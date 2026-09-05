@@ -2,7 +2,6 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createOpenClawMemoryEmbeddingProviderAdapters,
@@ -109,7 +108,7 @@ describe("OpenClaw memory embedding provider adapters", () => {
   });
 
   it("keeps a tool-discovery local adapter usable across activation-owner rotation", async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-adapter-ipc-"));
+    const stateRoot = mkdtempSync(join("/tmp", "plur1bus-adapter-ipc-"));
     const calls = [];
     const embeddings = {
       model: "intfloat/multilingual-e5-small",
