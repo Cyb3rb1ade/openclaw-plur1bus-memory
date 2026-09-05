@@ -235,3 +235,58 @@ describe("Obsidian vault gateway parameter shapes", () => {
     assert.deepEqual(seen.at(-1), { sessionKey: "agent:main:main:heartbeat", agentId: "main" });
   });
 });
+
+describe("Obsidian vault operator CLI", () => {
+  function fakeProgram() {
+    const state = { name: null, action: null };
+    const chain = {
+      command(name) { state.name = name; return chain; },
+      description() { return chain; },
+      argument() { return chain; },
+      requiredOption() { return chain; },
+      option() { return chain; },
+      action(fn) { state.action = fn; return chain; },
+    };
+    return { program: chain, state };
+  }
+
+  it("calls the host RPC helper as (method, opts, params, extra) and prints the result", async () => {
+    const calls = [];
+    const out = [];
+    const clis = [];
+    registerObsidianVaultRuntime({
+      api: {
+        registerGatewayMethod() {},
+        registerCli: (builder, options) => clis.push({ builder, options }),
+        logger: { warn() {} },
+      },
+      baseDbPath: "/tmp",
+      confirmationStore: new Map(),
+      resolveSessionMemoryContext: async () => ({}),
+      getObsidianBridgeConfig: () => ({}),
+      loadGatewayRuntime: async () => ({
+        callGatewayFromCli: async (...args) => { calls.push(args); return { ok: true, callbackData: "cb-1" }; },
+      }),
+      write: (chunk) => out.push(chunk),
+    });
+    const { program, state } = fakeProgram();
+    clis[0].builder({ program });
+    assert.equal(state.name, OBSIDIAN_VAULT_CLI_COMMAND);
+
+    await state.action("use", { session: "agent:heisenberg:telegram:heisenberg:direct:2048378590", path: "/vaults/h" });
+    const [method, opts, params, extra] = calls.at(-1);
+    assert.equal(method, OBSIDIAN_VAULT_GATEWAY_METHODS.prepare);
+    assert.equal(opts.json, true, "the host prints progress unless json is requested");
+    assert.deepEqual(params, { session: "agent:heisenberg:telegram:heisenberg:direct:2048378590", vaultPath: "/vaults/h", create: false });
+    assert.deepEqual(extra, { progress: false, scopes: ["operator.write"] });
+    assert.match(out.at(-1), /"callbackData": "cb-1"/, "the result is written, the host does not print return values");
+
+    await state.action("detect", { session: "agent:main:main" });
+    assert.equal(calls.at(-1)[0], OBSIDIAN_VAULT_GATEWAY_METHODS.detect);
+    assert.deepEqual(calls.at(-1)[3], { progress: false, scopes: ["operator.read"] });
+
+    await state.action("confirm", { session: "agent:main:main", path: "/vaults/m", token: "cb-1" });
+    assert.deepEqual(calls.at(-1)[2], { session: "agent:main:main", vaultPath: "/vaults/m", callbackData: "cb-1" });
+    await assert.rejects(() => state.action("bogus", { session: "agent:main:main" }), /unknown operation/);
+  });
+});

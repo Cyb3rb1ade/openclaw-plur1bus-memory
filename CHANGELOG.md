@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.9] — 2026-09-05
+
+### Behoben
+
+- **`openclaw plur1bus-obsidian` lief ins Leere.** Die CLI rief den
+  RPC-Helfer des Hosts als `(method, params)` auf; seine Signatur ist
+  `(method, opts, params, extra)`. Die Parameter landeten im Options-Slot,
+  jede Methode sah eine leere Anfrage: `use` und `confirm` antworteten
+  „Invalid agent ID", `detect` druckte nichts, weil der Host den
+  Rückgabewert einer Aktion nicht ausgibt. Die CLI ruft jetzt
+  `(method, { json, timeout }, params, { progress: false, scopes })` mit dem
+  passenden Scope je Methode und schreibt das Ergebnis als JSON.
+
 ## [7.8.8] — 2026-09-05
 
 ### Behoben
