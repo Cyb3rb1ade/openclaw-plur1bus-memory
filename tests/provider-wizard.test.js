@@ -3,14 +3,20 @@ import assert from "node:assert/strict";
 import { buildWizardOptions, formatWizardOption } from "../scripts/provider-wizard.mjs";
 
 describe("provider-wizard i18n rendering", () => {
-  it("Cohere ist Option 1 in der Reranker-Liste (de)", () => {
+  // Seit 7.10.0 ist der lokale BGE-Reranker die Empfehlung und steht vorn;
+  // Cohere folgt als gehostete Alternative.
+  it("lokaler BGE ist Option 1, Cohere Option 2 in der Reranker-Liste (de)", () => {
     const options = buildWizardOptions("reranker", { lang: "de" });
-    assert.strictEqual(options[0].key, "cohere");
+    assert.strictEqual(options[0].key, "local-transformers");
+    assert.strictEqual(options[1].key, "cohere");
+    assert.ok(formatWizardOption("reranker", "local-transformers", { lang: "de" }).includes("empfohlen"));
   });
 
-  it("Cohere ist Option 1 in der Reranker-Liste (en)", () => {
+  it("lokaler BGE ist Option 1, Cohere Option 2 in der Reranker-Liste (en)", () => {
     const options = buildWizardOptions("reranker", { lang: "en" });
-    assert.strictEqual(options[0].key, "cohere");
+    assert.strictEqual(options[0].key, "local-transformers");
+    assert.strictEqual(options[1].key, "cohere");
+    assert.ok(formatWizardOption("reranker", "local-transformers", { lang: "en" }).includes("recommended"));
   });
 
   it("Cohere-Label enthält 'kostenpflichtig' (de)", () => {

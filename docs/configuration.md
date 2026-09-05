@@ -115,6 +115,27 @@ unvollständige Datei wird vor der Inferenz abgelehnt.
   "reranker": {
     "enabled": true,
     "provider": "local-transformers",
+    "model": "woxpas-ai/bge-reranker-v2-m3-onnx",
+    "local": {
+      "model": "woxpas-ai/bge-reranker-v2-m3-onnx",
+      "revision": "c44ebc43de724ae8816668bb44d2e728e17faa18",
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
+    },
+    "fallbackOnError": true
+  }
+}
+```
+
+BGE ist der empfohlene lokale Reranker und die Vorgabe des Installers
+(mehrsprachig, auf MIRACL vor Jina v2, Apache 2.0, 8k Kontext). Wer stattdessen
+den halb so tiefen Jina-v2-Reranker will (schneller auf CPU, CC BY-NC 4.0),
+setzt ihn als `model`/`local.model` und BGE als kontrollierten Fallback:
+
+```json
+{
+  "reranker": {
+    "enabled": true,
+    "provider": "local-transformers",
     "model": "jinaai/jina-reranker-v2-base-multilingual",
     "local": {
       "model": "jinaai/jina-reranker-v2-base-multilingual",
@@ -162,12 +183,11 @@ der nach einem bestaetigten Switch aktive Provider verwenden exakt dasselbe
 aufgeloeste `embedding.local.cacheDir`; ein Remote-Provider darf diesen
 zukuenftigen lokalen Cache bereits konfigurieren.
 
-Wer Jina abwählt, kann BGE direkt als `reranker.model` und
-`reranker.local.model` setzen. Das Quellrepository
-`BAAI/bge-reranker-v2-m3` ist für diesen Pfad absichtlich ungültig, weil es
-keine von Transformers.js ladbare ONNX-Datei veröffentlicht. Ein Jina-Fehler
-wechselt nur dann kontrolliert zu BGE, wenn der oben gezeigte freie Fallback
-explizit konfiguriert ist.
+Für BGE gilt ausschließlich der ONNX-Export `woxpas-ai/bge-reranker-v2-m3-onnx`.
+Das Quellrepository `BAAI/bge-reranker-v2-m3` ist für diesen Pfad absichtlich
+ungültig, weil es keine von Transformers.js ladbare ONNX-Datei veröffentlicht.
+Ein Jina-Fehler wechselt nur dann kontrolliert zu BGE, wenn der oben gezeigte
+Fallback explizit konfiguriert ist.
 
 ### Embedding-Dimensionen
 

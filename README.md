@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.9.2 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.10.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.9.2**. PLUR1BUS 7.9.2 supports OpenClaw `2026.8.1`
+Current source version: **7.10.0**. PLUR1BUS 7.10.0 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,17 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.10.0 — BGE is the recommended local reranker
+
+- The provider wizard and the shell installer now offer the local BGE reranker
+  as option 1 and the default; Cohere is option 2, Jina v2 stays under the
+  advanced options. The choice is selected by key, so the order can change
+  without shifting the branches. The reason is documented under
+  [Choosing embedding and reranking models](#choosing-embedding-and-reranking-models):
+  on the multilingual benchmarks that matter for memory cards BGE is ahead or
+  level, and it needs no license consent. Nothing changes for an existing
+  configuration; the runtime default was BGE already.
 
 ### New in v7.9.2 — tombstoned cards are no longer classified or pushed
 
@@ -817,12 +828,13 @@ spread compresses, which moves every threshold. The dimension is baked into
 the table, so changing it later means another re-embedding run.
 
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
-and removes the ANN noise. Locally, that is
-`jinaai/jina-reranker-v2-base-multilingual`, with `bge-reranker-v2-m3` as the
-controlled fallback when the Jina model fails; both run as quantized ONNX
-models through Transformers.js. Switching between them is a runtime choice
-without any data migration (see `controlUi.writeActions`). The two models
-differ in size and in what they are good at:
+and removes the ANN noise. Two local models are pinned, both quantized ONNX
+through Transformers.js: `bge-reranker-v2-m3`, which the installer proposes
+and the runtime uses when nothing else is configured, and
+`jinaai/jina-reranker-v2-base-multilingual`, available under the wizard's
+advanced options and as a dashboard switch. Switching between them is a
+runtime choice without any data migration (see `controlUi.writeActions`). The
+two models differ in size and in what they are good at:
 
 | | Jina reranker v2 | BGE reranker v2-m3 |
 |---|---|---|
@@ -845,9 +857,13 @@ the broad multilingual retrieval benchmark, and slightly ahead on tool
 retrieval. Jina is clearly ahead on long documents and on code, and at half the
 depth it reranks noticeably faster on CPU; Jina quotes up to 15x the document
 throughput of BGE with flash attention on a GPU. For PLUR1BUS memory cards,
-which are short German or English summaries, the practical differences are
-speed and license, not ranking quality: Jina is the lighter default, BGE the
-Apache-licensed fallback with the longer context.
+which are short German or English summaries, multilingual ranking quality is
+what counts, and long documents and code do not occur. **The recommendation
+is therefore BGE**: ahead or level on the benchmarks that matter here, Apache
+2.0 without a license consent, at the price of roughly twice the CPU time per
+query, which is a fraction of a second for 40 short candidates on an ordinary
+server. Pick Jina only when a weak CPU runs into the reranker timeout of five
+seconds; the quality loss is small.
 
 Sources: [Jina model card](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual),
 [BGE model card](https://huggingface.co/BAAI/bge-reranker-v2-m3),

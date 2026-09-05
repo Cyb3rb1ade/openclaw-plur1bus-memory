@@ -820,10 +820,10 @@ esac
 
 echo ""
 info "Reranker-Auswahl:"
-info "  1) Cohere rerank — remote, API-Key erforderlich, stabiler Default."
-info "  2) Local BGE reranker-v2-m3 — frei, mehrsprachig, verifizierter ~570-MB-ONNX-Download."
+info "  1) Local BGE reranker-v2-m3 — empfohlen: frei, mehrsprachig, Apache 2.0, verifizierter ~570-MB-ONNX-Download."
+info "  2) Cohere rerank — remote, API-Key erforderlich."
 info "  3) Disabled — Vector-only Recall."
-prompt_choice RERANKER_PROVIDER_MODE "Reranker provider: cohere=remote, local=lokal experimental, disabled=aus" "cohere" "cohere" "local" "disabled"
+prompt_choice RERANKER_PROVIDER_MODE "Reranker provider: local=BGE empfohlen, cohere=remote, disabled=aus" "local" "local" "cohere" "disabled"
 case "$RERANKER_PROVIDER_MODE" in
   cohere)
     RERANKER_PROVIDER="cohere"

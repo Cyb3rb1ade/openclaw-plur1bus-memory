@@ -19,9 +19,11 @@ const lang = resolveLocale();
 const tone = "default";
 // rl wird NICHT beim Import erstellt — nur in main() beim direkten CLI-Run
 
+// Reihenfolge = Empfehlung: der lokale BGE-Reranker steht vorn (mehrsprachig,
+// Apache 2.0, auf MIRACL vor Jina v2), Cohere ist die gehostete Alternative.
 const RERANKER_OPTIONS = [
-  { key: "cohere",             i18nLabel: "setup.reranker.option.cohere",    i18nHelp: "setup.reranker.option.cohere_help" },
   { key: "local-transformers", i18nLabel: "setup.reranker.option.local_bge", i18nHelp: "setup.reranker.option.local_bge_help" },
+  { key: "cohere",             i18nLabel: "setup.reranker.option.cohere",    i18nHelp: "setup.reranker.option.cohere_help" },
   { key: "disabled",           i18nLabel: "setup.reranker.option.disabled",  i18nHelp: "setup.reranker.option.disabled_help" },
   { key: "advanced",           i18nLabel: "setup.reranker.option.advanced",  i18nHelp: "setup.reranker.option.advanced_help" },
 ];
@@ -143,7 +145,10 @@ async function main() {
       if (["1", "2", "3", "4"].includes(choice)) break;
       console.error(t("setup.reranker.invalid_choice", { lang, tone }));
     }
-    if (choice === "1") {
+    // Auswahl über den Schlüssel der Option, nicht über die Position: die
+    // Reihenfolge der Liste ist die Empfehlung und darf sich ändern.
+    const selected = RERANKER_OPTIONS[Number(choice) - 1].key;
+    if (selected === "cohere") {
       const keyChoice = await askLine("COHERE_API_KEY [1] env-ref / [2] literal: ");
       let cfg;
       if (keyChoice === "2") {
@@ -160,11 +165,11 @@ async function main() {
         console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
       }
       return cfg;
-    } else if (choice === "2") {
+    } else if (selected === "local-transformers") {
       console.error(t("setup.reranker.local_cpu_warning", { lang, tone }));
       console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
       return { provider: "local-transformers", model: "woxpas-ai/bge-reranker-v2-m3-onnx", candidates: 20, timeoutMs: 5000, fallbackOnError: true };
-    } else if (choice === "3") {
+    } else if (selected === "disabled") {
       return { provider: "disabled", enabled: false, candidates: 20 };
     } else {
       for (let i = 0; i < ADVANCED_RERANKER_MODELS.length; i++) {

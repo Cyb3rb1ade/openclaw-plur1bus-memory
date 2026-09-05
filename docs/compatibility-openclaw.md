@@ -193,8 +193,8 @@ verified.
 | --- | --- | --- | --- |
 | E5 embedding | `intfloat/multilingual-e5-small` | `614241f622f53c4eeff9890bdc4f31cfecc418b3` | `onnx/model.onnx` |
 | Optional multilingual Jina v3 embedding (CC BY-NC 4.0) | `jinaai/jina-embeddings-v3` base `ab036b023d30b4d1138c4c3bfa9f0c445ab455d6`; Q8 conversion `ldwformat/jina-embeddings-v3-Q8-onnx` | `68ed94909d564380f954be27ae2e133214c1adc9` | local `onnx/model_quantized.onnx` from pinned `model.onnx` |
-| Jina primary reranker | `jinaai/jina-reranker-v2-base-multilingual` | `9cfeff2df7d40d1b78e75e5e9cebec92a99813c9` | `onnx/model_quantized.onnx` |
-| Free BGE fallback reranker | `woxpas-ai/bge-reranker-v2-m3-onnx` | `c44ebc43de724ae8816668bb44d2e728e17faa18` | `onnx/model_quantized.onnx` |
+| Optional Jina v2 reranker (CC BY-NC 4.0) | `jinaai/jina-reranker-v2-base-multilingual` | `9cfeff2df7d40d1b78e75e5e9cebec92a99813c9` | `onnx/model_quantized.onnx` |
+| BGE reranker (recommended default, Apache 2.0) | `woxpas-ai/bge-reranker-v2-m3-onnx` | `c44ebc43de724ae8816668bb44d2e728e17faa18` | `onnx/model_quantized.onnx` |
 
 Jina's published null `model_type` is accepted only for the two validated Jina
 profiles and normalized to their XLM-RoBERTa architecture. Jina v3 embedding

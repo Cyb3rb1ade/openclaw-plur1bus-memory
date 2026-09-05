@@ -35,7 +35,7 @@ function runWizard(lines) {
     }, 5_000);
 
     function answerVisiblePrompts() {
-      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4|a\/b\/c|yes\/no)\]: /g) || []).length;
+      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4|a\/b\/c|yes\/no)\]: |\[2\] literal: /g) || []).length;
       while (sentLines < lines.length && sentLines < promptCount) {
         child.stdin.write(`${lines[sentLines]}\n`);
         sentLines += 1;
@@ -122,8 +122,39 @@ describe("provider wizard CLI input validation", () => {
     });
   });
 
+  it("offers the local BGE reranker as option 1, the recommendation", async () => {
+    const result = await runWizard(["2", "1"]);
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.match(result.stderr, /\[1\] Local: woxpas-ai\/bge-reranker-v2-m3-onnx/);
+    assert.match(result.stderr, /\[2\] Cohere rerank-v3\.5/);
+    assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
+      provider: "local-transformers",
+      model: "woxpas-ai/bge-reranker-v2-m3-onnx",
+      candidates: 20,
+      timeoutMs: 5000,
+      fallbackOnError: true,
+    });
+  });
+
+  it("keeps the second option on Cohere, selected by key rather than position", async () => {
+    // E5 embedding, Cohere reranker, key from the environment, no fallback.
+    const result = await runWizard(["2", "2", "1", "1"]);
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
+      provider: "cohere",
+      apiKeyEnv: "COHERE_API_KEY",
+      model: "rerank-v3.5",
+      candidates: 20,
+      timeoutMs: 5000,
+      fallbackOnError: true,
+      fallbackProvider: "disabled",
+    });
+  });
+
   it("retains the default local BGE reranker choice", async () => {
-    const result = await runWizard(["2", "2"]);
+    const result = await runWizard(["2", "1"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {

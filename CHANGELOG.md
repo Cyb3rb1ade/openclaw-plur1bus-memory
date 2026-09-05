@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.10.0] — 2026-09-05
+
+### Geändert
+
+- **BGE ist der empfohlene lokale Reranker.** Provider-Wizard und
+  Shell-Installer bieten `woxpas-ai/bge-reranker-v2-m3-onnx` als Option 1 und
+  Vorgabe an, Cohere ist Option 2, Jina v2 bleibt unter den erweiterten
+  Optionen. Die Auswahl läuft über den Schlüssel der Option, nicht über die
+  Position. Begründung in der README unter „Choosing embedding and reranking
+  models“: Auf den mehrsprachigen Benchmarks, die für Memory-Karten zählen,
+  liegt BGE vorn oder gleichauf (MIRACL 69,32 gegen 63,65) und braucht keine
+  Lizenzzustimmung. Für bestehende Konfigurationen ändert sich nichts, der
+  Laufzeit-Default war schon BGE.
+- **Doku nachgezogen.** `docs/configuration.md` zeigt BGE als Vorgabe und Jina
+  v2 mit BGE-Fallback als Alternative; die Kompatibilitätstabelle nennt die
+  Rollen entsprechend. Die README-Gegenüberstellung nennt außerdem die
+  empfohlene Embedding-Dimension für Jina v3 (1024, sparsam 512).
+
 ## [7.9.2] — 2026-09-05
 
 ### Behoben
