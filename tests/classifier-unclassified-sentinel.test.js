@@ -158,3 +158,39 @@ describe("findRecentUnclassified — Sentinel und Zeitfenster", () => {
     }
   });
 });
+
+describe("findRecentUnclassified — Tombstones", () => {
+  // 05.09.2026: memory_forget tombstont (status "deleted", epistemicStatus
+  // "invalidated"), lässt type aber auf "memory". Der Cron hielt solche
+  // Zeilen für frische Kandidaten, klassifizierte sie und pushte sie als
+  // Critical; findPendingCriticalReviews (status = 'active') fand sie nie.
+  it("liefert eine getombstonte Karte nicht als Kandidaten", async (t) => {
+    const baseDbPath = tempBase(t);
+    const pluginModule = await loadFreshPlugin();
+    const TOMB = "00000000-0000-4000-8000-00000000d005";
+    const db = new pluginModule.MemoryDB(join(baseDbPath, AGENT), VECTOR_DIM);
+    const base = {
+      vector: Array(VECTOR_DIM).fill(0.1),
+      category: "fact",
+      storedBy: AGENT,
+      origin: "dm",
+      trustLevel: "untrusted",
+      status: "active",
+    };
+    const jetzt = Date.now();
+    await db.store({ ...base, id: FRISCH, text: "Evas Geburtstag ist am 3. Mai.", createdAt: jetzt - 60_000 });
+    await db.store({ ...base, id: TOMB, text: "Chris besitzt Hörgeräte von Amplifon.", createdAt: jetzt - 60_000 });
+    const tomb = await db.tombstone(TOMB);
+    assert.equal(tomb.ok, true, "Vorbedingung: tombstone schreibt status=deleted");
+    await db.shutdown();
+
+    const adapter = createDbAdapter({ basePath: baseDbPath, logger: { info() {}, warn() {} } });
+    try {
+      const ids = (await adapter.findRecentUnclassified(AGENT, { sinceMinutes: 30 })).map((c) => c.id);
+      assert.ok(ids.includes(FRISCH), "die lebende Karte bleibt Kandidat");
+      assert.ok(!ids.includes(TOMB), "eine getombstonte Karte ist kein Kandidat, obwohl type noch \"memory\" ist");
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+});

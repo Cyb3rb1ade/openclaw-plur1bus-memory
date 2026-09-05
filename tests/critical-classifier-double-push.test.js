@@ -50,3 +50,35 @@ describe("critical-classifier double-push guard", () => {
     assert.strictEqual(res.pushed, 0, "pushed count must be 0");
   });
 });
+
+describe("critical-classifier tombstone guard", () => {
+  // Live 05.09.2026: zwei per memory_forget getombstonte Karten (status
+  // "deleted") blieben unklassifiziert, wurden klassifiziert und als Critical
+  // gepusht; der Review-Pfad (status = 'active') kannte die Referenzen nicht.
+  it("neither classifies nor pushes a card with status deleted", async () => {
+    let sent = 0;
+    let typed = 0;
+    const statePath = mkdtempSync(join(tmpdir(), "crit-state-"));
+    const db = makeDb({
+      findRecentUnclassified: async () => [
+        { ...card, id: "dead1", status: "deleted" },
+        { ...card, id: "arch1", status: "archived" },
+        { ...card, id: "live1", status: "active" },
+        { ...card, id: "bare1" },
+      ],
+      updateCardType: async () => { typed++; },
+    });
+    const res = await runClassifier(db, "agentC", {
+      model, telegramSend: async () => { sent++; }, statePath,
+    });
+    assert.strictEqual(typed, 2, "only the active and the status-less card may be reclassified");
+    assert.strictEqual(res.processed, 2, "tombstones do not count as processed");
+    assert.strictEqual(res.skippedInactive, 2, "both inactive cards are reported as skipped");
+    assert.strictEqual(sent, 2, "only living cards are pushed");
+    assert.deepStrictEqual(
+      (res.pushMessages || []).map((m) => m.id).sort(),
+      ["bare1", "live1"],
+      "the push carries no tombstone reference",
+    );
+  });
+});

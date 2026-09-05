@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.9.2] — 2026-09-05
+
+### Behoben
+
+- **Gelöschte Karten wurden klassifiziert und als Critical gepusht.** Eine per
+  `memory_forget` entfernte Karte behält `type = "memory"`, ihr `status` wird
+  `deleted`. Der classify-recent-Cron hielt solche Zeilen für frische
+  Kandidaten, typte sie und nannte sie im Push; der Review-Pfad liest nur
+  aktive Zeilen und kannte die Referenzen nicht („nicht im Pending-Bestand“).
+  Kandidatenabfrage und Klassifikator übergehen jetzt jede Zeile, deren
+  Status nicht aktiv ist; das Laufergebnis meldet sie als `skippedInactive`.
+  Live beobachtet am 05.09.2026 bei zwei von drei gepushten Karten.
+
 ## [7.9.1] — 2026-09-05
 
 ### Behoben
