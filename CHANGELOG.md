@@ -49,6 +49,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Operator-Status und physisches Optimize verwenden den zertifizierten aktiven
   Generationspfad auch nach einer Re-Embedding-Umschaltung; alte oder fremde
   Routen bleiben gesperrt.
+- Der Plugin-Installer vergleicht Inhalte statt nur Größe/Zeitstempel: Updates
+  aus npm-Tarballs mit normalisierten Zeitstempeln lassen keinen gleich großen
+  alten Code zurück. Beide Python-Distributionen werden aktualisiert.
 - Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.

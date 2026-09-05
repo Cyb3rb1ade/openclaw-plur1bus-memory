@@ -78,13 +78,14 @@ vmlx_target="$hermes_home/plugins/model-providers/vmlx"
 mtplx_target="$hermes_home/plugins/model-providers/mtplx"
 bin_target="$hermes_home/bin"
 install -d "$memory_target" "$controls_target" "$bin_target"
-rsync -a --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/plur1bus-hermes/src/plur1bus_hermes/" "$memory_target/"
-rsync -a --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/plur1bus-controls/src/plur1bus_controls/" "$controls_target/"
+# npm tarballs normalize timestamps. Equal-size edits must still replace old code.
+rsync -ac --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/plur1bus-hermes/src/plur1bus_hermes/" "$memory_target/"
+rsync -ac --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/plur1bus-controls/src/plur1bus_controls/" "$controls_target/"
 if [[ "$install_model_providers" == "1" ]]; then
   install -d "$omlx_target" "$vmlx_target" "$mtplx_target"
-  rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/omlx/" "$omlx_target/"
-  rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/vmlx/" "$vmlx_target/"
-  rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/mtplx/" "$mtplx_target/"
+  rsync -ac --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/omlx/" "$omlx_target/"
+  rsync -ac --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/vmlx/" "$vmlx_target/"
+  rsync -ac --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/mtplx/" "$mtplx_target/"
 else
   printf 'Skipped model-provider plugins (--no-model-providers); existing omlx, vmlx, and mtplx code was preserved.\n'
 fi
@@ -99,11 +100,11 @@ if [[ "$install_dashboard" == "1" ]]; then
     exit 4
   fi
   install -d "$dashboard_target"
-  rsync -a --exclude '__pycache__/' --exclude '*.pyc' "$repo_dir/hermes-dashboard/plur1bus/dashboard/" "$dashboard_target/"
+  rsync -ac --exclude '__pycache__/' --exclude '*.pyc' "$repo_dir/hermes-dashboard/plur1bus/dashboard/" "$dashboard_target/"
 fi
 
 if [[ "$install_deps" == "1" ]]; then
-  "$hermes_python" -m pip install --disable-pip-version-check "$repo_dir/plur1bus-hermes"
+  "$hermes_python" -m pip install --disable-pip-version-check "$repo_dir/plur1bus-hermes" "$repo_dir/plur1bus-controls"
 fi
 
 if [[ "$install_retrieval" == "1" ]]; then

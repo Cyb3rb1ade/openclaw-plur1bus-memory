@@ -23,6 +23,22 @@ output="$($repo_dir/scripts/install-hermes-plugins.sh \
 grep -Fq 'Skipped model-provider plugins (--no-model-providers); existing omlx, vmlx, and mtplx code was preserved.' <<<"$output"
 grep -Fq 'model providers: skipped (--no-model-providers; existing code preserved)' <<<"$output"
 
+# Packaged upgrades must not trust equal mtime/size: npm normalizes both releases.
+for plugin in plur1bus plur1bus-controls; do
+  if [[ "$plugin" == "plur1bus" ]]; then
+    source="$repo_dir/plur1bus-hermes/src/plur1bus_hermes/__init__.py"
+  else
+    source="$repo_dir/plur1bus-controls/src/plur1bus_controls/__init__.py"
+  fi
+  sed 's/__version__/__versioN__/' "$source" > "$home/plugins/$plugin/__init__.py"
+  touch -r "$source" "$home/plugins/$plugin/__init__.py"
+  ! cmp -s "$source" "$home/plugins/$plugin/__init__.py"
+done
+"$repo_dir/scripts/install-hermes-plugins.sh" \
+  --hermes-home "$home" --no-setup --no-deps --no-retrieval --no-model-providers >/dev/null
+cmp "$repo_dir/plur1bus-hermes/src/plur1bus_hermes/__init__.py" "$home/plugins/plur1bus/__init__.py"
+cmp "$repo_dir/plur1bus-controls/src/plur1bus_controls/__init__.py" "$home/plugins/plur1bus-controls/__init__.py"
+
 # Omission preserves the historic synchronizing/default installation behavior.
 default_home="$temporary/default-hermes-home"
 mkdir -p "$default_home/plugins/model-providers/omlx"
