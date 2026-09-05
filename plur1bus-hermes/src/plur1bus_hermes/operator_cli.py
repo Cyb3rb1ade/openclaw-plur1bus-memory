@@ -57,6 +57,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agent", required=True, help="explicit profile or agent identity")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
+    model = commands.add_parser("embedding-model", help="explicit Nano preparation; never switches an existing database")
+    model.add_argument("action", choices=("plan", "verify", "prepare"))
+    model.add_argument("--model-dir", required=True, type=Path)
+    model.add_argument("--dimensions", type=int, default=768, choices=(32, 64, 128, 256, 512, 768))
+    model.add_argument("--accept-noncommercial-license", action="store_true", help="acknowledge CC-BY-NC-4.0 for this model")
+    model.add_argument("--apply", action="store_true", help="allow explicit preparation/download only, never activation")
     compact = commands.add_parser("compact")
     compact.add_argument("--apply", action="store_true")
     source_sync = commands.add_parser("source-sync")
@@ -83,7 +89,30 @@ def main(argv: list[str] | None = None) -> int:
         # instantiate/apply that pointer before its exclusive lease transition.
         raw_generation = args.command == "reembed" and (args.activate or args.recover)
         runtime = runtime_view(args.hermes_home, args.agent, apply_generation=not raw_generation)
-        if args.command == "status":
+        if args.command == "embedding-model":
+            from .jina_v5_nano import ARTIFACTS, LICENSE, default_config, prepare_model, verify_model_dir
+            if not args.model_dir.is_absolute():
+                raise ValueError("an explicit absolute model directory is required")
+            target = default_config(args.model_dir, args.dimensions, args.accept_noncommercial_license)
+            result = {
+                "dryRun": True, "activeConfigurationUnchanged": True,
+                "license": LICENSE, "licenseAccepted": args.accept_noncommercial_license,
+                "targetEmbedding": target, "downloadBytes": sum(item.size for item in ARTIFACTS),
+                "newInstallSelection": target if args.accept_noncommercial_license else Plur1busMemoryProvider._local_embedding_config(),
+                "nextStep": "explicit reembed plan, staged apply, validate, approved activation; existing vectors must not be reused",
+            }
+            if args.action == "verify":
+                if args.apply:
+                    raise ValueError("verification is read-only; omit --apply")
+                result["verification"] = verify_model_dir(args.model_dir, accepted=args.accept_noncommercial_license)
+            elif args.action == "prepare":
+                if not args.apply:
+                    raise ValueError("model preparation requires explicit --apply")
+                result["preparation"] = prepare_model(args.model_dir, accepted=args.accept_noncommercial_license)
+                result["dryRun"] = False
+            elif args.apply:
+                raise ValueError("plan is read-only; omit --apply")
+        elif args.command == "status":
             result = read_operator_status(runtime)
         elif args.command == "compact":
             result = optimize_runtime_table(runtime, authorized=True) if args.apply else {

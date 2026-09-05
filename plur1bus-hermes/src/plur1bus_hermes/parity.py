@@ -87,8 +87,14 @@ COVERAGE_710 = (
 )
 
 
+COVERAGE_712 = COVERAGE_710 + (
+    {"id": "local-jina-v5-nano", "status": "partial", "detail": "native pinned Q8 ONNX, explicit license/download gate, 512-token sequential inference and normalized Matryoshka dimensions; real-model local acceptance remains required"},
+    {"id": "nano-new-install-migration", "status": "partial", "detail": "explicit operator model plan/prepare/verify and staged reembedding; existing configs untouched; upstream browser migration recommendation and wizard default are not reproduced"},
+)
+
+
 def parity_report() -> dict[str, Any]:
-    """Return the legacy inventory and the authoritative 7.10 coverage gate."""
+    """Return the legacy inventory and the authoritative 7.12 coverage gate."""
     counts = Counter(feature["status"] for feature in FEATURES)
     required = [feature for feature in FEATURES if feature["status"] != "excluded"]
     ready = [feature for feature in required if feature["status"] == "ready"]
@@ -103,9 +109,10 @@ def parity_report() -> dict[str, Any]:
         "totalRequired": len(required),
         "counts": dict(counts),
         "features": list(FEATURES),
-        "coverageVersion": "7.10.0",
+        "coverageVersion": "7.12.0",
         "coverageStatus": coverage_status,
         "coverage710": list(COVERAGE_710),
+        "coverage712": list(COVERAGE_712),
     }
 
 

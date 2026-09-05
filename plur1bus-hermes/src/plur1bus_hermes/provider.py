@@ -41,7 +41,7 @@ except ImportError:  # Older Hermes may have MemoryProvider but no status shape.
             self.glyph = glyph
 
 from .service import PLUR1BUS_SERVICE
-from .runtime import Plur1busRuntime
+from .runtime import Plur1busRuntime, validate_native_embedding_config
 from .namespaces import binding_from_scope, normalize_scope_context
 from .validation import ValidationError, normalize_text_payload, resolve_inside, safe_agent_id, safe_memory_id
 from .valid_time import normalize_timestamp
@@ -115,6 +115,14 @@ class Plur1busMemoryProvider(MemoryProvider):
             return False
         embedding = self._runtime_config().get("embedding", {})
         provider = embedding.get("provider", "local-transformers")
+        try:
+            validate_native_embedding_config(embedding)
+        except ValidationError:
+            return False
+        if provider == "local-onnx" and any(
+            importlib.util.find_spec(name) is None for name in ("onnxruntime", "tokenizers", "numpy")
+        ):
+            return False
         fallback = embedding.get("fallback", {})
         local_embedding_needed = provider == "local-transformers" or (isinstance(fallback, Mapping) and fallback.get("provider") == "local-transformers")
         reranker = self._runtime_config().get("reranker", {})
@@ -123,7 +131,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             return False
         if (local_embedding_needed or local_reranker_needed) and importlib.util.find_spec("sentence_transformers") is None:
             return False
-        return provider in {"local-transformers", "omlx", "openai-compatible"} or bool(
+        return provider in {"local-transformers", "local-onnx", "omlx", "openai-compatible"} or bool(
             embedding.get("apiKey")
             or os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")))
         )
@@ -134,6 +142,14 @@ class Plur1busMemoryProvider(MemoryProvider):
             return "provider is shut down"
         embedding = self._runtime_config().get("embedding", {})
         provider = embedding.get("provider", "local-transformers")
+        try:
+            validate_native_embedding_config(embedding)
+        except ValidationError as error:
+            return str(error)
+        if provider == "local-onnx":
+            for name in ("onnxruntime", "tokenizers", "numpy"):
+                if importlib.util.find_spec(name) is None:
+                    return f"missing Python dependency: {name} (install plur1bus-hermes[local-onnx])"
         fallback = embedding.get("fallback", {})
         reranker = self._runtime_config().get("reranker", {})
         local_needed = (
@@ -148,7 +164,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             return "missing Python dependency: lancedb"
         if local_needed and importlib.util.find_spec("sentence_transformers") is None:
             return "missing Python dependency: sentence-transformers"
-        if provider not in {"local-transformers", "omlx", "openai-compatible"} and not (
+        if provider not in {"local-transformers", "local-onnx", "omlx", "openai-compatible"} and not (
             embedding.get("apiKey")
             or os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")))
         ):
@@ -462,7 +478,8 @@ class Plur1busMemoryProvider(MemoryProvider):
             merged["reranker"].pop("baseUrl", None)
         if merged["reranker"]["provider"] == "omlx":
             merged["reranker"]["apiKeyEnv"] = "OMLX_API_KEY"
-        fallback_provider = str(values.get("embeddingFallbackProvider", existing.get("embedding", {}).get("fallback", {}).get("provider", "local-transformers")))
+        fallback_default = "disabled" if merged["embedding"]["provider"] == "local-onnx" else "local-transformers"
+        fallback_provider = str(values.get("embeddingFallbackProvider", existing.get("embedding", {}).get("fallback", {}).get("provider", fallback_default)))
         if fallback_provider == "disabled":
             merged["embedding"].pop("fallback", None)
         else:
@@ -1088,8 +1105,9 @@ class Plur1busMemoryProvider(MemoryProvider):
         if not isinstance(embedding, Mapping):
             raise ValidationError("embedding configuration must be a mapping")
         provider = embedding.get("provider", "local-transformers")
-        if provider not in {"local-transformers", "omlx", "openai-compatible"}:
+        if provider not in {"local-transformers", "local-onnx", "omlx", "openai-compatible"}:
             raise ValidationError("unsupported embedding provider")
+        validate_native_embedding_config(embedding)
         dimensions = self._positive_int(embedding.get("dimensions", 768), "embedding.dimensions")
         fallback = embedding.get("fallback")
         if fallback:

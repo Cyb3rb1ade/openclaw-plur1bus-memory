@@ -9,7 +9,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hermes-Port-Kandidat 7.12.0-hermes (lokal)
 
-- Native Basis aus 7.4.8-hermes.1 auf unverändertem Upstream 7.10.0; Critical-
+- Native Basis aus 7.4.8-hermes.1, kompletter Upstream-Merge bis v7.12.0; Critical-
   Sammelreview, inaktive Klassifikationskandidaten ausgeschlossen, Hermes-Lifecycle-
   Isolation, private Dream Diary, explizite Recall-Opt-outs und Remote-Dimensionsprüfung.
 - Hermes-Dashboard mit sitzungs-/revisionsgebundenem Workshop-Review,
@@ -26,9 +26,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   lösen wartende Aufrufer, ohne ungültige Vektoren zu cachen.
 - Schema-/ACL-, Profilrouting-, Symlink- und Retry/Checkpoint-Regressionen;
   Python-Wheels enthalten nun auch plugin.yaml.
+- Jina v5 Text Nano: gepinnte Q8-ONNX-Artefakte, expliziter Download mit
+  CC-BY-NC-4.0-Freigabe, lokale Inferenz ohne Remote-Code/Auto-Download,
+  512-Token-Grenze, Query-/Document-Präfixe und normalisierte Matryoshka-Vektoren.
+  Kein automatischer Wechsel bestehender Konfigurationen und kein E5-Fallback
+  in den Nano-Vektorraum. Native Vorbereitung und Staging per Operator-CLI.
 - Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
+  Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
 
 ## [7.12.0] — 2026-09-05
 

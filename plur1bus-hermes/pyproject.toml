@@ -15,6 +15,9 @@ dependencies = [
   "sentence-transformers>=3.0,<4",
 ]
 
+[project.optional-dependencies]
+local-onnx = ["onnxruntime>=1.20,<2", "tokenizers>=0.21,<1"]
+
 [project.scripts]
 plur1bus-hermes = "plur1bus_hermes.cli:main"
 plur1bus-hermes-operator = "plur1bus_hermes.operator_cli:main"

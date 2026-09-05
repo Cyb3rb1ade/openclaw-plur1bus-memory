@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 import uuid
 import weakref
+from collections.abc import Mapping
 from concurrent.futures import Future, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,6 +130,28 @@ def _request_json(url: str, payload: dict[str, Any], config: dict[str, Any], *, 
     return loaded
 
 
+def validate_native_embedding_config(config: Mapping[str, Any]) -> None:
+    """Reject Nano routing/license drift before cache hits or model imports."""
+    from .jina_v5_nano import MODEL_ID, JinaV5NanoError, validate_config
+    provider = config.get("provider", "local-transformers")
+    model = str(config.get("model") or "")
+    fallback = config.get("fallback")
+    if provider == "local-onnx":
+        if fallback:
+            raise ValidationError("local-onnx embeddings cannot mix fallback vector spaces")
+        try:
+            validate_config(config)
+        except JinaV5NanoError as error:
+            raise ValidationError(str(error)) from error
+    elif model == MODEL_ID or "jina-embeddings-v5-text-nano" in model.lower():
+        raise ValidationError("Jina v5 Nano requires the pinned local-onnx provider")
+    if isinstance(fallback, Mapping) and (
+        fallback.get("provider") == "local-onnx"
+        or "jina-embeddings-v5-text-nano" in str(fallback.get("model") or "").lower()
+    ):
+        raise ValidationError("Jina v5 Nano cannot be an automatic embedding fallback")
+
+
 class EmbeddingBackend:
     """Embedding backend with a dimension-checked local failure fallback."""
 
@@ -174,6 +197,7 @@ class EmbeddingBackend:
         """
         if purpose not in {"query", "passage"}:
             raise ValidationError("embedding purpose must be query or passage")
+        validate_native_embedding_config(self.config)
         if not texts:
             return []
         if len(texts) == 1:
@@ -197,11 +221,26 @@ class EmbeddingBackend:
     def close(self) -> None:
         """Release loaded local models and persistent cache handles."""
         with self._lock:
+            for model in self._models.values():
+                if callable(getattr(model, "close", None)):
+                    model.close()
             self._models.clear()
         self._cache.close()
 
     def _embed_with(self, config: dict[str, Any], text: str, *, purpose: str) -> list[float]:
         provider = config.get("provider", "local-transformers")
+        validate_native_embedding_config(config)
+        if provider == "local-onnx":
+            from .jina_v5_nano import JinaV5NanoEncoder
+            key = "local-onnx:" + json.dumps(config, sort_keys=True)
+            # Tokenizer/session lifecycle is serialized; migration stays one
+            # bounded input at a time, never an unbounded ONNX batch.
+            with self._lock:
+                encoder = self._models.get(key)
+                if encoder is None:
+                    encoder = JinaV5NanoEncoder(config)
+                    self._models[key] = encoder
+                return encoder.embed(text, purpose=purpose)
         if provider == "local-transformers":
             return self._embed_local(config, text, purpose=purpose)
         if provider == "omlx":

@@ -90,7 +90,7 @@ def build_plan(target: Path, hermes_home: Path) -> dict[str, Any]:
         or parity.get("coverageStatus") != "complete"
     ):
         errors.append(
-            f"PLUR1BUS feature parity is incomplete for v7.10.0: "
+            f"PLUR1BUS feature parity is incomplete for v{parity.get('coverageVersion')}: "
             f"{parity['readyRequired']}/{parity['totalRequired']}"
         )
     return {
