@@ -27,11 +27,12 @@ class _StubCrossEncoder:
     instances: list["_StubCrossEncoder"] = []
     fail: bool = False
 
-    def __init__(self, model_name: str, cache_folder: str | None = None) -> None:
+    def __init__(self, model_name: str, cache_dir: str | None = None,
+                 max_length: int = 512, trust_remote_code: bool = False) -> None:
         if _StubCrossEncoder.fail:
             raise RuntimeError("local reranker unavailable")
         self.model_name = model_name
-        self.cache_folder = cache_folder
+        self.cache_folder = cache_dir
         _StubCrossEncoder.instances.append(self)
 
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:

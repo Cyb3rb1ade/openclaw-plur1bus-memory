@@ -31,6 +31,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   512-Token-Grenze, Query-/Document-Präfixe und normalisierte Matryoshka-Vektoren.
   Kein automatischer Wechsel bestehender Konfigurationen und kein E5-Fallback
   in den Nano-Vektorraum. Native Vorbereitung und Staging per Operator-CLI.
+- Lokaler BGE-Reranker verwendet den tatsächlichen CrossEncoder-Parameter
+  `cache_dir` statt `cache_folder`; Regressionstest gegen die 3.x-Signatur,
+  begrenzte Eingaben und kein Remote-Code. Echte Nano-/BGE-Inferenz geprüft.
 - Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.

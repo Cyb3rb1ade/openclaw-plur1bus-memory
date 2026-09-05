@@ -418,7 +418,8 @@ class RerankerBackend:
         with self._lock:
             model = self._models.get(model_name)
             if model is None:
-                model = CrossEncoder(model_name, cache_folder=str(cache_dir))
+                model = CrossEncoder(model_name, cache_dir=str(cache_dir), max_length=512,
+                                     trust_remote_code=False)
                 self._models[model_name] = model
         scores = model.predict([(query, str(row.get("content", ""))) for row in rows])
         ranked = [dict(row, rerankScore=float(score)) for row, score in zip(rows, scores, strict=True)]
