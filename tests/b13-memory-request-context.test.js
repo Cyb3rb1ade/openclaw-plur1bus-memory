@@ -1372,7 +1372,9 @@ describe("shared workspace pool labels", () => {
     const byLabel = Object.fromEntries(labels.map((entry) => [entry.label, entry]));
     assert.deepEqual(Object.keys(byLabel).sort(), ["Bernhardine.dir", "Bernhardine", "main", "main.dir"].sort());
     assert.equal(byLabel.main.poolKey, workspacePoolKey("workspace:v1:main"));
-    assert.equal(byLabel["main.dir"].poolKey, workspacePoolKey(`workspace-dir:v1:${mainDir}`));
+    // Workspace identities are canonical filesystem identities. macOS exposes
+    // /var through /private/var, so compare the same realpath used by routing.
+    assert.equal(byLabel["main.dir"].poolKey, workspacePoolKey(`workspace-dir:v1:${realpathSync(mainDir)}`));
     assert.equal(byLabel.Bernhardine.label.length, "Bernhardine".length, "the shortest alias wins; ties fall to the lexically first");
     for (const entry of labels) {
       assert.doesNotMatch(entry.label, /\//, "labels never carry a path");
