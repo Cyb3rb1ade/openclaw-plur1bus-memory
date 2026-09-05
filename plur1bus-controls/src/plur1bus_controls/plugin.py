@@ -466,11 +466,16 @@ class Plur1busControlsPlugin:
                         for item in pending
                     ]
                     return json.dumps({"pending": items}, ensure_ascii=False, indent=2)
-                if len(arguments) != 2 or arguments[0] not in {"accept", "reject", "edit"}:
-                    return "Usage: /plur1bus critical [--agent ID] accept|reject|edit REFERENZ"
+                if not arguments or arguments[0] not in {"accept", "reject", "edit"}:
+                    return "Usage: /plur1bus critical [--agent ID] accept|reject REFERENZ [REFERENZ ...]|all; edit REFERENZ"
                 decision = arguments[0]
-                reference = arguments[1]
+                references = arguments[1:]
+                if not references:
+                    return "Usage: /plur1bus critical [--agent ID] accept|reject REFERENZ [REFERENZ ...]|all; edit REFERENZ"
                 if decision == "edit":
+                    if len(references) != 1:
+                        return "Usage: /plur1bus critical [--agent ID] edit REFERENZ"
+                    reference = references[0]
                     resolved = domain.resolve_critical_reference(reference, **scope_kwargs)
                     if not resolved["ok"]:
                         return json.dumps(
@@ -484,8 +489,14 @@ class Plur1busControlsPlugin:
                             f"(Referenz {reference} → {resolved['id']})."
                         ),
                     }, ensure_ascii=False, indent=2)
+                all_pending = len(references) == 1 and references[0].lower() == "all"
                 return json.dumps(
-                    domain.review_critical_by_reference(reference, decision, **scope_kwargs),
+                    domain.review_critical_batch(
+                        None if all_pending else references,
+                        decision,
+                        all_pending=all_pending,
+                        **scope_kwargs,
+                    ),
                     ensure_ascii=False,
                     indent=2,
                 )

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plur1bus-hermes"
-version = "7.4.8.1"
+version = "7.10.0"
 description = "Hermes Python runtime implementation of the PLUR1BUS memory provider and migration tooling."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 plur1bus-hermes = "plur1bus_hermes.cli:main"
+plur1bus-hermes-operator = "plur1bus_hermes.operator_cli:main"
 plur1bus-hermes-migrate = "plur1bus_hermes.migrate:main"
 plur1bus-hermes-reembed = "plur1bus_hermes.reembed:main"
 plur1bus-hermes-workspace-migrate = "plur1bus_hermes.workspace_migrate:main"
@@ -31,3 +32,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+plur1bus_hermes = ["plugin.yaml"]

@@ -60,8 +60,25 @@ FEATURES: tuple[dict[str, str], ...] = (
     {"id": "tombstone-bulk-writers", "status": "ready", "evidence": "migration and workspace-migration reinserts pass the canonical scope-bound tombstone guard"},
     {"id": "derived-record-visibility", "status": "ready", "evidence": "dream records carry visibility stamps beside physical scope partitions and the own-agent legacy fallback"},
     {"id": "inject-marker-line-headers", "status": "ready", "evidence": "runtime inject headers recognized only as line headers in capture trust decisions"},
-    {"id": "skill-farming", "status": "excluded", "evidence": "explicitly excluded by migration scope"},
+    {"id": "critical-batch", "status": "ready", "evidence": "ACL-bound snapshot, multiple refs/all, per-card error isolation"},
+    {"id": "operator-status", "status": "ready", "evidence": "read-only native dashboard and explicit local CLI"},
+    {"id": "physical-compaction", "status": "ready", "evidence": "explicit operator CLI --apply, exact writer route, no semantic GC"},
+    {"id": "private-dream-diary", "status": "ready", "evidence": "private-only idempotent managed DREAMS.md block"},
+    {"id": "skill-farming", "status": "excluded", "evidence": "not in the legacy runtime baseline; 7.10 Workshop parity remains unimplemented, not host-impossible"},
     {"id": "curation-drop-injected", "status": "excluded", "evidence": "no neo-conflict or injected behavior-card surface exists in Hermes; upstream-only contracts"},
+)
+
+# Keep legacy native-runtime readiness distinct from full new upstream coverage.
+# A passing legacy capability inventory must never imply a full 7.10 port.
+COVERAGE_710 = (
+    {"id": "local-jina-v3", "status": "not-ported", "detail": "native Transformers remote-code chain is not independently audited; explicit fail-closed guard, existing sidecar model support retained"},
+    {"id": "dashboard", "status": "partial", "detail": "native read-only status; write workflows remain CLI-only or unavailable"},
+    {"id": "reembedding", "status": "partial", "detail": "bounded staged batches; no automatic active-generation switch"},
+    {"id": "trusted-critical-reply", "status": "partial", "detail": "intent parser tested; no trusted quote-to-action host wiring"},
+    {"id": "skill-workshop", "status": "not-ported", "detail": "Hermes skills exist; revision-bound proposal approval/publication needs a native workflow"},
+    {"id": "obsidian-operator-ui", "status": "partial", "detail": "native mirror retained; new browser target discovery and consent workflow not reproduced"},
+    {"id": "proactive-delivery", "status": "partial", "detail": "outbox drains on inbound gateway dispatch, not an independent background wake-up"},
+    {"id": "openclaw-host-internals", "status": "host-specific", "detail": "public SDK memory slot, Cron ownership, iframe actions and native dream renderer have no identical Hermes interface"},
 )
 
 
@@ -76,6 +93,9 @@ def parity_report() -> dict[str, Any]:
         "totalRequired": len(required),
         "counts": dict(counts),
         "features": list(FEATURES),
+        "coverageVersion": "7.10.0",
+        "coverageStatus": "partial",
+        "coverage710": list(COVERAGE_710),
     }
 
 
@@ -86,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     report = parity_report()
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 1 if arguments.strict and report["status"] != "ready" else 0
+    return 1 if arguments.strict and (report["status"] != "ready" or report["coverageStatus"] != "complete") else 0
 
 
 if __name__ == "__main__":

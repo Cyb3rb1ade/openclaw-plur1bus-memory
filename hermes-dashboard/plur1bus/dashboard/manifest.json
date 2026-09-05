@@ -1,0 +1,14 @@
+{
+  "name": "plur1bus",
+  "label": "PLUR1BUS",
+  "description": "Read-only status for the active PLUR1BUS memory partition.",
+  "icon": "Brain",
+  "version": "7.10.0",
+  "tab": {
+    "path": "/plur1bus",
+    "position": "after:memory"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

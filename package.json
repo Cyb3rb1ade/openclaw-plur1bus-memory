@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.10.0",
+  "version": "7.10.0-hermes",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -19,6 +19,11 @@
     }
   },
   "files": [
+    "plur1bus-hermes/",
+    "hermes-dashboard/",
+    "plur1bus-controls/",
+    "mtplx-embed/",
+    "hermes-model-providers/",
     "index.js",
     "lib/",
     "scripts/",
@@ -36,6 +41,10 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "tag": "hermes"
+  },
   "scripts": {
     "lint": "node --check index.js && find lib tests test -name '*.js' -exec node --check {} + && find scripts -name '*.mjs' -exec node --check {} +",
     "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 tests/*.test.js test/*.test.js",

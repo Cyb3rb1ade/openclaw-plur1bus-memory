@@ -8,6 +8,7 @@ hermes_python=""
 run_setup=1
 install_deps=1
 install_retrieval=1
+install_dashboard=0
 retrieval_args=()
 non_interactive="${PLUR1BUS_NONINTERACTIVE:-0}"
 
@@ -19,6 +20,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-setup)
       run_setup=0
+      shift
+      ;;
+    --dashboard)
+      install_dashboard=1
       shift
       ;;
     --no-deps)
@@ -39,7 +44,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      printf 'Usage: %s [--hermes-home PATH] [--no-setup] [--no-deps] [--no-retrieval] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
+      printf 'Usage: %s [--hermes-home PATH] [--dashboard] [--no-setup] [--no-deps] [--no-retrieval] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -50,9 +55,15 @@ source "$repo_dir/scripts/lib/hermes-home.sh"
 resolve_hermes_home "$hermes_home_arg" "$non_interactive"
 hermes_home="$HERMES_HOME_RESOLVED"
 export HERMES_HOME="$hermes_home"
-if [[ "$install_deps" == "1" || "$install_retrieval" == "1" ]]; then
+if [[ "$install_deps" == "1" || "$install_retrieval" == "1" || "$install_dashboard" == "1" ]]; then
   resolve_hermes_python "$hermes_home" 0
   hermes_python="$HERMES_PYTHON_RESOLVED"
+fi
+if [[ "$install_dashboard" == "1" && "$install_deps" == "0" ]]; then
+  if ! "$hermes_python" -c 'import plur1bus_hermes, fastapi' >/dev/null 2>&1; then
+    printf 'Dashboard needs plur1bus-hermes and the Hermes dashboard dependencies in the selected interpreter; omit --no-deps.\n' >&2
+    exit 4
+  fi
 fi
 
 memory_target="$hermes_home/plugins/plur1bus"
@@ -69,6 +80,17 @@ rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "
 rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/mtplx/" "$mtplx_target/"
 install -m 0755 "$repo_dir/scripts/run-hermes-workspace-migration-job.sh" "$bin_target/"
 install -m 0755 "$repo_dir/scripts/mtplx-hermes-up" "$bin_target/"
+
+# Dashboard installation is opt-in and never touches memory data or config.
+if [[ "$install_dashboard" == "1" ]]; then
+  dashboard_target="$memory_target/dashboard"
+  if [[ -L "$hermes_home/plugins" || -L "$memory_target" || -L "$dashboard_target" ]]; then
+    printf 'Refusing symbolic-link dashboard destination.\n' >&2
+    exit 4
+  fi
+  install -d "$dashboard_target"
+  rsync -a --exclude '__pycache__/' --exclude '*.pyc' "$repo_dir/hermes-dashboard/plur1bus/dashboard/" "$dashboard_target/"
+fi
 
 if [[ "$install_deps" == "1" ]]; then
   "$hermes_python" -m pip install --disable-pip-version-check "$repo_dir/plur1bus-hermes"
@@ -94,6 +116,10 @@ if [[ "$run_setup" == "1" && -x "$(command -v hermes || true)" ]]; then
   HERMES_HOME="$hermes_home" hermes config set memory.user_profile_enabled true
   HERMES_HOME="$hermes_home" hermes plugins enable plur1bus-controls || \
     printf 'Warning: enable controls manually with: HERMES_HOME="%s" hermes plugins enable plur1bus-controls\n' "$hermes_home" >&2
+  if [[ "$install_dashboard" == "1" ]]; then
+    HERMES_HOME="$hermes_home" hermes plugins enable plur1bus || \
+      printf 'Warning: enable dashboard backend manually: HERMES_HOME="%s" hermes plugins enable plur1bus\n' "$hermes_home" >&2
+  fi
 else
   cat <<EOF
 PLUR1BUS resolves retrieval from the active Hermes provider automatically.
@@ -102,6 +128,10 @@ To activate it after Hermes is available:
   HERMES_HOME="$hermes_home" hermes config set memory.memory_enabled false
   HERMES_HOME="$hermes_home" hermes plugins enable plur1bus-controls
 EOF
+fi
+
+if [[ "$install_dashboard" == "1" ]]; then
+  printf 'Dashboard backend requires: HERMES_HOME="%s" hermes plugins enable plur1bus; restart the dashboard server after installation.\n' "$hermes_home"
 fi
 
 cat <<EOF

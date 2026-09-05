@@ -19,6 +19,9 @@ class ParityTests(unittest.TestCase):
             )
         )
         self.assertEqual(report["readyRequired"], report["totalRequired"])
+        self.assertEqual(report["coverageStatus"], "partial")
+        coverage = {item["id"]: item for item in report["coverage710"]}
+        self.assertEqual(coverage["skill-workshop"]["status"], "not-ported")
 
 
 if __name__ == "__main__":

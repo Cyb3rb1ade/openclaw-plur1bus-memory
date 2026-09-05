@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import logging
 import math
 import os
 import re
@@ -28,6 +29,17 @@ except ImportError:  # pragma: no cover - exercised only before Hermes installs 
     class MemoryProvider:  # type: ignore[no-redef]
         """Fallback base class used only when Hermes is not importable."""
 
+try:
+    from agent.memory_provider import RecallStatus
+except ImportError:  # Older Hermes may have MemoryProvider but no status shape.
+    class RecallStatus:  # type: ignore[no-redef]
+        """Small compatibility shape used by non-Hermes package inspection."""
+
+        def __init__(self, provider_label: str, count: int, glyph: str = "🧠") -> None:
+            self.provider_label = provider_label
+            self.count = count
+            self.glyph = glyph
+
 from .service import PLUR1BUS_SERVICE
 from .runtime import Plur1busRuntime
 from .namespaces import binding_from_scope, normalize_scope_context
@@ -43,6 +55,8 @@ _DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 # allowing the embedding and reranking round-trip to finish on a normal turn.
 _CURRENT_RECALL_WAIT_SECONDS = 7.0
 _MAX_CURRENT_RECALL_WAIT_SECONDS = 7.0
+_TRUSTED_INTERNAL_DISPLAY_KINDS = frozenset({"internal_notification"})
+logger = logging.getLogger(__name__)
 
 
 def _utcnow_iso() -> str:
@@ -82,6 +96,11 @@ class Plur1busMemoryProvider(MemoryProvider):
         self._prefetch_cache: dict[str, str] = {}
         self._prefetch_futures: dict[str, Future[str]] = {}
         self._prefetch_lock = threading.RLock()
+        self._prefetch_generation = 0
+        self._last_recall_status: RecallStatus | None = None
+        # Hermes declares this context at provider initialization.  Non-primary
+        # agents must not convert internal work into durable user memory.
+        self._agent_context = "primary"
 
     @property
     def name(self) -> str:
@@ -107,6 +126,33 @@ class Plur1busMemoryProvider(MemoryProvider):
             or os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")))
         )
 
+    def unavailable_reason(self) -> str:
+        """Return the local prerequisite that prevented provider activation."""
+        if self._closed:
+            return "provider is shut down"
+        embedding = self._runtime_config().get("embedding", {})
+        provider = embedding.get("provider", "local-transformers")
+        fallback = embedding.get("fallback", {})
+        reranker = self._runtime_config().get("reranker", {})
+        local_needed = (
+            provider == "local-transformers"
+            or (isinstance(fallback, Mapping) and fallback.get("provider") == "local-transformers")
+            or (isinstance(reranker, Mapping) and (
+                reranker.get("provider") == "local-transformers"
+                or reranker.get("fallbackProvider") == "local-transformers"
+            ))
+        )
+        if importlib.util.find_spec("lancedb") is None:
+            return "missing Python dependency: lancedb"
+        if local_needed and importlib.util.find_spec("sentence_transformers") is None:
+            return "missing Python dependency: sentence-transformers"
+        if provider not in {"local-transformers", "omlx", "openai-compatible"} and not (
+            embedding.get("apiKey")
+            or os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")))
+        ):
+            return "embedding provider has no configured credentials"
+        return "provider configuration is unavailable"
+
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         """Initialize the provider for one Hermes session."""
         hermes_home = kwargs.get("hermes_home")
@@ -118,8 +164,10 @@ class Plur1busMemoryProvider(MemoryProvider):
         profile_name = str(kwargs.get("agent_identity") or kwargs.get("agent_id") or "")
         self.config = self._runtime_config(profile_name)
         self._validate_runtime_config()
+        self._release_previous_runtime()
         self._session_id = str(session_id or "")
         self._closed = False
+        self._agent_context = str(kwargs.get("agent_context") or "primary").lower()
         root = self._base_path()
         for name in ("archives", "cache", "state", "manifests"):
             (root / name).mkdir(parents=True, exist_ok=True)
@@ -175,6 +223,27 @@ class Plur1busMemoryProvider(MemoryProvider):
             "scopeKey": self._runtime.scope_key,
         }
 
+    def _release_previous_runtime(self) -> None:
+        """Release session-bound state before a repeated ``initialize`` replaces it."""
+        with self._prefetch_lock:
+            futures = list(self._prefetch_futures.values())
+            self._prefetch_futures.clear()
+            self._prefetch_cache.clear()
+            self._prefetch_generation += 1
+        for future in futures:
+            future.cancel()
+        self._last_recall_status = None
+        previous = self._runtime
+        self._runtime = None
+        if previous is None:
+            return
+        try:
+            previous.shutdown()
+        except Exception as error:
+            # A stale runtime must not prevent the next Hermes session from
+            # binding its own storage; retain only a local diagnostic.
+            logger.warning("PLUR1BUS previous runtime shutdown failed: %s", error)
+
     def system_prompt_block(self) -> str:
         return (
             "PLUR1BUS is the authoritative persistent-memory provider. Recalled "
@@ -184,6 +253,7 @@ class Plur1busMemoryProvider(MemoryProvider):
     def prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
         """Return only this query's recall after a short, fail-open bounded wait."""
         del kwargs
+        self._last_recall_status = None
         if session_id:
             self._session_id = session_id
         text = str(query).strip()
@@ -193,7 +263,7 @@ class Plur1busMemoryProvider(MemoryProvider):
         with self._prefetch_lock:
             result = self._prefetch_cache.pop(key, "")
         if result:
-            return f"<memory-context>\n{result}\n</memory-context>"
+            return self._format_recall_context(result)
 
         future = self._queue_recall(text, self._session_id, key)
         if future is None:
@@ -201,7 +271,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             # and queue lookup. It is still safe only for this exact query key.
             with self._prefetch_lock:
                 result = self._prefetch_cache.pop(key, "")
-            return f"<memory-context>\n{result}\n</memory-context>" if result else ""
+            return self._format_recall_context(result) if result else ""
         try:
             result = future.result(timeout=self._current_recall_wait_seconds())
         except TimeoutError:
@@ -215,7 +285,11 @@ class Plur1busMemoryProvider(MemoryProvider):
         with self._prefetch_lock:
             self._prefetch_futures.pop(key, None)
             self._prefetch_cache.pop(key, None)
-        return f"<memory-context>\n{result}\n</memory-context>"
+        return self._format_recall_context(result)
+
+    def recall_status(self) -> RecallStatus | None:
+        """Describe only the context injected by the current prefetch call."""
+        return self._last_recall_status
 
     def queue_prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> None:
         """Schedule background recall for the next eligible Hermes turn."""
@@ -228,7 +302,7 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def sync_turn(self, user: str, assistant: str, *, session_id: str = "", **kwargs: Any) -> None:
         """Queue a completed turn and return immediately to Hermes."""
-        if self._closed:
+        if self._closed or not self._capture_allowed(kwargs):
             return
         payload = normalize_text_payload({
             "agentId": str(kwargs.get("agent_id") or "default"),
@@ -258,7 +332,8 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def on_pre_compress(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
         """Durably checkpoint direct evidence before Hermes discards context."""
-        del kwargs
+        if not self._capture_allowed(kwargs, messages):
+            return ""
         checkpoint = self._write_pre_compress_checkpoint(messages)
         self._flush_captures()
         if self._runtime:
@@ -407,7 +482,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             return json.dumps({"ok": False, "error": "text is required"})
         if tool_name == "memory_recall":
             query = str(arguments.get("query", "")).strip()
-            context = self._run_recall(query, self._session_id) if query else ""
+            context = self._run_recall(query, self._session_id, self._runtime) if query else ""
             return json.dumps({"ok": True, "query": query, "context": context})
         if tool_name == "memory_forget":
             return json.dumps({"ok": False, "error": "memory_forget is available only through authorized PLUR1BUS controls"})
@@ -442,10 +517,15 @@ class Plur1busMemoryProvider(MemoryProvider):
     def _checkpoint_messages(cls, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         """Normalize old-host raw transcripts to Hermes checkpoint-v2 evidence."""
         evidence = []
+        skip_turn = False
         for message in messages or []:
             if not isinstance(message, Mapping):
                 continue
             role = str(message.get("role") or "")
+            if role == "user":
+                skip_turn = cls._is_trusted_internal_message(message)
+            if skip_turn:
+                continue
             if role not in {"user", "assistant"} or message.get("_compressed_summary"):
                 continue
             content = cls._checkpoint_text(message.get("content"))
@@ -453,6 +533,32 @@ class Plur1busMemoryProvider(MemoryProvider):
                 continue
             evidence.append({"role": role, "content": content})
         return evidence
+
+    @staticmethod
+    def _is_trusted_internal_message(message: Mapping[str, Any]) -> bool:
+        """Recognize the host-owned marker for self-injected gateway turns."""
+        return str(message.get("display_kind") or "").lower() in _TRUSTED_INTERNAL_DISPLAY_KINDS
+
+    def _capture_allowed(self, kwargs: Mapping[str, Any], messages: Any = None) -> bool:
+        """Keep non-primary and host-marked internal turns out of durable memory."""
+        if self._agent_context != "primary":
+            return False
+        if str(kwargs.get("agent_context") or "primary").lower() != "primary":
+            return False
+        transcript = messages if messages is not None else kwargs.get("messages")
+        if not isinstance(transcript, list):
+            return True
+        for message in reversed(transcript):
+            if not isinstance(message, Mapping) or str(message.get("role") or "") != "user":
+                continue
+            return not self._is_trusted_internal_message(message)
+        return True
+
+    def _format_recall_context(self, result: str) -> str:
+        """Fence recall and refresh the host recall indicator atomically."""
+        count = sum(1 for line in result.splitlines() if line.lstrip().startswith("- "))
+        self._last_recall_status = RecallStatus("PLUR1BUS", count)
+        return f"<memory-context>\n{result}\n</memory-context>"
 
     def _write_pre_compress_checkpoint(self, messages: list[dict[str, Any]]) -> str:
         """Write one fsync-backed, content-addressed checkpoint for a transcript."""
@@ -586,25 +692,41 @@ class Plur1busMemoryProvider(MemoryProvider):
             existing = self._prefetch_futures.get(key)
             if existing is not None:
                 return existing
-            future = self._prefetch_executor.submit(self._run_recall, query, session_id)
+            generation = self._prefetch_generation
+            runtime = self._runtime
+            future = self._prefetch_executor.submit(self._run_recall, query, session_id, runtime)
             self._prefetch_futures[key] = future
-        future.add_done_callback(lambda completed: self._store_prefetch_result(key, completed))
+        future.add_done_callback(
+            lambda completed: self._store_prefetch_result(key, completed, generation)
+        )
         return future
 
-    def _run_recall(self, query: str, session_id: str) -> str:
+    def _run_recall(
+        self,
+        query: str,
+        session_id: str,
+        runtime: Plur1busRuntime | None = None,
+    ) -> str:
         """Run one provider recall outside the synchronous Hermes lifecycle hook."""
         recall = PLUR1BUS_SERVICE.get("recall")
         if callable(recall):
             return str(recall(query=query, session_id=session_id) or "")
-        return self._runtime.recall(query) if self._runtime else ""
+        return runtime.recall(query) if runtime else ""
 
-    def _store_prefetch_result(self, key: str, future: Future[str]) -> None:
+    def _store_prefetch_result(
+        self,
+        key: str,
+        future: Future[str],
+        generation: int,
+    ) -> None:
         """Keep a completed recall result, while treating failures as fail-open."""
         try:
             result = future.result()
         except Exception:
             result = ""
         with self._prefetch_lock:
+            if generation != self._prefetch_generation:
+                return
             self._prefetch_futures.pop(key, None)
             if result:
                 self._prefetch_cache[key] = result

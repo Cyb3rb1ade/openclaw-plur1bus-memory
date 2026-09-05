@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes-Port-Kandidat 7.10.0-hermes (lokal)
+
+- Native Basis aus 7.4.8-hermes.1 auf unverändertem Upstream 7.10.0; Critical-
+  Sammelreview, inaktive Klassifikationskandidaten ausgeschlossen, Hermes-Lifecycle-
+  Isolation, private Dream Diary, explizite Recall-Opt-outs und Remote-Dimensionsprüfung.
+- Read-only Hermes-Dashboard, lokale Status-/Kompaktierungs-CLI und gebatchtes,
+  quellgebundenes Re-Embedding in separaten, niemals automatisch aktiven Stages.
+- Schema-/ACL-, Profilrouting-, Symlink- und Retry/Checkpoint-Regressionen;
+  Python-Wheels enthalten nun auch plugin.yaml.
+- Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
+  bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
+  `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
+
 ## [7.10.0] — 2026-09-05
 
 ### Geändert

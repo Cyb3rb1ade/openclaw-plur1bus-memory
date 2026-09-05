@@ -74,6 +74,15 @@ class SourceRoleGatingTests(unittest.TestCase):
         self.assertTrue(result["eligible"])
         self.assertEqual(result["reason"], "high_importance")
 
+    def test_nonactive_record_is_never_critical(self):
+        result = classify_critical(
+            "Never forget this.",
+            {"importance": 1.0, "neverForget": True},
+            status="deleted",
+        )
+        self.assertFalse(result["eligible"])
+        self.assertFalse(result["requiresReview"])
+
 
 class PreviewPrivacyTests(unittest.TestCase):
     def test_suppresses_sensitive_types(self):

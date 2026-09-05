@@ -262,6 +262,78 @@ class CriticalWorkflowTests(unittest.TestCase):
                 "pending_review",
             )
 
+    def test_batch_reject_reports_partial_result_without_hiding_failure(self):
+        temporary, domain, _table = self._domain_with_cards([
+            {"id": "00000000-0000-4000-8000-000000000001"},
+            {"id": "00000000-0000-4000-8000-000000000002"},
+        ])
+        with temporary:
+            original = domain.review_critical
+
+            def one_fails(memory_id, decision, **kwargs):
+                if memory_id.endswith("0002"):
+                    return {"updated": False, "reason": "card-changed", "id": memory_id}
+                return original(memory_id, decision, **kwargs)
+
+            domain.review_critical = one_fails
+            result = domain.review_critical_batch(["00001", "00002"], "reject")
+            self.assertEqual(result["updated"], 1)
+            self.assertEqual(result["failed"], 1)
+            self.assertTrue(result["partial"])
+            self.assertEqual(len(result["results"]), 2)
+
+    def test_all_batch_skips_deleted_and_foreign_cards(self):
+        temporary, domain, table = self._domain_with_cards([
+            {"id": "00000000-0000-4000-8000-000000000001"},
+            {"id": "00000000-0000-4000-8000-000000000002", "status": "deleted"},
+            {
+                "id": "00000000-0000-4000-8000-000000000003",
+                "scopeKey": "foreign-scope",
+                "aclBindings": {"agentId": "main", "scopeKey": "foreign-scope"},
+            },
+        ])
+        with temporary:
+            result = domain.review_critical_batch(None, "accept", all_pending=True)
+            self.assertEqual(result["requested"], 1)
+            self.assertEqual(result["updated"], 1)
+            self.assertTrue(table.rows[0]["confirmed"])
+            self.assertFalse(table.rows[1]["confirmed"])
+            self.assertFalse(table.rows[2]["confirmed"])
+
+    def test_reference_map_honors_snake_case_acl_binding(self):
+        temporary, domain, _table = self._domain_with_cards([])
+        with temporary:
+            selected = []
+            domain._all_pending_critical_items = lambda selector: selected.append(selector) or []
+            domain.critical_reference_map(acl_bindings={"agentId": "main", "scopeKey": "foreign-scope"})
+            self.assertEqual(selected[0].scope_key, "foreign-scope")
+
+    def test_batch_continues_after_exception_and_deduplicates_resolved_id(self):
+        temporary, domain, _table = self._domain_with_cards([
+            {"id": "00000000-0000-4000-8000-000000000001"},
+            {"id": "00000000-0000-4000-8000-000000000002"},
+        ])
+        with temporary:
+            calls = []
+
+            def review(memory_id, _decision, **_kwargs):
+                calls.append(memory_id)
+                if memory_id.endswith("0001"):
+                    raise RuntimeError("simulated")
+                return {"updated": True, "id": memory_id}
+
+            domain.review_critical = review
+            result = domain.review_critical_batch([
+                "00001", "00000000-0000-4000-8000-000000000001", "00002"
+            ], "accept")
+            self.assertEqual(calls, [
+                "00000000-0000-4000-8000-000000000001",
+                "00000000-0000-4000-8000-000000000002",
+            ])
+            self.assertEqual(result["updated"], 1)
+            self.assertEqual(result["failed"], 2)
+            self.assertEqual(result["results"][1]["reason"], "duplicate-reference")
+
 
 if __name__ == "__main__":
     unittest.main()

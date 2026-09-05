@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import threading
@@ -29,6 +30,7 @@ from .critical_review import (
     resolve_short_ref,
 )
 from .dreaming import build_rem_dream
+from .dream_diary import append_dream_diary_entry
 from .obsidian_maintenance import generate_obsidian_control_room
 from .mood import MoodEngine
 from .namespaces import (
@@ -136,6 +138,13 @@ class Plur1busDomain:
         self._llm_backend = None
         self._lock = threading.RLock()
         self._last_recall_ms = 0
+
+    def _feature_enabled(self, name: str) -> bool:
+        """Treat absent feature settings as enabled while honoring explicit opt-outs."""
+        value = self.config.get(name)
+        if value is False:
+            return False
+        return not (isinstance(value, Mapping) and value.get("enabled") is False)
 
     def _scope_selector(
         self,
@@ -507,10 +516,15 @@ class Plur1busDomain:
         self._build_graph_edges(record, table)
         metadata = self._metadata_for(record, importance=importance)
         source_role = str(record.get("sourceRole") or "")
+        # A delayed writer must not create a review proposal for a record that
+        # is no longer recall-eligible.
+        if str(record.get("status") or "active") != "active":
+            return
         critical = classify_critical(
             str(record.get("content") or ""),
             metadata,
             source_role=source_role,
+            status=str(record.get("status") or "active"),
         )
         classifications = self._read_jsonl(
             state_dir / "critical-classification.jsonl"
@@ -582,7 +596,7 @@ class Plur1busDomain:
             rows, acl_bindings=acl_bindings, scope_key=scope_key
         )
         rows = self._filter_rows(rows, selector) if selector is not None else []
-        if not rows:
+        if not rows or not self._feature_enabled("continuityEngine"):
             return ""
         analysis = analyze_text(query)
         distances = [
@@ -731,15 +745,21 @@ class Plur1busDomain:
         candidate_ids = self._graph_neighbor_ids(
             seen, acl_bindings=selector.acl_bindings
         )
-        candidate_ids.update(
-            self._semantic_lens_ids(seen, acl_bindings=selector.acl_bindings)
-        )
+        if self._feature_enabled("semanticLens"):
+            candidate_ids.update(
+                self._semantic_lens_ids(seen, acl_bindings=selector.acl_bindings)
+            )
         now = _now_ms()
-        if self._last_recall_ms and now - self._last_recall_ms >= 45 * 60 * 1000:
+        if (
+            self._feature_enabled("continuityEngine")
+            and self._last_recall_ms
+            and now - self._last_recall_ms >= 45 * 60 * 1000
+        ):
             candidate_ids.update(
                 self._reactivation_ids(seen, acl_bindings=selector.acl_bindings)
             )
-        self._last_recall_ms = now
+        if self._feature_enabled("continuityEngine"):
+            self._last_recall_ms = now
         hydrated = self._hydrate_ids(
             table,
             candidate_ids - seen,
@@ -1041,13 +1061,19 @@ class Plur1busDomain:
             self._commit_job_page(page)
             return dream
         self._append_jsonl(neo_dir / "dream-diary.jsonl", dream)
-        dreams_path = workspace_dir / "DREAMS.md"
-        dreams_path.parent.mkdir(parents=True, exist_ok=True)
-        with dreams_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"\n## Dream {_utcnow()}\n\n")
-            handle.write(f"{dream['narrative']}\n\n")
-            for insight in dream["insights"]:
-                handle.write(f"- {insight}\n")
+        diary_config = self.config.get("dreaming")
+        narrative_config = diary_config.get("narrative") if isinstance(diary_config, Mapping) else None
+        diary_enabled = not isinstance(narrative_config, Mapping) or narrative_config.get("diary", True) is not False
+        if diary_enabled and selector.scope_type == "agent-private":
+            append_dream_diary_entry(
+                workspace_dir=workspace_dir,
+                workspace_root=self.data_dir,
+                agent_id=self.agent_id,
+                narrative=str(dream["narrative"]),
+                scope=selector.acl_bindings,
+                mode="rem",
+                timezone_name=str(self.config.get("timezone") or "") or None,
+            )
         dream["persisted"] = 1
         dream["executed"] = 1
         self._commit_job_page(page)
@@ -1587,12 +1613,36 @@ class Plur1busDomain:
         scopeKey: str | None = None,
     ) -> dict[str, str]:
         """Kürzeste eindeutige Kurzreferenz je ausstehender Critical-Review."""
-        pending = self.critical_items(
-            "pending_review",
+        selector = self._scope_selector(
             acl_bindings=aclBindings if aclBindings is not None else acl_bindings,
             scope_key=scopeKey if scopeKey is not None else scope_key,
         )
+        pending = self._all_pending_critical_items(selector)
         return assign_short_refs([str(item["id"]) for item in pending])
+
+    def _all_pending_critical_items(self, selector: _ScopeSelector) -> list[dict[str, Any]]:
+        """Return every current pending item for an authorized scope.
+
+        Unlike the user-facing page this snapshot is not capped at 500: an
+        explicit ``all`` decision must not silently omit later items.
+        """
+        state_dir = self._scope_state_dir(selector)
+        latest: dict[str, dict[str, Any]] = {}
+        for item in self._scoped_jsonl(self.state_dir, state_dir, "critical-push.jsonl", selector):
+            if _row_matches_scope(item, selector) and str(item.get("id") or ""):
+                latest[str(item["id"])] = item
+        pending: list[dict[str, Any]] = []
+        for card in self._critical_candidates(selector):
+            memory_id = str(card.get("id") or "")
+            ledger = latest.get(memory_id)
+            if ledger is not None and ledger.get("status") != "pending_review":
+                continue
+            item = dict(card)
+            if ledger is not None and "reason" in ledger:
+                item["reason"] = ledger["reason"]
+            item["status"] = "pending_review"
+            pending.append(item)
+        return pending
 
     def resolve_critical_reference(
         self,
@@ -1606,11 +1656,11 @@ class Plur1busDomain:
         """Löst eine Kurzreferenz (oder vollständige UUID) gegen ausstehende
         Reviews auf. Liefert ``{"ok": True, "id": ...}`` oder ein Fehlerobjekt.
         """
-        pending = self.critical_items(
-            "pending_review",
+        selector = self._scope_selector(
             acl_bindings=aclBindings if aclBindings is not None else acl_bindings,
             scope_key=scopeKey if scopeKey is not None else scope_key,
         )
+        pending = self._all_pending_critical_items(selector)
         return resolve_short_ref(reference, pending)
 
     def review_critical_by_reference(
@@ -1634,6 +1684,64 @@ class Plur1busDomain:
         return self.review_critical(
             resolved["id"], decision, acl_bindings=acl_bindings, scope_key=scope_key
         )
+
+    def review_critical_batch(
+        self,
+        references: list[str] | None,
+        decision: str,
+        *,
+        all_pending: bool = False,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
+        """Review a scoped snapshot and report every success or failure honestly."""
+        if decision not in {"accept", "reject"}:
+            raise ValueError("decision must be accept or reject")
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        snapshot = self._all_pending_critical_items(selector)
+        targets: list[tuple[str, str]] = []
+        results: list[dict[str, Any]] = []
+        if all_pending:
+            targets = [(str(item["id"]), str(item.get("shortRef") or item["id"])) for item in snapshot]
+        else:
+            seen: set[str] = set()
+            for reference in references or []:
+                reference = str(reference)
+                if reference.lower() in seen:
+                    continue
+                seen.add(reference.lower())
+                resolved = resolve_short_ref(reference, snapshot)
+                if not resolved["ok"]:
+                    results.append({"reference": reference, "updated": False, "reason": resolved["error"]})
+                else:
+                    targets.append((str(resolved["id"]), reference))
+        executed_ids: set[str] = set()
+        for memory_id, reference in targets:
+            if memory_id in executed_ids:
+                results.append({"reference": reference, "updated": False, "reason": "duplicate-reference", "id": memory_id})
+                continue
+            executed_ids.add(memory_id)
+            try:
+                result = self.review_critical(memory_id, decision, acl_bindings=acl_bindings, scope_key=scope_key)
+            except Exception as error:
+                logging.getLogger(__name__).warning("critical batch review failed for %s: %s", memory_id, type(error).__name__)
+                result = {"updated": False, "reason": "review-failed", "id": memory_id}
+            results.append({"reference": reference, **result})
+        succeeded = sum(result.get("updated") is True for result in results)
+        failed = len(results) - succeeded
+        return {
+            "decision": decision,
+            "allPending": bool(all_pending),
+            "requested": len(results),
+            "updated": succeeded,
+            "failed": failed,
+            "partial": succeeded > 0 and failed > 0,
+            "results": results,
+        }
 
     def speaker_mappings(self) -> dict[str, str]:
         """Return the current agent-local speaker alias mappings."""
@@ -1760,9 +1868,7 @@ class Plur1busDomain:
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         pending = {
             item["id"]: item
-            for item in self.critical_items(
-                "pending_review", acl_bindings=acl_bindings, scope_key=scope_key
-            )
+            for item in self._all_pending_critical_items(selector)
         }
         if memory_id not in pending:
             return {"updated": False, "reason": "not-pending", "id": memory_id}
@@ -2226,6 +2332,8 @@ class Plur1busDomain:
         acl_bindings: Any = None,
         scope_key: str | None = None,
     ) -> set[str]:
+        if not self._feature_enabled("semanticLens"):
+            return set()
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         scoped_path = (
             self._scope_workspace_dir(selector)

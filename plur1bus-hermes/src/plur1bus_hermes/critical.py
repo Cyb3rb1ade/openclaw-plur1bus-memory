@@ -142,6 +142,8 @@ def classify_critical(
     text: str,
     metadata: dict[str, Any],
     source_role: str = "user",
+    *,
+    status: str = "active",
 ) -> dict[str, Any]:
     """Classify critical-push eligibility without exposing secret-like content.
 
@@ -151,6 +153,17 @@ def classify_critical(
     aber keinen Critical-Push aus — ``neverForget`` und echte Importance-Signale
     bleiben unabhängig von der Quelle wirksam.
     """
+    # Classification may be invoked from an asynchronous capture path.  A
+    # non-active record is never eligible for a new critical-review proposal.
+    if str(status or "active") != "active":
+        return {
+            "eligible": False,
+            "reason": "not_critical",
+            "importance": float(metadata.get("importance") or 0),
+            "requiresReview": False,
+            "suppressContent": False,
+            "sourceRole": str(source_role or ""),
+        }
     value = str(text or "")
     importance = float(metadata.get("importance") or 0)
     never_forget = bool(metadata.get("neverForget"))

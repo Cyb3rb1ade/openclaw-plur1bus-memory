@@ -9,6 +9,7 @@ from pathlib import Path
 import lancedb
 
 from plur1bus_hermes.domain import Plur1busDomain
+from plur1bus_hermes.dream_diary import END_MARKER, START_MARKER
 from plur1bus_hermes.namespaces import binding_from_scope
 
 
@@ -56,6 +57,31 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(self.domain.status()["dreams"], 1)
         self.assertFalse(report["destructiveChanges"])
         self.assertEqual(self.table.count_rows(), 1)
+
+    def test_private_dream_uses_managed_diary_without_erasing_manual_content(self) -> None:
+        diary = self.root / "profiles" / "main" / "workspace" / "DREAMS.md"
+        diary.parent.mkdir(parents=True)
+        diary.write_text("# My manual dream notes\n", encoding="utf-8")
+        self.domain.run_dreaming(self.table)
+        self.domain.run_dreaming(self.table)
+        text = diary.read_text(encoding="utf-8")
+
+        self.assertIn("# My manual dream notes", text)
+        self.assertEqual(text.count(START_MARKER), 1)
+        self.assertEqual(text.count(END_MARKER), 1)
+        self.assertEqual(text.count("REM synthesis connected"), 1)
+
+    def test_diary_disabled_and_shared_dreams_never_create_dreams_md(self) -> None:
+        disabled = Plur1busDomain(self.root / "disabled", "main", {"dreaming": {"narrative": {"diary": False}}})
+        disabled.run_dreaming(self.table)
+        self.assertFalse((disabled.workspace_dir / "DREAMS.md").exists())
+
+        shared = Plur1busDomain(self.root / "shared", "main")
+        shared.run_dreaming(
+            self.table,
+            acl_bindings={"agentId": "main", "scopeType": "workspace", "workspaceIdentity": "team"},
+        )
+        self.assertFalse((shared.workspace_dir / "DREAMS.md").exists())
 
 
 if __name__ == "__main__":

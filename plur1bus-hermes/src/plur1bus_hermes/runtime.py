@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import urllib.error
@@ -44,6 +45,9 @@ def _utcnow() -> str:
 
 
 OMLX_BASE_URL = "http://127.0.0.1:8000/v1"
+
+_JINA_V3_MODEL = "jinaai/jina-embeddings-v3"
+_JINA_V3_MATRYOSHKA_DIMENSIONS = frozenset({32, 64, 128, 256, 512, 768, 1024})
 
 LOGGER = logging.getLogger(__name__)
 
@@ -148,6 +152,8 @@ class EmbeddingBackend:
         stored text instead of a question. Measured on real memories, this was
         the difference between the answering document ranking 347th and 1st.
         """
+        if purpose not in {"query", "passage"}:
+            raise ValidationError("embedding purpose must be query or passage")
         if not texts:
             return []
         results: list[list[float] | None] = [self._cache.get(text, purpose) for text in texts]
@@ -168,6 +174,8 @@ class EmbeddingBackend:
                     self._embed_with(fallback, text, purpose=purpose) for text in missing_texts
                 ]
         for index, text, vector in zip(missing_indexes, missing_texts, computed, strict=True):
+            if not vector or any(not math.isfinite(float(value)) for value in vector):
+                raise ValidationError("embedding returned an empty or non-finite vector")
             expected = int(self.config.get("dimensions", len(vector)))
             if len(vector) != expected:
                 raise ValidationError(f"embedding dimensions mismatch: expected {expected}, got {len(vector)}")
@@ -176,7 +184,9 @@ class EmbeddingBackend:
         return [value for value in results if value is not None]
 
     def close(self) -> None:
-        """Close persistent cache handles owned by this backend."""
+        """Release loaded local models and persistent cache handles."""
+        with self._lock:
+            self._models.clear()
         self._cache.close()
 
     def _embed_with(self, config: dict[str, Any], text: str, *, purpose: str) -> list[float]:
@@ -190,11 +200,13 @@ class EmbeddingBackend:
         raise ValidationError(f"unsupported embedding provider: {provider}")
 
     def _embed_local(self, config: dict[str, Any], text: str, *, purpose: str) -> list[float]:
+        model_name = str(config.get("model", "intfloat/multilingual-e5-base"))
+        if model_name == _JINA_V3_MODEL:
+            return self._embed_local_jina_v3(config, text, purpose=purpose)
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as error:
             raise RuntimeError("local embeddings require sentence-transformers") from error
-        model_name = str(config.get("model", "intfloat/multilingual-e5-base"))
         cache_dir = Path(str(config.get("cacheDir") or self.hermes_home / "plur1bus" / "models"))
         with self._lock:
             model = self._models.get(model_name)
@@ -213,12 +225,47 @@ class EmbeddingBackend:
             raise ValidationError(f"embedding dimensions mismatch: expected {expected}, got {len(result)}")
         return result
 
+    def _embed_local_jina_v3(
+        self, config: dict[str, Any], text: str, *, purpose: str
+    ) -> list[float]:
+        """Fail closed until every Jina v3 remote-code dependency is pinned."""
+        if config.get("acceptNonCommercialLicense") is not True:
+            raise RuntimeError(
+                "jinaai/jina-embeddings-v3 requires explicit acceptance of its "
+                "CC-BY-NC-4.0 license before local use"
+            )
+        dimensions = int(config.get("dimensions", 1024))
+        if dimensions not in _JINA_V3_MATRYOSHKA_DIMENSIONS:
+            raise ValidationError(
+                "jinaai/jina-embeddings-v3 dimensions must be one of "
+                "32, 64, 128, 256, 512, 768, 1024"
+            )
+        raise RuntimeError(
+            "jinaai/jina-embeddings-v3 local loading is unsupported: its pinned "
+            "model revision delegates remote code to a separately versioned repository "
+            "that has not been independently audited and pinned"
+        )
+
     def _embed_remote(self, config: dict[str, Any], text: str, *, purpose: str) -> list[float]:
-        key = os.environ.get(str(config.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")), "")
+        key = str(config.get("apiKey") or "")
+        if not key:
+            explicit_env = config.get("apiKeyEnv")
+            key = os.environ.get(str(explicit_env), "") if explicit_env else (
+                os.environ.get("PLUR1BUS_EMBEDDING_API_KEY", "")
+                or os.environ.get("OPENAI_API_KEY", "")
+            )
         if not key:
             raise RuntimeError("remote embedding API key is not configured")
         base_url = str(config.get("baseUrl") or "https://api.openai.com/v1").rstrip("/")
         body = {"model": config["model"], "input": text, "encoding_format": "float"}
+        # OpenAI v3 models support requested dimensions; other compatible
+        # servers are probed by validating their actual vector below.
+        if config["model"] in {"text-embedding-3-small", "text-embedding-3-large"} and "dimensions" in config:
+            width = int(config["dimensions"])
+            maximum = 1536 if config["model"] == "text-embedding-3-small" else 3072
+            if width < 1 or width > maximum:
+                raise ValidationError("invalid dimensions for OpenAI embedding model")
+            body["dimensions"] = width
         instruction = config.get("queryInstruction")
         if purpose == "query" and instruction:
             body["instruction"] = instruction
@@ -599,7 +646,12 @@ class Plur1busRuntime:
             and float(row["_distance"]) > 0.65
             for row in rows
         )
-        refined_query = refine_query(semantic_query)
+        recall_config = self.config.get("recall", {})
+        refinement = recall_config.get("queryRefinement", {}) if isinstance(recall_config, dict) else {}
+        refinement_enabled = refinement is not False and not (
+            isinstance(refinement, dict) and refinement.get("enabled") is False
+        )
+        refined_query = refine_query(semantic_query) if refinement_enabled else ""
         if poor_first_pass and refined_query and refined_query != semantic_query.lower():
             refined_vector = self._embedding.embed(refined_query, purpose="query")
             for namespace, recall_table in recall_tables:

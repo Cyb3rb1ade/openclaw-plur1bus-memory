@@ -2,7 +2,11 @@
 
 This directory contains the installable Hermes memory-provider package for PLUR1BUS.
 
-Current scope in this milestone:
+Native adapter candidate: **7.10.0-hermes**, Python **7.10.0**.
+Compatibility was inspected against Hermes 0.21.0. Detailed coverage and
+remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` in the repository.
+
+Core architecture:
 
 - A Hermes `MemoryProvider` subclass with the lifecycle hooks used by Hermes 0.19+.
 - Shared validation helpers that mirror critical OpenClaw-side constraints.
@@ -13,17 +17,17 @@ It intentionally runs without a Node.js dependency and is designed to run
 inside Hermes' plugin process. Install it with `scripts/install-hermes-plugins.sh`;
 the provider and controls are copied below the selected Hermes home.
 
-The adapter is installable and lifecycle-correct, but the full PLUR1BUS domain
-parity (LanceDB recall/capture, graph, Obsidian, dreaming, and migration copy)
-is still tracked in the migration plan and must not be used as a production
-cutover yet.
+Capture/recall, graph, Obsidian, dreaming and migration are native Python
+implementations. This candidate does not claim full 7.10 UI/Workshop parity.
+No production cutover, live installation or publication is implied by a build.
+`plur1bus-hermes-parity --strict` deliberately reports incomplete upstream
+coverage even when the retained native-runtime baseline is ready.
 
 ### Retrieval configuration
 
-The Hermes schema-migration bugfix is released as `7.4.8-hermes.1` with
-Python package version `7.4.8.1`. Install the release packages from that tag,
-or clone it and run
-`scripts/install-hermes-plugins.sh` for the complete Hermes-plugin path. Its
+This candidate retains the `7.4.8-hermes.1` schema-migration fixes. Run
+`scripts/install-hermes-plugins.sh` from the selected verified checkout for
+the complete Hermes-plugin path. Its
 pip step alone is not a complete installation: the full installer copies the
 provider, controls, model-provider plugins, and helpers into the selected
 Hermes home, installs provider dependencies with that instance's Python, and
