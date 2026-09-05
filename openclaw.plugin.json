@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.11.0",
+  "version": "7.11.1",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
@@ -121,6 +121,12 @@
               },
               "passagePrefix": {
                 "type": "string"
+              },
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 32,
+                "maximum": 8192,
+                "description": "Per-text token cap for the pinned local Jina runtimes (default 512). Bounds the attention working set the ONNX runtime keeps for the longest text of a batch."
               },
               "cacheDir": {
                 "type": "string"

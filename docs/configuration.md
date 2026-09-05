@@ -185,6 +185,13 @@ veroeffentlichten Praefixe `Query: ` und `Document: ` unterschieden; der
 Provider verweigert abweichende Praefixe, damit ein kopierter v3-Block (leere
 Praefixe) nicht stillschweigend untypisierten Text einbettet.
 
+Beide Jina-Laeufe kappen jeden Text bei `embedding.local.maxTokens` (Vorgabe
+512, erlaubt 32 bis 8192). Die ONNX-Laufzeit haelt die Attention fuer die
+laengste Karte eines Batches mal Batchgroesse vor und gibt den Speicher nie
+zurueck; ohne Kappung brachte ein Batch mit den laengsten Karten den Prozess
+auf ueber 30 GB. Wer lange Karten vollstaendig einbetten will, hebt den Wert
+bewusst an und rechnet mit dem entsprechenden Arbeitsspeicher.
+
 ```json
 {
   "embedding": {

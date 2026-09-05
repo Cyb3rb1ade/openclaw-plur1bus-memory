@@ -7,6 +7,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.11.1] — 2026-09-05
+
+### Behoben
+
+- **Lange Karten trieben die lokalen Jina-Embeddings in den OOM-Killer.** Beide
+  gepinnten Jina-Modelle nehmen 8192 Token an, und die ONNX-Laufzeit hält die
+  Attention für die längste Karte eines Batches mal Batchgröße im Arbeitsspeicher
+  vor, ohne ihn je zurückzugeben. Im Labortest zu 7.11.0 wuchs der v3-Prozess
+  auf 41 GB und wurde bei Karte 808 von 1 031 vom Kernel abgeschossen; ein
+  einziger Batch mit den acht längsten Karten (bis 15 000 Zeichen) brachte Nano
+  auf +30 GB und 117 s. Beide Jina-Läufe kappen jeden Text jetzt bei
+  `embedding.local.maxTokens`, Vorgabe 512 (32 bis 8192). Derselbe Batch
+  braucht damit +0,6 GB (Nano) bzw. +1,1 GB (v3) und 5 bzw. 22 s. Memory-Karten
+  sind Zusammenfassungen, 512 Token decken das 90. Perzentil mehrfach ab; wer
+  lange Karten vollständig einbetten will, hebt den Wert bewusst an. Die
+  Kappung geht in die Identität des geteilten Modell-Pools ein.
+
 ## [7.11.0] — 2026-09-05
 
 ### Hinzugefügt

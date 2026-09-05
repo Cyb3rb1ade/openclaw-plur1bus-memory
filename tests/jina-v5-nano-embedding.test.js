@@ -51,9 +51,9 @@ function fakeTransformersRuntime(calls, {
     AutoTokenizer: {
       async from_pretrained(model, options) {
         calls.push(["tokenizer-load", model, options]);
-        return async (texts) => {
+        return async (texts, options) => {
           const input = Array.isArray(texts) ? texts : [texts];
-          calls.push(["tokenize", [...input]]);
+          calls.push(["tokenize", [...input], options]);
           // Row 0 is padded on the right: two real tokens, one pad.
           const mask = new BigInt64Array(input.length * 3).fill(1n);
           mask[2] = 0n;
@@ -174,6 +174,8 @@ describe("downloadable Jina v5 Text Nano embedding", () => {
 
     const tokenized = calls.filter(([kind]) => kind === "tokenize").map(([, texts]) => texts);
     assert.deepEqual(tokenized[0], ["Query: Wann hat die Tante Geburtstag?"]);
+    const tokenizeOptions = calls.find(([kind]) => kind === "tokenize")[2];
+    assert.deepEqual(tokenizeOptions, { padding: true, truncation: true, max_length: 512 }, "texts are capped at 512 tokens by default");
     assert.deepEqual(tokenized[1], ["Document: Die Tante hat am 16.08. Geburtstag.", "Document: Anne und Wolfgang sind Freunde."]);
 
     const modelLoad = calls.find(([kind]) => kind === "model-load");
@@ -197,6 +199,20 @@ describe("downloadable Jina v5 Text Nano embedding", () => {
     assert.ok(Math.abs(padded[0] - 0.6) < 1e-6 && Math.abs(padded[1] - 0.8) < 1e-6);
     assert.ok(Math.abs(full[0] - 0.6) < 1e-6 && Math.abs(full[1] - 0.8) < 1e-6);
     await embedding.shutdown();
+  });
+
+  it("caps every text at the configured token count and refuses caps outside 32 to 8192", async () => {
+    const calls = [];
+    const embedding = provider(calls, { maxTokens: 256 });
+    await embedding.embedPassage("x");
+    assert.equal(calls.find(([kind]) => kind === "tokenize")[2].max_length, 256);
+    await embedding.shutdown();
+    assert.throws(() => provider([], { maxTokens: 16 }), /between 32 and 8192/);
+    assert.throws(() => provider([], { maxTokens: 10_000 }), /between 32 and 8192/);
+    assert.throws(() => provider([], { maxTokens: 1.5 }), /between 32 and 8192/);
+    const normalized = normalizeEmbeddingConfig({ provider: "local-transformers", local: { model: MODEL, dimensions: 768, maxTokens: 384 } });
+    assert.equal(normalized.local.maxTokens, 384);
+    assert.equal("maxTokens" in normalizeEmbeddingConfig({ provider: "local-transformers", local: { model: MODEL, dimensions: 768 } }).local, false);
   });
 
   it("refuses prefixes that differ from the profile, so a copied v3 block cannot embed untyped text", () => {

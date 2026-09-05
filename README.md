@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.11.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.11.1 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.11.0**. PLUR1BUS 7.11.0 supports OpenClaw `2026.8.1`
+Current source version: **7.11.1**. PLUR1BUS 7.11.1 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,18 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.11.1 — long cards no longer drive the local Jina models into the OOM killer
+
+- Both pinned Jina models accept 8,192 tokens, and the ONNX runtime keeps the
+  attention working set of the longest text in a batch, times the batch size,
+  without ever returning it. In the 7.11.0 lab run the v3 process grew to 41 GB
+  and was killed at card 808 of 1,031; one batch of the eight longest cards
+  (up to 15,000 characters) took nano to +30 GB and 117 s. Both Jina runtimes
+  now cap every text at `embedding.local.maxTokens`, default 512 (32 to 8,192).
+  The same batch then costs +0.6 GB (nano) or +1.1 GB (v3) and 5 or 22 s.
+  Memory cards are summaries; raise the cap deliberately if long cards must be
+  embedded in full. The cap is part of the shared model pool identity.
 
 ### New in v7.11.0 — Jina v5 Text Nano as a local embedding option
 
@@ -851,9 +863,36 @@ runs as the upstream Q8 export at roughly a quarter of v3's compute and about
 the process grows by about 120 MB. Jina reports MMTEB 65.5 against 64.44 for
 v3. Queries and documents are told apart by the `Query: ` and `Document: `
 prefixes. Whether it becomes the proposal for new installs is decided by the
-PLUR1BUS lab test on real memory cards (agreement with the production ranking,
-margin between hits and noise, false duplicates above 0.95, latency, memory),
-not by the version number.
+PLUR1BUS lab test on real memory cards, not by the version number. That test
+ran on 5 September 2026 (OpenClaw 2026.9.1, Transformers.js 4.2.0, 12 cores
+shared with other work): 1,031 active cards of one agent, 72 real recall
+queries from the gateway log, the production ranking (OpenAI
+`text-embedding-3-large`, 3,072 dimensions) as reference, both models through
+the real provider with the 512-token cap, in separate processes, back to back.
+
+| | Jina v5 Text Nano, 768d | Jina v3, 1024d |
+|---|---|---|
+| Production top-1 found at rank 1 / within top 5 | 48.6 % / 70.8 % | 47.2 % / 73.6 % |
+| Overlap of the top 5 with production | 47.2 % | 46.1 % |
+| Median top-1 similarity / median noise band (ranks 11 to 50) | 0.615 / 0.333 | 0.721 / 0.541 |
+| Margin top hit over noise, median / 10th percentile | 0.242 / 0.132 | 0.153 / 0.100 |
+| Distinct-card pairs at or above 0.95 / 0.96 (production: 59 / 49) | 90 / 81 | 84 / 66 |
+| Model load | 5.1 s | 14.1 s |
+| One card in a batch of 8 (migration path) | 478 ms | 1,556 ms |
+| One card alone (capture path) | 313 ms | 416 ms |
+| One query (recall path) | 256 ms | 124 ms |
+| Process growth after load / peak | 444 MB / 1.2 GB | 1,120 MB / 2.3 GB |
+
+Reading it: on ranking quality the two are level within the noise of 72
+queries. Nano separates hits from the noise band much more clearly (v3
+compresses similarities into a narrow band around 0.54, which is what makes
+thresholds hard to set), embeds cards three times faster in batches, loads in
+a third of the time and needs half the memory; v3 answers a single query
+twice as fast, which at a quarter of a second is not a user-visible
+difference. Both models push more distinct pairs above the 0.95 duplicate
+threshold than the production model, mostly genuine near-duplicates. The
+default for new installs is decided on these numbers by the maintainer, not
+by this file.
 
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
 and removes the ANN noise. Two local models are pinned, both quantized ONNX
