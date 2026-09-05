@@ -50,3 +50,23 @@ printf 'replace-me\n' > "$default_home/plugins/model-providers/omlx/sentinel.py"
 [[ -f "$default_home/plugins/model-providers/omlx/__init__.py" ]]
 [[ -f "$default_home/plugins/model-providers/vmlx/__init__.py" ]]
 [[ -f "$default_home/plugins/model-providers/mtplx/__init__.py" ]]
+
+# Desktop is explicit, uses the native disk door, and refuses symlink targets.
+desktop_home="$temporary/desktop-home"
+mkdir -p "$desktop_home/plugins" "$temporary/bin"
+printf 'memory: {}\n' > "$desktop_home/config.yaml"
+printf '#!/bin/sh\nexit 0\n' > "$temporary/bin/python"
+printf '#!/bin/sh\nexit 0\n' > "$temporary/bin/hermes"
+chmod +x "$temporary/bin/python" "$temporary/bin/hermes"
+PATH="$temporary/bin:$PATH" HERMES_PYTHON="$temporary/bin/python" "$repo_dir/scripts/install-hermes-plugins.sh" \
+  --hermes-home "$desktop_home" --desktop --no-setup --no-deps --no-retrieval --no-model-providers >/dev/null
+cmp "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$desktop_home/desktop-plugins/plur1bus/plugin.js"
+[[ -f "$desktop_home/plugins/plur1bus/dashboard/manifest.json" ]]
+mv "$desktop_home/desktop-plugins/plur1bus" "$temporary/outside-desktop"
+ln -s "$temporary/outside-desktop" "$desktop_home/desktop-plugins/plur1bus"
+if PATH="$temporary/bin:$PATH" HERMES_PYTHON="$temporary/bin/python" "$repo_dir/scripts/install-hermes-plugins.sh" \
+  --hermes-home "$desktop_home" --desktop --no-setup --no-deps --no-retrieval --no-model-providers >/dev/null 2>&1; then
+  printf 'Desktop installer followed a symbolic link\n' >&2
+  exit 1
+fi
+cmp "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$temporary/outside-desktop/plugin.js"

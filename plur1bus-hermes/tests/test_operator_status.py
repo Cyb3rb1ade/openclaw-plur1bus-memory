@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from plur1bus_hermes.namespaces import binding_from_scope, resolve_namespace_routes
-from plur1bus_hermes.operator_status import optimize_runtime_table, read_operator_status
+from plur1bus_hermes.operator_status import browse_runtime_memories, optimize_runtime_table, read_operator_status
 
 
 class _Table:
@@ -36,6 +36,32 @@ class _Database:
 
 
 class OperatorStatusTests(unittest.TestCase):
+    def test_memory_browser_real_lance_scope_literal_search_and_paging(self):
+        import lancedb
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime, _ = self._runtime(Path(temporary), _Table())
+            rows = [{"id": str(i), "agentId": "main", "scopeKey": runtime.scope_binding.scope_key,
+                     "content": "Owner's 100% _ literal", "status": "active", "vector": [0.1, 0.2],
+                     "internalSecret": "not exported"} for i in range(3)]
+            rows += [{**rows[0], "id": "foreign", "scopeKey": "foreign"},
+                     {**rows[0], "id": "foreign-agent", "agentId": "other"},
+                     {**rows[0], "id": "archived", "status": "archived"}]
+            table = lancedb.connect(str(runtime._writer_route.path)).create_table("memories", data=rows)
+            page = browse_runtime_memories(runtime, query="Owner's 100% _", limit=2)
+            self.assertEqual(len(page["items"]), 2)
+            self.assertTrue(page["hasMore"])
+            last = browse_runtime_memories(runtime, offset=2, limit=2)
+            self.assertEqual(len(last["items"]), 1)
+            self.assertFalse(last["hasMore"])
+            self.assertEqual(browse_runtime_memories(runtime, query="' OR 1=1 --")["items"], [])
+            self.assertEqual(browse_runtime_memories(runtime, status="archived")["items"][0]["id"], "archived")
+            self.assertNotIn("vector", repr(page))
+            self.assertNotIn("internalSecret", repr(page))
+            self.assertEqual(table.count_rows(), 6)
+            for args in ({"query": "x" * 201}, {"query": "\x00"}, {"offset": -1}, {"limit": 51}, {"status": "bad"}):
+                with self.subTest(args=args), self.assertRaises(ValueError):
+                    browse_runtime_memories(runtime, **args)
+
     def test_local_onnx_credentials_are_not_reported_as_missing_remote_key(self):
         from plur1bus_hermes.operator_status import _credential_state
         self.assertEqual(_credential_state({"provider": "local-onnx"}, "local-onnx", reranker=False), "not_required")

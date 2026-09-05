@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .namespaces import resolve_namespace_routes, scope_where_clause
-from .validation import safe_agent_id
+from .validation import safe_agent_id, safe_status
 
 
 _PUBLIC_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -195,6 +195,43 @@ def read_operator_status(
             "code": "table_unavailable",
         }
     return projection
+
+
+def browse_runtime_memories(runtime: Any, *, query: str = "", status: str = "active",
+                            offset: int = 0, limit: int = 20,
+                            connect: Callable[[str], Any] | None = None) -> dict[str, Any]:
+    """Read a bounded page from the exact authorized scope, without embeddings or writes.
+
+    This is literal substring inspection, not recall: archived/expired records may
+    be inspected explicitly, and neither vectors nor internal provenance is exported.
+    """
+    if not isinstance(query, str) or len(query) > 200 or any(ord(c) < 32 for c in query):
+        raise ValueError("invalid search query")
+    safe_status(status)
+    if type(offset) is not int or not 0 <= offset <= 100000 or type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("invalid page bounds")
+    table = _open_exact_table(runtime, connect)
+    binding = getattr(runtime, "scope_binding", None)
+    if binding is None:
+        raise ValueError("runtime scope binding is unavailable")
+    predicate = f"({scope_where_clause(binding)}) AND status = '{status}'"
+    if query:
+        literal = query.lower().replace("'", "''")
+        predicate += f" AND strpos(lower(content), '{literal}') > 0"
+    # Schema intersection supports old stores without migrating them during a GET.
+    allowed = {"id", "content", "status", "type", "createdAt", "updatedAt", "expiresAt",
+               "validFrom", "validUntil", "epistemicStatus", "sourceRole", "importance"}
+    columns = sorted(allowed.intersection(table.schema.names))
+    rows = table.search().where(predicate).select(columns).offset(offset).limit(limit + 1).to_list()
+    items = [{key: row[key] for key in columns if key in row} for row in rows[:limit]]
+    for item in items:
+        content = item.get("content")
+        if isinstance(content, str) and len(content) > 32768:
+            item["content"] = content[:32768]
+            item["contentTruncated"] = True
+    return {"items": items,
+            "offset": offset, "limit": limit, "hasMore": len(rows) > limit,
+            "searchMode": "literal-substring", "status": status}
 
 
 def optimize_runtime_table(

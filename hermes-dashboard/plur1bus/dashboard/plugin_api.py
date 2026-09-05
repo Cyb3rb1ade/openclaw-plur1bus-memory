@@ -13,11 +13,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from plur1bus_hermes.namespaces import binding_from_scope, normalize_scope_context, resolve_namespace_routes
-from plur1bus_hermes.operator_status import read_operator_status
+from plur1bus_hermes.operator_status import browse_runtime_memories, read_operator_status
 from plur1bus_hermes.provider import Plur1busMemoryProvider
 from plur1bus_hermes.runtime import Plur1busRuntime
 from plur1bus_hermes.skill_workshop import SkillWorkshop
@@ -95,6 +95,52 @@ def get_status() -> dict[str, Any]:
 class _WorkshopAction(BaseModel):
     proposal_id: str
     revision: str
+
+
+@router.get("/memories")
+def get_memories(request: Request, query: str = Query("", max_length=200), status: str = Query("active", pattern="^(active|superseded|archived|deleted)$"),
+                 offset: int = Query(0, ge=0, le=100000), limit: int = Query(20, ge=1, le=50)) -> dict[str, Any]:
+    """Inspect bounded content from the server-selected scope; never a client-selected path."""
+    _actor(request)
+    try:
+        return browse_runtime_memories(_active_runtime_view(), query=query, status=status, offset=offset, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="memory_request_invalid") from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="memories_unavailable") from error
+
+
+class _DesktopWorkshopAction(_WorkshopAction):
+    confirmation: str
+    nonce: str
+
+
+def _desktop_actor(request: Request) -> str:
+    """Authenticate native IPC transport, never a browser cookie or an origin bypass.
+
+    Electron sends a host-issued session token (or verified OAuth bearer), JSON,
+    and no browser Origin/Fetch-Metadata headers. Web actions retain their
+    independent same-origin + confirmation-header checks unchanged.
+    """
+    if request.headers.get("origin") is not None or request.headers.get("sec-fetch-site") is not None:
+        raise HTTPException(status_code=403, detail="native_transport_required")
+    session = getattr(request.state, "session", None)
+    if session is not None:
+        token = str(getattr(session, "access_token", "") or "")
+        presented = request.headers.get("authorization", "")
+        if not token or not hmac.compare_digest(presented, "Bearer " + token):
+            raise HTTPException(status_code=401, detail="native_bearer_required")
+    return _actor(request)
+
+
+@router.get("/desktop/capabilities")
+def desktop_capabilities(request: Request) -> dict[str, Any]:
+    try:
+        _desktop_actor(request)
+        actions = True
+    except HTTPException:
+        actions = False
+    return {"memoryBrowser": True, "workshopActions": actions}
 
 
 def _actor(request: Request) -> str:
@@ -259,6 +305,10 @@ def _run_workshop_action(action: _WorkshopAction, request: Request, verb: str) -
     _same_origin_confirmation(request, verb)
     actor = _actor(request)
     nonce = request.headers.get("X-Plur1bus-Action-Nonce", "")
+    return _commit_workshop_action(action, actor, nonce, verb)
+
+
+def _commit_workshop_action(action: _WorkshopAction, actor: str, nonce: str, verb: str) -> dict[str, Any]:
     with _runtime_lease() as (runtime, view):
         context = _route_context(runtime, view)
         _consume_nonce(nonce=nonce, actor=actor, context=context, verb=verb,
@@ -274,6 +324,17 @@ def _run_workshop_action(action: _WorkshopAction, request: Request, verb: str) -
             # Do not expose local paths, evidence, or backend details.
             raise HTTPException(status_code=409, detail="workshop_action_rejected") from error
     return result
+
+
+@router.post("/desktop/workshop/{verb}")
+def desktop_workshop_action(verb: str, action: _DesktopWorkshopAction, request: Request) -> dict[str, Any]:
+    """Native JSON confirmation over host-authenticated IPC with the same review nonce."""
+    actor = _desktop_actor(request)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="json_required")
+    if verb not in {"approve", "publish"} or action.confirmation != verb:
+        raise HTTPException(status_code=403, detail="explicit_confirmation_required")
+    return _commit_workshop_action(action, actor, action.nonce, verb)
 
 
 @router.post("/workshop/approve")

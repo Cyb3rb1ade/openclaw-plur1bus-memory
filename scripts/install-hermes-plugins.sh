@@ -9,6 +9,7 @@ run_setup=1
 install_deps=1
 install_retrieval=1
 install_dashboard=0
+install_desktop=0
 install_model_providers=1
 retrieval_args=()
 non_interactive="${PLUR1BUS_NONINTERACTIVE:-0}"
@@ -24,6 +25,11 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --dashboard)
+      install_dashboard=1
+      shift
+      ;;
+    --desktop)
+      install_desktop=1
       install_dashboard=1
       shift
       ;;
@@ -49,7 +55,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      printf 'Usage: %s [--hermes-home PATH] [--dashboard] [--no-setup] [--no-deps] [--no-retrieval] [--no-model-providers] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
+      printf 'Usage: %s [--hermes-home PATH] [--dashboard|--desktop] [--no-setup] [--no-deps] [--no-retrieval] [--no-model-providers] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -72,6 +78,13 @@ if [[ "$install_dashboard" == "1" && "$install_deps" == "0" ]]; then
 fi
 
 memory_target="$hermes_home/plugins/plur1bus"
+desktop_target="$hermes_home/desktop-plugins/plur1bus"
+if [[ "$install_desktop" == "1" ]]; then
+  if [[ -L "$hermes_home/desktop-plugins" || -L "$desktop_target" || -L "$desktop_target/plugin.js" ]]; then
+    printf 'Refusing symbolic-link desktop plugin destination.\n' >&2
+    exit 4
+  fi
+fi
 controls_target="$hermes_home/plugins/plur1bus-controls"
 omlx_target="$hermes_home/plugins/model-providers/omlx"
 vmlx_target="$hermes_home/plugins/model-providers/vmlx"
@@ -105,6 +118,13 @@ fi
 
 if [[ "$install_deps" == "1" ]]; then
   "$hermes_python" -m pip install --disable-pip-version-check "$repo_dir/plur1bus-hermes" "$repo_dir/plur1bus-controls"
+fi
+
+if [[ "$install_desktop" == "1" ]]; then
+  install -d "$desktop_target"
+  install -m 0644 "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$desktop_target/plugin.js"
+  printf 'Installed native PLUR1BUS Desktop entry; open PLUR1BUS in the bottom status bar or command palette.\n'
+  printf 'Restart Hermes Desktop to load backend updates. The frontend uses a native workspace tab, not the contributed route cache.\n'
 fi
 
 if [[ "$install_retrieval" == "1" ]]; then
