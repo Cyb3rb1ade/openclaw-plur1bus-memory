@@ -449,3 +449,28 @@ describe("Obsidian target with path confirmation switched off", () => {
     assert.match(response.body, /3 targets detected/);
   });
 });
+
+describe("shared partition counters", () => {
+  it("explains all-zero shared workspace partitions instead of showing bare zeros", async () => {
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        memoryHealth: {
+          status: "ready",
+          observedAt: 1_000,
+          namespaces: [],
+          cards: { byAgent: [{ id: "main", cards: 9 }], byWorkspace: [{ id: "main", cards: 0 }, { id: "main.dir", cards: 0 }], byUser: [] },
+          storage: { bytes: 1, complete: true },
+          lastError: null,
+        },
+      }),
+    });
+    const response = fakeResponse();
+    await handler({ method: "GET", url: CONTROL_UI_PATH }, response);
+    assert.match(response.body, /<code>main<\/code><strong>0<\/strong>/);
+    assert.match(response.body, /<code>main\.dir<\/code><strong>0<\/strong>/);
+    assert.match(response.body, /hold no cards yet\. A card gets there through \/share &lt;id&gt;/);
+    assert.match(response.body, /No shared user cards observed\./);
+    assert.doesNotMatch(response.body, /through \/share &lt;id&gt; --user/, "the user hint only appears for existing all-zero user partitions");
+  });
+});

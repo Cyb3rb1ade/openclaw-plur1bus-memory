@@ -23,6 +23,7 @@ import {
   userPoolKey,
   workspacePoolKey,
   describeDirectSessionRoute,
+  describeWorkspacePoolLabels,
   resolveSessionOwnerMemoryContext,
 } from "../lib/memory-request-context.js";
 import { buildNeoWorkspaceAliases } from "../lib/neo-arch.js";
@@ -1352,5 +1353,30 @@ describe("operator session context for identity-bound steps", () => {
       assert.ok(ctx.workspaceIdentity, sessionKey);
     }
     assert.equal(describeDirectSessionRoute("agent:main:telegram:group:-100123", routingCapability), null, "a group is not a direct chat");
+  });
+});
+
+describe("shared workspace pool labels", () => {
+  it("names each aliased pool and its pre-alias directory identity without a path", () => {
+    const { mkdtempSync, mkdirSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-pool-labels-"));
+    const mainDir = join(root, "workspace"); mkdirSync(mainDir);
+    const bDir = join(root, "workspace-bernhardine"); mkdirSync(bDir);
+    const labels = describeWorkspacePoolLabels({
+      paths: [{ path: mainDir, workspaceKey: "workspace:v1:main" }, { path: bDir, workspaceKey: "workspace:v1:bernhardine" }],
+      aliases: [{ alias: "main", workspaceKey: "workspace:v1:main" }, { alias: "Bernhardine", workspaceKey: "workspace:v1:bernhardine" }, { alias: "bernhardine", workspaceKey: "workspace:v1:bernhardine" }],
+    });
+    const byLabel = Object.fromEntries(labels.map((entry) => [entry.label, entry]));
+    assert.deepEqual(Object.keys(byLabel).sort(), ["Bernhardine.dir", "Bernhardine", "main", "main.dir"].sort());
+    assert.equal(byLabel.main.poolKey, workspacePoolKey("workspace:v1:main"));
+    assert.equal(byLabel["main.dir"].poolKey, workspacePoolKey(`workspace-dir:v1:${mainDir}`));
+    assert.equal(byLabel.Bernhardine.label.length, "Bernhardine".length, "the shortest alias wins; ties fall to the lexically first");
+    for (const entry of labels) {
+      assert.doesNotMatch(entry.label, /\//, "labels never carry a path");
+      assert.match(entry.label, /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
+    }
+    assert.deepEqual(describeWorkspacePoolLabels(), []);
   });
 });

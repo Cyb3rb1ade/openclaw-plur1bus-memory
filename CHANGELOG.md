@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.10] — 2026-09-05
+
+### Behoben
+
+- **„Cards by workspace" zeigte nur Hash-Schlüssel und Nullen.** Die
+  geteilten Workspace-Partitionen heißen im Store `w-<hash>`; einen Namen
+  bekam die Karte bisher nur aus dauerhaften Workspace-Richtlinien, die es
+  meist nicht gibt. Jetzt liefert der Alias-Schnappschuss die Namen: die
+  Partition eines Alias erscheint als `main`, die Partition seiner
+  Verzeichnis-Identität von vor dem Alias als `main.dir`; eine nackte
+  `workspace:v1:<id>`-Identität wird als `<id>` gezeigt. Pfade bleiben
+  draußen. Sind alle Zähler null, sagt die Karte, dass die Partitionen zwar
+  existieren, aber noch keine Karte per `/share` dorthin kopiert wurde; die
+  Nullen waren korrekt, nur unerklärt.
+
 ## [7.8.9] — 2026-09-05
 
 ### Behoben

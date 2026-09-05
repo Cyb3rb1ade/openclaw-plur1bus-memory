@@ -205,6 +205,7 @@ import {
   createMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
+  describeWorkspacePoolLabels,
   resolveMemoryRequestContext,
   resolveSessionOwnerMemoryContext,
   resolveToolMemoryRequestContext,
@@ -5343,13 +5344,27 @@ const plugin = {
     // request: the warm-up at gateway start and the background refresh never
     // go through a request, and without this they would count shared
     // workspace cards under raw pool keys.
+    // Pool keys are hashes; the page needs names. Durable policy records name
+    // their workspace identity, the alias snapshot names every aliased
+    // workspace (`main`) and its pre-alias directory identity (`main.dir`).
+    // A bare `workspace:v1:<id>` identity is shown as `<id>`.
+    const shortWorkspaceLabel = (identity) => (
+      typeof identity === "string" && identity.startsWith("workspace:v1:") && identity.length > "workspace:v1:".length
+        ? identity.slice("workspace:v1:".length)
+        : identity
+    );
     const syncControlHealthWorkspaceIdentities = () => {
       controlHealthWorkspaceIdentityByKey.clear();
       for (const record of workspacePolicyStore.list()) {
         controlHealthWorkspaceIdentityByKey.set(
           workspacePoolKey(record.workspaceIdentity),
-          record.workspaceIdentity,
+          shortWorkspaceLabel(record.workspaceIdentity),
         );
+      }
+      for (const entry of describeWorkspacePoolLabels(memoryWorkspaceAliases)) {
+        if (!controlHealthWorkspaceIdentityByKey.has(entry.poolKey)) {
+          controlHealthWorkspaceIdentityByKey.set(entry.poolKey, entry.label);
+        }
       }
     };
     const controlHealth = createControlPlaneHealthInspector({
