@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.11.0] — 2026-09-05
+
+### Hinzugefügt
+
+- **Jina v5 Text Nano als lokales Embedding-Ziel.** Gepinnt ist der
+  veröffentlichte Q8-ONNX-Export von `jinaai/jina-embeddings-v5-text-nano-retrieval`
+  (Revision `ac5d898c`, fünf Artefakte mit Größe und SHA-256, rund 265 MB).
+  Neuer Runtime-Zweig `jina-v5` im lokalen Embedding-Provider: EuroBERT-Konfig
+  wird geprüft, das Modell liefert `sentence_embedding` (normalisiertes
+  Last-Token-Pooling) direkt, sonst poolt der Provider über die Attention-Maske;
+  Matryoshka 32 bis 768; Anfrage und Dokument über die Präfixe `Query: ` und
+  `Document: `, abweichende Präfixe werden verweigert. Zielprofile
+  `jina-v5-nano-32…768` im Schema, im Dimensions-Planer und im Dashboard
+  (Re-Embedding-Migration wie bisher), Option 4 im Wizard und `jina5` im
+  Shell-Installer, jeweils mit Lizenzzustimmung (CC BY-NC 4.0). Eine Option,
+  kein Vorschlag: Der Default bleibt unverändert, bis der PLUR1BUS-Labortest
+  gegen v3 ausgewertet ist. Bestehende Konfigurationen werden nicht angefasst.
+
 ## [7.10.0] — 2026-09-05
 
 ### Geändert

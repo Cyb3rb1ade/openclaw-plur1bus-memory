@@ -176,6 +176,36 @@ nicht benoetigt.
 }
 ```
 
+Seit 7.11.0 ist zusaetzlich das Jina-v5-Text-Nano-Embedding gepinnt (Retrieval-
+Adapter in die Gewichte gemischt, EuroBERT-Encoder, 239M Parameter, 15
+europaeische Sprachen, Last-Token-Pooling). Es ist eine Option, kein Vorschlag;
+der PLUR1BUS-Labortest gegen v3 entscheidet ueber den Default. `dimensions`
+darf 32, 64, 128, 256, 512 oder 768 sein. Anfrage und Dokument werden ueber die
+veroeffentlichten Praefixe `Query: ` und `Document: ` unterschieden; der
+Provider verweigert abweichende Praefixe, damit ein kopierter v3-Block (leere
+Praefixe) nicht stillschweigend untypisierten Text einbettet.
+
+```json
+{
+  "embedding": {
+    "provider": "local-transformers",
+    "dimensions": 768,
+    "local": {
+      "model": "jinaai/jina-embeddings-v5-text-nano-retrieval",
+      "revision": "ac5d898c8d382b17167c33e5c8af644a3519b47d",
+      "dimensions": 768,
+      "queryPrefix": "Query: ",
+      "passagePrefix": "Document: ",
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
+    }
+  },
+  "modelPreparation": {
+    "profile": "jina-v5-nano-768",
+    "acceptNonCommercialLicense": true
+  }
+}
+```
+
 Die Bestaetigung ist kein reiner UI-Hinweis: Ohne sie verweigern sowohl der
 aktive Provider als auch Re-Embedding-Probes und der zentrale Artefakt-
 Downloader Jina vor Netzwerk- oder Modellzugriff. Vorbereitung, Zielprobe und
@@ -196,7 +226,8 @@ Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
 `text-embedding-3-large` 1 bis 3072 Dimensionen zulaessig; die Ansicht bietet
 dafuer bewaehrte Presets und markiert die jeweilige Standardbreite. Das lokale
 `intfloat/multilingual-e5-small` liefert fest 384 Dimensionen. Das getrennte
-Jina-v3-Embedding unterstuetzt exakt 32/64/128/256/512/768/1024 Dimensionen.
+Jina-v3-Embedding unterstuetzt exakt 32/64/128/256/512/768/1024 Dimensionen,
+das Jina-v5-Nano-Embedding exakt 32/64/128/256/512/768.
 Der Jina-v2-Reranker und BGE sind Reranker und besitzen keine Memory-
 Vektordimension.
 

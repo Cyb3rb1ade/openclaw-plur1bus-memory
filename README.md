@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.10.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.11.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.10.0**. PLUR1BUS 7.10.0 supports OpenClaw `2026.8.1`
+Current source version: **7.11.0**. PLUR1BUS 7.11.0 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,21 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.11.0 — Jina v5 Text Nano as a local embedding option
+
+- The published Q8 ONNX export of `jinaai/jina-embeddings-v5-text-nano-retrieval`
+  is pinned (five artifacts, about 265 MB, SHA-256 checked). A `jina-v5`
+  runtime branch validates the EuroBERT config, takes the graph's own
+  `sentence_embedding` (normalized last-token pooling) or pools over the
+  attention mask itself, truncates to 32 to 768 Matryoshka dimensions, and
+  distinguishes queries from documents by the published `Query: ` and
+  `Document: ` prefixes, refusing any other prefix. Targets `jina-v5-nano-*`
+  appear in the schema, the dimension planner, the dashboard switch (same
+  re-embedding migration), wizard option 4 and installer choice `jina5`, each
+  behind the CC BY-NC 4.0 acknowledgement. An option, not a proposal: the
+  default stays where it is until the PLUR1BUS lab test against v3 is in,
+  and existing configurations are untouched.
 
 ### New in v7.10.0 — BGE is the recommended local reranker
 
@@ -805,7 +820,8 @@ exactly what the compatibility lab showed when it measured with E5 and no
 reranker. The recommended model spreads similarities much wider:
 `jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
 1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
-do their job, which is why the installer proposes Jina and lists E5 only as the
+do their job. The installer's first option is OpenAI; among the local models it
+offers Jina v3 (and, since 7.11.0, Jina v5 Text Nano) and lists E5 only as the
 small keyless fallback. The embedding model is switched from the PLUR1BUS tab
 as well (`controlUi.writeActions: "all"`): the button picks the target model,
 model preparation downloads and verifies it, and the re-embedding migration
@@ -826,6 +842,18 @@ hardware; it halves storage and ANN cost for a loss of 0.2 points. Do not go
 below 256: from 128 down the recall loss becomes visible and the similarity
 spread compresses, which moves every threshold. The dimension is baked into
 the table, so changing it later means another re-embedding run.
+
+*Jina v5 Text Nano (7.11.0), an option with the lab test pending.* The
+EuroBERT-based nano model (239M parameters, 12 layers, 768 dimensions with
+Matryoshka down to 32, 15 European languages including German, CC BY-NC 4.0)
+runs as the upstream Q8 export at roughly a quarter of v3's compute and about
+265 MB on disk; on the reference machine one card embeds in about 0.45 s and
+the process grows by about 120 MB. Jina reports MMTEB 65.5 against 64.44 for
+v3. Queries and documents are told apart by the `Query: ` and `Document: `
+prefixes. Whether it becomes the proposal for new installs is decided by the
+PLUR1BUS lab test on real memory cards (agreement with the production ranking,
+margin between hits and noise, false duplicates above 0.95, latency, memory),
+not by the version number.
 
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
 and removes the ANN noise. Two local models are pinned, both quantized ONNX

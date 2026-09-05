@@ -60,6 +60,12 @@ describe("automatic local embedding model preparation", () => {
         "jina-v3-multilingual-512",
         "jina-v3-multilingual-768",
         "jina-v3-multilingual-1024",
+        "jina-v5-nano-32",
+        "jina-v5-nano-64",
+        "jina-v5-nano-128",
+        "jina-v5-nano-256",
+        "jina-v5-nano-512",
+        "jina-v5-nano-768",
       ];
     assert.deepStrictEqual(EMBEDDING_PREPARATION_TARGETS.map(({ id }) => id), ids);
     const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));

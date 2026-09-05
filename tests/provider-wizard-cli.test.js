@@ -166,6 +166,32 @@ describe("provider wizard CLI input validation", () => {
     });
   });
 
+  it("returns the pinned JinaAI v5 Text Nano local embedding as option 4, after the license acknowledgement", async () => {
+    const result = await runWizard(["4", "yes", "3"]);
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.match(result.stderr, /\[4\] Local: JinaAI jina-embeddings-v5-text-nano/);
+    const parsed = parseWizardResult(result.stdout);
+    assert.deepStrictEqual(parsed?.embedding, {
+      provider: "local-transformers",
+      local: {
+        model: "jinaai/jina-embeddings-v5-text-nano-retrieval",
+        revision: "ac5d898c8d382b17167c33e5c8af644a3519b47d",
+        dimensions: 768,
+        queryPrefix: "Query: ",
+        passagePrefix: "Document: ",
+      },
+    });
+    assert.deepStrictEqual(parsed?.modelPreparation, { profile: "jina-v5-nano-768", acceptNonCommercialLicense: true });
+  });
+
+  it("refuses the v5 nano option without the license acknowledgement", async () => {
+    const result = await runWizard(["4", "no"]);
+
+    assert.notStrictEqual(result.code, 0);
+    assert.strictEqual(parseWizardResult(result.stdout), null);
+  });
+
   it("returns the pinned JinaAI v3 local embedding with no credential", async () => {
     const result = await runWizard(["3", "yes", "3"]);
 

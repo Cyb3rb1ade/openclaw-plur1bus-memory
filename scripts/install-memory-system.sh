@@ -760,8 +760,10 @@ info "  1) OpenAI text-embedding-3-large — empfohlen, remote, API-Key erforder
 info "  2) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
 info "  3) Local JinaAI jina-embeddings-v3 — mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
 warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
-info "  4) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
-prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=E5, jina=JinaAI, custom=OpenAI-kompatibel" "openai" "openai" "local" "jina" "custom"
+info "  4) Local JinaAI jina-embeddings-v5-text-nano — neue Option, Labortest gegen v3 offen; 15 europäische Sprachen, Matryoshka, verifizierter ~0,26-GB-Q8-Download."
+warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
+info "  5) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=E5, jina=JinaAI v3, jina5=JinaAI v5 Nano (Labortest offen), custom=OpenAI-kompatibel" "openai" "openai" "local" "jina" "jina5" "custom"
 
 case "$EMBEDDING_PROVIDER_MODE" in
   openai)
@@ -799,6 +801,23 @@ case "$EMBEDDING_PROVIDER_MODE" in
     info "Lokaler Provider nutzt $EMBEDDING_MODEL (1024d; Matryoshka: 32/64/128/256/512/768/1024)."
     warn "CC BY-NC 4.0: Diese lokale Modelloption ist nur für nicht-kommerzielle Nutzung vorgesehen."
     info "Der erste echte Aufruf lädt den gepinnten Q8-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
+    ;;
+  jina5)
+    if ! confirm "CC BY-NC 4.0 für JinaAI jina-embeddings-v5-text-nano ausdrücklich akzeptieren?" "n"; then
+      error "JinaAI jina-embeddings-v5-text-nano wird ohne ausdrückliche Zustimmung zur CC BY-NC 4.0 nicht konfiguriert."
+      exit 1
+    fi
+    JINA_LICENSE_ACCEPTED="true"
+    MODEL_PREPARATION_PROFILE="jina-v5-nano-768"
+    EMBEDDING_PROVIDER="local-transformers"
+    EMBEDDING_LOCAL_MODEL="jinaai/jina-embeddings-v5-text-nano-retrieval"
+    EMBEDDING_LOCAL_REVISION="ac5d898c8d382b17167c33e5c8af644a3519b47d"
+    EMBEDDING_LOCAL_QUERY_PREFIX="Query: "
+    EMBEDDING_LOCAL_PASSAGE_PREFIX="Document: "
+    EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
+    EMBEDDING_DIMENSIONS=768
+    info "Lokaler Provider nutzt $EMBEDDING_MODEL (768d; Matryoshka: 32/64/128/256/512/768; Präfixe Query:/Document:)."
+    warn "CC BY-NC 4.0: Diese lokale Modelloption ist nur für nicht-kommerzielle Nutzung vorgesehen."
     ;;
   custom)
     EMBEDDING_PROVIDER="openai-compatible"
