@@ -791,23 +791,50 @@ background noise sit so close together that neither the ranking nor a threshold
 can separate them cleanly, and the band 0.96 to 1.0 reserved for agent-marked
 cards as well as the duplicate threshold of 0.95 lose their meaning. This is
 exactly what the compatibility lab showed when it measured with E5 and no
-reranker. The recommended models spread similarities much wider:
-`jinaai/jina-embeddings-v3` locally (multilingual, Matryoshka dimensions from 32
-to 1024, CC BY-NC 4.0 license consent required) or OpenAI
-`text-embedding-3-large` hosted. With either of them ranking and thresholds do
-their job, which is why the installer proposes Jina or OpenAI and lists E5 only
-as the small keyless fallback. Changing the embedding model is a migration with
-a re-embedding run (dry run, copy, separate switch), not a setting.
+reranker. The recommended model spreads similarities much wider:
+`jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
+1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
+do their job, which is why the installer proposes Jina and lists E5 only as the
+small keyless fallback. Changing the embedding model is a migration with a
+re-embedding run (dry run, copy, separate switch), not a setting.
 
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
-and removes the ANN noise. Hosted, that is Cohere `rerank-v3.5`; locally,
+and removes the ANN noise. Locally, that is
 `jinaai/jina-reranker-v2-base-multilingual`, with `bge-reranker-v2-m3` as the
-controlled fallback when the Jina model fails. Switching between them is a
-runtime choice without any data migration (see `controlUi.writeActions`). The
-project has no measured quality difference between the Jina and BGE rerankers:
-both passed every run of the compatibility matrix, including the controlled
-fallback and the cache surviving a Gateway restart, and that is a functional
-proof, not a ranking benchmark.
+controlled fallback when the Jina model fails; both run as quantized ONNX
+models through Transformers.js. Switching between them is a runtime choice
+without any data migration (see `controlUi.writeActions`). The two models
+differ in size and in what they are good at:
+
+| | Jina reranker v2 | BGE reranker v2-m3 |
+|---|---|---|
+| Parameters, layers | 278M, 12 layers | 568M, 24 layers |
+| Context per query+document | 1,024 tokens | 8,192 tokens |
+| Quantized ONNX artifact | 280 MB | 570 MB |
+| License | CC BY-NC 4.0 | Apache 2.0 |
+| BEIR nDCG@10 (English) | 53.17 / 57.06 | 53.65 / 56.51 |
+| MKQA (26 languages) | 54.83 / 67.90 | 54.17 / 67.88 |
+| MIRACL nDCG@10 (18 languages) | 63.65 | 69.32 |
+| MLDR recall@10 (long documents) | 68.95 | 59.73 |
+| CodeSearchNet MRR@10 / CoIR nDCG@10 | 71.36 / 56.14 | 62.86 / 35.97 |
+| ToolBench recall@3 | 77.75 | 78.46 |
+
+Where two numbers are given, the first comes from the Jina model card and the
+second from the jina-reranker-v3 paper; the two evaluations use different
+candidate sets, so compare within a column pair, not across. On English and on
+the 26-language MKQA set the two are level. BGE is clearly ahead on MIRACL,
+the broad multilingual retrieval benchmark, and slightly ahead on tool
+retrieval. Jina is clearly ahead on long documents and on code, and at half the
+depth it reranks noticeably faster on CPU; Jina quotes up to 15x the document
+throughput of BGE with flash attention on a GPU. For PLUR1BUS memory cards,
+which are short German or English summaries, the practical differences are
+speed and license, not ranking quality: Jina is the lighter default, BGE the
+Apache-licensed fallback with the longer context.
+
+Sources: [Jina model card](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual),
+[BGE model card](https://huggingface.co/BAAI/bge-reranker-v2-m3),
+[jina-reranker-v3 paper, table 2](https://arxiv.org/abs/2509.25085),
+[Jina Reranker v2 announcement](https://jina.ai/news/jina-reranker-v2-for-agentic-rag-ultra-fast-multilingual-function-calling-and-code-search/).
 
 Settings for both stages are described in
 [docs/configuration.md](docs/configuration.md); the installer offers the
