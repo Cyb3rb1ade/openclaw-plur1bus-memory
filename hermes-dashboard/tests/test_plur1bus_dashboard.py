@@ -41,6 +41,7 @@ class Plur1busDashboardTests(unittest.TestCase):
     def test_manifest_declares_relative_read_only_api(self) -> None:
         manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "plur1bus")
+        self.assertIn("reviewed Skill Workshop actions", manifest["description"])
         self.assertEqual(manifest["api"], "plugin_api.py")
         self.assertFalse(Path(manifest["api"]).is_absolute())
         self.assertTrue((ROOT / manifest["entry"]).is_file())

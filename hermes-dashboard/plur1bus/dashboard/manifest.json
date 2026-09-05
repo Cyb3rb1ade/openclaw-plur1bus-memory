@@ -1,7 +1,7 @@
 {
   "name": "plur1bus",
   "label": "PLUR1BUS",
-  "description": "Read-only status for the active PLUR1BUS memory partition.",
+  "description": "Scoped PLUR1BUS status and reviewed Skill Workshop actions for the active memory partition.",
   "icon": "Brain",
   "version": "7.10.0",
   "tab": {

@@ -9,6 +9,7 @@ run_setup=1
 install_deps=1
 install_retrieval=1
 install_dashboard=0
+install_model_providers=1
 retrieval_args=()
 non_interactive="${PLUR1BUS_NONINTERACTIVE:-0}"
 
@@ -34,6 +35,10 @@ while [[ $# -gt 0 ]]; do
       install_retrieval=0
       shift
       ;;
+    --no-model-providers)
+      install_model_providers=0
+      shift
+      ;;
     --non-interactive)
       non_interactive=1
       retrieval_args+=("$1")
@@ -44,7 +49,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      printf 'Usage: %s [--hermes-home PATH] [--dashboard] [--no-setup] [--no-deps] [--no-retrieval] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
+      printf 'Usage: %s [--hermes-home PATH] [--dashboard] [--no-setup] [--no-deps] [--no-retrieval] [--no-model-providers] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -72,12 +77,17 @@ omlx_target="$hermes_home/plugins/model-providers/omlx"
 vmlx_target="$hermes_home/plugins/model-providers/vmlx"
 mtplx_target="$hermes_home/plugins/model-providers/mtplx"
 bin_target="$hermes_home/bin"
-install -d "$memory_target" "$controls_target" "$omlx_target" "$vmlx_target" "$mtplx_target" "$bin_target"
+install -d "$memory_target" "$controls_target" "$bin_target"
 rsync -a --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/plur1bus-hermes/src/plur1bus_hermes/" "$memory_target/"
 rsync -a --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/plur1bus-controls/src/plur1bus_controls/" "$controls_target/"
-rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/omlx/" "$omlx_target/"
-rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/vmlx/" "$vmlx_target/"
-rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/mtplx/" "$mtplx_target/"
+if [[ "$install_model_providers" == "1" ]]; then
+  install -d "$omlx_target" "$vmlx_target" "$mtplx_target"
+  rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/omlx/" "$omlx_target/"
+  rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/vmlx/" "$vmlx_target/"
+  rsync -a --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '* 2.*' "$repo_dir/hermes-model-providers/mtplx/" "$mtplx_target/"
+else
+  printf 'Skipped model-provider plugins (--no-model-providers); existing omlx, vmlx, and mtplx code was preserved.\n'
+fi
 install -m 0755 "$repo_dir/scripts/run-hermes-workspace-migration-job.sh" "$bin_target/"
 install -m 0755 "$repo_dir/scripts/mtplx-hermes-up" "$bin_target/"
 
@@ -138,9 +148,19 @@ cat <<EOF
 Installed PLUR1BUS Hermes plugins:
   $memory_target
   $controls_target
+EOF
+
+if [[ "$install_model_providers" == "1" ]]; then
+  cat <<EOF
   $omlx_target
   $vmlx_target
   $mtplx_target
+EOF
+else
+  printf '  model providers: skipped (--no-model-providers; existing code preserved)\n'
+fi
+
+cat <<EOF
 
 Configure Hermes with:
   memory.provider: plur1bus
