@@ -185,10 +185,37 @@ def run_jobs(
                     "reminders": reminders,
                 })
             if mode in {"daily", "all"}:
+                if callable(getattr(domain, "run_episode_narratives", None)):
+                    results["episodeNarratives"] = gate.run(
+                        "episode-narratives", 86_400, lambda: scoped_call(domain.run_episode_narratives)
+                    )
                 results["metaReflection"] = (
                     gate.run("meta-reflection", 604_800, domain.run_meta_reflection)
                     if scope_type == "agent-private"
                     else {"skipped": True, "reason": "agent-private-only"}
+                )
+                # These optional LLM features are deliberately job-bound, not
+                # prompt-path work.  Each implementation validates its own
+                # configured opt-in and returns a clear skipped reason.
+                results["llmMetaReflection"] = (
+                    gate.run("llm-meta-reflection", 604_800, domain.run_llm_meta_reflection)
+                    if scope_type == "agent-private" and callable(getattr(domain, "run_llm_meta_reflection", None))
+                    else {"skipped": True, "reason": "agent-private-only-or-unavailable"}
+                )
+                results["lightDream"] = (
+                    gate.run("light-dream", 86_400, lambda: scoped_call(domain.run_light_dream))
+                    if scope_type == "agent-private" and callable(getattr(domain, "run_light_dream", None))
+                    else {"skipped": True, "reason": "agent-private-only-or-unavailable"}
+                )
+                results["knowledgeProposals"] = (
+                    gate.run("knowledge-promotions", 86_400, lambda: scoped_call(domain.propose_knowledge_promotions))
+                    if scope_type == "agent-private" and callable(getattr(domain, "propose_knowledge_promotions", None))
+                    else {"skipped": True, "reason": "agent-private-only-or-unavailable"}
+                )
+                results["personaSeed"] = (
+                    gate.run("persona-seed", 86_400, lambda: scoped_call(domain.ensure_persona_voice_seed))
+                    if scope_type == "agent-private" and callable(getattr(domain, "ensure_persona_voice_seed", None))
+                    else {"skipped": True, "reason": "agent-private-only-or-unavailable"}
                 )
                 results["criticalAutoAccept"] = gate.run(
                     "critical-auto-accept",

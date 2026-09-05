@@ -11,8 +11,19 @@ import sqlite3
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from .validation import ValidationError
+
+
+@dataclass
+class _EmbeddingInFlight:
+    """One owner computation and its result for identical cache requests."""
+
+    event: threading.Event = field(default_factory=threading.Event)
+    result: list[float] | None = None
+    error: BaseException | None = None
 
 
 class EmbeddingCache:
@@ -24,9 +35,10 @@ class EmbeddingCache:
         self.ttl_seconds = max(60, int(config.get("cacheTtlSeconds", 7 * 86_400)))
         self.persist = bool(config.get("cachePersist", False))
         self.max_bytes = max(0, min(1_073_741_824, int(config.get("cacheMaxBytes", 67_108_864))))
-        self.metrics = {"hits": 0, "misses": 0, "persistHits": 0, "persistWrites": 0, "persistSkips": 0}
+        self.metrics = {"hits": 0, "misses": 0, "persistHits": 0, "persistWrites": 0, "persistSkips": 0, "coalesced": 0}
         self._memory: OrderedDict[str, tuple[float, list[float]]] = OrderedDict()
         self._lock = threading.RLock()
+        self._inflight: dict[str, _EmbeddingInFlight] = {}
         self._database: sqlite3.Connection | None = None
         self._db_path: Path | None = None
         if self.persist and self.max_entries:
@@ -74,6 +86,9 @@ class EmbeddingCache:
 
     def _get(self, text: str, purpose: str) -> list[float] | None:
         key = self.key(text, purpose)
+        return self._get_by_key(key)
+
+    def _get_by_key(self, key: str) -> list[float] | None:
         now = time.time()
         with self._lock:
             cached = self._memory.get(key)
@@ -106,6 +121,78 @@ class EmbeddingCache:
             self._set(text, vector, purpose)
         except Exception as error:
             logging.getLogger(__name__).warning("Embedding cache write bypassed: %s", type(error).__name__)
+
+    def get_or_compute(
+        self,
+        text: str,
+        compute: Callable[[], list[float]],
+        purpose: str = "passage",
+    ) -> list[float]:
+        """Return an embedding while coalescing one identical live computation.
+
+        Cache read/write failures are bypassed. A backend failure or malformed
+        vector remains visible to every waiting caller so normal fallback logic
+        still decides what to do next.
+        """
+        cached = self.get(text, purpose)
+        if cached is not None:
+            return list(cached)
+        try:
+            cache_key = self.key(text, purpose)
+        except Exception as error:
+            logging.getLogger(__name__).warning("Embedding cache key bypassed: %s", type(error).__name__)
+            return self._compute_valid(compute)
+        with self._lock:
+            # A value may have appeared between the first cache read and this
+            # request joining the live-operation map.
+            try:
+                cached = self._get_by_key(cache_key)
+            except Exception as error:
+                logging.getLogger(__name__).warning("Embedding cache read bypassed: %s", type(error).__name__)
+                cached = None
+            if cached is not None:
+                return list(cached)
+            operation = self._inflight.get(cache_key)
+            if operation is None:
+                operation = _EmbeddingInFlight()
+                self._inflight[cache_key] = operation
+                owner = True
+            else:
+                self.metrics["coalesced"] += 1
+                owner = False
+        if not owner:
+            operation.event.wait()
+            if operation.error is not None:
+                raise operation.error
+            if operation.result is None:
+                raise RuntimeError("embedding computation ended without a result")
+            return list(operation.result)
+        try:
+            result = self._compute_valid(compute)
+            # set() is fail-open: disk/cache failures cannot alter a good
+            # backend result or strand waiters.
+            self.set(text, result, purpose)
+            operation.result = list(result)
+            return list(result)
+        except BaseException as error:
+            operation.error = error
+            raise
+        finally:
+            with self._lock:
+                if self._inflight.get(cache_key) is operation:
+                    self._inflight.pop(cache_key, None)
+                operation.event.set()
+
+    def _compute_valid(self, compute: Callable[[], list[float]]) -> list[float]:
+        """Copy and validate a backend result before it can become shareable."""
+        value = compute()
+        if not isinstance(value, (list, tuple)):
+            raise ValidationError("embedding computation did not return a vector")
+        vector = [float(item) for item in value]
+        expected = int(self.config.get("dimensions", len(vector)))
+        if not vector or len(vector) != expected or any(not math.isfinite(item) for item in vector):
+            raise ValidationError("embedding computation returned an invalid vector")
+        return vector
 
     def _set(self, text: str, vector: list[float], purpose: str) -> None:
         expected = int(self.config.get("dimensions", len(vector)))

@@ -2,15 +2,18 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
+from gateway.platforms.base import SendResult
 from plur1bus_controls.plugin import Plur1busControlsPlugin
 
 
 class _Adapter:
-    def __init__(self):
+    def __init__(self, result=None):
         self.sent = []
+        self.result = result or SendResult(success=True)
 
     async def send(self, chat_id, text, metadata=None):
         self.sent.append((chat_id, text, metadata))
+        return self.result
 
 
 class _Domain:
@@ -91,6 +94,23 @@ class ProactiveDeliveryTests(unittest.TestCase):
             self.assertIn("/plur1bus critical reject 9a018", text)
             self.assertIn("/plur1bus critical edit 9a018", text)
             self.assertNotIn("a4563cc9-7611-4528-992a-075f8889a018", text)
+
+        asyncio.run(scenario())
+
+    def test_failed_send_does_not_mark_any_delivery_state(self):
+        async def scenario():
+            plugin = Plur1busControlsPlugin()
+            domain = _Domain()
+            runtime = SimpleNamespace(_domain=domain)
+            adapter = _Adapter(SendResult(success=False, error="forbidden"))
+            gateway = SimpleNamespace(_adapter_for_source=lambda _source: adapter)
+            event = SimpleNamespace(source=SimpleNamespace(chat_id="chat", thread_id=None))
+
+            await plugin._deliver_proactive(event, gateway, runtime)
+
+            self.assertEqual(len(adapter.sent), 1)
+            self.assertEqual(domain.presented, [])
+            self.assertEqual(domain.notified, [])
 
         asyncio.run(scenario())
 

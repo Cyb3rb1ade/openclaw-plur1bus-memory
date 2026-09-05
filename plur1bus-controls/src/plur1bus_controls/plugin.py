@@ -5,13 +5,17 @@ from __future__ import annotations
 import shlex
 import asyncio
 import json
+import logging
+import weakref
 from pathlib import Path
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from plur1bus_hermes.domain import Plur1busDomain
 from plur1bus_hermes.provider import Plur1busMemoryProvider
 from plur1bus_hermes.runtime import Plur1busRuntime
+from plur1bus_hermes.skill_workshop import SkillWorkshop
 from plur1bus_hermes.service import PLUR1BUS_SERVICE
 from plur1bus_hermes.critical_review import (
     build_preview,
@@ -19,6 +23,7 @@ from plur1bus_hermes.critical_review import (
     translate_source_role,
     translate_type,
 )
+from plur1bus_hermes.critical_reply_intent import parse_critical_reply_intent
 
 from .commands import CANONICAL_SUBCOMMANDS, build_command_table
 from .hooks import HookCollector
@@ -26,6 +31,9 @@ from .service import PLUR1BUS_CONTROLS_CONTAINER
 from .request_context import RequestIdentity, current_identity, is_mutation_authorized
 from .command_parse import parse_correction
 from .confirmations import ConfirmationStore
+from .background_delivery import BackgroundDelivery
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _utcnow() -> str:
@@ -40,6 +48,36 @@ class Plur1busControlsPlugin:
         self.commands = build_command_table()
         self._delivery_tasks: set[str] = set()
         self._confirmations = ConfirmationStore()
+        self._background = BackgroundDelivery()
+
+    @staticmethod
+    def _shutdown_runtime(runtime: Any) -> None:
+        shutdown = getattr(runtime, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except Exception as error:
+                PLUR1BUS_CONTROLS_CONTAINER.put(
+                    "last_delivery_error", f"{type(error).__name__}: {error}"
+                )
+
+    @staticmethod
+    def _background_enabled(runtime: Any) -> bool:
+        config = getattr(runtime, "config", {})
+        delivery = config.get("proactiveDelivery") if isinstance(config, dict) else None
+        background = delivery.get("background") if isinstance(delivery, dict) else None
+        return isinstance(background, dict) and background.get("enabled") is True
+
+    @staticmethod
+    def _source_snapshot(source: Any) -> Any:
+        """Retain only outbound routing fields, never the inbound message or text."""
+        return SimpleNamespace(**{
+            name: getattr(source, name, None)
+            for name in (
+                "platform", "chat_id", "thread_id", "profile", "scope_id",
+                "guild_id", "parent_chat_id", "delivered_via_upstream_relay",
+            )
+        })
 
     def _is_control_event(self, event: Any) -> bool:
         """Konservativ Slash-/Control-Ereignisse erkennen.
@@ -70,11 +108,144 @@ class Plur1busControlsPlugin:
             return True
         return False
 
+    @staticmethod
+    def _host_platform(source: Any) -> str:
+        value = getattr(source, "platform", "")
+        return str(getattr(value, "value", value) or "")
+
+    def _record_critical_delivery(
+        self, domain: Any, runtime: Any, criticals: list[dict[str, Any]],
+        source: Any, message_id: str,
+    ) -> None:
+        """Bind delivered critical IDs to one host-issued outgoing message ID."""
+        if not message_id or not criticals:
+            return
+        scope_kwargs = self._scope_kwargs(runtime)
+        selector = domain._scope_selector(**scope_kwargs)
+        state_dir = domain._scope_state_dir(selector)
+        append = getattr(domain, "_append_jsonl", None)
+        if not callable(append):
+            return
+        try:
+            entries = domain._read_jsonl(state_dir / "critical-push.jsonl")
+        except Exception as error:
+            LOGGER.warning("Cannot read critical delivery ledger: %s", type(error).__name__)
+            return
+        # Append-only ledgers must be folded before adding routing metadata: the
+        # immediately preceding notification transition owns ``notifiedAt``.
+        latest: dict[str, dict[str, Any]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            memory_id = str(entry.get("id") or "")
+            if (
+                memory_id
+                and str(entry.get("agentId") or "") == str(runtime.agent_id)
+                and str(entry.get("scopeKey") or "") == str(runtime.scope_key)
+            ):
+                latest[memory_id] = entry
+        route = {
+            "deliveryMessageId": str(message_id),
+            "deliveryPlatform": self._host_platform(source),
+            "deliveryChatId": str(getattr(source, "chat_id", "") or ""),
+            "deliveryThreadId": str(getattr(source, "thread_id", "") or ""),
+            "deliveryAt": _utcnow(),
+        }
+        for item in criticals:
+            memory_id = str(item.get("id") or "")
+            if not memory_id:
+                continue
+            prior = latest.get(memory_id, item)
+            if str(prior.get("status") or "pending_review") != "pending_review":
+                continue
+            append(state_dir / "critical-push.jsonl", {
+                **prior, **route, "id": memory_id, "agentId": runtime.agent_id,
+                "scopeKey": runtime.scope_key,
+                "aclBindings": prior.get("aclBindings") or runtime.scope_binding.as_dict(),
+                "status": "pending_review",
+            })
+
+    def _apply_trusted_critical_reply(self, event: Any, runtime: Any, identity: RequestIdentity) -> None:
+        """Apply only an explicit reply tied to this scope's recorded host message ID."""
+        reply_to = str(getattr(event, "reply_to_message_id", "") or "").strip()
+        source = getattr(event, "source", None)
+        if not reply_to or source is None or getattr(event, "reply_to_is_own_message", False) is not True:
+            return
+        if not is_mutation_authorized(getattr(runtime, "config", {}), identity):
+            return
+        # The source and the independently resolved identity must describe the
+        # same host route; neither quoted text nor a caller-provided route is
+        # authority for a critical transition.
+        if (
+            self._host_platform(source) != str(identity.platform)
+            or str(getattr(source, "chat_id", "") or "") != str(identity.chat_id)
+            or str(getattr(source, "thread_id", "") or "") != str(identity.thread_id or "")
+        ):
+            return
+        intent = parse_critical_reply_intent(getattr(event, "text", ""))
+        if intent is None:
+            return
+        domain = runtime._domain
+        scope_kwargs = self._scope_kwargs(runtime)
+        selector = domain._scope_selector(**scope_kwargs)
+        state_dir = domain._scope_state_dir(selector)
+        try:
+            entries = domain._read_jsonl(state_dir / "critical-push.jsonl")
+        except Exception as error:
+            LOGGER.warning("Cannot read critical reply ledger: %s", type(error).__name__)
+            return
+        platform = self._host_platform(source)
+        chat_id = str(getattr(source, "chat_id", "") or "")
+        thread_id = str(getattr(source, "thread_id", "") or "")
+        latest: dict[str, dict[str, Any]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            memory_id = str(entry.get("id") or "")
+            if (
+                memory_id
+                and str(entry.get("agentId") or "") == runtime.agent_id
+                and str(entry.get("scopeKey") or "") == runtime.scope_key
+            ):
+                latest[memory_id] = entry
+        matches: dict[str, dict[str, Any]] = {}
+        for memory_id, entry in latest.items():
+            if (
+                entry.get("status") != "pending_review"
+                or str(entry.get("deliveryMessageId") or "") != reply_to
+                or str(entry.get("deliveryPlatform") or "") != platform
+                or str(entry.get("deliveryChatId") or "") != chat_id
+                or str(entry.get("deliveryThreadId") or "") != thread_id
+            ):
+                continue
+            matches[memory_id] = entry
+        if not matches or (len(matches) > 1 and intent.get("all") is not True):
+            return
+        feedback = "useful" if intent["action"] == "accept" else "incorrect"
+        for memory_id in matches:
+            try:
+                result = domain.review_critical(
+                    memory_id, intent["action"], **scope_kwargs
+                )
+            except Exception as error:
+                LOGGER.warning("Critical reply review failed: %s", type(error).__name__)
+                continue
+            if result.get("updated") is True:
+                # This is an authenticated explicit decision about the delivered
+                # critical card—not a heuristic over unrelated assistant text.
+                try:
+                    domain.record_feedback(
+                        memory_id, feedback,
+                        query=f"trusted-critical-reply:{reply_to}",
+                        **scope_kwargs,
+                    )
+                except Exception as error:
+                    LOGGER.warning("Critical reply feedback write failed: %s", type(error).__name__)
+                    continue
+
     def _on_gateway_dispatch(self, event: Any, gateway: Any, identity: Any) -> None:
         """Schedule one non-blocking proactive delivery pass for an authorized route."""
         if event is None or gateway is None or identity is None:
-            return
-        if self._is_control_event(event):
             return
         agent = identity.profile or self.config.get("defaultAgentId") or "default"
         try:
@@ -88,10 +259,58 @@ class Plur1busControlsPlugin:
                 "last_delivery_error", f"{type(error).__name__}: {error}"
             )
             return
-        if not is_mutation_authorized(runtime.config, identity):
-            return
         route_key = f"{identity.platform}:{identity.chat_id}:{agent}"
+        if not is_mutation_authorized(runtime.config, identity):
+            self._background.unregister(route_key)
+            self._shutdown_runtime(runtime)
+            return
+        self._apply_trusted_critical_reply(event, runtime, identity)
+        if self._background_enabled(runtime):
+            source = getattr(event, "source", None)
+            if source is not None:
+                source_snapshot = self._source_snapshot(source)
+                try:
+                    gateway_ref = weakref.ref(gateway)
+                except TypeError:
+                    # Some lightweight host test doubles cannot be weakly referenced.
+                    # Do not retain a live gateway just to make background delivery work.
+                    self._shutdown_runtime(runtime)
+                    return
+
+                async def tick() -> None:
+                    live_gateway = gateway_ref()
+                    if live_gateway is None:
+                        self._background.unregister(route_key)
+                        return
+                    current = None
+                    try:
+                        current = self._runtime(agent, identity)
+                        if (
+                            not self._background_enabled(current)
+                            or not is_mutation_authorized(current.config, identity)
+                        ):
+                            self._background.unregister(route_key)
+                            return
+                        if route_key in self._delivery_tasks:
+                            return
+                        self._delivery_tasks.add(route_key)
+                        await self._deliver_proactive(
+                            SimpleNamespace(source=source_snapshot), live_gateway, current
+                        )
+                        current = None  # delivery owns and closes it in its finally block
+                    finally:
+                        self._delivery_tasks.discard(route_key)
+                        if current is not None:
+                            self._shutdown_runtime(current)
+
+                self._background.register(route_key, tick)
+        else:
+            self._background.unregister(route_key)
+        if self._is_control_event(event):
+            self._shutdown_runtime(runtime)
+            return
         if route_key in self._delivery_tasks:
+            self._shutdown_runtime(runtime)
             return
         self._delivery_tasks.add(route_key)
         try:
@@ -100,6 +319,7 @@ class Plur1busControlsPlugin:
             )
         except RuntimeError as error:
             self._delivery_tasks.discard(route_key)
+            self._shutdown_runtime(runtime)
             PLUR1BUS_CONTROLS_CONTAINER.put(
                 "last_delivery_error", f"{type(error).__name__}: {error}"
             )
@@ -107,6 +327,8 @@ class Plur1busControlsPlugin:
 
         def completed(future):
             self._delivery_tasks.discard(route_key)
+            if future.cancelled():
+                return
             error = future.exception()
             if error is not None:
                 PLUR1BUS_CONTROLS_CONTAINER.put(
@@ -180,60 +402,105 @@ class Plur1busControlsPlugin:
 
     async def _deliver_proactive(self, event: Any, gateway: Any, runtime: Any) -> None:
         """Deliver due reminders and pending critical reviews through the live adapter."""
-        source = getattr(event, "source", None)
-        resolve_adapter = getattr(gateway, "_adapter_for_source", None)
-        adapter = resolve_adapter(source) if callable(resolve_adapter) else None
-        if adapter is None or source is None:
-            return
-        domain = runtime._domain
-        scope_kwargs = self._scope_kwargs(runtime)
-        reminders = domain.due_reminders(**scope_kwargs)
-        criticals = [
-            item
-            for item in domain.critical_items("pending_review", **scope_kwargs)
-            if not item.get("notifiedAt")
-        ]
-        binding = getattr(runtime, "scope_binding", None)
-        proactive = (
-            domain.proactive_messages()
-            if getattr(binding, "scope_type", "agent-private") == "agent-private"
-            else []
-        )
-        if not reminders and not criticals and not proactive:
-            return
-        ref_map = domain.critical_reference_map(**scope_kwargs)
-        lines = []
-        if reminders:
-            lines.append("PLUR1BUS reminders:")
-            lines.extend(
-                f"- [{item['id']}] {str(item.get('text') or '')[:500]}"
-                for item in reminders
+        try:
+            source = getattr(event, "source", None)
+            resolve_adapter = getattr(gateway, "_adapter_for_source", None)
+            adapter = resolve_adapter(source) if callable(resolve_adapter) else None
+            if adapter is None or source is None:
+                return
+            domain = runtime._domain
+            scope_kwargs = self._scope_kwargs(runtime)
+            reminders = domain.due_reminders(**scope_kwargs)
+            pending_criticals = domain.critical_items("pending_review", **scope_kwargs)
+            # ``critical_items`` intentionally projects cards, not delivery
+            # metadata. Fold the scoped append-only ledger here so a successful
+            # prior delivery is never re-notified merely because its card stays
+            # pending for a human decision.
+            notified_ids: set[str] = set()
+            ledger_api = all(callable(getattr(domain, name, None)) for name in (
+                "_scope_selector", "_scope_state_dir", "_read_jsonl",
+            ))
+            if ledger_api:
+                try:
+                    selector = domain._scope_selector(**scope_kwargs)
+                    state_dir = domain._scope_state_dir(selector)
+                    latest: dict[str, dict[str, Any]] = {}
+                    for entry in domain._read_jsonl(state_dir / "critical-push.jsonl"):
+                        if not isinstance(entry, dict):
+                            continue
+                        memory_id = str(entry.get("id") or "")
+                        if (
+                            memory_id
+                            and str(entry.get("agentId") or "") == str(runtime.agent_id)
+                            and str(entry.get("scopeKey") or "") == str(runtime.scope_key)
+                        ):
+                            latest[memory_id] = entry
+                    notified_ids = {
+                        memory_id for memory_id, entry in latest.items()
+                        if entry.get("status") == "pending_review" and entry.get("notifiedAt")
+                    }
+                except Exception as error:
+                    # The domain remains authoritative for pending cards; degrade to
+                    # its legacy projection if its ledger cannot be read.
+                    LOGGER.warning("Cannot read critical notification ledger: %s", type(error).__name__)
+            criticals = [
+                item for item in pending_criticals
+                if str(item.get("id") or "") not in notified_ids
+                and not item.get("notifiedAt")
+            ]
+            binding = getattr(runtime, "scope_binding", None)
+            proactive = (
+                domain.proactive_messages()
+                if getattr(binding, "scope_type", "agent-private") == "agent-private"
+                else []
             )
-        if criticals:
-            for item in criticals:
-                ref = str(item.get("shortRef") or ref_map.get(str(item["id"]), ""))
-                lines.append(self._render_critical_message(item, ref))
-        if proactive:
-            lines.extend(str(item.get("text") or "") for item in proactive)
-        metadata = {}
-        thread_id = getattr(source, "thread_id", None)
-        if thread_id:
-            metadata["thread_id"] = thread_id
-        await adapter.send(
-            str(source.chat_id),
-            "\n\n".join(lines),
-            metadata=metadata or None,
-        )
-        for reminder in reminders:
-            domain.update_reminder(
-                str(reminder["id"]), "present", **scope_kwargs
+            if not reminders and not criticals and not proactive:
+                return
+            ref_map = domain.critical_reference_map(**scope_kwargs)
+            lines = []
+            if reminders:
+                lines.append("PLUR1BUS reminders:")
+                lines.extend(
+                    f"- [{item['id']}] {str(item.get('text') or '')[:500]}"
+                    for item in reminders
+                )
+            if criticals:
+                for item in criticals:
+                    ref = str(item.get("shortRef") or ref_map.get(str(item["id"]), ""))
+                    lines.append(self._render_critical_message(item, ref))
+            if proactive:
+                lines.extend(str(item.get("text") or "") for item in proactive)
+            metadata = {}
+            thread_id = getattr(source, "thread_id", None)
+            if thread_id:
+                metadata["thread_id"] = thread_id
+            result = await adapter.send(
+                str(source.chat_id),
+                "\n\n".join(lines),
+                metadata=metadata or None,
             )
-        domain.mark_criticals_notified(
-            [str(item["id"]) for item in criticals], **scope_kwargs
-        )
-        domain.mark_proactive_sent(
-            [str(item["id"]) for item in proactive]
-        )
+            result_success = bool(getattr(result, "success", False))
+            result_id = str(getattr(result, "message_id", "") or "")
+            if isinstance(result, dict):
+                result_success = bool(result.get("success", False))
+                result_id = str(result.get("message_id") or "")
+            if result_success:
+                for reminder in reminders:
+                    domain.update_reminder(
+                        str(reminder["id"]), "present", **scope_kwargs
+                    )
+                domain.mark_criticals_notified(
+                    [str(item["id"]) for item in criticals], **scope_kwargs
+                )
+                if result_id:
+                    self._record_critical_delivery(
+                        domain, runtime, criticals, source, result_id
+                    )
+                domain.mark_proactive_sent(
+                    [str(item["id"]) for item in proactive]
+                )
+        finally:
+            self._shutdown_runtime(runtime)
 
     def handle_command(self, raw_args: str = "") -> str:
         """Handle canonical PLUR1BUS operations through the Python domain runtime."""
@@ -273,9 +540,13 @@ class Plur1busControlsPlugin:
                 command == "temperament" and bool(arguments)
             )
             mutating_command = mutating_command or (
-                command in {"dreams", "obsidian", "jobs", "critical", "reminders", "speakers", "temperament", "code"}
+                command in {"dreams", "obsidian", "jobs", "critical", "reminders", "speakers", "temperament", "code", "knowledge", "persona", "merge"}
                 and bool(arguments)
-                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "edit", "acknowledge", "cancel", "create"}
+                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "edit", "acknowledge", "cancel", "create", "propose", "confirm", "seed", "evolve", "apply"}
+            )
+            mutating_command = mutating_command or (
+                command == "skills" and bool(arguments)
+                and arguments[0] in {"mine", "approve", "publish"}
             )
             if mutating_command and not is_mutation_authorized(
                 runtime.config, current_identity()
@@ -299,6 +570,16 @@ class Plur1busControlsPlugin:
             requires_confirmation = command in confirmation_commands or (
                 command == "reminders" and bool(arguments) and arguments[0] == "create"
             )
+            requires_confirmation = requires_confirmation or (
+                command == "skills" and bool(arguments)
+                and arguments[0] in {"approve", "publish"}
+            )
+            requires_confirmation = requires_confirmation or (
+                command in {"knowledge", "persona", "merge"} and bool(arguments)
+                and arguments[0] in {"confirm", "seed", "evolve", "apply"}
+            ) or (
+                command == "reminders" and bool(arguments) and arguments[0] == "confirm"
+            )
             if (
                 mutating_command
                 and requires_confirmation
@@ -313,7 +594,7 @@ class Plur1busControlsPlugin:
                     nonce = self._confirmations.issue(
                         command, arguments, identity
                     )
-                    return json.dumps({
+                    confirmation = {
                         "status": "confirmation_required",
                         "nonce": nonce,
                         "confirmWith": (
@@ -322,7 +603,13 @@ class Plur1busControlsPlugin:
                             + f" --confirm {nonce}"
                         ),
                         "expiresInSeconds": self._confirmations.ttl_seconds,
-                    }, ensure_ascii=False)
+                    }
+                    if command == "skills" and arguments and arguments[0] == "publish":
+                        confirmation["warning"] = (
+                            "Published Hermes skills are profile-global and accessible to "
+                            "Hermes profile agents; they are not protected by a PLUR1BUS agent ACL."
+                        )
+                    return json.dumps(confirmation, ensure_ascii=False)
             if command in {"setup", "enable", "disable"} and (
                 runtime.config.get("security") or {}
             ).get("allowChatConfigCommands", True) is False:
@@ -595,10 +882,24 @@ class Plur1busControlsPlugin:
                             ensure_ascii=False,
                             indent=2,
                         )
+                    if arguments[0] == "confirm":
+                        if len(arguments) != 3:
+                            return (
+                                "Usage: /plur1bus reminders [--agent ID] confirm "
+                                "PROPOSAL_ID MEMORY_ID"
+                            )
+                        return json.dumps(
+                            domain.confirm_reminder_proposal(
+                                arguments[1], arguments[2], **scope_kwargs
+                            ),
+                            ensure_ascii=False,
+                            indent=2,
+                        )
                     if len(arguments) != 2 or arguments[0] not in {"acknowledge", "cancel"}:
                         return (
                             "Usage: /plur1bus reminders [--agent ID] "
-                            "create MEMORY_ID ABSOLUTE_ISO_TIME [TEXT]|acknowledge|cancel MEMORY_ID"
+                            "create MEMORY_ID ABSOLUTE_ISO_TIME [TEXT]|confirm PROPOSAL_ID MEMORY_ID|"
+                            "acknowledge|cancel MEMORY_ID"
                         )
                     return json.dumps(
                         domain.update_reminder(
@@ -608,6 +909,108 @@ class Plur1busControlsPlugin:
                         indent=2,
                     )
                 return json.dumps({"due": domain.due_reminders(**scope_kwargs)}, ensure_ascii=False, indent=2)
+            if command == "knowledge":
+                # A bare command must be observational. Proposal generation is
+                # a persisted mutation and therefore requires the explicit
+                # ``propose`` verb, which is authorization-gated above.
+                if not arguments:
+                    return "Usage: /plur1bus knowledge [--agent ID] propose|confirm PROPOSAL_ID"
+                if arguments[0] == "propose":
+                    if len(arguments) > 1:
+                        return "Usage: /plur1bus knowledge [--agent ID] propose|confirm PROPOSAL_ID"
+                    return json.dumps(
+                        domain.propose_knowledge_promotions(**scope_kwargs),
+                        ensure_ascii=False, indent=2,
+                    )
+                if arguments[0] == "confirm" and len(arguments) == 2:
+                    return json.dumps(
+                        domain.confirm_knowledge_promotion(arguments[1], **scope_kwargs),
+                        ensure_ascii=False, indent=2,
+                    )
+                return "Usage: /plur1bus knowledge [--agent ID] propose|confirm PROPOSAL_ID"
+            if command == "persona":
+                if not arguments:
+                    return "Usage: /plur1bus persona [--agent ID] seed|evolve"
+                if arguments[0] == "seed" and len(arguments) == 1:
+                    return json.dumps(
+                        domain.ensure_persona_voice_seed(**scope_kwargs),
+                        ensure_ascii=False, indent=2,
+                    )
+                if arguments[0] == "evolve" and len(arguments) == 1:
+                    # The only accepted outcome source is the existing, scope-filtered
+                    # feedback ledger; command arguments can never manufacture praise.
+                    selector = domain._scope_selector(**scope_kwargs)
+                    feedback = domain._scoped_jsonl(
+                        domain.workspace_dir,
+                        domain._scope_workspace_dir(selector),
+                        ".adaptive-learning/feedback-log.jsonl",
+                        selector,
+                    )
+                    return json.dumps(
+                        domain.evolve_persona_voice(feedback, **scope_kwargs),
+                        ensure_ascii=False, indent=2,
+                    )
+                return "Usage: /plur1bus persona [--agent ID] seed|evolve"
+            if command == "merge":
+                if not arguments or arguments[0] == "list":
+                    if len(arguments) > 1:
+                        return "Usage: /plur1bus merge [--agent ID] list|propose TEXT|apply PROPOSAL_ID REVISION"
+                    proposals = [
+                        {
+                            key: proposal.get(key)
+                            for key in ("proposalId", "revision", "state", "candidateId", "replacementId")
+                        }
+                        for proposal in runtime.list_merge_proposals()
+                    ]
+                    return json.dumps({"proposals": proposals}, ensure_ascii=False, indent=2)
+                if arguments[0] == "propose" and len(arguments) > 1:
+                    proposal = runtime.create_merge_proposal(
+                        " ".join(arguments[1:]), "plur1bus-merge-command"
+                    )
+                    if proposal is None:
+                        return json.dumps({"proposed": False, "reason": "no-safe-scoped-candidate"})
+                    return json.dumps({
+                        "proposed": True,
+                        "proposalId": proposal["proposalId"],
+                        "revision": proposal["revision"],
+                        "state": proposal["state"],
+                    }, ensure_ascii=False, indent=2)
+                if arguments[0] == "apply" and len(arguments) == 3:
+                    applied = runtime.apply_merge_proposal(
+                        arguments[1], approved_revision=arguments[2]
+                    )
+                    return json.dumps({
+                        "applied": applied,
+                        "proposalId": arguments[1],
+                        "revision": arguments[2],
+                    }, ensure_ascii=False, indent=2)
+                return "Usage: /plur1bus merge [--agent ID] list|propose TEXT|apply PROPOSAL_ID REVISION"
+            if command == "skills":
+                workshop = SkillWorkshop(runtime)
+                if not arguments or arguments[0] == "list":
+                    return json.dumps({"proposals": workshop.list()}, ensure_ascii=False, indent=2)
+                action = arguments[0]
+                if action == "mine" and len(arguments) == 1:
+                    return json.dumps(workshop.mine(), ensure_ascii=False, indent=2)
+                if action == "show" and len(arguments) == 2:
+                    return json.dumps(workshop.inspect(arguments[1]), ensure_ascii=False, indent=2)
+                if action == "approve" and len(arguments) == 3:
+                    return json.dumps(
+                        workshop.approve(arguments[1], arguments[2]),
+                        ensure_ascii=False, indent=2,
+                    )
+                if action == "publish" and len(arguments) == 3:
+                    return json.dumps(
+                        workshop.publish(
+                            arguments[1], arguments[2],
+                            Path(str(self.config.get("hermesHome") or Path.home() / ".hermes")),
+                        ),
+                        ensure_ascii=False, indent=2,
+                    )
+                return (
+                    "Usage: /plur1bus skills [--agent ID] list|mine|show PROPOSAL_ID|"
+                    "approve PROPOSAL_ID REVISION|publish PROPOSAL_ID REVISION"
+                )
             if command == "jobs":
                 if table is None:
                     return json.dumps({"error": "memory table unavailable"})

@@ -52,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("status")
     compact = commands.add_parser("compact")
     compact.add_argument("--apply", action="store_true")
+    source_sync = commands.add_parser("source-sync")
+    source_sync.add_argument("--source", required=True, type=Path)
+    source_sync.add_argument("--apply", action="store_true")
+    source_sync.add_argument("--approved-revision", help="exact revision from read-only preview")
     reembed = commands.add_parser("reembed")
     reembed.add_argument("--target-embedding", required=True, type=Path, help="JSON embedding config; source config stays unchanged")
     reembed.add_argument("--plan", type=Path, help="saved JSON plan from an earlier read-only invocation")
@@ -67,6 +71,21 @@ def main(argv: list[str] | None = None) -> int:
             result = optimize_runtime_table(runtime, authorized=True) if args.apply else {
                 "dryRun": True, "operation": "physical_compaction", "status": read_operator_status(runtime),
             }
+        elif args.command == "source-sync":
+            from .source_sync import plan_source_sync, apply_source_sync
+            from .runtime import Plur1busRuntime
+            plan = plan_source_sync(args.source)
+            if not args.apply:
+                result = {**plan, "agentId": runtime.agent_id, "scopeKey": runtime.scope_binding.scope_key}
+            else:
+                if args.approved_revision != plan["revision"]:
+                    raise ValueError("explicit matching source revision approval is required")
+                writer = Plur1busRuntime(runtime.data_dir, runtime.config, runtime.agent_id,
+                                         runtime.scope_binding.as_dict())
+                try:
+                    result = apply_source_sync(writer, plan, approved_revision=args.approved_revision)
+                finally:
+                    writer.shutdown()
         else:
             from .reembed_staged import apply_staged_reembed, plan_staged_reembed, validate_staged_reembed
             embedding = json.loads(args.target_embedding.read_text(encoding="utf-8"))

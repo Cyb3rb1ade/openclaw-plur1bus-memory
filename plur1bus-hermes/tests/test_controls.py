@@ -125,6 +125,167 @@ class ControlsTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["errorType"], "ValueError")
 
+    def test_skill_approve_requires_identity_bound_confirmation(self) -> None:
+        runtime = SimpleNamespace(
+            config={}, _domain=SimpleNamespace(),
+            scope_binding=SimpleNamespace(as_dict=lambda: {"scopeType": "agent-private"}),
+            _table=lambda create=False: (None, None),
+        )
+        identity = RequestIdentity("telegram", "user", "chat", "private", "main", True)
+        plugin = Plur1busControlsPlugin({"agentId": "main"})
+        proposal_id = "11111111-1111-4111-8111-111111111111"
+        revision = "a" * 64
+        with patch.object(plugin, "_runtime", return_value=runtime), patch(
+            "plur1bus_controls.plugin.current_identity", return_value=identity,
+        ), patch("plur1bus_controls.plugin.SkillWorkshop") as workshop_cls:
+            workshop_cls.return_value.approve.return_value = {"approved": True}
+            first = json.loads(plugin.handle_command(f"skills approve {proposal_id} {revision}"))
+            self.assertEqual(first["status"], "confirmation_required")
+            second = json.loads(plugin.handle_command(
+                f"skills approve {proposal_id} {revision} --confirm {first['nonce']}"
+            ))
+        self.assertTrue(second["approved"])
+        workshop_cls.return_value.approve.assert_called_once_with(proposal_id, revision)
+
+    def test_merge_apply_requires_revision_bound_confirmation(self) -> None:
+        runtime = SimpleNamespace(
+            config={}, _domain=SimpleNamespace(),
+            scope_binding=SimpleNamespace(as_dict=lambda: {"scopeType": "agent-private"}),
+            _table=lambda create=False: (None, None),
+            apply_merge_proposal=lambda proposal_id, *, approved_revision: (
+                proposal_id == "11111111-1111-4111-8111-111111111111" and approved_revision == "b" * 64
+            ),
+        )
+        identity = RequestIdentity("telegram", "user", "chat", "private", "main", True)
+        plugin = Plur1busControlsPlugin({"agentId": "main"})
+        with patch.object(plugin, "_runtime", return_value=runtime), patch(
+            "plur1bus_controls.plugin.current_identity", return_value=identity,
+        ):
+            first = json.loads(plugin.handle_command(
+                f"merge apply 11111111-1111-4111-8111-111111111111 {'b' * 64}"
+            ))
+            self.assertEqual(first["status"], "confirmation_required")
+            second = json.loads(plugin.handle_command(
+                f"merge apply 11111111-1111-4111-8111-111111111111 {'b' * 64} --confirm {first['nonce']}"
+            ))
+        self.assertTrue(second["applied"])
+
+    def test_knowledge_confirmation_passes_only_runtime_scope(self) -> None:
+        captured = []
+
+        class Domain:
+            def confirm_knowledge_promotion(self, proposal_id, *, acl_bindings):
+                captured.append((proposal_id, acl_bindings))
+                return {"confirmed": True}
+
+        binding = {"scopeType": "agent-private", "scopeKey": "private"}
+        runtime = SimpleNamespace(
+            config={}, _domain=Domain(),
+            scope_binding=SimpleNamespace(as_dict=lambda: dict(binding)),
+            _table=lambda create=False: (None, None),
+        )
+        identity = RequestIdentity("telegram", "user", "chat", "private", "main", True)
+        plugin = Plur1busControlsPlugin({"agentId": "main"})
+        proposal_id = "11111111-1111-4111-8111-111111111111"
+        with patch.object(plugin, "_runtime", return_value=runtime), patch(
+            "plur1bus_controls.plugin.current_identity", return_value=identity,
+        ):
+            first = json.loads(plugin.handle_command(f"knowledge confirm {proposal_id}"))
+            second = json.loads(plugin.handle_command(
+                f"knowledge confirm {proposal_id} --confirm {first['nonce']}"
+            ))
+        self.assertTrue(second["confirmed"])
+        self.assertEqual(captured, [(proposal_id, binding)])
+
+    def test_bare_knowledge_is_read_only_for_unauthorized_identity(self) -> None:
+        calls = []
+
+        class Domain:
+            def propose_knowledge_promotions(self, **_kwargs):
+                calls.append("propose")
+                return {"proposed": []}
+
+        runtime = SimpleNamespace(
+            config={"controls": {"allowedUserIds": ["other-user"]}},
+            _domain=Domain(),
+            scope_binding=SimpleNamespace(as_dict=lambda: {"scopeType": "agent-private"}),
+            _table=lambda create=False: (None, None),
+        )
+        identity = RequestIdentity("telegram", "untrusted-user", "chat", "private", "main", True)
+        plugin = Plur1busControlsPlugin({"agentId": "main"})
+        with patch.object(plugin, "_runtime", return_value=runtime), patch(
+            "plur1bus_controls.plugin.current_identity", return_value=identity,
+        ):
+            result = plugin.handle_command("knowledge")
+
+        self.assertIn("Usage: /plur1bus knowledge", result)
+        self.assertEqual(calls, [])
+
+
+class BackgroundRegistrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_background_route_registers_only_after_authorized_opt_in(self) -> None:
+        calls = []
+
+        class Background:
+            def register(self, key, tick):
+                calls.append(("register", key, tick))
+                return True
+
+            def unregister(self, key):
+                calls.append(("unregister", key))
+
+        class Runtime:
+            config = {"proactiveDelivery": {"background": {"enabled": True}}}
+
+            def __init__(self):
+                self.closed = False
+
+            def shutdown(self):
+                self.closed = True
+
+        runtime = Runtime()
+        identity = RequestIdentity("telegram", "user", "chat", "private", "main", True)
+        plugin = Plur1busControlsPlugin({"agentId": "main"})
+        plugin._background = Background()
+        plugin._runtime = lambda *_args: runtime
+        event = SimpleNamespace(text="/plur1bus status", source=SimpleNamespace(
+            platform="telegram", chat_id="chat", thread_id=None, profile="main",
+        ))
+
+        class Gateway:
+            pass
+
+        plugin._on_gateway_dispatch(event, Gateway(), identity)
+
+        self.assertEqual(calls[0][0], "register")
+        self.assertTrue(runtime.closed)
+        snapshot = calls[0][2].__closure__
+        self.assertIsNotNone(snapshot)
+
+    async def test_background_route_is_revoked_when_identity_is_not_authorized(self) -> None:
+        calls = []
+
+        class Background:
+            def register(self, *_args, **_kwargs):
+                self.fail("must not register")
+
+            def unregister(self, key):
+                calls.append(key)
+
+        runtime = SimpleNamespace(
+            config={"controls": {"allowedUserIds": ["other"]}, "proactiveDelivery": {"background": {"enabled": True}}},
+            shutdown=lambda: None,
+        )
+        plugin = Plur1busControlsPlugin({"agentId": "main"})
+        plugin._background = Background()
+        plugin._runtime = lambda *_args: runtime
+        identity = RequestIdentity("telegram", "user", "chat", "private", "main", True)
+        event = SimpleNamespace(source=SimpleNamespace(platform="telegram", chat_id="chat"))
+
+        plugin._on_gateway_dispatch(event, SimpleNamespace(), identity)
+
+        self.assertEqual(calls, ["telegram:chat:main"])
+
 
 if __name__ == "__main__":
     unittest.main()

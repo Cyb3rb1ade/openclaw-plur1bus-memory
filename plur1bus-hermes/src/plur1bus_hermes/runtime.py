@@ -37,7 +37,7 @@ from .shared_pools import (
 from .cognition import parse_temporal_range
 from .query_refinement import refine_query
 from .llm_backend import InternalLlmBackend
-from .validation import ValidationError, safe_agent_id, safe_memory_id
+from .validation import ValidationError, safe_agent_id, safe_memory_id, resolve_inside
 from .valid_time import (
     has_disjoint_validity_windows,
     is_entry_live,
@@ -49,6 +49,8 @@ from .valid_time import (
     validity_where_clause,
 )
 from .runtime_scheduler import AdmissionRejected, BoundedExecutor
+from .durable_merge import build_proposal, persist_proposal
+from .writer_lock import serialized_memory_write
 
 
 def _utcnow() -> str:
@@ -173,6 +175,10 @@ class EmbeddingBackend:
             raise ValidationError("embedding purpose must be query or passage")
         if not texts:
             return []
+        if len(texts) == 1:
+            return [self._cache.get_or_compute(
+                texts[0], lambda: self._embed_one_uncached(texts[0], purpose=purpose), purpose,
+            )]
         results: list[list[float] | None] = [self._cache.get(text, purpose) for text in texts]
         missing_indexes = [index for index, value in enumerate(results) if value is None]
         if not missing_indexes:
@@ -985,6 +991,7 @@ class Plur1busRuntime:
                 "error": str(error),
             }, sort_keys=True) + "\n")
 
+    @serialized_memory_write
     def forget(self, memory_id: str) -> bool:
         """Kanonischer Tombstone-Vorgang: archivieren, soft-delete, Tombstone persistieren.
 
@@ -1158,6 +1165,21 @@ class Plur1busRuntime:
         return True
 
     def correct_async(self, memory_id: str, replacement: str, session_id: str) -> bool:
+        """Admit one complete correction transaction without holding a caller lock."""
+        memory_id = safe_memory_id(memory_id)
+        try:
+            future = self._executor.submit(self._correct_locked, memory_id, replacement, session_id)
+        except AdmissionRejected:
+            return False
+        try:
+            return bool(future.result())
+        except Exception as error:
+            self._log_capture_error(error)
+            return False
+
+    @serialized_memory_write
+    def _correct_locked(self, memory_id: str, replacement: str, session_id: str) -> bool:
+        """Keep revalidation and retirement in the same cooperating-writer lock."""
         card_id = safe_memory_id(memory_id)
         table, _ = self._table(create=False)
         if table is None:
@@ -1174,20 +1196,12 @@ class Plur1busRuntime:
         # bounded queue must never turn a successful /forget into a missing
         # correction merely because capture admission was saturated.
         source = dict(rows[0])
-        try:
-            replacement_future = self._executor.submit(
-                self._remember, replacement, session_id, "correction",
-                valid_from=rows[0].get("validFrom"),
-                valid_until=rows[0].get("validUntil"),
-                expires_at=rows[0].get("expiresAt"),
-            )
-        except AdmissionRejected:
-            return False
-        try:
-            replacement_id = replacement_future.result()
-        except Exception as error:
-            self._log_capture_error(error)
-            return False
+        replacement_id = self._remember(
+            replacement, session_id, "correction",
+            valid_from=rows[0].get("validFrom"),
+            valid_until=rows[0].get("validUntil"),
+            expires_at=rows[0].get("expiresAt"),
+        )
         if not replacement_id:
             return False
         # A callback can outlive the confirmation.  Read the exact source
@@ -1279,6 +1293,44 @@ class Plur1busRuntime:
             return None
         return safe_memory_id(str(best.get("id") or ""))
 
+    def create_merge_proposal(self, incoming_text: str, session_id: str, *, valid_from: Any = None,
+                              valid_until: Any = None) -> dict[str, Any] | None:
+        """Create (never apply) an opt-in, scope-bound merge proposal."""
+        if not bool((self.config.get("merging") or {}).get("enabled")):
+            return None
+        text = incoming_text.strip()
+        if not text:
+            return None
+        if len(text) > 12_000:
+            raise ValidationError("merge input exceeds 12000 characters")
+        table, _ = self._table(create=False)
+        if table is None:
+            return None
+        vector = self._embedding.embed(text)
+        rows = table.search(vector).where(
+            f"{scope_where_clause(self.scope_binding, include_legacy_private=False)} AND status = 'active'"
+        ).limit(1).to_list()
+        if not rows or not self._card_matches_scope(rows[0]):
+            return None
+        start, end = normalize_validity_window(valid_from, valid_until)
+        candidate = {key: value for key, value in rows[0].items() if key != "vector"}
+        # Native adapter has no merge LLM authority here: only propose the
+        # lossless concatenation, leaving explicit apply to controls.
+        proposal = build_proposal(self.agent_id, candidate, {
+            "content": text, "sessionId": session_id, "validFrom": start, "validUntil": end,
+        }, f"{candidate.get('content', '')}\n{text}")
+        if proposal is None:
+            return None
+        proposal["scopeKey"] = self.scope_key
+        from .durable_merge import proposal_revision
+        proposal["revision"] = proposal_revision(proposal)
+        proposal_path = resolve_inside(str(self.data_dir), "state", "merge-proposals", f"{proposal['proposalId']}.json")
+        persist_proposal(proposal_path, proposal)
+        self._domain.audit_mutation({"event": "memory.merge_proposed", "agentId": self.agent_id,
+                                     "proposalId": proposal["proposalId"], "candidateId": candidate["id"],
+                                     "scopeKey": self.scope_key, "result": "proposed"})
+        return proposal
+
     def shutdown(self, timeout_seconds: float = 5.0) -> None:
         self.flush(timeout_seconds)
         self._executor.shutdown(wait=False, cancel_futures=False)
@@ -1318,9 +1370,13 @@ class Plur1busRuntime:
                            expires_at=expires_at, ttl=ttl)
         self._remember(assistant, session_id, "assistant")
 
+    @serialized_memory_write
     def _remember(self, content: str, session_id: str, source_role: str, *,
                   importance: float | None = None, valid_from: Any = None,
-                  valid_until: Any = None, expires_at: Any = None, ttl: Any = None) -> str | None:
+                  valid_until: Any = None, expires_at: Any = None, ttl: Any = None,
+                  record_id: str | None = None, merged_from: list[str] | None = None) -> str | None:
+        if record_id is not None:
+            record_id = safe_memory_id(record_id)
         content = content.strip()
         if not content:
             return None
@@ -1348,7 +1404,10 @@ class Plur1busRuntime:
         # ttl is deliberately duration-only; an absolute expiresAt wins.  A
         # malformed/negative duration becomes the no-expiry sentinel rather
         # than a guessed deadline.
-        if not expiry_ms and isinstance(ttl, (int, float)) and not isinstance(ttl, bool):
+        if not expiry_ms and isinstance(ttl, str) and ttl in {"session", "short"}:
+            duration = 86_400_000 if ttl == "session" else 14 * 86_400_000
+            expiry_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) + duration
+        elif not expiry_ms and isinstance(ttl, (int, float)) and not isinstance(ttl, bool):
             try:
                 duration = int(ttl)
             except (TypeError, ValueError, OverflowError):
@@ -1356,9 +1415,25 @@ class Plur1busRuntime:
                 duration = 0
             if 0 < duration <= 3650 * 24 * 60 * 60 * 1000:
                 expiry_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) + duration
+        if record_id is not None:
+            existing_table, _ = self._table(create=False)
+            if existing_table is not None:
+                existing = existing_table.search().where(f"id = '{record_id}'").limit(2).to_list()
+                if existing:
+                    if len(existing) != 1:
+                        raise ValueError("duplicate stable memory identifier")
+                    row = existing[0]
+                    if (not self._card_matches_scope(row) or row.get("status") != "active"
+                        or row.get("content") != content or row.get("sourceRole") != source_role
+                        or row.get("sessionId") != session_id
+                        or normalize_validity_window(row.get("validFrom"), row.get("validUntil")) != (valid_from_ms, valid_until_ms)
+                        or normalize_timestamp(row.get("expiresAt")) != expiry_ms
+                        or json.loads(row.get("mergedFrom") or "[]") != (merged_from or [])):
+                        raise ValueError("stable memory identifier conflicts with existing record")
+                    return record_id
         vector = self._embedding.embed(content)
         record = {
-            "id": str(uuid.uuid4()),
+            "id": record_id or str(uuid.uuid4()),
             "agentId": self.agent_id,
             "scopeKey": self.scope_key,
             "scopeType": self.scope_binding.scope_type,
@@ -1379,6 +1454,7 @@ class Plur1busRuntime:
             "validFrom": valid_from_ms,
             "validUntil": valid_until_ms,
             "expiresAt": expiry_ms,
+            "mergedFrom": json.dumps(merged_from or []),
             "vector": vector,
             # Explicit trust state (upstream 7.4.0): genuine user captures start
             # as `observed`; every other new write is explicitly `untrusted`.
@@ -1418,6 +1494,138 @@ class Plur1busRuntime:
                     return str(record["id"])
         return None
 
+    def list_merge_proposals(self) -> list[dict[str, Any]]:
+        """List only valid proposals belonging to the current exact scope."""
+        from .durable_merge import proposal_revision
+        directory = resolve_inside(str(self.data_dir), "state", "merge-proposals")
+        result = []
+        if not directory.is_dir():
+            return result
+        for path in sorted(directory.glob("*.json"))[:500]:
+            if path.is_symlink() or path.stat().st_size > 1_000_000:
+                continue
+            try:
+                safe_memory_id(path.stem)
+                proposal = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            if (isinstance(proposal, dict) and proposal.get("agentId") == self.agent_id
+                and proposal.get("scopeKey") == self.scope_key
+                and proposal.get("revision") == proposal_revision(proposal)):
+                result.append(proposal)
+        return result
+
+    @serialized_memory_write
+    def apply_merge_proposal(self, proposal_id: str, *, approved_revision: str | None = None) -> bool:
+        """Explicit crash-safe merge apply; source is retired only last."""
+        from .durable_merge import stable_replacement_id, valid_time_marker, combined_window, proposal_revision
+        proposal_id = safe_memory_id(proposal_id)
+        if not isinstance(approved_revision, str) or not approved_revision:
+            return False
+        lexical = self.data_dir / "state" / "merge-proposals" / f"{proposal_id}.json"
+        if lexical.is_symlink() or lexical.parent.is_symlink() or lexical.parent.parent.is_symlink():
+            return False
+        path = resolve_inside(str(self.data_dir), "state", "merge-proposals", f"{proposal_id}.json")
+        if path.is_symlink() or (path.exists() and path.stat().st_size > 1_000_000):
+            return False
+        try:
+            proposal = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if (not isinstance(proposal, dict) or proposal.get("scopeKey") != self.scope_key
+            or proposal.get("agentId") != self.agent_id or proposal.get("proposalId") != proposal_id):
+            return False
+        revision = proposal_revision(proposal)
+        if proposal.get("revision") != revision or (approved_revision is not None and approved_revision != revision):
+            return False
+        if proposal.get("state") not in {"proposed", "prepared", "materialized", "applied"}:
+            return False
+        snapshot = proposal.get("candidateSnapshot") or {}
+        incoming = proposal.get("incomingSnapshot") or {}
+        if not isinstance(snapshot, dict) or not isinstance(incoming, dict) or not self._card_matches_scope(snapshot):
+            return False
+        candidate_id = safe_memory_id(str(proposal.get("candidateId") or ""))
+        replacement_id = safe_memory_id(str(proposal.get("replacementId") or ""))
+        expected_id = stable_replacement_id(self.agent_id, candidate_id, str(incoming.get("content") or ""))
+        expected_lineage = [candidate_id, valid_time_marker(snapshot)]
+        merged_text = str(snapshot.get("content") or "") + "\n" + str(incoming.get("content") or "")
+        if (snapshot.get("id") != candidate_id or replacement_id != expected_id
+            or proposal.get("mergedFrom") != expected_lineage or proposal.get("mergedText") != merged_text
+            or has_disjoint_validity_windows(snapshot, incoming)):
+            return False
+        start, end = combined_window(snapshot, incoming)
+        expiry = normalize_timestamp(snapshot.get("expiresAt"))
+
+        def read(identifier):
+            table, _ = self._table(create=False)
+            if table is None:
+                return []
+            return table.search().where(f"id = '{identifier}' AND {scope_where_clause(self.scope_binding, include_legacy_private=False)}").limit(2).to_list()
+
+        def replacement_matches(rows):
+            if len(rows) != 1 or not self._card_matches_scope(rows[0]):
+                return False
+            row = rows[0]
+            try:
+                lineage = json.loads(row.get("mergedFrom") or "null")
+            except (TypeError, ValueError):
+                return False
+            return (isinstance(lineage, list) and lineage == expected_lineage
+                and row.get("status") == "active" and row.get("content") == merged_text
+                and normalize_validity_window(row.get("validFrom"), row.get("validUntil")) == (start, end)
+                and normalize_timestamp(row.get("expiresAt")) == expiry)
+
+        def conflict():
+            proposal["state"] = "conflict"
+            persist_proposal(path, proposal)
+            return False
+
+        def retired_source_matches(rows):
+            return (len(rows) == 1 and rows[0].get("status") == "deleted"
+                and self._same_correction_source(snapshot, {**rows[0], "status": "active"}))
+
+        rows = read(candidate_id)
+        existing = read(replacement_id)
+        if proposal["state"] == "applied":
+            return replacement_matches(existing) and retired_source_matches(rows)
+        # Recovery after source retirement but before proposal acknowledgement.
+        if proposal["state"] == "materialized" and replacement_matches(existing) and retired_source_matches(rows):
+            proposal["state"] = "applied"
+            persist_proposal(path, proposal)
+            return True
+        if len(rows) != 1 or not self._same_correction_source(snapshot, rows[0]):
+            return conflict()
+        if existing and not replacement_matches(existing):
+            return conflict()
+        if existing and proposal["state"] != "materialized":
+            # The insert may have survived a crash before graph/metadata/mirror
+            # materialization. Never retire the source on table existence alone.
+            proposal["state"] = "repair_required"
+            persist_proposal(path, proposal)
+            return False
+        if not existing:
+            proposal["state"] = "prepared"
+            persist_proposal(path, proposal)
+            stored = self._remember(merged_text, str(incoming.get("sessionId") or ""), "merge",
+                valid_from=start, valid_until=end, expires_at=expiry,
+                record_id=replacement_id, merged_from=expected_lineage)
+            if stored != replacement_id:
+                return False
+            proposal["state"] = "materialized"
+            persist_proposal(path, proposal)
+        if not replacement_matches(read(replacement_id)):
+            return conflict()
+        latest = read(candidate_id)
+        if len(latest) != 1 or not self._same_correction_source(snapshot, latest[0]):
+            if replacement_matches(read(replacement_id)):
+                self._abandon_correction_replacement(replacement_id, "merge_source_revalidation_failed")
+            return conflict()
+        if not self.forget(candidate_id):
+            return False
+        proposal["state"] = "applied"
+        persist_proposal(path, proposal)
+        return True
+
     @staticmethod
     def _schema_names(table: Any) -> set[str]:
         """Return schema names across real LanceDB tables and lightweight fakes."""
@@ -1440,6 +1648,9 @@ class Plur1busRuntime:
         if "epistemicStatus" not in names:
             add_columns({"epistemicStatus": "''"})
             names.add("epistemicStatus")
+        if "mergedFrom" not in names:
+            add_columns({"mergedFrom": "'[]'"})
+            names.add("mergedFrom")
         try:
             import pyarrow as pa
         except ImportError as error:  # pragma: no cover - LanceDB supplies PyArrow

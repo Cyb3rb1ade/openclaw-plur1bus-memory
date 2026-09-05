@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import unittest
 from concurrent.futures import Future
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from plur1bus_hermes.provider import Plur1busMemoryProvider
+from plur1bus_hermes.domain import Plur1busDomain
+from plur1bus_hermes.namespaces import ScopeBinding
+from plur1bus_hermes.runtime import Plur1busRuntime
 from plur1bus_hermes.service import PLUR1BUS_SERVICE
 
 
@@ -128,6 +132,7 @@ class HermesApi710Tests(unittest.TestCase):
             "validFrom": "2026-01-01T00:00:00Z",
             "validUntil": "2026-02-01T00:00:00Z",
             "expiresAt": "2026-03-01T00:00:00Z",
+            "ttl": "short",
         }))
         recall = json.loads(provider.handle_tool_call("memory_recall", {
             "query": "fact", "limit": 7, "validAt": "2026-01-15T00:00:00Z",
@@ -139,6 +144,7 @@ class HermesApi710Tests(unittest.TestCase):
         self.assertEqual(stored[0][1]["source_role"], "tool")
         self.assertEqual(stored[0][1]["expires_at"], "2026-03-01T00:00:00Z")
         self.assertEqual(stored[0][1]["valid_from"], "2026-01-01T00:00:00Z")
+        self.assertEqual(stored[0][1]["ttl"], "short")
         self.assertTrue(recall["ok"])
         self.assertEqual(recalled[0][0], ("fact",))
         self.assertEqual(recalled[0][1], {
@@ -146,6 +152,7 @@ class HermesApi710Tests(unittest.TestCase):
         })
         schemas = {schema["name"]: schema for schema in provider.get_tool_schemas()}
         self.assertIn("expiresAt", schemas["memory_store"]["parameters"]["properties"])
+        self.assertEqual(schemas["memory_store"]["parameters"]["properties"]["ttl"]["enum"], ["session", "short"])
         self.assertIn("validAt", schemas["memory_recall"]["parameters"]["properties"])
         self.assertIn("full_text", schemas["memory_recall"]["parameters"]["properties"])
         provider.shutdown()
@@ -170,6 +177,41 @@ class HermesApi710Tests(unittest.TestCase):
         self.assertIn("absolute ISO-8601", invalid["error"])
         self.assertEqual(stored, [])
         provider.shutdown()
+
+    def test_reminder_extraction_runs_once_in_admitted_runtime_capture_path(self) -> None:
+        extracted = []
+        with TemporaryDirectory() as directory:
+            binding = ScopeBinding("main")
+            domain = Plur1busDomain(
+                Path(directory), "main", {"reminders": {"autoExtract": True}}
+            )
+            domain.extract_reminder_proposals = lambda user, assistant, session_id, *, acl_bindings: (
+                extracted.append((user, assistant, session_id, acl_bindings))
+                or {"proposed": [{"proposalId": "pending"}]}
+            )
+            provider = Plur1busMemoryProvider({"autoCapture": True})
+            runtime = type("Runtime", (), {
+                "_domain": domain, "scope_binding": binding,
+                "_remember": lambda *_args, **_kwargs: None,
+                "shutdown": lambda _self: None,
+            })()
+
+            def capture_async(user, assistant, session_id, *, importance=None):
+                Plur1busRuntime._capture_turn(runtime, user, assistant, session_id, importance)
+
+            runtime.capture_async = capture_async
+            provider._runtime = runtime
+
+            provider.sync_turn("remind me on 2027-01-01", "I can propose that", session_id="s")
+            provider.sync_turn(
+                "internal notification", "ignored", session_id="s2",
+                messages=[{"role": "user", "content": "internal notification", "display_kind": "internal_notification"}],
+            )
+
+            self.assertEqual(extracted, [
+                ("remind me on 2027-01-01", "I can propose that", "s", binding.as_dict())
+            ])
+            provider.shutdown()
 
     def test_readiness_is_published_only_after_success_and_cleared_after_failure_or_shutdown(self) -> None:
         state = PLUR1BUS_SERVICE.state()

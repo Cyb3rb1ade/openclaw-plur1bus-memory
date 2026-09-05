@@ -4,6 +4,11 @@ Stand: 2026-09-05. **Lokaler Port, keine Veröffentlichung und keine Live-Instal
 
 **Nachtrag:** Diese ursprüngliche Matrix war für eine Vollständigkeitsbewertung zu eng. Für anschließende Implementierungen und verbleibende Lücken gilt [der Implementierungsnachtrag](hermes-7.10.0-implementation-followup.md). `parity.py` meldet weiterhin ausdrücklich partielle Abdeckung.
 
+Der jüngste Implementierungsstand (Workshop, Merge, native kognitive Jobs und
+Gateway-Antworten) steht in [Native Workflows](hermes-7.10.0-native-workflows.md).
+Die weiter unten genannten 18 Node-Fehler dokumentieren die ursprüngliche
+Upstream-Baseline vor den nachfolgend übernommenen macOS-Korrekturen.
+
 ## Geprüfte Basis
 
 - Upstream: `v7.10.0`, Commit `b4138df52781b6d51bc2baa0659e67325dbd5fa9`.
@@ -15,7 +20,8 @@ Stand: 2026-09-05. **Lokaler Port, keine Veröffentlichung und keine Live-Instal
 7.10.0 selbst ändert vor allem die Empfehlung für den lokalen BGE-Reranker.
 Der erhebliche Gesamtunterschied gegenüber dem letzten Hermes-Port liegt in
 7.5–7.9: SDK-/Host-Integration, Bedienoberflächen, Re-Embedding und Critical-Review.
-Das JavaScript aus `index.js` und `lib/` bleibt bytegleich zum Upstream-Tag.
+Das JavaScript basiert auf dem Upstream-Tag; zusätzlich sind die separaten
+macOS-Korrekturen aus PR #131/#132 lokal in den Hermes-Branch übernommen.
 Hermes verwendet die native Python-Implementierung, nicht diese JS-Host-Pfade.
 
 ## Vertragsmatrix
@@ -26,7 +32,7 @@ Hermes verwendet die native Python-Implementierung, nicht diese JS-Host-Pfade.
 | Hermes MemoryProvider-Lifecycle | Ja | RecallStatus, Verfügbarkeitsgrund, Schutz vor internen Notifications/Subagent-Capture; Neuinitialisierung beendet alten Runtime-Besitz und sperrt späte alte Prefetch-Ergebnisse. |
 | Critical `accept/reject REF…/all` | Ja | Erreichbar über bestehende autorisierte Controls. Vollständiger Pending-Snapshot im Scope, ID-Dedupe, Fehler je Karte, weitere Karten laufen weiter. |
 | Keine Klassifikation inaktiver/gelöschter Karten | Ja | Native Klassifikationspfade filtern diese Karten; Regressionen enthalten. |
-| Zitierte natürliche Antwort auf einen Critical-Push | Grundsätzlich ja, mit vertrauenswürdigem Host-Metadatenvertrag | Intent-Parser getestet, aber **nicht an Gateway-Aktionen angeschlossen**. Keine Ausführung aufgrund frei kopierter Zitate. Explizite Controls-Befehle funktionieren. |
+| Zitierte natürliche Antwort auf einen Critical-Push | Ja, mit vertrauenswürdigem Host-Metadatenvertrag | Gateway-Wiring prüft eigene Antwort, Host-Message-ID, Route, Agent/Scope, Autorisierung und neuesten Ledger-Zustand. Explizites Accept/Reject erzeugt Feedback erst nach erfolgreicher Änderung. Keine Autorität aus frei kopierten Zitaten. |
 | BGE als lokale Reranker-Empfehlung | Ja | Native Python-BGE-Konfiguration beibehalten; bestehende Benutzerkonfiguration und Vektorräume werden nicht geändert. Der JS-ONNX-Modellname ist kein Python-Modellalias. |
 | Remote OpenAI-v3-Embeddings | Ja | Angeforderte Dimensionen werden mitgeschickt und geprüft; explizites Key-Env wird nicht durch fremde Standard-Credentials ersetzt; nicht-endliche Vektoren werden nicht gecacht. |
 | Jina v3 lokal mit Matryoshka | Technisch ja, weitere Implementierung/Audit erforderlich | **Nicht freigegeben.** Lizenz-/Dimensionsprüfungen vorhanden, danach expliziter Fehler vor Remote-Code-Import. Das Modell delegiert Code an ein separat versioniertes Repository. Kein scheinbar sicherer Modell-Hash-Pin. Bestehender optionaler Jina-Sidecar ist davon getrennt. |
@@ -36,9 +42,9 @@ Hermes verwendet die native Python-Implementierung, nicht diese JS-Host-Pfade.
 | Physische LanceDB-Kompaktierung | Ja | Explizite lokale Operator-CLI, Dry-run als Default, Write nur `--apply`; echte LanceDB-Prüfung erhält Zeilen. Keine semantische Löschung/GC. |
 | Re-Embedding planen / in Batches ausführen | Ja | Eigene Staging-Datenbank, Quellversion/-inhalt und Zielkonfiguration gebunden, Prozess-Lock, Schema-/ACL-Erhalt, Finite-/Dimensionsprüfung, Wiederaufnahme ohne doppelte Batch-Writes. CLI erreichbar. |
 | Re-Embedding produktiv umschalten | Ja, aber noch nicht implementiert | **Kein aktiver Generation-Switch.** Staging berichtet immer `active:false`; Backup, Gateway-Quieszenz, Transaktion/Recovery und Runtime-Probe müssen einen separaten Switch-Vertrag bilden. |
-| Skill-Miner / revision-bound Skill Workshop | Grundsätzlich ja | **Nicht portiert.** Hermes hat native Skills, aber diese ersetzen nicht die Proposal-/Revision-/Approve-/Publish-Semantik von OpenClaw. Kein direktes Schreiben generierter Skills als vermeintliches Äquivalent. |
+| Skill-Miner / revision-bound Skill Workshop | Ja, nativ | Opt-in LLM-Verfahrensvorschläge, Inhalts-/Scope-Evidenzbindung, revisionsgebundenes Approve/Publish, kein Überschreiben manueller Skills. Veröffentlichung im Hermes-Skill-Verzeichnis ist profilweit sichtbar; darauf weist die separate Bestätigung hin. |
 | Obsidian | Ja | Bestehende native Mirror-/Sync-/Graph-Funktionen erhalten. Neue Browser-Zielerkennung, Consent- und Operator-UI nicht vollständig nachgebildet. |
-| Zeitgesteuerte Hintergrundjobs / Push | Teilweise native Entsprechung | Vorhandene CLI-/launchd-Jobs erhalten. Gateway-Outbox wird bei eingehendem Dispatch ausgeliefert, kein garantierter unabhängiger Wake-up. Launchd bleibt macOS-spezifisch. |
+| Zeitgesteuerte Hintergrundjobs / Push | Teilweise native Entsprechung | CLI-/launchd-Jobs erhalten. Opt-in In-Process-Timer liefert nach autorisierter Routenregistrierung auch ohne weiteren Eingang; ein Kaltstart braucht zunächst einen neuen autorisierten Gateway-Event. Launchd bleibt macOS-spezifisch. |
 | OpenClaw Memory-Slot, SDK, Cron-Ownership, iframe-Aktionen, Dream-Renderer | Nicht 1:1 im Hermes-Host | Upstream-JS vollständig enthalten, in Hermes nicht erreichbar. Funktionale Hermes-Neuentwicklungen wären möglich; keine Shims für interne OpenClaw-APIs. |
 
 `plur1bus-hermes-parity` trennt die übernommene native Baseline von

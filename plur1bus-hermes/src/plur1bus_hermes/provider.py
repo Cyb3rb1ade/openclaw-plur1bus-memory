@@ -487,6 +487,7 @@ class Plur1busMemoryProvider(MemoryProvider):
                     "validFrom": {"type": "string", "description": "Optional absolute ISO-8601/epoch-ms time when the claim became true. Omit vague or relative dates; never guess."},
                     "validUntil": {"type": "string", "description": "Optional absolute ISO-8601/epoch-ms time when the claim ceased to be true. Omit unknown or ongoing bounds; never guess."},
                     "expiresAt": {"type": "string", "description": "Optional absolute ISO-8601/epoch-ms expiry time. Never infer it from a new fact."},
+                    "ttl": {"type": "string", "enum": ["session", "short"], "description": "Optional expiry policy: session (24 hours) or short (14 days). Omit unless the caller explicitly requests expiry."},
                 },
                 ["text"],
             ),
@@ -533,6 +534,7 @@ class Plur1busMemoryProvider(MemoryProvider):
                         valid_from=arguments.get("validFrom"),
                         valid_until=arguments.get("validUntil"),
                         expires_at=arguments.get("expiresAt"),
+                        ttl=arguments.get("ttl"),
                     )
                 except (ValueError, RuntimeError) as error:
                     return json.dumps({"ok": False, "error": str(error)})
