@@ -85,9 +85,12 @@ def build_plan(target: Path, hermes_home: Path) -> dict[str, Any]:
     if not profiles:
         errors.append("migration contains no staged Hermes profiles")
     parity = parity_report()
-    if parity["status"] != "ready":
+    if (
+        parity.get("status") != "complete"
+        or parity.get("coverageStatus") != "complete"
+    ):
         errors.append(
-            f"PLUR1BUS feature parity is incomplete: "
+            f"PLUR1BUS feature parity is incomplete for v7.10.0: "
             f"{parity['readyRequired']}/{parity['totalRequired']}"
         )
     return {
@@ -98,6 +101,7 @@ def build_plan(target: Path, hermes_home: Path) -> dict[str, Any]:
         "profiles": profiles,
         "parity": {
             "status": parity["status"],
+            "coverageStatus": parity.get("coverageStatus", "incomplete"),
             "readyRequired": parity["readyRequired"],
             "totalRequired": parity["totalRequired"],
         },

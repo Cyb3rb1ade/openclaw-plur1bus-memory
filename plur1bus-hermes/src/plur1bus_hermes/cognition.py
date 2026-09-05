@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+import threading
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 
 _EMOTIONS = {
@@ -26,6 +27,90 @@ _STOP = {
     "aber", "auch", "das", "der", "die", "ein", "eine", "for", "ist", "mit",
     "the", "und", "von", "was", "with", "you",
 }
+
+
+_T2_CLASSIFIERS: dict[str, Callable[[str], dict[str, Any]]] = {}
+_T2_CLASSIFIER_LOCK = threading.RLock()
+_MAX_T2_CLASSIFIERS = 8
+
+
+def _normalize_classifier_result(value: Any) -> dict[str, Any] | None:
+    """Validate a local classifier result before it influences persistent state."""
+    if not isinstance(value, dict):
+        return None
+    dominant = str(value.get("dominant") or "").lower()
+    valence = str(value.get("valence") or "").lower()
+    if not dominant or valence not in {"positive", "negative", "neutral"}:
+        return None
+    try:
+        intensity = max(0.0, min(1.0, float(value.get("intensity"))))
+    except (TypeError, ValueError):
+        return None
+    return {"dominant": dominant, "intensity": round(intensity, 4), "valence": valence}
+
+
+def _local_t2_classifier(config: dict[str, Any]) -> tuple[Callable[[str], dict[str, Any]] | None, str]:
+    """Lazily load an explicitly configured local-only emotion classifier."""
+    model_name = str(config.get("model") or "").strip()
+    backend = str(config.get("backend") or "transformers").lower()
+    if not model_name:
+        return None, "not-configured"
+    cache_key = f"{backend}:{model_name}:{repr(config.get('labelMap'))}:{repr(config.get('labels'))}"
+    with _T2_CLASSIFIER_LOCK:
+        cached = _T2_CLASSIFIERS.get(cache_key)
+        if cached is not None:
+            return cached, "ready"
+        try:
+            if backend == "transformers":
+                from transformers import AutoModelForSequenceClassification, AutoTokenizer  # type: ignore[import-not-found]
+                import torch  # type: ignore[import-not-found]
+
+                tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+                model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
+                model.eval()
+                label_map = config.get("labelMap") if isinstance(config.get("labelMap"), dict) else {}
+                id_to_label = getattr(model.config, "id2label", {})
+
+                def classify(text: str) -> dict[str, Any]:
+                    inputs = tokenizer(text, truncation=True, max_length=512, return_tensors="pt")
+                    with torch.inference_mode():
+                        logits = model(**inputs).logits[0]
+                    scores = logits.softmax(dim=-1).tolist()
+                    index = max(range(len(scores)), key=scores.__getitem__)
+                    raw_label = str(id_to_label.get(index, index))
+                    dominant = str(label_map.get(raw_label, raw_label)).lower()
+                    valence = "positive" if dominant in {"joy", "love", "trust"} else "negative" if dominant in {"sadness", "anger", "fear"} else "neutral"
+                    return {"dominant": dominant, "intensity": scores[index], "valence": valence}
+
+            elif backend == "sentence-transformers":
+                from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+
+                labels = config.get("labels") if isinstance(config.get("labels"), dict) else {}
+                prototypes = {str(name).lower(): str(example) for name, example in labels.items() if str(example).strip()}
+                if not prototypes:
+                    return None, "sentence-transformers-labels-required"
+                model = SentenceTransformer(model_name, local_files_only=True)
+                names = list(prototypes)
+                vectors = model.encode([prototypes[name] for name in names], normalize_embeddings=True)
+
+                def classify(text: str) -> dict[str, Any]:
+                    vector = model.encode([text], normalize_embeddings=True)[0]
+                    scores = [sum(float(a) * float(b) for a, b in zip(vector, prototype)) for prototype in vectors]
+                    index = max(range(len(scores)), key=scores.__getitem__)
+                    dominant = names[index]
+                    valence = "positive" if dominant in {"joy", "love", "trust"} else "negative" if dominant in {"sadness", "anger", "fear"} else "neutral"
+                    return {"dominant": dominant, "intensity": max(0.0, min(1.0, (scores[index] + 1.0) / 2.0)), "valence": valence}
+
+            else:
+                return None, "unsupported-backend"
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+            return None, "local-model-unavailable"
+        if len(_T2_CLASSIFIERS) >= _MAX_T2_CLASSIFIERS:
+            # Model instances are process-local and potentially large.  Keep a
+            # bounded cache instead of retaining arbitrary profile models.
+            _T2_CLASSIFIERS.pop(next(iter(_T2_CLASSIFIERS)))
+        _T2_CLASSIFIERS[cache_key] = classify
+        return classify, "ready"
 
 
 def _tokens(text: str) -> list[str]:
@@ -70,6 +155,7 @@ def analyze_text_tiered(
     config: dict[str, Any],
     *,
     complete_json=None,
+    t2_classifier: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Route emotion analysis through T1/T2/T3 with explicit fail-soft metadata."""
     result = analyze_text(text)
@@ -78,7 +164,28 @@ def analyze_text_tiered(
     if requested not in {"auto", "t1", "t2", "t3"}:
         requested = "auto"
     result["emotion"]["requestedTier"] = requested
-    result["emotion"]["tierUsed"] = "t1" if requested == "t1" else "t2"
+    result["emotion"]["tierUsed"] = "t1"
+    t2_config = emotion_config.get("t2") if isinstance(emotion_config.get("t2"), dict) else {}
+    use_t2 = requested in {"auto", "t2", "t3"} and t2_config.get("enabled") is not False
+    t2_reason = "disabled"
+    if use_t2:
+        classifier = t2_classifier
+        if classifier is None:
+            classifier, t2_reason = _local_t2_classifier(t2_config)
+        else:
+            t2_reason = "injected"
+        if classifier is not None:
+            try:
+                classified = _normalize_classifier_result(classifier(text))
+            except (RuntimeError, TypeError, ValueError):
+                classified = None
+                t2_reason = "classifier-error"
+            if classified is not None:
+                result["emotion"].update({**classified, "tierUsed": "t2"})
+            else:
+                t2_reason = "invalid-classifier-result"
+        if result["emotion"]["tierUsed"] != "t2":
+            result["emotion"]["fallback"] = f"t2-{t2_reason}-to-t1"
     should_use_t3 = requested == "t3" or (
         requested == "auto"
         and (emotion_config.get("t3") or {}).get("enabled") is True
@@ -91,7 +198,7 @@ def analyze_text_tiered(
     if not should_use_t3:
         return result
     if complete_json is None:
-        result["emotion"]["fallback"] = "t3-unavailable-to-t2"
+        result["emotion"]["fallback"] = f"t3-unavailable-to-{result['emotion']['tierUsed']}"
         return result
     try:
         classified = complete_json(
@@ -114,9 +221,7 @@ def analyze_text_tiered(
             "tierUsed": "t3",
         })
     except (RuntimeError, TypeError, ValueError) as error:
-        result["emotion"]["fallback"] = (
-            f"t3-{type(error).__name__}-to-t2"
-        )
+        result["emotion"]["fallback"] = f"t3-{type(error).__name__}-to-{result['emotion']['tierUsed']}"
     return result
 
 

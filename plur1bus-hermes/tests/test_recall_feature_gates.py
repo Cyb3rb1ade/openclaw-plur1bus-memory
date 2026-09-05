@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from plur1bus_hermes.domain import Plur1busDomain, _now_ms
+from plur1bus_hermes.domain import Plur1busDomain
 
 
 class RecallFeatureGateTests(unittest.TestCase):
@@ -22,24 +22,21 @@ class RecallFeatureGateTests(unittest.TestCase):
         domain._hydrate_ids = lambda _table, ids, *_args, **_kwargs: [  # type: ignore[method-assign]
             {"id": item, "agentId": "main", "content": item} for item in sorted(ids)
         ]
-        domain._last_recall_ms = _now_ms() - 46 * 60 * 1000
         return domain, calls
 
-    def test_default_configuration_adds_semantic_and_continuity_candidates(self) -> None:
+    def test_default_configuration_keeps_only_graph_base_candidates(self) -> None:
         domain, calls = self._boost_domain()
         result = domain.boost_recall(self._base(), object(), 4)
 
-        self.assertEqual(calls, ["graph", "lens", "continuity"])
-        self.assertEqual({row["id"] for row in result}, {"base", "graph", "lens", "continuity"})
+        self.assertEqual(calls, ["graph"])
+        self.assertEqual({row["id"] for row in result}, {"base", "graph"})
 
     def test_explicit_optouts_keep_graph_base_but_skip_semantic_and_continuity(self) -> None:
-        domain, calls = self._boost_domain({"semanticLens": False, "continuityEngine": {"enabled": False}})
-        previous_recall = domain._last_recall_ms
+        domain, calls = self._boost_domain({"semanticLens": False, "conversationReactivationRecall": {"enabled": False}})
         result = domain.boost_recall(self._base(), object(), 4)
 
         self.assertEqual(calls, ["graph"])
         self.assertEqual([row["id"] for row in result], ["base", "graph"])
-        self.assertEqual(domain._last_recall_ms, previous_recall, "continuity state must not advance while disabled")
 
     def test_semantic_lens_direct_helper_honors_enabled_false_without_reading_an_index(self) -> None:
         domain = Plur1busDomain(Path("/private/tmp"), "main", {"semanticLens": {"enabled": False}})

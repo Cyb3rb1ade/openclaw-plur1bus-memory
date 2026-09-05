@@ -8,17 +8,14 @@ class ParityTests(unittest.TestCase):
         report = parity_report()
         by_id = {feature["id"]: feature for feature in report["features"]}
 
-        self.assertEqual(report["status"], "ready")
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(report["legacyInventoryStatus"], "incomplete")
         self.assertEqual(by_id["skill-farming"]["status"], "excluded")
-        self.assertEqual(by_id["proactive-delivery"]["status"], "ready")
-        self.assertTrue(
-            all(
-                item["status"] == "ready"
-                for item in report["features"]
-                if item["status"] != "excluded"
-            )
-        )
-        self.assertEqual(report["readyRequired"], report["totalRequired"])
+        self.assertEqual(by_id["proactive-delivery"]["status"], "partial")
+        # A completed legacy inventory must never become the public v7.10
+        # readiness signal while the separate coverage gate is partial.
+        self.assertNotEqual(report["status"], report["legacyInventoryStatus"])
+        self.assertLess(report["readyRequired"], report["totalRequired"])
         self.assertEqual(report["coverageStatus"], "partial")
         coverage = {item["id"]: item for item in report["coverage710"]}
         self.assertEqual(coverage["skill-workshop"]["status"], "not-ported")

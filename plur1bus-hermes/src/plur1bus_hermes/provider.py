@@ -44,6 +44,7 @@ from .service import PLUR1BUS_SERVICE
 from .runtime import Plur1busRuntime
 from .namespaces import binding_from_scope, normalize_scope_context
 from .validation import ValidationError, normalize_text_payload, resolve_inside, safe_agent_id, safe_memory_id
+from .valid_time import normalize_timestamp
 
 
 # Hermes profile names are single path segments; anything else must never be joined
@@ -98,6 +99,7 @@ class Plur1busMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.RLock()
         self._prefetch_generation = 0
         self._last_recall_status: RecallStatus | None = None
+        self._active_runtime_agent: str | None = None
         # Hermes declares this context at provider initialization.  Non-primary
         # agents must not convert internal work into durable user memory.
         self._agent_context = "primary"
@@ -155,6 +157,13 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         """Initialize the provider for one Hermes session."""
+        state = PLUR1BUS_SERVICE.state()
+        # This is process-visible state, so never carry a previous successful
+        # session over an initialization which can still fail below.
+        state.provider_ready = False
+        if self._active_runtime_agent:
+            state.active_profiles.pop(self._active_runtime_agent, None)
+            self._active_runtime_agent = None
         hermes_home = kwargs.get("hermes_home")
         if hermes_home:
             self._hermes_home = Path(str(hermes_home)).expanduser()
@@ -171,7 +180,6 @@ class Plur1busMemoryProvider(MemoryProvider):
         root = self._base_path()
         for name in ("archives", "cache", "state", "manifests"):
             (root / name).mkdir(parents=True, exist_ok=True)
-        PLUR1BUS_SERVICE.state().provider_ready = True
         runtime_agent = str(
             kwargs.get("agent_identity")
             or kwargs.get("agent_id")
@@ -211,17 +219,25 @@ class Plur1busMemoryProvider(MemoryProvider):
         ):
             request_scope["workspace"] = str(self.config["workspaceId"])
         request_scope = binding_from_scope(runtime_agent, request_scope).as_dict()
-        self._runtime = Plur1busRuntime(
-            self._base_path(),
-            self.config,
-            runtime_agent,
-            request_scope,
-        )
-        PLUR1BUS_SERVICE.state().active_profiles[runtime_agent] = {
+        try:
+            self._runtime = Plur1busRuntime(
+                self._base_path(),
+                self.config,
+                runtime_agent,
+                request_scope,
+            )
+        except Exception:
+            self._closed = True
+            state.last_health = {"status": "initialization_failed", "at": _utcnow_iso()}
+            raise
+        self._active_runtime_agent = runtime_agent
+        state.active_profiles[runtime_agent] = {
             "sessionId": self._session_id,
             "workspace": request_scope["workspace"],
             "scopeKey": self._runtime.scope_key,
         }
+        state.provider_ready = True
+        state.last_health = {"status": "ready", "at": _utcnow_iso()}
 
     def _release_previous_runtime(self) -> None:
         """Release session-bound state before a repeated ``initialize`` replaces it."""
@@ -254,6 +270,8 @@ class Plur1busMemoryProvider(MemoryProvider):
         """Return only this query's recall after a short, fail-open bounded wait."""
         del kwargs
         self._last_recall_status = None
+        if not self._feature_enabled("autoRecall"):
+            return ""
         if session_id:
             self._session_id = session_id
         text = str(query).strip()
@@ -294,6 +312,8 @@ class Plur1busMemoryProvider(MemoryProvider):
     def queue_prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> None:
         """Schedule background recall for the next eligible Hermes turn."""
         del kwargs
+        if not self._feature_enabled("autoRecall"):
+            return
         text = str(query).strip()
         if not text:
             return
@@ -302,7 +322,7 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def sync_turn(self, user: str, assistant: str, *, session_id: str = "", **kwargs: Any) -> None:
         """Queue a completed turn and return immediately to Hermes."""
-        if self._closed or not self._capture_allowed(kwargs):
+        if self._closed or not self._feature_enabled("autoCapture") or not self._capture_allowed(kwargs):
             return
         payload = normalize_text_payload({
             "agentId": str(kwargs.get("agent_id") or "default"),
@@ -332,7 +352,7 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def on_pre_compress(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
         """Durably checkpoint direct evidence before Hermes discards context."""
-        if not self._capture_allowed(kwargs, messages):
+        if not self._feature_enabled("autoCapture") or not self._capture_allowed(kwargs, messages):
             return ""
         checkpoint = self._write_pre_compress_checkpoint(messages)
         self._flush_captures()
@@ -368,11 +388,19 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def shutdown(self) -> None:
         self._closed = True
-        self._flush_captures()
-        self._prefetch_executor.shutdown(wait=False, cancel_futures=True)
-        if self._runtime:
-            self._runtime.shutdown()
-        PLUR1BUS_SERVICE.state().last_health = {"status": "shutdown", "at": _utcnow_iso()}
+        try:
+            self._flush_captures()
+            self._prefetch_executor.shutdown(wait=False, cancel_futures=True)
+            if self._runtime:
+                self._runtime.shutdown()
+        finally:
+            self._runtime = None
+            state = PLUR1BUS_SERVICE.state()
+            state.provider_ready = False
+            if self._active_runtime_agent:
+                state.active_profiles.pop(self._active_runtime_agent, None)
+                self._active_runtime_agent = None
+            state.last_health = {"status": "shutdown", "at": _utcnow_iso()}
 
     def backup_paths(self) -> list[str]:
         root = self._base_path()
@@ -456,15 +484,27 @@ class Plur1busMemoryProvider(MemoryProvider):
                 {
                     "text": {"type": "string", "maxLength": 20000},
                     "importance": {"type": "number", "minimum": 0, "maximum": 1},
+                    "validFrom": {"type": "string", "description": "Optional absolute ISO-8601/epoch-ms time when the claim became true. Omit vague or relative dates; never guess."},
+                    "validUntil": {"type": "string", "description": "Optional absolute ISO-8601/epoch-ms time when the claim ceased to be true. Omit unknown or ongoing bounds; never guess."},
+                    "expiresAt": {"type": "string", "description": "Optional absolute ISO-8601/epoch-ms expiry time. Never infer it from a new fact."},
                 },
                 ["text"],
             ),
-            self._tool_schema("memory_recall", "Recall PLUR1BUS memories.", {"query": {"type": "string", "maxLength": 5000}}, ["query"]),
+            self._tool_schema(
+                "memory_recall",
+                "Recall PLUR1BUS memories.",
+                {
+                    "query": {"type": "string", "maxLength": 5000},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "full_text": {"type": "boolean", "description": "Return complete memory content instead of the bounded preview."},
+                    "validAt": {"type": "string", "description": "Optional absolute ISO-8601/epoch-ms point for historical recall. Omit vague dates; never guess."},
+                },
+                ["query"],
+            ),
         ]
 
     def handle_tool_call(self, tool_name: str, args: Mapping[str, Any] | None, **kwargs: Any) -> str:
         """Return JSON text, the format expected by Hermes tool dispatch."""
-        del kwargs
         arguments = dict(args or {})
         if tool_name == "memory_store":
             text = str(arguments.get("text", "")).strip()
@@ -477,12 +517,45 @@ class Plur1busMemoryProvider(MemoryProvider):
                         return json.dumps({"ok": False, "error": "importance must be a number between 0 and 1"})
                     if not math.isfinite(importance) or not 0 <= importance <= 1:
                         return json.dumps({"ok": False, "error": "importance must be a number between 0 and 1"})
-                self.sync_turn(text, "", session_id=self._session_id, importance=importance)
-                return json.dumps({"ok": True, "stored": True, "textHash": _fingerprint(text)})
+                if self._runtime is None:
+                    return json.dumps({"ok": False, "error": "provider is not initialized"})
+                if not self._capture_allowed(kwargs):
+                    return json.dumps({"ok": False, "error": "memory_store is not allowed for this agent context"})
+                error = self._tool_temporal_error(arguments)
+                if error:
+                    return json.dumps({"ok": False, "error": error})
+                try:
+                    self._runtime.remember_async(
+                        text,
+                        self._session_id,
+                        source_role="tool",
+                        importance=importance,
+                        valid_from=arguments.get("validFrom"),
+                        valid_until=arguments.get("validUntil"),
+                        expires_at=arguments.get("expiresAt"),
+                    )
+                except (ValueError, RuntimeError) as error:
+                    return json.dumps({"ok": False, "error": str(error)})
+                return json.dumps({"ok": True, "accepted": True, "queued": True, "textHash": _fingerprint(text)})
             return json.dumps({"ok": False, "error": "text is required"})
         if tool_name == "memory_recall":
             query = str(arguments.get("query", "")).strip()
-            context = self._run_recall(query, self._session_id, self._runtime) if query else ""
+            limit = arguments.get("limit", 5)
+            if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+                return json.dumps({"ok": False, "error": "limit must be an integer between 1 and 100"})
+            try:
+                context = (
+                    self._runtime.recall(
+                        query,
+                        limit=limit,
+                        valid_at=arguments.get("validAt"),
+                        full_text=arguments.get("full_text", False) is True,
+                    )
+                    if query and self._runtime is not None
+                    else ""
+                )
+            except ValueError as error:
+                return json.dumps({"ok": False, "error": str(error)})
             return json.dumps({"ok": True, "query": query, "context": context})
         if tool_name == "memory_forget":
             return json.dumps({"ok": False, "error": "memory_forget is available only through authorized PLUR1BUS controls"})
@@ -553,6 +626,34 @@ class Plur1busMemoryProvider(MemoryProvider):
                 continue
             return not self._is_trusted_internal_message(message)
         return True
+
+    def _feature_enabled(self, name: str) -> bool:
+        """Return an explicit automatic-lifecycle opt-out, defaulting to enabled."""
+        return self.config.get(name, True) is not False
+
+    @staticmethod
+    def _tool_temporal_error(arguments: Mapping[str, Any]) -> str | None:
+        """Reject ambiguous temporal tool inputs before an asynchronous write."""
+        values = {
+            "validFrom": arguments.get("validFrom"),
+            "validUntil": arguments.get("validUntil"),
+            "expiresAt": arguments.get("expiresAt"),
+        }
+        parsed: dict[str, int] = {}
+        for name, value in values.items():
+            if value is None:
+                continue
+            timestamp = normalize_timestamp(value)
+            if not timestamp:
+                return f"{name} must be an absolute ISO-8601 or epoch-ms timestamp"
+            parsed[name] = timestamp
+        if (
+            parsed.get("validFrom")
+            and parsed.get("validUntil")
+            and parsed["validFrom"] >= parsed["validUntil"]
+        ):
+            return "validUntil must be after validFrom"
+        return None
 
     def _format_recall_context(self, result: str) -> str:
         """Fence recall and refresh the host recall indicator atomically."""
@@ -686,6 +787,8 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def _queue_recall(self, query: str, session_id: str, key: str) -> Future[str] | None:
         """Submit one recall per key and return its future for the current turn."""
+        if not self._feature_enabled("autoRecall"):
+            return None
         with self._prefetch_lock:
             if key in self._prefetch_cache:
                 return None
@@ -711,7 +814,16 @@ class Plur1busMemoryProvider(MemoryProvider):
         recall = PLUR1BUS_SERVICE.get("recall")
         if callable(recall):
             return str(recall(query=query, session_id=session_id) or "")
-        return runtime.recall(query) if runtime else ""
+        if runtime is None:
+            return ""
+        try:
+            return runtime.recall(query, session_id=session_id)
+        except TypeError as error:
+            # Preserve compatibility only for pre-7.10 runtime shims that do
+            # not accept the new session-bound recall argument.
+            if "session_id" not in str(error):
+                raise
+            return runtime.recall(query)
 
     def _store_prefetch_result(
         self,

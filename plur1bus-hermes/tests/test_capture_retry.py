@@ -6,6 +6,7 @@ import json
 import tempfile
 import time
 import unittest
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Callable
 
@@ -150,6 +151,29 @@ class CaptureRetryTests(unittest.TestCase):
         self.runtime.flush()
 
         self.assertTrue(self._wait_until(lambda: "salvage user" in self.embedding.calls))
+        self.assertTrue(self._wait_until(lambda: not self._retry_entries()))
+
+    def test_retry_stays_durable_while_inflight_and_is_not_submitted_twice(self) -> None:
+        payload = {"user": "blocked", "assistant": "blocked reply", "sessionId": "session-e", "attempts": 1}
+        self.runtime._write_capture_retries([payload])
+        submitted: list[Future[None]] = []
+
+        class BlockingExecutor:
+            def submit(self, *_args, **_kwargs):
+                future: Future[None] = Future()
+                submitted.append(future)
+                return future
+
+            def shutdown(self, **_kwargs):
+                return None
+
+        self.runtime._executor = BlockingExecutor()  # type: ignore[assignment]
+        self.runtime._resubmit_capture_retries()
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(self._retry_entries()[0]["user"], "blocked")
+        self.runtime._resubmit_capture_retries()
+        self.assertEqual(len(submitted), 1, "in-flight retry must not be duplicated")
+        submitted[0].set_result(None)
         self.assertTrue(self._wait_until(lambda: not self._retry_entries()))
 
 

@@ -12,6 +12,7 @@ from typing import Any
 from plur1bus_hermes.domain import Plur1busDomain
 from plur1bus_hermes.provider import Plur1busMemoryProvider
 from plur1bus_hermes.runtime import Plur1busRuntime
+from plur1bus_hermes.service import PLUR1BUS_SERVICE
 from plur1bus_hermes.critical_review import (
     build_preview,
     translate_reason,
@@ -274,7 +275,7 @@ class Plur1busControlsPlugin:
             mutating_command = mutating_command or (
                 command in {"dreams", "obsidian", "jobs", "critical", "reminders", "speakers", "temperament", "code"}
                 and bool(arguments)
-                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "edit", "acknowledge", "cancel"}
+                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "edit", "acknowledge", "cancel", "create"}
             )
             if mutating_command and not is_mutation_authorized(
                 runtime.config, current_identity()
@@ -295,9 +296,12 @@ class Plur1busControlsPlugin:
                 "enable",
                 "disable",
             }
+            requires_confirmation = command in confirmation_commands or (
+                command == "reminders" and bool(arguments) and arguments[0] == "create"
+            )
             if (
                 mutating_command
-                and command in confirmation_commands
+                and requires_confirmation
                 and identity is not None
             ):
                 if not confirmation_nonce or not self._confirmations.consume(
@@ -348,7 +352,11 @@ class Plur1busControlsPlugin:
             if command in {"enable", "disable"}:
                 from plur1bus_hermes.feature_profiles import set_feature
                 if len(arguments) != 1:
-                    return f"Usage: /plur1bus {command} vaultSync|kritischPush|dailyConsolidation"
+                    return (
+                        f"Usage: /plur1bus {command} "
+                        "vaultSync|kritischPush|dailyConsolidation|autoCapture|autoRecall|"
+                        "conversationReactivationRecall|semanticLens|styleDirective|dreamEcho"
+                    )
                 return json.dumps(
                     set_feature(
                         self._config_path(),
@@ -359,9 +367,17 @@ class Plur1busControlsPlugin:
                     indent=2,
                 )
             if command in {"start", "status", "features"}:
+                from plur1bus_hermes.parity import parity_report
+                parity = parity_report()
                 return json.dumps({
-                    "status": "ready",
+                    "status": (
+                        "operational"
+                        if PLUR1BUS_SERVICE.state().provider_ready
+                        else "degraded"
+                    ),
                     "provider": Plur1busMemoryProvider(runtime.config).name,
+                    "providerReady": PLUR1BUS_SERVICE.state().provider_ready,
+                    "coverageStatus": parity["coverageStatus"],
                     "features": domain.status(**scope_kwargs),
                 }, ensure_ascii=False, indent=2)
             if command == "memory":
@@ -563,8 +579,27 @@ class Plur1busControlsPlugin:
                 return json.dumps(result, indent=2)
             if command == "reminders":
                 if arguments:
+                    if arguments[0] == "create":
+                        if len(arguments) < 3:
+                            return (
+                                "Usage: /plur1bus reminders [--agent ID] create "
+                                "MEMORY_ID ABSOLUTE_ISO_TIME [TEXT]"
+                            )
+                        return json.dumps(
+                            domain.create_reminder(
+                                arguments[1],
+                                arguments[2],
+                                text=" ".join(arguments[3:]) or None,
+                                **scope_kwargs,
+                            ),
+                            ensure_ascii=False,
+                            indent=2,
+                        )
                     if len(arguments) != 2 or arguments[0] not in {"acknowledge", "cancel"}:
-                        return "Usage: /plur1bus reminders [--agent ID] acknowledge|cancel MEMORY_ID"
+                        return (
+                            "Usage: /plur1bus reminders [--agent ID] "
+                            "create MEMORY_ID ABSOLUTE_ISO_TIME [TEXT]|acknowledge|cancel MEMORY_ID"
+                        )
                     return json.dumps(
                         domain.update_reminder(
                             arguments[1], arguments[0], **scope_kwargs

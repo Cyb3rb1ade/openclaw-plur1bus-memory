@@ -171,7 +171,7 @@ class RuntimeProviderTests(unittest.TestCase):
 
     def test_memory_recall_tool_returns_runtime_result_immediately(self) -> None:
         provider = Plur1busMemoryProvider()
-        provider._runtime = type("Runtime", (), {"recall": lambda self, query: f"found:{query}"})()
+        provider._runtime = type("Runtime", (), {"recall": lambda self, query, **_kwargs: f"found:{query}"})()
         result = json.loads(provider.handle_tool_call("memory_recall", {"query": "needle"}))
         self.assertEqual(result["context"], "found:needle")
 

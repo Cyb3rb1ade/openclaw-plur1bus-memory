@@ -68,6 +68,19 @@ class SharedPoolTests(unittest.TestCase):
 
             self.assertEqual([row["content"] for row in recalled], ["owner"])
 
+    def test_temporal_and_expiry_predicates_apply_before_shared_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"))
+            base = {
+                "agentId": "main", "scopeKey": "scope", "status": "active",
+                "type": "observation", "sourceRole": "user", "vector": [1.0, 0.0],
+            }
+            store.copy({**base, "id": "a", "content": "expired", "expiresAt": 1}, source_agent="main")
+            store.copy({**base, "id": "b", "content": "future", "validFrom": 200}, source_agent="main")
+            store.copy({**base, "id": "c", "content": "valid", "validFrom": 100, "validUntil": 200}, source_agent="main")
+            recalled = store.recall_rows([1.0, 0.0], 1, valid_at=150, now_ms=10_000)
+        self.assertEqual([row["content"] for row in recalled], ["valid"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,12 @@ TOGGLES = {
     "vaultSync": ("obsidianBridge", "enabled"),
     "kritischPush": ("criticalPush", "enabled"),
     "dailyConsolidation": ("dailyConsolidation", "enabled"),
+    "autoCapture": ("autoCapture",),
+    "autoRecall": ("autoRecall",),
+    "conversationReactivationRecall": ("conversationReactivationRecall", "enabled"),
+    "semanticLens": ("semanticLens", "enabled"),
+    "styleDirective": ("styleDirective", "enabled"),
+    "dreamEcho": ("dreamEcho", "enabled"),
 }
 
 
@@ -99,8 +105,12 @@ def set_feature(path: Path, feature: str, enabled: bool) -> dict[str, Any]:
         if path.is_file()
         else {}
     )
-    section, key = TOGGLES[feature]
-    config.setdefault(section, {})[key] = bool(enabled)
+    toggle_path = TOGGLES[feature]
+    if len(toggle_path) == 1:
+        config[toggle_path[0]] = bool(enabled)
+    else:
+        section, key = toggle_path
+        config.setdefault(section, {})[key] = bool(enabled)
     config["featuresUpdatedAt"] = _utcnow()
     _write_config(path, config)
     return {

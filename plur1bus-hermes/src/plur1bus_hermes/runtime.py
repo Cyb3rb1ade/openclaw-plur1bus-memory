@@ -10,7 +10,7 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor, wait
+from concurrent.futures import Future, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,17 @@ from .cognition import parse_temporal_range
 from .query_refinement import refine_query
 from .llm_backend import InternalLlmBackend
 from .validation import ValidationError, safe_agent_id, safe_memory_id
+from .valid_time import (
+    has_disjoint_validity_windows,
+    is_entry_live,
+    is_entry_valid_at,
+    is_missing_validity_column_error,
+    normalize_timestamp,
+    normalize_validity_window,
+    validity_label,
+    validity_where_clause,
+)
+from .runtime_scheduler import AdmissionRejected, BoundedExecutor
 
 
 def _utcnow() -> str:
@@ -123,7 +134,13 @@ class EmbeddingBackend:
         self.hermes_home = hermes_home
         self._models: dict[str, Any] = {}
         self._lock = threading.RLock()
-        self._cache = EmbeddingCache(config, hermes_home)
+        try:
+            self._cache = EmbeddingCache(config, hermes_home)
+        except Exception as error:
+            # The cache is never authoritative.  In particular, a damaged
+            # SQLite cache must not stop embedding/capture from starting.
+            LOGGER.warning("embedding cache persistence disabled: %s", type(error).__name__)
+            self._cache = EmbeddingCache({**config, "cachePersist": False}, hermes_home)
 
     def embed(self, text: str, *, purpose: str = "passage") -> list[float]:
         return self.embed_many([text], purpose=purpose)[0]
@@ -462,70 +479,144 @@ class Plur1busRuntime:
             ),
         )
         embedding_config = dict(config.get("embedding", {}))
-        embedding_config["_scopeId"] = self.agent_id
+        # Upstream top-level embedding-cache settings remain accepted while
+        # explicit native ``embedding.cache*`` values take precedence.
+        runtime_config = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
+        upstream_embedding_cache = {
+            "embeddingCacheMaxEntries": "cacheMaxEntries",
+            "embeddingCachePersist": "cachePersist",
+            "embeddingCacheMaxBytes": "cacheMaxBytes",
+        }
+        for upstream, native in upstream_embedding_cache.items():
+            if native not in embedding_config and upstream in runtime_config:
+                embedding_config[native] = runtime_config[upstream]
+            elif native not in embedding_config and upstream in config:
+                embedding_config[native] = config[upstream]
+        cache_ttl_ms = runtime_config.get("embeddingCacheTtlMs", config.get("embeddingCacheTtlMs"))
+        if "cacheTtlSeconds" not in embedding_config and cache_ttl_ms is not None:
+            try:
+                embedding_config["cacheTtlSeconds"] = max(1, int(cache_ttl_ms) // 1000)
+            except (TypeError, ValueError):
+                LOGGER.warning("invalid runtime.embeddingCacheTtlMs ignored")
+        cache_enabled = runtime_config.get("embeddingCacheEnabled", config.get("embeddingCacheEnabled"))
+        if cache_enabled is False:
+            embedding_config["cacheMaxEntries"] = 0
+        scope = str(runtime_config.get("embeddingCacheScope", config.get("embeddingCacheScope") or "agent"))
+        embedding_config["_scopeId"] = "shared" if scope == "shared" else self.agent_id
         self._embedding = EmbeddingBackend(embedding_config, data_dir)
         self._reranker = RerankerBackend(dict(config.get("reranker", {})), data_dir.parent)
         self._domain = Plur1busDomain(data_dir, self.agent_id, config)
         llm_cache_config = dict(config.get("llmResultCache", {}))
-        self._llm_cache = LlmResultCache(
-            data_dir,
-            self.agent_id,
-            ttl_ms=llm_cache_config.get("ttlMs", 86_400_000),
-            max_entries=llm_cache_config.get("maxEntries", 256),
-            persist=llm_cache_config.get("persist", False),
-            max_bytes=llm_cache_config.get("maxBytes", 67_108_864),
-            cache_version=llm_cache_config.get("cacheVersion", "1"),
-        )
-        self._internal_llm = InternalLlmBackend(config, self.agent_id)
+        for upstream, native in {
+            "llmResultCacheTtlMs": "ttlMs", "llmResultCacheMaxEntries": "maxEntries",
+            "llmResultCachePersist": "persist", "llmResultCacheMaxBytes": "maxBytes",
+        }.items():
+            if native not in llm_cache_config and upstream in runtime_config:
+                llm_cache_config[native] = runtime_config[upstream]
+        if runtime_config.get("llmResultCacheEnabled") is False:
+            llm_cache_config["maxEntries"] = 0
+        try:
+            self._llm_cache = LlmResultCache(
+                data_dir,
+                self.agent_id,
+                ttl_ms=llm_cache_config.get("ttlMs", 86_400_000),
+                max_entries=llm_cache_config.get("maxEntries", 256),
+                persist=llm_cache_config.get("persist", False),
+                max_bytes=llm_cache_config.get("maxBytes", 67_108_864),
+                cache_version=llm_cache_config.get("cacheVersion", "1"),
+            )
+        except Exception as error:
+            # Cache is an optimisation: an unavailable persistent cache must
+            # never prevent capture/recall from starting.
+            LOGGER.warning("LLM result cache persistence disabled: %s", type(error).__name__)
+            self._llm_cache = LlmResultCache(data_dir, self.agent_id, persist=False)
+        self._internal_llm = InternalLlmBackend(config, self.agent_id, cache=self._llm_cache)
         self._domain.set_llm_backend(self._internal_llm)
         # Restore-safe epistemic cutoff, created on the first upgrade before
         # the first write (upstream 7.4.0 contract). A broken cutoff fails
         # closed: `observed` captures degrade to `untrusted`, never the reverse.
         self._epistemic_cutoff = ensure_epistemic_cutoff(data_dir)
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plur1bus-capture")
+        queue_depth = runtime_config.get("maxQueueDepthCapturePerAgent", 10)
+        queue_timeout_ms = runtime_config.get("captureTimeoutMs", 60_000)
+        self._executor = BoundedExecutor(
+            max_workers=1,  # memory mutations remain single-writer
+            max_queue=queue_depth,
+            queue_timeout_ms=queue_timeout_ms,
+            thread_name_prefix="plur1bus-capture",
+        )
         self._futures: set[Future[None]] = set()
         self._lock = threading.RLock()
+        self._retry_inflight: set[tuple[str, str, str, str, str, str, str, str]] = set()
 
-    def capture_async(self, user: str, assistant: str, session_id: str, *, importance: float | None = None) -> None:
+    def capture_async(self, user: str, assistant: str, session_id: str, *, importance: float | None = None,
+                      valid_from: Any = None, valid_until: Any = None, expires_at: Any = None,
+                      ttl: Any = None) -> None:
         self._resubmit_capture_retries()
         self._submit_capture(
-            {"user": user, "assistant": assistant, "sessionId": session_id, "importance": importance},
+            {"user": user, "assistant": assistant, "sessionId": session_id, "importance": importance,
+             "validFrom": valid_from, "validUntil": valid_until, "expiresAt": expires_at, "ttl": ttl},
             attempts=0,
         )
 
-    def _submit_capture(self, payload: dict[str, Any], attempts: int) -> None:
-        future = self._executor.submit(
-            self._capture_turn,
-            str(payload.get("user") or ""),
-            str(payload.get("assistant") or ""),
-            str(payload.get("sessionId") or ""),
-            payload.get("importance"),
-        )
+    def _submit_capture(self, payload: dict[str, Any], attempts: int, *, from_retry: bool = False) -> None:
+        try:
+            future = self._executor.submit(
+                self._capture_turn,
+                str(payload.get("user") or ""),
+                str(payload.get("assistant") or ""),
+                str(payload.get("sessionId") or ""),
+                payload.get("importance"),
+                payload.get("validFrom"), payload.get("validUntil"), payload.get("expiresAt"), payload.get("ttl"),
+            )
+        except AdmissionRejected as error:
+            # Queue pressure did not execute the capture, so preserve the
+            # backend-attempt count and retry it durably later.
+            self._log_capture_error(error)
+            if from_retry:
+                with self._lock:
+                    self._retry_inflight.discard(self._retry_key(payload))
+            else:
+                self._record_capture_retry(payload, attempts)
+            return
         with self._lock:
             self._futures.add(future)
         future.add_done_callback(
-            lambda done: self._finish_capture_future(done, payload, attempts)
+            lambda done: self._finish_capture_future(done, payload, attempts, from_retry=from_retry)
         )
 
-    def _finish_capture_future(self, future: Future[None], payload: dict[str, Any], attempts: int) -> None:
+    def _finish_capture_future(self, future: Future[None], payload: dict[str, Any], attempts: int,
+                               *, from_retry: bool = False) -> None:
         with self._lock:
             self._futures.discard(future)
         try:
             future.result()
         except Exception as error:
             self._log_capture_error(error)
-            self._record_capture_retry(payload, attempts + 1)
+            # Expiry happened before the worker began, not as a failed
+            # storage attempt; do not burn the bounded backend retry budget.
+            self._record_capture_retry(
+                payload, attempts if isinstance(error, AdmissionRejected) else attempts + 1,
+            )
+        else:
+            if from_retry:
+                self._remove_capture_retry(payload)
+        finally:
+            if from_retry:
+                with self._lock:
+                    self._retry_inflight.discard(self._retry_key(payload))
 
     def _capture_retry_path(self) -> Path:
         return self.data_dir / "state" / "capture-retry.jsonl"
 
     @staticmethod
-    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str, str]:
+    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str, str, str, str]:
         return (
             str(entry.get("user") or ""),
             str(entry.get("assistant") or ""),
             str(entry.get("sessionId") or ""),
             str(entry.get("importance") if entry.get("importance") is not None else ""),
+            str(entry.get("validFrom") or ""), str(entry.get("validUntil") or ""),
+            str(entry.get("expiresAt") or ""), str(entry.get("ttl") or ""),
         )
 
     def _read_capture_retries(self) -> list[dict[str, Any]]:
@@ -551,25 +642,32 @@ class Plur1busRuntime:
         """Atomically rewrite the retry queue via a tmp file and os.replace."""
         path = self._capture_retry_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(path.name + ".tmp")
-        temp_path.write_text(
-            "".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries),
-            encoding="utf-8",
-        )
+        temp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries))
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def _resubmit_capture_retries(self) -> None:
         """Requeue pending retries through the normal capture future path.
 
-        Resubmitted payloads leave the retry file here; a failed retry appends
-        itself back with an incremented attempts counter, so a payload is never
-        queued twice at the same time.
+        Entries remain on disk until their future reports success. Failed work
+        updates its attempt count in place; an in-memory key set prevents a
+        second resubmission of the same durable entry while it is in flight.
         """
         with self._lock:
             entries = self._read_capture_retries()
             if not entries:
                 return
             pending = []
+            dead_letters = []
             for entry in entries:
                 try:
                     attempts = int(entry.get("attempts", 0))
@@ -581,11 +679,45 @@ class Plur1busRuntime:
                         attempts,
                         entry.get("sessionId"),
                     )
+                    dead_letters.append({**entry, "deadLetterAt": _utcnow(), "reason": "max_attempts"})
+                    continue
+                if self._retry_key(entry) in self._retry_inflight:
                     continue
                 pending.append((entry, attempts))
-            self._write_capture_retries([])
+                self._retry_inflight.add(self._retry_key(entry))
+            if dead_letters:
+                self._append_capture_dead_letters(dead_letters)
+                dead_keys = {self._retry_key(entry) for entry in dead_letters}
+                self._write_capture_retries([
+                    entry for entry in entries if self._retry_key(entry) not in dead_keys
+                ])
         for entry, attempts in pending:
-            self._submit_capture(entry, attempts)
+            self._submit_capture(entry, attempts, from_retry=True)
+
+    def _append_capture_dead_letters(self, entries: list[dict[str, Any]]) -> None:
+        """Durably retain exhausted capture evidence instead of discarding it."""
+        path = self.data_dir / "state" / "capture-retry-dead-letter.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.chmod(path, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    def _remove_capture_retry(self, payload: dict[str, Any]) -> None:
+        key = self._retry_key(payload)
+        with self._lock:
+            self._write_capture_retries([
+                entry for entry in self._read_capture_retries()
+                if self._retry_key(entry) != key
+            ])
 
     def _record_capture_retry(self, payload: dict[str, Any], attempts: int) -> None:
         """Requeue a failed capture payload, or give up once attempts hit the cap."""
@@ -602,18 +734,31 @@ class Plur1busRuntime:
                     attempts,
                     key[2],
                 )
+                self._append_capture_dead_letters([{
+                    "user": key[0], "assistant": key[1], "sessionId": key[2],
+                    "attempts": attempts, "deadLetterAt": _utcnow(), "reason": "max_attempts",
+                }])
             else:
                 entries.append({
                     "user": key[0],
                     "assistant": key[1],
                     "sessionId": key[2],
                     "importance": payload.get("importance"),
+                    "validFrom": payload.get("validFrom"), "validUntil": payload.get("validUntil"),
+                    "expiresAt": payload.get("expiresAt"), "ttl": payload.get("ttl"),
                     "attempts": attempts,
                     "lastErrorAt": _utcnow(),
                 })
             self._write_capture_retries(entries)
 
-    def recall(self, query: str, limit: int = 5, explain: bool = False) -> str:
+    def recall(self, query: str, limit: int = 5, explain: bool = False, *, valid_at: Any = None,
+               session_id: str = "", full_text: bool = False) -> str:
+        """Recall active, unexpired memories, optionally at an asserted valid time."""
+        parsed_valid_at = None
+        if valid_at is not None:
+            parsed_valid_at = normalize_timestamp(valid_at)
+            if not parsed_valid_at:
+                raise ValueError("validAt must be an absolute ISO-8601 or epoch-ms timestamp")
         prepared = prepare_semantic_input(query)
         if prepared["requiresSource"]:
             return str(prepared["message"])
@@ -631,16 +776,32 @@ class Plur1busRuntime:
                 f" AND createdAt >= '{temporal_range['start']}'"
                 f" AND createdAt < '{temporal_range['end']}'"
             )
+        temporal_where = where_clause
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        expiry_where = (
+            f"{temporal_where} AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
+        )
+        where_clause = expiry_where
+        if parsed_valid_at is not None:
+            where_clause += f" AND {validity_where_clause(parsed_valid_at)}"
         for namespace, recall_table in recall_tables:
-            namespace_rows = recall_table.search(vector).where(
-                where_clause
-            ).limit(adaptive_limit * 3).to_list()
+            namespace_rows = self._search_recall_rows(
+                recall_table, vector, where_clause, expiry_where, temporal_where,
+                adaptive_limit * 3, parsed_valid_at,
+            )
             for row in namespace_rows:
                 row["_namespace"] = namespace
             rows.extend(namespace_rows)
-        rows.extend(
-            self._shared_pools.recall_rows(vector, adaptive_limit * 2)
-        )
+        try:
+            rows.extend(self._shared_pools.recall_rows(
+                vector, adaptive_limit * 2, valid_at=parsed_valid_at, now_ms=now_ms,
+            ))
+        except TypeError as error:
+            # Compatibility for externally injected pre-7.10 pool adapters;
+            # native SharedPoolStore always receives the lifecycle predicates.
+            if "valid_at" not in str(error) and "now_ms" not in str(error):
+                raise
+            rows.extend(self._shared_pools.recall_rows(vector, adaptive_limit * 2))
         poor_first_pass = not rows or all(
             row.get("_distance") is not None
             and float(row["_distance"]) > 0.65
@@ -651,38 +812,61 @@ class Plur1busRuntime:
         refinement_enabled = refinement is not False and not (
             isinstance(refinement, dict) and refinement.get("enabled") is False
         )
-        refined_query = refine_query(semantic_query) if refinement_enabled else ""
+        refined_query = self._refine_query(semantic_query, refinement) if refinement_enabled else ""
         if poor_first_pass and refined_query and refined_query != semantic_query.lower():
             refined_vector = self._embedding.embed(refined_query, purpose="query")
             for namespace, recall_table in recall_tables:
-                refined_rows = recall_table.search(refined_vector).where(
-                    where_clause
-                ).limit(adaptive_limit * 2).to_list()
+                refined_rows = self._search_recall_rows(
+                    recall_table, refined_vector, where_clause, expiry_where, temporal_where,
+                    adaptive_limit * 2, parsed_valid_at,
+                )
                 for row in refined_rows:
                     row["_namespace"] = namespace
                     row["_queryVariant"] = "refined"
                 rows.extend(refined_rows)
+        rows = [
+            row for row in rows
+            if is_entry_live(row, now_ms) and is_entry_valid_at(row, parsed_valid_at)
+        ]
         rows = self._reranker.rerank(semantic_query, rows)[:adaptive_limit]
         deduplicated = []
-        seen_content = set()
+        seen_content: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             canonical = " ".join(
                 str(row.get("content") or "").lower().split()
             )
-            if not canonical or canonical in seen_content:
+            prior = seen_content.get(canonical, [])
+            # Historical text duplicates survive only if known bounds prove
+            # they describe non-overlapping periods.
+            if not canonical or any(not has_disjoint_validity_windows(row, old) for old in prior):
                 continue
-            seen_content.add(canonical)
+            seen_content.setdefault(canonical, []).append(row)
             deduplicated.append(row)
-        rows = self._domain.boost_recall(
-            deduplicated, recall_tables[0][1], adaptive_limit + 3
-        )
+        if session_id:
+            rows = self._domain.boost_recall(
+                deduplicated, recall_tables[0][1], adaptive_limit + 3,
+                session_id=session_id,
+            )
+        else:
+            rows = self._domain.boost_recall(
+                deduplicated, recall_tables[0][1], adaptive_limit + 3,
+            )
+        # Boosters are additive read paths, so enforce the lifecycle gates
+        # again after they contribute rows.
+        rows = [
+            row for row in rows
+            if is_entry_live(row, now_ms) and is_entry_valid_at(row, parsed_valid_at)
+        ]
         recalled = "\n".join(
-            f"- {str(row['content'])[:2000]}"
+            f"- {str(row['content']) if full_text else str(row['content'])[:2000]} {validity_label(row)}".rstrip()
             for row in rows
             if row.get("content")
         )
         overlay = self._domain.recall_overlay(semantic_query, rows)
         explanation = self._domain.explain_recall(rows) if explain else ""
+        cognitive_blocks = "\n\n".join(self._domain.cognitive_prompt_blocks(
+            acl_bindings=self.scope_binding.as_dict(), scope_key=self.scope_key,
+        ))
         compression = (
             "<memory-input-compression>"
             f"original={prepared['originalLength']} compressed={len(semantic_query)}"
@@ -708,13 +892,73 @@ class Plur1busRuntime:
                 {"name": "memories", "text": recalled, "droppable": True},
                 {"name": "overlay", "text": overlay, "droppable": True},
                 {"name": "explanation", "text": explanation, "droppable": True},
+                {"name": "cognitive", "text": cognitive_blocks, "droppable": True},
                 {"name": "compression", "text": compression, "droppable": False},
             ],
             max_chars=max_chars,
         )
 
-    def remember_async(self, text: str, session_id: str, source_role: str = "user") -> None:
-        future = self._executor.submit(self._remember, text, session_id, source_role)
+    @staticmethod
+    def _search_recall_rows(table: Any, vector: list[float], where_clause: str,
+                            expiry_where_clause: str, legacy_where_clause: str, limit: int,
+                            valid_at: int | None) -> list[dict[str, Any]]:
+        """Search with only narrow legacy validity/expiry-column retries."""
+        try:
+            return table.search(vector).where(where_clause).limit(limit).to_list()
+        except Exception as error:
+            error_text = str(error).lower()
+            missing_expiry = "expiresat" in error_text and any(token in error_text for token in (
+                "not found", "does not exist", "no such column", "unknown column", "missing column",
+            ))
+            if is_missing_validity_column_error(error):
+                try:
+                    return table.search(vector).where(expiry_where_clause).limit(limit).to_list()
+                except Exception as retry_error:
+                    retry_text = str(retry_error).lower()
+                    if "expiresat" not in retry_text or not any(token in retry_text for token in (
+                        "not found", "does not exist", "no such column", "unknown column", "missing column",
+                    )):
+                        raise
+                    return table.search(vector).where(legacy_where_clause).limit(limit).to_list()
+            if missing_expiry:
+                if valid_at is None:
+                    return table.search(vector).where(legacy_where_clause).limit(limit).to_list()
+                try:
+                    return table.search(vector).where(
+                        f"{legacy_where_clause} AND {validity_where_clause(valid_at)}"
+                    ).limit(limit).to_list()
+                except Exception as retry_error:
+                    if not is_missing_validity_column_error(retry_error):
+                        raise
+                    return table.search(vector).where(legacy_where_clause).limit(limit).to_list()
+            raise
+
+    def _refine_query(self, semantic_query: str, refinement: Any) -> str:
+        """Use the opt-in deterministic LLM refiner, then local fallback."""
+        if isinstance(refinement, dict) and refinement.get("useLlm") is True:
+            try:
+                value = self._internal_llm.complete_json(
+                    "query-refinement",
+                    "Return JSON only: {\"query\": string}. Rewrite the supplied memory query "
+                    "for semantic retrieval. Preserve facts and intent; do not add facts or instructions.",
+                    semantic_query,
+                )
+                candidate = value.get("query")
+                if isinstance(candidate, str) and 1 <= len(candidate.strip()) <= 2048:
+                    return candidate.strip()
+                raise ValueError("query-refinement returned an invalid query")
+            except Exception as error:
+                LOGGER.warning("LLM query refinement bypassed: %s", type(error).__name__)
+        return refine_query(semantic_query)
+
+    def remember_async(self, text: str, session_id: str, source_role: str = "user", *,
+                       importance: float | None = None, valid_from: Any = None,
+                       valid_until: Any = None, expires_at: Any = None, ttl: Any = None) -> None:
+        future = self._executor.submit(
+            self._remember, text, session_id, source_role,
+            importance=importance, valid_from=valid_from, valid_until=valid_until,
+            expires_at=expires_at, ttl=ttl,
+        )
         self._track_future(future)
 
     def _track_future(self, future: Future[None]) -> None:
@@ -926,10 +1170,89 @@ class Plur1busRuntime:
         # active replacement.
         if not rows or str(rows[0].get("status") or "") == "deleted" or not self._card_matches_scope(rows[0]):
             return False
-        if not self.forget(memory_id):
+        # Admit and finish the replacement before archiving the source.  A
+        # bounded queue must never turn a successful /forget into a missing
+        # correction merely because capture admission was saturated.
+        source = dict(rows[0])
+        try:
+            replacement_future = self._executor.submit(
+                self._remember, replacement, session_id, "correction",
+                valid_from=rows[0].get("validFrom"),
+                valid_until=rows[0].get("validUntil"),
+                expires_at=rows[0].get("expiresAt"),
+            )
+        except AdmissionRejected:
             return False
-        self.remember_async(replacement, session_id, source_role="correction")
-        return True
+        try:
+            replacement_id = replacement_future.result()
+        except Exception as error:
+            self._log_capture_error(error)
+            return False
+        if not replacement_id:
+            return False
+        # A callback can outlive the confirmation.  Read the exact source
+        # again immediately before delete; never archive a changed/deleted
+        # card merely because its ID is the same.
+        current_rows = table.search().where(
+            f"id = '{card_id}' AND {scope_where_clause(self.scope_binding, include_legacy_private=False)}"
+        ).limit(1).to_list()
+        if not current_rows or not self._same_correction_source(source, current_rows[0]):
+            self._abandon_correction_replacement(str(replacement_id), "source_revalidation_failed")
+            return False
+        if self.forget(memory_id):
+            return True
+        self._abandon_correction_replacement(str(replacement_id), "source_archive_failed")
+        return False
+
+    def _abandon_correction_replacement(self, replacement_id: str, reason: str) -> None:
+        """Archive a replacement when its source cannot safely be retired."""
+        table, _ = self._table(create=False)
+        if table is None:
+            raise RuntimeError("cannot archive orphaned correction without memory table")
+        rows = table.search().where(
+            f"id = '{replacement_id}' AND {scope_where_clause(self.scope_binding, include_legacy_private=False)}"
+        ).limit(1).to_list()
+        if not rows or not self._card_matches_scope(rows[0]):
+            raise RuntimeError("cannot locate orphaned correction replacement")
+        from .tombstone import archive_card_atomically, archive_path_for
+
+        archive_ref = archive_path_for(
+            self.data_dir, self.agent_id, self.scope_key, replacement_id,
+        )
+        archive_card_atomically(archive_ref, rows[0])
+        table.update(
+            where=(f"id = '{replacement_id}' AND "
+                   f"{scope_where_clause(self.scope_binding, include_legacy_private=False)} "
+                   "AND status = 'active'"),
+            values={"status": "archived"},
+        )
+        settled = table.search().where(
+            f"id = '{replacement_id}' AND {scope_where_clause(self.scope_binding, include_legacy_private=False)}"
+        ).limit(1).to_list()
+        if not settled or str(settled[0].get("status") or "") != "archived":
+            raise RuntimeError("orphaned correction replacement archive did not settle")
+        self._domain.audit_mutation({
+            "event": "memory.correction_abandoned",
+            "agentId": self.agent_id,
+            "memoryId": replacement_id,
+            "scopeKey": self.scope_key,
+            "aclBindings": self.scope_binding.as_dict(),
+            "reason": reason,
+            "archivePath": str(archive_ref),
+            "result": "archived",
+        })
+
+    def _same_correction_source(self, expected: dict[str, Any], current: dict[str, Any]) -> bool:
+        """Refuse a confirmation-race deletion if the source changed in place."""
+        if str(current.get("status") or "") != "active" or not self._card_matches_scope(current):
+            return False
+        if str(current.get("content") or "") != str(expected.get("content") or ""):
+            return False
+        return (
+            normalize_validity_window(current.get("validFrom"), current.get("validUntil"))
+            == normalize_validity_window(expected.get("validFrom"), expected.get("validUntil"))
+            and normalize_timestamp(current.get("expiresAt")) == normalize_timestamp(expected.get("expiresAt"))
+        )
 
     def resolve_memory_id(self, reference: str) -> str | None:
         """Resolve an exact UUID or a conservative semantic active-card reference."""
@@ -960,7 +1283,10 @@ class Plur1busRuntime:
         self.flush(timeout_seconds)
         self._executor.shutdown(wait=False, cancel_futures=False)
         self._embedding.close()
-        self._llm_cache.close()
+        try:
+            self._llm_cache.close()
+        except Exception as error:
+            LOGGER.warning("LLM result cache close bypassed: %s", type(error).__name__)
 
     def flush(self, timeout_seconds: float = 5.0) -> None:
         """Wait for queued captures before a lifecycle boundary discards context."""
@@ -968,23 +1294,36 @@ class Plur1busRuntime:
             futures = list(self._futures)
         wait(futures, timeout=timeout_seconds)
 
-    def _capture_turn(self, user: str, assistant: str, session_id: str, importance: float | None = None) -> None:
+    def _capture_turn(self, user: str, assistant: str, session_id: str,
+                      importance: float | None = None, valid_from: Any = None,
+                      valid_until: Any = None, expires_at: Any = None,
+                      ttl: Any = None) -> None:
         self._domain.on_turn(
             user,
             assistant,
             session_id,
             acl_bindings=self.scope_binding.as_dict(),
         )
-        if importance is None:
+        temporal = any(value is not None for value in (valid_from, valid_until, expires_at, ttl))
+        if importance is None and not temporal:
             self._remember(user, session_id, "user")
-        else:
+        elif importance is None:
+            self._remember(user, session_id, "user", valid_from=valid_from,
+                           valid_until=valid_until, expires_at=expires_at, ttl=ttl)
+        elif not temporal:
             self._remember(user, session_id, "user", importance=importance)
+        else:
+            self._remember(user, session_id, "user", importance=importance,
+                           valid_from=valid_from, valid_until=valid_until,
+                           expires_at=expires_at, ttl=ttl)
         self._remember(assistant, session_id, "assistant")
 
-    def _remember(self, content: str, session_id: str, source_role: str, *, importance: float | None = None) -> None:
+    def _remember(self, content: str, session_id: str, source_role: str, *,
+                  importance: float | None = None, valid_from: Any = None,
+                  valid_until: Any = None, expires_at: Any = None, ttl: Any = None) -> str | None:
         content = content.strip()
         if not content:
-            return
+            return None
         # Tombstone-Block VOR Embedding und LanceDB-Insert: eine gleichlautende,
         # zuvor gelöschte Erinnerung im selben Agent-/Scope-Kontext darf nicht
         # still reaktiviert werden.
@@ -1003,7 +1342,20 @@ class Plur1busRuntime:
         if blocking is not None:
             reason = blocking.get("_blockReason") or "fingerprint match"
             self._log_capture_error(RuntimeError(f"tombstone_blocked ({reason})"))
-            return
+            return None
+        valid_from_ms, valid_until_ms = normalize_validity_window(valid_from, valid_until)
+        expiry_ms = normalize_timestamp(expires_at)
+        # ttl is deliberately duration-only; an absolute expiresAt wins.  A
+        # malformed/negative duration becomes the no-expiry sentinel rather
+        # than a guessed deadline.
+        if not expiry_ms and isinstance(ttl, (int, float)) and not isinstance(ttl, bool):
+            try:
+                duration = int(ttl)
+            except (TypeError, ValueError, OverflowError):
+                LOGGER.warning("invalid capture ttl ignored")
+                duration = 0
+            if 0 < duration <= 3650 * 24 * 60 * 60 * 1000:
+                expiry_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) + duration
         vector = self._embedding.embed(content)
         record = {
             "id": str(uuid.uuid4()),
@@ -1022,6 +1374,11 @@ class Plur1busRuntime:
             "type": "observation",
             "sourceRole": source_role,
             "createdAt": _utcnow(),
+            # Real-world claim validity and hard TTL are separate metadata.
+            # Never derive these from createdAt/updatedAt.
+            "validFrom": valid_from_ms,
+            "validUntil": valid_until_ms,
+            "expiresAt": expiry_ms,
             "vector": vector,
             # Explicit trust state (upstream 7.4.0): genuine user captures start
             # as `observed`; every other new write is explicitly `untrusted`.
@@ -1041,6 +1398,25 @@ class Plur1busRuntime:
                 self._domain.on_memory(record, table)
             else:
                 self._domain.on_memory(record, table, importance=importance)
+            # Confirm the exact card persisted under the same ownership and
+            # temporal metadata before reporting success to /correct.
+            search = getattr(table, "search", None)
+            if not callable(search):  # lightweight unit-test table only
+                return str(record["id"])
+            persisted = search().where(
+                f"id = '{record['id']}' AND {scope_where_clause(self.scope_binding, include_legacy_private=False)}"
+            ).limit(2).to_list()
+            if len(persisted) == 1:
+                candidate = persisted[0]
+                if (
+                    self._card_matches_scope(candidate)
+                    and str(candidate.get("content") or "") == content
+                    and normalize_validity_window(candidate.get("validFrom"), candidate.get("validUntil"))
+                    == (valid_from_ms, valid_until_ms)
+                    and normalize_timestamp(candidate.get("expiresAt")) == expiry_ms
+                ):
+                    return str(record["id"])
+        return None
 
     @staticmethod
     def _schema_names(table: Any) -> set[str]:
@@ -1064,7 +1440,6 @@ class Plur1busRuntime:
         if "epistemicStatus" not in names:
             add_columns({"epistemicStatus": "''"})
             names.add("epistemicStatus")
-
         try:
             import pyarrow as pa
         except ImportError as error:  # pragma: no cover - LanceDB supplies PyArrow
@@ -1076,6 +1451,15 @@ class Plur1busRuntime:
         ])
         schema_attr = getattr(table, "schema", None)
         schema = schema_attr() if callable(schema_attr) else schema_attr
+        # These defaults are material: legacy active rows mean unknown
+        # validity/no expiry, never the Unix epoch.  Real Lance schemas expose
+        # ``names``; retain minimal older test doubles which cannot represent
+        # expression-default migrations.
+        if getattr(schema, "names", None) is not None:
+            for field in ("validFrom", "validUntil", "expiresAt"):
+                if field not in names:
+                    add_columns({field: "0"})
+                    names.add(field)
         field_reader = getattr(schema, "field", None)
         replace_acl = False
         existing_acl_type = None

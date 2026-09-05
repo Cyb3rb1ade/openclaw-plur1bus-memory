@@ -6,11 +6,13 @@ import asyncio
 import hashlib
 import inspect
 import json
+import logging
 import os
 import sqlite3
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -52,8 +54,10 @@ class LlmResultCache:
         self.max_bytes = min(max(int(max_bytes), 0), 1_073_741_824)
         self.cache_version = str(cache_version)
         self._memory: OrderedDict[str, tuple[int, dict[str, Any]]] = OrderedDict()
-        self._inflight: dict[str, asyncio.Task] = {}
+        self._inflight: dict[tuple[Any, str], asyncio.Task] = {}
+        self._sync_inflight: dict[str, Future] = {}
         self._lock = threading.RLock()
+        self._closed = False
         self.metrics = {
             "hits": 0,
             "misses": 0,
@@ -106,17 +110,70 @@ class LlmResultCache:
             "model": str(request.get("model") or ""),
             "messagesHash": _hash(_canonical(request.get("messages") or [])),
             "maxTokens": int(request.get("maxTokens") or 0),
-            "temperature": float(request.get("temperature") or 0),
+            "temperature": request.get("temperature"),
             "jsonMode": bool(request.get("jsonMode")),
             "disableThinking": bool(request.get("disableThinking")),
             "headersHash": _hash(_canonical(request.get("headers") or {})),
+            "payloadHash": _hash(_canonical(request.get("payload") or {})),
         }
         return _hash(_canonical(material))
+
+    def get_or_compute_sync(
+        self, request: dict[str, Any], compute: Callable[[], tuple[str, dict[str, Any] | None]],
+    ) -> dict[str, Any]:
+        """Coalesce synchronous live calls; cache faults never suppress computation."""
+        try:
+            key = self.make_key(request) if self.max_entries and not self._closed else None
+            cached = self.get(request)
+            if cached is not None:
+                return cached
+        except Exception as error:
+            logging.getLogger(__name__).warning("LLM cache read bypassed: %s", type(error).__name__)
+            key = None
+        if key is None:
+            text, usage = compute()
+            return {"text": text, "usage": usage or {}, "cached": False}
+        with self._lock:
+            future = self._sync_inflight.get(key)
+            owner = future is None
+            if owner:
+                future = Future()
+                self._sync_inflight[key] = future
+            else:
+                self.metrics["coalesced"] += 1
+        if not owner:
+            return dict(future.result())
+        try:
+            # A preceding owner may have completed between the initial lookup
+            # and acquiring the coordination lock.
+            try:
+                cached = self.get(request)
+            except Exception as error:
+                logging.getLogger(__name__).warning("LLM cache reread bypassed: %s", type(error).__name__)
+                cached = None
+            if cached is not None:
+                future.set_result(cached)
+                return cached
+            text, usage = compute()
+            result = {"text": text, "usage": usage or {}, "cached": False}
+            try:
+                self.put(request, text, usage)
+            except Exception as error:
+                logging.getLogger(__name__).warning("LLM cache write bypassed: %s", type(error).__name__)
+            future.set_result(result)
+            return result
+        except BaseException as error:
+            future.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                if self._sync_inflight.get(key) is future:
+                    self._sync_inflight.pop(key, None)
 
     def get(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """Read a valid result from memory or SQLite."""
         cache_key = self.make_key(request)
-        if cache_key is None or not self.max_entries:
+        if cache_key is None or not self.max_entries or self._closed:
             return None
         now = self._now_ms()
         with self._lock:
@@ -163,7 +220,7 @@ class LlmResultCache:
         """Store a non-empty valid response for an allowlisted purpose."""
         cache_key = self.make_key(request)
         response_text = str(text or "")
-        if cache_key is None or not self.max_entries or not response_text.strip():
+        if cache_key is None or not self.max_entries or self._closed or not response_text.strip():
             return False
         if request.get("jsonMode"):
             try:
@@ -175,7 +232,14 @@ class LlmResultCache:
         with self._lock:
             self._remember(cache_key, expires_at, result)
             if self._connection is not None:
-                if self.db_path and self.max_bytes and self.db_path.stat().st_size >= self.max_bytes:
+                disk_bytes = sum(path.stat().st_size for path in (
+                    self.db_path, Path(str(self.db_path) + "-wal"),
+                ) if path is not None and path.exists())
+                # SQLite may allocate pages/WAL frames beyond payload bytes.
+                # Reserve conservative page headroom; this is an admission
+                # budget, not an OS-enforced filesystem quota.
+                required_bytes = len(response_text.encode("utf-8")) * 2 + len(_canonical(usage or {}).encode("utf-8")) + 32_768
+                if disk_bytes + required_bytes >= self.max_bytes:
                     self.metrics["persistSkips"] += 1
                     return True
                 self._connection.execute(
@@ -206,27 +270,36 @@ class LlmResultCache:
         compute: Callable[[], Awaitable[tuple[str, dict[str, Any] | None]] | tuple[str, dict[str, Any] | None]],
     ) -> dict[str, Any]:
         """Return a cached result or coalesce and execute one live computation."""
-        cached = self.get(request)
+        try:
+            cached = self.get(request)
+        except Exception as error:
+            logging.getLogger(__name__).warning("Async LLM cache read bypassed: %s", type(error).__name__)
+            cached = None
         if cached is not None:
             return cached
-        cache_key = self.make_key(request)
+        cache_key = self.make_key(request) if self.max_entries and not self._closed else None
         if cache_key is None:
             value = compute()
             text, usage = await value if inspect.isawaitable(value) else value
             return {"text": text, "usage": usage or {}, "cached": False}
+        # Tasks belong to their event loop; never await another loop's task.
+        inflight_key = (asyncio.get_running_loop(), cache_key)
         with self._lock:
-            task = self._inflight.get(cache_key)
+            task = self._inflight.get(inflight_key)
             if task is None:
                 task = asyncio.create_task(self._compute_and_store(request, compute))
-                self._inflight[cache_key] = task
+                self._inflight[inflight_key] = task
+                def release(done: asyncio.Task) -> None:
+                    with self._lock:
+                        if self._inflight.get(inflight_key) is done:
+                            self._inflight.pop(inflight_key, None)
+                    # Consume exceptions if every waiter was cancelled.
+                    if not done.cancelled():
+                        done.exception()
+                task.add_done_callback(release)
             else:
                 self.metrics["coalesced"] += 1
-        try:
-            return await task
-        finally:
-            with self._lock:
-                if self._inflight.get(cache_key) is task:
-                    self._inflight.pop(cache_key, None)
+        return await asyncio.shield(task)
 
     async def _compute_and_store(
         self,
@@ -235,16 +308,32 @@ class LlmResultCache:
     ) -> dict[str, Any]:
         value = compute()
         text, usage = await value if inspect.isawaitable(value) else value
-        self.put(request, text, usage)
+        try:
+            self.put(request, text, usage)
+        except Exception as error:
+            logging.getLogger(__name__).warning("Async LLM cache write bypassed: %s", type(error).__name__)
         return {"text": text, "usage": usage or {}, "cached": False}
+
+    async def aclose(self) -> None:
+        """Drain this loop's computations before closing persistence."""
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            tasks = [task for (owner, _key), task in self._inflight.items() if owner is loop]
+        if tasks:
+            await asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True)
+        self.close()
 
     def close(self) -> None:
         """Sweep expired rows and close the persistent cache."""
         with self._lock:
+            self._closed = True
             if self._connection is not None:
-                self._connection.execute(
-                    "DELETE FROM results WHERE expires_at <= ?", (self._now_ms(),)
-                )
-                self._connection.commit()
-                self._connection.close()
+                connection = self._connection
                 self._connection = None
+                try:
+                    connection.execute(
+                        "DELETE FROM results WHERE expires_at <= ?", (self._now_ms(),)
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()

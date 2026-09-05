@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .valid_time import is_missing_validity_column_error, validity_where_clause
+
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:62]
@@ -84,20 +86,26 @@ class SharedPoolStore:
                 else self.principal.workspace_key
             ),
         })
+        for field in ("validFrom", "validUntil", "expiresAt"):
+            shared.setdefault(field, 0)
         path = self._path(user_scope)
         path.mkdir(parents=True, exist_ok=True)
         database = lancedb.connect(str(path))
-        try:
-            table = database.open_table("memories")
-        except Exception:
+        listed = database.list_tables()
+        table_names = getattr(listed, "tables", listed)
+        names = {str(getattr(item, "name", item)) for item in table_names}
+        if "memories" not in names:
             database.create_table("memories", data=[shared])
         else:
+            # Do not turn a corrupt/unreadable existing table into an
+            # accidental replacement database.
+            table = database.open_table("memories")
+            self._ensure_temporal_columns(table)
             # Idempotent copy of a card that is active in the guard-protected
             # agent table (share_memory filters status='active'); a forgotten
-            # card can never reach this delete+add, so no tombstone check is
+            # card cannot enter this guarded upsert, so no tombstone check is
             # applicable here (7.4.0 contract review).
-            table.delete(f"id = '{shared_id}'")
-            table.add([shared])
+            table.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute([shared])
         return {
             "id": shared_id,
             "originId": original_id,
@@ -106,7 +114,18 @@ class SharedPoolStore:
             "copied": True,
         }
 
-    def recall_rows(self, vector: list[float], limit: int) -> list[dict[str, Any]]:
+    @staticmethod
+    def _ensure_temporal_columns(table: Any) -> None:
+        schema = table.schema
+        schema = schema() if callable(schema) else schema
+        names = set(getattr(schema, "names", ()) or ())
+        for field in ("validFrom", "validUntil", "expiresAt"):
+            if field not in names:
+                table.add_columns({field: "0"})
+                names.add(field)
+
+    def recall_rows(self, vector: list[float], limit: int, *, valid_at: int | None = None,
+                    now_ms: int | None = None) -> list[dict[str, Any]]:
         """Read bounded additive rows only from this validated principal's pools."""
         try:
             import lancedb
@@ -129,10 +148,44 @@ class SharedPoolStore:
                 if name == "user-shared"
                 else self.principal.workspace_key
             )
-            found = table.search(vector).where(
+            base_where = (
                 f"sharedScope = '{'user' if name == 'user-shared' else 'workspace'}' "
                 f"AND principalHash = '{principal_hash}' AND status = 'active'"
-            ).limit(limit).to_list()
+            )
+            expiry_where = base_where
+            if now_ms is not None:
+                expiry_where += f" AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
+            where = expiry_where
+            if valid_at is not None:
+                where += f" AND {validity_where_clause(valid_at)}"
+            try:
+                found = table.search(vector).where(where).limit(limit).to_list()
+            except Exception as error:
+                text = str(error).lower()
+                expiry_missing = "expiresat" in text and any(token in text for token in (
+                    "not found", "does not exist", "no such column", "unknown column", "missing column",
+                ))
+                if is_missing_validity_column_error(error):
+                    try:
+                        found = table.search(vector).where(expiry_where).limit(limit).to_list()
+                    except Exception as retry_error:
+                        retry_text = str(retry_error).lower()
+                        if "expiresat" not in retry_text or not any(token in retry_text for token in (
+                            "not found", "does not exist", "no such column", "unknown column", "missing column",
+                        )):
+                            raise
+                        found = table.search(vector).where(base_where).limit(limit).to_list()
+                elif expiry_missing:
+                    try:
+                        found = table.search(vector).where(
+                            base_where if valid_at is None else f"{base_where} AND {validity_where_clause(valid_at)}"
+                        ).limit(limit).to_list()
+                    except Exception as retry_error:
+                        if valid_at is None or not is_missing_validity_column_error(retry_error):
+                            raise
+                        found = table.search(vector).where(base_where).limit(limit).to_list()
+                else:
+                    raise
             for row in found:
                 row["_namespace"] = name
             rows.extend(found)

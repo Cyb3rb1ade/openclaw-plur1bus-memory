@@ -29,6 +29,22 @@ class FeatureProfileTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 set_feature(path, "unknown", True)
 
+    def test_control_toggles_map_to_their_effective_runtime_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.json"
+            for feature in (
+                "autoCapture", "autoRecall", "conversationReactivationRecall",
+                "semanticLens", "styleDirective", "dreamEcho",
+            ):
+                set_feature(path, feature, False)
+            config = json.loads(path.read_text(encoding="utf-8"))
+            self.assertFalse(config["autoCapture"])
+            self.assertFalse(config["autoRecall"])
+            self.assertFalse(config["conversationReactivationRecall"]["enabled"])
+            self.assertFalse(config["semanticLens"]["enabled"])
+            self.assertFalse(config["styleDirective"]["enabled"])
+            self.assertFalse(config["dreamEcho"]["enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

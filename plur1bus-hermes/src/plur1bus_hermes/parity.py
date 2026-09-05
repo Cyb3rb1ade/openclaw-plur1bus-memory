@@ -9,50 +9,50 @@ from typing import Any
 
 
 FEATURES: tuple[dict[str, str], ...] = (
-    {"id": "capture-recall", "status": "ready", "evidence": "runtime capture, vector recall, reranking"},
+    {"id": "capture-recall", "status": "partial", "evidence": "native lifecycle capture/vector recall; upstream capture, TTL and store contracts differ"},
     {"id": "agent-isolation", "status": "ready", "evidence": "per-agent LanceDB, Neo, state, workspace"},
     {"id": "omlx-providers", "status": "ready", "evidence": "LLM config plus embedding and /v1/rerank adapters"},
-    {"id": "legacy-reembedding", "status": "ready", "evidence": "resumable source-text re-embedding with dimension guard"},
-    {"id": "legacy-artifacts", "status": "ready", "evidence": "metadata, Neo, archives, workspaces, vault, markdown"},
-    {"id": "embedding-cache", "status": "ready", "evidence": "agent-scoped LRU TTL and SQLite WAL"},
-    {"id": "llm-result-cache", "status": "ready", "evidence": "purpose allowlist, hashed inputs, coalescing"},
-    {"id": "memory-graph", "status": "ready", "evidence": "edges, link index, semantic communities, ANN rebuild"},
-    {"id": "semantic-lens", "status": "ready", "evidence": "additive post-recall booster"},
-    {"id": "conversation-reactivation", "status": "ready", "evidence": "idle-gap additive reactivation"},
-    {"id": "episodes-emotion-temporal", "status": "ready", "evidence": "turn journal, episodes, emotion state, temporal hints"},
-    {"id": "memory-dynamics", "status": "ready", "evidence": "strength decay maintenance and consolidation report"},
-    {"id": "dreaming", "status": "ready", "evidence": "bounded REM phases with deterministic local fallback"},
-    {"id": "critical-push", "status": "ready", "evidence": "classification, review ledger, stale auto-accept"},
-    {"id": "feedback", "status": "ready", "evidence": "adaptive feedback ledger and dynamics inputs"},
-    {"id": "reminder-state", "status": "ready", "evidence": "due, pending export, acknowledge, cancel"},
+    {"id": "legacy-reembedding", "status": "partial", "evidence": "resumable source-text re-embedding; no active-generation switch"},
+    {"id": "legacy-artifacts", "status": "partial", "evidence": "selected metadata and artifacts; no full export/restore"},
+    {"id": "embedding-cache", "status": "partial", "evidence": "agent-scoped cache; upstream coalescing/limits/configuration differ"},
+    {"id": "llm-result-cache", "status": "partial", "evidence": "native cache integration is narrower than the upstream contract"},
+    {"id": "memory-graph", "status": "partial", "evidence": "native graph and recall edges; extended graph contracts differ"},
+    {"id": "semantic-lens", "status": "partial", "evidence": "default-off additive booster with category caps and elapsed-time guard; full upstream contract not claimed"},
+    {"id": "conversation-reactivation", "status": "partial", "evidence": "native session-aware reactivation, not every upstream trigger"},
+    {"id": "episodes-emotion-temporal", "status": "partial", "evidence": "turn journal and temporal fields; episode/emotion contracts differ"},
+    {"id": "memory-dynamics", "status": "partial", "evidence": "strength/consolidation is not upstream TTL or store-merge parity"},
+    {"id": "dreaming", "status": "partial", "evidence": "bounded REM and fallback; full dream workflow differs"},
+    {"id": "critical-push", "status": "partial", "evidence": "classification/review exists; trusted host reply action is incomplete"},
+    {"id": "feedback", "status": "partial", "evidence": "manual feedback exists; automatic outcome tracking is absent"},
+    {"id": "reminder-state", "status": "partial", "evidence": "explicit scoped creation and management; no automatic extraction"},
     {"id": "shared-memory-copy", "status": "ready", "evidence": "explicit agent-scoped sharing"},
-    {"id": "obsidian-basic", "status": "ready", "evidence": "mirror, managed graph block, hash-tracked inbound sync"},
-    {"id": "controls", "status": "ready", "evidence": "status, CRUD, graph, dreams, reminders, jobs, doctor"},
-    {"id": "scheduler", "status": "ready", "evidence": "locked hourly/daily jobs and launchd installer"},
-    {"id": "backup-cutover", "status": "ready", "evidence": "gated profile cutover and expanded backup roots"},
-    {"id": "contradiction-live", "status": "ready", "evidence": "nearest-card capture scoring, graph edge, review disclosure"},
-    {"id": "proactive-delivery", "status": "ready", "evidence": "authorized pre-gateway route, deduplicated async adapter delivery"},
+    {"id": "obsidian-basic", "status": "partial", "evidence": "mirror and explicit sync; full consent/watch/conflict workflows differ"},
+    {"id": "controls", "status": "partial", "evidence": "native commands cover an intentionally narrower operator surface"},
+    {"id": "scheduler", "status": "partial", "evidence": "macOS launchd jobs; no cross-platform Hermes scheduler equivalent"},
+    {"id": "backup-cutover", "status": "partial", "evidence": "backup roots and gated cutover; no complete export/restore"},
+    {"id": "contradiction-live", "status": "partial", "evidence": "native graph/review disclosure; independent upstream disclosure config and formatting differ"},
+    {"id": "proactive-delivery", "status": "partial", "evidence": "inbound-gateway delivery only; no independent wake-up"},
     {"id": "identity-authorization", "status": "ready", "evidence": "pre-gateway MessageEvent identity, user allowlist, private-chat fallback"},
     {"id": "confirmation-bound-mutations", "status": "ready", "evidence": "one-time nonce bound to exact command, user, chat and expiry"},
-    {"id": "obsidian-advanced", "status": "ready", "evidence": "managed dashboard, Bases, tasks, conflict report, weekly synthesis"},
+    {"id": "obsidian-advanced", "status": "partial", "evidence": "managed native files, not the full dynamic operator workflow"},
     {"id": "speaker-mapping", "status": "ready", "evidence": "persistent aliases, turn segmentation, controls mapping"},
     {"id": "code-index", "status": "ready", "evidence": "bounded Python, JavaScript, TypeScript workspace symbol index"},
-    {"id": "afterthought-meta-cognition", "status": "ready", "evidence": "additive confidence, continuity, temporal, contradiction overlay"},
+    {"id": "afterthought-meta-cognition", "status": "partial", "evidence": "additive hints, not full configurable session-LLM reporting"},
     {"id": "explainable-recall", "status": "ready", "evidence": "per-result vector/rerank rationale and bounded decision trace"},
-    {"id": "proactive-pattern-nudges", "status": "ready", "evidence": "persistent cosine clusters, cooldown, daily governor, outbox delivery"},
-    {"id": "afterthought-followups", "status": "ready", "evidence": "30-120 minute open-outcome gate and shared governor"},
-    {"id": "meta-reflection", "status": "ready", "evidence": "feedback precision, recall, F1 and coverage-gap state"},
-    {"id": "temperament-mood", "status": "ready", "evidence": "presets, persistent mood files, capture stamp, recall context"},
+    {"id": "proactive-pattern-nudges", "status": "partial", "evidence": "native patterns/governor; no independent delivery"},
+    {"id": "afterthought-followups", "status": "partial", "evidence": "native governor; no independent delivery"},
+    {"id": "meta-reflection", "status": "partial", "evidence": "aggregate feedback, not full upstream reflection contract"},
+    {"id": "temperament-mood", "status": "partial", "evidence": "mood presets/context; Persona Voice and full style contract differ"},
     {"id": "multi-namespace-recall", "status": "ready", "evidence": "single writer, read-only legacy routes, globally bounded rerank and dedupe"},
     {"id": "shared-memory-pools", "status": "ready", "evidence": "hashed workspace/user pools, copy-never-move, additive vector recall"},
-    {"id": "recall-hardening", "status": "ready", "evidence": "adaptive caps, long-input compression, exact canonical dedupe"},
+    {"id": "recall-hardening", "status": "partial", "evidence": "native caps/compression; fallback and validity-aware behavior differ"},
     {"id": "long-input-commands", "status": "ready", "evidence": "semantic preparation for recall, forget, correct and 100k source guidance"},
-    {"id": "correction-reinforcement", "status": "ready", "evidence": "archive-first correction plus retrieval count, timestamp and strength boost"},
-    {"id": "gc-compaction-conflicts", "status": "ready", "evidence": "proposal-only merges, conflict recommendations, archive-first expiry GC"},
-    {"id": "feature-profiles-toggles", "status": "ready", "evidence": "read-only choices, explicit safe/recommended apply, atomic whitelisted toggles"},
+    {"id": "correction-reinforcement", "status": "partial", "evidence": "archive-first correction; safe-update and merge-lineage contracts differ"},
+    {"id": "gc-compaction-conflicts", "status": "partial", "evidence": "proposal/GC support; no upstream store-merge lineage"},
+    {"id": "feature-profiles-toggles", "status": "partial", "evidence": "atomic native allowlist, not full upstream configuration mapping"},
     {"id": "job-rate-limits", "status": "ready", "evidence": "persisted per-agent hourly, daily and weekly gates plus overlap lock"},
-    {"id": "emotion-tier-routing", "status": "ready", "evidence": "T1/T2 plus configured OpenAI-compatible oMLX T3 and explicit T2 fallback"},
-    {"id": "temporal-query-ranges", "status": "ready", "evidence": "relative day, last-month and quarter ranges filter Lance recall"},
+    {"id": "emotion-tier-routing", "status": "partial", "evidence": "local-only lazy Transformer/prototype T2 or explicit T1 fallback; configured T3; live model quality not verified"},
+    {"id": "temporal-query-ranges", "status": "partial", "evidence": "validAt and created-time ranges exist; full historical store-merge contract is absent"},
     {"id": "poor-result-query-refinement", "status": "ready", "evidence": "one bounded content-focused second query before global rerank"},
     {"id": "critical-push-budget", "status": "ready", "evidence": "exactly-once classification ledger and persisted per-agent daily max"},
     {"id": "epistemic-capture", "status": "ready", "evidence": "observed/untrusted capture decision, restore-safe fail-closed cutoff, legacy rows stay unstamped"},
@@ -71,6 +71,11 @@ FEATURES: tuple[dict[str, str], ...] = (
 # Keep legacy native-runtime readiness distinct from full new upstream coverage.
 # A passing legacy capability inventory must never imply a full 7.10 port.
 COVERAGE_710 = (
+    {"id": "validity-and-expiry", "status": "partial", "detail": "native validAt/validity windows and absolute expiresAt exist; complete TTL and historical merge parity is not claimed"},
+    {"id": "store-merge-lineage", "status": "not-ported", "detail": "no upstream-equivalent store-time merge guard, durable candidate lineage, or replacement revalidation"},
+    {"id": "llm-result-cache", "status": "partial", "detail": "native cache integration is narrower than the complete upstream live-call contract"},
+    {"id": "reminder-extraction", "status": "partial", "detail": "authorized explicit scoped creation exists; automatic reminder extraction is not implemented"},
+    {"id": "cognition-tiers", "status": "partial", "detail": "opt-in style/echo and local-only T2 adapters exist; Persona Voice, reaction feedback and full cognition workflows remain missing"},
     {"id": "local-jina-v3", "status": "not-ported", "detail": "native Transformers remote-code chain is not independently audited; explicit fail-closed guard, existing sidecar model support retained"},
     {"id": "dashboard", "status": "partial", "detail": "native read-only status; write workflows remain CLI-only or unavailable"},
     {"id": "reembedding", "status": "partial", "detail": "bounded staged batches; no automatic active-generation switch"},
@@ -83,18 +88,23 @@ COVERAGE_710 = (
 
 
 def parity_report() -> dict[str, Any]:
-    """Return stable feature statuses and completion counts."""
+    """Return the legacy inventory and the authoritative 7.10 coverage gate."""
     counts = Counter(feature["status"] for feature in FEATURES)
     required = [feature for feature in FEATURES if feature["status"] != "excluded"]
     ready = [feature for feature in required if feature["status"] == "ready"]
+    coverage_status = "partial"
     return {
-        "status": "ready" if len(ready) == len(required) else "incomplete",
+        # ``status`` is intentionally the release/cutover status.  The legacy
+        # inventory below remains useful evidence, but cannot claim complete
+        # v7.10 parity while COVERAGE_710 has known gaps.
+        "status": "complete" if coverage_status == "complete" else coverage_status,
+        "legacyInventoryStatus": "ready" if len(ready) == len(required) else "incomplete",
         "readyRequired": len(ready),
         "totalRequired": len(required),
         "counts": dict(counts),
         "features": list(FEATURES),
         "coverageVersion": "7.10.0",
-        "coverageStatus": "partial",
+        "coverageStatus": coverage_status,
         "coverage710": list(COVERAGE_710),
     }
 
@@ -106,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     report = parity_report()
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 1 if arguments.strict and (report["status"] != "ready" or report["coverageStatus"] != "complete") else 0
+    return 1 if arguments.strict and report["coverageStatus"] != "complete" else 0
 
 
 if __name__ == "__main__":

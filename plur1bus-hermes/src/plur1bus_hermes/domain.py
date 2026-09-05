@@ -8,6 +8,7 @@ import logging
 import math
 import re
 import threading
+import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from .cognition import (
     contradiction_score,
     extract_open_threads,
 )
+from .cognitive_prompt import fresh_dream_echo, style_directive
 from .code_index import query_code_index, rebuild_code_index
 from .critical import CRITICAL_TYPES, NON_CRITICAL_TYPE, classify_critical, is_confirmed
 from .critical_review import (
@@ -137,7 +139,10 @@ class Plur1busDomain:
         self._mood = MoodEngine(self.workspace_dir)
         self._llm_backend = None
         self._lock = threading.RLock()
-        self._last_recall_ms = 0
+        # Reactivation is deliberately per session.  A process-wide timestamp
+        # leaks one conversation's cadence into another and cannot model a
+        # first-turn or post-compaction transition safely.
+        self._reactivation_sessions: dict[str, dict[str, int]] = {}
 
     def _feature_enabled(self, name: str) -> bool:
         """Treat absent feature settings as enabled while honoring explicit opt-outs."""
@@ -145,6 +150,26 @@ class Plur1busDomain:
         if value is False:
             return False
         return not (isinstance(value, Mapping) and value.get("enabled") is False)
+
+    def _opt_in_feature_enabled(self, name: str) -> bool:
+        """Return true only for an explicit boolean or ``enabled: true`` setting."""
+        value = self.config.get(name)
+        return value is True or (isinstance(value, Mapping) and value.get("enabled") is True)
+
+    @staticmethod
+    def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+        try:
+            return max(minimum, min(maximum, int(value)))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _session_key(session_id: str | None) -> str:
+        """Return an opaque, bounded key for local recall state only."""
+        raw = str(session_id or "").strip()
+        if not raw or len(raw) > 512:
+            return ""
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _scope_selector(
         self,
@@ -729,6 +754,9 @@ class Plur1busDomain:
         scope_key: str | None = None,
         aclBindings: Any = None,
         scopeKey: str | None = None,
+        session_id: str | None = None,
+        reactivation_trigger: str | None = None,
+        reactivation_substantive: bool = False,
     ) -> list[dict[str, Any]]:
         """Append graph, semantic-lens, and reactivation candidates after base recall."""
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
@@ -742,30 +770,81 @@ class Plur1busDomain:
         if not rows:
             return rows
         seen = {str(row.get("id") or "") for row in rows}
-        candidate_ids = self._graph_neighbor_ids(
+        graph_ids = self._graph_neighbor_ids(
             seen, acl_bindings=selector.acl_bindings
         )
-        if self._feature_enabled("semanticLens"):
-            candidate_ids.update(
+        lens_ids: set[str] = set()
+        lens_deadline: float | None = None
+        # The lens is useful but intentionally opt-in: it widens recall beyond
+        # the ordinary semantic candidates and must never surprise a profile.
+        if self._opt_in_feature_enabled("semanticLens"):
+            lens_cfg = self.config.get("semanticLens")
+            lens_cfg = lens_cfg if isinstance(lens_cfg, Mapping) else {}
+            lens_budget_ms = self._bounded_int(lens_cfg.get("timeoutMs"), 50, 1, 50)
+            lens_deadline = time.monotonic() + lens_budget_ms / 1000
+            lens_ids.update(
                 self._semantic_lens_ids(seen, acl_bindings=selector.acl_bindings)
             )
+        reactivation_ids: set[str] = set()
+        reactivation_deadline: float | None = None
+        reactivation_cfg = self.config.get("conversationReactivationRecall")
+        reactivation_cfg = reactivation_cfg if isinstance(reactivation_cfg, Mapping) else {}
+        session_key = self._session_key(session_id)
         now = _now_ms()
+        trigger = str(reactivation_trigger or "").strip().lower()
+        state = self._reactivation_sessions.get(session_key, {}) if session_key else {}
+        crr_enabled = self._opt_in_feature_enabled("conversationReactivationRecall")
+        if not trigger and session_key:
+            trigger = "first_substantive" if not state and reactivation_substantive is True else ""
+            if state.get("lastRecallMs") and now - state["lastRecallMs"] >= 45 * 60 * 1000:
+                trigger = "idle"
+        valid_triggers = {"idle", "continuation", "first_substantive", "post_compaction"}
         if (
-            self._feature_enabled("continuityEngine")
-            and self._last_recall_ms
-            and now - self._last_recall_ms >= 45 * 60 * 1000
+            crr_enabled
+            and session_key
+            and trigger in valid_triggers
         ):
-            candidate_ids.update(
-                self._reactivation_ids(seen, acl_bindings=selector.acl_bindings)
+            reactivation_budget_ms = self._bounded_int(
+                reactivation_cfg.get("timeoutMs"), 50, 1, 50
             )
-        if self._feature_enabled("continuityEngine"):
-            self._last_recall_ms = now
+            reactivation_deadline = time.monotonic() + reactivation_budget_ms / 1000
+            reactivation_ids.update(
+                self._reactivation_ids(
+                    seen,
+                    acl_bindings=selector.acl_bindings,
+                    max_candidates=self._bounded_int(
+                        reactivation_cfg.get("maxReactivationMemories"), 3, 1, 3
+                    ),
+                    deadline=reactivation_deadline,
+                )
+            )
+        if crr_enabled and session_key:
+            self._reactivation_sessions[session_key] = {"lastRecallMs": now}
+            # Bound local state even if a caller supplies many legitimate sessions.
+            if len(self._reactivation_sessions) > 256:
+                oldest = min(
+                    self._reactivation_sessions,
+                    key=lambda key: self._reactivation_sessions[key].get("lastRecallMs", now),
+                )
+                self._reactivation_sessions.pop(oldest, None)
         hydrated = self._hydrate_ids(
-            table,
-            candidate_ids - seen,
-            max(0, limit - len(rows)),
+            table, graph_ids - seen, max(0, limit - len(rows)),
             acl_bindings=selector.acl_bindings,
         )
+        remaining = max(0, limit - len(rows) - len(hydrated))
+        if remaining and lens_ids and lens_deadline is not None:
+            hydrated.extend(self._hydrate_ids(
+                table, lens_ids - seen - {str(row.get("id") or "") for row in hydrated},
+                remaining, acl_bindings=selector.acl_bindings, deadline=lens_deadline,
+            ))
+        remaining = max(0, limit - len(rows) - len(hydrated))
+        if remaining and reactivation_ids:
+            hydrated.extend(self._hydrate_ids(
+                table,
+                reactivation_ids - seen - {str(row.get("id") or "") for row in hydrated},
+                remaining, acl_bindings=selector.acl_bindings,
+                deadline=reactivation_deadline,
+            ))
         return rows + hydrated
 
     def record_feedback(
@@ -860,11 +939,127 @@ class Plur1busDomain:
             if remind_at and remind_at <= now and status not in {"acknowledged", "cancelled", "presented"}:
                 due.append({
                     "id": row["id"],
-                    "text": metadata.get("text") or metadata.get("content") or "",
+                    "text": metadata.get("reminderText") or metadata.get("text") or metadata.get("content") or "",
                     "remindAt": remind_at,
                     "status": status or "pending",
                 })
         return due
+
+    def create_reminder(
+        self,
+        memory_id: str,
+        due_at: str | int,
+        *,
+        text: str | None = None,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
+        """Schedule one existing scoped card at an explicit absolute instant."""
+        memory_id = safe_memory_id(memory_id)
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        due_ms = self._parse_absolute_due_at(due_at)
+        now = _now_ms()
+        if due_ms <= now:
+            raise ValueError("reminder due time must be in the future")
+        # A bounded horizon prevents accidental unit mistakes (e.g. seconds as
+        # milliseconds) from creating a practically irreversible schedule.
+        if due_ms > now + 5 * 366 * 24 * 60 * 60 * 1000:
+            raise ValueError("reminder due time is too far in the future")
+        if text is not None:
+            text = str(text).strip()
+            if not text or len(text) > 1000:
+                raise ValueError("reminder text must contain 1 to 1000 characters")
+        table = self._metadata_table()
+        if table is None:
+            return {"created": False, "reason": "metadata-table-unavailable"}
+        all_rows = [dict(row) for row in self._metadata_rows()]
+        matching = []
+        for row in all_rows:
+            metadata = self._metadata_json(row)
+            candidate = metadata if _row_scope_key(metadata) else row
+            if str(row.get("id") or "") == memory_id and _row_matches_scope(candidate, selector):
+                matching.append((row, metadata))
+        if len(matching) != 1:
+            return {"created": False, "reason": "not-found", "id": memory_id}
+        _row, metadata = matching[0]
+        reminder_text = text if text is not None else str(
+            metadata.get("text") or metadata.get("content") or ""
+        ).strip()
+        if not reminder_text:
+            return {"created": False, "reason": "empty-reminder-text", "id": memory_id}
+        reminder_key = hashlib.sha256(
+            f"{selector.scope_key}|{memory_id}|{due_ms}|{reminder_text}".encode("utf-8")
+        ).hexdigest()
+        metadata.update({
+            "remindAt": due_ms,
+            "reminderStatus": "scheduled",
+            "reminderKey": reminder_key,
+            "reminderText": reminder_text,
+            "reminderCreatedAt": now,
+        })
+        serialized = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        # Do not rewrite the metadata table: another capture can append a row
+        # while a reminder is being scheduled.  Legacy rows without a concrete
+        # top-level scope are deliberately not mutable through this API.
+        safe_id = memory_id.replace("'", "''")
+        safe_agent = self.agent_id.replace("'", "''")
+        safe_scope = selector.scope_key.replace("'", "''")
+        update = table.update(
+            where=(
+                f"id = '{safe_id}' AND agentId = '{safe_agent}' "
+                f"AND scopeKey = '{safe_scope}'"
+            ),
+            values={"metadataJson": serialized},
+        )
+        updated = getattr(update, "rows_updated", None)
+        if updated is not None and int(updated) != 1:
+            return {"created": False, "reason": "card-changed", "id": memory_id}
+        event = {
+            "id": memory_id,
+            "agentId": self.agent_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
+            "remindAt": due_ms,
+            "reminderKey": reminder_key,
+            "createdAt": _utcnow(),
+        }
+        self._append_jsonl(
+            self._scope_neo_dir(selector) / "reminder-dispatch-ledger.jsonl",
+            {"action": "create", **event},
+        )
+        return {"created": True, **event}
+
+    @staticmethod
+    def _parse_absolute_due_at(value: str | int) -> int:
+        """Parse a timezone-qualified ISO instant or an epoch-millisecond integer."""
+        if isinstance(value, bool):
+            raise ValueError("reminder due time must be an absolute instant")
+        if isinstance(value, int):
+            if value <= 0:
+                raise ValueError("reminder due time must be a positive epoch millisecond")
+            return value
+        raw = str(value or "").strip()
+        if not raw or len(raw) > 64:
+            raise ValueError("reminder due time must be an absolute ISO-8601 instant")
+        if raw.isdecimal():
+            try:
+                epoch_ms = int(raw)
+            except ValueError as error:  # pragma: no cover - guarded by isdecimal
+                raise ValueError("invalid epoch millisecond") from error
+            if epoch_ms <= 0:
+                raise ValueError("reminder due time must be a positive epoch millisecond")
+            return epoch_ms
+        try:
+            instant = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("reminder due time must be an ISO-8601 instant") from error
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise ValueError("reminder due time must include a timezone offset")
+        return int(instant.timestamp() * 1000)
 
     def obsidian_candidates(
         self,
@@ -1061,6 +1256,17 @@ class Plur1busDomain:
             self._commit_job_page(page)
             return dream
         self._append_jsonl(neo_dir / "dream-diary.jsonl", dream)
+        if self._opt_in_feature_enabled("dreamEcho"):
+            # The echo is a short derived summary, not a copy of the diary; it
+            # stays in the same physical scope and is read only by the helper.
+            self._append_jsonl(neo_dir / "dream-echo.jsonl", {
+                "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
+                "createdAt": _utcnow(),
+                "text": str(dream.get("narrative") or "")[:500],
+                "sourceDreamId": dream["id"],
+            })
         diary_config = self.config.get("dreaming")
         narrative_config = diary_config.get("narrative") if isinstance(diary_config, Mapping) else None
         diary_enabled = not isinstance(narrative_config, Mapping) or narrative_config.get("diary", True) is not False
@@ -1765,6 +1971,27 @@ class Plur1busDomain:
         """Return the current persisted mood and temperament."""
         return self._mood.state()
 
+    def cognitive_prompt_blocks(
+        self,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> list[str]:
+        """Return explicitly enabled, scope-bound prompt blocks for the runtime."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        blocks = [style_directive(self._mood.state(), self.config)]
+        blocks.append(fresh_dream_echo(
+            self._scope_neo_dir(selector) / "dream-echo.jsonl",
+            scope_key=selector.scope_key,
+            enabled_config=self.config,
+            now_ms=_now_ms(),
+        ))
+        return [block for block in blocks if block]
+
     def set_temperament(self, preset: str) -> dict[str, Any]:
         """Apply a documented temperament preset for this agent."""
         return self._mood.set_preset(preset)
@@ -2332,8 +2559,19 @@ class Plur1busDomain:
         acl_bindings: Any = None,
         scope_key: str | None = None,
     ) -> set[str]:
-        if not self._feature_enabled("semanticLens"):
+        """Return a small, scope-bound lens expansion within a hard time budget."""
+        if not self._opt_in_feature_enabled("semanticLens"):
             return set()
+        started = time.monotonic()
+        lens_cfg = self.config.get("semanticLens")
+        lens_cfg = lens_cfg if isinstance(lens_cfg, Mapping) else {}
+        max_candidates = self._bounded_int(
+            lens_cfg.get("maxLensMemories"), 3, 1, 3
+        )
+        max_communities = self._bounded_int(lens_cfg.get("maxCommunities"), 2, 1, 2)
+        max_bridges = self._bounded_int(lens_cfg.get("maxBridgeMemories"), 2, 0, 2)
+        max_faded = self._bounded_int(lens_cfg.get("maxFadedMemories"), 1, 0, 1)
+        budget_ms = self._bounded_int(lens_cfg.get("timeoutMs"), 50, 1, 50)
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         scoped_path = (
             self._scope_workspace_dir(selector)
@@ -2355,12 +2593,51 @@ class Plur1busDomain:
         communities = index.get("communities", {})
         community_ids = {memory_to_community.get(seed) for seed in seeds if memory_to_community.get(seed)}
         candidates = set()
-        for community_id in community_ids:
+        for community_id in sorted(str(value) for value in community_ids if value)[:max_communities]:
+            if (time.monotonic() - started) * 1000 >= budget_ms:
+                break
             community = communities.get(community_id, {})
             for key in ("members", "memoryIds", "ids"):
+                if (time.monotonic() - started) * 1000 >= budget_ms:
+                    break
                 values = community.get(key, []) if isinstance(community, dict) else []
                 if isinstance(values, list):
-                    candidates.update(str(value) for value in values)
+                    for value in values:
+                        if (time.monotonic() - started) * 1000 >= budget_ms:
+                            break
+                        candidate = str(value)
+                        if candidate and candidate not in seeds:
+                            candidates.add(candidate)
+                        if len(candidates) >= max_candidates:
+                            break
+                if len(candidates) >= max_candidates:
+                    break
+            if len(candidates) >= max_candidates:
+                break
+        def collect_optional(raw: Any, maximum: int) -> None:
+            if not isinstance(raw, list) or maximum <= 0:
+                return
+            added = 0
+            for value in raw:
+                if added >= maximum or (time.monotonic() - started) * 1000 >= budget_ms:
+                    break
+                candidate = ""
+                if isinstance(value, Mapping):
+                    candidate = str(value.get("id") or value.get("memoryId") or "")
+                    candidate_scope = str(value.get("scopeKey") or "")
+                    if candidate_scope and candidate_scope != selector.scope_key:
+                        continue
+                else:
+                    candidate = str(value)
+                if candidate and candidate not in seeds and candidate not in candidates:
+                    candidates.add(candidate)
+                    added += 1
+
+        # v7.10 index producers may use either compact ID lists or the more
+        # descriptive bridge/faded names.  Both are strictly same-scope and
+        # bounded; unknown index fields never become prompt candidates.
+        collect_optional(index.get("bridgeMemoryIds", index.get("bridges")), max_bridges)
+        collect_optional(index.get("fadedMemoryIds", index.get("faded")), max_faded)
         return candidates
 
     def _reactivation_ids(
@@ -2369,7 +2646,12 @@ class Plur1busDomain:
         *,
         acl_bindings: Any = None,
         scope_key: str | None = None,
+        max_candidates: int = 3,
+        deadline: float | None = None,
     ) -> set[str]:
+        """Return bounded CRR links, stopping before the caller deadline."""
+        if deadline is not None and time.monotonic() >= deadline:
+            return set()
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         scoped_path = (
             self._scope_workspace_dir(selector) / ".plur1bus" / "link-index.json"
@@ -2388,12 +2670,16 @@ class Plur1busDomain:
         entries = index.get("entries", {})
         candidates = set()
         for seed in seeds:
+            if deadline is not None and time.monotonic() >= deadline:
+                return candidates
             entry = entries.get(seed, {}) if isinstance(entries, dict) else {}
             if isinstance(entry, dict) and str(entry.get("scopeKey") or "") in {"", selector.scope_key, legacy_agent_private_scope_key()}:
                 for key in ("links", "targets", "memoryIds"):
                     values = entry.get(key, [])
                     if isinstance(values, list):
-                        for value in values[:3]:
+                        for value in values[:max(1, min(3, max_candidates))]:
+                            if deadline is not None and time.monotonic() >= deadline:
+                                return candidates
                             if isinstance(value, Mapping):
                                 if _row_matches_scope(value, selector):
                                     candidate = str(value.get("id") or value.get("memoryId") or "")
@@ -2401,6 +2687,8 @@ class Plur1busDomain:
                                         candidates.add(candidate)
                             else:
                                 candidates.add(str(value))
+                            if len(candidates) >= max(1, min(3, max_candidates)):
+                                return candidates
         return candidates
 
     def _hydrate_ids(
@@ -2411,8 +2699,9 @@ class Plur1busDomain:
         *,
         acl_bindings: Any = None,
         scope_key: str | None = None,
+        deadline: float | None = None,
     ) -> list[dict[str, Any]]:
-        if not ids or limit <= 0:
+        if not ids or limit <= 0 or (deadline is not None and time.monotonic() >= deadline):
             return []
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         valid = []
@@ -2428,6 +2717,8 @@ class Plur1busDomain:
             rows = table.search().where(
                 f"({where}) AND {selector.where()} AND status = 'active'"
             ).limit(limit).to_list()
+            if deadline is not None and time.monotonic() >= deadline:
+                return []
             return self._filter_rows(rows, selector)[:limit]
         except Exception:
             return []

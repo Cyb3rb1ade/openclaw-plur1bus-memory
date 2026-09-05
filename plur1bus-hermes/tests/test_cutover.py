@@ -122,7 +122,7 @@ class CutoverTests(unittest.TestCase):
 
             plan = build_plan(target, hermes_home)
 
-            self.assertEqual(plan["status"], "ready")
+            self.assertEqual(plan["status"], "blocked")
             self.assertEqual(plan["profiles"][0]["profileName"], "bernd")
             self.assertEqual(plan["profiles"][0]["internalAgentId"], "main")
 

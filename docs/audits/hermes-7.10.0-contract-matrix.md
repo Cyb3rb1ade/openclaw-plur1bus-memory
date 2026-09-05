@@ -2,6 +2,8 @@
 
 Stand: 2026-09-05. **Lokaler Port, keine Veröffentlichung und keine Live-Installation.**
 
+**Nachtrag:** Diese ursprüngliche Matrix war für eine Vollständigkeitsbewertung zu eng. Für anschließende Implementierungen und verbleibende Lücken gilt [der Implementierungsnachtrag](hermes-7.10.0-implementation-followup.md). `parity.py` meldet weiterhin ausdrücklich partielle Abdeckung.
+
 ## Geprüfte Basis
 
 - Upstream: `v7.10.0`, Commit `b4138df52781b6d51bc2baa0659e67325dbd5fa9`.
