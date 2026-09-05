@@ -2,9 +2,17 @@
 
 This directory contains the installable Hermes memory-provider package for PLUR1BUS.
 
-Native adapter candidate: **7.10.0-hermes**, Python **7.10.0**.
+Native adapter candidate: **7.12.0-hermes**, Python **7.12.0**.
 Compatibility was inspected against Hermes 0.21.0. Detailed coverage and
-remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` in the repository.
+remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` and
+`docs/audits/hermes-7.12.0-contract-delta.md` in the repository.
+
+Jina v5 Text Nano is an explicit `local-onnx` option, with optional
+`plur1bus-hermes[local-onnx]` dependencies. Preparation requires acknowledgement
+of CC-BY-NC-4.0; inference is pinned, local-only, and limited to 512 tokens per
+input. Use `plur1bus-hermes-operator embedding-model --help` for preparation.
+Existing configurations are not switched automatically. Migrate existing
+vectors through the separately approved staged re-embedding workflow.
 
 Core architecture:
 
