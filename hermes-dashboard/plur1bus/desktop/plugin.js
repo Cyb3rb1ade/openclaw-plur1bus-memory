@@ -240,6 +240,52 @@ function MemoryBrowser({ rest }) {
           onClick: () => { void load(page.offset + 20); } }, 'Weiter'))) : null);
 }
 
+function Obsidian({ rest, refresh }) {
+  const request = useRequests(rest);
+  const [review, setReview] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [notice, setNotice] = React.useState('');
+  const [capable, setCapable] = React.useState(false);
+  React.useEffect(() => {
+    async function check() {
+      const result = await request.current?.run('/desktop/capabilities');
+      if (result && !result.stale) setCapable(result.value?.obsidianActions === true);
+    }
+    void check();
+  }, [rest]);
+  async function preview() {
+    setBusy(true); setReview(null); setNotice('');
+    const result = await request.current?.run('/obsidian/preview');
+    if (!result || result.stale) return;
+    setBusy(false);
+    if (result.error) setNotice('Notizen nicht prüfbar. Quelle, Größenlimit und Backend-Version prüfen.');
+    else setReview({ ...result.value, expiresAt: Date.now() + result.value.expiresInSeconds * 1000 });
+  }
+  async function confirm() {
+    if (!review || busy || !capable) return;
+    if (Date.now() >= review.expiresAt) { setReview(null); setNotice('Prüfung abgelaufen. Bitte erneut prüfen.'); return; }
+    setBusy(true);
+    const result = await request.current?.run('/desktop/obsidian/sync', { method: 'POST', body: {
+      revision: review.revision, nonce: review.nonce, confirmation: 'obsidian-sync',
+    } });
+    if (!result || result.stale) return;
+    setBusy(false); setReview(null);
+    setNotice(result.error ? 'Import nicht vollständig bestätigt. Erneut prüfen; erfolgreiche Teile werden nicht doppelt angelegt.'
+      : `${result.value.files} Notizen geprüft und importiert. Originaldateien unverändert.`);
+    refresh();
+  }
+  return h('section', null, h('h2', null, 'Obsidian & Workspace'),
+    h('p', null, 'Geänderte Markdown-Notizen im konfigurierten Workspace dieses Agenten prüfen. Import fügt Beobachtungen hinzu; er überschreibt weder Notizen noch Erinnerungen.'),
+    h('button', { disabled: busy || !capable, onClick: () => { void preview(); } }, busy ? 'Wird geprüft…' : 'Geänderte Notizen prüfen'),
+    !capable ? h('p', null, 'Für diese Aktion wird das aktualisierte, authentifizierte Backend benötigt.') : null,
+    notice ? h('p', { role: 'status' }, notice) : null,
+    review ? h('div', { className: 'pb-review' }, h('p', null, `Agent ${review.agentId} · ${review.files.length} geänderte Notizen`),
+      h('ul', null, review.files.map(file => h('li', { key: file.path }, file.path, h('small', null, ` · SHA-256 ${file.sha256.slice(0, 12)}`)))),
+      h('p', null, 'Bitte die aufgeführten Quelldateien vor der Freigabe prüfen. Neue Dateiversionen erzeugen neue Beobachtungen.'),
+      h('button', { disabled: busy, onClick: () => setReview(null) }, 'Abbrechen'),
+      h('button', { disabled: busy || !review.files.length, onClick: () => { void confirm(); } }, 'Geprüfte Notizen importieren')) : null);
+}
+
 function Workshop({ rest, proposals, error, loading, refresh }) {
   const request = useRequests(rest);
   const [capable, setCapable] = React.useState(false);
@@ -479,6 +525,7 @@ function Partition({ rest, profile }) {
           field('Provider', reranker.provider), field('Modell', reranker.model))))) : null,
     s ? h(RetrievalSettings, { rest }) : null,
     s ? h(MemoryBrowser, { rest }) : null,
+    s ? h(Obsidian, { rest, refresh: () => { void reader.current?.load(); } }) : null,
     s ? h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,
       refresh: () => { void reader.current?.load(); } }) : null,
     h('p', null, 'Verwendet den bestehenden Hermes-Backendprozess. Kein separater Webserver erforderlich.'));

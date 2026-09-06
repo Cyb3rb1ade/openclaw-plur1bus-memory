@@ -579,6 +579,8 @@ class Plur1busControlsPlugin:
                 and arguments[0] in {"confirm", "seed", "evolve", "apply", "repair"}
             ) or (
                 command == "reminders" and bool(arguments) and arguments[0] == "confirm"
+            ) or (
+                command == "obsidian" and len(arguments) == 2 and arguments[0] == "sync"
             )
             if (
                 mutating_command
@@ -851,16 +853,12 @@ class Plur1busControlsPlugin:
                     "exists": scoped_workspace.is_dir(),
                 }
                 if arguments and arguments[0] == "sync":
-                    candidates = domain.obsidian_candidates(**scope_kwargs)
-                    for candidate in candidates:
-                        runtime.remember_async(
-                            f"Obsidian note {candidate['path']}:\n{candidate['content']}",
-                            "obsidian-sync",
-                            source_role="obsidian",
-                        )
-                    runtime.flush(timeout_seconds=60)
-                    domain.mark_obsidian_synced(candidates, **scope_kwargs)
-                    result["imported"] = len(candidates)
+                    from plur1bus_hermes.obsidian_sync import plan_obsidian_sync, apply_obsidian_sync
+                    if len(arguments) == 2:
+                        result["sync"] = apply_obsidian_sync(runtime, approved_revision=arguments[1])
+                    else:
+                        result["sync"] = plan_obsidian_sync(runtime)
+                        result["nextStep"] = "/plur1bus obsidian sync <reviewed revision>"
                 if arguments and arguments[0] == "maintain":
                     result["maintenance"] = domain.maintain_obsidian(**scope_kwargs)
                 return json.dumps(result, indent=2)

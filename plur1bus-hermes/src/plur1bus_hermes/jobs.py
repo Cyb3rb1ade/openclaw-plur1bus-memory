@@ -152,6 +152,9 @@ def run_jobs(
                 return method(*args, **scope_kwargs) if scope_kwargs else method(*args)
 
             if mode in {"hourly", "all"}:
+                if (config.get("obsidianBridge") or {}).get("watch") is True:
+                    from .obsidian_sync import watch_obsidian
+                    results["obsidianWatch"] = gate.run("obsidian-watch", 3600, lambda: watch_obsidian(runtime))
                 results["dynamics"] = gate.run(
                     "dynamics", 3_600, lambda: scoped_call(domain.run_dynamics)
                 )

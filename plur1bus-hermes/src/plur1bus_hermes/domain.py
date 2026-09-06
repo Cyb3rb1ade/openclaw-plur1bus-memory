@@ -1421,21 +1421,8 @@ class Plur1busDomain:
         workspace_dir = self._scope_workspace_dir(selector)
         state = self._read_json(state_path)
         previous = state.get("hashes", {}) if isinstance(state.get("hashes"), dict) else {}
-        candidates = []
-        if not workspace_dir.is_dir():
-            return candidates
-        for path in sorted(workspace_dir.rglob("*.md")):
-            relative = path.relative_to(workspace_dir)
-            if relative.parts[:2] == ("plur1bus", "memories") or ".stversions" in relative.parts:
-                continue
-            content = path.read_text(encoding="utf-8", errors="replace")
-            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-            if previous.get(str(relative)) == digest:
-                continue
-            candidates.append({"path": str(relative), "content": content, "sha256": digest})
-            if len(candidates) >= max(1, min(limit, 1000)):
-                break
-        return candidates
+        from .obsidian_sync import changed_notes
+        return changed_notes(workspace_dir, previous, limit)
 
     def mark_obsidian_synced(
         self,

@@ -155,7 +155,7 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
         actions = True
     except HTTPException:
         actions = False
-    result = {"memoryBrowser": True, "workshopActions": actions, "retrievalActions": actions}
+    result = {"memoryBrowser": True, "workshopActions": actions, "retrievalActions": actions, "obsidianActions": actions}
     if actions:
         from hermes_cli.profiles import get_active_profile_name
         from hermes_cli.config import load_config_readonly
@@ -417,6 +417,57 @@ def _review(workshop: SkillWorkshop, proposal_id: str, revision: str) -> dict[st
         key: proposal.get(key)
         for key in ("id", "skillName", "title", "description", "instructions", "evidence", "status", "revision")
     }
+
+
+class _ObsidianAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    nonce: str = Field(min_length=20, max_length=128)
+    confirmation: str
+
+
+@router.get("/obsidian/preview")
+def obsidian_preview(request: Request) -> dict[str, Any]:
+    """Discover changed notes only in the server-selected scoped workspace."""
+    actor = _actor(request)
+    from plur1bus_hermes.obsidian_sync import plan_obsidian_sync
+    try:
+        with _runtime_lease() as (runtime, view):
+            plan = plan_obsidian_sync(runtime)
+            nonce = _issue_nonce(actor=actor, context=_route_context(runtime, view), verb="obsidian-sync",
+                                 proposal_id="workspace", revision=plan["revision"])
+        return {"files": plan["files"], "revision": plan["revision"], "nonce": nonce,
+                "agentId": plan["agentId"], "mode": plan["mode"], "expiresInSeconds": _NONCE_TTL_SECONDS,
+                "warning": "Append-only import. Source notes and existing memories are not overwritten. Changed notes create new observations."}
+    except (ValueError, OSError) as error:
+        raise HTTPException(409, "obsidian_source_unavailable_or_outside_budget") from error
+
+
+def _commit_obsidian(action: _ObsidianAction, actor: str) -> dict[str, Any]:
+    from plur1bus_hermes.obsidian_sync import apply_obsidian_sync
+    if action.confirmation != "obsidian-sync":
+        raise HTTPException(403, "explicit_confirmation_required")
+    with _runtime_lease() as (runtime, view):
+        _consume_nonce(nonce=action.nonce, actor=actor, context=_route_context(runtime, view),
+                       verb="obsidian-sync", proposal_id="workspace", revision=action.revision)
+        try:
+            return apply_obsidian_sync(runtime, approved_revision=action.revision)
+        except Exception as error:
+            raise HTTPException(409, "obsidian_sync_incomplete_review_before_retry") from error
+
+
+@router.post("/obsidian/sync")
+def obsidian_sync(action: _ObsidianAction, request: Request) -> dict[str, Any]:
+    _same_origin_confirmation(request, "obsidian-sync")
+    return _commit_obsidian(action, _actor(request))
+
+
+@router.post("/desktop/obsidian/sync")
+def desktop_obsidian_sync(action: _ObsidianAction, request: Request) -> dict[str, Any]:
+    actor = _desktop_actor(request)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "json_required")
+    return _commit_obsidian(action, actor)
 
 
 @router.get("/workshop/proposals")

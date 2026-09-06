@@ -21,7 +21,7 @@ SUFFIXES = {".md", ".txt", ".rst"}
 def _read_source(source: Path, relative: str) -> bytes:
     """Read only a bounded regular file; never follow a replaced leaf symlink."""
     raw = source / relative
-    if raw.is_symlink():
+    if raw.is_symlink() or any(parent.is_symlink() for parent in raw.parents if parent != Path("/var")):
         raise ValueError("source changed to symlink")
     path = resolve_inside(str(source), relative)
     from .file_lock import open_existing

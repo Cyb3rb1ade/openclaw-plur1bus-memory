@@ -3,22 +3,54 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from .validation import safe_agent_id, resolve_inside
+from . import file_lock
+from .generation import _atomic_json, _read_json_existing
+from .source_sync import _read_source
+from .file_io import replace_file, sync_parent
+import tempfile
 
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _write(path: Path, content: str) -> None:
+def _write(path: Path, content: str) -> bool:
+    """Replace only our unchanged managed file; preserve foreign/manual edits."""
+    if any(parent.is_symlink() for parent in (path, *path.parents)):
+        raise ValueError("unsafe Obsidian managed path")
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(content, encoding="utf-8")
-    os.replace(temporary, path)
+    lock = file_lock.open_lock(path.parent / ".managed.lock")
+    try:
+        file_lock.flock(lock, file_lock.LOCK_EX)
+        manifest_path = path.parent / ".managed.json"
+        manifest = _read_json_existing(manifest_path, label="Obsidian ownership") or {}
+        if path.exists():
+            current = hashlib.sha256(_read_source(path.parent, path.name)).hexdigest()
+            if manifest.get(path.name) != current:
+                return False
+        descriptor, temporary = tempfile.mkstemp(prefix=".managed-", dir=path.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(content.encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            replace_file(temporary, path)
+            sync_parent(path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        manifest[path.name] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        _atomic_json(manifest_path, manifest)
+        return True
+    finally:
+        os.close(lock)
 
 
 def generate_obsidian_control_room(
@@ -32,7 +64,15 @@ def generate_obsidian_control_room(
     open_threads: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Write replaceable managed views derived from authoritative stores."""
-    control_dir = Path(workspace_dir) / ".plur1bus" / "control-room"
+    agent_id = safe_agent_id(agent_id)
+    lexical = Path(workspace_dir) / ".plur1bus" / "control-room"
+    if any(parent.is_symlink() for parent in (lexical, *lexical.parents)):
+        raise ValueError("unsafe Obsidian managed path")
+    control_dir = resolve_inside(str(workspace_dir), ".plur1bus", "control-room")
+    conflicts_found = []
+    def write(path: Path, content: str) -> None:
+        if not _write(path, content):
+            conflicts_found.append(str(path))
     metadata = []
     for row in metadata_rows:
         try:
@@ -70,7 +110,7 @@ def generate_obsidian_control_room(
     dashboard.extend(f"- {key}: {value}" for key, value in sorted(statuses.items()))
     dashboard.extend(["", "## Categories", ""])
     dashboard.extend(f"- {key}: {value}" for key, value in sorted(categories.items()))
-    _write(control_dir / "Dashboard.md", "\n".join(dashboard) + "\n")
+    write(control_dir / "Dashboard.md", "\n".join(dashboard) + "\n")
 
     bases = (
         "filters:\n"
@@ -85,7 +125,7 @@ def generate_obsidian_control_room(
         "      - category\n"
         "      - status\n"
     )
-    _write(control_dir / "Memories.base", bases)
+    write(control_dir / "Memories.base", bases)
 
     tasks = [
         "---",
@@ -100,7 +140,7 @@ def generate_obsidian_control_room(
         f"- [ ] {str(item.get('text') or '').replace(chr(10), ' ')[:500]}"
         for item in active_threads
     )
-    _write(control_dir / "Open Threads.md", "\n".join(tasks) + "\n")
+    write(control_dir / "Open Threads.md", "\n".join(tasks) + "\n")
 
     conflicts = ["# Contradictions Requiring Review", ""]
     conflicts.extend(
@@ -111,7 +151,7 @@ def generate_obsidian_control_room(
         )
         for item in contradictions[-100:]
     )
-    _write(control_dir / "Contradictions.md", "\n".join(conflicts) + "\n")
+    write(control_dir / "Contradictions.md", "\n".join(conflicts) + "\n")
 
     weekly = ["# Weekly Memory Synthesis", "", f"Generated: {_utcnow()}", ""]
     weekly.append(f"- Recent episodes: {len(episodes[-50:])}")
@@ -120,7 +160,7 @@ def generate_obsidian_control_room(
         narrative = str(dream.get("narrative") or "").strip()
         if narrative:
             weekly.append(f"- Dream: {narrative[:500]}")
-    _write(control_dir / "Weekly Synthesis.md", "\n".join(weekly) + "\n")
+    write(control_dir / "Weekly Synthesis.md", "\n".join(weekly) + "\n")
     return {
         "generatedAt": _utcnow(),
         "agentId": agent_id,
@@ -135,4 +175,5 @@ def generate_obsidian_control_room(
             )
         ],
         "managedOnly": True,
+        "conflicts": conflicts_found,
     }

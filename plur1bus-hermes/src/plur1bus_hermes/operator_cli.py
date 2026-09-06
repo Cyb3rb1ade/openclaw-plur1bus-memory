@@ -65,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     model.add_argument("--apply", action="store_true", help="allow explicit preparation/download only, never activation")
     compact = commands.add_parser("compact")
     compact.add_argument("--apply", action="store_true")
+    obsidian = commands.add_parser("obsidian", help="review configured scoped workspace notes, never arbitrary browser paths")
+    obsidian.add_argument("action", choices=("plan", "apply", "watch"))
+    obsidian.add_argument("--approved-revision")
     source_sync = commands.add_parser("source-sync")
     source_sync.add_argument("--source", required=True, type=Path)
     source_sync.add_argument("--apply", action="store_true")
@@ -118,6 +121,21 @@ def main(argv: list[str] | None = None) -> int:
             result = optimize_runtime_table(runtime, authorized=True) if args.apply else {
                 "dryRun": True, "operation": "physical_compaction", "status": read_operator_status(runtime),
             }
+        elif args.command == "obsidian":
+            from .obsidian_sync import plan_obsidian_sync, apply_obsidian_sync, watch_obsidian
+            from .runtime import Plur1busRuntime
+            writer = Plur1busRuntime(runtime.data_dir, runtime.config, runtime.agent_id, runtime.scope_binding.as_dict())
+            try:
+                if args.action == "plan":
+                    result = plan_obsidian_sync(writer)
+                elif args.action == "watch":
+                    result = watch_obsidian(writer)
+                else:
+                    if not args.approved_revision:
+                        raise ValueError("an exact reviewed Obsidian revision is required")
+                    result = apply_obsidian_sync(writer, approved_revision=args.approved_revision)
+            finally:
+                writer.shutdown()
         elif args.command == "workspace-source":
             from .workspace_consent import (
                 plan_workspace_consent, approve_workspace_consent,
