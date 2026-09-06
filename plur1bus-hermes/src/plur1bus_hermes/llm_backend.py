@@ -9,6 +9,11 @@ import urllib.request
 from typing import Any, Callable
 
 
+# Native names keep their validation/logging semantics; only the cache key is
+# mapped to the corresponding upstream deterministic transformation purpose.
+_CACHE_PURPOSES = {"skill-workshop-mining": "skill-extraction", "episode-extraction": "episode-analysis"}
+
+
 class InternalLlmBackend:
     """Execute explicitly configured internal JSON transformations."""
 
@@ -80,7 +85,7 @@ class InternalLlmBackend:
         )
         timeout = max(0.1, min(float(self.config.get("timeoutSeconds") or 4), 30))
         cache_request = {
-            "purpose": purpose, "scopeId": self.agent_id,
+            "purpose": _CACHE_PURPOSES.get(purpose, purpose), "scopeId": self.agent_id,
             "endpoint": request.full_url, "credential": api_key,
             "model": payload.get("model"), "messages": payload.get("messages"),
             "maxTokens": payload.get("max_tokens"),

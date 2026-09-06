@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 from .validation import ValidationError
+from .cache_budget import admit
 
 
 @dataclass
@@ -47,6 +48,7 @@ class EmbeddingCache:
             self._db_path = cache_dir / "embedding-cache-v2.sqlite"
             self._database = sqlite3.connect(str(self._db_path), check_same_thread=False)
             os.chmod(self._db_path, 0o600)
+            self._database.execute("PRAGMA auto_vacuum=INCREMENTAL")
             self._database.execute("PRAGMA journal_mode=WAL")
             self._database.execute("PRAGMA busy_timeout=5000")
             self._database.execute("PRAGMA auto_vacuum=INCREMENTAL")
@@ -107,7 +109,7 @@ class EmbeddingCache:
             if not row:
                 self.metrics["misses"] += 1
                 return None
-            vector = [float(value) for value in json.loads(row[0])]
+            vector = self._validate_vector(json.loads(row[0]))
             self._database.execute("UPDATE embeddings SET accessed = ? WHERE key = ?", (now, key))
             self._database.commit()
             self._remember(key, vector, float(row[1]))
@@ -303,7 +305,9 @@ class EmbeddingCache:
             self._remember(key, vector, expires)
             if self._database is not None:
                 required_bytes = len(json.dumps(vector).encode("utf-8")) * 2 + 32_768
-                if self._disk_bytes() + required_bytes >= self.max_bytes:
+                if not admit(self._database, self._db_path, "embeddings", now=now,
+                             max_entries=self.max_entries, max_bytes=self.max_bytes,
+                             required_bytes=required_bytes, protected_key=key):
                     self.metrics["persistSkips"] += 1
                     return
                 self._database.execute(
@@ -329,9 +333,12 @@ class EmbeddingCache:
                 database = self._database
                 self._database = None
                 try:
+                    database.execute("DELETE FROM embeddings WHERE expires <= ?", (time.time(),))
+                    database.commit()
                     database.close()
                 except Exception as error:
                     logging.getLogger(__name__).warning("Embedding cache close failed: %s", type(error).__name__)
+                    database.close()
 
     def _remember(self, key: str, vector: list[float], expires: float) -> None:
         if self.max_entries == 0:

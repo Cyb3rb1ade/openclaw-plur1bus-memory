@@ -15,9 +15,14 @@ from collections import OrderedDict
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from .cache_budget import admit
 
 
 LLM_RESULT_CACHE_PURPOSES = frozenset({
+    "capture-summary", "recall-query-summary", "merge-decision",
+    "conflict-resolution", "emotion-classification", "episode-analysis",
+    "conversation-insights", "skill-extraction", "rem-pattern-analysis",
+    "knowledge-update",
     "categorize",
     "contradiction-detection",
     "memory-fact-quality",
@@ -75,14 +80,17 @@ class LlmResultCache:
             db_name = _hash(str(agent_id))[:24] + ".sqlite"
             db_path = cache_dir / db_name
             self._connection = sqlite3.connect(db_path, check_same_thread=False)
+            self._connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._connection.execute("PRAGMA busy_timeout=5000")
             self._connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
             self._connection.execute(
                 "CREATE TABLE IF NOT EXISTS results ("
                 "cache_key TEXT PRIMARY KEY, response_text TEXT NOT NULL, "
-                "usage_json TEXT NOT NULL, expires_at INTEGER NOT NULL)"
+                "usage_json TEXT NOT NULL, expires_at INTEGER NOT NULL, accessed_at INTEGER NOT NULL DEFAULT 0)"
             )
+            if "accessed_at" not in {row[1] for row in self._connection.execute("PRAGMA table_info(results)")}:
+                self._connection.execute("ALTER TABLE results ADD COLUMN accessed_at INTEGER NOT NULL DEFAULT 0")
             self._connection.execute(
                 "DELETE FROM results WHERE expires_at <= ?", (self._now_ms(),)
             )
@@ -199,6 +207,8 @@ class LlmResultCache:
                         "usage": json.loads(row[1]),
                         "cached": True,
                     }
+                    self._connection.execute("UPDATE results SET accessed_at=? WHERE cache_key=?", (now, cache_key))
+                    self._connection.commit()
                     self._remember(cache_key, int(row[2]), result)
                     self.metrics["hits"] += 1
                     self.metrics["persistHits"] += 1
@@ -232,22 +242,21 @@ class LlmResultCache:
         with self._lock:
             self._remember(cache_key, expires_at, result)
             if self._connection is not None:
-                disk_bytes = sum(path.stat().st_size for path in (
-                    self.db_path, Path(str(self.db_path) + "-wal"),
-                ) if path is not None and path.exists())
                 # SQLite may allocate pages/WAL frames beyond payload bytes.
                 # Reserve conservative page headroom; this is an admission
                 # budget, not an OS-enforced filesystem quota.
                 required_bytes = len(response_text.encode("utf-8")) * 2 + len(_canonical(usage or {}).encode("utf-8")) + 32_768
-                if disk_bytes + required_bytes >= self.max_bytes:
+                if not admit(self._connection, self.db_path, "results", now=self._now_ms(),
+                             max_entries=self.max_entries, max_bytes=self.max_bytes,
+                             required_bytes=required_bytes, protected_key=cache_key):
                     self.metrics["persistSkips"] += 1
                     return True
                 self._connection.execute(
-                    "INSERT INTO results(cache_key,response_text,usage_json,expires_at) "
-                    "VALUES(?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET "
+                    "INSERT INTO results(cache_key,response_text,usage_json,expires_at,accessed_at) "
+                    "VALUES(?,?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET "
                     "response_text=excluded.response_text, "
-                    "usage_json=excluded.usage_json, expires_at=excluded.expires_at",
-                    (cache_key, response_text, _canonical(usage or {}), expires_at),
+                    "usage_json=excluded.usage_json, expires_at=excluded.expires_at, accessed_at=excluded.accessed_at",
+                    (cache_key, response_text, _canonical(usage or {}), expires_at, self._now_ms()),
                 )
                 self._connection.commit()
                 self.metrics["persistWrites"] += 1
