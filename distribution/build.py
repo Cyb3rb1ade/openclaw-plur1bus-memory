@@ -6,6 +6,7 @@ import json
 import importlib.metadata
 from email.parser import BytesParser
 from pathlib import Path
+import platform
 import re
 import shutil
 import struct
@@ -16,6 +17,30 @@ import tomllib
 import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def native_artifact_target(system=None, machine=None):
+    """Return the release-asset target label for a supported native builder."""
+    system = sys.platform if system is None else system
+    machine = platform.machine() if machine is None else machine
+    normalized = machine.lower()
+    targets = {
+        ("win32", "arm64"): "windows-arm64",
+        ("win32", "amd64"): "windows-x64",
+        ("win32", "x86_64"): "windows-x64",
+        ("darwin", "arm64"): "macos-arm64",
+        ("darwin", "aarch64"): "macos-arm64",
+        ("darwin", "x86_64"): "macos-x86_64",
+    }
+    try:
+        return targets[(system, normalized)]
+    except KeyError as exc:
+        raise ValueError(f"unsupported native build architecture: {system}/{machine}") from exc
+
+
+def artifact_stem(name, native_target=None):
+    """Keep portable artifact names stable while qualifying native candidates."""
+    return name if native_target is None else f"{name}-{native_target}"
 
 
 def tracked(prefix):
@@ -102,6 +127,11 @@ def validate_windows_arm_wheel(path, expected_sha256, package):
 
 def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha256=None,
           arm_lancedb_wheel=None, arm_lancedb_sha256=None, arm_pyarrow_wheel=None, arm_pyarrow_sha256=None):
+    if mac_pkg and sys.platform != "darwin":
+        raise ValueError("macOS pkg must be built and tested on macOS")
+    if windows_exe and sys.platform != "win32":
+        raise ValueError("Windows executable must be built and tested on Windows")
+    native_target = native_artifact_target() if mac_pkg or windows_exe else None
     if bool(intel_wheel) != bool(intel_sha256):
         raise ValueError("native wheel path and approved SHA-256 must be supplied together")
     vendor = validate_intel_wheel(intel_wheel, intel_sha256) if intel_wheel else None
@@ -118,6 +148,7 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
     output.mkdir(parents=True, exist_ok=True)
     version = json.loads((REPO / "package.json").read_text())["version"]
     name = "plur1bus-" + version
+    release_stem = artifact_stem(name, native_target)
     work = Path(tempfile.mkdtemp(prefix="plur1bus-distribution-"))
     bundle = work / name
     bundle.mkdir()
@@ -185,21 +216,17 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
                 "nativeDependencies": native_dependencies}
     (bundle / "distribution.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     # Deliberately no OpenClaw JS package/postinstall, provider credentials or models.
-    shutil.make_archive(str(output / name), "zip", work, name)
-    shutil.make_archive(str(output / name), "gztar", work, name)
+    shutil.make_archive(str(output / release_stem), "zip", work, name)
+    shutil.make_archive(str(output / release_stem), "gztar", work, name)
     if mac_pkg:
-        if sys.platform != "darwin":
-            raise ValueError("macOS pkg must be built on macOS")
         subprocess.run(["pkgbuild", "--root", str(bundle), "--install-location", "/Applications/PLUR1BUS Installer",
                         "--identifier", "io.plur1bus.hermes.installer", "--version", version.replace("-hermes", ""),
-                        str(output / (name + "-macos-unsigned.pkg"))], check=True)
+                        str(output / (release_stem + "-unsigned.pkg"))], check=True)
     if windows_exe:
-        if sys.platform != "win32":
-            raise ValueError("Windows executable must be built and tested on Windows")
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile",
-                        "--name", name + "-setup-unsigned", "--distpath", str(output), "--workpath", str(work / "pyinstaller"),
+                        "--name", release_stem + "-setup-unsigned", "--distpath", str(output), "--workpath", str(work / "pyinstaller"),
                         "--specpath", str(work), "--add-data", str(bundle) + ":.", str(bundle / "installer.py")], check=True)
-    with zipfile.ZipFile(output / (name + ".zip")) as archive:
+    with zipfile.ZipFile(output / (release_stem + ".zip")) as archive:
         if not any(p.endswith("/distribution.json") for p in archive.namelist()):
             raise ValueError("bundle validation failed")
     sums = [hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name for p in sorted(output.iterdir()) if p.is_file()]

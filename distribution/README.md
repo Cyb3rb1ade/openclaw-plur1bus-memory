@@ -35,6 +35,11 @@ your user/profile. After installing it, open **Install PLUR1BUS.command** in tha
 folder and review the plan. Python comes from existing Hermes or your PATH.
 The Windows `.exe` bundles its installer Python, but still uses the explicitly
 selected Hermes venv for the provider. Run the assistant as your normal user.
+Native candidate artifacts are platform-qualified (for example,
+`plur1bus-<version>-windows-arm64-setup-unsigned.exe` and
+`plur1bus-<version>-macos-x86_64-unsigned.pkg`); their accompanying native
+`.zip` and `.tar.gz` use the same qualifier. Portable builds without a native
+installer flag deliberately retain the unqualified bundle name.
 Package installation does not change ExecutionPolicy, disable antivirus, install
 models, change dimensions, migrate memory, restart Hermes or overwrite its app.
 Model/memory changes are separate, explicitly approved operations described below.
