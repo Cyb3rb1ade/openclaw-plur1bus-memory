@@ -834,6 +834,28 @@ class Plur1busDomain:
         self._append_jsonl(ledger_path, event)
         return {"confirmed": True, "proposalId": proposal_id, "memoryId": memory_id}
 
+    def contradiction_context(self, rows: list[dict[str, Any]], *, acl_bindings: Any = None) -> str:
+        """Disclose only pairs whose two cards already passed this recall's gates."""
+        config = self.config.get("contradictionDisclosure") or {}
+        if config.get("enabled") is False:
+            return ""
+        selector = self._scope_for_rows(rows, acl_bindings=acl_bindings)
+        if selector is None:
+            return ""
+        scoped = {str(row.get("id") or ""): row for row in self._filter_rows(rows, selector)}
+        if len(scoped) < 2:
+            return ""
+        latest = {}
+        for item in self._scoped_jsonl(self.neo_dir, self._scope_neo_dir(selector), "contradiction-disclosure.jsonl", selector):
+            if _row_matches_scope(item, selector):
+                key = (str(item.get("newMemoryId") or ""), str(item.get("existingMemoryId") or ""))
+                latest[key] = item
+        from .contradiction_disclosure import format_contradiction
+        for (new, old), item in reversed(list(latest.items())):
+            if new in scoped and old in scoped and item.get("status") == "requires_review":
+                return format_contradiction(scoped[new], scoped[old])
+        return ""
+
     def recall_overlay(
         self,
         query: str,
@@ -874,7 +896,8 @@ class Plur1busDomain:
                 "contradiction-disclosure.jsonl",
                 selector,
             )
-            if _row_matches_scope(item, selector)
+            if (self.config.get("contradictionDisclosure") or {}).get("enabled") is not False
+            and _row_matches_scope(item, selector)
             and (str(item.get("newMemoryId") or "") in recalled_ids
             or str(item.get("existingMemoryId") or "") in recalled_ids
             )

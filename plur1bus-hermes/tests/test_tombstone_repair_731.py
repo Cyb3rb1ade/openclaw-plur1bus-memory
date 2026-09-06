@@ -99,8 +99,8 @@ class LiveForgetArchiveTests(unittest.TestCase):
             first_audit = first._domain.audit[0]
             second_audit = second._domain.audit[0]
             self.assertNotEqual(first_audit["archivePath"], second_audit["archivePath"])
-            self.assertIn("/archives/agent-a/", first_audit["archivePath"])
-            self.assertIn("/archives/agent-b/", second_audit["archivePath"])
+            self.assertIn("/archives/agent-a/", Path(first_audit["archivePath"]).as_posix())
+            self.assertIn("/archives/agent-b/", Path(second_audit["archivePath"]).as_posix())
             self.assertEqual(first_audit["cardIdentity"]["memoryId"], MEMORY_ID)
             self.assertTrue(first_audit["contentFingerprint"])
             self.assertEqual(first_audit["ownership"]["agentId"], "agent-a")

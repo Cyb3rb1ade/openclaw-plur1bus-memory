@@ -30,7 +30,7 @@ FEATURES: tuple[dict[str, str], ...] = (
     {"id": "controls", "status": "partial", "evidence": "native commands cover an intentionally narrower operator surface"},
     {"id": "scheduler", "status": "partial", "evidence": "reviewed per-user launchd, systemd/WSL and Windows Task Scheduler definitions/load commands plus OS-owned job locks; native Windows/WSL scheduler acceptance remains open"},
     {"id": "backup-cutover", "status": "partial", "evidence": "offline exact-root export/restore, retained backups and interrupted-restore guards; full-parity cutover stays gated"},
-    {"id": "contradiction-live", "status": "partial", "evidence": "native graph/review disclosure; independent upstream disclosure config and formatting differ"},
+    {"id": "contradiction-live", "status": "partial", "evidence": "independent bounded disclosure toggle; both cards must pass current recall gates; upstream graph/selector/format semantics still differ"},
     {"id": "proactive-delivery", "status": "partial", "evidence": "opt-in independent in-process ticks after authorized route registration; cold restart needs a fresh gateway event"},
     {"id": "identity-authorization", "status": "ready", "evidence": "pre-gateway MessageEvent identity, user allowlist, private-chat fallback"},
     {"id": "confirmation-bound-mutations", "status": "ready", "evidence": "one-time nonce bound to exact command, user, chat and expiry"},

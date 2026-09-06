@@ -66,13 +66,13 @@ def _stub_transformers_module(dims: int) -> ModuleType:
 class EmbeddingFallbackTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self._saved_key = os.environ.pop(MISSING_KEY_ENV, None)
 
     def tearDown(self) -> None:
         if self._saved_key is not None:
             os.environ[MISSING_KEY_ENV] = self._saved_key
-        self.temporary.cleanup()
 
     def _backend(self, config: dict[str, Any]) -> EmbeddingBackend:
         backend = EmbeddingBackend(config, self.root)

@@ -52,7 +52,8 @@ def _date_text(now: datetime | None, timezone_name: str | None) -> str:
             moment = moment.astimezone(ZoneInfo(timezone_name))
         except Exception:
             moment = moment.astimezone(timezone.utc)
-    return moment.strftime("%B %-d, %Y at %-I:%M %p %Z")
+    # %-d / %-I are POSIX extensions rejected by Windows strftime.
+    return f"{moment.strftime('%B')} {moment.day}, {moment.year} at {moment.hour % 12 or 12}:{moment.strftime('%M %p %Z')}"
 
 
 def _workspace_path(workspace_dir: str | Path, workspace_root: str | Path | None) -> Path:

@@ -152,7 +152,7 @@ class JinaV5NanoTests(unittest.TestCase):
 
     def test_static_validation_never_reads_model_and_rejects_float_caps(self):
         checked = validate_config(default_config("/does-not-exist", dimensions=768, accepted=True))
-        self.assertEqual(checked["modelDir"], "/does-not-exist")
+        self.assertEqual(Path(checked["modelDir"]), Path("/does-not-exist"))
         with self.assertRaisesRegex(JinaV5NanoError, "maximum"):
             validate_config({**default_config("/x", accepted=True), "maxTokens": 512.0})
 

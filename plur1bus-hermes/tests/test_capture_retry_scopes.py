@@ -129,6 +129,17 @@ class CaptureRetryScopeTests(unittest.TestCase):
         self.assertEqual(runtime._read_capture_retries(), [])
         self.assertIn(opaque, path.read_bytes())
 
+    def test_mixed_line_endings_in_opaque_retry_evidence_are_byte_preserved(self) -> None:
+        runtime = self._runtime("alpha", "workspace-a")
+        path = runtime._capture_retry_path()
+        path.parent.mkdir(parents=True)
+        opaque = b'{"broken":\r\n["nonobject"]\n["also"]\r\n'
+        path.write_bytes(opaque)
+        runtime._record_capture_retry(self._payload(), 1)
+        self.assertTrue(path.read_bytes().startswith(opaque))
+        runtime._remove_capture_retry(runtime._read_capture_retries()[0])
+        self.assertEqual(path.read_bytes(), opaque)
+
     def test_symlinked_scoped_state_component_is_rejected(self) -> None:
         runtime = self._runtime("alpha", "workspace-a")
         outside = self.root / "outside"

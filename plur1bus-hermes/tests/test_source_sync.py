@@ -6,6 +6,7 @@ from plur1bus_hermes.source_sync import plan_source_sync, apply_source_sync
 
 
 class SourceSyncTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO is unavailable on Windows")
     def test_fifo_cannot_block_a_source_read(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

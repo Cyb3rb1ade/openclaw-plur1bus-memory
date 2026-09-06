@@ -8,6 +8,7 @@ wiring (default 17000, config override, no more hardcoded 12000 cap).
 from __future__ import annotations
 
 import tempfile
+from contextlib import ExitStack
 import unittest
 from pathlib import Path
 
@@ -121,8 +122,9 @@ class RuntimeInjectBudgetWiringTests(unittest.TestCase):
         return runtime
 
     def test_default_budget_allows_more_than_the_old_hard_cap(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory, {})
+            resources.callback(runtime.shutdown)
             rows = [
                 {"id": str(index), "content": f"Karte {index} " + "x" * 1800, "_distance": 0.1}
                 for index in range(9)
@@ -135,8 +137,9 @@ class RuntimeInjectBudgetWiringTests(unittest.TestCase):
         self.assertLessEqual(len(result), 17_000)
 
     def test_configured_small_budget_is_enforced(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory, {"recall": {"globalInjectMaxChars": 500}})
+            resources.callback(runtime.shutdown)
             rows = [
                 {"id": str(index), "content": f"Karte {index} " + "x" * 1800, "_distance": 0.1}
                 for index in range(5)
@@ -147,8 +150,9 @@ class RuntimeInjectBudgetWiringTests(unittest.TestCase):
         self.assertLessEqual(len(result), 500)
 
     def test_recall_where_clause_keeps_lifecycle_filter(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory, {})
+            resources.callback(runtime.shutdown)
             table = _FakeRecallTable([])
             runtime._recall_tables = lambda: [("default", table)]  # type: ignore[method-assign]
             runtime.recall("frage")

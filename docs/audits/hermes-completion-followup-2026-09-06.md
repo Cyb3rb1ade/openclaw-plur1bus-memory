@@ -50,6 +50,21 @@ model, memory database or gateway was changed by these regression tests.
 
 ## Acceptance at this source checkpoint
 
+Follow-up: native Windows CI exposed non-portable diary date formatting and
+newline translation of opaque retry evidence. Both are fixed, portable code-index
+paths are normalized, and test runtimes/caches now close before temporary-directory
+cleanup. POSIX-only FIFO/directory-fsync tests are explicitly platform-scoped,
+not used to claim equivalent Windows POSIX semantics. Independent contradiction
+disclosure now binds both cards to the current gated recall and has its own toggle
+and 400-character bound; this is not full graph-policy parity.
+
+The separate native Intel LanceDB workflow builds pinned upstream 0.34.0. Its
+first run found stale workspace-version metadata in upstream Cargo.lock; only
+that version is corrected, without resolving new third-party versions. Intel
+wheel and runtime acceptance remain pending, not certified by the workflow's
+existence. The user's requested upstream contribution targets an opt-in native
+build, respecting LanceDB's intentional retirement of the default Intel matrix.
+
 Full macOS Python suite: 624 passed plus 55 subtests, no failures. Native desktop
 routing/action harness passed with Node's experimental VM-module flag. These are
 source/regression results, not visual installed-app acceptance or real-model

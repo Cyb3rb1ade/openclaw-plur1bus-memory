@@ -8,6 +8,7 @@ text and a broken cutoff downgrade; ``""`` is never persisted for new writes.
 from __future__ import annotations
 
 import tempfile
+from contextlib import ExitStack
 import unittest
 from pathlib import Path
 
@@ -107,8 +108,9 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         return FakeTable()
 
     def test_remember_records_decided_status(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = Plur1busRuntime(Path(directory), {}, "main")
+            resources.callback(runtime.shutdown)
             captured: list[dict] = []
             fake_table = self._fake_table(captured)
 
@@ -137,7 +139,7 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         self.assertEqual(len(fake_table.added_columns), 3)
 
     def test_broken_cutoff_downgrades_user_capture(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             base = Path(directory)
             # Simulate the fail-closed post-upgrade state: enabled marker
             # exists, cutoff file is missing and must not be recreated.
@@ -145,6 +147,7 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
             marker_dir.mkdir(parents=True)
             (marker_dir / "EXPLICIT_WRITES_ENABLED").write_text("1\n", encoding="utf-8")
             runtime = Plur1busRuntime(base, {}, "main")
+            resources.callback(runtime.shutdown)
             self.assertFalse(runtime._epistemic_cutoff["ok"])
             self.assertEqual(
                 runtime._epistemic_cutoff["reason"], "cutoff_missing_after_upgrade",
@@ -163,9 +166,10 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         self.assertFalse((marker_dir / "explicit-write-since.json").exists())
 
     def test_cutoff_created_before_first_write(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             base = Path(directory)
             runtime = Plur1busRuntime(base, {}, "main")
+            resources.callback(runtime.shutdown)
             self.assertTrue(runtime._epistemic_cutoff["ok"])
             self.assertTrue((base / "_epistemic" / "explicit-write-since.json").exists())
             # A second ensure keeps the earliest since.
@@ -176,13 +180,14 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         """A pre-scope table must accept the current ACL-bound record shape."""
         import lancedb
 
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             base = Path(directory)
             runtime = Plur1busRuntime(
                 base,
                 {"embedding": {"provider": "local-transformers", "dimensions": 2}},
                 "main",
             )
+            resources.callback(runtime.shutdown)
             agent_dir = base / "lancedb" / "main"
             agent_dir.mkdir(parents=True)
             legacy_record = {
@@ -228,13 +233,14 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         """A manual partial migration may leave a struct without scopeKey."""
         import lancedb
 
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             base = Path(directory)
             runtime = Plur1busRuntime(
                 base,
                 {"embedding": {"provider": "local-transformers", "dimensions": 2}},
                 "main",
             )
+            resources.callback(runtime.shutdown)
             agent_dir = base / "lancedb" / "main"
             agent_dir.mkdir(parents=True)
             partial_acl = dict(runtime.scope_binding.as_dict())
@@ -282,13 +288,14 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         """Automatic repair must not discard non-null partial ACL evidence."""
         import lancedb
 
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             base = Path(directory)
             runtime = Plur1busRuntime(
                 base,
                 {"embedding": {"provider": "local-transformers", "dimensions": 2}},
                 "main",
             )
+            resources.callback(runtime.shutdown)
             agent_dir = base / "lancedb" / "main"
             agent_dir.mkdir(parents=True)
             partial_acl = dict(runtime.scope_binding.as_dict())

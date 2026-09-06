@@ -28,6 +28,7 @@ class DreamDiaryTests(unittest.TestCase):
         self.assertEqual(text.count(START_MARKER), 1)
         self.assertEqual(text.count(END_MARKER), 1)
         self.assertEqual(text.count("A calm recurring pattern."), 1)
+        self.assertIn("September 5, 2026 at 12:00 PM UTC", text)
 
     def test_shared_scope_cannot_write_a_diary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -99,7 +99,7 @@ class NamespaceTests(unittest.TestCase):
             self.assertTrue(writer.writable)
             self.assertEqual([route.name for route in recall], ["local", "legacy"])
             self.assertFalse(recall[1].writable)
-            self.assertTrue(str(recall[1].path).endswith("legacy/main"))
+            self.assertEqual(recall[1].path.parts[-2:], ("legacy", "main"))
 
     def test_rejects_writer_outside_active_recall(self):
         with tempfile.TemporaryDirectory() as temporary:

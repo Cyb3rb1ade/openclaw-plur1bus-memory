@@ -767,7 +767,8 @@ class Plur1busRuntime:
     def _read_capture_retry_contents_locked(self) -> tuple[list[dict[str, Any]], list[str]]:
         """Read valid entries and retain opaque malformed evidence verbatim."""
         try:
-            text = self._capture_retry_path().read_text(encoding="utf-8")
+            with self._capture_retry_path().open(encoding="utf-8", newline="") as handle:
+                text = handle.read()
         except FileNotFoundError:
             return [], []
         entries: list[dict[str, Any]] = []
@@ -804,7 +805,7 @@ class Plur1busRuntime:
         _valid, opaque_lines = self._read_capture_retry_contents_locked()
         temp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
         fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             for raw_line in opaque_lines:
                 handle.write(raw_line if raw_line.endswith(("\n", "\r")) else f"{raw_line}\n")
             handle.write("".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries))
@@ -1095,6 +1096,8 @@ class Plur1busRuntime:
             if row.get("content")
         )
         overlay = self._domain.recall_overlay(semantic_query, rows, acl_bindings=self.scope_binding.as_dict())
+        contradiction = self._domain.contradiction_context(rows, acl_bindings=self.scope_binding.as_dict())
+        overlay = "\n\n".join(block for block in (contradiction, overlay) if block)
         explanation = self._domain.explain_recall(rows, acl_bindings=self.scope_binding.as_dict()) if explain else ""
         cognitive_blocks = "\n\n".join(self._domain.cognitive_prompt_blocks(
             acl_bindings=self.scope_binding.as_dict(), scope_key=self.scope_key,

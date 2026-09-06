@@ -71,7 +71,7 @@ def rebuild_code_index(
             for pattern in _SYMBOL_PATTERNS:
                 symbols.extend(pattern.findall(content))
             entries.append({
-                "path": str(path.relative_to(workspace)),
+                "path": path.relative_to(workspace).as_posix(),
                 "language": language,
                 "symbols": sorted(set(symbols))[:500],
                 "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),

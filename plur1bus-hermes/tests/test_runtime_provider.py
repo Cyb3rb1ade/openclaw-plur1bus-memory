@@ -643,6 +643,7 @@ providers:
                 provider.on_pre_compress(messages)
             provider.shutdown()
 
+    @unittest.skipIf(os.name == "nt", "POSIX directory fsync; Windows durable replacement has separate coverage")
     def test_pre_compress_checkpoint_concurrent_fast_path_fsyncs_before_success(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from contextlib import ExitStack
 import unittest
 from pathlib import Path
 from typing import Any
@@ -72,8 +73,9 @@ class _Table:
 
 class RuntimeValidTimeRecallTests(unittest.TestCase):
     def test_runtime_passes_session_query_to_additive_helpers_and_fails_open(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory)
+            resources.callback(runtime.shutdown)
             table = _Table([{"id": "a", "content": "primary survives", "expiresAt": 0}])
             runtime._recall_tables = lambda: [("default", table)]
             calls = []
@@ -100,8 +102,9 @@ class RuntimeValidTimeRecallTests(unittest.TestCase):
         return runtime
 
     def test_valid_at_is_pushed_before_limit_then_ttl_and_window_postfilter(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory)
+            resources.callback(runtime.shutdown)
             table = _Table([
                 {"id": "a", "content": "historical", "validFrom": 100, "validUntil": 200, "expiresAt": 0},
                 {"id": "b", "content": "future", "validFrom": 201, "validUntil": 0, "expiresAt": 0},
@@ -116,8 +119,9 @@ class RuntimeValidTimeRecallTests(unittest.TestCase):
         self.assertIn("[valid:", recalled)
 
     def test_legacy_missing_validity_column_retries_once_without_predicate(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory)
+            resources.callback(runtime.shutdown)
             table = _Table([{"id": "a", "content": "legacy", "expiresAt": 0}], fail_first=True)
             runtime._recall_tables = lambda: [("main", table)]  # type: ignore[method-assign]
             self.assertIn("legacy", runtime.recall("where", valid_at=150))
@@ -126,8 +130,9 @@ class RuntimeValidTimeRecallTests(unittest.TestCase):
         self.assertNotIn("validFrom", table.where_calls[1])
 
     def test_full_text_removes_per_memory_cap_but_not_global_budget(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory)
+            resources.callback(runtime.shutdown)
             runtime.config["recall"] = {"globalInjectMaxChars": 10_000}
             body = "x" * 2500
             table = _Table([{"id": "a", "content": body, "expiresAt": 0}])
@@ -136,8 +141,9 @@ class RuntimeValidTimeRecallTests(unittest.TestCase):
             self.assertIn(body, runtime.recall("where", full_text=True))
 
     def test_expired_rows_added_by_a_booster_cannot_leak(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime = self._runtime(directory)
+            resources.callback(runtime.shutdown)
             table = _Table([{"id": "a", "content": "live", "expiresAt": 0}])
             runtime._recall_tables = lambda: [("main", table)]  # type: ignore[method-assign]
             runtime._domain.boost_recall = lambda rows, _table, _limit, **_kwargs: rows + [{  # type: ignore[method-assign]
@@ -152,9 +158,10 @@ class ValidTimeSchemaMigrationTests(unittest.TestCase):
     def test_legacy_lance_table_gets_idempotent_zero_defaults(self) -> None:
         import lancedb
 
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             runtime = Plur1busRuntime(root, {"embedding": {"dimensions": 2}}, "main")
+            resources.callback(runtime.shutdown)
             agent_dir = root / "lancedb" / "main"
             agent_dir.mkdir(parents=True)
             table = lancedb.connect(str(agent_dir)).create_table("memories", data=[{
@@ -170,9 +177,10 @@ class ValidTimeSchemaMigrationTests(unittest.TestCase):
     def test_real_lance_legacy_schema_preserves_vectors_and_filters_boundaries(self) -> None:
         import lancedb
 
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             runtime = Plur1busRuntime(root, {"embedding": {"dimensions": 2}}, "main")
+            resources.callback(runtime.shutdown)
             agent_dir = root / "lancedb" / "main"
             agent_dir.mkdir(parents=True)
             binding = runtime.scope_binding
@@ -225,8 +233,9 @@ class CorrectionPersistenceTests(unittest.TestCase):
         return runtime, str(source_id)
 
     def test_empty_or_tombstone_blocked_replacement_keeps_source_active(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime, source_id = self._runtime_with_source(directory)
+            resources.callback(runtime.shutdown)
             self.assertFalse(runtime.correct_async(source_id, "   ", "s2"))
             table, _ = runtime._table(create=False)
             source = table.search().where(f"id = '{source_id}'").limit(1).to_list()[0]
@@ -241,8 +250,10 @@ class CorrectionPersistenceTests(unittest.TestCase):
             self.assertEqual(source["status"], "active")
 
     def test_queue_rejection_keeps_source_active(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime, source_id = self._runtime_with_source(directory)
+            resources.callback(runtime.shutdown)
+            resources.callback(setattr, runtime, "_executor", runtime._executor)
             runtime._executor = type("Rejected", (), {
                 "submit": lambda _self, *_args, **_kwargs: (_ for _ in ()).throw(AdmissionRejected("full")),
             })()
@@ -251,8 +262,9 @@ class CorrectionPersistenceTests(unittest.TestCase):
             self.assertEqual(table.search().where(f"id = '{source_id}'").limit(1).to_list()[0]["status"], "active")
 
     def test_verified_correction_preserves_temporal_fields_before_source_archive(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime, source_id = self._runtime_with_source(directory)
+            resources.callback(runtime.shutdown)
             self.assertTrue(runtime.correct_async(source_id, "replacement", "s2"))
             table, _ = runtime._table(create=False)
             rows = table.search().limit(10).to_list()
@@ -265,8 +277,9 @@ class CorrectionPersistenceTests(unittest.TestCase):
         )
 
     def test_failed_source_revalidation_archives_replacement_instead_of_leaving_duplicate(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             runtime, source_id = self._runtime_with_source(directory)
+            resources.callback(runtime.shutdown)
             runtime._same_correction_source = lambda _expected, _current: False  # type: ignore[method-assign]
             self.assertFalse(runtime.correct_async(source_id, "replacement", "s2"))
             table, _ = runtime._table(create=False)
