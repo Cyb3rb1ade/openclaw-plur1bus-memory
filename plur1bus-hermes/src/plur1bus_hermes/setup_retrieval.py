@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .generation import _atomic_json, _reject_symlink_components, _validate_complete, activate_staged_generation, read_generation
+from .generation import _atomic_json, _reject_symlink_components, _validate_complete, activate_staged_generation, read_generation, generation_namespace
 from .operator_cli import runtime_view
 from .retrieval_admin import config_path, context_revision, public_config, save_reranker, stage_embedding, validate_target
 from .reembed_staged import _finite_vector, _source_snapshot, plan_staged_reembed, validate_staged_reembed
@@ -29,8 +29,10 @@ def _view(home: Path, profile: str):
         raise ValidationError("select an existing Hermes profile")
     view = runtime_view(home, profile)
     view.hermes_home, view.profile = home, profile
-    if view.config.get("namespaces") is not None:
-        raise ValidationError("installer migration supports a single private writer; use the namespace migration workflow")
+    namespace = generation_namespace(view.config)
+    if namespace is not None and (set(view.config["namespaces"]["activeRecallNamespaces"]) != {namespace}
+                                  or view.config["namespaces"].get("crossNamespaceRecall") is True):
+        raise ValidationError("installer migration requires an isolated named writer; review other namespaces separately")
     return view
 
 
@@ -50,7 +52,7 @@ def review(home: Path, profile: str, kind: str, target: dict) -> dict:
             names = database.table_names()
             empty = "memories" not in names or database.open_table("memories").count_rows() == 0
         if empty:
-            if read_generation(view.data_dir, view.agent_id) is not None:
+            if read_generation(view.data_dir, view.agent_id, generation_namespace(view.config)) is not None:
                 raise ValidationError("empty active generation requires explicit generation recovery, not a config reset")
             operation = "configure-empty-store"
         else:

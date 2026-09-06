@@ -304,6 +304,14 @@ def resolve_namespace_routes(
         NamespaceRoute(name, root / name / agent_id, name == writer)
         for name in recall_names[:16]
     ]
-    active_writer = resolve_generation_route(data_dir, agent_id, writer_route)
-    routes = [active_writer if route.writable else route for route in routes]
+    # One query encoder cannot compare two vector spaces merely because their
+    # dimension counts happen to match. After migration, mixed recall requires
+    # matching certified model fingerprints for every participating namespace.
+    from .generation import read_generation
+    manifests = [read_generation(data_dir, agent_id, route.name) for route in routes]
+    if any(manifests) and (any(item is None for item in manifests)
+                          or len({item["embeddingFingerprint"] for item in manifests if item is not None}) != 1):
+        raise ValueError("namespace recall contains uncertified or incompatible embedding generations")
+    active_writer = resolve_generation_route(data_dir, agent_id, writer_route, namespace=writer)
+    routes = [active_writer if route.writable else resolve_generation_route(data_dir, agent_id, route, namespace=route.name) for route in routes]
     return active_writer, routes

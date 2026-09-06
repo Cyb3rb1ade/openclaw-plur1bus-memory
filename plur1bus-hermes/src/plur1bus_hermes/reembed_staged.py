@@ -102,11 +102,12 @@ def _exact_source_route(data_dir: Path, agent_id: str, config: Mapping[str, Any]
     # writer.  It must not consult normal generation-aware routing: during a
     # pointer_swapped crash that routing correctly fails closed until recovery.
     # Legacy namespace staging retains its existing resolver behaviour.
-    if config.get("namespaces") is None:
+    from .generation import generation_namespace
+    namespace = generation_namespace(config)
+    if namespace is None:
         expected = data_dir / "lancedb" / agent_id
     else:
-        route, _ = resolve_namespace_routes(data_dir, agent_id, dict(config))
-        expected = route.path.expanduser()
+        expected = data_dir / "lancedb-namespaces" / namespace / agent_id
     if not expected.is_absolute() or not expected.is_dir():
         raise ValidationError("canonical private source route is unavailable")
     current = expected
@@ -210,11 +211,10 @@ def plan_staged_reembed(
     """Create a read-only plan; this never loads an embedding backend or writes."""
     agent_id = safe_agent_id(agent_id)
     source = _exact_source_route(Path(data_dir).expanduser().absolute(), agent_id, config)
-    if config.get("namespaces") is None:
-        from .generation import read_generation
-        active = read_generation(data_dir, agent_id)
-        if active is not None:
-            source = Path(active["targetRoute"])
+    from .generation import read_generation, generation_namespace
+    active = read_generation(data_dir, agent_id, generation_namespace(config))
+    if active is not None:
+        source = Path(active["targetRoute"])
     rows, source_version, source_fingerprint = _source_snapshot(source, connect)
     return _make_plan(source, agent_id, rows, source_version, source_fingerprint, config)
 
@@ -244,14 +244,14 @@ def _validate_plan(plan: Mapping[str, Any], data_dir: Path, agent_id: str, confi
     if not isinstance(plan, Mapping) or int(plan.get("planVersion", 0)) != _PLAN_VERSION or str(plan.get("agentId") or "") != agent_id:
         raise ValidationError("staged re-embedding plan does not match this agent")
     source = _exact_source_route(data_dir, agent_id, config)
-    if config.get("namespaces") is None:
-        from .generation import _source_route, _read_pointer_raw
-        source = _source_route(data_dir, agent_id, str(plan.get("sourceRoute") or ""))
-        active = _read_pointer_raw(data_dir, agent_id, require_verified=False)
-        if active is not None and active["targetRoute"] not in {str(source), str(plan.get("targetRoute"))}:
-            raise ValidationError("staged re-embedding active source changed")
-        if active is None and source.name != agent_id:
-            raise ValidationError("staged re-embedding active source changed")
+    from .generation import _source_route, _read_pointer_raw, generation_namespace
+    namespace = generation_namespace(config)
+    source = _source_route(data_dir, agent_id, str(plan.get("sourceRoute") or ""), namespace=namespace)
+    active = _read_pointer_raw(data_dir, agent_id, require_verified=False, namespace=namespace)
+    if active is not None and active["targetRoute"] not in {str(source), str(plan.get("targetRoute"))}:
+        raise ValidationError("staged re-embedding active source changed")
+    if active is None and source.name != agent_id:
+        raise ValidationError("staged re-embedding active source changed")
     if str(source) != str(plan.get("sourceRoute") or ""):
         raise ValidationError("staged re-embedding source route changed")
     rows, version, fingerprint = _source_snapshot(source, connect)
