@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +14,8 @@ from .runtime import Plur1busRuntime
 from .namespaces import binding_from_scope
 from .validation import safe_agent_id
 from .rate_gate import JobRateGate
+from . import file_lock
+from .validation import resolve_inside
 
 
 def _utcnow() -> str:
@@ -29,17 +30,6 @@ def _atomic_json(path: Path, value: Any) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
-
-
-def _lock_pid_is_alive(lock_path: Path) -> bool:
-    try:
-        pid = int(lock_path.read_text(encoding="ascii").strip())
-        if pid <= 0:
-            return False
-        os.kill(pid, 0)
-        return True
-    except (OSError, ValueError):
-        return False
 
 
 def _owner_state_dir(
@@ -110,18 +100,23 @@ def run_jobs(
     state_dir, resolved_scope_key, scope_type = _owner_state_dir(
         Path(data_dir), agent_id, acl_bindings, scope_key
     )
+    state_dir = resolve_inside(str(data_dir), str(state_dir.relative_to(Path(data_dir))))
     state_dir.mkdir(parents=True, exist_ok=True)
     lock_path = state_dir / "maintenance.lock"
+    lock_fd = file_lock.open_lock(lock_path)
     try:
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        age = time.time() - lock_path.stat().st_mtime
-        if age <= 21_600 and _lock_pid_is_alive(lock_path):
-            return {"status": "skipped", "reason": "job-already-running", "agentId": agent_id}
-        lock_path.unlink()
-        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    os.write(lock_fd, f"{os.getpid()}\n".encode("ascii"))
-    os.close(lock_fd)
+        file_lock.flock(lock_fd, file_lock.LOCK_EX | file_lock.LOCK_NB)
+    except BlockingIOError:
+        os.close(lock_fd)
+        return {"status": "skipped", "reason": "job-already-running", "agentId": agent_id}
+    except BaseException:
+        os.close(lock_fd)
+        raise
+    if os.fstat(lock_fd).st_size:
+        # Pre-OS-lease versions wrote a PID then removed this file at exit.
+        # Do not guess that an old owner is dead (PID reuse, Windows os.kill).
+        os.close(lock_fd)
+        return {"status": "partial", "reason": "legacy-maintenance-lock-needs-review", "agentId": agent_id}
     runtime = None
     try:
         runtime_scope = acl_bindings if acl_bindings is not None else scope
@@ -258,9 +253,13 @@ def run_jobs(
         _atomic_json(state_dir / f"maintenance-{mode}.json", report)
         return report
     finally:
-        if runtime is not None:
-            runtime.shutdown(timeout_seconds=30)
-        lock_path.unlink(missing_ok=True)
+        try:
+            if runtime is not None:
+                runtime.shutdown(timeout_seconds=30)
+        finally:
+            # Never unlink an OS lock: another process may already have the
+            # same inode open. Descriptor close also releases locks on crashes.
+            os.close(lock_fd)
 
 
 def main(argv: list[str] | None = None) -> int:

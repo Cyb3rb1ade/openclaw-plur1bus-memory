@@ -9,7 +9,7 @@ from typing import Any
 
 
 FEATURES: tuple[dict[str, str], ...] = (
-    {"id": "capture-recall", "status": "partial", "evidence": "native lifecycle capture/vector recall; upstream capture, TTL and store contracts differ"},
+    {"id": "capture-recall", "status": "partial", "evidence": "native lifecycle capture/vector recall and explicit session/short TTL; automatic store-time LLM merge remains absent"},
     {"id": "agent-isolation", "status": "ready", "evidence": "per-agent LanceDB, Neo, state, workspace"},
     {"id": "omlx-providers", "status": "ready", "evidence": "LLM config plus embedding and /v1/rerank adapters"},
     {"id": "legacy-reembedding", "status": "partial", "evidence": "resumable staged batches plus explicit activate/recover for one private writer; named namespaces and non-cooperating runtimes are unsupported"},
@@ -28,7 +28,7 @@ FEATURES: tuple[dict[str, str], ...] = (
     {"id": "shared-memory-copy", "status": "ready", "evidence": "explicit agent-scoped sharing"},
     {"id": "obsidian-basic", "status": "partial", "evidence": "mirror, explicit sync and revision-bound CLI consent; browser discovery, watch and conflict workflows differ"},
     {"id": "controls", "status": "partial", "evidence": "native commands cover an intentionally narrower operator surface"},
-    {"id": "scheduler", "status": "partial", "evidence": "macOS launchd jobs; no cross-platform Hermes scheduler equivalent"},
+    {"id": "scheduler", "status": "partial", "evidence": "reviewed per-user launchd, systemd/WSL and Windows Task Scheduler definitions/load commands plus OS-owned job locks; native Windows/WSL scheduler acceptance remains open"},
     {"id": "backup-cutover", "status": "partial", "evidence": "backup roots and gated cutover; no complete export/restore"},
     {"id": "contradiction-live", "status": "partial", "evidence": "native graph/review disclosure; independent upstream disclosure config and formatting differ"},
     {"id": "proactive-delivery", "status": "partial", "evidence": "opt-in independent in-process ticks after authorized route registration; cold restart needs a fresh gateway event"},
@@ -71,7 +71,7 @@ FEATURES: tuple[dict[str, str], ...] = (
 # Keep legacy native-runtime readiness distinct from full new upstream coverage.
 # A passing legacy capability inventory must never imply a full 7.10 port.
 COVERAGE_710 = (
-    {"id": "validity-and-expiry", "status": "partial", "detail": "native validAt/validity windows and absolute expiresAt exist; complete TTL and historical merge parity is not claimed"},
+    {"id": "validity-and-expiry", "status": "partial", "detail": "native validAt/validity windows, absolute expiresAt and session/short TTL are wired; historical automatic store-time merge parity remains open"},
     {"id": "store-merge-lineage", "status": "partial", "detail": "explicit lossless-concatenation proposals, stable IDs, validity lineage, approved revision and final revalidation; repair restores metadata/mirror/cognition/graph materialization before source retirement; automatic store-time LLM merge remains absent"},
     {"id": "llm-result-cache", "status": "partial", "detail": "native cache integration is narrower than the complete upstream live-call contract"},
     {"id": "reminder-extraction", "status": "partial", "detail": "absolute-time opt-in extraction and scoped pending confirmation implemented; relative dates are deliberately not guessed"},
@@ -89,7 +89,7 @@ COVERAGE_710 = (
 
 COVERAGE_712 = COVERAGE_710 + (
     {"id": "local-jina-v5-nano", "status": "partial", "detail": "native pinned Q8 ONNX, explicit license/download gate, 512-token sequential inference and normalized Matryoshka dimensions; real-model local acceptance remains required"},
-    {"id": "nano-new-install-migration", "status": "partial", "detail": "explicit operator model plan/prepare/verify and staged reembedding; existing configs untouched; upstream browser migration recommendation and wizard default are not reproduced"},
+    {"id": "nano-new-install-migration", "status": "partial", "detail": "shared installer exposes explicit model plan/prepare/stage/validate/activate with backup/source checks and profile-local config; real-model all-agent acceptance and named-namespace cutover remain open"},
 )
 
 

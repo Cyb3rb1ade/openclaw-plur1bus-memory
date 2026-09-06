@@ -172,10 +172,37 @@ required). Run with `--source /absolute/source` to review a plan first. The
 helper never replaces your app or auto-publishes; read the provider README for
 the complete host-build procedure. No binary host patch runs at every startup.
 
-Hourly/daily maintenance remains available through `plur1bus-hermes-jobs` on
-each platform. The existing `plur1bus-hermes-jobs-install` helper is **macOS
-launchd only**; Linux/Windows users must schedule the jobs command using their
-OS scheduler. These installers deliberately do not create background services.
+Hourly/daily maintenance is available through `plur1bus-hermes-jobs` on each
+platform. `plur1bus-hermes-jobs-install` now previews native **per-user** schedules:
+launchd on macOS, systemd user timers on Linux/WSL, Task Scheduler on Windows.
+It never installs an elevated service. The package installer does not implicitly
+register jobs. Use the same Hermes venv and an **effective PLUR1BUS JSON config**
+(not the outer Hermes YAML). Example, preview first:
+
+```sh
+plur1bus-hermes-jobs-install --data-dir /absolute/data --config /absolute/plur1bus.json --agent main --agent bernhardine
+```
+
+After reviewing, repeat with `--apply` to write definitions, and additionally
+`--load` to register them. `--backend launchd|systemd|windows` supports cross-OS
+definition previews; loading requires the matching OS. Linux/WSL needs a running
+user systemd manager; absent managers fail before definitions are written.
+Windows tasks run only while their registering user is logged in, without
+credentials/elevation. macOS jobs require a GUI login session. No catch-up run
+is requested for missed schedules. Native Windows/WSL scheduler execution still
+needs acceptance on those hosts; generated XML alone is not that evidence.
+
+Job identities bind the data root, config path, agent and mode. Existing changed
+definition files and existing Windows registrations are not overwritten.
+Loading an already loaded launchd job also fails visibly. Review/remove old
+registrations before changing definitions. **When upgrading from the old macOS
+helper**, unload its `com.plur1bus.hermes.<agent>.<mode>` jobs before registering
+the new root/config-bound labels to avoid duplicate timers. Stop old maintenance
+processes before upgrading: a nonempty legacy PID lock is deliberately reported
+as `legacy-maintenance-lock-needs-review`, not stolen. Only after verifying all
+old jobs are stopped may that exact old lock be removed. New OS lock files remain
+empty and must not be unlinked; process exit automatically releases ownership.
+
 MLX/oMLX remains an optional Apple-specific backend, not a dependency for other
 platforms. Local model files are downloaded on use, not shipped in the archive.
 Windows uses OS-owned byte-range locks and native file flush/write-through

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from plur1bus_hermes.jobs import run_jobs
+from plur1bus_hermes import file_lock
 
 
 class _Domain:
@@ -67,7 +68,7 @@ class JobsTests(unittest.TestCase):
             self.assertEqual(report["results"]["reminders"]["due"], 1)
             self.assertEqual(report["results"]["indexes"]["annIndex"], "created")
             self.assertTrue((root / "state/main/pending-reminders.json").is_file())
-            self.assertFalse((root / "state/main/maintenance.lock").exists())
+            self.assertTrue((root / "state/main/maintenance.lock").exists())
             self.assertTrue(_Runtime.instances[-1].closed)
 
     def test_live_lock_skips_overlapping_run(self):
@@ -75,14 +76,17 @@ class JobsTests(unittest.TestCase):
             root = Path(temporary)
             lock = root / "state/main/maintenance.lock"
             lock.parent.mkdir(parents=True)
-            lock.write_text(f"{os.getpid()}\n", encoding="ascii")
-
-            report = run_jobs(root, {}, "main", "hourly", runtime_factory=_Runtime)
+            fd = file_lock.open_lock(lock)
+            try:
+                file_lock.flock(fd, file_lock.LOCK_EX | file_lock.LOCK_NB)
+                report = run_jobs(root, {}, "main", "hourly", runtime_factory=_Runtime)
+            finally:
+                os.close(fd)
 
             self.assertEqual(report["status"], "skipped")
             self.assertEqual(report["reason"], "job-already-running")
 
-    def test_dead_process_lock_is_recovered_immediately(self):
+    def test_legacy_pid_lock_is_not_stolen_or_signalled(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             lock = root / "state/main/maintenance.lock"
@@ -91,8 +95,21 @@ class JobsTests(unittest.TestCase):
 
             report = run_jobs(root, {}, "main", "hourly", runtime_factory=_Runtime)
 
-            self.assertEqual(report["status"], "completed")
-            self.assertFalse(lock.exists())
+            self.assertEqual(report["status"], "partial")
+            self.assertEqual(report["reason"], "legacy-maintenance-lock-needs-review")
+            self.assertEqual(lock.read_text(), "99999999\n")
+            self.assertTrue(lock.exists())
+
+    def test_shutdown_failure_does_not_leave_lock_held(self):
+        class BrokenRuntime(_Runtime):
+            def shutdown(self, timeout_seconds=5):
+                raise RuntimeError("shutdown failed")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, "shutdown failed"):
+                run_jobs(root, {}, "main", "hourly", runtime_factory=BrokenRuntime)
+            self.assertEqual(run_jobs(root, {}, "main", "hourly", runtime_factory=_Runtime)["status"], "completed")
 
 
 if __name__ == "__main__":

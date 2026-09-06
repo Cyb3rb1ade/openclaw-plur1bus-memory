@@ -55,8 +55,11 @@ Not yet certified:
   not successful executions.
 - Installer.app interactive flow, Windows interactive console wizard,
   Authenticode, Apple Developer signing/notarization and public release assets.
-- Automatic maintenance scheduler setup on Windows/Linux; the existing helper
-  targets macOS launchd. The jobs CLI is included, services are not auto-created.
+- Native scheduler execution on Windows/Linux/WSL. The helper now generates
+  per-user launchd/systemd/Task Scheduler definitions and explicitly loads them;
+  unit tests exercise identity isolation, argument escaping, no-clobber writes,
+  unavailable-manager refusal and OS-owned maintenance locks. No productive
+  scheduler was registered during this work. Definitions are not native QA.
 - Windows uses inherited private-home ACLs, not POSIX mode guarantees. Windows
   file flush/write-through is not claimed to be identical to directory fsync
   under power failure or on network shares.

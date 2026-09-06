@@ -1,4 +1,4 @@
-"""Install per-agent launchd schedules for PLUR1BUS Hermes maintenance."""
+"""Preview/install per-user PLUR1BUS schedules for macOS, Linux/WSL or Windows."""
 
 from __future__ import annotations
 
@@ -114,25 +114,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agent", action="append", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--load", action="store_true")
+    parser.add_argument("--backend", choices=("auto", "launchd", "systemd", "windows"), default="auto")
+    parser.add_argument("--destination", type=Path, help="Definition directory; normally use the platform default")
     arguments = parser.parse_args(argv)
-    jobs = build_launchd_jobs(arguments.data_dir, arguments.config, arguments.agent)
+    from .platform_jobs import build_platform_jobs, install_platform_jobs
+    backend = arguments.backend
+    if backend == "auto":
+        if sys.platform not in {"darwin", "linux", "win32"}:
+            parser.error("unsupported operating system; choose an explicit preview backend")
+        backend = {"darwin": "launchd", "linux": "systemd", "win32": "windows"}[sys.platform]
+    jobs = build_platform_jobs(arguments.data_dir, arguments.config, arguments.agent,
+                               backend=backend, destination=arguments.destination)
     if arguments.load and not arguments.apply:
         parser.error("--load requires --apply")
     if arguments.apply:
-        result = {"status": "installed", "jobs": install_launchd_jobs(jobs, load=arguments.load)}
+        if not arguments.config.is_file():
+            parser.error("--apply requires an existing effective PLUR1BUS JSON config")
+        result = {"status": "installed", "jobs": install_platform_jobs(jobs, load=arguments.load)}
     else:
         result = {
             "status": "preview",
-            "jobs": [
-                {
-                    "agentId": job["agentId"],
-                    "mode": job["mode"],
-                    "label": job["label"],
-                    "path": str(job["path"]),
-                    "programArguments": job["plist"]["ProgramArguments"],
-                }
-                for job in jobs
-            ],
+            "jobs": jobs,
         }
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
