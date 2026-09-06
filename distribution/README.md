@@ -54,6 +54,12 @@ asks for an existing Hermes root home and profile, displays a read-only plan,
 then requires typing `INSTALL` after stopping affected Hermes runtimes.
 Native Windows normally uses `%LOCALAPPDATA%\hermes`; Linux/macOS/WSL use
 `~/.hermes`. `HERMES_HOME` is suggested but never silently applied.
+Hermes environments created by `uv` may omit `pip`. The preview uses Python's
+standard-library package metadata and does not install anything. Confirmed apply
+can bootstrap `pip` from that interpreter's bundled `ensurepip`, with a separate
+transaction log. If neither is available, preflight asks you to provision the
+selected venv using its environment manager. Configuration pipes explicitly use
+UTF-8 on both ends, including Unicode profile descriptions on Windows.
 
 For automation, run a plan first (substitute real absolute paths):
 
@@ -92,6 +98,13 @@ wheel metadata, and ARM64 PE headers for every bundled native binary. This is a
 storage packaging capability, **not yet a complete ARM edition**: native ML
 dependency/provider provisioning and full installed-application acceptance must
 also pass. The installer does not silently replace Hermes's x64 Python with ARM.
+The Python package uses NumPy 2.3.0 on native Windows ARM and retains 2.2.0 on
+other platforms. Windows ARM and Intel macOS do not implicitly install the
+PyTorch-based transformer extra; configure the explicit local ONNX provider or a
+supported remote provider there. Existing transformer packages/configurations
+are not removed or rewritten. `local-transformers` remains an explicit extra
+for operators who provision a compatible native stack; no old torch version is
+selected as a compatibility workaround.
 `--no-deps` is for an already provisioned, compatible venv; wheels are still
 installed and checked. New pip conflicts abort before plugin-file changes.
 Pre-existing conflict lines are recorded, not presented as a healthy environment.

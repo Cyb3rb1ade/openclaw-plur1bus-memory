@@ -72,7 +72,8 @@ def atomic_write(path, data):
 
 
 def run_python(python, code, data=None):
-    result = subprocess.run([str(python), "-I", "-c", code], input=data, capture_output=True, text=True)
+    result = subprocess.run([str(python), "-I", "-X", "utf8", "-c", code], input=data,
+                            capture_output=True, text=True, encoding="utf-8")
     if result.returncode:
         raise ValueError("Hermes Python preflight failed; inspect its installation (no raw config is logged)")
     return result.stdout
@@ -87,6 +88,21 @@ def config_bytes(python, config):
     return run_python(python,
         "import json,sys,yaml; print(yaml.safe_dump(json.load(sys.stdin),allow_unicode=True,sort_keys=False),end='')",
         json.dumps(config)).encode("utf-8")
+
+
+def environment_state(python):
+    """Fingerprint a venv without pip, suppressing raw direct-URL credentials."""
+    code = """
+# PLUR1BUS_ENVIRONMENT_STATE: read-only, standard-library-only preflight.
+import hashlib, importlib.metadata, importlib.util, json
+packages = sorted((dist.metadata.get('Name', ''), dist.version,
+                   dist.read_text('direct_url.json') or '')
+                  for dist in importlib.metadata.distributions())
+print(json.dumps({'fingerprint': hashlib.sha256(json.dumps(packages).encode()).hexdigest(),
+                  'pipAvailable': importlib.util.find_spec('pip') is not None,
+                  'ensurepipAvailable': importlib.util.find_spec('ensurepip') is not None}))
+"""
+    return json.loads(run_python(python, code))
 
 
 def verify_bundle(bundle):
@@ -214,8 +230,13 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
               "nativeWheels": native_wheels,
               "effects": "Install Python wheels into selected Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile writes. File rollback does not roll back pip dependencies."}
     if not desktop_only:
-        environment = subprocess.run([str(python), "-I", "-m", "pip", "freeze"], capture_output=True, check=True)
-        result["environmentFingerprint"] = digest(environment.stdout)
+        environment = environment_state(python)
+        if not environment["pipAvailable"] and not environment["ensurepipAvailable"]:
+            raise ValueError("Hermes venv has neither pip nor ensurepip; provision pip with its environment manager first")
+        result["environmentFingerprint"] = environment["fingerprint"]
+        result["bootstrapPip"] = not environment["pipAvailable"]
+        if result["bootstrapPip"]:
+            result["effects"] += " Confirmed apply first bootstraps pip in this venv using Python's bundled ensurepip."
     else:
         result["effects"] = "Install desktop frontend only. No Python, backend, model, provider configuration or host patch changes."
     # A frozen one-file executable extracts into a different directory per run.
@@ -288,6 +309,12 @@ def apply_install(plan, confirmation, stopped=False):
         # Pip changes are intentionally separate from the file transaction and
         # recorded honestly; restoring files cannot undo an environment resolver.
         if not plan["desktopOnly"]:
+            if plan["bootstrapPip"]:
+                journal.update(status="bootstrapping-pip", pipChanged=True)
+                record()
+                with (transaction / "pip-bootstrap.log").open("w", encoding="utf-8") as log:
+                    subprocess.run([plan["python"], "-I", "-m", "ensurepip"],
+                                   stdout=log, stderr=subprocess.STDOUT, check=True)
             before = subprocess.run([plan["python"], "-I", "-m", "pip", "freeze"], capture_output=True, check=True)
             atomic_write(transaction / "pip-before.txt", before.stdout)
             before_check = subprocess.run([plan["python"], "-I", "-m", "pip", "check"], capture_output=True, text=True)

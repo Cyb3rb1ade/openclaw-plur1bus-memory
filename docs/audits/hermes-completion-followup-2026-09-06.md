@@ -104,10 +104,22 @@ The portable builder now accepts the reviewed ARM wheel **pair** with individual
 approved hashes, exact wheel metadata and PE architecture checks. Read-only
 installation planning selects them only for standard-ABI native CPython 3.13
 on Windows ARM64. Existing Intel selection remains compatible. Distribution
-regressions: 59 passed on macOS; 56 passed and 3 explicitly POSIX-only skipped
+regressions: 59 passed on macOS; 56 passed and 3 symlink-privilege fixtures skipped
 in the actual Windows ARM guest. Both real ARM wheel artifacts pass the new
 builder checks. NumPy/PyTorch-independent native ML provisioning, BGE ONNX,
 complete native application packaging and the remaining gates below are still open.
+
+Real fresh-Hermes preflight found two further installer issues: uv-created venvs
+omit pip, and Windows' default CP1252 pipe encoding rejects Unicode config text.
+Read-only preview now fingerprints installed distributions via Python metadata;
+only confirmed apply may run bundled ensurepip, with a journal/log. Python pipes
+use explicit UTF-8 on both ends. A real plan against the user's staged ARM Hermes
+venv and unmodified config passed, selecting both ARM wheels and reporting pip
+bootstrap required without creating any install receipt/backup. Regression suite:
+87 passed on macOS; 83 passed and 4 symlink-privilege skips in the ARM guest.
+Windows ARM uses native NumPy 2.3.0; Intel macOS and Windows ARM no longer pull
+PyTorch implicitly. Transformer extras/config remain available, not removed or
+silently downgraded; native ONNX use requires its explicit supported model config.
 
 The full upstream automatic semantic-compaction/rewrite policy, complete
 graph/entity/cognition selector/configuration parity, arbitrary vault discovery
