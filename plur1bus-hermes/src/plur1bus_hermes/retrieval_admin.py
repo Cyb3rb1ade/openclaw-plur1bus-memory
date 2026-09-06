@@ -16,9 +16,10 @@ from .writer_lock import writer_lock
 from .validation import ValidationError
 
 EMBEDDING_PROVIDERS = ["local-onnx", "local-transformers", "openai-compatible", "omlx"]
-RERANKER_PROVIDERS = ["local-transformers", "openai-compatible", "cohere", "omlx", "disabled"]
+RERANKER_PROVIDERS = ["local-transformers", "local-onnx", "openai-compatible", "cohere", "omlx", "disabled"]
 FIELDS = {"provider", "model", "dimensions", "baseUrl", "apiKeyEnv", "modelDir", "cacheDir",
-          "revision", "queryPrefix", "passagePrefix", "license", "licenseAccepted", "localFilesOnly"}
+          "revision", "queryPrefix", "passagePrefix", "license", "licenseAccepted", "localFilesOnly",
+          "maxTokens", "batchSize"}
 
 
 def public_config(config: dict) -> dict:
@@ -44,9 +45,9 @@ def validate_target(kind: str, value: dict) -> dict:
         if key in {"licenseAccepted", "localFilesOnly"}:
             if type(item) is not bool:
                 raise ValidationError("invalid retrieval flag")
-        elif key == "dimensions":
+        elif key in {"dimensions", "maxTokens", "batchSize"}:
             if type(item) is not int or not 1 <= item <= 8192:
-                raise ValidationError("dimensions must be between 1 and 8192")
+                raise ValidationError(f"{key} must be between 1 and 8192")
         elif not isinstance(item, str) or len(item) > 2048 or any(ord(c) < 32 for c in item):
             raise ValidationError("invalid retrieval text")
     if result["provider"] != "disabled" and not str(result.get("model") or "").strip():
@@ -65,7 +66,45 @@ def validate_target(kind: str, value: dict) -> dict:
     if kind == "embedding":
         from .runtime import validate_native_embedding_config
         validate_native_embedding_config(result)
+    elif result["provider"] == "local-onnx":
+        from .bge_onnx import BgeOnnxError, validate_config
+        try:
+            validate_config(result)
+        except BgeOnnxError as error:
+            raise ValidationError(str(error)) from error
     return result
+
+
+def prepare_reranker_model(target: dict) -> dict:
+    """Explicitly fetch/verify a reviewed BGE ONNX directory without activating it."""
+    checked = validate_target("reranker", target)
+    if checked["provider"] != "local-onnx":
+        return {"prepared": True, "activeConfigurationUnchanged": True}
+    from .bge_onnx import prepare_model
+    prepared = prepare_model(checked["modelDir"])
+    return {**prepared, "activeConfigurationUnchanged": True}
+
+
+def prepare_reranker(view, target: dict, revision: str) -> dict:
+    """Prepare and probe a reviewed BGE directory without persisting configuration."""
+    checked = validate_target("reranker", target)
+    if checked["provider"] != "local-onnx":
+        raise ValidationError("only native ONNX rerankers have a separate preparation step")
+    with exclusive_generation_lease(view.data_dir), writer_lock(view.data_dir):
+        if context_revision(view) != revision:
+            raise ValidationError("configuration changed; review again")
+        prepared = prepare_reranker_model(checked)
+        from .runtime import RerankerBackend
+        backend = RerankerBackend(checked, view.hermes_home)
+        try:
+            ranked = backend._rerank_with(
+                checked, "PLUR1BUS configuration probe", [{"content": "PLUR1BUS probe document"}]
+            )
+        finally:
+            backend.close()
+        if not ranked or not math.isfinite(float(ranked[0].get("rerankScore", float("nan")))):
+            raise ValidationError("reranker model probe returned no finite score")
+        return {**prepared, "modelProbePassed": True, "activeConfigurationUnchanged": True}
 
 
 def config_path(view) -> Path:
@@ -98,7 +137,11 @@ def save_reranker(view, target: dict, revision: str) -> dict:
             from .runtime import RerankerBackend
             # The public rerank method deliberately fails open; settings must
             # instead fail closed when this explicit synthetic smoke test fails.
-            ranked = RerankerBackend(target, view.hermes_home)._rerank_with(target, "test", [{"content": "test"}])
+            backend = RerankerBackend(target, view.hermes_home)
+            try:
+                ranked = backend._rerank_with(target, "test", [{"content": "test"}])
+            finally:
+                backend.close()
             if not ranked or not math.isfinite(float(ranked[0].get("rerankScore", float("nan")))):
                 raise ValidationError("reranker smoke test returned no finite score")
         path = config_path(view)

@@ -150,6 +150,18 @@ class JinaV5NanoTests(unittest.TestCase):
         with self.assertRaisesRegex(JinaV5NanoError, LICENSE):
             prepare_model("/not-a-model", accepted=False)
 
+    def test_default_preparation_uses_certifi_per_request_without_changing_injected_openers(self):
+        from plur1bus_hermes import jina_v5_nano
+        context = Mock()
+        with patch("plur1bus_hermes.jina_v5_nano.urlopen") as urlopen, \
+             patch("plur1bus_hermes.jina_v5_nano.ssl.create_default_context", return_value=context), \
+             patch("plur1bus_hermes.jina_v5_nano.importlib.import_module", return_value=SimpleNamespace(where=lambda: "/certifi.pem")):
+            jina_v5_nano._verified_opener(urlopen)("request", timeout=4)
+        context.load_verify_locations.assert_called_once_with(cafile="/certifi.pem")
+        urlopen.assert_called_once_with("request", timeout=4, context=context)
+        injected = Mock()
+        self.assertIs(jina_v5_nano._verified_opener(injected), injected)
+
     def test_static_validation_never_reads_model_and_rejects_float_caps(self):
         checked = validate_config(default_config("/does-not-exist", dimensions=768, accepted=True))
         self.assertEqual(Path(checked["modelDir"]), Path("/does-not-exist"))

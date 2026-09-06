@@ -106,8 +106,9 @@ installation planning selects them only for standard-ABI native CPython 3.13
 on Windows ARM64. Existing Intel selection remains compatible. Distribution
 regressions: 59 passed on macOS; 56 passed and 3 symlink-privilege fixtures skipped
 in the actual Windows ARM guest. Both real ARM wheel artifacts pass the new
-builder checks. NumPy/PyTorch-independent native ML provisioning, BGE ONNX,
-complete native application packaging and the remaining gates below are still open.
+builder checks. At that storage-only checkpoint, NumPy/PyTorch-independent ML
+provisioning and BGE ONNX remained open; their subsequent implementation is below.
+Complete native application packaging and the remaining parity gates stay separate.
 
 Real fresh-Hermes preflight found two further installer issues: uv-created venvs
 omit pip, and Windows' default CP1252 pipe encoding rejects Unicode config text.
@@ -120,6 +121,20 @@ bootstrap required without creating any install receipt/backup. Regression suite
 Windows ARM uses native NumPy 2.3.0; Intel macOS and Windows ARM no longer pull
 PyTorch implicitly. Transformer extras/config remain available, not removed or
 silently downgraded; native ONNX use requires its explicit supported model config.
+
+The native pinned BGE ONNX path is now implemented, with separately approved
+desktop/installer preparation and activation. The desktop uses its already-bound
+runtime view, including named profile homes, rather than reinterpreting them as
+the Hermes root. Inference/load/close serialize; probe resources close in finally;
+Windows reparse/junction paths are rejected. Model retrieval adds certifi roots
+to per-request system TLS contexts, with verification always enabled. This also
+fixes Jina preparation on fresh Windows Python trust stores.
+Real Parallels ARM inference passed without torch installed; four ORT/tokenizers
+native binaries checked as ARM64 and normal verified TLS succeeded. Full host
+Python acceptance: **711 passed plus 55 subtests**, 150 deprecation warnings,
+covering runtime, Controls, dashboard and installer. Native full-stack and visual
+acceptance, reranking quality beyond the synthetic ordering smoke, final artifact
+publication and the parity items below are not certified by these tests.
 
 The full upstream automatic semantic-compaction/rewrite policy, complete
 graph/entity/cognition selector/configuration parity, arbitrary vault discovery

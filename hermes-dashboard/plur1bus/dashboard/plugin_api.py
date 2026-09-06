@@ -167,7 +167,7 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
 
 class _RetrievalPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: str = Field(pattern="^(embedding|reranker|activate)$")
+    kind: str = Field(pattern="^(embedding|reranker|reranker-prepare|activate)$")
     target: dict = Field(default_factory=dict, max_length=20)
     job: str = Field(default="", max_length=64)
 
@@ -175,7 +175,7 @@ class _RetrievalPreview(BaseModel):
 class _RetrievalCommit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     nonce: str = Field(max_length=128)
-    confirmation: str = Field(pattern="^(embedding|reranker|activate)$")
+    confirmation: str = Field(pattern="^(embedding|reranker|reranker-prepare|activate)$")
 
 
 @router.get("/desktop/retrieval")
@@ -206,7 +206,7 @@ def retrieval_preview(body: _RetrievalPreview, request: Request) -> dict[str, An
                     raise HTTPException(409, "reviewed_stage_required")
                 target, plan = job["target"], job["plan"]
         else:
-            target = validate_target(body.kind, body.target)
+            target = validate_target("reranker" if body.kind == "reranker-prepare" else body.kind, body.target)
             plan = (plan_staged_reembed(view.data_dir, view.agent_id, {**view.config, "embedding": target})
                     if body.kind == "embedding" else None)
         nonce = secrets.token_urlsafe(32)
@@ -245,6 +245,12 @@ def _run_retrieval_job(identifier: str, view: Any) -> None:
             raise ValueError("review context changed")
         if job["kind"] == "reranker":
             result = save_reranker(view, job["target"], job["revision"])
+        elif job["kind"] == "reranker-prepare":
+            # The view is already bound by Hermes to the active profile.  Do
+            # not reconstruct a root/profile pair here: a profile-local home
+            # must remain profile-local throughout preparation and probing.
+            from plur1bus_hermes.retrieval_admin import prepare_reranker
+            result = prepare_reranker(view, job["target"], job["revision"])
         elif job["kind"] == "embedding":
             result = stage_embedding(view, job["target"], job["plan"], progress)
         else:

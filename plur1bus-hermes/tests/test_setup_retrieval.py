@@ -101,6 +101,27 @@ class SetupRetrievalTests(unittest.TestCase):
         self.assertEqual(json.loads(self.path.read_text()), self.config)
         self.assertIsNone(read_generation(self.data, "default"))
 
+    def test_native_onnx_reranker_prepare_requires_review_stop_and_never_activates(self):
+        target = {
+            "provider": "local-onnx", "model": "BAAI/bge-reranker-v2-m3",
+            "revision": "6f5ff65298512715a1e669753bc754d2bc8f367b",
+            "modelDir": str(self.home / "models/bge"), "localFilesOnly": True,
+            "maxTokens": 512, "batchSize": 8,
+        }
+        plan = review(self.home, "default", "reranker", target)
+        with self.assertRaisesRegex(ValueError, "stop affected"):
+            execute(self.home, "default", "reranker", target, "prepare", confirmation=plan["confirmation"], stopped=False)
+        with patch("plur1bus_hermes.retrieval_admin.prepare_reranker", return_value={
+            "prepared": True, "modelProbePassed": True, "activeConfigurationUnchanged": True,
+        }) as prepare:
+            result = execute(self.home, "default", "reranker", target, "prepare", confirmation=plan["confirmation"], stopped=True)
+        self.assertTrue(result["prepared"])
+        self.assertTrue(result["modelProbePassed"])
+        self.assertTrue(result["activeConfigurationUnchanged"])
+        self.assertEqual(prepare.call_args.args[1:], (target, plan["revision"]))
+        self.assertEqual(json.loads(self.path.read_text()), self.config)
+        self.assertIsNone(read_generation(self.data, "default"))
+
     def test_reranker_for_new_named_profile_override_never_changes_root(self):
         profile = self.home / "profiles/alpha"
         profile.mkdir(parents=True)

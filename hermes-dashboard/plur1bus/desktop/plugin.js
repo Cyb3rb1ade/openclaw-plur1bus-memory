@@ -367,6 +367,9 @@ const css = `
  */
 export function retrievalDefaults(provider, kind) {
   if (provider === 'disabled') return { provider };
+  if (provider === 'local-onnx' && kind === 'reranker') return { provider, model: 'BAAI/bge-reranker-v2-m3',
+    revision: '6f5ff65298512715a1e669753bc754d2bc8f367b', modelDir: '', localFilesOnly: true,
+    maxTokens: 512, batchSize: 8 };
   if (provider === 'local-onnx') return { provider, model: 'jinaai/jina-embeddings-v5-text-nano-retrieval',
     revision: 'ac5d898c8d382b17167c33e5c8af644a3519b47d', dimensions: 768, modelDir: '',
     license: 'CC-BY-NC-4.0', licenseAccepted: false, queryPrefix: 'Query: ', passagePrefix: 'Document: ' };
@@ -463,9 +466,11 @@ function RetrievalSettings({ rest }) {
           onChange: event => edit({ ...target, dimensions: Number(event.target.value) }) })) : null),
       target.provider === 'local-onnx' ? h(React.Fragment, null,
         h('div', { className: 'pb-actions' }, textField('modelDir', 'Vorhandener Modellordner', true)),
-        h('p', null, 'Jina v5 Nano unterstützt 32, 64, 128, 256, 512 und 768 Dimensionen. Vektoren werden aus den Originaltexten neu berechnet. Kein automatischer Modelldownload.'),
-        h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: target.licenseAccepted === true, disabled: busy,
-          onChange: event => edit({ ...target, licenseAccepted: event.target.checked }) }), 'CC-BY-NC-4.0 für dieses Modell akzeptieren (keine kommerzielle Nutzung).')) : null,
+        kind === 'embedding' ? h(React.Fragment, null,
+          h('p', null, 'Jina v5 Nano unterstützt 32, 64, 128, 256, 512 und 768 Dimensionen. Vektoren werden aus den Originaltexten neu berechnet. Kein automatischer Modelldownload.'),
+          h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: target.licenseAccepted === true, disabled: busy,
+            onChange: event => edit({ ...target, licenseAccepted: event.target.checked }) }), 'CC-BY-NC-4.0 für dieses Modell akzeptieren (keine kommerzielle Nutzung).'))
+          : h('p', null, 'BGE v2-m3 wird als byte-geprüftes, quantisiertes CPU-ONNX-Modell vorbereitet. Es gibt keinen Download während eines Recall-Aufrufs.')) : null,
       ['openai-compatible', 'omlx', 'cohere'].includes(target.provider) ? h('div', { className: 'pb-actions' },
         target.provider !== 'cohere' ? textField('baseUrl', 'API-Basis-URL', target.provider === 'openai-compatible') : null,
         textField('apiKeyEnv', 'API-Key: Name der Umgebungsvariable')) : null,
@@ -474,7 +479,9 @@ function RetrievalSettings({ rest }) {
       h('p', null, 'Vor Ausführung müssen Gateway und andere Memory-Laufzeiten dieses Speichers gestoppt sein. Hermes Desktop kann offen bleiben. Es werden keine Prozesse automatisch beendet.'),
       h('p', null, kind === 'embedding' ? 'Der bestehende Speicher bleibt erhalten. Ablauf: Vorschau, Backup & Umrechnung, Prüfung, separate Aktivierung.'
         : 'Reranking benötigt keine Vektormigration. Die Profilkonfiguration wird gesichert; die Änderung gilt nach Neustart der Memory-Laufzeit.'),
-      h('button', { type: 'submit', disabled: busy }, 'Änderung prüfen')) : null,
+      h('button', { type: 'submit', disabled: busy }, 'Änderung prüfen'),
+      kind === 'reranker' && target.provider === 'local-onnx'
+        ? h('button', { type: 'button', disabled: busy, onClick: () => { void preview('reranker-prepare'); } }, 'BGE-Modell vorbereiten') : null) : null,
     error ? h('p', { role: 'alert' }, error) : null,
     review ? h('div', { className: 'pb-review' }, h('h3', null, 'Änderung bestätigen'),
       h('p', null, `Profil ${review.profile} · Agent ${review.agentId} · ${review.target.provider} · ${review.target.model || 'deaktiviert'}`),
@@ -483,7 +490,8 @@ function RetrievalSettings({ rest }) {
       h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: approved, disabled: busy,
         onChange: event => setApproved(event.target.checked) }), 'Ich habe Ziel und Profil geprüft und bestätige diese Änderung.'),
       h('button', { disabled: busy || !approved, onClick: () => { void commit(); } },
-        review.kind === 'activate' ? 'Geprüften Speicher aktivieren' : review.kind === 'embedding' ? 'Backup & Umrechnung starten' : 'Reranking speichern')) : null,
+        review.kind === 'activate' ? 'Geprüften Speicher aktivieren' : review.kind === 'embedding' ? 'Backup & Umrechnung starten'
+          : review.kind === 'reranker-prepare' ? 'BGE-Modell vorbereiten' : 'Reranking speichern')) : null,
     job ? h('div', { role: 'status' },
       h('p', null, `Auftrag: ${job.status}${job.progress ? ` · ${job.progress.cursor}/${job.progress.cards}` : ''}`),
       job.status === 'failed' ? h('p', { role: 'alert' }, job.error === 'runtime_active'
@@ -491,6 +499,7 @@ function RetrievalSettings({ rest }) {
         : 'Auftrag fehlgeschlagen. Quelle bleibt erhalten; Modellverfügbarkeit und Quelländerungen prüfen. Keine automatische Wiederholung.') : null,
       job.result?.validated ? h(React.Fragment, null, h('p', null, 'Backup vorhanden. Neue Vektoren und unveränderte Metadaten geprüft; noch nicht aktiv.'),
         h('button', { disabled: busy, onClick: () => { void preview('activate'); } }, 'Aktivierung prüfen')) : null,
+      job.result?.modelProbePassed ? h('p', null, 'BGE-Modell byte-geprüft und getestet; die aktive Reranker-Konfiguration blieb unverändert.') : null,
       job.result?.restartRequired ? h('p', null, 'Gespeichert. Memory-Laufzeit jetzt neu starten und anschließend den Status aktualisieren.') : null) : null);
 }
 

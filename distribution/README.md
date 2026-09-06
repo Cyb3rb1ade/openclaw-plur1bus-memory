@@ -83,6 +83,7 @@ stop all processes using that venv. No new profiles are created. An older
 installation receipt prevents accidental downgrades.
 
 Default installation resolves dependencies, including the `local-onnx` extra.
+For the byte-pinned local BGE reranker, see [preparation and activation](docs/hermes-bge-onnx.md).
 If a release includes a reviewed native Intel LanceDB wheel, the plan lists it
 under `nativeWheels`; only a macOS x86_64 target interpreter with dependency
 installation enabled selects it. Apple Silicon, Windows, Linux and desktop-only

@@ -395,6 +395,15 @@ class RerankerBackend:
         self._models: dict[str, Any] = {}
         self._lock = threading.RLock()
 
+    def close(self) -> None:
+        """Release optional ONNX sessions when the runtime lifecycle ends."""
+        with self._lock:
+            for model in self._models.values():
+                close = getattr(model, "close", None)
+                if callable(close):
+                    close()
+            self._models.clear()
+
     def rerank(self, query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows or self.config.get("provider", "disabled") == "disabled":
             return rows
@@ -402,6 +411,9 @@ class RerankerBackend:
             return self._rerank_with(self.config, query, rows)
         except Exception as primary_error:
             if self.config.get("fallbackProvider") != "local-transformers":
+                # Native ONNX is intentionally fail-open: a bad optional local
+                # accelerator must never suppress otherwise valid recall rows.
+                LOGGER.warning("reranker primary (%s) failed; returning unreranked results", primary_error)
                 return rows
             try:
                 return self._rerank_with({"provider": "local-transformers", "model": self.config.get("fallbackModel", "BAAI/bge-reranker-v2-m3")}, query, rows)
@@ -419,6 +431,8 @@ class RerankerBackend:
             return self._rerank_cohere(config, query, rows)
         if config.get("provider") in {"omlx", "openai-compatible"}:
             return self._rerank_omlx(config, query, rows)
+        if config.get("provider") == "local-onnx":
+            return self._rerank_local_onnx(config, query, rows)
         if config.get("provider") != "local-transformers":
             raise RuntimeError("unsupported reranking provider")
         try:
@@ -438,6 +452,26 @@ class RerankerBackend:
         scores = model.predict([(query, str(row.get("content", ""))) for row in rows])
         ranked = [dict(row, rerankScore=float(score)) for row, score in zip(rows, scores, strict=True)]
         return sorted(ranked, key=lambda row: row["rerankScore"], reverse=True)
+
+    def _rerank_local_onnx(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Run only the pinned BGE ONNX cross-encoder from a verified local directory."""
+        from .bge_onnx import BgeOnnxReranker
+        key = "bge-onnx:" + json.dumps(config, sort_keys=True, default=str)
+        with self._lock:
+            model = self._models.get(key)
+            if model is None:
+                # Constructor/load rejects a non-pinned config and verifies every
+                # required byte before optional inference libraries are imported.
+                model = BgeOnnxReranker(config)
+                self._models[key] = model
+        scores: list[float] = []
+        for start in range(0, len(rows), 8):
+            batch = rows[start:start + 8]
+            scores.extend(model.score_many([(query, str(row.get("content", ""))) for row in batch]))
+        if len(scores) != len(rows):
+            raise RuntimeError("BGE ONNX reranker returned an incomplete ranking")
+        return sorted([dict(row, rerankScore=score) for row, score in zip(rows, scores, strict=True)],
+                      key=lambda row: row["rerankScore"], reverse=True)
 
     def _rerank_cohere(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key = os.environ.get(str(config.get("apiKeyEnv", "PLUR1BUS_RERANKER_API_KEY")), "")
@@ -1592,6 +1626,7 @@ class Plur1busRuntime:
                 self._closed = True
                 try:
                     self._embedding.close()
+                    self._reranker.close()
                     self._llm_cache.close()
                 except Exception as error:
                     LOGGER.warning("Runtime resource close failed: %s", type(error).__name__)

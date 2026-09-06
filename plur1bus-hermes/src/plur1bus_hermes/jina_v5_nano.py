@@ -15,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import ssl
 import tempfile
 from typing import Any, Callable, Iterable, Mapping
 from urllib.request import Request, urlopen
@@ -183,6 +184,19 @@ def _artifact_url(artifact: Artifact) -> str:
     return f"https://huggingface.co/{MODEL}/resolve/{REVISION}/" + "/".join(artifact.path.split("/"))
 
 
+def _verified_opener(opener: Callable[..., Any]) -> Callable[..., Any]:
+    """Add certifi roots to the system trust store for only the default request."""
+    if opener is not urlopen:
+        return opener
+    try:
+        certifi = importlib.import_module("certifi")
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+    except (ImportError, AttributeError, OSError) as error:
+        raise JinaV5NanoError("Jina v5 preparation requires certifi for verified TLS") from error
+    return lambda request, *, timeout: opener(request, timeout=timeout, context=context)
+
+
 def _download_artifact(artifact: Artifact, target: Path, *, timeout: float, opener: Callable[..., Any]) -> None:
     request = Request(_artifact_url(artifact), headers={"User-Agent": "plur1bus-hermes"})
     with opener(request, timeout=timeout) as response, target.open("xb") as handle:
@@ -217,10 +231,11 @@ def prepare_model(model_dir: str | Path, *, accepted: bool = False, timeout: flo
         raise JinaV5NanoError("Jina v5 model parent must be an existing non-symlink directory")
     temporary: Path | None = Path(tempfile.mkdtemp(prefix=f".{target.name}.jina-v5-", dir=parent))
     try:
+        request_opener = _verified_opener(opener)
         for artifact in ARTIFACTS:
             path = _artifact_path(temporary, artifact)
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            _download_artifact(artifact, path, timeout=timeout, opener=opener)
+            _download_artifact(artifact, path, timeout=timeout, opener=request_opener)
         prepare_local_jina_v5_nano(temporary, license_accepted=True)
         if target.exists() or target.is_symlink():
             return verify_model_dir(target, accepted=True)

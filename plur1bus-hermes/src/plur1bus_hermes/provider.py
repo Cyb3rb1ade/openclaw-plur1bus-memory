@@ -128,6 +128,15 @@ class Plur1busMemoryProvider(MemoryProvider):
         local_embedding_needed = provider == "local-transformers" or (isinstance(fallback, Mapping) and fallback.get("provider") == "local-transformers")
         reranker = self._runtime_config().get("reranker", {})
         local_reranker_needed = isinstance(reranker, Mapping) and (reranker.get("provider") == "local-transformers" or reranker.get("fallbackProvider") == "local-transformers")
+        local_onnx_reranker = isinstance(reranker, Mapping) and reranker.get("provider") == "local-onnx"
+        if local_onnx_reranker:
+            try:
+                from .bge_onnx import BgeOnnxError, validate_config
+                validate_config(reranker)
+            except BgeOnnxError:
+                return False
+            if any(importlib.util.find_spec(name) is None for name in ("onnxruntime", "tokenizers", "numpy")):
+                return False
         if importlib.util.find_spec("lancedb") is None:
             return False
         if (local_embedding_needed or local_reranker_needed) and importlib.util.find_spec("sentence_transformers") is None:
@@ -153,6 +162,15 @@ class Plur1busMemoryProvider(MemoryProvider):
                     return f"missing Python dependency: {name} (install plur1bus-hermes[local-onnx])"
         fallback = embedding.get("fallback", {})
         reranker = self._runtime_config().get("reranker", {})
+        if isinstance(reranker, Mapping) and reranker.get("provider") == "local-onnx":
+            try:
+                from .bge_onnx import BgeOnnxError, validate_config
+                validate_config(reranker)
+            except BgeOnnxError as error:
+                return str(error)
+            for name in ("onnxruntime", "tokenizers", "numpy"):
+                if importlib.util.find_spec(name) is None:
+                    return f"missing Python dependency: {name} (install plur1bus-hermes[local-onnx])"
         local_needed = (
             provider == "local-transformers"
             or (isinstance(fallback, Mapping) and fallback.get("provider") == "local-transformers")

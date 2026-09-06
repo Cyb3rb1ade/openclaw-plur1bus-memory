@@ -84,8 +84,9 @@ def execute(home: Path, profile: str, kind: str, target: dict, action: str = "pl
     if not stopped or confirmation != plan["confirmation"]:
         raise ValidationError("stop affected runtimes and approve the exact current retrieval plan")
     if action == "prepare":
-        if kind != "embedding":
-            raise ValidationError("rerankers are smoke-tested during their config activation")
+        if kind == "reranker":
+            from .retrieval_admin import prepare_reranker
+            return prepare_reranker(view, plan["target"], plan["revision"])
         if plan["target"]["provider"] == "local-onnx":
             from .jina_v5_nano import prepare_model
             prepared = prepare_model(plan["target"]["modelDir"], accepted=plan["target"].get("licenseAccepted") is True)

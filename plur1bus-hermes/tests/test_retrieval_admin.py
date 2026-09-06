@@ -76,3 +76,21 @@ class RetrievalAdminTests(unittest.TestCase):
             path.symlink_to(home / "elsewhere")
             with self.assertRaises(ValueError):
                 admin.context_revision(view)
+
+    def test_native_prepare_uses_the_bound_named_profile_view_without_config_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_home = root / "profiles" / "bernhardine"
+            data = root / "data"; data.mkdir()
+            target = {"provider": "local-onnx", "model": "BAAI/bge-reranker-v2-m3",
+                      "revision": "6f5ff65298512715a1e669753bc754d2bc8f367b", "modelDir": str(root / "models/bge"),
+                      "localFilesOnly": True, "maxTokens": 512, "batchSize": 8}
+            view = SimpleNamespace(hermes_home=profile_home, profile="bernhardine", data_dir=data)
+            with patch("plur1bus_hermes.retrieval_admin.context_revision", return_value="reviewed"), \
+                 patch("plur1bus_hermes.retrieval_admin.prepare_reranker_model", return_value={"prepared": True}) as prepare, \
+                 patch("plur1bus_hermes.runtime.RerankerBackend._rerank_with", return_value=[{"rerankScore": 0.2}]):
+                result = admin.prepare_reranker(view, target, "reviewed")
+            self.assertTrue(result["modelProbePassed"])
+            self.assertEqual(prepare.call_args.args, (target,))
+            self.assertFalse(profile_home.exists())
+            self.assertFalse((root / "plugins").exists())
