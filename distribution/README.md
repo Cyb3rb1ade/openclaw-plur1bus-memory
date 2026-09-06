@@ -7,6 +7,15 @@ package remains a separate distribution; do not install it into Hermes.
 
 ## Choose the right artifact
 
+After installation, `plur1bus-hermes-snapshot` provides offline export/verify/
+restore; see [snapshot instructions](docs/hermes-snapshot-restore.md) before use.
+It preserves explicitly selected configs/artifacts and retains replaced roots.
+Automatic lossless merging is separately opt-in. Obsidian note review is available
+in the dashboard and with `plur1bus-hermes-operator --hermes-home HOME --agent PROFILE
+obsidian plan`. No model switch or data rewrite is implied by installing a bundle.
+See the included [feature checkpoint](docs/audits/hermes-completion-followup-2026-09-06.md)
+for implemented native variants and remaining parity/acceptance boundaries.
+
 | Environment | Artifact and launcher |
 | --- | --- |
 | macOS, Apple Silicon or Intel | Portable `.tar.gz` / `.zip`, `install.sh`; optional `.pkg` stages the same assistant in `/Applications/PLUR1BUS Installer` |

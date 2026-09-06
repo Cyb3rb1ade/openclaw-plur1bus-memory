@@ -61,6 +61,8 @@ def build(output, mac_pkg=False, windows_exe=False):
     for relative in tracked("hermes-dashboard/patches/"):
         copy(REPO / relative, bundle / "helpers/plur1bus-host-patches" / Path(relative).name)
     copy(REPO / "LICENSE", bundle / "LICENSE")
+    for filename in ("hermes-snapshot-restore.md", "audits/hermes-completion-followup-2026-09-06.md"):
+        copy(REPO / "docs" / filename, bundle / "docs" / filename)
     if windows_exe:
         if sys.platform != "win32":
             raise ValueError("Windows executable must be built and tested on Windows")

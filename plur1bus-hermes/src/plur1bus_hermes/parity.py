@@ -9,16 +9,16 @@ from typing import Any
 
 
 FEATURES: tuple[dict[str, str], ...] = (
-    {"id": "capture-recall", "status": "partial", "evidence": "native lifecycle capture/vector recall and explicit session/short TTL; automatic store-time LLM merge remains absent"},
+    {"id": "capture-recall", "status": "partial", "evidence": "native lifecycle, TTL and opt-in private lossless LLM-selected automatic store merges; unrestricted semantic rewrite/compaction policy is not claimed"},
     {"id": "agent-isolation", "status": "ready", "evidence": "per-agent LanceDB, Neo, state, workspace"},
     {"id": "omlx-providers", "status": "ready", "evidence": "LLM config plus embedding and /v1/rerank adapters"},
-    {"id": "legacy-reembedding", "status": "partial", "evidence": "resumable staged batches plus explicit activate/recover for one private writer; named namespaces and non-cooperating runtimes are unsupported"},
-    {"id": "legacy-artifacts", "status": "partial", "evidence": "selected metadata and artifacts; no complete export/restore workflow"},
-    {"id": "embedding-cache", "status": "partial", "evidence": "agent-scoped persistence and single/batch in-flight coalescing; exact upstream cache and byte-pruning contract differs"},
-    {"id": "llm-result-cache", "status": "partial", "evidence": "native cache integration is narrower than the upstream contract"},
+    {"id": "legacy-reembedding", "status": "partial", "evidence": "private and isolated named-writer staged activate/recover; mixed recall requires matching certified model fingerprints; non-cooperating processes require real shutdown"},
+    {"id": "legacy-artifacts", "status": "partial", "evidence": "complete explicit-root offline snapshot export/restore with configs/artifacts, retained originals and resume guards; no automatic external discovery or path relocation"},
+    {"id": "embedding-cache", "status": "partial", "evidence": "agent-scoped persistence, single/batch coalescing, corrupt-vector repair and bounded 90-percent soft byte pruning; exact upstream configuration/metrics contract differs"},
+    {"id": "llm-result-cache", "status": "partial", "evidence": "upstream deterministic purposes plus native episode/workshop/emotion consumers, persistent LRU and byte pruning; not all upstream live transformations exist in Hermes"},
     {"id": "memory-graph", "status": "partial", "evidence": "native graph and recall edges; extended graph contracts differ"},
-    {"id": "semantic-lens", "status": "partial", "evidence": "default-off additive booster with category caps and elapsed-time guard; full upstream contract not claimed"},
-    {"id": "conversation-reactivation", "status": "partial", "evidence": "native first-substantive/continuation/idle/compression triggers, scope-session isolation, cooldown and primary-recall error fallback; upstream selector/format and hard preemption are not identical"},
+    {"id": "semantic-lens", "status": "partial", "evidence": "default-off additive booster with category caps, bounded 50-ms caller wait and one worker/no backlog; upstream selector parity not claimed"},
+    {"id": "conversation-reactivation", "status": "partial", "evidence": "native triggers, scope-session isolation, cooldown, bounded 50-ms caller wait and primary fallback; native reads retain generation leases rather than being forcibly killed; upstream selector/format differs"},
     {"id": "episodes-emotion-temporal", "status": "partial", "evidence": "turn journal and temporal fields; episode/emotion contracts differ"},
     {"id": "memory-dynamics", "status": "partial", "evidence": "strength/consolidation is not upstream TTL or store-merge parity"},
     {"id": "dreaming", "status": "partial", "evidence": "bounded REM and fallback; full dream workflow differs"},
@@ -26,10 +26,10 @@ FEATURES: tuple[dict[str, str], ...] = (
     {"id": "feedback", "status": "partial", "evidence": "manual feedback exists; automatic outcome tracking is absent"},
     {"id": "reminder-state", "status": "partial", "evidence": "opt-in absolute-time extraction produces private pending proposals; explicit confirmation schedules an existing scoped card"},
     {"id": "shared-memory-copy", "status": "ready", "evidence": "explicit agent-scoped sharing"},
-    {"id": "obsidian-basic", "status": "partial", "evidence": "mirror, explicit sync and revision-bound CLI consent; browser discovery, watch and conflict workflows differ"},
+    {"id": "obsidian-basic", "status": "partial", "evidence": "scoped desktop/web/CLI reviewed note import, opt-in hourly change reviews, stable IDs and verified acknowledgement; arbitrary vault discovery and mirror conflict resolution remain open"},
     {"id": "controls", "status": "partial", "evidence": "native commands cover an intentionally narrower operator surface"},
     {"id": "scheduler", "status": "partial", "evidence": "reviewed per-user launchd, systemd/WSL and Windows Task Scheduler definitions/load commands plus OS-owned job locks; native Windows/WSL scheduler acceptance remains open"},
-    {"id": "backup-cutover", "status": "partial", "evidence": "backup roots and gated cutover; no complete export/restore"},
+    {"id": "backup-cutover", "status": "partial", "evidence": "offline exact-root export/restore, retained backups and interrupted-restore guards; full-parity cutover stays gated"},
     {"id": "contradiction-live", "status": "partial", "evidence": "native graph/review disclosure; independent upstream disclosure config and formatting differ"},
     {"id": "proactive-delivery", "status": "partial", "evidence": "opt-in independent in-process ticks after authorized route registration; cold restart needs a fresh gateway event"},
     {"id": "identity-authorization", "status": "ready", "evidence": "pre-gateway MessageEvent identity, user allowlist, private-chat fallback"},
@@ -72,16 +72,16 @@ FEATURES: tuple[dict[str, str], ...] = (
 # A passing legacy capability inventory must never imply a full 7.10 port.
 COVERAGE_710 = (
     {"id": "validity-and-expiry", "status": "partial", "detail": "native validAt/validity windows, absolute expiresAt and session/short TTL are wired; historical automatic store-time merge parity remains open"},
-    {"id": "store-merge-lineage", "status": "partial", "detail": "explicit lossless-concatenation proposals, stable IDs, validity lineage, approved revision and final revalidation; repair restores metadata/mirror/cognition/graph materialization before source retirement; automatic store-time LLM merge remains absent"},
+    {"id": "store-merge-lineage", "status": "partial", "detail": "explicit lossless proposals plus opt-in private LLM-selected store merges; stable retry IDs, validity lineage, repair and final revalidation; arbitrary semantic rewrite and full automatic compaction differ"},
     {"id": "llm-result-cache", "status": "partial", "detail": "native cache integration is narrower than the complete upstream live-call contract"},
     {"id": "reminder-extraction", "status": "partial", "detail": "absolute-time opt-in extraction and scoped pending confirmation implemented; relative dates are deliberately not guessed"},
     {"id": "cognition-tiers", "status": "partial", "detail": "opt-in Persona Voice, knowledge promotion, LightDream, LLM reflection and scoped episode narrative jobs; reaction events and complete graph/entity parity remain open"},
     {"id": "local-jina-v3", "status": "not-ported", "detail": "native Transformers remote-code chain is not independently audited; explicit fail-closed guard, existing sidecar model support retained"},
     {"id": "dashboard", "status": "partial", "detail": "server-scoped status plus reviewed Workshop approve/publish previews and session-bound one-use actions; no generic operator command or full workflow UI"},
-    {"id": "reembedding", "status": "partial", "detail": "bounded staged batches plus explicit activate/recover under cooperating runtime leases; named namespaces, non-cooperating processes and automatic switching are unsupported"},
+    {"id": "reembedding", "status": "partial", "detail": "bounded private/isolated named-writer activate/recover under cooperating runtime leases; mixed recall requires matching certified encoders; non-cooperating processes and automatic switching remain unsupported"},
     {"id": "trusted-critical-reply", "status": "partial", "detail": "own-reply flag plus scoped outgoing message ID/route and fresh authorization gate explicit outcomes; no generic reaction hook"},
     {"id": "skill-workshop", "status": "partial", "detail": "native mine/show/approve/publish workflow with source revalidation and no manual overwrite; native publication is profile-wide, not agent-ACL protected"},
-    {"id": "obsidian-operator-ui", "status": "partial", "detail": "native mirror retained and source import has revision-bound local CLI consent; browser target discovery and consent UI are not reproduced"},
+    {"id": "obsidian-operator-ui", "status": "partial", "detail": "desktop/web/CLI scoped workspace discovery and exact-revision consent implemented; no arbitrary filesystem selector or complete mirror conflict-resolution UI"},
     {"id": "proactive-delivery", "status": "partial", "detail": "independent async ticks after one authorized gateway route registration; no durable cold-start route ownership"},
     {"id": "openclaw-host-internals", "status": "host-specific", "detail": "public SDK memory slot, Cron ownership, iframe actions and native dream renderer have no identical Hermes interface"},
 )
@@ -89,7 +89,7 @@ COVERAGE_710 = (
 
 COVERAGE_712 = COVERAGE_710 + (
     {"id": "local-jina-v5-nano", "status": "partial", "detail": "native pinned Q8 ONNX, explicit license/download gate, 512-token sequential inference and normalized Matryoshka dimensions; macOS real-model smoke verified, broader quality/platform acceptance remains open"},
-    {"id": "nano-new-install-migration", "status": "partial", "detail": "shared installer exposes explicit model plan/prepare/stage/validate/activate with backup/source checks and profile-local config; real-model all-agent acceptance and named-namespace cutover remain open"},
+    {"id": "nano-new-install-migration", "status": "partial", "detail": "shared installer exposes backed-up model workflows for private and isolated named writers; exact new-candidate real-model all-agent acceptance remains open"},
 )
 
 
