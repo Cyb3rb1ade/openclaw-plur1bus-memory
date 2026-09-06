@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import json
 import importlib.metadata
+from email.parser import BytesParser
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -27,7 +29,36 @@ def copy(source, target):
     shutil.copy2(source, target)
 
 
-def build(output, mac_pkg=False, windows_exe=False):
+def validate_intel_wheel(path, expected_sha256):
+    """Accept only an explicitly hash-approved LanceDB Intel ABI3 wheel."""
+    path = Path(path)
+    if (path.is_symlink() or not path.is_file() or path.stat().st_size > 512 * 1024 * 1024
+        or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256 or "")
+        or not re.fullmatch(r"lancedb-0\.34\.0-cp3\d+-abi3-macosx_\d+_\d+_x86_64\.whl", path.name)):
+        raise ValueError("expected a hash-approved native LanceDB 0.34.0 Intel ABI3 wheel")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError("native wheel checksum differs from approved build")
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate wheel members")
+        metadata = "lancedb-0.34.0.dist-info/METADATA"
+        tags_file = "lancedb-0.34.0.dist-info/WHEEL"
+        for name in (metadata, tags_file):
+            if archive.getinfo(name).file_size > 100_000:
+                raise ValueError("oversized wheel metadata")
+        info = BytesParser().parsebytes(archive.read(metadata))
+        tags = BytesParser().parsebytes(archive.read(tags_file)).get_all("Tag")
+        expected_tag = path.name.removeprefix("lancedb-0.34.0-").removesuffix(".whl")
+        if info.get("Name") != "lancedb" or info.get("Version") != "0.34.0" or tags != [expected_tag]:
+            raise ValueError("native wheel metadata/architecture mismatch")
+    return path
+
+
+def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha256=None):
+    if bool(intel_wheel) != bool(intel_sha256):
+        raise ValueError("native wheel path and approved SHA-256 must be supplied together")
+    vendor = validate_intel_wheel(intel_wheel, intel_sha256) if intel_wheel else None
     output = Path(output).absolute()
     if output.exists() and any(output.iterdir()):
         raise ValueError("use a new empty output directory; existing releases are never overwritten")
@@ -63,6 +94,14 @@ def build(output, mac_pkg=False, windows_exe=False):
     copy(REPO / "LICENSE", bundle / "LICENSE")
     for filename in ("hermes-snapshot-restore.md", "audits/hermes-completion-followup-2026-09-06.md"):
         copy(REPO / "docs" / filename, bundle / "docs" / filename)
+    native_dependencies = {}
+    if vendor:
+        relative = "vendor/macos-x86_64/" + vendor.name
+        copy(vendor, bundle / relative)
+        # Detect a source-wheel replacement during the copy, before manifesting it.
+        if hashlib.sha256((bundle / relative).read_bytes()).hexdigest() != intel_sha256:
+            raise ValueError("native wheel changed while packaging")
+        native_dependencies["darwin/x86_64"] = relative
     if windows_exe:
         if sys.platform != "win32":
             raise ValueError("Windows executable must be built and tested on Windows")
@@ -81,7 +120,8 @@ def build(output, mac_pkg=False, windows_exe=False):
     manifest = {"schema": 1, "version": version,
                 "pythonVersion": tomllib.loads((REPO / "plur1bus-hermes/pyproject.toml").read_text())["project"]["version"],
                 "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
-                "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)), "files": files}
+                "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)), "files": files,
+                "nativeDependencies": native_dependencies}
     (bundle / "distribution.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     # Deliberately no OpenClaw JS package/postinstall, provider credentials or models.
     shutil.make_archive(str(output / name), "zip", work, name)
@@ -113,5 +153,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", required=True)
     parser.add_argument("--mac-pkg", action="store_true")
     parser.add_argument("--windows-exe", action="store_true")
+    parser.add_argument("--intel-lancedb-wheel", help="native-tested LanceDB 0.34.0 Intel wheel from the reviewed build")
+    parser.add_argument("--intel-lancedb-sha256", help="approved wheel SHA-256 from native CI provenance")
     args = parser.parse_args()
-    build(args.output, args.mac_pkg, args.windows_exe)
+    build(args.output, args.mac_pkg, args.windows_exe, args.intel_lancedb_wheel, args.intel_lancedb_sha256)

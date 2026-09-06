@@ -71,6 +71,25 @@ source/regression results, not visual installed-app acceptance or real-model
 quality benchmarking. Linux and exact-artifact evidence are recorded separately
 after the final source commit. Newly added tests use temporary data only.
 
+## Native distribution evidence added later in this session
+
+Source `38b50265c90dd2d19d97056895bb73e99ea83020` passed real package and
+temporary-install/rollback CI on Linux x64, Linux ARM64, Apple Silicon and Windows
+x64, including the Windows executable smoke. Downloaded artifact checksums and
+embedded verification source IDs were checked locally. Run:
+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/actions/runs/34049104695 .
+Its overall red status is the unresolved Intel dependency job, not hidden failures
+on those four successful platforms. macOS local Python regression count at that
+checkpoint was 627 plus 55 subtests. These are unsigned candidate artifacts.
+
+The subsequent optional Intel-wheel bundler/installer changes add explicit
+approved-hash and wheel-metadata validation, target-interpreter architecture
+selection, and same-version native-wheel replacement. They are a new source
+checkpoint and do not inherit an exact-artifact certificate from the prior CI run.
+Upstream contribution: https://github.com/lancedb/lancedb/pull/4140 (draft pending
+native build/runtime evidence). Intel ML dependencies are a separate open gate;
+PyTorch must not be silently downgraded to bypass it.
+
 ## Still not claimed
 
 The full upstream automatic semantic-compaction/rewrite policy, complete

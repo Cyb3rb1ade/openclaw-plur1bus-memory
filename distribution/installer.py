@@ -150,7 +150,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     info = None
     if not desktop_only:
         python = interpreter(home, python)
-        info = json.loads(run_python(python, "import json,sys; print(json.dumps({'version':list(sys.version_info[:3]),'venv':sys.prefix!=sys.base_prefix,'prefix':sys.prefix,'platform':sys.platform}))"))
+        info = json.loads(run_python(python, "import json,sys,platform; print(json.dumps({'version':list(sys.version_info[:3]),'venv':sys.prefix!=sys.base_prefix,'prefix':sys.prefix,'platform':sys.platform,'architecture':platform.machine()}))"))
         if info["version"] < [3, 11, 0] or not info["venv"] or info["platform"] != sys.platform:
             raise ValueError("same-platform Python >=3.11 in a Hermes virtual environment required; global or Windows/WSL-crossed pip refused")
     selected = targets(home, profiles, desktop_only)
@@ -163,6 +163,18 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     wheels = sorted(key for key in manifest["files"] if key.startswith("wheels/") and key.endswith(".whl"))
     if len(wheels) != 2:
         raise ValueError("both Python wheels are required")
+    native = manifest.get("nativeDependencies", {})
+    if not isinstance(native, dict) or set(native) - {"darwin/x86_64"}:
+        raise ValueError("unsupported bundled native dependency mapping")
+    for key, wheel in native.items():
+        if (not isinstance(wheel, str) or wheel not in manifest["files"]
+            or not re.fullmatch(r"vendor/macos-x86_64/lancedb-0\.34\.0-cp3\d+-abi3-macosx_\d+_\d+_x86_64\.whl", wheel)):
+            raise ValueError("invalid bundled native dependency")
+    native_wheels = []
+    if not desktop_only and dependencies:
+        target = info["platform"] + "/" + str(info.get("architecture", ""))
+        if target in native:
+            native_wheels = [native[target]]
     for name, target in selected.items():
         config_path = resolve_inside(target, "config.yaml")
         configs[name] = digest(config_path.read_bytes()) if config_path.exists() else None
@@ -188,6 +200,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
               "desktopOnly": desktop_only,
               "profiles": list(selected), "activate": activate, "dependencies": dependencies,
               "configs": configs, "receipts": receipts, "destinations": destinations, "wheels": wheels,
+              "nativeWheels": native_wheels,
               "effects": "Install Python wheels into selected Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile writes. File rollback does not roll back pip dependencies."}
     if not desktop_only:
         environment = subprocess.run([str(python), "-I", "-m", "pip", "freeze"], capture_output=True, check=True)
@@ -274,13 +287,14 @@ def apply_install(plan, confirmation, stopped=False):
                 command = [plan["python"], "-I", "-m", "pip", "install", "--disable-pip-version-check"]
                 if not plan["dependencies"]:
                     command += ["--no-deps", "--force-reinstall"]
+                command += [str(resolve_inside(bundle, wheel)) for wheel in plan["nativeWheels"]]
                 command += [str(resolve_inside(bundle, wheel)) + ("[local-onnx]" if plan["dependencies"] and Path(wheel).name.startswith("plur1bus_hermes-") else "") for wheel in plan["wheels"]]
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
                 if plan["dependencies"]:
                     # Resolve dependencies normally, but do not let pip's same-
                     # version shortcut retain stale wheel code from an old build.
                     subprocess.run([plan["python"], "-I", "-m", "pip", "install", "--no-deps", "--force-reinstall",
-                                    *[str(resolve_inside(bundle, wheel)) for wheel in plan["wheels"]]],
+                                    *[str(resolve_inside(bundle, wheel)) for wheel in plan["nativeWheels"] + plan["wheels"]]],
                                    stdout=log, stderr=subprocess.STDOUT, check=True)
             after_check = subprocess.run([plan["python"], "-I", "-m", "pip", "check"], capture_output=True, text=True)
             atomic_write(transaction / "pip-check-after.txt", after_check.stdout.encode())

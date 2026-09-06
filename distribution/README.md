@@ -18,7 +18,8 @@ for implemented native variants and remaining parity/acceptance boundaries.
 
 | Environment | Artifact and launcher |
 | --- | --- |
-| macOS, Apple Silicon or Intel | Portable `.tar.gz` / `.zip`, `install.sh`; optional `.pkg` stages the same assistant in `/Applications/PLUR1BUS Installer` |
+| macOS, Apple Silicon | Portable `.tar.gz` / `.zip`, `install.sh`; optional `.pkg` stages the same assistant in `/Applications/PLUR1BUS Installer` |
+| macOS, Intel (candidate) | Same assistant, but requires a native-built LanceDB wheel and separately validated ML dependencies; not yet a certified full-stack installation |
 | Linux / WSL2, x86-64 or ARM64 | Portable `.tar.gz`, run `install.sh` **inside Linux/WSL** |
 | Native Windows x86-64 | Portable `.zip` + `install.ps1`, or the Windows-built console setup `.exe` |
 | Windows Desktop, backend in WSL/remote | Desktop-only installation in Windows; separate backend installation inside WSL/remote |
@@ -76,6 +77,12 @@ stop all processes using that venv. No new profiles are created. An older
 installation receipt prevents accidental downgrades.
 
 Default installation resolves dependencies, including the `local-onnx` extra.
+If a release includes a reviewed native Intel LanceDB wheel, the plan lists it
+under `nativeWheels`; only a macOS x86_64 target interpreter with dependency
+installation enabled selects it. Apple Silicon, Windows, Linux and desktop-only
+installs never install that wheel. It is covered by the bundle checksum manifest.
+The native database wheel alone does not certify Intel compatibility of the
+rest of the ML stack. Do not downgrade PyTorch to bypass a failed preflight.
 `--no-deps` is for an already provisioned, compatible venv; wheels are still
 installed and checked. New pip conflicts abort before plugin-file changes.
 Pre-existing conflict lines are recorded, not presented as a healthy environment.
