@@ -90,9 +90,10 @@ or performed. No repeat migration, vector slicing or deletion was performed.
 
 At this checkpoint, the complete macOS Python invocation (provider, Controls,
 distribution and dashboard tests) passed **568 tests + 55 subtests**, zero
-failures. A Linux ARM64 container passed **537 tests + 55 subtests** after the
-scheduler changes, before the reactivation addition; that earlier result must
-not be represented as a Linux acceptance of the latter changes.
+failures. The final Linux ARM64 container recheck at source commit `df06a9f`
+passed **543 tests + 55 subtests**, including the reactivation addition, zero
+failures. This remains container/runtime evidence, not native WSL or Windows
+scheduler registration evidence.
 
 Regression evidence is in `test_platform_jobs.py`, `test_jobs.py`,
 `test_cognitive_opt_in_and_reminders.py`, `test_hermes_api_710.py`, and
