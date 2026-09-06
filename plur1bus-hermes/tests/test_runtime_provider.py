@@ -570,6 +570,7 @@ providers:
                 ])
             provider.shutdown()
 
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits; Windows requires a private per-user home ACL")
     def test_pre_compress_checkpoint_enforces_private_modes_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
@@ -605,19 +606,18 @@ providers:
             home = Path(directory)
             provider = self._provider_for(home)
             provider.config = {"dataDir": "plur1bus"}
-            original_fsync = os.fsync
+            from plur1bus_hermes.file_io import sync_parent
             directory_syncs = 0
 
-            def fail_first_directory_sync(fd: int) -> None:
+            def fail_first_directory_sync(path: Path) -> None:
                 nonlocal directory_syncs
-                if stat.S_ISDIR(os.fstat(fd).st_mode):
-                    directory_syncs += 1
-                    if directory_syncs == 1:
-                        raise OSError("injected directory fsync failure")
-                original_fsync(fd)
+                directory_syncs += 1
+                if directory_syncs == 1:
+                    raise OSError("injected directory fsync failure")
+                sync_parent(path)
 
             messages = [{"role": "user", "content": "Durable retry evidence."}]
-            with patch("plur1bus_hermes.provider.os.fsync", side_effect=fail_first_directory_sync):
+            with patch("plur1bus_hermes.provider.sync_parent", side_effect=fail_first_directory_sync):
                 with self.assertRaisesRegex(OSError, "directory fsync"):
                     provider.on_pre_compress(messages)
                 result = provider.on_pre_compress(messages)

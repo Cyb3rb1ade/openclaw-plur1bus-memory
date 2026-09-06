@@ -1,8 +1,8 @@
-"""Cooperating runtime/generation POSIX leases; no caller-supplied offline proof."""
+"""Cooperating runtime/generation OS leases; no caller-supplied offline proof."""
 from __future__ import annotations
 
 from contextlib import contextmanager
-import fcntl
+from . import file_lock as fcntl
 import os
 from pathlib import Path
 import threading
@@ -24,7 +24,7 @@ def _open(data_dir: Path) -> int:
     path = _lock_path(data_dir)
     if path.is_symlink():
         raise RuntimeError("unsafe runtime lease lock path")
-    return os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    return fcntl.open_lock(path)
 
 
 class RuntimeLease:

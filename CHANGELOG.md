@@ -7,6 +7,27 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### 7.12.0-hermes.2 / Python 7.12.0.post2 — Distributionskandidat
+
+- Gemeinsamer Python-Installer für bestehende Hermes-Installationen: explizites
+  Home/Venv, Profilwahl, Prüfsummen, revisionsgebundene Bestätigung, Sperre gegen
+  parallele Installationen, Backups und gegen nachträgliche Änderungen geschützter
+  Datei-Rollback. Keine implizite Aktivierung oder Änderung von Memory-/Modell-Daten.
+- Portable ZIP/Tar-Bundles, macOS-PKG als Installationsassistent und nativer
+  Windows-EXE-Baupfad; Desktop-only-Modus für getrennte Windows-/WSL-Backends.
+- Windows-Dateisperren über LockFileEx statt Unix-only-Imports; native sichere
+  Dateiöffnung und Flush-/Write-through-Pfade für Checkpoints, Retry-Queue und
+  Generationswechsel. POSIX-Sperren und Verzeichnis-fsync bleiben erhalten.
+- Abhängigkeiten werden im gewählten Hermes-Venv geprüft; neue pip-Konflikte
+  verhindern die Datei-Aktivierung. Gleiche Versionsnummern überspringen den
+  Austausch der beiden Wheels nicht. Pip-Änderungen sind separat protokolliert
+  und ausdrücklich nicht Bestandteil des Datei-Rollbacks.
+- CI-Matrix für macOS Intel/ARM64, Linux x64/ARM64 und Windows x64 mit echter
+  Wheel-Installation, LanceDB-Smoke und Rollback in temporären Homes. Keine
+  automatische Veröffentlichung oder Verwendung von Signier-Zertifikaten.
+- Freigabegrenzen: native Windows-Tests und Signierung müssen separat bestanden
+  sein; die vorhandene Wartungs-Scheduler-Installation bleibt launchd-spezifisch.
+
 - Hermes: schreibgeschützter Desktop-Start-/Profilcheck und unabhängig auffindbare
   Diagnose in der Befehlspalette. Unbestätigte Profilverbindungen bleiben gesperrt;
   Sidebar-Unterstützung wird ohne Host-Nachweis ausdrücklich als unbekannt angezeigt.

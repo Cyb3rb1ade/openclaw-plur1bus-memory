@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from .file_io import replace_file, sync_parent
 import uuid
 from pathlib import Path
 from typing import Any
@@ -64,12 +65,8 @@ def persist_proposal(path: Path, proposal: dict[str, Any]) -> None:
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(serialized); handle.flush(); os.fsync(handle.fileno())
-    os.replace(temp, path)
-    directory = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
+    replace_file(temp, path)
+    sync_parent(path)
 
 
 def combined_window(candidate: dict[str, Any], incoming: dict[str, Any]) -> tuple[int, int]:

@@ -145,7 +145,8 @@ def _read_record(path: Path) -> dict[str, Any] | None:
     if path.is_symlink():
         raise ValidationError("workspace consent record is a symlink; refusing overwrite")
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        from .file_lock import open_existing
+        fd = open_existing(path)
     except FileNotFoundError:
         return None
     except OSError as error:

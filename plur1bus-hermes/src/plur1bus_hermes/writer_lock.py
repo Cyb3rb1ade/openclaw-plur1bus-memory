@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from functools import wraps
-import fcntl
+from . import file_lock as fcntl
 import os
 from pathlib import Path
 import threading
@@ -32,7 +32,7 @@ def writer_lock(data_dir: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink():
             raise ValueError("unsafe memory writer lock")
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        fd = fcntl.open_lock(path)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             held.add(key)

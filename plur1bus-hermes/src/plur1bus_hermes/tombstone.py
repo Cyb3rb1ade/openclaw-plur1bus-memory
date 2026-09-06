@@ -13,6 +13,7 @@ import hashlib
 import json
 import copy
 import os
+from .file_io import sync_parent
 import re
 import stat
 import uuid
@@ -21,7 +22,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import fcntl
+from . import file_lock as fcntl
 
 TOMBSTONE_SCHEMA_VERSION = 1
 
@@ -98,11 +99,7 @@ def archive_card_atomically(path: Path, card: dict[str, Any]) -> None:
             if path.is_symlink() or path.read_bytes() != payload:
                 raise ValueError(f"archive collision: {path}")
         os.unlink(temporary)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        sync_parent(path)
     except Exception:
         try:
             temporary.unlink()
@@ -269,7 +266,7 @@ def _registry_file(base_dir: Path, agent_id: str) -> Path:
 def _registry_lock(lock_path: Path):
     """Hold the per-agent registry lock across repair and append operations."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as handle:
+    with os.fdopen(fcntl.open_lock(lock_path), "r+b") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield

@@ -2,10 +2,17 @@
 
 This directory contains the installable Hermes memory-provider package for PLUR1BUS.
 
-Hermes release: **7.12.0-hermes.1**, Python **7.12.0.post1**.
+Hermes release candidate: **7.12.0-hermes.2**, Python **7.12.0.post2** (not published).
 Compatibility was inspected against Hermes 0.21.0. Detailed coverage and
 remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` and
 `docs/audits/hermes-7.12.0-contract-delta.md` in the repository.
+
+### Cross-platform distribution
+
+See [the portable installer guide](../distribution/README.md) for macOS `.pkg`,
+Linux/WSL archives and Windows setup builds, profile selection, dependency checks,
+explicit activation, file rollback and the separate Desktop-only path.
+Native artifacts are candidates until their OS-specific CI and release gates pass.
 
 ### Desktop host preparation (next update; not in the published .1 assets)
 

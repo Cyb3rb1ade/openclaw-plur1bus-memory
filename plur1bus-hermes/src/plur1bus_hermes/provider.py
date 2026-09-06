@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+from .file_io import replace_file, sync_parent
 import re
 import stat
 import threading
@@ -742,7 +743,7 @@ class Plur1busMemoryProvider(MemoryProvider):
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, target)
+            replace_file(temporary, target)
             self._validate_and_sync_checkpoint(
                 target, checkpoint_dir, identity, digest
             )
@@ -763,10 +764,8 @@ class Plur1busMemoryProvider(MemoryProvider):
         digest: str,
     ) -> None:
         """Validate and durably sync a checkpoint on every successful path."""
-        flags = os.O_RDONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        fd = os.open(target, flags)
+        from .file_lock import open_existing
+        fd = open_existing(target, writable=os.name == "nt")
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise RuntimeError("pre-compress checkpoint must be a regular file")
@@ -786,18 +785,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             if fd >= 0:
                 os.close(fd)
 
-        directory_flags = os.O_RDONLY
-        if hasattr(os, "O_DIRECTORY"):
-            directory_flags |= os.O_DIRECTORY
-        if hasattr(os, "O_NOFOLLOW"):
-            directory_flags |= os.O_NOFOLLOW
-        directory_fd = os.open(checkpoint_dir, directory_flags)
-        try:
-            if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
-                raise RuntimeError("pre-compress checkpoint parent must be a directory")
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        sync_parent(target)
 
     @staticmethod
     def _prefetch_key(query: str, session_id: str) -> str:

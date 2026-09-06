@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+from .file_io import replace_file, sync_parent
 import re
 import stat
 import tempfile
@@ -100,7 +101,8 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
-        os.fchmod(descriptor, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             descriptor = -1
             handle.write(json.dumps(value, sort_keys=True, indent=2) + "\n")
@@ -108,14 +110,10 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
             os.fsync(handle.fileno())
         if path.is_symlink():
             raise ValidationError("generation state path is unsafe")
-        os.replace(temporary, path)
+        replace_file(temporary, path)
         temporary = ""
         os.chmod(path, 0o600)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        sync_parent(path)
     finally:
         if descriptor >= 0:
             os.close(descriptor)

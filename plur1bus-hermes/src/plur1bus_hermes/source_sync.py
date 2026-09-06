@@ -24,7 +24,8 @@ def _read_source(source: Path, relative: str) -> bytes:
     if raw.is_symlink():
         raise ValueError("source changed to symlink")
     path = resolve_inside(str(source), relative)
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    from .file_lock import open_existing
+    fd = open_existing(path)
     with os.fdopen(fd, "rb") as handle:
         metadata = os.fstat(handle.fileno())
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 200_000:

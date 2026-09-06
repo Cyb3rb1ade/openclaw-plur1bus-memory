@@ -2,7 +2,19 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 
-from gateway.platforms.base import SendResult
+try:
+    from gateway.platforms.base import SendResult
+except ModuleNotFoundError as error:
+    if error.name not in {"gateway", "gateway.platforms", "gateway.platforms.base"}:
+        raise
+    # These are host-neutral delivery-result contract tests. Use the real host
+    # type when present; an isolated wheel QA environment has no Hermes gateway.
+    from dataclasses import dataclass
+
+    @dataclass
+    class SendResult:
+        success: bool
+        error: str | None = None
 from plur1bus_controls.plugin import Plur1busControlsPlugin
 
 

@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 build/
 .worktrees/
+distribution-artifacts/
 .env
 .env.*
 !.env.example

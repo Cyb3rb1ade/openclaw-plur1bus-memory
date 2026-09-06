@@ -1,0 +1,50 @@
+name: Hermes portable and native distribution
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/hermes-distribution-*']
+  pull_request:
+    paths:
+      - 'distribution/**'
+      - 'plur1bus-hermes/**'
+      - 'plur1bus-controls/**'
+      - 'hermes-dashboard/**'
+      - '.github/workflows/hermes-distribution.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Build and test tools
+        run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2'
+      - name: CPU PyTorch (avoid unrelated CUDA downloads)
+        if: runner.os == 'Linux' || runner.os == 'Windows'
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install candidate runtime dependencies
+        run: python -m pip install './plur1bus-hermes[local-onnx]' ./plur1bus-controls
+      - name: Validate resolved dependency environment
+        run: python -m pip check
+      - name: Tests, native packaging and isolated actual installation
+        run: python distribution/ci.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: plur1bus-hermes-${{ matrix.os }}
+          path: distribution-artifacts/*
+          if-no-files-found: error
+          retention-days: 14

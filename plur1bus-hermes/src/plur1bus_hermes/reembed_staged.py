@@ -15,7 +15,7 @@ import logging
 import math
 import os
 import re
-import fcntl
+from . import file_lock as fcntl
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -169,7 +169,7 @@ def _stage_lock(source: Path, agent_id: str, plan_id: str):
     lock = source.parent / f".{agent_id}.reembed-staged-{plan_id}.lock"
     if lock.is_symlink():
         raise ValidationError("staged re-embedding lock is unsafe")
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    fd = fcntl.open_lock(lock)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield

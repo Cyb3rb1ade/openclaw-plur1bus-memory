@@ -50,7 +50,7 @@ def repair_materialization(domain: Any, record: dict[str, Any], table: Any) -> d
                 return report
         else:
             note.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(note, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            descriptor = os.open(note, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             with os.fdopen(descriptor, "w") as handle:
                 handle.write(prefix + '<section id="graph-links">\n<!-- PLUR1BUS managed graph links -->\n</section>\n')
                 handle.flush()

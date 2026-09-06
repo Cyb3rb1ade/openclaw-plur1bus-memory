@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+from .file_io import replace_file, sync_parent
 import threading
 import urllib.error
 import urllib.request
@@ -55,10 +56,7 @@ from .runtime_scheduler import AdmissionRejected, BoundedExecutor
 from .durable_merge import build_proposal, persist_proposal
 from .writer_lock import serialized_memory_write
 
-try:  # POSIX is the supported Hermes host contract.
-    import fcntl
-except ImportError:  # pragma: no cover - protects import on unsupported hosts.
-    fcntl = None  # type: ignore[assignment]
+from . import file_lock as fcntl
 
 
 def _utcnow() -> str:
@@ -718,10 +716,7 @@ class Plur1busRuntime:
         with self._retry_lock:
             directory = self._ensure_retry_state_dir()
             lock_path = self._retry_state_path(".capture-retry.lock")
-            flags = os.O_RDWR | os.O_CREAT
-            if hasattr(os, "O_NOFOLLOW"):
-                flags |= os.O_NOFOLLOW
-            fd = os.open(lock_path, flags, 0o600)
+            fd = fcntl.open_lock(lock_path)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 yield directory
@@ -809,12 +804,8 @@ class Plur1busRuntime:
             handle.write("".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries))
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        replace_file(temp_path, path)
+        sync_parent(path)
 
     def _write_capture_retries(self, entries: list[dict[str, Any]]) -> None:
         with self._locked_capture_retry_queue():
@@ -878,11 +869,7 @@ class Plur1busRuntime:
                 handle.write(json.dumps(entry, sort_keys=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        sync_parent(path)
 
     def _append_capture_dead_letters(self, entries: list[dict[str, Any]]) -> None:
         with self._locked_capture_retry_queue():
