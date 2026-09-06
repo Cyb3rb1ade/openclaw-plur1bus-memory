@@ -1,5 +1,5 @@
 import React from 'react';
-import { host, useValue, STATUSBAR_AREAS, PALETTE_AREA } from '@hermes/plugin-sdk';
+import { host, useValue, STATUSBAR_AREAS, PALETTE_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk';
 
 /** Read only the active backend; discard late responses.
  * @param {Function} rest Host REST transport.
@@ -88,7 +88,7 @@ export function createProfileTransport(api, routes, owner, current, identity) {
         // Never surface raw host errors (they can contain URLs or credentials).
         const message = String(error?.message || '');
         if (/404|not found|not enabled|disabled/i.test(message)) {
-          throw unavailable('PLUR1BUS ist in diesem Profil nicht aktiviert oder sein Dashboard-Backend fehlt. Keine fremde Partition wird geladen.');
+          throw Object.assign(unavailable('PLUR1BUS ist in diesem Profil nicht aktiviert oder sein Dashboard-Backend fehlt. Keine fremde Partition wird geladen.'), { plur1busDisabled: true });
         }
         if (/409|profile mismatch/i.test(message)) {
           throw unavailable('Hermes hat die Anfrage einem anderen Profil zugeordnet. Der Zugriff wurde sicher gesperrt.');
@@ -429,6 +429,31 @@ function Partition({ rest, profile }) {
     h('p', null, 'Verwendet den bestehenden Hermes-Backendprozess. Kein separater Webserver erforderlich.'));
 }
 
+/** Keep navigation scoped to authoritative activation; stale probes cannot change another profile.
+ * @param {Function} probe Read current profile's activation, or null on transient failure.
+ * @param {Function} current Connection/profile identity.
+ * @param {Function} show Set navigation visibility.
+ * @returns {object} Refreshable, disposable visibility controller.
+ */
+export function createNavigationVisibility(probe, current, show) {
+  const known = new Map();
+  let sequence = 0, disposed = false, owner;
+  return {
+    async refresh() {
+      if (disposed) return;
+      const identity = current(), turn = ++sequence;
+      if (owner !== identity) { owner = identity; show(known.get(identity) === true); }
+      let enabled;
+      try { enabled = await probe(); } catch { enabled = null; }
+      if (disposed || turn !== sequence || current() !== identity) return;
+      if (typeof enabled === 'boolean') known.set(identity, enabled);
+      // A temporary connection failure must not erase a verified menu entry.
+      show(known.get(identity) === true);
+    },
+    dispose() { disposed = true; sequence++; show(false); },
+  };
+}
+
 /** Register native navigation without changing backend configuration or memory data. */
 export default {
   id: 'plur1bus',
@@ -455,12 +480,39 @@ export default {
     ctx.onDispose(() => { closeWorkspace?.(); closeWorkspace = null; });
     // Retire our old experimental route, which Hermes can mistake for a chat.
     if (typeof window !== 'undefined' && window.location.hash === '#/plur1bus') host.navigate('/');
-    ctx.registerMany([
+    let removeNavigation = null;
+    const visibility = createNavigationVisibility(async () => {
+      const identity = scopeKey();
+      const [connection, profile] = JSON.parse(identity);
+      const rest = createProfileTransport(typeof window !== 'undefined' && window.hermesDesktop?.api,
+        host.profileRoutes, { connection, profile }, scopeKey, identity);
+      try {
+        const caps = await rest('/desktop/capabilities');
+        return typeof caps.memoryProviderEnabled === 'boolean' ? caps.memoryProviderEnabled : null;
+      } catch (error) {
+        return error?.plur1busDisabled ? false : null;
+      }
+    }, scopeKey, enabled => {
+      if (!enabled) { removeNavigation?.(); removeNavigation = null; return; }
+      if (removeNavigation) return;
+      removeNavigation = ctx.registerMany([
+      { id: 'sidebar-open', area: SIDEBAR_NAV_AREA, order: 55,
+        data: { codicon: 'database', label: 'PLUR1BUS', onSelect: open } },
       { id: 'open-button', area: STATUSBAR_AREAS.left, order: 55,
         data: { id: 'plur1bus-open', variant: 'action', label: 'PLUR1BUS', disabled: !supported, onSelect: open,
           title: supported ? 'PLUR1BUS als Workspace öffnen' : 'Hermes Desktop mit openWorkspace-Unterstützung erforderlich' } },
       { id: 'open', area: PALETTE_AREA, data: { id: 'plur1bus.open', label: 'PLUR1BUS öffnen',
         keywords: ['memory', 'embeddings', 'reranker', 'plur1bus'], run: open } },
-    ]);
+      ]);
+    });
+    const refresh = () => { void visibility.refresh(); };
+    const unsubscribers = [host.state.profile, host.state.connectionId].map(state => state.subscribe(refresh));
+    const timer = setInterval(refresh, 15000);
+    if (typeof window !== 'undefined') window.addEventListener('focus', refresh);
+    ctx.onDispose(() => {
+      unsubscribers.forEach(unsubscribe => unsubscribe()); clearInterval(timer);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', refresh);
+      visibility.dispose();
+    });
   },
 };

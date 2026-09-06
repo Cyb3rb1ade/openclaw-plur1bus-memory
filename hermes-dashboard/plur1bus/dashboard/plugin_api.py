@@ -158,7 +158,10 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
     result = {"memoryBrowser": True, "workshopActions": actions, "retrievalActions": actions}
     if actions:
         from hermes_cli.profiles import get_active_profile_name
+        from hermes_cli.config import load_config_readonly
         result.update(profileBinding=1, profile=get_active_profile_name())
+        config = load_config_readonly()
+        result["memoryProviderEnabled"] = (config.get("memory") or {}).get("provider") == "plur1bus"
     return result
 
 

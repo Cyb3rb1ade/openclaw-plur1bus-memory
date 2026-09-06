@@ -4,9 +4,10 @@ import vm from 'node:vm';
 
 const state = { profile: 'alpha', connection: 'local' };
 const values = {
-  host: { state: { profile: { get: () => state.profile }, connectionId: { get: () => state.connection } }, navigate() {} },
+  host: { state: { profile: { get: () => state.profile, subscribe: fn => { fn(); return () => {}; } },
+    connectionId: { get: () => state.connection, subscribe: fn => { fn(); return () => {}; } } }, navigate() {} },
   useValue: () => undefined,
-  STATUSBAR_AREAS: { left: 'statusBar.left' }, PALETTE_AREA: 'palette',
+  STATUSBAR_AREAS: { left: 'statusBar.left' }, PALETTE_AREA: 'palette', SIDEBAR_NAV_AREA: 'sidebar.nav',
 };
 const sdk = new vm.SyntheticModule(Object.keys(values), function () {
   for (const [key, value] of Object.entries(values)) this.setExport(key, value);
@@ -127,18 +128,47 @@ assert.equal(result.status.agentId, 'healthy');
 assert.ok(result.workshopError);
 assert.ok(!JSON.stringify(result).includes('private endpoint path'));
 
-let contributions, dispose, opened = [], closed = 0;
+let navOwner = 'local:enabled', navPending = [], visibilityStates = [];
+const visibility = plugin.namespace.createNavigationVisibility(
+  () => new Promise(resolve => navPending.push(resolve)), () => navOwner, value => visibilityStates.push(value));
+const enabledProbe = visibility.refresh(); navPending.shift()(true); await enabledProbe;
+assert.equal(visibilityStates.at(-1), true);
+const staleProbe = visibility.refresh(); const staleReply = navPending.shift();
+navOwner = 'local:disabled';
+const disabledProbe = visibility.refresh();
+assert.equal(visibilityStates.at(-1), false, 'profile switch cannot inherit the enabled menu');
+navPending.shift()(false); await disabledProbe;
+staleReply(true); await staleProbe;
+assert.equal(visibilityStates.at(-1), false, 'late enabled result cannot resurrect a disabled profile menu');
+navOwner = 'local:enabled';
+const transient = visibility.refresh(); navPending.shift()(null); await transient;
+assert.equal(visibilityStates.at(-1), true, 'transient failure keeps this profile last verified entry');
+const deactivated = visibility.refresh(); navPending.shift()(false); await deactivated;
+assert.equal(visibilityStates.at(-1), false, 'authoritative disable removes navigation');
+visibility.dispose();
+
+let contributions, opened = [], closed = 0;
+const disposers = [];
+globalThis.window = { location: { hash: '#/' }, addEventListener() {}, removeEventListener() {},
+  hermesDesktop: { api: async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: true }) } };
+values.host.profileRoutes = async () => [{ connectionId: state.connection, profile: state.profile, targetProfile: state.profile }];
 values.host.openWorkspace = (id, options) => { opened.push({ id, options }); return () => { closed++; }; };
-plugin.namespace.default.register({ rest() {}, onDispose(fn) { dispose = fn; }, registerMany(value) { contributions = value; } });
+plugin.namespace.default.register({ rest() {}, onDispose(fn) { disposers.push(fn); }, registerMany(value) { contributions = value; return () => {}; } });
+await new Promise(resolve => setTimeout(resolve, 0));
 assert.equal(plugin.namespace.default.id, 'plur1bus');
 assert.equal(contributions.some(c => c.area === 'routes'), false, 'must not rely on the stale compiled route table');
 const button = contributions.find(c => c.area === 'statusBar.left').data;
 assert.equal(button.label, 'PLUR1BUS');
 button.onSelect();
+const sidebar = contributions.find(c => c.area === 'sidebar.nav').data;
+assert.equal(sidebar.label, 'PLUR1BUS');
+assert.equal(sidebar.path, undefined, 'sidebar must open workspace, not a stale route');
+sidebar.onSelect();
 assert.equal(contributions.find(c => c.area === 'palette').data.id, 'plur1bus.open');
 contributions.find(c => c.area === 'palette').data.run();
-assert.deepEqual(opened.map(c => c.id), ['plur1bus', 'plur1bus'], 'stable workspace ID prevents duplicate tabs');
+assert.deepEqual(opened.map(c => c.id), ['plur1bus', 'plur1bus', 'plur1bus'], 'all entry points share the same workspace');
 assert.equal(opened[0].options.title, 'PLUR1BUS');
-dispose();
+disposers.forEach(dispose => dispose());
+delete globalThis.window;
 assert.equal(closed, 1, 'hot unload closes the owned workspace');
 console.log('Native desktop routing, lifecycle, read and scoped action contracts passed.');

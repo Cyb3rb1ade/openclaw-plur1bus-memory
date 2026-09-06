@@ -11,6 +11,19 @@ from test_plur1bus_dashboard import _load_api
 
 
 class DesktopActionsTests(unittest.TestCase):
+    def test_navigation_activation_follows_actual_profile_memory_provider(self):
+        api = _load_api()
+        app = FastAPI()
+        app.include_router(api.router)
+        with patch.object(api, "_desktop_actor", return_value="native"), patch(
+            "hermes_cli.config.load_config_readonly", return_value={"memory": {"provider": "plur1bus"}}
+        ) as config, TestClient(app) as client:
+            self.assertTrue(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
+            config.return_value = {"memory": {"provider": "builtin"}}
+            self.assertFalse(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
+            config.return_value = {}
+            self.assertFalse(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
+
     def test_expected_profile_is_asserted_before_any_read_or_action(self):
         api = _load_api()
         app = FastAPI()

@@ -4,7 +4,7 @@ The optional `--desktop` installer flag installs `plugin.js` into the supported
 `HERMES_HOME/desktop-plugins/plur1bus/` runtime-plugin directory and includes the
 existing dashboard backend. It does not patch or rebuild Hermes itself.
 
-Open **PLUR1BUS** in the bottom status bar or search for **PLUR1BUS öffnen** in
+Open **PLUR1BUS** in the left navigation, in the bottom status bar or search for **PLUR1BUS öffnen** in
 the command palette. It opens a closeable, reusable native workspace tab through
 `host.openWorkspace`, not a contributed route. Requests use the host's authenticated, profile-aware
 Electron bridge, not a hardcoded port or separate web server. Runtime-plugin
@@ -35,8 +35,8 @@ added after startup: a sidebar link appears but its route can keep showing chat.
 Reload was not consistently sufficient in repeated UI tests. The final plugin
 therefore does not use that route table at all. The SDK's workspace door works
 after hot installation, reopens the same tab, and closes it on plugin disposal.
-Older desktops without `openWorkspace` visibly disable the entry with an update
-hint. No host bundle is patched; the experimental `/plur1bus` native route is
+Older desktops without `openWorkspace` visibly disable the status entry with an update
+hint. The installer does not patch the host; the experimental `/plur1bus` native route is
 retired (the independent web-dashboard URL remains unchanged).
 
 The host can disable the entry in Settings → Plugins. Switching profiles or
@@ -111,3 +111,13 @@ before any data read or action. It never uses this value to select an arbitrary
 home. Old/mismatched backends and unavailable/disabled providers fail closed;
 there is no default-partition fallback. Shared remote backends must themselves
 support the selected profile scope; a mismatched shared backend is rejected.
+
+The left navigation requires the host's `sidebar.nav` action contribution
+(`onSelect`, not a route). The local host extension is supplied separately in
+`hermes-dashboard/patches/hermes-desktop-sidebar-action.patch`; it is not applied
+by the plugin installer. All entry points open the same workspace. Navigation
+is registered only after the selected backend confirms `memoryProviderEnabled`.
+Profile/connection changes recheck activation and discard late results. A
+temporary failure retains only that identity's last verified state; an explicit
+disabled response removes its entry. Focus and a 15-second active-profile check
+reconcile externally changed settings without probing every inactive backend.

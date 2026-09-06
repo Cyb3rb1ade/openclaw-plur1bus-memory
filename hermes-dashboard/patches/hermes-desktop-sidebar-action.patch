@@ -1,0 +1,113 @@
+diff --git a/apps/desktop/src/app/chat/sidebar/contributed-navigation.test.ts b/apps/desktop/src/app/chat/sidebar/contributed-navigation.test.ts
+new file mode 100644
+index 0000000000..2e8c7361d7
+--- /dev/null
++++ b/apps/desktop/src/app/chat/sidebar/contributed-navigation.test.ts
+@@ -0,0 +1,15 @@
++import { describe, expect, it, vi } from 'vitest'
++import { contributedNavigation } from './contributed-navigation'
++
++describe('contributed navigation intent', () => {
++  it('opens action-only workspaces without changing the route, while preserving route contributions', () => {
++    const open = vi.fn()
++    const action = contributedNavigation({ label: 'Memory', onSelect: open, path: '/unused' })
++    action?.onSelect?.()
++    expect(open).toHaveBeenCalledOnce()
++    expect(action).not.toHaveProperty('route')
++    expect(contributedNavigation({ label: 'Board', path: '/board' })).toEqual({ route: '/board' })
++    expect(contributedNavigation({ label: 'Invalid' })).toBeNull()
++    expect(contributedNavigation({ path: '/missing-label' })).toBeNull()
++  })
++})
+diff --git a/apps/desktop/src/app/chat/sidebar/contributed-navigation.ts b/apps/desktop/src/app/chat/sidebar/contributed-navigation.ts
+new file mode 100644
+index 0000000000..f8c590473f
+--- /dev/null
++++ b/apps/desktop/src/app/chat/sidebar/contributed-navigation.ts
+@@ -0,0 +1,8 @@
++import type { SidebarNavContribution } from '@/app/routes'
++
++/** Resolve one navigation intent: a workspace action takes precedence over a route. */
++export function contributedNavigation(data: Partial<SidebarNavContribution> | undefined) {
++  if (!data?.label) return null
++  if (typeof data.onSelect === 'function') return { onSelect: data.onSelect }
++  return data.path?.startsWith('/') ? { route: data.path } : null
++}
+diff --git a/apps/desktop/src/app/chat/sidebar/index.tsx b/apps/desktop/src/app/chat/sidebar/index.tsx
+index 3f53fafa7f..301e72694b 100644
+--- a/apps/desktop/src/app/chat/sidebar/index.tsx
++++ b/apps/desktop/src/app/chat/sidebar/index.tsx
+@@ -144,6 +144,7 @@ import {
+   SKILLS_ROUTE
+ } from '../../routes'
+ import type { SidebarNavItem } from '../../types'
++import { contributedNavigation } from './contributed-navigation'
+ import { type NewSessionSplitHandler, startNewSessionDrag } from '../new-session-drag'
+ 
+ import { SidebarSectionAddButton } from './chrome'
+@@ -342,7 +343,8 @@ export function ChatSidebar({
+       navContributions.flatMap(c => {
+         const data = c.data as Partial<SidebarNavContribution> | undefined
+ 
+-        if (!data?.path?.startsWith('/') || !data.label) {
++        const intent = contributedNavigation(data)
++        if (!intent || !data?.label) {
+           return []
+         }
+ 
+@@ -353,7 +355,7 @@ export function ChatSidebar({
+             id: c.id,
+             label: data.label,
+             icon: (props: { className?: string }) => <Codicon name={codicon} {...props} />,
+-            route: data.path
++            ...intent
+           }
+         ]
+       }),
+@@ -1490,7 +1492,7 @@ export function ChatSidebar({
+           <SidebarGroupContent>
+             <SidebarMenu className="gap-px">
+               {[...SIDEBAR_NAV, ...contributedNav].map(item => {
+-                const isInteractive = Boolean(item.action) || Boolean(item.route)
++                const isInteractive = Boolean(item.action) || Boolean(item.route) || Boolean(item.onSelect)
+ 
+                 const active =
+                   (item.id === 'skills' && currentView === 'skills') ||
+@@ -1531,7 +1533,8 @@ export function ChatSidebar({
+                         $newChatProfile.set(null)
+                       }
+ 
+-                      onNavigate(item)
++                      if (item.onSelect) item.onSelect()
++                      else onNavigate(item)
+                     }}
+                     onPointerDown={event => {
+                       // The "New session" row is a drag source too: drag it onto
+diff --git a/apps/desktop/src/app/routes.ts b/apps/desktop/src/app/routes.ts
+index 9ee9365c32..189a94377e 100644
+--- a/apps/desktop/src/app/routes.ts
++++ b/apps/desktop/src/app/routes.ts
+@@ -116,7 +116,9 @@ export interface SidebarNavContribution {
+   codicon: string
+   label: string
+   /** Route to navigate to (usually a contributed page's path). */
+-  path: string
++  path?: string
++  /** Open a plugin workspace directly instead of changing the chat route. */
++  onSelect?: () => void
+ }
+ 
+ // Views that render as a full-screen modal card (OverlayView) over the shell.
+diff --git a/apps/desktop/src/app/types.ts b/apps/desktop/src/app/types.ts
+index 57e85a0a9c..37bf9aaa5f 100644
+--- a/apps/desktop/src/app/types.ts
++++ b/apps/desktop/src/app/types.ts
+@@ -171,6 +171,7 @@ export interface SidebarNavItem {
+   icon: React.ComponentType<{ className?: string }>
+   route?: string
+   action?: 'new-session'
++  onSelect?: () => void
+   /** Keybind action id — when set, the tooltip shows the keybind hint. */
+   keybindActionId?: string
+ }
+
