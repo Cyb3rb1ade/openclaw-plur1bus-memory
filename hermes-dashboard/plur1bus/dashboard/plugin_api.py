@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from plur1bus_hermes.namespaces import binding_from_scope, normalize_scope_context, resolve_namespace_routes
@@ -23,7 +23,18 @@ from plur1bus_hermes.runtime import Plur1busRuntime
 from plur1bus_hermes.skill_workshop import SkillWorkshop
 from plur1bus_hermes.validation import safe_agent_id
 
-router = APIRouter()
+def _require_profile_binding(request: Request) -> None:
+    """Assert the native caller's expected profile; never use it to select a home."""
+    expected = request.query_params.getlist("expectedProfile")
+    if not expected:
+        return  # Existing browser clients stay process-scoped.
+    _actor(request)
+    from hermes_cli.profiles import get_active_profile_name
+    if len(expected) != 1 or expected[0] != get_active_profile_name():
+        raise HTTPException(status_code=409, detail="PLUR1BUS backend profile mismatch")
+
+
+router = APIRouter(dependencies=[Depends(_require_profile_binding)])
 _REVISION = re.compile(r"^[a-f0-9]{64}$")
 _NONCE_TTL_SECONDS = 300
 _nonce_lock = threading.Lock()
@@ -140,7 +151,11 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
         actions = True
     except HTTPException:
         actions = False
-    return {"memoryBrowser": True, "workshopActions": actions}
+    result = {"memoryBrowser": True, "workshopActions": actions}
+    if actions:
+        from hermes_cli.profiles import get_active_profile_name
+        result.update(profileBinding=1, profile=get_active_profile_name())
+    return result
 
 
 def _actor(request: Request) -> str:

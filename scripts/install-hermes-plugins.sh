@@ -10,6 +10,7 @@ install_deps=1
 install_retrieval=1
 install_dashboard=0
 install_desktop=0
+desktop_all_profiles=0
 install_model_providers=1
 retrieval_args=()
 non_interactive="${PLUR1BUS_NONINTERACTIVE:-0}"
@@ -31,6 +32,12 @@ while [[ $# -gt 0 ]]; do
     --desktop)
       install_desktop=1
       install_dashboard=1
+      shift
+      ;;
+    --desktop-all-profiles)
+      install_desktop=1
+      install_dashboard=1
+      desktop_all_profiles=1
       shift
       ;;
     --no-deps)
@@ -55,7 +62,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      printf 'Usage: %s [--hermes-home PATH] [--dashboard|--desktop] [--no-setup] [--no-deps] [--no-retrieval] [--no-model-providers] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
+      printf 'Usage: %s [--hermes-home PATH] [--dashboard|--desktop|--desktop-all-profiles] [--no-setup] [--no-deps] [--no-retrieval] [--no-model-providers] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -79,11 +86,29 @@ fi
 
 memory_target="$hermes_home/plugins/plur1bus"
 desktop_target="$hermes_home/desktop-plugins/plur1bus"
-if [[ "$install_desktop" == "1" ]]; then
-  if [[ -L "$hermes_home/desktop-plugins" || -L "$desktop_target" || -L "$desktop_target/plugin.js" ]]; then
-    printf 'Refusing symbolic-link desktop plugin destination.\n' >&2
+desktop_homes=("$hermes_home")
+if [[ "$desktop_all_profiles" == "1" ]]; then
+  if [[ "$(basename "$(dirname "$hermes_home")")" == "profiles" || -L "$hermes_home/profiles" ]]; then
+    printf 'All-profile Desktop installation requires an explicit root home with a non-symlink profiles directory.\n' >&2
     exit 4
   fi
+  for profile_home in "$hermes_home"/profiles/*; do
+    [[ -d "$profile_home" && -f "$profile_home/config.yaml" ]] || continue
+    if [[ -L "$profile_home" || -L "$profile_home/config.yaml" ]]; then
+      printf 'Refusing symbolic-link profile destination.\n' >&2
+      exit 4
+    fi
+    desktop_homes+=("$profile_home")
+  done
+fi
+if [[ "$install_desktop" == "1" ]]; then
+  for desktop_home in "${desktop_homes[@]}"; do
+    desktop_target="$desktop_home/desktop-plugins/plur1bus"
+    if [[ -L "$desktop_home/desktop-plugins" || -L "$desktop_target" || -L "$desktop_target/plugin.js" ]]; then
+      printf 'Refusing symbolic-link desktop plugin destination.\n' >&2
+      exit 4
+    fi
+  done
 fi
 controls_target="$hermes_home/plugins/plur1bus-controls"
 omlx_target="$hermes_home/plugins/model-providers/omlx"
@@ -121,9 +146,13 @@ if [[ "$install_deps" == "1" ]]; then
 fi
 
 if [[ "$install_desktop" == "1" ]]; then
-  install -d "$desktop_target"
-  install -m 0644 "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$desktop_target/plugin.js"
+  for desktop_home in "${desktop_homes[@]}"; do
+    desktop_target="$desktop_home/desktop-plugins/plur1bus"
+    install -d "$desktop_target"
+    install -m 0644 "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$desktop_target/plugin.js"
+  done
   printf 'Installed native PLUR1BUS Desktop entry; open PLUR1BUS in the bottom status bar or command palette.\n'
+  printf 'Desktop UI installed in %s existing home(s); other profiles memory-provider configuration is unchanged.\n' "${#desktop_homes[@]}"
   printf 'Restart Hermes Desktop to load backend updates. The frontend uses a native workspace tab, not the contributed route cache.\n'
 fi
 

@@ -24,6 +24,43 @@ await plugin.link(name => {
 await plugin.evaluate();
 const { createScopedReader } = plugin.namespace;
 const { createScopedRequest } = plugin.namespace;
+const { createProfileTransport } = plugin.namespace;
+
+// The ambient SDK transport can lag the visible profile. Pin Electron routing
+// explicitly and require the backend's profile-binding protocol before any data.
+let selected = 'local:bernhardine', wire = [], resolveWire;
+const pinned = createProfileTransport(async request => {
+  wire.push(request);
+  assert.equal(request.connectionId, 'local');
+  assert.equal(request.profile, 'bernhardine');
+  assert.equal(new URL(request.path, 'http://test').searchParams.get('expectedProfile'),
+    request.path.includes('/desktop/capabilities') ? null : 'bernhardine');
+  return request.path.includes('/desktop/capabilities')
+    ? { profileBinding: 1, profile: 'bernhardine' } : { agentId: 'bernhardine' };
+}, async () => [{ connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' }],
+{ connection: 'local', profile: 'bernhardine' }, () => selected, selected);
+assert.equal((await pinned('/status')).agentId, 'bernhardine');
+assert.equal(wire.length, 2);
+assert.match(wire[0].path, /desktop\/capabilities/);
+selected = 'local:bernd';
+await assert.rejects(pinned('/desktop/workshop/approve', { method: 'POST' }));
+assert.equal(wire.length, 2, 'changed profile must not dispatch a stale write');
+selected = 'local:bernhardine';
+for (const response of [{}, { profileBinding: 1, profile: 'default' }]) {
+  let calls = 0;
+  const wrong = createProfileTransport(async () => { calls++; return response; }, async () => [
+    { connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' },
+  ], { connection: 'local', profile: 'bernhardine' }, () => selected, selected);
+  await assert.rejects(wrong('/memories'));
+  assert.equal(calls, 1, 'unverified backend must never receive memory/action requests');
+}
+const racing = createProfileTransport(async () => { throw Error('must not dispatch'); },
+  () => new Promise(resolve => { resolveWire = resolve; }),
+  { connection: 'local', profile: 'bernhardine' }, () => selected, selected);
+const race = racing('/status');
+selected = 'elsewhere:bernhardine';
+resolveWire([{ connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' }]);
+await assert.rejects(race);
 
 let dispatches = 0, finish;
 let identity = 'local:alpha';

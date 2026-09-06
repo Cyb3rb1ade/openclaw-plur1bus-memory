@@ -1,5 +1,55 @@
 # Hermes Desktop integration — local acceptance
 
+## 2026-09-06 profile-routing correction (supersedes prior switch acceptance)
+
+The earlier profile-switch acceptance below was insufficient. Live Computer Use
+reproduced Bernhardine and Bernd showing the default partition (61 rows), and a
+desktop restart into another profile removed the button entirely.
+
+Two host distinctions were missing:
+
+1. Disk plugins are loaded from the Desktop profile's own folder. The root-only
+   installation did not cover named-profile launches. `--desktop-all-profiles`
+   now explicitly distributes the UI to existing profiles without enabling or
+   changing their memory provider. New profiles need installation too.
+2. Hermes' persistence-only `profile:remember` changes `active-profile.json`
+   without restarting the primary backend. `primaryProfileKey()` nevertheless
+   reread that preference and relabeled the running process. A native API call
+   explicitly targeting Heisenberg could reach Bernhardine. The companion host
+   patch pins the primary profile to its connection attempt, clears it on
+   invalidation/exit, uses that captured owner for spawning, and keeps the
+   Desktop plugin root tied to the live window home during rail switches.
+
+PLUR1BUS additionally pins Electron requests to a public `host.profileRoutes()`
+descriptor, bounds waits, verifies a native capability handshake and supplies an
+`expectedProfile` assertion. The backend checks the assertion **before** reads
+or actions, without using it to select a filesystem path. Missing/old/mismatched
+backends cannot expose the memory browser or workshop. No write retries.
+
+The Hermes patch is preserved in
+`hermes-dashboard/patches/hermes-desktop-live-profile.patch`. It is a separate
+host fix, not automatically applied by the plugin installer. A Hermes update
+must contain this fix (or an equivalent upstream correction); plugin guards
+remain fail-closed if it regresses. No Hermes upstream publication is claimed.
+
+Validation: 507 Python tests plus 46 subtests passed; native ESM routing/race/
+old-backend guards and installer regressions passed; Hermes routing suites
+passed 124 tests and Electron TypeScript checking passed. Locally rebuilt
+Electron main was installed with an original-bundle backup. UI acceptance
+confirmed default (61), Bernd/main (9,086), Bernhardine (13,105), and Heisenberg
+(672); coder and rapidmlx correctly report PLUR1BUS not activated, with no
+foreign data. Bernhardine's literal `plur1bus` search returned a 20-row page;
+switching to Bernd cleared the query/results and showed his own partition.
+This is UI routing acceptance, not a new capture/recall benchmark.
+
+The local Desktop setting **Warm Bot Backends** was raised from 3 to 6 through
+Settings → Advanced (idle timeout unchanged at 600000 ms). With the former hard
+limit, three live pooled sockets exhausted capacity and prevented waking another
+profile. This setting permits, but does not proactively start, more backends.
+No memory migration, memory-provider/model configuration change, skill
+publication, or Telegram gateway restart was performed. The fixes remain
+local/unpublished.
+
 2026-09-05, native Hermes Desktop `0.21.0 ee5b5ec`, extending the previously
 released `7.12.0-hermes`. This change is a **local candidate**, not a new published
 release or a claim of complete OpenClaw parity.

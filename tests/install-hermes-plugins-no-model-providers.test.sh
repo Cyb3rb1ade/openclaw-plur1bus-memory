@@ -70,3 +70,27 @@ if PATH="$temporary/bin:$PATH" HERMES_PYTHON="$temporary/bin/python" "$repo_dir/
   exit 1
 fi
 cmp "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$temporary/outside-desktop/plugin.js"
+
+# Explicit all-profile mode installs UI only in real, existing profiles, and
+# validates every target before writing anything. No implicit provider enable.
+all_home="$temporary/all-profiles"
+mkdir -p "$all_home/profiles/alpha" "$all_home/profiles/beta" "$all_home/profiles/not-a-profile"
+printf 'memory: {}\n' > "$all_home/config.yaml"
+printf 'memory: {provider: builtin}\n' > "$all_home/profiles/alpha/config.yaml"
+cp "$all_home/profiles/alpha/config.yaml" "$all_home/profiles/beta/config.yaml"
+PATH="$temporary/bin:$PATH" HERMES_PYTHON="$temporary/bin/python" "$repo_dir/scripts/install-hermes-plugins.sh" \
+  --hermes-home "$all_home" --desktop-all-profiles --no-setup --no-deps --no-retrieval --no-model-providers >/dev/null
+for profile in alpha beta; do
+  cmp "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$all_home/profiles/$profile/desktop-plugins/plur1bus/plugin.js"
+  [[ "$(<"$all_home/profiles/$profile/config.yaml")" == 'memory: {provider: builtin}' ]]
+  [[ ! -e "$all_home/profiles/$profile/plugins" ]]
+done
+[[ ! -e "$all_home/profiles/not-a-profile/desktop-plugins" ]]
+ln -s "$temporary/outside-desktop" "$all_home/profiles/alpha/desktop-plugins/foreign"
+mv "$all_home/profiles/beta/desktop-plugins/plur1bus" "$temporary/beta-before"
+ln -s "$temporary/beta-before" "$all_home/profiles/beta/desktop-plugins/plur1bus"
+if PATH="$temporary/bin:$PATH" HERMES_PYTHON="$temporary/bin/python" "$repo_dir/scripts/install-hermes-plugins.sh" \
+  --hermes-home "$all_home" --desktop-all-profiles --no-setup --no-deps --no-retrieval --no-model-providers >/dev/null 2>&1; then
+  printf 'All-profile installer followed a symbolic link\n' >&2
+  exit 1
+fi

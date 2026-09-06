@@ -11,6 +11,27 @@ from test_plur1bus_dashboard import _load_api
 
 
 class DesktopActionsTests(unittest.TestCase):
+    def test_expected_profile_is_asserted_before_any_read_or_action(self):
+        api = _load_api()
+        app = FastAPI()
+        app.include_router(api.router)
+        headers = {"X-Hermes-Session-Token": "test-host-token"}
+        with patch("hermes_cli.web_server._SESSION_TOKEN", "test-host-token"), patch(
+            "hermes_cli.profiles.get_active_profile_name", return_value="bernhardine"
+        ), patch.object(api, "_active_runtime_view") as view, patch.object(api, "_runtime_lease") as lease, TestClient(app) as client:
+            self.assertEqual(client.get("/status?expectedProfile=default").status_code, 401)
+            for suffix in ("default", "", "../bernhardine", "bernhardine&expectedProfile=default"):
+                for path in ("/status", "/memories", "/workshop/proposals", "/desktop/capabilities"):
+                    self.assertEqual(client.get(f"{path}?expectedProfile={suffix}", headers=headers).status_code, 409)
+                self.assertEqual(client.post(f"/desktop/workshop/approve?expectedProfile={suffix}",
+                    json={"proposal_id": "x", "revision": "a" * 64, "nonce": "x", "confirmation": "approve"},
+                    headers=headers).status_code, 409)
+            view.assert_not_called()
+            lease.assert_not_called()
+            caps = client.get("/desktop/capabilities?expectedProfile=bernhardine", headers=headers).json()
+            self.assertEqual(caps["profile"], "bernhardine")
+            self.assertEqual(caps["profileBinding"], 1)
+
     def test_native_confirmation_requires_token_scope_revision_and_single_use_nonce(self):
         api = _load_api()
         view = SimpleNamespace(profile="default", hermes_home=Path("/safe/home"))

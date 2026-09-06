@@ -26,7 +26,8 @@ export function createScopedReader(rest, scope, publish) {
         status: status.status === 'fulfilled' ? status.value : null,
         proposals: workshop.status === 'fulfilled' && Array.isArray(workshop.value?.proposals)
           ? workshop.value.proposals : [],
-        error: status.status === 'rejected' ? 'Status nicht erreichbar. Prüfe, ob PLUR1BUS im aktiven Hermes-Profil aktiviert ist.' : '',
+        error: status.status === 'rejected' ? (status.reason?.plur1busReason
+          || 'Status nicht erreichbar. Prüfe, ob PLUR1BUS im aktiven Hermes-Profil aktiviert ist.') : '',
         workshopError: workshop.status === 'rejected' ? 'Workshop-Übersicht derzeit nicht verfügbar.' : '',
       });
     },
@@ -36,6 +37,77 @@ export function createScopedReader(rest, scope, publish) {
 
 const h = React.createElement;
 const scopeKey = () => JSON.stringify([host.state.connectionId.get(), host.state.profile.get()]);
+
+/** Pin each request to a verified host-owned profile route, never ambient REST state.
+ * @param {Function} api Electron's authenticated HermesApiRequest bridge.
+ * @param {Function} routes Public host.profileRoutes inventory.
+ * @param {object} owner Mounted connection and profile.
+ * @param {Function} current Current UI identity.
+ * @param {string} identity Mounted UI identity.
+ * @returns {Function} Profile-bound plugin REST transport.
+ */
+export function createProfileTransport(api, routes, owner, current, identity) {
+  const unavailable = message => Object.assign(new Error(message), { plur1busReason: message });
+  const bounded = async operation => {
+    let timer;
+    try {
+      return await Promise.race([operation, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(unavailable('Die Profilverbindung antwortet nicht rechtzeitig. Bitte erneut versuchen.')), 10000);
+      })]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const check = () => {
+    if (current() !== identity) throw new Error('PLUR1BUS profile changed');
+  };
+  return async (path, options = {}) => {
+    check();
+    if (typeof api !== 'function' || typeof routes !== 'function') throw new Error('Profile-aware Hermes bridge required');
+    const inventory = await bounded(routes());
+    check();
+    const matches = inventory.filter(route => route.profile === owner.profile
+      && (!owner.connection || route.connectionId === owner.connection));
+    if (matches.length !== 1 || !matches[0].connectionId || !matches[0].targetProfile) {
+      throw unavailable('Für dieses Profil ist keine eindeutige Hermes-Verbindung verfügbar.');
+    }
+    const route = matches[0];
+    const send = async (suffix, opts = {}, assertProfile = true) => {
+      check();
+      if (!suffix.startsWith('/') || suffix.startsWith('//') || suffix.includes('#')
+          || suffix.split('?')[0].split('/').some(part => ['.', '..'].includes(decodeURIComponent(part)))) {
+        throw new Error('Invalid PLUR1BUS API path');
+      }
+      const url = new URL(`/api/plugins/plur1bus${suffix}`, 'http://plur1bus.invalid');
+      if (assertProfile) url.searchParams.set('expectedProfile', route.targetProfile);
+      let result;
+      try {
+        result = await bounded(api({ path: url.pathname + url.search, connectionId: route.connectionId,
+          profile: route.profile, method: opts.method, body: opts.body, timeoutMs: 10000 }));
+      } catch (error) {
+        // Never surface raw host errors (they can contain URLs or credentials).
+        const message = String(error?.message || '');
+        if (/404|not found|not enabled|disabled/i.test(message)) {
+          throw unavailable('PLUR1BUS ist in diesem Profil nicht aktiviert oder sein Dashboard-Backend fehlt. Keine fremde Partition wird geladen.');
+        }
+        if (/409|profile mismatch/i.test(message)) {
+          throw unavailable('Hermes hat die Anfrage einem anderen Profil zugeordnet. Der Zugriff wurde sicher gesperrt.');
+        }
+        throw unavailable('Die profilgebundene Backend-Anfrage ist fehlgeschlagen. Bitte Verbindung und Backend prüfen.');
+      }
+      check();
+      return result;
+    };
+    // Repeat the read-only handshake per operation. Old backends ignore query
+    // guards; they must never receive memory reads or writes from this client.
+    const capabilities = await send('/desktop/capabilities', {}, false);
+    if (capabilities?.profileBinding !== 1 || capabilities.profile !== route.targetProfile) {
+      const actual = /^[a-zA-Z0-9_-]{1,64}$/.test(capabilities?.profile || '') ? capabilities.profile : 'nicht bestätigt';
+      throw unavailable(`Das Backend bestätigt dieses Profil nicht (Backend: ${actual}). Bitte PLUR1BUS im Zielprofil aktualisieren und dessen Desktop-Backend neu starten.`);
+    }
+    return path === '/desktop/capabilities' ? capabilities : send(path, options);
+  };
+}
 const field = (label, value) => h('div', { key: label }, h('dt', null, label),
   h('dd', null, value == null || value === '' ? 'Nicht verfügbar' : String(value)));
 
@@ -215,9 +287,9 @@ function Partition({ rest, profile }) {
           field('Provider', embedding.provider), field('Modell', embedding.model), field('Dimensionen', embedding.dimensions))),
         h('section', null, h('h2', null, 'Reranking'), h('dl', null,
           field('Provider', reranker.provider), field('Modell', reranker.model))))) : null,
-    h(MemoryBrowser, { rest }),
-    h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,
-      refresh: () => { void reader.current?.load(); } }),
+    s ? h(MemoryBrowser, { rest }) : null,
+    s ? h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,
+      refresh: () => { void reader.current?.load(); } }) : null,
     h('p', null, 'Verwendet den bestehenden Hermes-Backendprozess. Kein separater Webserver erforderlich.'));
 }
 
@@ -231,7 +303,11 @@ export default {
     function Page() {
       const profile = useValue(host.state.profile);
       const connection = useValue(host.state.connectionId);
-      return h(Partition, { key: JSON.stringify([connection, profile]), rest: ctx.rest, profile });
+      const identity = JSON.stringify([connection, profile]);
+      const rest = React.useMemo(() => createProfileTransport(
+        typeof window !== 'undefined' && window.hermesDesktop?.api,
+        host.profileRoutes, { connection, profile }, scopeKey, identity), [connection, profile]);
+      return h(Partition, { key: identity, rest, profile });
     }
     let closeWorkspace = null;
     const supported = typeof host.openWorkspace === 'function';

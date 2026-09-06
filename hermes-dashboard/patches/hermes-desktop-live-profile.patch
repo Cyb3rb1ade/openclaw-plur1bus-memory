@@ -1,0 +1,147 @@
+diff --git a/apps/desktop/electron/backend-connection-state.test.ts b/apps/desktop/electron/backend-connection-state.test.ts
+index ce9dd2fded..39df0ae742 100644
+--- a/apps/desktop/electron/backend-connection-state.test.ts
++++ b/apps/desktop/electron/backend-connection-state.test.ts
+@@ -3,9 +3,28 @@ import assert from 'node:assert/strict'
+ import { test } from 'vitest'
+ 
+ import { createBackendConnectionState } from './backend-connection-state'
++import { resolveProfileBackendRoute } from './connection-config'
+ 
+ type FakeProcess = { id: string }
+ 
++test('remembering another profile never relabels the live primary backend', () => {
++  const state = createBackendConnectionState<FakeProcess, string>()
++  let remembered = 'alpha'
++  const attempt = state.startAttempt(remembered)
++  state.setPromise(attempt, Promise.resolve('alpha-backend'))
++  const owner = state.attachProcess(attempt, { id: 'alpha' })!
++  remembered = 'beta'
++  const primary = state.getProfile() || remembered
++  assert.equal(primary, 'alpha')
++  assert.equal(resolveProfileBackendRoute('beta', { primaryProfile: primary }).backend, 'pool')
++  assert.equal(resolveProfileBackendRoute('alpha', { primaryProfile: primary }).backend, 'primary')
++  state.invalidate()
++  state.startAttempt(remembered)
++  assert.equal(state.getProfile(), 'beta')
++  assert.equal(state.clearForCurrentProcess(owner), false)
++  assert.equal(state.getProfile(), 'beta')
++})
++
+ function deferred<T>() {
+   let resolve!: (value: T) => void
+ 
+diff --git a/apps/desktop/electron/backend-connection-state.ts b/apps/desktop/electron/backend-connection-state.ts
+index d20165db85..3a84f01bc9 100644
+--- a/apps/desktop/electron/backend-connection-state.ts
++++ b/apps/desktop/electron/backend-connection-state.ts
+@@ -12,9 +12,11 @@ export function createBackendConnectionState<TProcess, TConnection>() {
+   let generation = 0
+   let process: TProcess | null = null
+   let promise: Promise<TConnection> | null = null
++  let profile: string | null = null
+ 
+   return {
+-    startAttempt(): BackendConnectionAttempt<TConnection> {
++    startAttempt(nextProfile: string | null = null): BackendConnectionAttempt<TConnection> {
++      profile = nextProfile
+       return { generation, promise: null }
+     },
+ 
+@@ -53,6 +55,7 @@ export function createBackendConnectionState<TProcess, TConnection>() {
+ 
+       process = null
+       promise = null
++      profile = null
+ 
+       return true
+     },
+@@ -63,6 +66,9 @@ export function createBackendConnectionState<TProcess, TConnection>() {
+       }
+ 
+       promise = null
++      if (process === null) {
++        profile = null
++      }
+ 
+       return true
+     },
+@@ -75,12 +81,17 @@ export function createBackendConnectionState<TProcess, TConnection>() {
+       return promise
+     },
+ 
++    getProfile(): string | null {
++      return profile
++    },
++
+     invalidate(): TProcess | null {
+       const currentProcess = process
+ 
+       generation += 1
+       process = null
+       promise = null
++      profile = null
+ 
+       return currentProcess
+     }
+diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
+index 5116cdb7bc..8842f4d052 100644
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -11347,11 +11347,10 @@ async function waitForBackendExit(child, timeoutMs = 5000) {
+   await wait(1000)
+ }
+ 
+-// The profile the primary (window) backend runs as. readActiveDesktopProfile()
+-// returns the desktop's stored preference, or null when unset (legacy launch
+-// that defers to active_profile / default).
++// Live backend ownership outranks the next-launch preference. A rail switch
++// remembers its profile without restarting the primary process.
+ function primaryProfileKey() {
+-  return readActiveDesktopProfile() || 'default'
++  return backendConnectionState.getProfile() || readActiveDesktopProfile() || 'default'
+ }
+ 
+ // Options describing the current connection setup for `resolveProfileBackendRoute`.
+@@ -12809,8 +12808,8 @@ async function startHermes() {
+   // no-op when the preference file already exists.
+   migrateActiveProfileIfMissing()
+ 
+-  const connectionAttempt = backendConnectionState.startAttempt()
+   const primaryProfile = primaryProfileKey()
++  const connectionAttempt = backendConnectionState.startAttempt(primaryProfile)
+ 
+   // Legacy path callers without an explicit profile belong to the primary
+   // window backend. Profile-scoped callers still pass their key directly.
+@@ -12873,15 +12872,10 @@ async function startHermes() {
+     // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
+     const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
+     // Pin the desktop's chosen profile via the global --profile flag. This is
+-    // deterministic (it wins over the sticky ~/.hermes/active_profile file) and
+-    // resolves HERMES_HOME the same way `hermes -p <name>` does on the CLI. An
+-    // unset preference keeps the legacy launch so existing installs are
+-    // unaffected.
+-    const activeProfile = readActiveDesktopProfile()
+-
+-    if (activeProfile) {
+-      backendArgs.unshift('--profile', activeProfile)
+-    }
++    // deterministic and resolves HERMES_HOME as `hermes -p <name>` does.
++    // Use the attempt's captured owner: preference changes during async
++    // startup belong to the next launch, not this process.
++    backendArgs.unshift('--profile', primaryProfile)
+ 
+     const setup = await runPrimaryBackendStartup({
+       connectRemote,
+@@ -17411,7 +17405,9 @@ ipcMain.on('hermes:logs:renderer-error', (_event, report) => {
+ // Local filesystem + plugin-root IPC (readDir/reveal/rename/trash/…) — see fs-ipc.ts.
+ registerFsIpc({
+   hermesHome: HERMES_HOME,
+-  readActiveDesktopProfile,
++  // Runtime plugins belong to the live window home, not a rail selection
++  // remembered for next launch. Changing roots mid-swap unloads their UI.
++  readActiveDesktopProfile: primaryProfileKey,
+   expandUserPath,
+   resolveRequestedPathForIpc,
+   directoryExists,
+

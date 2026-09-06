@@ -53,3 +53,20 @@ there is intentionally no browser endpoint for arbitrary paths/config/commands.
 Background mining and generated-skill execution are not triggered merely by
 opening the page. Existing partial host parity remains documented in the audit
 matrix; this desktop integration does not turn it into full OpenClaw parity.
+# Profile-safe installation
+
+Hermes Desktop's disk-plugin root is profile-dependent. For the root home and
+all **existing** profiles, use `scripts/install-hermes-plugins.sh --hermes-home
+/absolute/root/home --desktop-all-profiles` (plus the usual installation flags).
+This distributes the UI without changing other profiles' memory-provider
+configuration. After creating a profile, repeat this option or install with
+`--desktop --hermes-home /absolute/root/home/profiles/name` for that profile.
+
+Requests are pinned to the connection/profile descriptor from `host.profileRoutes()`
+via Electron's authenticated `HermesApiRequest` bridge. The ambient `ctx.rest`
+does not provide an explicit route option in this Hermes version and is not used.
+The backend must confirm profile-binding protocol v1, and asserts `expectedProfile`
+before any data read or action. It never uses this value to select an arbitrary
+home. Old/mismatched backends and unavailable/disabled providers fail closed;
+there is no default-partition fallback. Shared remote backends must themselves
+support the selected profile scope; a mismatched shared backend is rejected.
