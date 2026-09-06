@@ -1,0 +1,177 @@
+name: Native Windows ARM64 storage candidates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/hermes-distribution-*']
+    paths:
+      - '.github/workflows/hermes-windows-arm64-storage.yml'
+      - '.github/scripts/init-native-windows-arm64.ps1'
+      - '.github/scripts/verify-windows-arm64-storage.py'
+      - '.github/scripts/test_native_storage_validation.py'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  arrow:
+    runs-on: windows-11-arm
+    timeout-minutes: 180
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      PYARROW_BUNDLE_ARROW_CPP: 'ON'
+      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYARROW: '25.0.1'
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: port
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: apache/arrow
+          ref: a2f2388e17fb2e1de5757d41b6bbe019a7604937
+          path: arrow
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.15'
+          architecture: arm64
+      - name: Build native Arrow C++ for local storage
+        run: |
+          python port/.github/scripts/test_native_storage_validation.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./port/.github/scripts/init-native-windows-arm64.ps1
+          python -c "import platform; assert platform.machine().upper() == 'ARM64'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --version
+          ninja --version
+          $env:ARROW_HOME = Join-Path $env:GITHUB_WORKSPACE 'arrow-install'
+          "ARROW_HOME=$env:ARROW_HOME" >> $env:GITHUB_ENV
+          cmake -S arrow/cpp -B arrow-build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=$env:ARROW_HOME" -DCMAKE_UNITY_BUILD=ON -DARROW_BUILD_SHARED=ON -DARROW_BUILD_STATIC=OFF -DARROW_DEPENDENCY_SOURCE=BUNDLED -DARROW_SIMD_LEVEL=NONE -DARROW_COMPUTE=ON -DARROW_ACERO=ON -DARROW_CSV=ON -DARROW_JSON=ON -DARROW_DATASET=ON -DARROW_FILESYSTEM=ON -DARROW_PARQUET=ON -DARROW_WITH_SNAPPY=ON -DARROW_WITH_ZLIB=ON -DARROW_WITH_ZSTD=ON -DARROW_WITH_LZ4=ON -DARROW_BUILD_TESTS=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build arrow-build --target install
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build self-contained PyArrow wheel
+        run: |
+          & ./port/.github/scripts/init-native-windows-arm64.ps1
+          $env:CMAKE_PREFIX_PATH = $env:ARROW_HOME
+          python -m pip install -r arrow/python/requirements-build.txt wheel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip wheel --no-deps --no-build-isolation arrow/python --wheel-dir wheels
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip freeze > wheels/BUILD_DEPENDENCIES.txt
+          git -C arrow rev-parse HEAD > wheels/UPSTREAM_COMMIT.txt
+          Get-ChildItem wheels/*.whl | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLowerInvariant())  $($_.Name)" } > wheels/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pyarrow-25.0.1-windows-arm64-candidate
+          path: wheels/*
+          if-no-files-found: error
+          retention-days: 30
+  lance:
+    runs-on: windows-11-arm
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: port
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: lancedb/lancedb
+          ref: 1545bd4b4fc3344420d1a65506d54b85f57edc54
+          path: lance
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.15'
+          architecture: arm64
+      - name: Native compiler and pinned protoc
+        run: |
+          & ./port/.github/scripts/init-native-windows-arm64.ps1
+          python -c "import platform; assert platform.machine().upper() == 'ARM64'"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rustup toolchain install 1.95.0-aarch64-pc-windows-msvc --profile minimal
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Invoke-WebRequest https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-win64.zip -OutFile protoc.zip
+          if ((Get-FileHash protoc.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '71852a30cf62975358edfcbbff93086e8857a079c8e4d6904881aa968d65c7f9') { throw 'Protoc checksum mismatch' }
+          Expand-Archive protoc.zip protoc
+          "PROTOC=$(Join-Path $env:GITHUB_WORKSPACE 'protoc/bin/protoc.exe')" >> $env:GITHUB_ENV
+          python -m pip install maturin==1.12.4
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build pinned LanceDB with locked third-party dependencies
+        run: |
+          & ./port/.github/scripts/init-native-windows-arm64.ps1
+          $env:RUSTUP_TOOLCHAIN = '1.95.0-aarch64-pc-windows-msvc'
+          @'
+          from pathlib import Path
+          path = Path('lance/Cargo.lock')
+          old = 'name = "lancedb-python"\nversion = "0.34.0-beta.6"'
+          new = 'name = "lancedb-python"\nversion = "0.34.0"'
+          content = path.read_text()
+          assert content.count(old) == 1
+          path.write_text(content.replace(old, new))
+          '@ | python -
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Push-Location lance/python
+          maturin build --locked --release --target aarch64-pc-windows-msvc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+          git -C lance rev-parse HEAD > lance/target/wheels/UPSTREAM_COMMIT.txt
+          git -C lance diff -- Cargo.lock > lance/target/wheels/SOURCE_METADATA.patch
+          Copy-Item lance/Cargo.lock lance/target/wheels/Cargo.lock
+          rustc -vV > lance/target/wheels/RUST_VERSION.txt
+          Get-ChildItem lance/target/wheels/*.whl | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLowerInvariant())  $($_.Name)" } > lance/target/wheels/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: lancedb-0.34.0-windows-arm64-candidate
+          path: lance/target/wheels/*
+          if-no-files-found: error
+          retention-days: 30
+  installed-storage:
+    needs: [arrow, lance]
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13.15'
+          architecture: arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: '*-windows-arm64-candidate'
+          path: candidate-wheels
+      - name: Install actual wheels and exercise native storage
+        run: |
+          Get-ChildItem candidate-wheels -Recurse -Filter SHA256SUMS | ForEach-Object {
+            $qaDirectory = $_.DirectoryName
+            Get-Content $_.FullName | ForEach-Object {
+              if ($_ -notmatch '^([a-f0-9]{64})  ([a-zA-Z0-9_.-]+\.whl)$') { throw 'Invalid wheel checksum manifest' }
+              $qaExpected = $matches[1]
+              $qaWheel = Join-Path $qaDirectory $matches[2]
+              if ((Get-FileHash $qaWheel -Algorithm SHA256).Hash.ToLowerInvariant() -ne $qaExpected) { throw 'Downloaded wheel checksum mismatch' }
+            }
+          }
+          $qaWheels = @(Get-ChildItem candidate-wheels -Recurse -Filter *.whl | ForEach-Object { $_.FullName })
+          if ($qaWheels.Count -ne 2 -or ($qaWheels | Where-Object { $_ -notmatch 'win_arm64\.whl$' })) { throw 'Expected exactly two native ARM wheels' }
+          python -m pip install @qaWheels
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python .github/scripts/verify-windows-arm64-storage.py | Tee-Object -FilePath native-storage-verification.json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-arm64-installed-storage-verification
+          path: native-storage-verification.json
+          if-no-files-found: error
