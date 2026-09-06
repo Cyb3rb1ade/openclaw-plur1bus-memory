@@ -7,6 +7,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.0-hermes.1] — 2026-09-06
+
+- Native Hermes-Workspace mit Memory-Browser, geprüftem Skill Workshop und
+  profilgebundenen Transport-/Bestätigungsgrenzen.
+- Embedding- und Reranking-Provider konfigurieren; Dimensionswechsel über
+  Backup, separates Staging, Metadatenprüfung und bestätigte Aktivierung.
+- Wiederholte Generationswechsel berücksichtigen neue Captures und stellen
+  bei unterbrochener Aktivierung den vorherigen Pointer wieder her.
+- Linker PLUR1BUS-Menüeintrag für aktivierte Profile; sichere Aktualisierung
+  bei Profilwechsel, verspäteten Antworten und kurzfristigen Verbindungsfehlern.
+- Prüfsummenbasierte Desktop-Verteilung an alle bestehenden Profile. Die zwei
+  nötigen Hermes-Host-Patches sind separat enthalten, nicht automatisch angewandt.
+- Python-Pakete: 7.12.0.post1. Keine automatische Modellumstellung, keine Löschung
+  alter Generationen, kein Eingriff in den OpenClaw-Releasekanal.
+
+## [7.12.0-hermes] — 2026-09-05
+
 ### Hermes-Port-Kandidat 7.12.0-hermes (lokal)
 
 - Native Basis aus 7.4.8-hermes.1, kompletter Upstream-Merge bis v7.12.0; Critical-
