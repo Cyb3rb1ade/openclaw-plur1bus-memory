@@ -12,7 +12,9 @@ permissions:
 jobs:
   upstream-wheel:
     runs-on: macos-15-intel
-    timeout-minutes: 120
+    # The exact PR source reached the previous 120-minute limit during Rust
+    # compilation. Preserve release flags and give installed-wheel tests time.
+    timeout-minutes: 240
     env:
       MACOSX_DEPLOYMENT_TARGET: '10.15'
       CARGO_BUILD_JOBS: '3'
