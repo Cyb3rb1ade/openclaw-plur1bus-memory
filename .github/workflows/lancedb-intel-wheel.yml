@@ -1,0 +1,87 @@
+name: Native Intel macOS LanceDB wheel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/hermes-distribution-*']
+    paths: ['.github/workflows/lancedb-intel-wheel.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '10.15'
+      CARGO_BUILD_JOBS: '3'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: lancedb/lancedb
+          # Peel of upstream python-v0.34.0; never build a moving branch.
+          ref: 1545bd4b4fc3344420d1a65506d54b85f57edc54
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Verify native runner and prepare build tools
+        run: |
+          test "$(uname -m)" = x86_64
+          brew install protobuf
+          python -m pip install 'maturin==1.12.4'
+          rustc --version
+          cargo --version
+      - name: Build locked upstream source without application data
+        working-directory: python
+        run: maturin build --locked --release --strip --target x86_64-apple-darwin --features fp16kernels
+      - name: Install and exercise the actual native wheel
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m pip install "$GITHUB_WORKSPACE"/target/wheels/lancedb-*.whl
+          python -m pip check
+          python - <<'PY'
+          import importlib.metadata
+          import platform
+          import subprocess
+          import tempfile
+          from pathlib import Path
+          import lancedb
+          import lancedb._lancedb as native
+          import pyarrow as pa
+
+          assert platform.machine() == 'x86_64'
+          assert importlib.metadata.version('lancedb') == '0.34.0'
+          architecture = subprocess.check_output(['lipo', '-archs', native.__file__], text=True).strip()
+          assert architecture == 'x86_64', architecture
+          with tempfile.TemporaryDirectory() as root:
+              db = lancedb.connect(root)
+              schema = pa.schema([('id', pa.string()), ('vector', pa.list_(pa.float32(), 3))])
+              table = db.create_table('memories', schema=schema)
+              table.add([{'id': 'first', 'vector': [1., 0., 0.]}])
+              table.add_columns({'scopeKey': "cast('' as string)"})
+              table.add([{'id': 'second', 'vector': [0., 1., 0.], 'scopeKey': 'private'}])
+              assert table.count_rows() == 2
+              assert table.search([1., 0., 0.]).limit(1).to_list()[0]['id'] == 'first'
+              assert table.search([0., 1., 0.]).where("scopeKey = 'private'").limit(1).to_list()[0]['id'] == 'second'
+              reopened = lancedb.connect(root).open_table('memories')
+              assert reopened.count_rows() == 2
+              assert reopened.schema.field('vector').type.list_size == 3
+          print('PASS: installed x86_64 wheel, insert, additive schema migration, filtered ANN, reopen')
+          PY
+      - name: Record source and wheel checksums
+        if: always()
+        run: |
+          mkdir -p target/wheels
+          git rev-parse HEAD > target/wheels/UPSTREAM_COMMIT.txt
+          rustc --version > target/wheels/RUST_VERSION.txt
+          find target/wheels -name '*.whl' -exec shasum -a 256 {} \; > target/wheels/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: lancedb-0.34.0-macos-x86_64-candidate
+          path: target/wheels/*
+          if-no-files-found: error
+          retention-days: 30
