@@ -917,6 +917,10 @@ class Plur1busRuntime:
                 })
             self._write_capture_retries_locked(entries)
 
+    def note_context_compression(self, session_id: str) -> None:
+        """Forward only host-owned session lifecycle, not model tool parameters."""
+        self._domain.note_context_compression(session_id, scope_key=self.scope_key)
+
     def recall(self, query: str, limit: int = 5, explain: bool = False, *, valid_at: Any = None,
                session_id: str = "", full_text: bool = False) -> str:
         """Recall active, unexpired memories, optionally at an asserted valid time."""
@@ -1008,17 +1012,15 @@ class Plur1busRuntime:
                 continue
             seen_content.setdefault(canonical, []).append(row)
             deduplicated.append(row)
-        if session_id:
+        try:
+            session_options = {"session_id": session_id, "reactivation_query": semantic_query} if session_id else {}
             boosted = self._domain.boost_recall(
                 deduplicated, recall_tables[0][1], adaptive_limit + 3,
-                session_id=session_id,
-                acl_bindings=self.scope_binding.as_dict(),
+                acl_bindings=self.scope_binding.as_dict(), **session_options,
             )
-        else:
-            boosted = self._domain.boost_recall(
-                deduplicated, recall_tables[0][1], adaptive_limit + 3,
-                acl_bindings=self.scope_binding.as_dict(),
-            )
+        except Exception as error:
+            LOGGER.warning("additive recall booster failed; retaining primary recall (%s)", type(error).__name__)
+            boosted = deduplicated
         # SQL and shared-pool recall already authorized the primary rows.
         # A scope-specific additive booster must never replace/drop them,
         # including legacy private rows and separately authorized pool rows.

@@ -17,6 +17,34 @@ from plur1bus_hermes.service import PLUR1BUS_SERVICE
 
 
 class HermesApi710Tests(unittest.TestCase):
+    def test_precompress_reactivation_is_independent_of_capture_and_skips_internal_turns(self):
+        provider = Plur1busMemoryProvider({"autoCapture": False})
+        notes = []
+        provider._session_id = "native-session"
+        provider._prefetch_cache["old-context"] = "old result"
+        old_generation = provider._prefetch_generation
+        provider._runtime = type("Runtime", (), {
+            "note_context_compression": lambda _self, session: notes.append(session),
+            "shutdown": lambda _self: None,
+        })()
+        self.assertEqual(provider.on_pre_compress([{"role": "user", "content": "A real question"}]), "")
+        self.assertEqual(notes, ["native-session"])
+        self.assertFalse(provider._prefetch_cache)
+        self.assertGreater(provider._prefetch_generation, old_generation)
+        provider.on_pre_compress([{"role": "user", "content": "wake", "display_kind": "internal_notification"}])
+        self.assertEqual(notes, ["native-session"])
+        provider.shutdown()
+
+    def test_optional_compression_signal_failure_is_not_a_checkpoint_failure(self):
+        provider = Plur1busMemoryProvider({"autoCapture": False})
+        def fail(_session):
+            raise RuntimeError("optional recall state failed")
+        provider._runtime = type("Runtime", (), {
+            "note_context_compression": staticmethod(fail), "shutdown": lambda _self: None,
+        })()
+        self.assertEqual(provider.on_pre_compress([{"role": "user", "content": "A real question"}]), "")
+        provider.shutdown()
+
     def test_reinitialize_releases_old_runtime_and_prefetch_state_before_replacement(self) -> None:
         provider = Plur1busMemoryProvider({
             "dataDir": "plur1bus",

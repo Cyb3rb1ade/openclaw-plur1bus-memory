@@ -71,6 +71,24 @@ class _Table:
 
 
 class RuntimeValidTimeRecallTests(unittest.TestCase):
+    def test_runtime_passes_session_query_to_additive_helpers_and_fails_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = self._runtime(directory)
+            table = _Table([{"id": "a", "content": "primary survives", "expiresAt": 0}])
+            runtime._recall_tables = lambda: [("default", table)]
+            calls = []
+            def broken(rows, _table, _limit, **kwargs):
+                calls.append(kwargs)
+                raise RuntimeError("optional index unreadable")
+            runtime._domain.boost_recall = broken
+            try:
+                result = runtime.recall("weiter mit dem Garten", session_id="native-session")
+                self.assertIn("primary survives", result)
+                self.assertEqual(calls[0]["session_id"], "native-session")
+                self.assertEqual(calls[0]["reactivation_query"], "weiter mit dem Garten")
+            finally:
+                runtime.shutdown()
+
     def _runtime(self, directory: str) -> Plur1busRuntime:
         runtime = Plur1busRuntime(Path(directory), {}, "main")
         runtime._embedding.embed = lambda _text, purpose="query": [0.1, 0.2]  # type: ignore[method-assign]

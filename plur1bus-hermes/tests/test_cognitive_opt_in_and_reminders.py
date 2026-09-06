@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -54,6 +55,51 @@ class CognitiveOptInTests(unittest.TestCase):
         self.assertNotIn("crr", self._domain({"conversationReactivationRecall": {"enabled": True}})[0].boost_recall(
             [{"id": "base", "agentId": "main", "content": "base"}], object(), 4,
         ))
+
+    def test_crr_first_substantive_continuation_idle_and_cooldown_are_live(self):
+        domain, calls = self._domain({"conversationReactivationRecall": {"enabled": True}})
+        rows = [{"id": "base", "agentId": "main", "content": "base"}]
+        def recall(query, now):
+            with patch("plur1bus_hermes.domain._now_ms", return_value=now):
+                domain.boost_recall(rows, object(), 5, session_id="s", reactivation_query=query)
+        recall("ok", 1000)
+        self.assertNotIn("crr", calls)
+        recall("Tell me about our garden", 2000)
+        self.assertEqual(calls.count("crr"), 1)
+        recall("weiter", 3000)
+        self.assertEqual(calls.count("crr"), 1)
+        recall("weiter", 2000 + 30 * 60_000)
+        self.assertEqual(calls.count("crr"), 2)
+        recall("Tell me about our garden", 2000 + 76 * 60_000)
+        self.assertEqual(calls.count("crr"), 3)
+
+    def test_compression_is_scope_bound_waits_for_content_and_consumes_once(self):
+        domain, calls = self._domain({"conversationReactivationRecall": {"enabled": True, "cooldownMinutes": 0}})
+        rows = [{"id": "base", "agentId": "main", "content": "base"}]
+        kwargs = {"session_id": "s", "reactivation_query": "A substantive question"}
+        domain.boost_recall(rows, object(), 5, **kwargs)
+        self.assertEqual(calls.count("crr"), 1)
+        domain.note_context_compression("s", scope_key="foreign-owner")
+        domain.boost_recall(rows, object(), 5, **kwargs)
+        self.assertEqual(calls.count("crr"), 1)
+        domain.note_context_compression("s", scope_key=binding_from_scope("main").scope_key)
+        domain.boost_recall(rows, object(), 5, session_id="s", reactivation_query="ok")
+        self.assertEqual(calls.count("crr"), 1)
+        domain.boost_recall(rows, object(), 5, **kwargs)
+        self.assertEqual(calls.count("crr"), 2)
+        domain.boost_recall(rows, object(), 5, **kwargs)
+        self.assertEqual(calls.count("crr"), 2)
+
+    def test_compression_respects_opt_out_and_bounds_ram_only_state(self):
+        domain, _calls = self._domain()
+        domain.note_context_compression("s", scope_key="owner")
+        self.assertFalse(domain._reactivation_sessions)
+        domain.config["conversationReactivationRecall"] = {"enabled": True}
+        for index in range(300):
+            domain.note_context_compression(str(index), scope_key="owner")
+        self.assertEqual(len(domain._reactivation_sessions), 256)
+        domain.note_context_compression("x" * 513, scope_key="owner")
+        self.assertEqual(len(domain._reactivation_sessions), 256)
 
     def test_lens_caps_community_members_and_is_default_off(self):
         binding = binding_from_scope("main")

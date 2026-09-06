@@ -166,7 +166,7 @@ class Plur1busDomain:
     def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
         try:
             return max(minimum, min(maximum, int(value)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
 
     @staticmethod
@@ -176,6 +176,26 @@ class Plur1busDomain:
         if not raw or len(raw) > 512:
             return ""
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def note_context_compression(self, session_id: str, *, scope_key: str) -> None:
+        """Remember one host compression signal in bounded RAM, never on disk."""
+        if not self._opt_in_feature_enabled("conversationReactivationRecall"):
+            return
+        key = self._session_key(session_id)
+        if not key:
+            return
+        key = hashlib.sha256(f"{scope_key}:{key}".encode()).hexdigest()
+        with self._lock:
+            state = dict(self._reactivation_sessions.get(key, {}))
+            state["pendingCompaction"] = 1
+            self._save_reactivation_state(key, state)
+
+    def _save_reactivation_state(self, key: str, state: dict[str, int]) -> None:
+        """Bound session state; caller holds the domain lock."""
+        self._reactivation_sessions.pop(key, None)
+        self._reactivation_sessions[key] = state
+        while len(self._reactivation_sessions) > 256:
+            self._reactivation_sessions.pop(next(iter(self._reactivation_sessions)))
 
     def _scope_selector(
         self,
@@ -967,6 +987,7 @@ class Plur1busDomain:
         session_id: str | None = None,
         reactivation_trigger: str | None = None,
         reactivation_substantive: bool = False,
+        reactivation_query: str = "",
     ) -> list[dict[str, Any]]:
         """Append graph, semantic-lens, and reactivation candidates after base recall."""
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
@@ -1002,18 +1023,44 @@ class Plur1busDomain:
         session_key = self._session_key(session_id)
         now = _now_ms()
         trigger = str(reactivation_trigger or "").strip().lower()
-        state = self._reactivation_sessions.get(session_key, {}) if session_key else {}
         crr_enabled = self._opt_in_feature_enabled("conversationReactivationRecall")
-        if not trigger and session_key:
-            trigger = "first_substantive" if not state and reactivation_substantive is True else ""
-            if state.get("lastRecallMs") and now - state["lastRecallMs"] >= 45 * 60 * 1000:
-                trigger = "idle"
+        if session_key:
+            session_key = hashlib.sha256(f"{selector.scope_key}:{session_key}".encode()).hexdigest()
+        query = str(reactivation_query or "").strip().lower()
+        continuation = any(signal in query for signal in (
+            "weiter", "was war der stand", "zurück", "was fehlt noch", "continue",
+            "where were we", "back to", "status", "was ist der stand", "return to", "pick up", "resume",
+        ))
+        substantive = reactivation_substantive is True or len(query) >= 5
         valid_triggers = {"idle", "continuation", "first_substantive", "post_compaction"}
-        if (
-            crr_enabled
-            and session_key
-            and trigger in valid_triggers
-        ):
+        should_reactivate = False
+        if crr_enabled and session_key:
+            with self._lock:
+                state = dict(self._reactivation_sessions.get(session_key, {}))
+                idle_ms = self._bounded_int(reactivation_cfg.get("idleThresholdMinutes"), 45, 1, 10080) * 60_000
+                cooldown_ms = self._bounded_int(reactivation_cfg.get("cooldownMinutes"), 30, 0, 10080) * 60_000
+                if not trigger and (substantive or continuation):
+                    if state.get("pendingCompaction"):
+                        trigger = "post_compaction"
+                    elif continuation:
+                        trigger = "continuation"
+                    elif not state.get("seenSubstantive"):
+                        trigger = "first_substantive"
+                    elif state.get("lastRecallMs") and now - state["lastRecallMs"] >= idle_ms:
+                        trigger = "idle"
+                should_reactivate = trigger in valid_triggers and (
+                    not state.get("lastAttemptMs") or now - state["lastAttemptMs"] >= cooldown_ms
+                )
+                state["lastRecallMs"] = now
+                if substantive:
+                    state["seenSubstantive"] = 1
+                if should_reactivate:
+                    # Reserve before index/DB reads so concurrent prefetches do
+                    # not both start the optional work. Errors also cool down.
+                    state["lastAttemptMs"] = now
+                    state.pop("pendingCompaction", None)
+                self._save_reactivation_state(session_key, state)
+        if should_reactivate:
             reactivation_budget_ms = self._bounded_int(
                 reactivation_cfg.get("timeoutMs"), 50, 1, 50
             )
@@ -1028,15 +1075,6 @@ class Plur1busDomain:
                     deadline=reactivation_deadline,
                 )
             )
-        if crr_enabled and session_key:
-            self._reactivation_sessions[session_key] = {"lastRecallMs": now}
-            # Bound local state even if a caller supplies many legitimate sessions.
-            if len(self._reactivation_sessions) > 256:
-                oldest = min(
-                    self._reactivation_sessions,
-                    key=lambda key: self._reactivation_sessions[key].get("lastRecallMs", now),
-                )
-                self._reactivation_sessions.pop(oldest, None)
         hydrated = self._hydrate_ids(
             table, graph_ids - seen, max(0, limit - len(rows)),
             acl_bindings=selector.acl_bindings,

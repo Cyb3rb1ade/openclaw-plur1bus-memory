@@ -18,7 +18,7 @@ FEATURES: tuple[dict[str, str], ...] = (
     {"id": "llm-result-cache", "status": "partial", "evidence": "native cache integration is narrower than the upstream contract"},
     {"id": "memory-graph", "status": "partial", "evidence": "native graph and recall edges; extended graph contracts differ"},
     {"id": "semantic-lens", "status": "partial", "evidence": "default-off additive booster with category caps and elapsed-time guard; full upstream contract not claimed"},
-    {"id": "conversation-reactivation", "status": "partial", "evidence": "native session-aware reactivation, not every upstream trigger"},
+    {"id": "conversation-reactivation", "status": "partial", "evidence": "native first-substantive/continuation/idle/compression triggers, scope-session isolation, cooldown and primary-recall error fallback; upstream selector/format and hard preemption are not identical"},
     {"id": "episodes-emotion-temporal", "status": "partial", "evidence": "turn journal and temporal fields; episode/emotion contracts differ"},
     {"id": "memory-dynamics", "status": "partial", "evidence": "strength/consolidation is not upstream TTL or store-merge parity"},
     {"id": "dreaming", "status": "partial", "evidence": "bounded REM and fallback; full dream workflow differs"},
@@ -39,8 +39,8 @@ FEATURES: tuple[dict[str, str], ...] = (
     {"id": "code-index", "status": "ready", "evidence": "bounded Python, JavaScript, TypeScript workspace symbol index"},
     {"id": "afterthought-meta-cognition", "status": "partial", "evidence": "additive hints, not full configurable session-LLM reporting"},
     {"id": "explainable-recall", "status": "ready", "evidence": "per-result vector/rerank rationale and bounded decision trace"},
-    {"id": "proactive-pattern-nudges", "status": "partial", "evidence": "native patterns/governor; no independent delivery"},
-    {"id": "afterthought-followups", "status": "partial", "evidence": "native governor; no independent delivery"},
+    {"id": "proactive-pattern-nudges", "status": "partial", "evidence": "native patterns/governor and independent authorized-route ticks; cold-start route registration still required"},
+    {"id": "afterthought-followups", "status": "partial", "evidence": "native governor and independent authorized-route ticks; cold-start route registration still required"},
     {"id": "meta-reflection", "status": "partial", "evidence": "aggregate feedback, not full upstream reflection contract"},
     {"id": "temperament-mood", "status": "partial", "evidence": "mood presets/context; Persona Voice and full style contract differ"},
     {"id": "multi-namespace-recall", "status": "ready", "evidence": "single writer, read-only legacy routes, globally bounded rerank and dedupe"},
@@ -88,7 +88,7 @@ COVERAGE_710 = (
 
 
 COVERAGE_712 = COVERAGE_710 + (
-    {"id": "local-jina-v5-nano", "status": "partial", "detail": "native pinned Q8 ONNX, explicit license/download gate, 512-token sequential inference and normalized Matryoshka dimensions; real-model local acceptance remains required"},
+    {"id": "local-jina-v5-nano", "status": "partial", "detail": "native pinned Q8 ONNX, explicit license/download gate, 512-token sequential inference and normalized Matryoshka dimensions; macOS real-model smoke verified, broader quality/platform acceptance remains open"},
     {"id": "nano-new-install-migration", "status": "partial", "detail": "shared installer exposes explicit model plan/prepare/stage/validate/activate with backup/source checks and profile-local config; real-model all-agent acceptance and named-namespace cutover remain open"},
 )
 

@@ -256,8 +256,8 @@ class Plur1busMemoryProvider(MemoryProvider):
         state.provider_ready = True
         state.last_health = {"status": "ready", "at": _utcnow_iso()}
 
-    def _release_previous_runtime(self) -> None:
-        """Release session-bound state before a repeated ``initialize`` replaces it."""
+    def _invalidate_prefetch(self) -> None:
+        """Discard old context results without letting late callbacks refill them."""
         with self._prefetch_lock:
             futures = list(self._prefetch_futures.values())
             self._prefetch_futures.clear()
@@ -266,6 +266,10 @@ class Plur1busMemoryProvider(MemoryProvider):
         for future in futures:
             future.cancel()
         self._last_recall_status = None
+
+    def _release_previous_runtime(self) -> None:
+        """Release session-bound state before a repeated ``initialize`` replaces it."""
+        self._invalidate_prefetch()
         previous = self._runtime
         self._runtime = None
         if previous is None:
@@ -369,7 +373,17 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def on_pre_compress(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
         """Durably checkpoint direct evidence before Hermes discards context."""
-        if not self._feature_enabled("autoCapture") or not self._capture_allowed(kwargs, messages):
+        if not self._capture_allowed(kwargs, messages):
+            return ""
+        # Reactivation is a read-side feature, independent of autoCapture.
+        note_compression = getattr(self._runtime, "note_context_compression", None)
+        if self._feature_enabled("autoRecall") and callable(note_compression):
+            self._invalidate_prefetch()
+            try:
+                note_compression(self._session_id)
+            except Exception as error:
+                logger.warning("optional reactivation compression signal failed (%s)", type(error).__name__)
+        if not self._feature_enabled("autoCapture"):
             return ""
         checkpoint = self._write_pre_compress_checkpoint(messages)
         self._flush_captures()
