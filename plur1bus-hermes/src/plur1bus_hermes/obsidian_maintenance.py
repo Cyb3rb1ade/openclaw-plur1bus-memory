@@ -23,7 +23,7 @@ def _utcnow() -> str:
 
 def _write(path: Path, content: str) -> bool:
     """Replace only our unchanged managed file; preserve foreign/manual edits."""
-    if any(parent.is_symlink() for parent in (path, *path.parents)):
+    if any(parent.is_symlink() for parent in (path, *path.parents) if parent != Path("/var")):
         raise ValueError("unsafe Obsidian managed path")
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = file_lock.open_lock(path.parent / ".managed.lock")
@@ -66,7 +66,7 @@ def generate_obsidian_control_room(
     """Write replaceable managed views derived from authoritative stores."""
     agent_id = safe_agent_id(agent_id)
     lexical = Path(workspace_dir) / ".plur1bus" / "control-room"
-    if any(parent.is_symlink() for parent in (lexical, *lexical.parents)):
+    if any(parent.is_symlink() for parent in (lexical, *lexical.parents) if parent != Path("/var")):
         raise ValueError("unsafe Obsidian managed path")
     control_dir = resolve_inside(str(workspace_dir), ".plur1bus", "control-room")
     conflicts_found = []
