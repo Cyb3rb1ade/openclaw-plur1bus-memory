@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import json
+import copy
 import logging
 import math
 import os
 from .file_io import replace_file, sync_parent
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
 import weakref
 from collections.abc import Mapping
 from contextlib import contextmanager
-from concurrent.futures import Future, wait
+from concurrent.futures import Future, wait, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -607,6 +609,10 @@ class Plur1busRuntime:
             queue_timeout_ms=queue_timeout_ms,
             thread_name_prefix="plur1bus-capture",
         )
+        self._booster_executor = BoundedExecutor(
+            max_workers=1, max_queue=0, queue_timeout_ms=50,
+            thread_name_prefix="plur1bus-recall-booster",
+        )
         self._futures: set[Future[None]] = set()
         self._lock = threading.RLock()
         self._retry_lock = threading.RLock()
@@ -921,8 +927,65 @@ class Plur1busRuntime:
         """Forward only host-owned session lifecycle, not model tool parameters."""
         self._domain.note_context_compression(session_id, scope_key=self.scope_key)
 
+    def _run_recall_booster(self, rows, table, limit, session_options):
+        """Keep this runtime/lease alive for admitted read-only work, even on timeout."""
+        try:
+            result = self._domain.boost_recall(rows, table, limit,
+                acl_bindings=self.scope_binding.as_dict(), **session_options)
+            if not isinstance(result, list) or any(not isinstance(row, dict) for row in result):
+                raise ValueError("invalid additive recall result")
+            return result
+        except Exception as error:
+            LOGGER.warning("additive recall booster failed; retaining primary recall (%s)", type(error).__name__)
+            return []
+
+    def _boost_recall_with_deadline(self, rows, table, limit, session_options):
+        """Wait at most the 50-ms budget; busy workers never queue more work.
+
+        This bounds caller waiting, not OS scheduling or termination of native
+        I/O. Timed-out workers retain the runtime lease until they really drain.
+        """
+        if self._closing or self._closed:
+            return rows
+        budgets = [50]
+        for name in ("semanticLens", "conversationReactivationRecall"):
+            settings = self.config.get(name)
+            if isinstance(settings, dict) and settings.get("enabled") is True:
+                budgets.append(self._domain._bounded_int(settings.get("timeoutMs"), 50, 1, 50))
+        deadline = time.monotonic() + min(budgets) / 1000
+        try:
+            future = self._booster_executor.submit(self._run_recall_booster,
+                copy.deepcopy([{key: value for key, value in row.items() if key != "vector"} for row in rows]),
+                table, limit, dict(session_options))
+        except AdmissionRejected:
+            LOGGER.debug("additive recall booster busy or closed; retaining primary recall")
+            return rows
+        try:
+            return future.result(timeout=max(0, deadline - time.monotonic()))
+        except FutureTimeout:
+            future.cancel()  # Only queued work is cancellable; never pretend to kill I/O.
+            LOGGER.debug("additive recall budget elapsed; retaining primary recall")
+            return rows
+        except Exception as error:
+            LOGGER.warning("additive recall worker failed (%s)", type(error).__name__)
+            return rows
+
     def recall(self, query: str, limit: int = 5, explain: bool = False, *, valid_at: Any = None,
                session_id: str = "", full_text: bool = False) -> str:
+        """Pin storage for the whole synchronous read, including late host prefetches."""
+        if self._closing or self._closed:
+            return ""
+        from .runtime_lease import acquire_runtime_lease
+        lease = acquire_runtime_lease(self.data_dir)
+        try:
+            if self._closing or self._closed:
+                return ""
+            return self._recall(query, limit, explain, valid_at=valid_at, session_id=session_id, full_text=full_text)
+        finally:
+            lease.close()
+
+    def _recall(self, query: str, limit: int = 5, explain: bool = False, *, valid_at: Any = None,
+                session_id: str = "", full_text: bool = False) -> str:
         """Recall active, unexpired memories, optionally at an asserted valid time."""
         parsed_valid_at = None
         if valid_at is not None:
@@ -1012,15 +1075,8 @@ class Plur1busRuntime:
                 continue
             seen_content.setdefault(canonical, []).append(row)
             deduplicated.append(row)
-        try:
-            session_options = {"session_id": session_id, "reactivation_query": semantic_query} if session_id else {}
-            boosted = self._domain.boost_recall(
-                deduplicated, recall_tables[0][1], adaptive_limit + 3,
-                acl_bindings=self.scope_binding.as_dict(), **session_options,
-            )
-        except Exception as error:
-            LOGGER.warning("additive recall booster failed; retaining primary recall (%s)", type(error).__name__)
-            boosted = deduplicated
+        session_options = {"session_id": session_id, "reactivation_query": semantic_query} if session_id else {}
+        boosted = self._boost_recall_with_deadline(deduplicated, recall_tables[0][1], adaptive_limit + 3, session_options)
         # SQL and shared-pool recall already authorized the primary rows.
         # A scope-specific additive booster must never replace/drop them,
         # including legacy private rows and separately authorized pool rows.
@@ -1519,6 +1575,7 @@ class Plur1busRuntime:
             self._shutdown_complete.wait(max(0, timeout_seconds))
             return
         self._closing = True
+        self._booster_executor.shutdown(wait=False, cancel_futures=True)
         self.flush(timeout_seconds)
         self._executor.shutdown(wait=False, cancel_futures=False)
 
@@ -1527,6 +1584,7 @@ class Plur1busRuntime:
             # No hard cancellation claim: a live worker keeps the shared lease
             # and therefore blocks activation even after shutdown's time budget.
             self._executor.shutdown(wait=True, cancel_futures=False)
+            self._booster_executor.shutdown(wait=True, cancel_futures=True)
             with writer_lock(self.data_dir):
                 self._closed = True
                 try:
@@ -1539,6 +1597,7 @@ class Plur1busRuntime:
                     self._shutdown_complete.set()
 
         pending = getattr(self._executor, "metrics", {}).get("pending", 0)
+        pending += self._booster_executor.metrics.get("pending", 0)
         if pending:
             threading.Thread(target=finalize, name="plur1bus-drain", daemon=True).start()
         else:
@@ -1636,6 +1695,14 @@ class Plur1busRuntime:
                         raise ValueError("stable memory identifier conflicts with existing record")
                     return record_id
         vector = self._embedding.embed(content)
+        if record_id is None and merged_from is None and importance is None:
+            from .automatic_merge import try_store_merge
+            replacement = try_store_merge(self, {
+                "content": content, "sessionId": session_id, "sourceRole": source_role,
+                "validFrom": valid_from_ms, "validUntil": valid_until_ms, "expiresAt": expiry_ms,
+            }, vector)
+            if replacement is not None:
+                return replacement
         record = {
             "id": record_id or str(uuid.uuid4()),
             "agentId": self.agent_id,
