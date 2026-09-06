@@ -9,6 +9,7 @@ from pathlib import Path
 import threading
 
 from .validation import resolve_inside
+from .restore_guard import assert_restore_idle
 
 _guard = threading.Lock()
 _locks: dict[str, threading.RLock] = {}
@@ -16,13 +17,15 @@ _held = threading.local()
 
 
 @contextmanager
-def writer_lock(data_dir: Path):
+def writer_lock(data_dir: Path, *, restoring: bool = False):
     """Serialize cooperating writers; nested calls share the outer file lock."""
     path = resolve_inside(str(data_dir), "state", "memory-writer.lock")
     key = str(path)
     with _guard:
         lock = _locks.setdefault(key, threading.RLock())
     with lock:
+        if not restoring:
+            assert_restore_idle(data_dir)
         held = getattr(_held, "paths", None)
         if held is None:
             held = _held.paths = set()
@@ -35,6 +38,8 @@ def writer_lock(data_dir: Path):
         fd = fcntl.open_lock(path)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
+            if not restoring:
+                assert_restore_idle(data_dir)
             held.add(key)
             try:
                 yield

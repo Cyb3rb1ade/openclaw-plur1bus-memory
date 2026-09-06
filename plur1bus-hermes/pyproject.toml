@@ -28,6 +28,7 @@ plur1bus-hermes-cutover = "plur1bus_hermes.cutover:main"
 plur1bus-hermes-jobs = "plur1bus_hermes.jobs:main"
 plur1bus-hermes-jobs-install = "plur1bus_hermes.job_install:main"
 plur1bus-hermes-parity = "plur1bus_hermes.parity:main"
+plur1bus-hermes-snapshot = "plur1bus_hermes.snapshot:main"
 plur1bus-hermes-repair-tombstones = "plur1bus_hermes.tombstone:repair_cli_main"
 
 [tool.setuptools]
