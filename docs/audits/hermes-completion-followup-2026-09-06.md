@@ -92,6 +92,23 @@ PyTorch must not be silently downgraded to bypass it.
 
 ## Still not claimed
 
+Native-storage follow-up (2026-09-07): Windows ARM CI run `34060568686`
+passed pinned Arrow 25.0.1 and LanceDB 0.34.0 builds plus fresh installed-wheel
+validation. The same checksum-verified wheels then passed in the user's native
+Parallels ARM64 guest: 19 PE binaries, insert/additive schema/filtered ANN/reopen,
+Parquet and compute. Native Hermes dependencies separately passed CLI, AES-GCM
+and ConPTY `read(4096)` tests in a staged ARM64 venv; the default upstream x64
+venv was not replaced. Neither result is full PLUR1BUS model/UI acceptance.
+
+The portable builder now accepts the reviewed ARM wheel **pair** with individual
+approved hashes, exact wheel metadata and PE architecture checks. Read-only
+installation planning selects them only for standard-ABI native CPython 3.13
+on Windows ARM64. Existing Intel selection remains compatible. Distribution
+regressions: 59 passed on macOS; 56 passed and 3 explicitly POSIX-only skipped
+in the actual Windows ARM guest. Both real ARM wheel artifacts pass the new
+builder checks. NumPy/PyTorch-independent native ML provisioning, BGE ONNX,
+complete native application packaging and the remaining gates below are still open.
+
 The full upstream automatic semantic-compaction/rewrite policy, complete
 graph/entity/cognition selector/configuration parity, arbitrary vault discovery
 and mirror conflict resolution, cold-start proactive route ownership and general

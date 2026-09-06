@@ -8,6 +8,7 @@ from email.parser import BytesParser
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -55,10 +56,62 @@ def validate_intel_wheel(path, expected_sha256):
     return path
 
 
-def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha256=None):
+def validate_windows_arm_wheel(path, expected_sha256, package):
+    """Validate approved pinned ARM wheel identity and every bundled PE binary."""
+    identities = {"lancedb": ("0.34.0", "cp39-abi3-win_arm64"),
+                  "pyarrow": ("25.0.1", "cp313-cp313-win_arm64")}
+    if package not in identities:
+        raise ValueError("unsupported ARM native dependency")
+    version, tag = identities[package]
+    path = Path(path)
+    if (path.is_symlink() or not path.is_file() or path.stat().st_size > 512 * 1024 * 1024
+        or path.name != f"{package}-{version}-{tag}.whl"
+        or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256 or "")):
+        raise ValueError("expected a hash-approved pinned Windows ARM64 wheel")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise ValueError("native wheel checksum differs from approved build")
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate wheel members")
+        prefix = f"{package}-{version}.dist-info/"
+        for name in (prefix + "METADATA", prefix + "WHEEL"):
+            if archive.getinfo(name).file_size > 100_000:
+                raise ValueError("oversized wheel metadata")
+        info = BytesParser().parsebytes(archive.read(prefix + "METADATA"))
+        tags = BytesParser().parsebytes(archive.read(prefix + "WHEEL")).get_all("Tag")
+        if info.get("Name") != package or info.get("Version") != version or tags != [tag]:
+            raise ValueError("native wheel metadata/architecture mismatch")
+        binaries = [name for name in names if name.lower().endswith((".pyd", ".dll", ".exe"))]
+        if not any(name.lower().endswith(".pyd") for name in binaries):
+            raise ValueError("native ARM64 extension missing")
+        for name in binaries:
+            with archive.open(name) as stream:
+                header = stream.read(64)
+                if len(header) != 64 or header[:2] != b"MZ":
+                    raise ValueError("invalid ARM64 PE header")
+                offset = struct.unpack_from("<I", header, 0x3c)[0]
+                if offset < 64 or offset > min(1024 * 1024, archive.getinfo(name).file_size - 6):
+                    raise ValueError("invalid ARM64 PE offset")
+                stream.seek(offset)
+                pe = stream.read(6)
+                if len(pe) != 6 or pe[:4] != b"PE\0\0" or struct.unpack_from("<H", pe, 4)[0] != 0xaa64:
+                    raise ValueError("native binary is not Windows ARM64")
+    return path
+
+
+def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha256=None,
+          arm_lancedb_wheel=None, arm_lancedb_sha256=None, arm_pyarrow_wheel=None, arm_pyarrow_sha256=None):
     if bool(intel_wheel) != bool(intel_sha256):
         raise ValueError("native wheel path and approved SHA-256 must be supplied together")
     vendor = validate_intel_wheel(intel_wheel, intel_sha256) if intel_wheel else None
+    arm_inputs = [arm_lancedb_wheel, arm_lancedb_sha256, arm_pyarrow_wheel, arm_pyarrow_sha256]
+    if any(arm_inputs) and not all(arm_inputs):
+        raise ValueError("both ARM native wheel paths and approved SHA-256 values are required")
+    arm_vendors = []
+    if all(arm_inputs):
+        arm_vendors = [(validate_windows_arm_wheel(arm_lancedb_wheel, arm_lancedb_sha256, "lancedb"), arm_lancedb_sha256),
+                       (validate_windows_arm_wheel(arm_pyarrow_wheel, arm_pyarrow_sha256, "pyarrow"), arm_pyarrow_sha256)]
     output = Path(output).absolute()
     if output.exists() and any(output.iterdir()):
         raise ValueError("use a new empty output directory; existing releases are never overwritten")
@@ -102,6 +155,14 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
         if hashlib.sha256((bundle / relative).read_bytes()).hexdigest() != intel_sha256:
             raise ValueError("native wheel changed while packaging")
         native_dependencies["darwin/x86_64"] = relative
+    if arm_vendors:
+        native_dependencies["win32/ARM64"] = []
+        for arm_vendor, approved_hash in arm_vendors:
+            relative = "vendor/windows-arm64/" + arm_vendor.name
+            copy(arm_vendor, bundle / relative)
+            if hashlib.sha256((bundle / relative).read_bytes()).hexdigest() != approved_hash:
+                raise ValueError("native wheel changed while packaging")
+            native_dependencies["win32/ARM64"].append(relative)
     if windows_exe:
         if sys.platform != "win32":
             raise ValueError("Windows executable must be built and tested on Windows")
@@ -155,5 +216,10 @@ if __name__ == "__main__":
     parser.add_argument("--windows-exe", action="store_true")
     parser.add_argument("--intel-lancedb-wheel", help="native-tested LanceDB 0.34.0 Intel wheel from the reviewed build")
     parser.add_argument("--intel-lancedb-sha256", help="approved wheel SHA-256 from native CI provenance")
+    parser.add_argument("--arm-lancedb-wheel", help="native-tested LanceDB 0.34.0 Windows ARM64 wheel")
+    parser.add_argument("--arm-lancedb-sha256", help="approved LanceDB wheel SHA-256")
+    parser.add_argument("--arm-pyarrow-wheel", help="native-tested PyArrow 25.0.1 CPython 3.13 Windows ARM64 wheel")
+    parser.add_argument("--arm-pyarrow-sha256", help="approved PyArrow wheel SHA-256")
     args = parser.parse_args()
-    build(args.output, args.mac_pkg, args.windows_exe, args.intel_lancedb_wheel, args.intel_lancedb_sha256)
+    build(args.output, args.mac_pkg, args.windows_exe, args.intel_lancedb_wheel, args.intel_lancedb_sha256,
+          args.arm_lancedb_wheel, args.arm_lancedb_sha256, args.arm_pyarrow_wheel, args.arm_pyarrow_sha256)

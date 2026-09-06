@@ -17,6 +17,43 @@ builder = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(builder)
 FILENAME = "lancedb-0.34.0-cp39-abi3-macosx_10_15_x86_64.whl"
 RELATIVE = "vendor/macos-x86_64/" + FILENAME
+ARM_LANCE = "vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl"
+ARM_ARROW = "vendor/windows-arm64/pyarrow-25.0.1-cp313-cp313-win_arm64.whl"
+
+
+def test_arm_wheel_requires_approved_hash_metadata_and_native_pe(tmp_path):
+    import struct
+    path = tmp_path / Path(ARM_LANCE).name
+    binary = bytearray(128)
+    binary[:2] = b"MZ"
+    struct.pack_into("<I", binary, 0x3c, 64)
+    binary[64:68] = b"PE\0\0"
+    struct.pack_into("<H", binary, 68, 0xaa64)
+
+    def write(machine):
+        struct.pack_into("<H", binary, 68, machine)
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("lancedb-0.34.0.dist-info/METADATA", "Name: lancedb\nVersion: 0.34.0\n")
+            archive.writestr("lancedb-0.34.0.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: cp39-abi3-win_arm64\n")
+            archive.writestr("lancedb/_lancedb.pyd", binary)
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    sha = write(0xaa64)
+    assert builder.validate_windows_arm_wheel(path, sha, "lancedb") == path
+    with pytest.raises(ValueError):
+        builder.validate_windows_arm_wheel(path, "0" * 64, "lancedb")
+    sha = write(0x8664)
+    with pytest.raises(ValueError, match="ARM64"):
+        builder.validate_windows_arm_wheel(path, sha, "lancedb")
+    with pytest.raises(ValueError):
+        builder.validate_windows_arm_wheel(path, sha, "pyarrow")
+
+
+def test_partial_arm_bundle_refused_before_output_creation(tmp_path):
+    output = tmp_path / "new-bundle"
+    with pytest.raises(ValueError, match="both ARM"):
+        builder.build(output, arm_lancedb_wheel=tmp_path / "missing.whl")
+    assert not output.exists()
 
 
 def wheel(tmp_path, tag="cp39-abi3-macosx_10_15_x86_64", version="0.34.0"):
@@ -98,3 +135,57 @@ class NativeInstallerTests(fixtures.InstallerTests):
                 installer.apply_install(plan, plan["confirmation"], True)
         forced = next(command for command in commands if "--force-reinstall" in command)
         assert "--no-deps" in forced and str(self.bundle / RELATIVE) in forced
+
+
+class ArmNativeInstallerTests(fixtures.InstallerTests):
+    def setUp(self):
+        super().setUp()
+        self.architecture = "ARM64"
+        self.python_version = [3, 13, 15]
+        self.implementation = "cpython"
+        self.free_threaded = False
+        self.files.update({ARM_LANCE: b"lance fixture", ARM_ARROW: b"arrow fixture"})
+        self.write_bundle()
+        self.set_native([ARM_LANCE, ARM_ARROW])
+
+    def set_native(self, values):
+        path = self.bundle / "distribution.json"
+        manifest = json.loads(path.read_text())
+        manifest["nativeDependencies"] = {"win32/ARM64": values}
+        path.write_text(json.dumps(manifest))
+
+    def fake_python(self, python, code, data=None):
+        result = super().fake_python(python, code, data)
+        if "sys.version_info" in code:
+            info = json.loads(result)
+            info.update(architecture=self.architecture, version=self.python_version,
+                        implementation=self.implementation, freeThreaded=self.free_threaded)
+            return json.dumps(info)
+        return result
+
+    def test_arm_pair_selected_only_for_matching_interpreter(self):
+        from unittest.mock import patch
+        with patch.object(installer.sys, "platform", "win32"):
+            assert self.plan()["nativeWheels"] == [ARM_LANCE, ARM_ARROW]
+            assert self.plan(dependencies=False)["nativeWheels"] == []
+            assert self.plan(desktop_only=True)["nativeWheels"] == []
+            self.architecture = "AMD64"
+            assert self.plan()["nativeWheels"] == []
+
+    def test_arm_python_abi_mismatch_refused_before_writes(self):
+        from unittest.mock import patch
+        with patch.object(installer.sys, "platform", "win32"):
+            for version, implementation, free_threaded in (([3, 12, 10], "cpython", False),
+                                                          ([3, 13, 15], "pypy", False),
+                                                          ([3, 13, 15], "cpython", True)):
+                self.python_version, self.implementation, self.free_threaded = version, implementation, free_threaded
+                with pytest.raises(ValueError, match="Python 3.13"):
+                    self.plan()
+        assert not (self.home / "plur1bus-install-backups").exists()
+
+    def test_incomplete_duplicate_foreign_or_unlisted_pair_refused(self):
+        for values in ([ARM_LANCE], [ARM_ARROW, ARM_ARROW], [ARM_LANCE, RELATIVE],
+                       [ARM_LANCE, "../../pyarrow.whl"], ARM_LANCE):
+            self.set_native(values)
+            with pytest.raises(ValueError, match="native dependency"):
+                self.plan()

@@ -83,6 +83,15 @@ installation enabled selects it. Apple Silicon, Windows, Linux and desktop-only
 installs never install that wheel. It is covered by the bundle checksum manifest.
 The native database wheel alone does not certify Intel compatibility of the
 rest of the ML stack. Do not downgrade PyTorch to bypass a failed preflight.
+Reviewed Windows ARM storage bundles list **both** LanceDB 0.34.0 and PyArrow
+25.0.1 under `nativeWheels`. The current Arrow artifact requires native CPython
+3.13 with the standard GIL ABI; incompatible interpreters are refused during the
+read-only plan. Windows x64 and desktop-only installs never select ARM wheels.
+The builder requires an explicitly approved SHA-256 for each wheel, exact pinned
+wheel metadata, and ARM64 PE headers for every bundled native binary. This is a
+storage packaging capability, **not yet a complete ARM edition**: native ML
+dependency/provider provisioning and full installed-application acceptance must
+also pass. The installer does not silently replace Hermes's x64 Python with ARM.
 `--no-deps` is for an already provisioned, compatible venv; wheels are still
 installed and checked. New pip conflicts abort before plugin-file changes.
 Pre-existing conflict lines are recorded, not presented as a healthy environment.

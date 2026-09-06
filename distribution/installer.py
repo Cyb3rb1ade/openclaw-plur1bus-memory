@@ -150,7 +150,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     info = None
     if not desktop_only:
         python = interpreter(home, python)
-        info = json.loads(run_python(python, "import json,sys,platform; print(json.dumps({'version':list(sys.version_info[:3]),'venv':sys.prefix!=sys.base_prefix,'prefix':sys.prefix,'platform':sys.platform,'architecture':platform.machine()}))"))
+        info = json.loads(run_python(python, "import json,sys,platform,sysconfig; print(json.dumps({'version':list(sys.version_info[:3]),'venv':sys.prefix!=sys.base_prefix,'prefix':sys.prefix,'platform':sys.platform,'architecture':platform.machine(),'implementation':sys.implementation.name,'freeThreaded':bool(sysconfig.get_config_var('Py_GIL_DISABLED'))}))"))
         if info["version"] < [3, 11, 0] or not info["venv"] or info["platform"] != sys.platform:
             raise ValueError("same-platform Python >=3.11 in a Hermes virtual environment required; global or Windows/WSL-crossed pip refused")
     selected = targets(home, profiles, desktop_only)
@@ -164,17 +164,28 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     if len(wheels) != 2:
         raise ValueError("both Python wheels are required")
     native = manifest.get("nativeDependencies", {})
-    if not isinstance(native, dict) or set(native) - {"darwin/x86_64"}:
+    if not isinstance(native, dict) or set(native) - {"darwin/x86_64", "win32/ARM64"}:
         raise ValueError("unsupported bundled native dependency mapping")
     for key, wheel in native.items():
-        if (not isinstance(wheel, str) or wheel not in manifest["files"]
+        if key == "win32/ARM64":
+            expected = ["vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl",
+                        "vendor/windows-arm64/pyarrow-25.0.1-cp313-cp313-win_arm64.whl"]
+            if wheel != expected or not all(path in manifest["files"] for path in expected):
+                raise ValueError("invalid bundled ARM native dependency pair")
+        elif (not isinstance(wheel, str) or wheel not in manifest["files"]
             or not re.fullmatch(r"vendor/macos-x86_64/lancedb-0\.34\.0-cp3\d+-abi3-macosx_\d+_\d+_x86_64\.whl", wheel)):
             raise ValueError("invalid bundled native dependency")
     native_wheels = []
     if not desktop_only and dependencies:
         target = info["platform"] + "/" + str(info.get("architecture", ""))
         if target in native:
-            native_wheels = [native[target]]
+            if target == "win32/ARM64":
+                if (info["version"][:2] != [3, 13] or info.get("implementation") != "cpython"
+                    or info.get("freeThreaded") is not False):
+                    raise ValueError("bundled Windows ARM storage requires native CPython / Python 3.13 with the standard GIL ABI")
+                native_wheels = list(native[target])
+            else:
+                native_wheels = [native[target]]
     for name, target in selected.items():
         config_path = resolve_inside(target, "config.yaml")
         configs[name] = digest(config_path.read_bytes()) if config_path.exists() else None
