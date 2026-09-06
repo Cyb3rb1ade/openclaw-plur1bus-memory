@@ -11,6 +11,7 @@ install_retrieval=1
 install_dashboard=0
 install_desktop=0
 desktop_all_profiles=0
+desktop_host_source=""
 install_model_providers=1
 retrieval_args=()
 non_interactive="${PLUR1BUS_NONINTERACTIVE:-0}"
@@ -33,6 +34,10 @@ while [[ $# -gt 0 ]]; do
       install_desktop=1
       install_dashboard=1
       shift
+      ;;
+    --desktop-host-source)
+      desktop_host_source="${2:?missing path after --desktop-host-source}"
+      shift 2
       ;;
     --desktop-all-profiles)
       install_desktop=1
@@ -62,11 +67,16 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      printf 'Usage: %s [--hermes-home PATH] [--dashboard|--desktop|--desktop-all-profiles] [--no-setup] [--no-deps] [--no-retrieval] [--no-model-providers] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
+      printf 'Usage: %s [--hermes-home PATH] [--dashboard|--desktop|--desktop-all-profiles] [--desktop-host-source PATH] [--no-setup] [--no-deps] [--no-retrieval] [--no-model-providers] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
       exit 2
       ;;
   esac
 done
+
+if [[ -n "$desktop_host_source" && "$install_desktop" != "1" ]]; then
+  printf '%s\n' '--desktop-host-source requires --desktop or --desktop-all-profiles.' >&2
+  exit 2
+fi
 
 # Resolve before creating plugin directories or installing dependencies.
 source "$repo_dir/scripts/lib/hermes-home.sh"
@@ -102,6 +112,13 @@ if [[ "$desktop_all_profiles" == "1" ]]; then
   done
 fi
 if [[ "$install_desktop" == "1" ]]; then
+  if [[ -L "$hermes_home/bin" || -L "$hermes_home/bin/plur1bus-desktop-host.py" || -L "$hermes_home/bin/plur1bus-host-patches" ]]; then
+    printf 'Refusing symbolic-link host-helper destination.\n' >&2
+    exit 4
+  fi
+  for host_patch in "$hermes_home/bin/plur1bus-host-patches/"*.patch; do
+    if [[ -L "$host_patch" ]]; then printf 'Refusing symbolic-link host patch.\n' >&2; exit 4; fi
+  done
   for desktop_home in "${desktop_homes[@]}"; do
     desktop_target="$desktop_home/desktop-plugins/plur1bus"
     if [[ -L "$desktop_home/desktop-plugins" || -L "$desktop_target" || -L "$desktop_target/plugin.js" ]]; then
@@ -146,6 +163,9 @@ if [[ "$install_deps" == "1" ]]; then
 fi
 
 if [[ "$install_desktop" == "1" ]]; then
+  install -m 0755 "$repo_dir/scripts/hermes-desktop-host.py" "$bin_target/plur1bus-desktop-host.py"
+  install -d "$bin_target/plur1bus-host-patches"
+  install -m 0644 "$repo_dir/hermes-dashboard/patches/"*.patch "$bin_target/plur1bus-host-patches/"
   for desktop_home in "${desktop_homes[@]}"; do
     desktop_target="$desktop_home/desktop-plugins/plur1bus"
     install -d "$desktop_target"
@@ -154,6 +174,11 @@ if [[ "$install_desktop" == "1" ]]; then
   printf 'Installed native PLUR1BUS Desktop entry; open PLUR1BUS in the bottom status bar or command palette.\n'
   printf 'Desktop UI installed in %s existing home(s); other profiles memory-provider configuration is unchanged.\n' "${#desktop_homes[@]}"
   printf 'Restart Hermes Desktop to load backend updates. The frontend uses a native workspace tab, not the contributed route cache.\n'
+  printf 'Read-only startup checks are enabled. Host preparation helper: %s/plur1bus-desktop-host.py --source /absolute/hermes/source\n' "$bin_target"
+  if [[ -n "$desktop_host_source" ]]; then
+    "$hermes_python" "$bin_target/plur1bus-desktop-host.py" --source "$desktop_host_source" || \
+      printf 'Host compatibility is not confirmed. No host changes were attempted; inspect the report before a separate confirmed build.\n' >&2
+  fi
 fi
 
 if [[ "$install_retrieval" == "1" ]]; then

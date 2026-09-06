@@ -7,6 +7,67 @@ Compatibility was inspected against Hermes 0.21.0. Detailed coverage and
 remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` and
 `docs/audits/hermes-7.12.0-contract-delta.md` in the repository.
 
+### Desktop host preparation (next update; not in the published .1 assets)
+
+Once the desktop plugin is enabled, startup/profile-switch checks are read-only:
+they verify workspace/routing APIs and the selected backend's identity before
+allowing memory access. The command palette always offers **PLUR1BUS:
+Desktop-Kompatibilität prüfen**, even if memory navigation cannot be enabled.
+On compatible hosts, the status bar and palette open the workspace without the
+sidebar extension. A failed profile handshake blocks access; there is no fallback
+to another profile or an ambient unverified backend. Hermes currently does not
+expose a sidebar-action capability flag, so the check reports that feature as
+**unknown**, not as successfully patched.
+
+For a trusted, clean Hermes Git source checkout, Python >= 3.12, Git, Node/npm
+and the normal platform build prerequisites, use the shipped helper:
+
+```bash
+python3 scripts/hermes-desktop-host.py --source /absolute/path/hermes-agent
+```
+
+This only prints a plan: source commit, patch states (`present`, `applicable`,
+`incompatible`), output directory, build commands and a confirmation hash.
+Review it before explicitly requesting execution:
+
+The source's declared Node/npm engine ranges are checked before any writes.
+If the installed toolchain is excluded, select a compatible one in `PATH` and
+generate a new plan. The helper never disables Hermes' engine constraints.
+
+```bash
+python3 scripts/hermes-desktop-host.py --source /absolute/path/hermes-agent \
+  --apply --confirm HASH_FROM_THE_PLAN
+```
+
+The helper snapshots the tracked source to `source-backup.tar`, applies missing
+patches to a **separate copy**, runs `npm ci` and the host's non-publishing
+`npm run pack --workspace=apps/desktop`, and reports the resulting application
+directory. These commands download dependencies and execute the reviewed Hermes
+revision's build scripts; only use a source checkout you trust. Default output
+is a uniquely named directory under the source's sibling `<name>-plur1bus-builds`;
+use the same `--output-root PATH` on both invocations to select another location.
+Developer-certificate auto-discovery and inherited signing/notarization credentials
+are disabled for this local build; it is not a signed/notarized public installer.
+
+No source commit, existing app, profile, memory store or provider setting is
+replaced. The result is **built, not installed or launched**: quit Hermes Desktop
+and explicitly choose the newly built app when ready. Keep the original app to
+switch back. Auto-updates can remove the host changes; repeat the read-only check
+after updating instead of blindly reapplying a patch on every launch. Source
+checks do not prove which binary you are running; use the live profile check too.
+
+Dirty/incompatible sources, changed confirmation plans and symlink targets are
+refused. A failed build is retained with `plan.json`, `result.json`, the snapshot
+and `build.log` (when build execution started); it is never automatically retried.
+Existing patches are not applied twice. Unsupported packaged `.app` installations
+are not modified; use a compatible host update or a supported source build.
+
+`install-hermes-plugins.sh --desktop` also installs the helper as
+`<Hermes-Home>/bin/plur1bus-desktop-host.py` with its patches. Optional
+`--desktop-host-source /absolute/source` prints the read-only plan during plugin
+installation; it **never** confirms or starts a host build. It does not submit
+upstream PRs or publish a new plugin release.
+
 Jina v5 Text Nano is an explicit `local-onnx` option, with optional
 `plur1bus-hermes[local-onnx]` dependencies. Preparation requires acknowledgement
 of CC-BY-NC-4.0; inference is pinned, local-only, and limited to 512 tokens per

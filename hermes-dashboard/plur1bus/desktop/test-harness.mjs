@@ -27,6 +27,27 @@ const { createScopedReader } = plugin.namespace;
 const { createScopedRequest } = plugin.namespace;
 const { createProfileTransport } = plugin.namespace;
 const { retrievalDefaults } = plugin.namespace;
+const { checkDesktopCompatibility } = plugin.namespace;
+const compatibleHost = { openWorkspace() {}, profileRoutes: async () => [
+  { connectionId: 'local', profile: 'alpha', targetProfile: 'alpha' }] };
+let compatibilityCalls = [];
+const compatibilityBridge = { api: async req => {
+  compatibilityCalls.push(req);
+  return { profile: 'alpha', profileBinding: 1, memoryProviderEnabled: true };
+} };
+const compatibility = await checkDesktopCompatibility(compatibleHost, compatibilityBridge, () => '["local","alpha"]');
+assert.equal(compatibility.status, 'verified');
+assert.equal(compatibility.sidebar, 'unknown', 'profile handshake does not prove host sidebar patch');
+assert.equal(compatibilityCalls.length, 1);
+assert.ok(compatibilityCalls[0].path.endsWith('/desktop/capabilities'));
+assert.equal(compatibilityCalls[0].method, undefined, 'startup check is read-only');
+assert.equal((await checkDesktopCompatibility({}, compatibilityBridge, () => '["local","alpha"]')).status, 'unsupported');
+assert.equal(compatibilityCalls.length, 1, 'missing host API must not dispatch');
+const mismatch = await checkDesktopCompatibility(compatibleHost, { api: async () => ({ profile: 'beta', profileBinding: 1 }) }, () => '["local","alpha"]');
+assert.equal(mismatch.status, 'blocked');
+assert.equal(mismatch.enabled, null);
+const inactive = await checkDesktopCompatibility(compatibleHost, { api: async () => ({ profile: 'alpha', profileBinding: 1, memoryProviderEnabled: false }) }, () => '["local","alpha"]');
+assert.equal(inactive.enabled, false);
 assert.equal(retrievalDefaults('local-onnx', 'embedding').licenseAccepted, false);
 assert.equal(retrievalDefaults('local-onnx', 'embedding').dimensions, 768);
 assert.deepEqual(retrievalDefaults('disabled', 'reranker'), { provider: 'disabled' });
@@ -169,6 +190,32 @@ contributions.find(c => c.area === 'palette').data.run();
 assert.deepEqual(opened.map(c => c.id), ['plur1bus', 'plur1bus', 'plur1bus'], 'all entry points share the same workspace');
 assert.equal(opened[0].options.title, 'PLUR1BUS');
 disposers.forEach(dispose => dispose());
+const inactiveDisposers = [], inactiveBatches = [];
+globalThis.window.hermesDesktop.api = async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: false });
+plugin.namespace.default.register({ onDispose: fn => inactiveDisposers.push(fn),
+  registerMany: batch => { inactiveBatches.push(batch); return () => {}; } });
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(inactiveBatches.flat().length, 1);
+assert.equal(inactiveBatches.flat()[0].data.id, 'plur1bus.host-check', 'disabled profiles only retain diagnostics, not a memory button');
+inactiveDisposers.forEach(dispose => dispose());
+
+// Older hosts can omit the sidebar area entirely; status/palette still load.
+const legacyNames = Object.keys(values).filter(name => name !== 'SIDEBAR_NAV_AREA');
+const legacySdk = new vm.SyntheticModule(legacyNames, function () {
+  for (const name of legacyNames) this.setExport(name, values[name]);
+});
+const legacy = new vm.SourceTextModule(await readFile(new URL('./plugin.js', import.meta.url), 'utf8'));
+await legacy.link(name => name === 'react' ? react : legacySdk);
+await legacy.evaluate();
+globalThis.window.hermesDesktop.api = async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: true });
+const legacyBatches = [], legacyDisposers = [];
+legacy.namespace.default.register({ onDispose: fn => legacyDisposers.push(fn),
+  registerMany: batch => { legacyBatches.push(batch); return () => {}; } });
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.ok(legacyBatches.flat().some(c => c.area === 'statusBar.left'));
+assert.ok(legacyBatches.flat().some(c => c.data.id === 'plur1bus.open'));
+assert.ok(!legacyBatches.flat().some(c => c.area === 'sidebar.nav' || !c.area));
+legacyDisposers.forEach(dispose => dispose());
 delete globalThis.window;
 assert.equal(closed, 1, 'hot unload closes the owned workspace');
 console.log('Native desktop routing, lifecycle, read and scoped action contracts passed.');

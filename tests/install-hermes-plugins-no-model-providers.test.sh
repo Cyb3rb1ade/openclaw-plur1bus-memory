@@ -61,6 +61,9 @@ chmod +x "$temporary/bin/python" "$temporary/bin/hermes"
 PATH="$temporary/bin:$PATH" HERMES_PYTHON="$temporary/bin/python" "$repo_dir/scripts/install-hermes-plugins.sh" \
   --hermes-home "$desktop_home" --desktop --no-setup --no-deps --no-retrieval --no-model-providers >/dev/null
 cmp "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$desktop_home/desktop-plugins/plur1bus/plugin.js"
+cmp "$repo_dir/scripts/hermes-desktop-host.py" "$desktop_home/bin/plur1bus-desktop-host.py"
+cmp "$repo_dir/hermes-dashboard/patches/hermes-desktop-live-profile.patch" "$desktop_home/bin/plur1bus-host-patches/hermes-desktop-live-profile.patch"
+cmp "$repo_dir/hermes-dashboard/patches/hermes-desktop-sidebar-action.patch" "$desktop_home/bin/plur1bus-host-patches/hermes-desktop-sidebar-action.patch"
 [[ -f "$desktop_home/plugins/plur1bus/dashboard/manifest.json" ]]
 mv "$desktop_home/desktop-plugins/plur1bus" "$temporary/outside-desktop"
 ln -s "$temporary/outside-desktop" "$desktop_home/desktop-plugins/plur1bus"

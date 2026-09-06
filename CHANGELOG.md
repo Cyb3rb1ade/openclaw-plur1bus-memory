@@ -7,6 +7,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+- Hermes: schreibgeschützter Desktop-Start-/Profilcheck und unabhängig auffindbare
+  Diagnose in der Befehlspalette. Unbestätigte Profilverbindungen bleiben gesperrt;
+  Sidebar-Unterstützung wird ohne Host-Nachweis ausdrücklich als unbekannt angezeigt.
+- Bestätigter Host-Bauhelfer: revisionsgebundener Plan, Quell-Snapshot, Patch-Prüfung
+  und nicht veröffentlichender Neubau einer separaten Kopie. Bestehende App und
+  Daten bleiben unangetastet; kein automatisches Patchen bei jedem Start.
+
 ## [7.12.0-hermes.1] — 2026-09-06
 
 - Native Hermes-Workspace mit Memory-Browser, geprüftem Skill Workshop und

@@ -1,5 +1,59 @@
 import React from 'react';
-import { host, useValue, STATUSBAR_AREAS, PALETTE_AREA, SIDEBAR_NAV_AREA } from '@hermes/plugin-sdk';
+import * as sdk from '@hermes/plugin-sdk';
+// Optional newer exports must not prevent the diagnostic/fallback from loading.
+const { host, useValue, STATUSBAR_AREAS, PALETTE_AREA, SIDEBAR_NAV_AREA } = sdk;
+
+/** Read-only startup check; source patch presence is never inferred from an API name.
+ * @param {object} runtime Hermes SDK host.
+ * @param {object} bridge Electron renderer bridge.
+ * @param {Function} current Current profile/connection identity.
+ * @returns {Promise<object>} Safe capability report, without memory reads or writes.
+ */
+export async function checkDesktopCompatibility(runtime, bridge, current) {
+  const identity = current();
+  const [connection, profile] = JSON.parse(identity);
+  const missing = [];
+  if (typeof runtime.openWorkspace !== 'function') missing.push('Workspace-API');
+  if (typeof runtime.profileRoutes !== 'function') missing.push('Profilrouting-API');
+  if (typeof bridge?.api !== 'function') missing.push('Electron-API');
+  const base = { identity, sidebar: 'unknown', profileBinding: false, enabled: null };
+  if (missing.length) return { ...base, status: 'unsupported',
+    message: `Hermes Desktop benötigt ein Update: ${missing.join(', ')} fehlt. Es wurde nichts verändert.` };
+  try {
+    const rest = createProfileTransport(bridge.api, runtime.profileRoutes, { connection, profile }, current, identity);
+    const caps = await rest('/desktop/capabilities');
+    if (current() !== identity) return { ...base, status: 'stale' };
+    return { ...base, profileBinding: true, enabled: typeof caps.memoryProviderEnabled === 'boolean' ? caps.memoryProviderEnabled : null,
+      status: 'verified', message: 'Workspace und Profilverbindung geprüft. Die Sidebar-Erweiterung ist über die Host-API nicht nachweisbar; Statusleiste und Befehlspalette benötigen sie nicht.' };
+  } catch (error) {
+    return { ...base, status: current() !== identity ? 'stale' : 'blocked',
+      enabled: error?.plur1busDisabled ? false : null,
+      message: error?.plur1busReason || 'Profilverbindung nicht bestätigt. Datenzugriff bleibt gesperrt.' };
+  }
+}
+
+function HostCompatibility() {
+  const [report, setReport] = React.useState(null);
+  const profile = useValue(host.state.profile), connection = useValue(host.state.connectionId);
+  React.useEffect(() => {
+    let disposed = false;
+    setReport(null);
+    const identity = scopeKey();
+    async function check() {
+      const result = await checkDesktopCompatibility(host, typeof window !== 'undefined' && window.hermesDesktop, scopeKey);
+      if (!disposed && scopeKey() === identity && result.status !== 'stale') setReport(result);
+    }
+    void check();
+    return () => { disposed = true; };
+  }, [profile, connection]);
+  return h('section', null, h('h2', null, 'Hermes-Kompatibilität'),
+    h('p', { role: 'status' }, report?.message || 'Host-Funktionen und Profilzuordnung werden schreibgeschützt geprüft…'),
+    h('p', null, 'Fehlt der linke Knopf: PLUR1BUS über die untere Statusleiste oder Befehlspalette öffnen. Bei nicht bestätigter Profilverbindung bleiben Daten und Aktionen gesperrt.'),
+    h('details', null, h('summary', null, 'Quellinstallation automatisch vorbereiten'),
+      h('p', null, 'Im PLUR1BUS-Paket ausführen (Python ≥ 3.12). Zuerst den ausgegebenen Plan prüfen; nur dessen exakter Bestätigungscode erlaubt den Neubau einer separaten Kopie.'),
+      h('pre', null, 'python3 scripts/hermes-desktop-host.py --source /absoluter/pfad/hermes-agent\npython3 scripts/hermes-desktop-host.py --source /absoluter/pfad/hermes-agent --apply --confirm BESTAETIGUNGSCODE'),
+      h('p', null, 'Alternativ nach Installation: <Hermes-Home>/bin/plur1bus-desktop-host.py. Kein Patchen bei jedem Start. Bestehende App, Profile und Memory bleiben unverändert.')));
+}
 
 /** Read only the active backend; discard late responses.
  * @param {Function} rest Host REST transport.
@@ -411,6 +465,7 @@ function Partition({ rest, profile }) {
     h('button', { type: 'button', disabled: view.loading, onClick: () => { void reader.current?.load(); } },
       view.loading ? 'Wird geladen…' : 'Aktualisieren')),
     view.error ? h('p', { role: 'alert', className: 'pb-error' }, view.error) : null,
+    h(HostCompatibility, { key: scopeKey() }),
     view.loading ? h('p', { role: 'status' }, 'Aktive Memory-Partition wird gelesen…') : null,
     s ? h(React.Fragment, null,
       h('p', { role: 'status' }, s.configured && s.storage?.status === 'ready'
@@ -478,26 +533,34 @@ export default {
         onClose: () => { closeWorkspace = null; } });
     };
     ctx.onDispose(() => { closeWorkspace?.(); closeWorkspace = null; });
+    // Always discoverable even when a broken bridge prevents activation probes.
+    // This is a diagnostic command, not an enabled-profile memory entry.
+    let closeHelp = null;
+    const removeHelp = ctx.registerMany([{ id: 'host-check', area: PALETTE_AREA,
+      data: { id: 'plur1bus.host-check', label: 'PLUR1BUS: Desktop-Kompatibilität prüfen', run: () => {
+        if (supported) closeHelp = host.openWorkspace('plur1bus-host-check', {
+          title: 'PLUR1BUS-Kompatibilität', render: () => h(HostCompatibility, { key: scopeKey() }) });
+        else host.notify?.({ kind: 'error', message: 'Hermes Workspace-API fehlt. Hermes aktualisieren oder scripts/hermes-desktop-host.py aus dem PLUR1BUS-Paket verwenden.' });
+      } } }]);
+    ctx.onDispose(() => { removeHelp(); closeHelp?.(); });
     // Retire our old experimental route, which Hermes can mistake for a chat.
     if (typeof window !== 'undefined' && window.location.hash === '#/plur1bus') host.navigate('/');
     let removeNavigation = null;
+    const notified = new Set();
     const visibility = createNavigationVisibility(async () => {
-      const identity = scopeKey();
-      const [connection, profile] = JSON.parse(identity);
-      const rest = createProfileTransport(typeof window !== 'undefined' && window.hermesDesktop?.api,
-        host.profileRoutes, { connection, profile }, scopeKey, identity);
-      try {
-        const caps = await rest('/desktop/capabilities');
-        return typeof caps.memoryProviderEnabled === 'boolean' ? caps.memoryProviderEnabled : null;
-      } catch (error) {
-        return error?.plur1busDisabled ? false : null;
+      const report = await checkDesktopCompatibility(host, typeof window !== 'undefined' && window.hermesDesktop, scopeKey);
+      if (report.status === 'stale') return null;
+      if (report.status === 'unsupported' && !notified.has(report.identity)) {
+        notified.add(report.identity);
+        host.notify?.({ kind: 'error', message: report.message });
       }
+      return report.enabled;
     }, scopeKey, enabled => {
       if (!enabled) { removeNavigation?.(); removeNavigation = null; return; }
       if (removeNavigation) return;
       removeNavigation = ctx.registerMany([
-      { id: 'sidebar-open', area: SIDEBAR_NAV_AREA, order: 55,
-        data: { codicon: 'database', label: 'PLUR1BUS', onSelect: open } },
+      ...(SIDEBAR_NAV_AREA ? [{ id: 'sidebar-open', area: SIDEBAR_NAV_AREA, order: 55,
+        data: { codicon: 'database', label: 'PLUR1BUS', onSelect: open } }] : []),
       { id: 'open-button', area: STATUSBAR_AREAS.left, order: 55,
         data: { id: 'plur1bus-open', variant: 'action', label: 'PLUR1BUS', disabled: !supported, onSelect: open,
           title: supported ? 'PLUR1BUS als Workspace öffnen' : 'Hermes Desktop mit openWorkspace-Unterstützung erforderlich' } },
