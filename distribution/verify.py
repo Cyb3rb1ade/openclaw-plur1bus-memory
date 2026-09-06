@@ -56,6 +56,15 @@ finally:
 print('Installed wheel import and real LanceDB capture/recall passed (stub embeddings, no model download).')
 """
         subprocess.run([str(python), "-I", "-c", smoke, str(root / "data"), manifest["pythonVersion"]], check=True)
+        target = root / "reranker-target.json"
+        target.write_text('{"provider":"disabled"}', encoding="utf-8")
+        retrieval = [str(python), "-I", str(bundle / "installer.py"), "--bundle", str(bundle),
+                     "--home", str(home), "--python", str(python), "--profile", "default",
+                     "--retrieval-kind", "reranker", "--retrieval-target", str(target)]
+        settings_plan = json.loads(subprocess.check_output(retrieval, text=True))
+        subprocess.run(retrieval + ["--retrieval-action", "activate", "--apply", "--confirm",
+                                   settings_plan["confirmation"], "--runtimes-stopped"], check=True)
+        assert json.loads((home / "plugins/plur1bus/config.json").read_text())["reranker"]["provider"] == "disabled"
         review = rollback(home, transaction.name)
         rollback(home, transaction.name, review["confirmation"], True)
         assert (home / "config.yaml").read_bytes() == original

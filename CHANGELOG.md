@@ -9,6 +9,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### 7.12.0-hermes.2 / Python 7.12.0.post2 — Distributionskandidat
 
+- Installer-Modellverwaltung: explizites Ziel, Modellvorbereitung/Probe,
+  profilgebundenes Backup und Re-Embedding, separate Prüfung/Aktivierung.
+  Reranker-Wechsel ohne Vektormigration; leere Stores erhalten nach Modellprobe
+  einen gesicherten Konfigurations-Override. Keine ungefragte Modellwahl.
+- Migration darf nur mit passendem, erneut geprüftem Quellbackup aktiviert
+  werden. Vorhandene Memory-IDs, ACLs, Zeitfelder und alte Vektoren bleiben erhalten.
+- Profilfix: Ein neuer Retrieval-Override für ein benanntes Profil wird nicht
+  mehr in die Default-Konfiguration geschrieben, wenn seine eigene Datei fehlt.
 - Gemeinsamer Python-Installer für bestehende Hermes-Installationen: explizites
   Home/Venv, Profilwahl, Prüfsummen, revisionsgebundene Bestätigung, Sperre gegen
   parallele Installationen, Backups und gegen nachträgliche Änderungen geschützter

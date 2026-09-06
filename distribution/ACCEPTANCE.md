@@ -2,6 +2,27 @@
 
 Candidate: **7.12.0-hermes.2 / 7.12.0.post2**. This is not a publication record.
 
+## Model/migration addition
+
+The installer now exposes explicit target-model planning, preparation/probes,
+backed-up staged re-embedding, full metadata validation and separate activation.
+Reranker-only changes and empty-store initialization do not re-embed memories.
+Named profiles create their own override even if none existed before.
+
+New tests exercise real LanceDB migrations with stub embedding vectors, reject
+missing backups, changed metadata, stale approvals and active runtime leases,
+and preserve the original database. Actual installed-wheel QA also invokes the
+installer's reranker plan/activation path in a temporary home on macOS and Linux.
+These tests do not constitute a real-model quality benchmark or a productive
+data migration. No target model/profile was inferred for the user's live Hermes.
+Legacy OpenClaw imports remain an explicit separate CLI workflow.
+
+Updated execution logs: `python-model-migration-final.log` and
+`linux-model-migration.log` in the external QA directory below. Native Windows
+execution/signing and publication gates remain open as listed below.
+
+## Initial distribution evidence
+
 Implemented: one shared installer, manifest verification, explicit profile/home/
 venv selection, optional activation, dependency-conflict gate, forced same-version
 wheel refresh, per-file backup journals, guarded rollback, portable launchers,

@@ -363,6 +363,36 @@ def rollback(home, transaction, confirmation=None, stopped=False):
     return {"restored": True, "pipRollback": False}
 
 
+def retrieval_command(args):
+    """Run the installed adapter's migration API in its own verified interpreter."""
+    if args.desktop_only or args.rollback or args.activate or args.no_deps:
+        raise ValueError("retrieval changes are a separate backend operation; omit package/rollback flags")
+    home = root_path(args.home)
+    if home.parent.name == "profiles":
+        raise ValueError("use the root Hermes home and select --profile separately")
+    selected = targets(home, args.profile)
+    if len(selected) != 1 or args.profile == ["all"]:
+        raise ValueError("review and migrate one explicitly selected profile at a time")
+    python = interpreter(home, args.python)
+    manifest = verify_bundle(root_path(args.bundle))
+    info = json.loads(run_python(python, "import json,sys; print(json.dumps({'venv':sys.prefix!=sys.base_prefix,'platform':sys.platform}))"))
+    if not info["venv"] or info["platform"] != sys.platform:
+        raise ValueError("same-platform Hermes virtual environment required")
+    request = {"home": str(home), "profile": next(iter(selected)), "kind": args.retrieval_kind,
+               "target": json.loads(Path(args.retrieval_target).read_text(encoding="utf-8")),
+               "action": args.retrieval_action, "confirmation": args.confirm, "stopped": args.runtimes_stopped}
+    if request["action"] in {"prepare", "stage", "activate"} and not args.apply:
+        raise ValueError("retrieval stage/activation requires --apply and its own confirmation")
+    if request["action"] in {"plan", "validate"} and args.apply:
+        raise ValueError("retrieval plan/validation is read-only; omit --apply")
+    code = ("import json,sys,plur1bus_hermes; from pathlib import Path; "
+            "from plur1bus_hermes.setup_retrieval import execute; "
+            "assert plur1bus_hermes.__version__ == " + repr(manifest["pythonVersion"]) + "; "
+            "request=json.load(sys.stdin); request['home']=Path(request['home']); "
+            "print(json.dumps(execute(**request),indent=2))")
+    return json.loads(run_python(python, code, json.dumps(request)))
+
+
 def main():
     if sys.platform == "win32" and getattr(sys, "frozen", False):
         # The one-file loader's DLL directory must not leak into external Hermes
@@ -384,20 +414,46 @@ def main():
     parser.add_argument("--confirm")
     parser.add_argument("--runtimes-stopped", action="store_true")
     parser.add_argument("--rollback", help="transaction directory name from the backup receipt")
+    parser.add_argument("--retrieval-target", help="explicit embedding/reranker JSON; separate from package installation")
+    parser.add_argument("--retrieval-kind", choices=("embedding", "reranker"), default="embedding")
+    parser.add_argument("--retrieval-action", choices=("plan", "prepare", "stage", "validate", "activate"), default="plan")
     args = parser.parse_args()
     interactive = (args.interactive or len(sys.argv) == 1) and sys.stdin.isatty()
     try:
         if interactive:
-            print("PLUR1BUS for Hermes — stop affected Hermes runtimes before installing. No host app or models are installed.")
+            print("PLUR1BUS for Hermes — package installation and model/memory changes require separate review. Stop affected runtimes before writes.")
             suggested_home = os.environ.get("HERMES_HOME") or str(Path(os.environ["LOCALAPPDATA"]) / "hermes" if sys.platform == "win32" and "LOCALAPPDATA" in os.environ else Path.home() / ".hermes")
             args.home = input("Hermes root home [" + suggested_home + "]: ").strip() or suggested_home
             args.profile = [input("Existing profile name [default], or all: ").strip() or "default"]
             args.desktop_only = input("Desktop UI only, backend in WSL/remote? [y/N]: ").strip().lower() == "y"
             if not args.desktop_only:
                 args.python = input("Hermes venv Python executable [automatic]: ").strip() or None
-                args.activate = input("Activate PLUR1BUS for these profiles? [y/N]: ").strip().lower() == "y"
+                if input("Operation: package install or model/memory change? [install/retrieval]: ").strip().lower() == "retrieval":
+                    args.retrieval_target = input("Path to explicit target-model JSON: ").strip()
+                    if not args.retrieval_target:
+                        raise ValueError("an explicit target-model JSON is required")
+                    args.retrieval_kind = input("Model kind [embedding/reranker]: ").strip() or "embedding"
+                    args.retrieval_action = "plan"
+                else:
+                    args.activate = input("Activate PLUR1BUS for these profiles? [y/N]: ").strip().lower() == "y"
         if not args.home:
             raise ValueError("--home is required in noninteractive use; no writes performed")
+        if args.retrieval_target:
+            result = retrieval_command(args)
+            print(json.dumps(result, indent=2))
+            if interactive:
+                action = input("Next action [plan/prepare/stage/validate/activate; default plan]: ").strip() or "plan"
+                if action not in {"plan", "prepare", "stage", "validate", "activate"}:
+                    raise ValueError("unknown retrieval action")
+                if action == "plan":
+                    return 0
+                args.retrieval_action = action
+                if action in {"prepare", "stage", "activate"}:
+                    if input("After reviewing provider data transfer and stopping runtimes, type CHANGE: ") != "CHANGE":
+                        return 0
+                    args.apply, args.runtimes_stopped, args.confirm = True, True, result["confirmation"]
+                print(json.dumps(retrieval_command(args), indent=2))
+            return 0
         if args.rollback:
             result = rollback(args.home, args.rollback, args.confirm if args.apply else None, args.runtimes_stopped)
         else:

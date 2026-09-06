@@ -74,7 +74,7 @@ def config_path(view) -> Path:
     path = home / "plugins" / "plur1bus" / "config.json"
     nested = home / "profiles" / view.profile / "plugins" / "plur1bus" / "config.json"
     _reject_symlink_components(home, nested, message="unsafe profile config")
-    if nested.is_file():
+    if view.profile != "default" and (home / "profiles" / view.profile).is_dir():
         path = nested
     _reject_symlink_components(home, path, message="unsafe profile config")
     return path
@@ -119,12 +119,14 @@ def save_reranker(view, target: dict, revision: str) -> dict:
         return {"saved": True, "restartRequired": True, "backup": had_config}
 
 
-def stage_embedding(view, target: dict, plan: dict, progress) -> dict:
+def stage_embedding(view, target: dict, plan: dict, progress, *, revision: str | None = None) -> dict:
     """Snapshot the source, re-embed into a separate table, then verify all metadata."""
     from .reembed_staged import apply_staged_reembed, _validate_plan
     from .generation import _validate_complete
     config = {**view.config, "embedding": target}
     with exclusive_generation_lease(view.data_dir), writer_lock(view.data_dir):
+        if revision is not None and context_revision(view) != revision:
+            raise ValidationError("configuration changed; review again")
         source, _ = _validate_plan(plan, view.data_dir, view.agent_id, config, None)
         backup_root = Path(view.data_dir).resolve() / "state" / view.agent_id / "retrieval-backups"
         _reject_symlink_components(Path(view.data_dir).resolve(), backup_root, message="unsafe backup path")

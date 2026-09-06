@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("portable_installer", Path(__file__).resolve().parents[1] / "installer.py")
@@ -209,3 +210,29 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.plan()
         self.assertFalse((self.home / "plugins").exists())
+
+    def test_retrieval_bridge_uses_selected_venv_profile_and_explicit_approval(self):
+        target = self.root / "target.json"
+        target.write_text('{"provider":"disabled"}')
+        args = SimpleNamespace(home=str(self.home), bundle=str(self.bundle), profile=["alpha"], python=sys.executable,
+                               desktop_only=False, rollback=None, activate=False, no_deps=False, apply=False,
+                               retrieval_target=str(target), retrieval_kind="reranker", retrieval_action="plan",
+                               confirm=None, runtimes_stopped=False)
+        requests = []
+        def bridge(python, code, data=None):
+            self.assertEqual(str(python), sys.executable)
+            if data is None:
+                return json.dumps({"venv": True, "platform": sys.platform})
+            self.assertIn("setup_retrieval", code)
+            requests.append(json.loads(data))
+            return '{"planned":true}'
+        with patch.object(installer, "run_python", side_effect=bridge):
+            self.assertTrue(installer.retrieval_command(args)["planned"])
+            self.assertEqual(requests[0]["profile"], "alpha")
+            args.retrieval_action = "activate"
+            with self.assertRaises(ValueError):
+                installer.retrieval_command(args)
+            self.assertEqual(len(requests), 1)
+            args.profile = ["all"]
+            with self.assertRaises(ValueError):
+                installer.retrieval_command(args)

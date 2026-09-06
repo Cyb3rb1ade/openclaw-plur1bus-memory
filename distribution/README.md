@@ -25,9 +25,10 @@ your user/profile. After installing it, open **Install PLUR1BUS.command** in tha
 folder and review the plan. Python comes from existing Hermes or your PATH.
 The Windows `.exe` bundles its installer Python, but still uses the explicitly
 selected Hermes venv for the provider. Run the assistant as your normal user.
-Neither installer changes ExecutionPolicy, disables antivirus, installs models,
-changes embedding dimensions, migrates memory, restarts Hermes, or overwrites the
-Hermes app. Unsigned candidates are named/documented as such; signing/notarization
+Package installation does not change ExecutionPolicy, disable antivirus, install
+models, change dimensions, migrate memory, restart Hermes or overwrite its app.
+Model/memory changes are separate, explicitly approved operations described below.
+Unsigned candidates are named/documented as such; signing/notarization
 is a separate release gate, not implied by an artifact's existence.
 
 ## Integrity and installation
@@ -78,7 +79,65 @@ call pip, change backend config, or activate a provider. Install and activate
 the backend separately inside its own environment. The startup handshake still
 requires the selected backend to report the correct agent/profile identity.
 
-## Updates, backups and recovery
+## Model changes and memory migration
+
+After installing the package, the same assistant offers **model/memory change**.
+Choose one existing profile and supply an explicit JSON target (`embedding` or
+`reranker`). No model is chosen on your behalf and no old vectors are reused in
+a different model space, even when the dimensions happen to be equal.
+
+For automation, save the chosen model's supported config as JSON, for example
+`{"provider":"local-transformers","model":"YOUR_MODEL_ID","dimensions":768}`.
+Choose the actual model/dimensions intentionally; this is not a recommendation.
+For remote providers use `baseUrl` and an `apiKeyEnv` name, never an inline key.
+Applicable model license acknowledgement must be present in the target config.
+
+```sh
+python3 installer.py --home /absolute/hermes-home --python /absolute/venv/bin/python \
+  --profile PROFILE --retrieval-kind embedding --retrieval-target /absolute/target.json
+```
+
+This prints the source partition, record count, target model and confirmation hash
+without downloading a model. Stop affected runtimes, then repeat with
+`--retrieval-action stage --apply --confirm HASH --runtimes-stopped`.
+If model files are not prepared yet, first use `--retrieval-action prepare`
+with the same approval flags. This prepares the supported pinned Jina Nano ONNX
+artifacts (with license acknowledgement), or probes/downloads the chosen local
+Transformer model. Remote targets receive synthetic probe text only at this
+step. Preparation does not change the active model or memory store.
+Staging first snapshots the database, then re-embeds into a separate, resumable
+generation and validates all non-vector record fields. Source vectors, IDs, ACLs,
+timestamps and original memories remain intact. **Remote re-embedding transmits
+memory text to the chosen provider and may incur API costs.**
+
+Repeat with `--retrieval-action validate` for a read-only staging check. Finally
+use `--retrieval-action activate --apply --confirm HASH --runtimes-stopped` to
+switch the generation pointer. Activation revalidates the source and requires a
+matching, readable backup. Source/config changes invalidate approval; obtain a
+new plan. Restart Hermes afterward. Staging alone never switches models.
+Interrupted staging can be retried while its pinned source remains unchanged.
+
+For rerankers, use `--retrieval-kind reranker`: after review go directly to
+`activate`. The target must pass a finite-score smoke test (or explicitly be
+`disabled`); no re-embedding is needed. An empty new embedding store also uses
+`activate`, with a real model/dimension probe and backed-up config write.
+Named profiles receive their own override, not a write into the root profile.
+Bulk `all` and custom namespace cutovers are refused; review each private writer.
+Profiles intentionally aliased to the same agent/data root share its generation;
+a model switch applies to that store, not a separate copy per alias.
+
+Package rollback does not undo a generation change. Source databases,
+`state/<agent>/retrieval-backups/`, config backups and generation journals are
+retained. An interrupted pointer activation uses the existing
+`plur1bus-hermes-operator ... reembed --recover` workflow with its saved staged
+plan and exact approved plan ID. Never discard generations or return to an old
+source after new captures without a fresh migration/reconciliation plan.
+
+Legacy OpenClaw-to-Hermes import remains available through the bundled
+`plur1bus-hermes-migrate` CLI, with explicit source, target, snapshot and agent
+mapping. Model changes do not implicitly import or merge another agent's store.
+
+## Package updates, backups and recovery
 
 All file replacements have a checksum-verified backup and journal under
 `<Hermes-Home>/plur1bus-install-backups/<transaction>`. Unknown files (including
