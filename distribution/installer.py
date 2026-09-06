@@ -287,7 +287,10 @@ def apply_install(plan, confirmation, stopped=False):
             if after_check.returncode and (not after_check.stdout.strip() or set(after_check.stdout.splitlines()) - set(before_check.stdout.splitlines())):
                 raise ValueError("new dependency conflicts; plugin files not activated, inspect pip-check-after.txt")
             expected = manifest["pythonVersion"]
-            run_python(plan["python"], "import plur1bus_hermes,plur1bus_controls; assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == " + repr(expected))
+            run_python(plan["python"], "import plur1bus_hermes,plur1bus_controls,sys; from pathlib import Path; "
+                       "assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == " + repr(expected) + "; "
+                       "assert all(Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()) "
+                       "for module in (plur1bus_hermes, plur1bus_controls)), 'wheel import escaped target venv'")
         journal["status"] = "writing-files"
         record()
         for relative, data in incoming.items():

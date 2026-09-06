@@ -31,7 +31,9 @@ def verify(bundle, executable=None):
         python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
         # Nested venvs inherit the base interpreter's packages, not the invoking
         # QA venv. Add read-only dependency search paths explicitly for this test.
-        child_site = Path(subprocess.check_output([str(python), "-I", "-c", "import site; print(site.getsitepackages()[0])"], text=True).strip())
+        # On Windows getsitepackages()[0] is the venv root, not Lib/site-packages.
+        # A .pth there can put inherited packages before the actual wheel install.
+        child_site = Path(subprocess.check_output([str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True).strip())
         child_site.mkdir(parents=True, exist_ok=True)
         (child_site / "qa-dependencies.pth").write_text("\n".join(site.getsitepackages()) + "\n", encoding="utf-8")
         plan = plan_install(bundle, home, python=python, activate=True, dependencies=False)
@@ -43,7 +45,8 @@ import plur1bus_hermes, plur1bus_controls
 import lancedb, numpy, sentence_transformers, onnxruntime
 from plur1bus_hermes.runtime import Plur1busRuntime
 assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == sys.argv[2]
-assert Path(plur1bus_hermes.__file__).is_relative_to(Path(sys.prefix))
+for module in (plur1bus_hermes, plur1bus_controls):
+    assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), (module.__file__, sys.prefix)
 runtime = Plur1busRuntime(Path(sys.argv[1]), {'embedding': {'dimensions': 2}}, 'main')
 runtime._embedding.embed = lambda text, purpose='passage': [0.1, 0.2]
 runtime._reranker.rerank = lambda query, rows: rows

@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   push:
     branches: ['codex/hermes-distribution-*']
+    paths:
+      - 'distribution/**'
+      - 'plur1bus-hermes/**'
+      - 'plur1bus-controls/**'
+      - 'hermes-dashboard/**'
+      - 'scripts/hermes-desktop-host.py'
+      - '.github/workflows/hermes-distribution.yml'
   pull_request:
     paths:
       - 'distribution/**'
