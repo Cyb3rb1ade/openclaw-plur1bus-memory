@@ -20,6 +20,16 @@ def run(args, cwd):
     return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=True)
 
 
+def resolve_tool(tool):
+    """Resolve an executable once; Windows builds must invoke npm.cmd explicitly."""
+    candidates = (tool, tool + ".cmd") if sys.platform == "win32" else (tool,)
+    for candidate in candidates:
+        binary = shutil.which(candidate)
+        if binary:
+            return binary
+    return None
+
+
 def resolve_inside(base, relative):
     """Reject traversal and symlink components, including nonexistent destinations."""
     part = Path(relative)
@@ -87,7 +97,7 @@ def review(source, output, patches=None):
     engines = root_package.get("engines", {})
     toolchain = {}
     for tool in ("node", "npm"):
-        binary = shutil.which(tool)
+        binary = resolve_tool(tool)
         version = run([binary, "--version"], source).stdout.strip() if binary else "missing"
         requirement = engines.get(tool, "")
         toolchain[tool] = {"binary": binary, "version": version, "required": requirement,
@@ -114,7 +124,8 @@ def review(source, output, patches=None):
     plan = {"schema": 1, "source": str(source), "head": head, "outputRoot": str(output), "toolchain": toolchain,
             "signing": "disabled-local-build",
             "platform": sys.platform, "dirty": dirty, "patches": states,
-            "commands": [list(command) for command in COMMANDS],
+            "commands": [[toolchain["npm"]["binary"], *command[1:]] for command in COMMANDS]
+                        if toolchain["npm"]["binary"] else [list(command) for command in COMMANDS],
             "effects": "Snapshot tracked source, apply patches to copy, download locked npm dependencies and execute trusted Hermes build scripts. No publish, app replacement, profile or memory changes."}
     plan["supported"] = not dirty and all(item["state"] != "incompatible" for item in states) and all(item["supported"] for item in toolchain.values())
     plan["confirmation"] = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
@@ -126,8 +137,6 @@ def build(plan, confirmation, patches=None):
     fresh = review(plan["source"], plan["outputRoot"], patches)
     if not fresh["supported"] or fresh != plan or confirmation != fresh["confirmation"]:
         raise ValueError("unsupported or stale plan / missing exact confirmation; no writes performed")
-    if shutil.which("npm") is None:
-        raise ValueError("npm is required; no writes performed")
     source, output = directory(plan["source"]), directory(plan["outputRoot"])
     output.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix="hermes-" + plan["head"][:12] + "-", dir=output))
@@ -169,7 +178,7 @@ def build(plan, confirmation, patches=None):
         # The isolated archive has no .git, credentials, ignored files, or live app.
         # Build scripts are executable code from the exact explicitly trusted revision.
         with (stage / "build.log").open("w") as log:
-            for command in COMMANDS:
+            for command in plan["commands"]:
                 subprocess.run(command, cwd=target, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
         release = resolve_inside(target, "apps/desktop/release")
         if not release.is_dir() or not any(release.iterdir()):

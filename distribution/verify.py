@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,14 @@ import venv
 import site
 
 from installer import verify_bundle
+
+
+def dependency_modules(system, architecture):
+    """Import the supported local provider stack, without requiring Torch on ONNX-only targets."""
+    modules = ["lancedb", "numpy", "onnxruntime", "tokenizers", "certifi"]
+    if (system, architecture.lower()) not in {("win32", "arm64"), ("darwin", "x86_64")}:
+        modules.append("sentence_transformers")
+    return modules
 
 
 def verify(bundle, executable=None):
@@ -36,13 +45,21 @@ def verify(bundle, executable=None):
         child_site = Path(subprocess.check_output([str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True).strip())
         child_site.mkdir(parents=True, exist_ok=True)
         (child_site / "qa-dependencies.pth").write_text("\n".join(site.getsitepackages()) + "\n", encoding="utf-8")
-        plan = plan_install(bundle, home, python=python, activate=True, dependencies=False)
+        native_target = f"{sys.platform}/{platform.machine()}"
+        native_install = native_target in manifest.get("nativeDependencies", {})
+        plan = plan_install(bundle, home, python=python, activate=True, dependencies=native_install)
+        if native_install:
+            assert plan["nativeWheels"], "Native package test must install its bundled storage wheels"
         transaction = apply_install(plan, plan["confirmation"], True)
         smoke = """
-import sys
+import sys, importlib, json
 from pathlib import Path
 import plur1bus_hermes, plur1bus_controls
-import lancedb, numpy, sentence_transformers, onnxruntime
+for name in json.loads(sys.argv[3]):
+    importlib.import_module(name)
+for name in json.loads(sys.argv[4]):
+    module = importlib.import_module(name)
+    assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), (name, module.__file__)
 from plur1bus_hermes.runtime import Plur1busRuntime
 assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == sys.argv[2]
 for module in (plur1bus_hermes, plur1bus_controls):
@@ -58,7 +75,9 @@ finally:
     runtime.shutdown()
 print('Installed wheel import and real LanceDB capture/recall passed (stub embeddings, no model download).')
 """
-        subprocess.run([str(python), "-I", "-c", smoke, str(root / "data"), manifest["pythonVersion"]], check=True)
+        native_modules = ["lancedb"] + (["pyarrow"] if sys.platform == "win32" else []) if native_install else []
+        subprocess.run([str(python), "-I", "-c", smoke, str(root / "data"), manifest["pythonVersion"],
+                        json.dumps(dependency_modules(sys.platform, platform.machine())), json.dumps(native_modules)], check=True)
         target = root / "reranker-target.json"
         target.write_text('{"provider":"disabled"}', encoding="utf-8")
         retrieval = [str(python), "-I", str(bundle / "installer.py"), "--bundle", str(bundle),

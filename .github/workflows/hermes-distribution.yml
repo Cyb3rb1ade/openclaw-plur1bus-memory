@@ -21,13 +21,28 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   package:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            python: '3.12'
+          - os: ubuntu-24.04-arm
+            python: '3.12'
+          - os: macos-15
+            python: '3.12'
+          - os: macos-15-intel
+            python: '3.12'
+            native: intel
+          - os: windows-2025
+            python: '3.12'
+          - os: windows-11-arm
+            python: '3.13'
+            native: windows-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -40,11 +55,54 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
+      - name: Download reviewed Intel LanceDB candidate from pinned run
+        if: matrix.native == 'intel'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: Cyb3rb1ade/openclaw-plur1bus-memory
+          run-id: '34048642479'
+          name: lancedb-0.34.0-macos-x86_64-candidate
+          path: native-candidates/intel
+          github-token: ${{ github.token }}
+      - name: Bind Intel candidate paths and source provenance
+        if: matrix.native == 'intel'
+        run: |
+          echo "PLUR1BUS_INTEL_LANCEDB_WHEEL=$GITHUB_WORKSPACE/native-candidates/intel/lancedb-0.34.0-cp39-abi3-macosx_10_15_x86_64.whl" >> "$GITHUB_ENV"
+          echo "PLUR1BUS_INTEL_LANCEDB_SOURCE=$GITHUB_WORKSPACE/native-candidates/intel/UPSTREAM_COMMIT.txt" >> "$GITHUB_ENV"
+      - name: Download reviewed Windows ARM storage candidates from pinned run
+        if: matrix.native == 'windows-arm64'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: Cyb3rb1ade/openclaw-plur1bus-memory
+          run-id: '34060568686'
+          name: lancedb-0.34.0-windows-arm64-candidate
+          path: native-candidates/lancedb
+          github-token: ${{ github.token }}
+      - name: Download reviewed Windows ARM Arrow candidate from pinned run
+        if: matrix.native == 'windows-arm64'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          repository: Cyb3rb1ade/openclaw-plur1bus-memory
+          run-id: '34060568686'
+          name: pyarrow-25.0.1-windows-arm64-candidate
+          path: native-candidates/pyarrow
+          github-token: ${{ github.token }}
+      - name: Bind Windows ARM candidate paths and source provenance
+        if: matrix.native == 'windows-arm64'
+        shell: pwsh
+        run: |
+          "PLUR1BUS_ARM_LANCEDB_WHEEL=$env:GITHUB_WORKSPACE/native-candidates/lancedb/lancedb-0.34.0-cp39-abi3-win_arm64.whl" >> $env:GITHUB_ENV
+          "PLUR1BUS_ARM_LANCEDB_SOURCE=$env:GITHUB_WORKSPACE/native-candidates/lancedb/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
+          "PLUR1BUS_ARM_PYARROW_WHEEL=$env:GITHUB_WORKSPACE/native-candidates/pyarrow/pyarrow-25.0.1-cp313-cp313-win_arm64.whl" >> $env:GITHUB_ENV
+          "PLUR1BUS_ARM_PYARROW_SOURCE=$env:GITHUB_WORKSPACE/native-candidates/pyarrow/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
+      - name: Verify reviewed native artifacts before any dependency install
+        if: matrix.native == 'intel' || matrix.native == 'windows-arm64'
+        run: python distribution/ci.py --provision-native
       - name: Build and test tools
         run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2'
       - name: CPU PyTorch (avoid unrelated CUDA downloads)
-        if: runner.os == 'Linux' || runner.os == 'Windows'
+        if: runner.os == 'Linux' || matrix.os == 'windows-2025'
         run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install candidate runtime dependencies
         run: python -m pip install './plur1bus-hermes[local-onnx]' ./plur1bus-controls

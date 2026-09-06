@@ -9,6 +9,7 @@ import unittest
 
 
 class DashboardInstallerTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX shell installer; native Windows uses distribution/installer.py")
     def test_opt_in_dashboard_copies_assets_and_enables_backend(self):
         repo = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as directory:

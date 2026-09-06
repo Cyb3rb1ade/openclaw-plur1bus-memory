@@ -37,6 +37,17 @@ class HostPreparationTests(unittest.TestCase):
             (self.source / name).write_text("new\n")
             (self.patches / patch_name).write_text(self.git("diff", "--", name))
             (self.source / name).write_text("old\n")
+        self._real_run = host.run
+        self._which = patch.object(host.shutil, "which", side_effect=lambda tool: "/test-tools/" + tool)
+        self._which.start(); self.addCleanup(self._which.stop)
+        def tool_versions(args, cwd):
+            if args[0] == "/test-tools/node" and args[1:] == ["--version"]:
+                return subprocess.CompletedProcess(args, 0, stdout="v22.22.3\n")
+            if args[0] == "/test-tools/npm" and args[1:] == ["--version"]:
+                return subprocess.CompletedProcess(args, 0, stdout="10.9.4\n")
+            return self._real_run(args, cwd)
+        self._run = patch.object(host, "run", side_effect=tool_versions)
+        self._run.start(); self.addCleanup(self._run.stop)
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.source, check=True, capture_output=True, text=True).stdout
@@ -76,7 +87,7 @@ class HostPreparationTests(unittest.TestCase):
         real_run = subprocess.run
         builds = []
         def fake_build(command, **kwargs):
-            if command[0] != "npm":
+            if Path(command[0]).name not in {"npm", "npm.cmd"}:
                 return real_run(command, **kwargs)
             target = kwargs["cwd"]
             self.assertEqual(kwargs["env"]["CSC_IDENTITY_AUTO_DISCOVERY"], "false")
@@ -100,7 +111,7 @@ class HostPreparationTests(unittest.TestCase):
         plan = self.review()
         real_run = subprocess.run
         def fail(command, **kwargs):
-            if command[0] == "npm":
+            if Path(command[0]).name in {"npm", "npm.cmd"}:
                 raise subprocess.CalledProcessError(1, command)
             return real_run(command, **kwargs)
         with patch.object(host.subprocess, "run", side_effect=fail):
@@ -145,3 +156,12 @@ class HostPreparationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             host.build(plan, plan["confirmation"], self.patches)
         self.assertFalse(self.output.exists())
+
+    def test_windows_resolves_and_executes_npm_cmd_without_using_bare_npm(self):
+        def windows_which(tool):
+            return {"node": r"C:\Hermes\node\node.exe", "npm.cmd": r"C:\Hermes\node\npm.cmd"}.get(tool)
+        with patch.object(host.sys, "platform", "win32"), patch.object(host.shutil, "which", side_effect=windows_which), \
+             patch.object(host, "run", side_effect=lambda args, cwd: subprocess.CompletedProcess(args, 0, stdout="v22.22.3\n" if "node" in args[0] else "10.9.4\n") if args[1:] == ["--version"] else self._real_run(args, cwd)):
+            plan = self.review()
+        self.assertTrue(plan["supported"])
+        self.assertTrue(all(command[0].endswith("npm.cmd") for command in plan["commands"]))
