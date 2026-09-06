@@ -32,6 +32,35 @@ class _Backend:
 
 
 class GenerationTests(unittest.TestCase):
+    def test_repeated_migration_uses_active_generation_including_new_captures(self):
+        activate_staged_generation(self.plan, self.root, self.agent, self.config, approved_plan_id=self.plan["planId"])
+        active = lancedb.connect(self.plan["targetRoute"]).open_table("memories")
+        active.add([{"id": "c", "content": "new capture", "vector": [1.0, 2.0], "agentId": self.agent,
+                     "scopeKey": "private", "metadataJson": "{}"}])
+        target_config = {"embedding": {"provider": "test", "model": "second-model", "dimensions": 2}}
+        plan = plan_staged_reembed(self.root, self.agent, target_config)
+        self.assertEqual(plan["sourceRoute"], self.plan["targetRoute"])
+        self.assertEqual(plan["sourceCards"], 3)
+        apply_staged_reembed(plan, self.root, self.agent, target_config, backend_factory=_Backend)
+        # Failure after pointer swap restores the previous generation, not the
+        # old canonical database. Prepared recovery must then resume safely.
+        import plur1bus_hermes.generation as generation
+        validate = generation._validate_complete
+        with patch.object(generation, "_validate_complete", side_effect=[
+            validate(plan, self.root, self.agent, target_config, None), RuntimeError("crash")
+        ]):
+            with self.assertRaisesRegex(RuntimeError, "crash"):
+                activate_staged_generation(plan, self.root, self.agent, target_config, approved_plan_id=plan["planId"])
+        self.assertEqual(read_generation(self.root, self.agent)["planId"], self.plan["planId"])
+        result = recover_generation(self.root, self.agent, target_config, approved_plan_id=plan["planId"])
+        self.assertTrue(result["activated"])
+        self.assertEqual(read_generation(self.root, self.agent)["planId"], plan["planId"])
+        self.assertEqual(lancedb.connect(plan["targetRoute"]).open_table("memories").count_rows(), 3)
+        self.assertEqual(lancedb.connect(str(self.source)).open_table("memories").count_rows(), 2)
+        # Old plans cannot reactivate an earlier generation over newer captures.
+        with self.assertRaises(ValidationError):
+            activate_staged_generation(self.plan, self.root, self.agent, self.config, approved_plan_id=self.plan["planId"])
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)

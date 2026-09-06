@@ -149,7 +149,24 @@ def _read_json_existing(path: Path, *, label: str) -> dict[str, Any] | None:
     return value
 
 
-def _manifest_valid(manifest: Any, data_dir: Path, agent_id: str) -> dict[str, Any]:
+def _source_route(data_dir: Path, agent_id: str, route: str, depth: int = 0) -> Path:
+    """Accept the original store or a certified earlier generation, never an arbitrary path."""
+    source = _canonical_source(data_dir, agent_id)
+    if route == str(source):
+        return source
+    match = re.fullmatch(r"\." + re.escape(agent_id) + r"\.reembed-staged-([0-9a-f]{24})", Path(route).name)
+    if depth >= 64 or not match or Path(route) != source.parent / Path(route).name:
+        raise ValidationError("generation source route is not certified")
+    prior = _read_json_existing(_journal_path(data_dir, agent_id, match[1]), label="source journal")
+    if prior is None or prior.get("state") != "verified":
+        raise ValidationError("generation source journal is not verified")
+    manifest = _manifest_valid(prior.get("manifest"), data_dir, agent_id, depth + 1)
+    if manifest["targetRoute"] != route:
+        raise ValidationError("generation source journal route mismatch")
+    return Path(route)
+
+
+def _manifest_valid(manifest: Any, data_dir: Path, agent_id: str, depth: int = 0) -> dict[str, Any]:
     if not isinstance(manifest, dict) or safe_agent_id(str(manifest.get("agentId") or "")) != agent_id:
         raise ValidationError("generation manifest is invalid")
     if manifest.get("version") != 1:
@@ -170,7 +187,7 @@ def _manifest_valid(manifest: Any, data_dir: Path, agent_id: str) -> dict[str, A
         raise ValidationError("generation manifest embedding is invalid")
     if manifest.get("selectedEmbeddingFingerprint") != _digest(selected) or _without_secrets(selected) != selected:
         raise ValidationError("generation manifest selected embedding is invalid")
-    source = _canonical_source(data_dir, agent_id)
+    source = _source_route(data_dir, agent_id, str(manifest.get("sourceRoute") or ""), depth)
     target = _target_for(source, agent_id, plan_id)
     _reject_symlink_components(_root(data_dir), target, message="generation target route is unsafe")
     if str(manifest.get("sourceRoute") or "") != str(source) or str(manifest.get("targetRoute") or "") != str(target):
@@ -244,7 +261,7 @@ def _non_vector_identity(rows: list[dict[str, Any]]) -> list[str]:
 def _validate_complete(plan: Mapping[str, Any], data_dir: Path, agent_id: str, target_config: Mapping[str, Any], connect: Any) -> tuple[Path, Path]:
     from .reembed_staged import _connect, validate_staged_reembed
 
-    source = _canonical_source(data_dir, agent_id)
+    source = _source_route(data_dir, agent_id, str(plan.get("sourceRoute") or ""))
     if str(plan.get("sourceRoute") or "") != str(source):
         raise ValidationError("staged generation source route changed")
     target = _target_for(source, agent_id, str(plan.get("planId") or ""))
@@ -284,8 +301,8 @@ def _manifest(plan: Mapping[str, Any], source: Path, target: Path, agent_id: str
     return {**value, "digest": _digest(value)}
 
 
-def _journal_record(state: str, plan: Mapping[str, Any], manifest: Mapping[str, Any]) -> dict[str, Any]:
-    return {"state": state, "plan": dict(plan), "manifest": dict(manifest), "oldPointer": None}
+def _journal_record(state: str, plan: Mapping[str, Any], manifest: Mapping[str, Any], old_pointer=None) -> dict[str, Any]:
+    return {"state": state, "plan": dict(plan), "manifest": dict(manifest), "oldPointer": old_pointer}
 
 
 def _activation_preconditions(plan: Mapping[str, Any], data_dir: Path, agent_id: str, config: Mapping[str, Any], approved: str) -> None:
@@ -293,7 +310,7 @@ def _activation_preconditions(plan: Mapping[str, Any], data_dir: Path, agent_id:
         raise ValidationError("approved staged generation plan does not match")
     if config.get("namespaces") is not None:
         raise ValidationError("generation activation requires the single private writer route")
-    source = _canonical_source(data_dir, agent_id)
+    source = _source_route(data_dir, agent_id, str(plan.get("sourceRoute") or ""))
     _manifest(plan, source, _target_for(source, agent_id, approved), agent_id, config)
 
 
@@ -304,7 +321,7 @@ def activate_staged_generation(plan: Mapping[str, Any], data_dir: Path, agent_id
     from .reembed_staged import _stage_lock
     with exclusive_generation_lease(Path(data_dir)):
         with writer_lock(Path(data_dir)):
-            source = _canonical_source(data_dir, agent_id)
+            source = _source_route(data_dir, agent_id, str(plan.get("sourceRoute") or ""))
             with _stage_lock(source, agent_id, approved_plan_id):
                 target = _target_for(source, agent_id, approved_plan_id)
                 manifest = _manifest(plan, source, target, agent_id, target_config)
@@ -313,9 +330,10 @@ def activate_staged_generation(plan: Mapping[str, Any], data_dir: Path, agent_id
                     # New captures after a successful activation are legitimate:
                     # immutable pointer+journal identity, not table equality, proves idempotence.
                     verified = read_generation(data_dir, agent_id)
-                    if verified.get("digest") != manifest["digest"]:
+                    if verified.get("digest") == manifest["digest"]:
+                        return {"activated": True, "idempotent": True, "planId": approved_plan_id, "targetRoute": str(target)}
+                    if verified["targetRoute"] != str(source):
                         raise ValidationError("a different generation is already active")
-                    return {"activated": True, "idempotent": True, "planId": approved_plan_id, "targetRoute": str(target)}
                 # Revalidate exclusively under the stage lock immediately before publication.
                 source, target = _validate_complete(plan, data_dir, agent_id, target_config, connect)
                 journal = _journal_path(data_dir, agent_id, approved_plan_id)
@@ -325,19 +343,22 @@ def activate_staged_generation(plan: Mapping[str, Any], data_dir: Path, agent_id
                     if checked["manifest"].get("digest") != manifest["digest"]:
                         raise ValidationError("generation recovery journal does not match plan")
                 else:
-                    _atomic_json(journal, _journal_record("prepared", plan, manifest))
+                    _atomic_json(journal, _journal_record("prepared", plan, manifest, prior))
                 pointer = _pointer(data_dir, agent_id)
                 try:
                     _atomic_json(pointer, manifest)
-                    _atomic_json(journal, _journal_record("pointer_swapped", plan, manifest))
+                    _atomic_json(journal, _journal_record("pointer_swapped", plan, manifest, prior))
                     _validate_complete(plan, data_dir, agent_id, target_config, connect)
                 except Exception:
                     current = _read_json_existing(pointer, label="pointer")
                     if current is not None and current.get("digest") == manifest["digest"]:
-                        pointer.unlink()
-                    _atomic_json(journal, _journal_record("prepared", plan, manifest))
+                        if prior is None:
+                            pointer.unlink()
+                        else:
+                            _atomic_json(pointer, prior)
+                    _atomic_json(journal, _journal_record("prepared", plan, manifest, prior))
                     raise
-                _atomic_json(journal, _journal_record("verified", plan, manifest))
+                _atomic_json(journal, _journal_record("verified", plan, manifest, prior))
                 return {"activated": True, "idempotent": False, "planId": approved_plan_id, "targetRoute": str(target), "sourceRoute": str(source)}
 
 
@@ -354,7 +375,7 @@ def recover_generation(data_dir: Path, agent_id: str, target_config: Mapping[str
     plan = journal["plan"]
     if str(plan.get("planId") or "") != approved_plan_id:
         raise ValidationError("generation journal plan is invalid")
-    source = _canonical_source(data_dir, agent_id)
+    source = _source_route(data_dir, agent_id, str(plan.get("sourceRoute") or ""))
     target = _target_for(source, agent_id, approved_plan_id)
     expected = _manifest(plan, source, target, agent_id, target_config)
     if journal["manifest"].get("digest") != expected["digest"]:
@@ -368,6 +389,8 @@ def recover_generation(data_dir: Path, agent_id: str, target_config: Mapping[str
     # generations may legitimately contain new captures and are not re-frozen.
     _validate_complete(plan, data_dir, agent_id, target_config, connect)
     pending_pointer = _read_pointer_raw(data_dir, agent_id, require_verified=False)
+    if journal["state"] == "prepared" and pending_pointer is not None and pending_pointer["targetRoute"] == str(source):
+        return activate_staged_generation(plan, data_dir, agent_id, target_config, approved_plan_id=approved_plan_id, connect=connect)
     if journal["state"] == "pointer_swapped" or pending_pointer is not None:
         with exclusive_generation_lease(Path(data_dir)):
             with writer_lock(Path(data_dir)):
@@ -377,6 +400,6 @@ def recover_generation(data_dir: Path, agent_id: str, target_config: Mapping[str
                     if current is None or current.get("digest") != expected["digest"]:
                         raise ValidationError("generation recovery pointer does not match journal")
                     _validate_complete(plan, data_dir, agent_id, target_config, connect)
-                    _atomic_json(journal_path, _journal_record("verified", plan, expected))
+                    _atomic_json(journal_path, _journal_record("verified", plan, expected, journal.get("oldPointer")))
         return {"activated": True, "idempotent": False, "recovered": True, "planId": approved_plan_id, "targetRoute": str(target)}
     return activate_staged_generation(plan, data_dir, agent_id, target_config, approved_plan_id=approved_plan_id, connect=connect)

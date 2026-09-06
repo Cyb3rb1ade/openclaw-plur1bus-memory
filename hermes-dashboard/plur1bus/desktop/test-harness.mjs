@@ -25,6 +25,13 @@ await plugin.evaluate();
 const { createScopedReader } = plugin.namespace;
 const { createScopedRequest } = plugin.namespace;
 const { createProfileTransport } = plugin.namespace;
+const { retrievalDefaults } = plugin.namespace;
+assert.equal(retrievalDefaults('local-onnx', 'embedding').licenseAccepted, false);
+assert.equal(retrievalDefaults('local-onnx', 'embedding').dimensions, 768);
+assert.deepEqual(retrievalDefaults('disabled', 'reranker'), { provider: 'disabled' });
+assert.equal(retrievalDefaults('local-transformers', 'embedding').localFilesOnly, true);
+assert.equal(retrievalDefaults('openai-compatible', 'embedding').model, '');
+assert.equal(retrievalDefaults('openai-compatible', 'embedding').apiKey, undefined);
 
 // The ambient SDK transport can lag the visible profile. Pin Electron routing
 // explicitly and require the backend's profile-binding protocol before any data.

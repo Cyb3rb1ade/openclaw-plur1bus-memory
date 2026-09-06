@@ -210,6 +210,11 @@ def plan_staged_reembed(
     """Create a read-only plan; this never loads an embedding backend or writes."""
     agent_id = safe_agent_id(agent_id)
     source = _exact_source_route(Path(data_dir).expanduser().absolute(), agent_id, config)
+    if config.get("namespaces") is None:
+        from .generation import read_generation
+        active = read_generation(data_dir, agent_id)
+        if active is not None:
+            source = Path(active["targetRoute"])
     rows, source_version, source_fingerprint = _source_snapshot(source, connect)
     return _make_plan(source, agent_id, rows, source_version, source_fingerprint, config)
 
@@ -239,6 +244,14 @@ def _validate_plan(plan: Mapping[str, Any], data_dir: Path, agent_id: str, confi
     if not isinstance(plan, Mapping) or int(plan.get("planVersion", 0)) != _PLAN_VERSION or str(plan.get("agentId") or "") != agent_id:
         raise ValidationError("staged re-embedding plan does not match this agent")
     source = _exact_source_route(data_dir, agent_id, config)
+    if config.get("namespaces") is None:
+        from .generation import _source_route, _read_pointer_raw
+        source = _source_route(data_dir, agent_id, str(plan.get("sourceRoute") or ""))
+        active = _read_pointer_raw(data_dir, agent_id, require_verified=False)
+        if active is not None and active["targetRoute"] not in {str(source), str(plan.get("targetRoute"))}:
+            raise ValidationError("staged re-embedding active source changed")
+        if active is None and source.name != agent_id:
+            raise ValidationError("staged re-embedding active source changed")
     if str(source) != str(plan.get("sourceRoute") or ""):
         raise ValidationError("staged re-embedding source route changed")
     rows, version, fingerprint = _source_snapshot(source, connect)

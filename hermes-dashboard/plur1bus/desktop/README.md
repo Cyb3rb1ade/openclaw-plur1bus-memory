@@ -7,7 +7,7 @@ existing dashboard backend. It does not patch or rebuild Hermes itself.
 Open **PLUR1BUS** in the bottom status bar or search for **PLUR1BUS öffnen** in
 the command palette. It opens a closeable, reusable native workspace tab through
 `host.openWorkspace`, not a contributed route. Requests use the host's authenticated, profile-aware
-`ctx.rest` transport, not a hardcoded port or separate web server. Runtime-plugin
+Electron bridge, not a hardcoded port or separate web server. Runtime-plugin
 discovery must be supported by the installed Hermes Desktop version.
 
 The view includes:
@@ -45,7 +45,7 @@ bounded and stale responses cannot replace newer data.
 
 ## Deliberate boundaries
 
-This is not a copy of OpenClaw's entire dashboard. Re-embedding/model preparation,
+This is not a copy of OpenClaw's entire dashboard. Model preparation,
 Obsidian imports, physical optimization and maintenance remain in the native
 operator CLI (`plur1bus-hermes-operator --help`) and existing controls. They need
 their own source/destination, backup, licensing and writer-quiescence checks;
@@ -53,6 +53,47 @@ there is intentionally no browser endpoint for arbitrary paths/config/commands.
 Background mining and generated-skill execution are not triggered merely by
 opening the page. Existing partial host parity remains documented in the audit
 matrix; this desktop integration does not turn it into full OpenClaw parity.
+
+## Provider selection and dimension migration
+
+Open **Provider & Dimensionen → Provider-Einstellungen öffnen**. Embeddings
+support the pinned local-ONNX Jina v5 Nano backend, local-transformers,
+OpenAI-compatible endpoints and oMLX. Reranking supports local-transformers,
+OpenAI-compatible endpoints, Cohere, oMLX and disabled. Model availability is
+not implied by a provider being selectable. Local model preparation remains
+explicit; credentials are environment-variable references, never raw API keys.
+
+Every change requires a native authenticated, profile/config-bound preview
+and a single-use confirmation (five-minute expiry). Endpoint changes warn
+about sending memory text and possible costs. Browser cookies/origins cannot
+invoke these native actions. A profile switch clears the form and review.
+
+- Reranking: stop Memory runtimes, run a fail-closed synthetic provider test,
+  back up the profile config and atomically save only a PLUR1BUS retrieval
+  override. The existing embedding configuration is preserved. Restart the
+  Memory runtime after saving; the status is configured state, not a live
+  inference availability assertion.
+- Embeddings/dimensions: stop Memory runtimes sharing this data root, then
+  preview, explicitly start backup plus staged re-embedding, review validation,
+  and separately confirm activation. All vectors are recomputed from original
+  text. No padding/truncation or silent schema-width edit is performed.
+  The complete source DB is copied to `state/<agent>/retrieval-backups/` before
+  staging. The source and earlier generations remain intact. Activation also
+  compares every non-vector field and refuses changed sources or active leases.
+  Successive migrations start from the certified active generation, including
+  captures added since the first migration. Rollback restores the previous
+  pointer; the existing operator CLI can recover interrupted activation.
+
+Jobs run outside HTTP request timeouts and never auto-retry failed writes.
+Reopening settings recovers the latest job in the current backend process.
+After a backend restart, review the same target again to resume its deterministic
+staging checkpoint if the source is unchanged. Incomplete source copies are
+retained but never labelled complete backups. No job ends other processes,
+deletes old generations or downloads the pinned ONNX model. Empty or custom
+namespace stores that cannot satisfy the existing migration contract fail closed.
+
+Local acceptance uses temporary LanceDB data for writes; productive QA opens
+settings/previews only, without approving a provider change or migration.
 # Profile-safe installation
 
 Hermes Desktop's disk-plugin root is profile-dependent. For the root home and

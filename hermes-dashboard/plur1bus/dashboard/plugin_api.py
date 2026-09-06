@@ -8,13 +8,14 @@ import re
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 
 from plur1bus_hermes.namespaces import binding_from_scope, normalize_scope_context, resolve_namespace_routes
 from plur1bus_hermes.operator_status import browse_runtime_memories, read_operator_status
@@ -39,6 +40,9 @@ _REVISION = re.compile(r"^[a-f0-9]{64}$")
 _NONCE_TTL_SECONDS = 300
 _nonce_lock = threading.Lock()
 _nonces: dict[str, dict[str, Any]] = {}
+_retrieval_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plur1bus-retrieval")
+_retrieval_reviews: dict[str, dict[str, Any]] = {}
+_retrieval_jobs: dict[str, dict[str, Any]] = {}
 
 
 def _active_runtime_view() -> Any:
@@ -151,11 +155,153 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
         actions = True
     except HTTPException:
         actions = False
-    result = {"memoryBrowser": True, "workshopActions": actions}
+    result = {"memoryBrowser": True, "workshopActions": actions, "retrievalActions": actions}
     if actions:
         from hermes_cli.profiles import get_active_profile_name
         result.update(profileBinding=1, profile=get_active_profile_name())
     return result
+
+
+class _RetrievalPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str = Field(pattern="^(embedding|reranker|activate)$")
+    target: dict = Field(default_factory=dict, max_length=20)
+    job: str = Field(default="", max_length=64)
+
+
+class _RetrievalCommit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nonce: str = Field(max_length=128)
+    confirmation: str = Field(pattern="^(embedding|reranker|activate)$")
+
+
+@router.get("/desktop/retrieval")
+def retrieval_options(request: Request) -> dict[str, Any]:
+    """Return editable, secret-free settings for the authenticated current profile."""
+    _desktop_actor(request)
+    from plur1bus_hermes.retrieval_admin import public_config, EMBEDDING_PROVIDERS, RERANKER_PROVIDERS
+    view = _active_runtime_view()
+    return {"embedding": public_config(view.config.get("embedding", {})),
+            "reranker": public_config(view.config.get("reranker", {})),
+            "embeddingProviders": EMBEDDING_PROVIDERS, "rerankerProviders": RERANKER_PROVIDERS}
+
+
+@router.post("/desktop/retrieval/preview")
+def retrieval_preview(body: _RetrievalPreview, request: Request) -> dict[str, Any]:
+    """Pin an explicit target and scope; preview does not load models or write data."""
+    actor = _desktop_actor(request)
+    from plur1bus_hermes.retrieval_admin import context_revision, validate_target
+    from plur1bus_hermes.reembed_staged import plan_staged_reembed
+    view = _active_runtime_view()
+    revision = context_revision(view)
+    try:
+        if body.kind == "activate":
+            with _nonce_lock:
+                job = _retrieval_jobs.get(body.job)
+                if (not job or job["actor"] != actor or job["revision"] != revision
+                        or job["kind"] != "embedding" or job["status"] != "done"):
+                    raise HTTPException(409, "reviewed_stage_required")
+                target, plan = job["target"], job["plan"]
+        else:
+            target = validate_target(body.kind, body.target)
+            plan = (plan_staged_reembed(view.data_dir, view.agent_id, {**view.config, "embedding": target})
+                    if body.kind == "embedding" else None)
+        nonce = secrets.token_urlsafe(32)
+        with _nonce_lock:
+            now = time.monotonic()
+            for key in list(_retrieval_reviews):
+                if _retrieval_reviews[key]["expires"] < now:
+                    del _retrieval_reviews[key]
+            if len(_retrieval_reviews) >= 32:
+                raise HTTPException(429, "too_many_reviews")
+            _retrieval_reviews[nonce] = {"actor": actor, "revision": revision, "target": target,
+                "plan": plan, "kind": body.kind, "expires": now + _NONCE_TTL_SECONDS}
+        return {"nonce": nonce, "kind": body.kind, "profile": view.profile, "agentId": view.agent_id,
+                "target": target, "cards": plan["sourceCards"] if plan else None,
+                "planId": plan["planId"] if plan else None,
+                "requiresStoppedRuntimes": True,
+                "externalData": target.get("provider") in {"openai-compatible", "omlx", "cohere"}}
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(422, "retrieval_preview_invalid_check_target_and_source") from error
+
+
+def _run_retrieval_job(identifier: str, view: Any) -> None:
+    """Run once; status polling never retries a mutation."""
+    from plur1bus_hermes.retrieval_admin import save_reranker, stage_embedding, context_revision
+    from plur1bus_hermes.generation import activate_staged_generation
+    with _nonce_lock:
+        job = _retrieval_jobs[identifier]
+        job["status"] = "running"
+    def progress(value):
+        with _nonce_lock:
+            job["progress"] = value
+    try:
+        if context_revision(view) != job["revision"]:
+            raise ValueError("review context changed")
+        if job["kind"] == "reranker":
+            result = save_reranker(view, job["target"], job["revision"])
+        elif job["kind"] == "embedding":
+            result = stage_embedding(view, job["target"], job["plan"], progress)
+        else:
+            result = activate_staged_generation(job["plan"], view.data_dir, view.agent_id,
+                {**view.config, "embedding": job["target"]}, approved_plan_id=job["plan"]["planId"])
+            result = {"activated": result["activated"], "restartRequired": True}
+        with _nonce_lock:
+            job.update(status="done", result=result)
+    except Exception as error:
+        # Fixed codes only: inference exceptions may contain keys or memory text.
+        code = "runtime_active" if "runtime lease" in str(error) else "retrieval_job_failed"
+        with _nonce_lock:
+            job.update(status="failed", error=code)
+
+
+@router.post("/desktop/retrieval/commit")
+def retrieval_commit(body: _RetrievalCommit, request: Request) -> dict[str, Any]:
+    actor = _desktop_actor(request)
+    from plur1bus_hermes.retrieval_admin import context_revision
+    view = _active_runtime_view()
+    revision = context_revision(view)
+    with _nonce_lock:
+        review = _retrieval_reviews.get(body.nonce)
+        if (not review or review["actor"] != actor or review["revision"] != revision
+                or review["kind"] != body.confirmation or review["expires"] < time.monotonic()):
+            raise HTTPException(409, "retrieval_review_expired_or_changed")
+        if any(job["status"] in {"queued", "running"} for job in _retrieval_jobs.values()):
+            raise HTTPException(409, "retrieval_job_already_running")
+        del _retrieval_reviews[body.nonce]
+        # Retain a bounded number of completed jobs for activation reviews.
+        if len(_retrieval_jobs) >= 32:
+            del _retrieval_jobs[next(iter(_retrieval_jobs))]
+        identifier = secrets.token_urlsafe(24)
+        _retrieval_jobs[identifier] = {**review, "status": "queued", "profile": view.profile,
+                                      "home": str(view.hermes_home)}
+        _retrieval_executor.submit(_run_retrieval_job, identifier, view)
+    return {"job": identifier, "status": "queued"}
+
+
+@router.get("/desktop/retrieval/jobs")
+def retrieval_jobs(request: Request) -> dict[str, Any]:
+    """Recover the latest in-process job after navigation or a lost commit response."""
+    actor = _desktop_actor(request)
+    view = _active_runtime_view()
+    with _nonce_lock:
+        matches = [{"id": identifier, **{key: job[key] for key in ("kind", "status", "progress", "result", "error") if key in job}}
+                   for identifier, job in _retrieval_jobs.items()
+                   if job["actor"] == actor and job["profile"] == view.profile and job["home"] == str(view.hermes_home)]
+        return {"jobs": matches[-1:]}
+
+
+@router.get("/desktop/retrieval/jobs/{identifier}")
+def retrieval_job(identifier: str, request: Request) -> dict[str, Any]:
+    actor = _desktop_actor(request)
+    view = _active_runtime_view()
+    with _nonce_lock:
+        job = _retrieval_jobs.get(identifier)
+        if not job or job["actor"] != actor or job["profile"] != view.profile or job["home"] != str(view.hermes_home):
+            raise HTTPException(404, "retrieval_job_not_found")
+        return {key: job[key] for key in ("kind", "status", "progress", "result", "error") if key in job}
 
 
 def _actor(request: Request) -> str:

@@ -87,6 +87,19 @@ class LocalModelProfileTests(unittest.TestCase):
         )
         model.encode.assert_called_once_with("query: needle", normalize_embeddings=True)
 
+    def test_explicit_offline_revision_is_honored_and_separates_model_cache(self):
+        model = Mock()
+        model.encode.return_value = _Vector([1.0, 2.0])
+        factory = Mock(return_value=model)
+        config = {"provider": "local-transformers", "model": "test", "dimensions": 2,
+                  "localFilesOnly": True, "revision": "pinned"}
+        with patch.dict(sys.modules, {"sentence_transformers": SimpleNamespace(SentenceTransformer=factory)}):
+            self.backend._embed_local(config, "query", purpose="query")
+            self.backend._embed_local({**config, "revision": "different"}, "query", purpose="query")
+        self.assertEqual(factory.call_count, 2)
+        self.assertTrue(factory.call_args.kwargs["local_files_only"])
+        self.assertEqual(factory.call_args.kwargs["revision"], "different")
+
     def test_close_releases_retained_models(self) -> None:
         first = Mock()
         second = Mock()

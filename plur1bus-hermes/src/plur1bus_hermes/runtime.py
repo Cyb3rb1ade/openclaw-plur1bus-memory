@@ -264,11 +264,17 @@ class EmbeddingBackend:
         except ImportError as error:
             raise RuntimeError("local embeddings require sentence-transformers") from error
         cache_dir = Path(str(config.get("cacheDir") or self.hermes_home / "plur1bus" / "models"))
+        model_key = json.dumps([model_name, str(cache_dir), config.get("revision"), config.get("localFilesOnly") is True])
         with self._lock:
-            model = self._models.get(model_name)
+            model = self._models.get(model_key)
             if model is None:
-                model = SentenceTransformer(model_name, cache_folder=str(cache_dir))
-                self._models[model_name] = model
+                options = {}
+                if "revision" in config:
+                    options["revision"] = config["revision"]
+                if "localFilesOnly" in config:
+                    options["local_files_only"] = config["localFilesOnly"] is True
+                model = SentenceTransformer(model_name, cache_folder=str(cache_dir), **options)
+                self._models[model_key] = model
         # e5-family models are asymmetric like Qwen3: "query: " on questions,
         # "passage: " on stored text. Applying the query prefix to everything
         # was the local-provider half of the same bug fixed for omlx below.

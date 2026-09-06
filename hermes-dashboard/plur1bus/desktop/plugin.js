@@ -257,7 +257,142 @@ const css = `
 .plur1bus-desktop input,.plur1bus-desktop select{display:block;border:1px solid var(--border,#555);padding:8px;background:var(--background,#222);color:inherit;border-radius:6px}
 .plur1bus-desktop pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;padding:12px;background:var(--muted,#222)}
 .plur1bus-desktop summary{cursor:pointer;padding:8px 0}.plur1bus-desktop .pb-review{padding:18px;border:1px solid var(--border,#555)}
+.plur1bus-desktop .pb-check{display:flex;gap:10px;align-items:center;margin:12px 0}.plur1bus-desktop .pb-check input{display:inline-block}
 `;
+
+/** Build a provider form target without carrying stale credentials/model options across providers.
+ * @param {string} provider Selected supported backend.
+ * @param {string} kind Embedding or reranker.
+ * @returns {object} Explicit editable defaults, never an automatic model download.
+ */
+export function retrievalDefaults(provider, kind) {
+  if (provider === 'disabled') return { provider };
+  if (provider === 'local-onnx') return { provider, model: 'jinaai/jina-embeddings-v5-text-nano-retrieval',
+    revision: 'ac5d898c8d382b17167c33e5c8af644a3519b47d', dimensions: 768, modelDir: '',
+    license: 'CC-BY-NC-4.0', licenseAccepted: false, queryPrefix: 'Query: ', passagePrefix: 'Document: ' };
+  return { provider, model: '', ...(kind === 'embedding' ? { dimensions: 768 } : {}),
+    ...(provider === 'local-transformers' ? { localFilesOnly: true } : { baseUrl: '', apiKeyEnv: '' }) };
+}
+
+function RetrievalSettings({ rest }) {
+  const request = useRequests(rest);
+  const [settings, setSettings] = React.useState(null);
+  const [kind, setKind] = React.useState('embedding');
+  const [target, setTarget] = React.useState({});
+  const [review, setReview] = React.useState(null);
+  const [approved, setApproved] = React.useState(false);
+  const [job, setJob] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const jobRef = React.useRef(null);
+  const sequence = React.useRef(0);
+  React.useEffect(() => {
+    let disposed = false;
+    let polling = false;
+    async function poll() {
+      if (!jobRef.current || disposed || polling) return;
+      polling = true;
+      const id = jobRef.current;
+      const result = await request.current?.run(`/desktop/retrieval/jobs/${encodeURIComponent(id)}`);
+      polling = false;
+      if (disposed || !result || result.stale) return;
+      if (result.error) { setError('Auftragsstatus nicht erreichbar. Nicht erneut starten; Status erneut abfragen.'); return; }
+      setJob({ id, ...result.value });
+      if (['done', 'failed'].includes(result.value.status)) { jobRef.current = null; setBusy(false); }
+    }
+    const timer = setInterval(() => { void poll(); }, 1500);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [rest]);
+  function edit(next) { sequence.current++; setTarget(next); setReview(null); setApproved(false); setError(''); }
+  async function load() {
+    setBusy(true); setError('');
+    const result = await request.current?.run('/desktop/retrieval');
+    if (!result || result.stale) return;
+    setBusy(false);
+    if (result.error) setError('Provider-Einstellungen nicht erreichbar. Backend aktualisieren oder Verbindung prüfen.');
+    else {
+      setSettings(result.value); setKind('embedding'); edit(result.value.embedding);
+      const recent = await request.current?.run('/desktop/retrieval/jobs');
+      if (!recent || recent.stale) return;
+      if (recent.error) { setError('Auftragsstatus nicht erreichbar. Vor neuen Änderungen erneut laden.'); setSettings(null); return; }
+      const latest = recent.value.jobs?.[0];
+      if (latest) {
+        setJob(latest);
+        if (['queued', 'running'].includes(latest.status)) { jobRef.current = latest.id; setBusy(true); }
+      }
+    }
+  }
+  async function preview(action = kind) {
+    const current = ++sequence.current;
+    setBusy(true); setError(''); setReview(null); setApproved(false);
+    const result = await request.current?.run('/desktop/retrieval/preview', { method: 'POST',
+      body: { kind: action, ...(action === 'activate' ? { job: job.id } : { target }) } });
+    if (!result || result.stale || current !== sequence.current) return;
+    setBusy(false);
+    if (result.error) setError('Vorschau nicht möglich. Modell, Dimensionen, Lizenz und vorhandene Quellpartition prüfen. Es wurde nichts umgestellt.');
+    else setReview(result.value);
+  }
+  async function commit() {
+    if (!review || !approved || busy) return;
+    setBusy(true); setError('');
+    const result = await request.current?.run('/desktop/retrieval/commit', { method: 'POST',
+      body: { nonce: review.nonce, confirmation: review.kind } });
+    if (!result || result.stale) return;
+    setReview(null); setApproved(false);
+    if (result.error) { setBusy(false); setError('Bestätigung nicht übernommen oder Antwort verloren. Keine automatische Wiederholung. Vor neuem Versuch den Auftragsstatus prüfen.'); }
+    else { jobRef.current = result.value.job; setJob({ id: result.value.job, status: 'queued' }); }
+  }
+  const textField = (key, label, required = false) => h('label', { key }, label,
+    h('input', { value: target[key] || '', maxLength: 2048, required, disabled: busy,
+      onChange: event => { const next = { ...target }; if (event.target.value) next[key] = event.target.value; else delete next[key]; edit(next); } }));
+  const providers = settings?.[kind === 'embedding' ? 'embeddingProviders' : 'rerankerProviders'] || [];
+  return h('section', null, h('h2', null, 'Provider & Dimensionen'),
+    h('p', null, 'Embedding-Provider wechseln, Reranking konfigurieren oder Erinnerungen in neue Dimensionen umbetten. Gilt ausschließlich für dieses Profil.'),
+    h('button', { disabled: busy, onClick: () => { void load(); } }, settings ? 'Einstellungen neu laden' : 'Provider-Einstellungen öffnen'),
+    settings ? h('form', { onSubmit: event => { event.preventDefault(); void preview(); } },
+      h('div', { className: 'pb-actions' },
+        h('label', null, 'Bereich', h('select', { value: kind, disabled: busy, onChange: event => {
+          setKind(event.target.value); edit(settings[event.target.value]);
+        } }, h('option', { value: 'embedding' }, 'Embeddings / Dimensionen'), h('option', { value: 'reranker' }, 'Reranking'))),
+        h('label', null, 'Ziel-Provider', h('select', { value: target.provider || '', disabled: busy,
+          onChange: event => edit(event.target.value === settings[kind].provider ? { ...settings[kind] }
+            : retrievalDefaults(event.target.value, kind)) }, providers.map(value => h('option', { key: value, value }, value)))),
+        target.provider !== 'disabled' ? textField('model', 'Ziel-Modell', true) : null,
+        kind === 'embedding' ? h('label', null, 'Ziel-Dimensionen', h('input', { type: 'number', min: 1, max: 8192,
+          required: true, value: target.dimensions || '', disabled: busy,
+          onChange: event => edit({ ...target, dimensions: Number(event.target.value) }) })) : null),
+      target.provider === 'local-onnx' ? h(React.Fragment, null,
+        h('div', { className: 'pb-actions' }, textField('modelDir', 'Vorhandener Modellordner', true)),
+        h('p', null, 'Jina v5 Nano unterstützt 32, 64, 128, 256, 512 und 768 Dimensionen. Vektoren werden aus den Originaltexten neu berechnet. Kein automatischer Modelldownload.'),
+        h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: target.licenseAccepted === true, disabled: busy,
+          onChange: event => edit({ ...target, licenseAccepted: event.target.checked }) }), 'CC-BY-NC-4.0 für dieses Modell akzeptieren (keine kommerzielle Nutzung).')) : null,
+      ['openai-compatible', 'omlx', 'cohere'].includes(target.provider) ? h('div', { className: 'pb-actions' },
+        target.provider !== 'cohere' ? textField('baseUrl', 'API-Basis-URL', target.provider === 'openai-compatible') : null,
+        textField('apiKeyEnv', 'API-Key: Name der Umgebungsvariable')) : null,
+      target.provider === 'local-transformers' ? h('div', { className: 'pb-actions' }, textField('revision', 'Modell-Revision (optional)'),
+        textField('cacheDir', 'Modell-Cache (optional)')) : null,
+      h('p', null, 'Vor Ausführung müssen Gateway und andere Memory-Laufzeiten dieses Speichers gestoppt sein. Hermes Desktop kann offen bleiben. Es werden keine Prozesse automatisch beendet.'),
+      h('p', null, kind === 'embedding' ? 'Der bestehende Speicher bleibt erhalten. Ablauf: Vorschau, Backup & Umrechnung, Prüfung, separate Aktivierung.'
+        : 'Reranking benötigt keine Vektormigration. Die Profilkonfiguration wird gesichert; die Änderung gilt nach Neustart der Memory-Laufzeit.'),
+      h('button', { type: 'submit', disabled: busy }, 'Änderung prüfen')) : null,
+    error ? h('p', { role: 'alert' }, error) : null,
+    review ? h('div', { className: 'pb-review' }, h('h3', null, 'Änderung bestätigen'),
+      h('p', null, `Profil ${review.profile} · Agent ${review.agentId} · ${review.target.provider} · ${review.target.model || 'deaktiviert'}`),
+      review.cards != null ? h('p', null, `${review.cards} Erinnerungen → ${review.target.dimensions} Dimensionen`) : null,
+      review.externalData ? h('p', { role: 'alert' }, 'Achtung: Dieser Provider erhält Erinnerungstexte über seine API. Prüfe den Endpoint und mögliche Kosten vor der Bestätigung.') : null,
+      h('label', { className: 'pb-check' }, h('input', { type: 'checkbox', checked: approved, disabled: busy,
+        onChange: event => setApproved(event.target.checked) }), 'Ich habe Ziel und Profil geprüft und bestätige diese Änderung.'),
+      h('button', { disabled: busy || !approved, onClick: () => { void commit(); } },
+        review.kind === 'activate' ? 'Geprüften Speicher aktivieren' : review.kind === 'embedding' ? 'Backup & Umrechnung starten' : 'Reranking speichern')) : null,
+    job ? h('div', { role: 'status' },
+      h('p', null, `Auftrag: ${job.status}${job.progress ? ` · ${job.progress.cursor}/${job.progress.cards}` : ''}`),
+      job.status === 'failed' ? h('p', { role: 'alert' }, job.error === 'runtime_active'
+        ? 'Eine Memory-Laufzeit ist noch aktiv. Gateway beenden, anschließend neu prüfen und bestätigen.'
+        : 'Auftrag fehlgeschlagen. Quelle bleibt erhalten; Modellverfügbarkeit und Quelländerungen prüfen. Keine automatische Wiederholung.') : null,
+      job.result?.validated ? h(React.Fragment, null, h('p', null, 'Backup vorhanden. Neue Vektoren und unveränderte Metadaten geprüft; noch nicht aktiv.'),
+        h('button', { disabled: busy, onClick: () => { void preview('activate'); } }, 'Aktivierung prüfen')) : null,
+      job.result?.restartRequired ? h('p', null, 'Gespeichert. Memory-Laufzeit jetzt neu starten und anschließend den Status aktualisieren.') : null) : null);
+}
 
 function Partition({ rest, profile }) {
   const [view, setView] = React.useState({ loading: true, status: null, proposals: [], error: '', workshopError: '' });
@@ -287,6 +422,7 @@ function Partition({ rest, profile }) {
           field('Provider', embedding.provider), field('Modell', embedding.model), field('Dimensionen', embedding.dimensions))),
         h('section', null, h('h2', null, 'Reranking'), h('dl', null,
           field('Provider', reranker.provider), field('Modell', reranker.model))))) : null,
+    s ? h(RetrievalSettings, { rest }) : null,
     s ? h(MemoryBrowser, { rest }) : null,
     s ? h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,
       refresh: () => { void reader.current?.load(); } }) : null,
