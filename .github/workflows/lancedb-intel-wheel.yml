@@ -36,7 +36,19 @@ jobs:
           cargo --version
       - name: Build locked upstream source without application data
         working-directory: python
-        run: maturin build --locked --release --strip --target x86_64-apple-darwin --features fp16kernels
+        run: |
+          # The release tag left its own Python workspace version at beta.6
+          # in Cargo.lock. Repair ONLY that metadata, not third-party pins.
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('../Cargo.lock')
+          old = 'name = "lancedb-python"\nversion = "0.34.0-beta.6"'
+          new = 'name = "lancedb-python"\nversion = "0.34.0"'
+          text = path.read_text()
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new))
+          PY
+          maturin build --locked --release --strip --target x86_64-apple-darwin --features fp16kernels
       - name: Install and exercise the actual native wheel
         working-directory: ${{ runner.temp }}
         run: |
@@ -77,6 +89,8 @@ jobs:
           mkdir -p target/wheels
           git rev-parse HEAD > target/wheels/UPSTREAM_COMMIT.txt
           rustc --version > target/wheels/RUST_VERSION.txt
+          git diff -- Cargo.lock > target/wheels/SOURCE_METADATA.patch
+          cp Cargo.lock target/wheels/Cargo.lock
           find target/wheels -name '*.whl' -exec shasum -a 256 {} \; > target/wheels/SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
