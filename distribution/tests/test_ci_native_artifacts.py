@@ -52,3 +52,14 @@ def test_windows_arm_requires_the_exact_lance_and_arrow_pair(tmp_path):
     assert result["arm_lancedb_wheel"] == lance and result["arm_pyarrow_wheel"] == arrow
     assert validate.call_args_list[0].args == (str(lance), ci.ARM_LANCEDB_SHA256, "lancedb")
     assert validate.call_args_list[1].args == (str(arrow), ci.ARM_PYARROW_SHA256, "pyarrow")
+
+
+def test_checksum_manifest_accepts_exact_cargo_path_not_arbitrary_suffix(tmp_path):
+    wheel = candidate(tmp_path, "lancedb.whl", ci.INTEL_SOURCE, ci.INTEL_SHA256)
+    manifest = tmp_path / "SHA256SUMS"
+    manifest.write_text(f"{ci.INTEL_SHA256}  target/wheels/{wheel.name}\n")
+    ci._checksum_manifest(wheel, ci.INTEL_SHA256)
+    for prefix in ("../", "foreign/", "/target/wheels/"):
+        manifest.write_text(f"{ci.INTEL_SHA256}  {prefix}{wheel.name}\n")
+        with pytest.raises(ValueError, match="checksum manifest"):
+            ci._checksum_manifest(wheel, ci.INTEL_SHA256)

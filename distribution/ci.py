@@ -42,7 +42,10 @@ def _checksum_manifest(wheel, expected):
     """Require the candidate's recorded checksum before a pip invocation."""
     wheel = Path(wheel)
     manifest = wheel.parent / "SHA256SUMS"
-    if not manifest.is_file() or f"{expected}  {wheel.name}" not in manifest.read_text(encoding="utf-8").splitlines():
+    # Cargo's Intel build records its build-relative wheel path; ARM records
+    # the basename. Accept only these exact spellings, never arbitrary suffixes.
+    approved = {f"{expected}  {wheel.name}", f"{expected}  target/wheels/{wheel.name}"}
+    if not manifest.is_file() or not approved.intersection(manifest.read_text(encoding="utf-8").splitlines()):
         raise ValueError("native artifact checksum manifest is not approved")
 
 
