@@ -63,13 +63,13 @@ jobs:
           repository: Cyb3rb1ade/openclaw-plur1bus-memory
           run-id: '34048642479'
           name: lancedb-0.34.0-macos-x86_64-candidate
-          path: native-candidates/intel
+          path: ${{ runner.temp }}/plur1bus-native-candidates/intel
           github-token: ${{ github.token }}
       - name: Bind Intel candidate paths and source provenance
         if: matrix.native == 'intel'
         run: |
-          echo "PLUR1BUS_INTEL_LANCEDB_WHEEL=$GITHUB_WORKSPACE/native-candidates/intel/lancedb-0.34.0-cp39-abi3-macosx_10_15_x86_64.whl" >> "$GITHUB_ENV"
-          echo "PLUR1BUS_INTEL_LANCEDB_SOURCE=$GITHUB_WORKSPACE/native-candidates/intel/UPSTREAM_COMMIT.txt" >> "$GITHUB_ENV"
+          echo "PLUR1BUS_INTEL_LANCEDB_WHEEL=$RUNNER_TEMP/plur1bus-native-candidates/intel/lancedb-0.34.0-cp39-abi3-macosx_10_15_x86_64.whl" >> "$GITHUB_ENV"
+          echo "PLUR1BUS_INTEL_LANCEDB_SOURCE=$RUNNER_TEMP/plur1bus-native-candidates/intel/UPSTREAM_COMMIT.txt" >> "$GITHUB_ENV"
       - name: Download reviewed Windows ARM storage candidates from pinned run
         if: matrix.native == 'windows-arm64'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -77,7 +77,7 @@ jobs:
           repository: Cyb3rb1ade/openclaw-plur1bus-memory
           run-id: '34060568686'
           name: lancedb-0.34.0-windows-arm64-candidate
-          path: native-candidates/lancedb
+          path: ${{ runner.temp }}/plur1bus-native-candidates/lancedb
           github-token: ${{ github.token }}
       - name: Download reviewed Windows ARM Arrow candidate from pinned run
         if: matrix.native == 'windows-arm64'
@@ -86,16 +86,16 @@ jobs:
           repository: Cyb3rb1ade/openclaw-plur1bus-memory
           run-id: '34060568686'
           name: pyarrow-25.0.1-windows-arm64-candidate
-          path: native-candidates/pyarrow
+          path: ${{ runner.temp }}/plur1bus-native-candidates/pyarrow
           github-token: ${{ github.token }}
       - name: Bind Windows ARM candidate paths and source provenance
         if: matrix.native == 'windows-arm64'
         shell: pwsh
         run: |
-          "PLUR1BUS_ARM_LANCEDB_WHEEL=$env:GITHUB_WORKSPACE/native-candidates/lancedb/lancedb-0.34.0-cp39-abi3-win_arm64.whl" >> $env:GITHUB_ENV
-          "PLUR1BUS_ARM_LANCEDB_SOURCE=$env:GITHUB_WORKSPACE/native-candidates/lancedb/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
-          "PLUR1BUS_ARM_PYARROW_WHEEL=$env:GITHUB_WORKSPACE/native-candidates/pyarrow/pyarrow-25.0.1-cp313-cp313-win_arm64.whl" >> $env:GITHUB_ENV
-          "PLUR1BUS_ARM_PYARROW_SOURCE=$env:GITHUB_WORKSPACE/native-candidates/pyarrow/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
+          "PLUR1BUS_ARM_LANCEDB_WHEEL=$env:RUNNER_TEMP/plur1bus-native-candidates/lancedb/lancedb-0.34.0-cp39-abi3-win_arm64.whl" >> $env:GITHUB_ENV
+          "PLUR1BUS_ARM_LANCEDB_SOURCE=$env:RUNNER_TEMP/plur1bus-native-candidates/lancedb/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
+          "PLUR1BUS_ARM_PYARROW_WHEEL=$env:RUNNER_TEMP/plur1bus-native-candidates/pyarrow/pyarrow-25.0.1-cp313-cp313-win_arm64.whl" >> $env:GITHUB_ENV
+          "PLUR1BUS_ARM_PYARROW_SOURCE=$env:RUNNER_TEMP/plur1bus-native-candidates/pyarrow/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
       - name: Verify reviewed native artifacts before any dependency install
         if: matrix.native == 'intel' || matrix.native == 'windows-arm64'
         run: python distribution/ci.py --provision-native

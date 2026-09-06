@@ -86,6 +86,12 @@ def provision_native(environment=None, *, system=None, architecture=None):
     return inputs
 
 
+def require_clean_source():
+    """CI must never certify a candidate containing uncommitted source changes."""
+    if subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO):
+        raise ValueError("candidate CI checkout is not clean; do not publish its artifacts")
+
+
 def main():
     native = provision_native()
     environment = os.environ.copy()
@@ -93,7 +99,10 @@ def main():
     subprocess.run([sys.executable, "-m", "pytest", "-q", "plur1bus-hermes/tests", "plur1bus-controls/tests",
                     "distribution/tests"], cwd=REPO, env=environment, check=True)
     output = REPO / "distribution-artifacts"
+    require_clean_source()
     bundle = build(output, mac_pkg=sys.platform == "darwin", windows_exe=sys.platform == "win32", **native)
+    if json.loads((bundle / "distribution.json").read_text(encoding="utf-8"))["dirty"]:
+        raise ValueError("candidate source changed during packaging")
     executable = next(output.glob("*.exe")) if sys.platform == "win32" else None
     verify(bundle, executable)
     # Evidence is uploaded alongside, not folded into checksums of package files.

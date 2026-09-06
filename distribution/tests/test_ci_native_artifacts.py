@@ -63,3 +63,14 @@ def test_checksum_manifest_accepts_exact_cargo_path_not_arbitrary_suffix(tmp_pat
         manifest.write_text(f"{ci.INTEL_SHA256}  {prefix}{wheel.name}\n")
         with pytest.raises(ValueError, match="checksum manifest"):
             ci._checksum_manifest(wheel, ci.INTEL_SHA256)
+
+
+@pytest.mark.parametrize("status", [b" M distribution/installer.py\n", b"?? native-candidates/\n"])
+def test_ci_refuses_dirty_source_or_downloads_inside_checkout(status):
+    with patch.object(ci.subprocess, "check_output", return_value=status), pytest.raises(ValueError, match="not clean"):
+        ci.require_clean_source()
+
+
+def test_ci_accepts_clean_source():
+    with patch.object(ci.subprocess, "check_output", return_value=b""):
+        ci.require_clean_source()
