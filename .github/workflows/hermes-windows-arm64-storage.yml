@@ -31,6 +31,7 @@ jobs:
         with:
           path: port
           persist-credentials: false
+          sparse-checkout: .github
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: apache/arrow
@@ -83,6 +84,7 @@ jobs:
         with:
           path: port
           persist-credentials: false
+          sparse-checkout: .github
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: lancedb/lancedb
@@ -143,6 +145,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          sparse-checkout: .github
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.13.15'
