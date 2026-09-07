@@ -9,6 +9,8 @@ remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` and
 
 ### Cross-platform distribution
 
+Deutsch: [Installationsanleitung für macOS, Windows x64/ARM, Linux und WSL](../distribution/INSTALLATION.de.md).
+
 See [the portable installer guide](../distribution/README.md) for macOS `.pkg`,
 Linux/WSL archives and Windows setup builds, profile selection, dependency checks,
 explicit activation, file rollback and the separate Desktop-only path.

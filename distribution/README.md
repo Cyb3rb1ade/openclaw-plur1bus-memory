@@ -1,5 +1,9 @@
 # PLUR1BUS for Hermes — portable distribution
 
+**Deutsch: [Installation Schritt für Schritt für alle Plattformen](INSTALLATION.de.md).**
+The new native installers are release candidates, not assets of the older
+`7.12.0-hermes.1` release. Check the actual release asset list before downloading.
+
 This bundle installs the PLUR1BUS provider, Controls, dashboard and Desktop plugin
 into an **existing Hermes installation**. It does not install Hermes itself.
 No npm installation is needed for the Python Hermes provider. The OpenClaw npm
@@ -22,13 +26,16 @@ for implemented native variants and remaining parity/acceptance boundaries.
 | macOS, Intel (candidate) | Same assistant, but requires a native-built LanceDB wheel and separately validated ML dependencies; not yet a certified full-stack installation |
 | Linux / WSL2, x86-64 or ARM64 | Portable `.tar.gz`, run `install.sh` **inside Linux/WSL** |
 | Native Windows x86-64 | Portable `.zip` + `install.ps1`, or the Windows-built console setup `.exe` |
+| Native Windows ARM64 (candidate) | ARM-qualified `.zip` / console setup `.exe`; pre-existing native CPython 3.13 Hermes venv and bundled ARM storage wheels required |
 | Windows Desktop, backend in WSL/remote | Desktop-only installation in Windows; separate backend installation inside WSL/remote |
 
 Portable means Python source, not architecture-independent native dependencies.
 The Hermes venv must have Python >=3.11 and compatible LanceDB, NumPy, PyTorch,
 sentence-transformers and optional ONNX wheels for its OS/architecture. Native
-Windows ARM64, Termux and other architectures are **not certified** by this build
-matrix. Failed dependency resolution stops before plugin activation.
+Windows ARM64 builds are included in CI, but a build alone does not certify the
+complete installed application or provision a native Hermes environment.
+Termux and other unlisted platforms are not certified. Failed dependency
+resolution stops before plugin activation.
 
 The `.pkg` is an assistant container, not a privileged postinstall that guesses
 your user/profile. After installing it, open **Install PLUR1BUS.command** in that
