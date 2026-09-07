@@ -7,6 +7,16 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Behoben
+
+- **Zeitkontext:** Der `<temporal-context>`-Block nennt jetzt ausdrücklich, dass
+  Transkript-Nachrichten keine Zeitstempel tragen und Kompaktierungs-Zusammenfassungen
+  kein Datum enthalten — die Position im Verlauf sagt nichts über das Alter. Dazu die
+  Regel, nie eine konkrete Zeit oder ein Datum für frühere Gesprächsinhalte zu
+  behaupten, die nicht aus dem Block selbst, dem `created-at`/`age`-Attribut einer
+  Erinnerung oder einer Werkzeugausgabe stammt. Ohne diese Hinweise haben Agenten die
+  Lücke mit erfundenen Zeitangaben gefüllt.
+
 ## [7.12.3] — 2026-09-07
 
 ### Behoben

@@ -431,3 +431,41 @@ describe("temporal context — memory pollution guard", () => {
     assert.ok(!isInjectedContextText("The user asked about temporal reasoning in SQL."));
   });
 });
+
+describe("temporal context — undated transcript guard", () => {
+  it("renders the rule that transcript messages carry no timestamps", () => {
+    const ctx = computeTemporalContinuityContext({
+      previousUserTurnAt: isoBeforeNow(2 * MS_PER_HOUR),
+      now: FIXED_NOW,
+      timezone: TIMEZONE,
+    });
+    const out = renderTemporalContext(ctx);
+
+    assert.match(out, /messages in the conversation transcript carry no timestamps/i);
+    assert.match(out, /position in the transcript says nothing about age/i);
+  });
+
+  it("renders the rule against inventing times for earlier conversation content", () => {
+    const ctx = computeTemporalContinuityContext({
+      previousUserTurnAt: isoBeforeNow(20 * MS_PER_HOUR),
+      now: FIXED_NOW,
+      timezone: TIMEZONE,
+    });
+    const out = renderTemporalContext(ctx);
+
+    assert.match(out, /never state a specific time or date for earlier conversation content/i);
+    assert.match(out, /this block, a memory record's created-at\/age attribute, or a tool result/i);
+  });
+
+  it("renders both rules for a new session too", () => {
+    const ctx = computeTemporalContinuityContext({
+      previousUserTurnAt: null,
+      now: FIXED_NOW,
+      timezone: TIMEZONE,
+    });
+    const out = renderTemporalContext(ctx);
+
+    assert.match(out, /carry no timestamps/i);
+    assert.match(out, /never state a specific time or date/i);
+  });
+});
