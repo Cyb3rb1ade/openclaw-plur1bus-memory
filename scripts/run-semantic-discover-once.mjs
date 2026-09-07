@@ -5,6 +5,7 @@ import { discoverSemanticLinks } from "../lib/obsidian/semantic-link-discoverer.
 import { loadLinkIndex } from "../lib/obsidian/link-index.js";
 import { MemoryDB } from "../index.js";
 import { makeBoundedCache } from "../lib/bounded-cache.js";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 const VAULT_PATH = process.env.PLUR1BUS_VAULT_PATH || join(homedir(), ".openclaw", "workspace");

@@ -7,6 +7,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.4] — 2026-09-07
+
 ### Behoben
 
 - **Zeitkontext:** Der `<temporal-context>`-Block nennt jetzt ausdrücklich, dass
@@ -16,6 +18,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   behaupten, die nicht aus dem Block selbst, dem `created-at`/`age`-Attribut einer
   Erinnerung oder einer Werkzeugausgabe stammt. Ohne diese Hinweise haben Agenten die
   Lücke mit erfundenen Zeitangaben gefüllt.
+- **`scripts/run-semantic-discover-once.mjs` importierte `homedir` nicht.** Das Skript
+  verwendete `homedir()` aus `node:os` ohne Import und brach ohne gesetzte
+  `PLUR1BUS_VAULT_PATH`/`PLUR1BUS_DB_BASE` mit `ReferenceError` ab. Der Import ist
+  nachgezogen; der gleichlautende lokale Hotfix der Referenzinstallation (seit 04.09.)
+  geht damit in den Release-Stand auf.
 
 ## [7.12.3] — 2026-09-07
 

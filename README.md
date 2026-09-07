@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.3 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
+**PLUR1BUS 7.12.4 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
 
-Current source version: **7.12.3**. PLUR1BUS 7.12.3 supports OpenClaw `2026.8.1`
+Current source version: **7.12.4**. PLUR1BUS 7.12.4 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,17 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.4 — the transcript is undated, semantic-discover script imports homedir
+
+- The `<temporal-context>` block now states that transcript messages carry no
+  timestamps and compaction summaries no dates, and that no time or date may
+  be asserted for earlier conversation content unless it comes from the block,
+  a memory record's `created-at`/`age` attribute or a tool result. Agents had
+  been filling that gap with invented times (#133).
+- `scripts/run-semantic-discover-once.mjs` used `homedir()` without importing
+  it from `node:os` and crashed unless `PLUR1BUS_VAULT_PATH` and
+  `PLUR1BUS_DB_BASE` were set. The import is in place.
 
 ### New in v7.12.3 — KNOWLEDGE.md promotes again, dreams reach the agent's workspace
 
