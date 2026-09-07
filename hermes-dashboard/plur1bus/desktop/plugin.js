@@ -409,8 +409,16 @@ function RetrievalSettings({ rest }) {
   function edit(next) { sequence.current++; setTarget(next); setReview(null); setApproved(false); setError(''); }
   async function load() {
     setBusy(true); setError('');
-    const result = await request.current?.run('/desktop/retrieval');
-    if (!result || result.stale) return;
+    // useRequests installs its gate after the initial commit.  A click in that
+    // small window must remain retryable rather than leaving this button busy.
+    const gate = request.current;
+    if (!gate) {
+      setBusy(false);
+      setError('Provider-Einstellungen werden noch initialisiert. Bitte erneut versuchen.');
+      return;
+    }
+    const result = await gate.run('/desktop/retrieval');
+    if (!result || result.stale) { setBusy(false); return; }
     setBusy(false);
     if (result.error) setError('Provider-Einstellungen nicht erreichbar. Backend aktualisieren oder Verbindung prüfen.');
     else {

@@ -16,7 +16,8 @@ const react = new vm.SyntheticModule(['default'], function () {
   this.setExport('default', { createElement: (...args) => args });
 });
 // Execute the actual distributed ESM, with only its documented host imports injected.
-const plugin = new vm.SourceTextModule(await readFile(new URL('./plugin.js', import.meta.url), 'utf8'));
+const source = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
+const plugin = new vm.SourceTextModule(source);
 await plugin.link(name => {
   if (name === 'react') return react;
   if (name === '@hermes/plugin-sdk') return sdk;
@@ -114,6 +115,88 @@ assert.equal(dispatches, 1, 'disposed action must not dispatch');
 const failed = createScopedRequest(() => { throw Error('secret'); }, () => 'owner');
 assert.deepEqual(await failed.run('/memories'), { error: true });
 
+// RetrievalSettings deliberately installs its profile-bound request gate in a
+// passive effect. A click between first paint and that effect must be visibly
+// retryable, and a profile switch must not leave an old view busy either.
+async function retrievalHarness() {
+  let hooks = [], cursor = 0, effects = [];
+  const componentState = { profile: 'alpha', connection: 'local' };
+  const componentReact = new vm.SyntheticModule(['default'], function () {
+    this.setExport('default', {
+      Fragment: Symbol('fragment'),
+      createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
+      useState(initial) {
+        const slot = cursor++;
+        if (!(slot in hooks)) hooks[slot] = initial;
+        return [hooks[slot], value => { hooks[slot] = typeof value === 'function' ? value(hooks[slot]) : value; }];
+      },
+      useRef(initial) {
+        const slot = cursor++;
+        if (!(slot in hooks)) hooks[slot] = { current: initial };
+        return hooks[slot];
+      },
+      useEffect(effect) { cursor++; effects.push(effect); },
+    });
+  });
+  const componentValues = { ...values, host: { state: {
+    profile: { get: () => componentState.profile }, connectionId: { get: () => componentState.connection },
+  } } };
+  const componentSdk = new vm.SyntheticModule(Object.keys(componentValues), function () {
+    for (const [key, value] of Object.entries(componentValues)) this.setExport(key, value);
+  });
+  const component = new vm.SourceTextModule(source.replace('function RetrievalSettings({ rest })', 'export function RetrievalSettings({ rest })'));
+  await component.link(name => name === 'react' ? componentReact : componentSdk);
+  await component.evaluate();
+  return {
+    state: componentState,
+    render(rest) { cursor = 0; return component.namespace.RetrievalSettings({ rest }); },
+    runRequestEffect() { return effects.shift()(); },
+  };
+}
+const beforeEffect = await retrievalHarness();
+let retrievalCalls = 0;
+const beforeButton = beforeEffect.render(async () => { retrievalCalls++; throw Error('must not dispatch before request gate'); }).children[2];
+beforeButton.props.onClick();
+await Promise.resolve(); await Promise.resolve();
+const retryButton = beforeEffect.render(async () => {}).children[2];
+assert.equal(retrievalCalls, 0, 'click before passive request-gate effect must not dispatch');
+assert.equal(retryButton.props.disabled, false, 'click before request gate remains retryable');
+assert.match(beforeEffect.render(async () => {}).children[4].children[0], /initialisiert/, 'missing gate is explained');
+beforeEffect.runRequestEffect();
+beforeEffect.render(async () => {}).children[2].props.onClick();
+await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+const retriedView = beforeEffect.render(async () => {});
+assert.equal(retrievalCalls, 1, 'explicit retry on the same mounted view dispatches once after initialization');
+assert.equal(retriedView.children[2].props.disabled, false, 'failed transport after retry still clears busy');
+assert.match(retriedView.children[4].children[0], /nicht erreichbar/, 'transport failure remains visible without automatic retries');
+
+const normal = await retrievalHarness();
+let normalCalls = [];
+const normalRest = async path => {
+  normalCalls.push(path);
+  return path === '/desktop/retrieval'
+    ? { embedding: { provider: 'default', model: 'm', dimensions: 768 }, reranker: { provider: 'disabled' }, embeddingProviders: ['default'], rerankerProviders: ['disabled'] }
+    : { jobs: [] };
+};
+normal.render(normalRest); normal.runRequestEffect();
+normal.render(normalRest).children[2].props.onClick();
+await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+const normalView = normal.render(normalRest);
+assert.deepEqual(normalCalls, ['/desktop/retrieval', '/desktop/retrieval/jobs']);
+assert.equal(normalView.children[2].props.disabled, false, 'successful load clears busy state');
+assert.equal(normalView.children[2].children[0], 'Einstellungen neu laden');
+
+const switching = await retrievalHarness();
+let complete;
+const switchingRest = () => new Promise(resolve => { complete = resolve; });
+switching.render(switchingRest); switching.runRequestEffect();
+switching.render(switchingRest).children[2].props.onClick();
+switching.state.connection = 'remote';
+complete({});
+await Promise.resolve(); await Promise.resolve();
+assert.equal(switching.render(switchingRest).children[2].props.disabled, false,
+  'stale profile result cannot leave the old action busy');
+
 let scope = 'alpha', pending = [], published = [];
 const reader = createScopedReader((path, options) => {
   assert.equal(options.timeoutMs, 10000);
@@ -204,7 +287,7 @@ const legacyNames = Object.keys(values).filter(name => name !== 'SIDEBAR_NAV_ARE
 const legacySdk = new vm.SyntheticModule(legacyNames, function () {
   for (const name of legacyNames) this.setExport(name, values[name]);
 });
-const legacy = new vm.SourceTextModule(await readFile(new URL('./plugin.js', import.meta.url), 'utf8'));
+const legacy = new vm.SourceTextModule(source);
 await legacy.link(name => name === 'react' ? react : legacySdk);
 await legacy.evaluate();
 globalThis.window.hermesDesktop.api = async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: true });
