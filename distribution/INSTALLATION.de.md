@@ -2,19 +2,15 @@
 
 ## Verfügbarkeit und Geltungsbereich
 
-Stand **7. September 2026**: Diese Anleitung beschreibt den neuen Distributionsweg
-des Kandidaten **7.12.7-hermes.1**. Er ist noch **nicht veröffentlicht**.
-Die sechs nativen CI-Läufe sind erfolgreich; die abschließenden Tests in echten
-Testsystemen sind noch nicht vollständig abgeschlossen. Der Torch-DLL-Fehler im
-Windows-x64-Testsystem wurde durch Aktualisierung der offiziellen Microsoft-C++-
-Runtime und einen Neustart behoben; der native Import wurde danach geprüft.
-macOS-Kandidaten für Apple Silicon und Intel sind mit Developer ID Installer
-signiert. Die Apple-Notarisierung ist noch nicht abgeschlossen.
+Stand **7. September 2026**: Diese Anleitung beschreibt das veröffentlichte
+Hermes-Release **7.12.7-hermes.1**. Portable Archive und Python-Wheels sind die
+plattformübergreifenden Referenzartefakte. Native Installer sind separat nach
+Architektur gekennzeichnet; Signatur und Notarisierung sind je Asset in der
+Release-Beschreibung ausgewiesen.
 
-Das bereits veröffentlichte `7.12.0-hermes.1` enthält Wheels, ein Paketarchiv und
-Desktop-Patches, aber **keine `.exe` oder `.pkg`**. Dessen Archiv ist nicht das
-hier beschriebene neue Installer-Bundle. Diese Anleitung nicht unverändert auf
-die alten Assets anwenden; dafür gilt die Dokumentation im jeweiligen Release-Tag.
+Ältere Hermes-Releases enthalten andere Asset-Sätze. Diese Anleitung gilt nur
+für die Assets des jeweiligen Release-Tags; GitHubs automatisch erzeugtes
+„Source code“-ZIP ist kein fertiges Installationspaket.
 
 Downloads ausschließlich unter [GitHub Releases](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases).
 Ein CI-Artefakt oder diese Anleitung ist keine Release-Freigabe. Erst wenn das
@@ -25,13 +21,13 @@ ist ebenfalls **kein fertiges Installationspaket**.
 ## Welches Paket brauche ich?
 
 `VERSION` steht nachfolgend für die tatsächlich veröffentlichte Hermes-Version.
-Die Dateinamen in der Tabelle sind die Namen der neuen Build-Artefakte, keine
-Behauptung ihrer aktuellen Verfügbarkeit in Releases.
+Die Dateinamen in der Tabelle entsprechen den veröffentlichten oder im
+Release ausdrücklich als optional gekennzeichneten Build-Artefakten.
 
 | Zielsystem | Paket / Start | Voraussetzung und Grenze |
 | --- | --- | --- |
-| macOS Apple Silicon | `plur1bus-VERSION-macos-arm64-unsigned.pkg` oder entsprechendes ZIP/TAR | Native ARM64-Hermes-Umgebung |
-| macOS Intel | `plur1bus-VERSION-macos-x86_64-unsigned.pkg` oder entsprechendes ZIP/TAR | Plattformpaket mit mitgeliefertem geprüftem Intel-LanceDB-Wheel; ONNX oder Remote-Provider |
+| macOS Apple Silicon | `plur1bus-VERSION-macos-arm64.pkg` oder entsprechendes ZIP/TAR | Native ARM64-Hermes-Umgebung |
+| macOS Intel | Architekturqualifiziertes ZIP/TAR; `.pkg` nur falls im Release aufgeführt | Native Intel-Hermes-Umgebung und passendes Intel-LanceDB-Wheel; ONNX oder Remote-Provider |
 | Windows x64 | `plur1bus-VERSION-windows-x64-setup-unsigned.exe` oder entsprechendes ZIP | Native x64-Hermes-Umgebung; passende Microsoft-C++-Runtime für native Bibliotheken |
 | Windows ARM64 | `plur1bus-VERSION-windows-arm64-setup-unsigned.exe` oder entsprechendes ZIP | Vorbereitete native CPython-3.13-Hermes-Umgebung, Standard-GIL; ARM-LanceDB **und** ARM-PyArrow im Paket |
 | Linux x64 / ARM64 | `plur1bus-VERSION.tar.gz` oder ZIP, darin `install.sh` | Native Hermes-Umgebung derselben Architektur |

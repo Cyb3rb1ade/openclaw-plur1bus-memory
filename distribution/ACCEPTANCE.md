@@ -1,4 +1,30 @@
-# Distribution candidate acceptance — 2026-09-06
+# Distribution acceptance history
+
+## 7.12.7-hermes.1 — 2026-09-07
+
+Release verification gates for the Hermes port completed on the reviewed merge
+commit. The release package is portable-first: the source archive, installer,
+dashboard payload and both Python wheels are reproducible from the tagged
+commit. Native installer availability remains asset-specific and is never
+inferred from a source-only or CI build.
+
+Verification recorded for this release:
+
+- Node suite: 4,502 tests, 4,426 passed, 0 failed, 76 conditional skips;
+  lint and `git diff --check` passed.
+- Python suites: 746 passed, 0 failed; warnings are dependency deprecations
+  only.
+- `npm audit --audit-level=moderate`: 0 vulnerabilities.
+- Portable ZIP/TAR manifests and wheel contents were inspected; no Python
+  bytecode or cache directories are shipped.
+- Hermes-only integration retains Hermes lifecycle/routing ownership and does
+  not ship the retired OpenClaw host patch entrypoint.
+
+The release does not claim a productive memory migration, model download,
+native Windows signing, or Gatekeeper/SmartScreen acceptance unless the exact
+platform-qualified asset and execution evidence are listed in the release.
+
+## Historical candidate record — 2026-09-06
 
 Candidate: **7.12.0-hermes.2 / 7.12.0.post2**. This is not a publication record.
 

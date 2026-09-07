@@ -1,8 +1,10 @@
 # PLUR1BUS for Hermes — portable distribution
 
 **Deutsch: [Installation Schritt für Schritt für alle Plattformen](INSTALLATION.de.md).**
-The new native installers are release candidates, not assets of the older
-`7.12.0-hermes.1` release. Check the actual release asset list before downloading.
+This document describes the `7.12.7-hermes.1` release. Portable archives and
+Python wheels are release artifacts; native installer files are platform-
+qualified and must be treated according to the signature/notarization status
+shown in the release asset list and `SHA256SUMS`.
 
 This bundle installs the PLUR1BUS provider, Controls, dashboard and Desktop plugin
 into an **existing Hermes installation**. It does not install Hermes itself.
@@ -23,10 +25,10 @@ for implemented native variants and remaining parity/acceptance boundaries.
 | Environment | Artifact and launcher |
 | --- | --- |
 | macOS, Apple Silicon | Portable `.tar.gz` / `.zip`, `install.sh`; optional `.pkg` stages the same assistant in `/Applications/PLUR1BUS Installer` |
-| macOS, Intel (candidate) | Same assistant, but requires a native-built LanceDB wheel and separately validated ML dependencies; not yet a certified full-stack installation |
+| macOS, Intel | Portable archive is supported; a native `.pkg` requires the Intel LanceDB wheel and separately validated ML dependencies listed in the release assets |
 | Linux / WSL2, x86-64 or ARM64 | Portable `.tar.gz`, run `install.sh` **inside Linux/WSL** |
 | Native Windows x86-64 | Portable `.zip` + `install.ps1`, or the Windows-built console setup `.exe` |
-| Native Windows ARM64 (candidate) | ARM-qualified `.zip` / console setup `.exe`; pre-existing native CPython 3.13 Hermes venv and bundled ARM storage wheels required |
+| Native Windows ARM64 | ARM-qualified `.zip` / console setup `.exe`; pre-existing native CPython 3.13 Hermes venv and bundled ARM storage wheels required |
 | Windows Desktop, backend in WSL/remote | Desktop-only installation in Windows; separate backend installation inside WSL/remote |
 
 Portable means Python source, not architecture-independent native dependencies.
@@ -42,7 +44,7 @@ your user/profile. After installing it, open **Install PLUR1BUS.command** in tha
 folder and review the plan. Python comes from existing Hermes or your PATH.
 The Windows `.exe` bundles its installer Python, but still uses the explicitly
 selected Hermes venv for the provider. Run the assistant as your normal user.
-Native candidate artifacts are platform-qualified (for example,
+Native artifacts are platform-qualified (for example,
 `plur1bus-<version>-windows-arm64-setup-unsigned.exe` and
 `plur1bus-<version>-macos-x86_64-unsigned.pkg`); their accompanying native
 `.zip` and `.tar.gz` use the same qualifier. Portable builds without a native
@@ -50,7 +52,7 @@ installer flag deliberately retain the unqualified bundle name.
 Package installation does not change ExecutionPolicy, disable antivirus, install
 models, change dimensions, migrate memory, restart Hermes or overwrite its app.
 Model/memory changes are separate, explicitly approved operations described below.
-Unsigned candidates are named/documented as such; signing/notarization
+Unsigned artifacts are named/documented as such; signing/notarization
 is a separate release gate, not implied by an artifact's existence.
 
 ## Integrity and installation
@@ -307,7 +309,7 @@ python distribution/build.py --output /new/empty/artifact-directory
 ```
 
 `distribution.json` records source commit, dirty state, versions and file hashes.
-A dirty candidate must not be advertised as a commit-reproducible release.
+A dirty build must not be advertised as a commit-reproducible release.
 The Windows executable must be built on Windows. The CI workflow builds native
 artifacts and tests installer transactions, actual wheel installation, storage,
 shared/exclusive process leases and recovery in temporary homes. CI artifacts
