@@ -94,6 +94,11 @@ class NativeInstallerTests(fixtures.InstallerTests):
         path.write_text(json.dumps(manifest))
 
     def fake_python(self, python, code, data=None):
+        if "importlib.metadata.version('torch')" in code:
+            # This fixture intentionally simulates a foreign x86_64 target
+            # even on the native ARM runner; it assumes pre-existing CPU Torch
+            # rather than exercising fresh-Torch provisioning.
+            return json.dumps("2.9.1+cpu")
         result = super().fake_python(python, code, data)
         if "sys.version_info" in code:
             info = json.loads(result)
