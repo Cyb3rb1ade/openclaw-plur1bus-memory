@@ -149,16 +149,42 @@ def cpu_torch_decision(info, installed, dependencies):
     return {"action": "resolver-default", "version": None, "index": None}
 
 
-def verify_cpu_torch(python, expected_version):
-    """Verify the confirmed Torch installation uses no CUDA or HIP runtime."""
+def verify_cpu_torch(python, expected_version, require_cpu=True):
+    """Probe Torch's native loader, requiring CPU-only identity when requested."""
     state = json.loads(run_python(python, """
-import json, torch
-print(json.dumps({'version': torch.__version__,
-                  'cuda': getattr(torch.version, 'cuda', None),
-                  'hip': getattr(torch.version, 'hip', None)}))
+import json
+try:
+    import torch
+    state = {'ok': True, 'version': torch.__version__,
+             'cuda': getattr(torch.version, 'cuda', None),
+             'hip': getattr(torch.version, 'hip', None)}
+except Exception as error:
+    # Keep installer diagnostics useful without exposing DLL paths, environment,
+    # or arbitrary exception text from the target installation.
+    state = {'ok': False, 'errorType': type(error).__name__}
+    winerror = getattr(error, 'winerror', None)
+    if isinstance(winerror, int) and not isinstance(winerror, bool):
+        state['winerror'] = winerror
+print(json.dumps(state))
 """, timeout=60))
-    if state != {"version": expected_version, "cuda": None, "hip": None}:
+    if not isinstance(state, dict) or not isinstance(state.get("ok"), bool):
+        raise ValueError("Torch native runtime probe returned invalid data")
+    if not state["ok"]:
+        error_type = state.get("errorType")
+        if not isinstance(error_type, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", error_type):
+            raise ValueError("Torch native runtime probe returned invalid failure data")
+        detail = error_type
+        winerror = state.get("winerror")
+        if winerror is not None:
+            if not isinstance(winerror, int) or isinstance(winerror, bool) or not 0 <= winerror <= 0xFFFFFFFF:
+                raise ValueError("Torch native runtime probe returned invalid failure data")
+            detail += ", WinError " + str(winerror)
+        raise ValueError("Torch native runtime could not load (" + detail + "); inspect target native runtime prerequisites; no installer fallback was applied")
+    if state.get("version") != expected_version:
+        raise ValueError("installed Torch version differs from the confirmed runtime")
+    if require_cpu and (state.get("cuda") is not None or state.get("hip") is not None):
         raise ValueError("installed Torch is not the confirmed CPU runtime")
+    return state
 
 
 def verify_bundle(bundle):
@@ -398,6 +424,10 @@ def apply_install(plan, confirmation, stopped=False):
                 journal["torch"]["version"] = installed_torch
                 record()
             elif plan["torch"]["action"] == "preserve":
+                # Existing installations are never replaced, including GPU
+                # builds, but must still load before the resolver is allowed to
+                # retain them through a constraint.
+                verify_cpu_torch(plan["python"], plan["torch"]["version"], require_cpu=False)
                 constraint = transaction / "torch-constraint.txt"
                 atomic_write(constraint, ("torch==" + plan["torch"]["version"] + "\n").encode("utf-8"))
             journal.update(status="installing-python", pipChanged=True)
@@ -427,6 +457,8 @@ def apply_install(plan, confirmation, stopped=False):
                 verify_cpu_torch(plan["python"], journal["torch"]["version"])
             if plan["torch"]["action"] == "preserve" and torch_version(plan["python"]) != plan["torch"]["version"]:
                 raise ValueError("dependency resolver replaced an existing Torch installation")
+            if plan["torch"]["action"] == "preserve":
+                verify_cpu_torch(plan["python"], plan["torch"]["version"], require_cpu=False)
             expected = manifest["pythonVersion"]
             run_python(plan["python"], "import plur1bus_hermes,plur1bus_controls,sys; from pathlib import Path; "
                        "assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == " + repr(expected) + "; "

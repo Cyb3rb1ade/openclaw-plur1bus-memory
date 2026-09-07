@@ -93,13 +93,15 @@ class NativeInstallerTests(fixtures.InstallerTests):
         manifest["nativeDependencies"] = {"darwin/x86_64": RELATIVE}
         path.write_text(json.dumps(manifest))
 
-    def fake_python(self, python, code, data=None):
+    def fake_python(self, python, code, data=None, timeout=None):
         if "importlib.metadata.version('torch')" in code:
             # This fixture intentionally simulates a foreign x86_64 target
             # even on the native ARM runner; it assumes pre-existing CPU Torch
             # rather than exercising fresh-Torch provisioning.
             return json.dumps("2.9.1+cpu")
-        result = super().fake_python(python, code, data)
+        if "import torch" in code and "errorType" in code:
+            return json.dumps({"ok": True, "version": "2.9.1+cpu", "cuda": None, "hip": None})
+        result = super().fake_python(python, code, data, timeout=timeout)
         if "sys.version_info" in code:
             info = json.loads(result)
             info.update(architecture=self.architecture, platform=self.platform)
@@ -159,8 +161,8 @@ class ArmNativeInstallerTests(fixtures.InstallerTests):
         manifest["nativeDependencies"] = {"win32/ARM64": values}
         path.write_text(json.dumps(manifest))
 
-    def fake_python(self, python, code, data=None):
-        result = super().fake_python(python, code, data)
+    def fake_python(self, python, code, data=None, timeout=None):
+        result = super().fake_python(python, code, data, timeout=timeout)
         if "sys.version_info" in code:
             info = json.loads(result)
             info.update(architecture=self.architecture, version=self.python_version,

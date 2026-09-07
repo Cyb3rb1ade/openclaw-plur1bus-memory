@@ -46,12 +46,26 @@ def test_cpu_torch_apply_is_no_cache_and_resolver_constrained():
 
 def test_cpu_runtime_verification_requires_no_cuda_or_hip(monkeypatch):
     timeouts = []
-    monkeypatch.setattr(installer, "run_python", lambda *_, **kwargs: timeouts.append(kwargs.get("timeout")) or '{"version":"2.9.1+cpu","cuda":null,"hip":null}')
+    monkeypatch.setattr(installer, "run_python", lambda *_, **kwargs: timeouts.append(kwargs.get("timeout")) or '{"ok":true,"version":"2.9.1+cpu","cuda":null,"hip":null}')
     installer.verify_cpu_torch("python", "2.9.1+cpu")
     assert timeouts == [60]
-    monkeypatch.setattr(installer, "run_python", lambda *_, **__: '{"version":"2.9.1+cpu","cuda":"12.8","hip":null}')
+    monkeypatch.setattr(installer, "run_python", lambda *_, **__: '{"ok":true,"version":"2.9.1+cpu","cuda":"12.8","hip":null}')
     with pytest.raises(ValueError, match="CPU runtime"):
         installer.verify_cpu_torch("python", "2.9.1+cpu")
+
+
+def test_torch_loader_error_is_specific_without_raw_exception_text(monkeypatch):
+    monkeypatch.setattr(installer, "run_python", lambda *_, **__: '{"ok":false,"errorType":"OSError","winerror":1114}')
+    with pytest.raises(ValueError, match=r"native runtime could not load \(OSError, WinError 1114\)") as error:
+        installer.verify_cpu_torch("python", "2.9.1+cpu", require_cpu=False)
+    assert "c10.dll" not in str(error.value)
+    assert "no installer fallback" in str(error.value)
+
+
+def test_preserved_gpu_torch_is_loader_verified_without_cpu_replacement(monkeypatch):
+    monkeypatch.setattr(installer, "run_python", lambda *_, **__: '{"ok":true,"version":"2.9.1+cu128","cuda":"12.8","hip":null}')
+    state = installer.verify_cpu_torch("python", "2.9.1+cu128", require_cpu=False)
+    assert state["cuda"] == "12.8"
 
 
 def test_retrieval_bridge_does_not_inherit_cpu_probe_timeout():
@@ -142,8 +156,10 @@ class TestCpuTorchApply:
         assert no_deps["torch"]["action"] == "resolver-default"
         assert not any(command[-1:] == ["torch"] for command in self.commands)
         self.commands.clear()
-        gpu, _, _ = self.execute(torch="2.9.1+cu128")
+        gpu, _, verify = self.execute(torch="2.9.1+cu128")
         assert gpu["torch"]["action"] == "preserve"
         installs = [command for command in self.commands if "pip" in command and "install" in command]
         assert not any(command[-1:] == ["torch"] for command in installs)
         assert "--constraint" in installs[0]
+        assert verify.call_count == 2
+        assert all(call.kwargs == {"require_cpu": False} for call in verify.call_args_list)

@@ -30,12 +30,12 @@ class PiplessInstallerTests(fixtures.InstallerTests):
         self.ensurepip_available = True
         self.commands = []
 
-    def fake_python(self, python, code, data=None):
+    def fake_python(self, python, code, data=None, timeout=None):
         if "PLUR1BUS_ENVIRONMENT_STATE" in code:
             return json.dumps({"pipAvailable": self.pip_available,
                                "ensurepipAvailable": self.ensurepip_available,
                                "fingerprint": "fixture-fingerprint"})
-        return super().fake_python(python, code, data)
+        return super().fake_python(python, code, data, timeout=timeout)
 
     def fake_run(self, command, **kwargs):
         self.commands.append(command)

@@ -51,12 +51,12 @@ class InstallerTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "" if kwargs.get("text") else b"", "")
         return self.real_run(command, **kwargs)
 
-    def fake_python(self, python, code, data=None):
+    def fake_python(self, python, code, data=None, timeout=None):
         if code.startswith("import plur1bus_"):
             return ""
         if "sys.version_info" in code:
             return json.dumps({"version": [3, 12, 0], "venv": True, "prefix": str(self.root / "venv"), "platform": sys.platform})
-        return self.real_python(python, code, data)
+        return self.real_python(python, code, data, timeout=timeout)
 
     def plan(self, **kwargs):
         with patch.object(installer.subprocess, "run", side_effect=self.fake_run), patch.object(installer, "run_python", side_effect=self.fake_python):
