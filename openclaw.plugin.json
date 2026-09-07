@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.6",
+  "version": "7.12.7",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
@@ -101,6 +101,11 @@
           "dimensions": {
             "type": "integer",
             "minimum": 1
+          },
+          "requestTimeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "description": "Per-request timeout for remote embedding calls (OpenAI-compatible providers). Unset means 15000 ms; the SDK default of ten minutes let a stalled request block a recall until the worker timeout."
           },
           "local": {
             "type": "object",

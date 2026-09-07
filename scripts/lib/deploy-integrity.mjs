@@ -104,6 +104,7 @@ export const DEPLOY_FILES = [
   "lib/setup/control-ui-compaction.js",
   "lib/critical-reply-intent.js",
   "lib/setup/memory-host-runtime.js",
+  "lib/setup/workspace-memory-provenance.js",
   "lib/setup/obsidian-vault-plugin-runtime.js",
   "lib/setup/reembedding-plugin-runtime.js",
   "lib/setup/workspace-policy-plugin-runtime.js",

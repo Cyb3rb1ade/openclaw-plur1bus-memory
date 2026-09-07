@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.6 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
+**PLUR1BUS 7.12.7 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
 
-Current source version: **7.12.6**. PLUR1BUS 7.12.6 supports OpenClaw `2026.8.1`
+Current source version: **7.12.7**. PLUR1BUS 7.12.7 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,22 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.7 — MEMORY.md and USER.md reach the session again, embedding calls time out
+
+- OpenClaw asks the memory-slot owner to classify `MEMORY.md` and `USER.md`
+  before injecting them (`classifyWorkspaceMemoryPaths`). PLUR1BUS did not
+  implement it, the host answered `unsupported`, logged "excluding automatic
+  memory context: selected memory runtime does not support provenance
+  classification" and left both files out of every session — the agent only
+  saw its curated memory when it read the file by hand. The runtime now
+  classifies workspace memory paths with the same rules as memory-core
+  (curated roots and `memory/**.md` → `agent`, dreams → `system`, anything
+  outside the workspace or non-memory → `untrusted`).
+- Remote embedding requests carry a per-request timeout
+  (`embedding.requestTimeoutMs`, default 15 s) and no SDK-side retries. The
+  OpenAI SDK default of ten minutes let a stalled request hold a recall until
+  the 20-second worker timeout (`started=yes elapsedMs=0` in the log).
 
 ### New in v7.12.6 — recall returns memories again (BigInt expiry rows were treated as expired)
 

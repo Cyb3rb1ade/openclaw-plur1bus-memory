@@ -7,7 +7,29 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-## [7.12.6] — 2026-09-07
+## [7.12.7] — 2026-09-07
+
+### Behoben
+
+- **MEMORY.md und USER.md fehlten im automatischen Sitzungskontext.** Der Host
+  fragt den Besitzer des Memory-Slots vor der Injektion nach einer
+  Provenienz-Klassifizierung (`classifyWorkspaceMemoryPaths`). PLUR1BUS bot sie
+  nicht an, der Host antwortete `unsupported`, protokollierte „excluding
+  automatic memory context: selected memory runtime does not support
+  provenance classification" und ließ beide Dateien in jeder Sitzung weg — der
+  Agent kannte sein kuratiertes Gedächtnis nur, wenn er die Datei von Hand
+  las. Die Runtime klassifiziert Workspace-Memory-Pfade jetzt nach denselben
+  Regeln wie memory-core (kuratierte Wurzeldateien und `memory/**.md` →
+  `agent`, Träume → `system`, alles außerhalb des Workspace oder ohne
+  Memory-Bezug → `untrusted`).
+
+### Geändert
+
+- **Embedding-Anfragen haben ein Zeitlimit.** `embedding.requestTimeoutMs`
+  (Standard 15 s) begrenzt jede Anfrage an OpenAI-kompatible Provider; das SDK
+  wiederholt nicht mehr selbst, das macht der Provider bereits. Bisher galt der
+  SDK-Standard von zehn Minuten, und eine hängende Anfrage hielt einen Recall
+  bis zum 20-Sekunden-Worker-Timeout fest (`started=yes elapsedMs=0`).
 
 ### Behoben
 

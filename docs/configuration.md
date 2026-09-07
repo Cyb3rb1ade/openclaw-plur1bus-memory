@@ -229,6 +229,13 @@ ungültig, weil es keine von Transformers.js ladbare ONNX-Datei veröffentlicht.
 Ein Jina-Fehler wechselt nur dann kontrolliert zu BGE, wenn der oben gezeigte
 Fallback explizit konfiguriert ist.
 
+### Embedding-Request-Timeout
+
+`embedding.requestTimeoutMs` (Standard 15000) begrenzt jede einzelne Anfrage an
+einen OpenAI-kompatiblen Embedding-Provider. Der SDK-Standard von zehn Minuten
+ließ eine hängende Anfrage einen Recall bis zum Worker-Timeout blockieren. Der
+Provider wiederholt fehlgeschlagene Batches selbst; das SDK wiederholt nicht.
+
 ### Embedding-Dimensionen
 
 Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
