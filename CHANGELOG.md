@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.7-hermes.1 — release candidate
+
+- Portiert die vollständige v7.12.7-Differenz: Workspace-Provenienz für
+  `MEMORY.md`/`USER.md`, begrenzte Remote-Embedding-Anfragen, BigInt-sicheren
+  Recall-Lifecycle, deutsche Umlaut-Query-Verfeinerung, Slot-Diagnose bei
+  Recall-Timeouts sowie 24-Stunden-Fenster für KNOWLEDGE.md-Promotionen.
+- REM-Ausgaben der eigenen Agenten-Partition landen im Agenten-Workspace;
+  `agent-private` und `agent` werden im Dream-Diary gleich behandelt.
+- Hermes-spezifische Provider-/Dimensionsmigration, Dashboard, Installer,
+  Modellverwaltung, per-Profil-Menü und native Distribution bleiben erhalten.
+  Die Upstream-only OpenClaw-Schnittstellen werden dokumentiert und nicht als
+  Hermes-Fähigkeit ausgegeben.
+
 ### Hermes 7.12.2-hermes.1 candidate
 
 - Port upstream 7.12.2 Critical Push previews: health and finance are visible
@@ -118,6 +131,135 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
+## [7.12.7] — 2026-09-07
+
+### Behoben
+
+- **MEMORY.md und USER.md fehlten im automatischen Sitzungskontext.** Der Host
+  fragt den Besitzer des Memory-Slots vor der Injektion nach einer
+  Provenienz-Klassifizierung (`classifyWorkspaceMemoryPaths`). PLUR1BUS bot sie
+  nicht an, der Host antwortete `unsupported`, protokollierte „excluding
+  automatic memory context: selected memory runtime does not support
+  provenance classification" und ließ beide Dateien in jeder Sitzung weg — der
+  Agent kannte sein kuratiertes Gedächtnis nur, wenn er die Datei von Hand
+  las. Die Runtime klassifiziert Workspace-Memory-Pfade jetzt nach denselben
+  Regeln wie memory-core (kuratierte Wurzeldateien und `memory/**.md` →
+  `agent`, Träume → `system`, alles außerhalb des Workspace oder ohne
+  Memory-Bezug → `untrusted`).
+
+### Geändert
+
+- **Embedding-Anfragen haben ein Zeitlimit.** `embedding.requestTimeoutMs`
+  (Standard 15 s) begrenzt jede Anfrage an OpenAI-kompatible Provider; das SDK
+  wiederholt nicht mehr selbst, das macht der Provider bereits. Bisher galt der
+  SDK-Standard von zehn Minuten, und eine hängende Anfrage hielt einen Recall
+  bis zum 20-Sekunden-Worker-Timeout fest (`started=yes elapsedMs=0`).
+
+### Behoben
+
+- **Recall lieferte keine Erinnerungen mehr.** LanceDB gibt Int64-Spalten
+  (`expiresAt`, `validFrom`, `validUntil`, `updatedAt`, `remindAt`, …) als
+  BigInt zurück. Die Lebenszeitprüfung der Recall-Pipeline akzeptierte nur
+  Zahlen; ein BigInt `0n` galt als „abgelaufen", und **jeder** Kandidat wurde
+  vor Score-Schwelle, ACL und Reranking verworfen. Auto-Recall injizierte in
+  jedem Turn null Erinnerungen, `memory_recall` meldete „no results", obwohl
+  die Zeilen mit Scores um 0,5 in der Tabelle standen. `projectRecallEntry`
+  bringt alle Int64-Felder jetzt zentral auf sichere Zahlen, `isRecallEntryLive`
+  nimmt auch BigInt an. `MemoryDB.search` war nicht betroffen — deshalb fielen
+  manuelle Prüfungen nie auf.
+
+### Behoben
+
+- **Umlaute überlebten die Query-Verfeinerung nicht.** `lib/query-refiner.js`
+  zerlegte den Text mit NFKD und warf danach die kombinierenden Zeichen weg —
+  aus „Gespräch" wurde „Gespra ch", aus „läuft" „la uft", und Stopwörter mit
+  Umlaut („über", „für", „können") matchten nie. Kombinierende Zeichen bleiben
+  erhalten, das Ergebnis wird nach NFC zurückgeführt. Betraf jede deutsche
+  Anfrage mit ä, ö, ü, sobald die Verfeinerung ansprang.
+
+### Geändert
+
+- **Recall-Timeouts nennen die Slot-Lage.** Läuft ein Recall in sein Timeout,
+  bevor er je einen Worker-Slot bekam, sagt die Warnzeile jetzt `started=no`,
+  dazu `queueWaitMs`, `activeCount` und `maxConcurrent`; der Job wird aus der
+  Queue genommen statt später sinnlos anzulaufen. Damit lässt sich aus dem Log
+  ablesen, ob `runtime.maxConcurrentRecall` für den Host zu klein ist.
+
+## [7.12.4] — 2026-09-07
+
+### Behoben
+
+- **Zeitkontext:** Der `<temporal-context>`-Block nennt jetzt ausdrücklich, dass
+  Transkript-Nachrichten keine Zeitstempel tragen und Kompaktierungs-Zusammenfassungen
+  kein Datum enthalten — die Position im Verlauf sagt nichts über das Alter. Dazu die
+  Regel, nie eine konkrete Zeit oder ein Datum für frühere Gesprächsinhalte zu
+  behaupten, die nicht aus dem Block selbst, dem `created-at`/`age`-Attribut einer
+  Erinnerung oder einer Werkzeugausgabe stammt. Ohne diese Hinweise haben Agenten die
+  Lücke mit erfundenen Zeitangaben gefüllt.
+- **`scripts/run-semantic-discover-once.mjs` importierte `homedir` nicht.** Das Skript
+  verwendete `homedir()` aus `node:os` ohne Import und brach ohne gesetzte
+  `PLUR1BUS_VAULT_PATH`/`PLUR1BUS_DB_BASE` mit `ReferenceError` ab. Der Import ist
+  nachgezogen; der gleichlautende lokale Hotfix der Referenzinstallation (seit 04.09.)
+  geht damit in den Release-Stand auf.
+
+## [7.12.3] — 2026-09-07
+
+### Behoben
+
+- **KNOWLEDGE.md wurde nie wieder aktualisiert.** `schicht15.maxPromotionsPerRun`
+  verglich die lebenslange Zahl übernommener Karten mit dem Limit; ein
+  Workspace, der je so viele Karten übernommen hatte, war dauerhaft blockiert
+  (live seit dem 27.06.2026 mit „7/3“). Das Limit zählt jetzt ein
+  24-Stunden-Fenster; Übernahmen ohne Zeitstempel aus alten Ständen zählen
+  nicht mehr, ein festgefahrener Workspace läuft beim nächsten Lauf wieder.
+  Die Dedup-Listen bleiben lebenslang.
+- **REM-Träume landeten im Neo-Store statt im Agenten-Workspace.** Für die
+  agenteneigene Partition wurde das Store-Verzeichnis als Workspace übergeben;
+  DREAMS.md-Tagebuch, Vault-Notiz (`memory/dream-diary/rem/`), Stimmung und
+  Seelen-Skizze gingen dorthin, die Traumseite des Hosts sah nie einen
+  PLUR1BUS-Traum und die Erzählung lief ohne Stimmung. Die eigene private
+  Partition schreibt jetzt in den Agenten-Workspace (`resolveRemOutputRoot`),
+  fremde Agenten-Partitionen und Nutzer-Pools bleiben im Store.
+- **Light-Dream-Tagebuch akzeptierte nur die Schreibweise „agent“**, die
+  ACL-Bindungen liefern aber „agent-private“; beide gelten jetzt
+  (`diaryScopeAllowed`).
+
+## [7.12.2] — 2026-09-07
+
+### Geändert
+
+- **Critical Push zeigt die Vorschau auch für Gesundheit und Finanzen.** Bisher
+  stand dort „Der Inhalt wird aus Datenschutzgründen ausgeblendet“, und der
+  Besitzer sollte über eine Karte entscheiden, die er nicht sehen konnte. Der
+  Push geht ausschließlich in den Direktchat des Besitzers und zitiert dessen
+  eigene Aussage; deshalb wird die bereinigte 160-Zeichen-Vorschau jetzt für
+  alle Typen außer Zugangsdaten gezeigt. Zugangsdaten bleiben immer
+  ausgeblendet. Neue Option `criticalPush.hideTypes` (Liste von Typen) stellt
+  die alte Politik je Typ wieder her, zum Beispiel
+  `["gesundheit", "geld_konto"]`. Die Befehlsliste `/plur1bus critical list`
+  zeigte nie Inhalte und bleibt so.
+
+## [7.12.1] — 2026-09-07
+
+### Behoben
+
+- **Scoped-Embedding-Owner startete auf macOS nicht** (#132). Der Owner band
+  immer einen abstrakten Linux-Unix-Socket, den macOS mit `listen EINVAL`
+  ablehnt. Linux behält seine Adresse unverändert; andere Unix-Plattformen
+  wählen den Owner über einen deterministischen, exklusiven Loopback-TCP-Claim
+  ohne Datenverkehr, die Datenebene bleibt der private Dateisystem-Socket mit
+  256-Bit-Token. Zu lange macOS-Socketpfade (103 Byte) werden vor jeder
+  Mutation diagnostiziert (`scoped_embedding_socket_path_too_long`).
+- **Sechs macOS-Testfehler** (#131, nur Tests/Doku/CI): kanonische Pfade
+  (`realpathSync`), fähigkeitsgesteuerte Skips der Shared-Memory-Integration
+  auf Hosts ohne stabile fd-Verzeichnisführung, dazu ein Negativtest, dass
+  solche Hosts geteilte Schreibzugriffe ablehnen, ohne ein Shared-Root
+  anzulegen. Zwei fokussierte macOS-CI-Jobs neben der Linux-Suite.
+
+### Geändert
+
+- Kompatibilität zusätzlich gegen OpenClaw 2026.9.2 verifiziert (volle Suite
+  am 9.2-Host: dieselben drei absichtlichen Baseline-Fehlschläge wie auf 9.1).
 
 ## [7.12.0] — 2026-09-05
 

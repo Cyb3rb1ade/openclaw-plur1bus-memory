@@ -3,7 +3,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,7 +33,7 @@ describe("schicht15-tracker", () => {
     assert.strictEqual(isKnowledgePromoted(dir, "ws-b", agent, "mem-1", null), false);
   });
 
-  it("enforces maxPromotionsPerRun", () => {
+  it("enforces maxPromotionsPerRun inside a 24-hour window, not for life", () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
     const ws = "ws-a";
     const agent = "agent-1";
@@ -51,6 +51,26 @@ describe("schicht15-tracker", () => {
     const check3 = checkMaxPromotions(dir, ws, agent, 2);
     assert.strictEqual(check3.allowed, false);
     assert.strictEqual(check3.current, 2);
+
+    // A day later the window has moved on; the dedup lists still know both ids.
+    const later = Date.now() + 25 * 60 * 60 * 1000;
+    const check4 = checkMaxPromotions(dir, ws, agent, 2, { now: later });
+    assert.strictEqual(check4.allowed, true);
+    assert.strictEqual(check4.current, 0);
+    assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-1", null), true);
+  });
+
+  it("does not count legacy promotions recorded without timestamps (unblocks a stuck workspace)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
+    const statePath = join(dir, "run-state.json");
+    // Live shape from 2026-06-27: seven ids, no promotedAt, blocked as "7/3".
+    writeFileSync(statePath, JSON.stringify({
+      promotedKnowledge: { "schicht15:ws-a:agent-1": { ids: ["a", "b", "c", "d", "e", "f", "g"], hashes: [], count: 7, lastRunAt: 1782916275916 } },
+    }));
+    const check = checkMaxPromotions(dir, "ws-a", "agent-1", 3);
+    assert.strictEqual(check.allowed, true);
+    assert.strictEqual(check.current, 0);
+    assert.strictEqual(isKnowledgePromoted(dir, "ws-a", "agent-1", "a", null), true, "dedup keeps the old ids");
   });
 
   it("persists in run-state.json", () => {

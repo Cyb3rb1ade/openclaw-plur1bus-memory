@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -7,14 +7,11 @@ import { describe, it } from "node:test";
 const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
 
 describe("native cron direct-dispatch wiring", () => {
-  it("does not run a cron host patch from the canonical memory entrypoint", () => {
-    const source = readFileSync(
-      path.join(repoRoot, "patches/apply-memory-patches.sh"),
-      "utf8",
-    );
-
-    assert.doesNotMatch(source, /apply-cron-plugin-direct-dispatch\.mjs/);
-    assert.doesNotMatch(source, /patch_cron_plugin_direct_dispatch/);
+  it("ships no host patch script at all: the retired entrypoint is gone from the tree", () => {
+    // 7.5.0 retired host patching; the script stayed in the tree, shipped in
+    // no package, until the atlas re-read noted it. Removed for good.
+    assert.equal(existsSync(path.join(repoRoot, "patches/apply-memory-patches.sh")), false);
+    assert.equal(existsSync(path.join(repoRoot, "patches")), false);
   });
 
   it("does not copy or execute any OpenClaw host patch during installation", () => {

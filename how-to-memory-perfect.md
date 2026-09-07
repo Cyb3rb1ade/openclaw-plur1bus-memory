@@ -1888,6 +1888,8 @@ Alle Verbesserungen greifen automatisch ohne Config-Änderungen.
 
 # v2.1.x (2026-04-28 bis 2026-05-01) — OpenClaw-Patches + 4.29-Latenzfix
 
+> Historisch. Host-Patches gibt es seit 7.5.0 nicht mehr (Feature-Crons laufen über die öffentliche Plugin-Registrierung), und `patches/apply-memory-patches.sh` wurde am 05.09.2026 aus dem Baum entfernt. Die folgenden Schritte gelten nur für die hier beschriebenen Versionen.
+
 Aktive Critical-Patches sichern das Memory-System im Produktivbetrieb ab. Alle werden bei der Installation automatisch durch `patches/apply-memory-patches.sh` angewendet (Schritt 9 in `install-memory-system.sh`).
 
 ---

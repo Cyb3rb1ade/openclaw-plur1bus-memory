@@ -9,6 +9,7 @@ import {
   DIARY_START_MARKER,
   appendDreamDiaryEntry,
   buildDiaryEntry,
+  diaryScopeAllowed,
   emitDreamCompletedEvent,
   formatDiaryDate,
   insertDiaryEntry,
@@ -151,4 +152,12 @@ test("the completion event uses the host's shape and fails open", async () => {
   assert.equal(failed, false);
   assert.match(warned.join("\n"), /fail-open/);
   assert.equal(await emitDreamCompletedEvent({ workspaceDir: "/ws", mode: "light", narrative: "x", importHostEvents: async () => ({}) }), false, "a host without the function is not an error");
+});
+
+test("diaryScopeAllowed admits the agent's own scope under both spellings and refuses shared ones", () => {
+  assert.equal(diaryScopeAllowed(undefined), true);
+  assert.equal(diaryScopeAllowed("agent"), true);
+  assert.equal(diaryScopeAllowed("agent-private"), true, "ACL bindings spell the private scope this way");
+  assert.equal(diaryScopeAllowed("workspace"), false);
+  assert.equal(diaryScopeAllowed("user"), false);
 });

@@ -229,6 +229,13 @@ ungültig, weil es keine von Transformers.js ladbare ONNX-Datei veröffentlicht.
 Ein Jina-Fehler wechselt nur dann kontrolliert zu BGE, wenn der oben gezeigte
 Fallback explizit konfiguriert ist.
 
+### Embedding-Request-Timeout
+
+`embedding.requestTimeoutMs` (Standard 15000) begrenzt jede einzelne Anfrage an
+einen OpenAI-kompatiblen Embedding-Provider. Der SDK-Standard von zehn Minuten
+ließ eine hängende Anfrage einen Recall bis zum Worker-Timeout blockieren. Der
+Provider wiederholt fehlgeschlagene Batches selbst; das SDK wiederholt nicht.
+
 ### Embedding-Dimensionen
 
 Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
@@ -480,6 +487,17 @@ credentials ändern sich dadurch nicht.
 Ein nicht gesetztes Feature-Modell (`model` absent) verwendet das effective
 OpenClaw agent model des Ziel-Agenten. PLUR1BUS hat keinen globalen
 Chat-Modell-Default und erbt keine Route zwischen Features: `schicht15`,
+`criticalPush.hideTypes` (Liste aus `person`, `beziehung`, `geburtstag`,
+`geld_konto`, `gesundheit`, `zugang_passwort`) ergaenzt die Typen, deren Inhalt
+in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
+Seit 7.12.2 zeigt der Push fuer alle anderen Typen die bereinigte Vorschau, weil
+er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
+
+`schicht15.maxPromotionsPerRun` begrenzt die KNOWLEDGE.md-Uebernahmen je
+24-Stunden-Fenster (0 = unbegrenzt). Bis 7.12.2 wurde die lebenslange Zahl
+verglichen, was einen Workspace nach dem Erreichen des Limits dauerhaft
+blockierte.
+
 `skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
 `merging.model` noch dessen Endpoint, Credential oder Header.
 

@@ -3,7 +3,7 @@
 ## Verfügbarkeit und Geltungsbereich
 
 Stand **7. September 2026**: Diese Anleitung beschreibt den neuen Distributionsweg
-des Kandidaten **7.12.2-hermes.1**. Er ist noch **nicht veröffentlicht**.
+des Kandidaten **7.12.7-hermes.1**. Er ist noch **nicht veröffentlicht**.
 Die sechs nativen CI-Läufe sind erfolgreich; die abschließenden Tests in echten
 Testsystemen sind noch nicht vollständig abgeschlossen. Der Torch-DLL-Fehler im
 Windows-x64-Testsystem wurde durch Aktualisierung der offiziellen Microsoft-C++-

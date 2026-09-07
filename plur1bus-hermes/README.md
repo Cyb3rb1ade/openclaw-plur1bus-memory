@@ -2,7 +2,7 @@
 
 This directory contains the installable Hermes memory-provider package for PLUR1BUS.
 
-Hermes release candidate: **7.12.2-hermes.1**, Python **7.12.2.post1** (not published).
+Hermes release candidate: **7.12.7-hermes.1**, Python **7.12.7.post1** (not published).
 Compatibility was inspected against Hermes 0.21.0. Detailed coverage and
 remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` and
 `docs/audits/hermes-7.12.0-contract-delta.md` in the repository.

@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.12.7 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
 
-Current source version: **7.12.0**. PLUR1BUS 7.12.0 supports OpenClaw `2026.8.1`
+Current source version: **7.12.7**. PLUR1BUS 7.12.7 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,100 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.7 — MEMORY.md and USER.md reach the session again, embedding calls time out
+
+- OpenClaw asks the memory-slot owner to classify `MEMORY.md` and `USER.md`
+  before injecting them (`classifyWorkspaceMemoryPaths`). PLUR1BUS did not
+  implement it, the host answered `unsupported`, logged "excluding automatic
+  memory context: selected memory runtime does not support provenance
+  classification" and left both files out of every session — the agent only
+  saw its curated memory when it read the file by hand. The runtime now
+  classifies workspace memory paths with the same rules as memory-core
+  (curated roots and `memory/**.md` → `agent`, dreams → `system`, anything
+  outside the workspace or non-memory → `untrusted`).
+- Remote embedding requests carry a per-request timeout
+  (`embedding.requestTimeoutMs`, default 15 s) and no SDK-side retries. The
+  OpenAI SDK default of ten minutes let a stalled request hold a recall until
+  the 20-second worker timeout (`started=yes elapsedMs=0` in the log).
+
+### New in v7.12.6 — recall returns memories again (BigInt expiry rows were treated as expired)
+
+- LanceDB returns Int64 columns (`expiresAt`, `validFrom`, `validUntil`,
+  `updatedAt`, `remindAt`, …) as JavaScript BigInt. The recall pipeline's
+  lifecycle gate accepted only numbers, so a BigInt `0n` expiry counted as
+  "expired" and **every** candidate was rejected before scoring, ACL and
+  reranking. Auto-recall injected zero memories on every turn and
+  `memory_recall` reported "no results" while the rows were in the table with
+  scores around 0.5. `projectRecallEntry` now coerces all Int64-backed fields
+  to safe numbers and `isRecallEntryLive` accepts BigInt input. Direct
+  `MemoryDB.search` was unaffected, which is why manual checks kept passing.
+
+### New in v7.12.5 — umlauts survive query refinement, recall timeouts name the slot state
+
+- The recall query refiner decomposed text with NFKD and then stripped the
+  combining marks, so every German query with ä, ö or ü was split apart
+  (`Gespräch` became `Gespra ch`, `läuft` became `la uft`) and umlaut
+  stopwords such as `über` or `für` never matched. Combining marks are kept
+  and the text is recomposed to NFC.
+- When a recall times out before it ever received a worker slot, the warning
+  now says so (`started=no`), reports the wait time, the active slot count and
+  `maxConcurrentRecall`, and the job is dropped from the queue instead of
+  running uselessly later. This is the signal to watch when
+  `runtime.maxConcurrentRecall` is too low for the host.
+
+### New in v7.12.4 — the transcript is undated, semantic-discover script imports homedir
+
+- The `<temporal-context>` block now states that transcript messages carry no
+  timestamps and compaction summaries no dates, and that no time or date may
+  be asserted for earlier conversation content unless it comes from the block,
+  a memory record's `created-at`/`age` attribute or a tool result. Agents had
+  been filling that gap with invented times (#133).
+- `scripts/run-semantic-discover-once.mjs` used `homedir()` without importing
+  it from `node:os` and crashed unless `PLUR1BUS_VAULT_PATH` and
+  `PLUR1BUS_DB_BASE` were set. The import is in place.
+
+### New in v7.12.3 — KNOWLEDGE.md promotes again, dreams reach the agent's workspace
+
+- `schicht15.maxPromotionsPerRun` compared the lifetime number of promoted
+  cards against the limit, so a workspace that had ever promoted that many
+  was blocked for good (a live install sat at "7/3" since June with
+  KNOWLEDGE.md frozen). The limit now counts a 24-hour window; promotions
+  recorded before timestamps existed do not count, so a stuck workspace
+  unblocks on the next run. Dedup of already promoted cards is unchanged.
+- The agent's own REM partition wrote its DREAMS.md diary, vault note, mood
+  and soul context into its Neo store directory instead of the agent
+  workspace, so the host's Dreams page never showed PLUR1BUS dreams and the
+  narrative ran without mood. The agent's own private partition now writes
+  to its workspace; other agents' partitions and user pools stay in their
+  store directory. Light dreams accepted only the scope spelling "agent" for
+  the diary while ACL bindings say "agent-private"; both are accepted now.
+
+### New in v7.12.2 — critical pushes show what they are about
+
+- A critical push for a health or finance card used to read "The content is
+  hidden for privacy reasons", leaving the owner to accept or reject a card
+  they could not see. The push goes to the owner's direct chat only and quotes
+  the owner's own statement, so the sanitized 160-character preview is now
+  shown for every type except credentials, which stay hidden. Operators who
+  want the old behaviour list the types under `criticalPush.hideTypes`
+  (for example `["gesundheit", "geld_konto"]`).
+
+### New in v7.12.1 — macOS portability for the scoped embedding owner and the test suite
+
+- The scoped embedding owner always bound a Linux abstract Unix socket, which
+  macOS rejects with `listen EINVAL` before the owner service starts. Linux
+  keeps its exact address; other Unix platforms elect the owner through a
+  deterministic exclusive loopback TCP claim that carries no data, while the
+  data plane stays the private filesystem socket with its 256-bit token. An
+  oversized macOS socket path (103 bytes) is diagnosed before any mutation.
+- Tests compare workspace and generation paths canonically (`/var` is
+  `/private/var` on macOS), skip the four shared-memory integration paths on
+  hosts without stable fd-backed directory routing with an explicit reason, and
+  assert that such hosts reject shared writes without creating a shared root.
+  Two focused macOS CI jobs run next to the unchanged Linux suite.
+- Also verified on OpenClaw 2026.9.2 (full suite against the 9.2 host: same
+  three deliberate baseline failures as on 9.1, nothing else).
 
 ### New in v7.12.0 — Jina v5 Text Nano is the proposal for new installs
 
