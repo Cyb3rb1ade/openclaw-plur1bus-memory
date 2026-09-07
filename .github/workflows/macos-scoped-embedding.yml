@@ -1,0 +1,24 @@
+name: macOS scoped embedding IPC
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scoped-embedding:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.3'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Authenticated IPC and cross-process crash recovery
+        run: node --test tests/scoped-embedding-ipc.test.js tests/openclaw-memory-embedding-adapters.test.js
