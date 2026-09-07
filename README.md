@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.1 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
+**PLUR1BUS 7.12.2 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
 
-Current source version: **7.12.1**. PLUR1BUS 7.12.1 supports OpenClaw `2026.8.1`
+Current source version: **7.12.2**. PLUR1BUS 7.12.2 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,16 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.2 — critical pushes show what they are about
+
+- A critical push for a health or finance card used to read "The content is
+  hidden for privacy reasons", leaving the owner to accept or reject a card
+  they could not see. The push goes to the owner's direct chat only and quotes
+  the owner's own statement, so the sanitized 160-character preview is now
+  shown for every type except credentials, which stay hidden. Operators who
+  want the old behaviour list the types under `criticalPush.hideTypes`
+  (for example `["gesundheit", "geld_konto"]`).
 
 ### New in v7.12.1 — macOS portability for the scoped embedding owner and the test suite
 

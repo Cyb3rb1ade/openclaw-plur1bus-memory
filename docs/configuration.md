@@ -480,6 +480,12 @@ credentials ändern sich dadurch nicht.
 Ein nicht gesetztes Feature-Modell (`model` absent) verwendet das effective
 OpenClaw agent model des Ziel-Agenten. PLUR1BUS hat keinen globalen
 Chat-Modell-Default und erbt keine Route zwischen Features: `schicht15`,
+`criticalPush.hideTypes` (Liste aus `person`, `beziehung`, `geburtstag`,
+`geld_konto`, `gesundheit`, `zugang_passwort`) ergaenzt die Typen, deren Inhalt
+in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
+Seit 7.12.2 zeigt der Push fuer alle anderen Typen die bereinigte Vorschau, weil
+er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
+
 `skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
 `merging.model` noch dessen Endpoint, Credential oder Header.
 

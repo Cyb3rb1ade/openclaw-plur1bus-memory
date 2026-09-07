@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.1",
+  "version": "7.12.2",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
@@ -1943,6 +1943,15 @@
           "maxPerDay": {
             "type": "number",
             "default": 3
+          },
+          "hideTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["person", "beziehung", "geburtstag", "geld_konto", "gesundheit", "zugang_passwort"]
+            },
+            "default": [],
+            "description": "Critical types whose content is hidden in the push card in addition to zugang_passwort, which is always hidden. Pushes go to the owner's direct chat only; before 7.12.2 gesundheit and geld_konto were hidden as well."
           },
           "model": {
             "type": "string",

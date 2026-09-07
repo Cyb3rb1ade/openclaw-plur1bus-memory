@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.2] — 2026-09-07
+
+### Geändert
+
+- **Critical Push zeigt die Vorschau auch für Gesundheit und Finanzen.** Bisher
+  stand dort „Der Inhalt wird aus Datenschutzgründen ausgeblendet“, und der
+  Besitzer sollte über eine Karte entscheiden, die er nicht sehen konnte. Der
+  Push geht ausschließlich in den Direktchat des Besitzers und zitiert dessen
+  eigene Aussage; deshalb wird die bereinigte 160-Zeichen-Vorschau jetzt für
+  alle Typen außer Zugangsdaten gezeigt. Zugangsdaten bleiben immer
+  ausgeblendet. Neue Option `criticalPush.hideTypes` (Liste von Typen) stellt
+  die alte Politik je Typ wieder her, zum Beispiel
+  `["gesundheit", "geld_konto"]`. Die Befehlsliste `/plur1bus critical list`
+  zeigte nie Inhalte und bleibt so.
+
 ## [7.12.1] — 2026-09-07
 
 ### Behoben
