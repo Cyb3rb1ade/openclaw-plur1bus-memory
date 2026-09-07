@@ -5,8 +5,11 @@
 Stand **7. September 2026**: Diese Anleitung beschreibt den neuen Distributionsweg
 des Kandidaten **7.12.2-hermes.1**. Er ist noch **nicht veröffentlicht**.
 Die sechs nativen CI-Läufe sind erfolgreich; die abschließenden Tests in echten
-Testsystemen sind noch nicht vollständig abgeschlossen. Insbesondere ist ein
-Torch-DLL-Fehler im Windows-x64-Testsystem noch offen.
+Testsystemen sind noch nicht vollständig abgeschlossen. Der Torch-DLL-Fehler im
+Windows-x64-Testsystem wurde durch Aktualisierung der offiziellen Microsoft-C++-
+Runtime und einen Neustart behoben; der native Import wurde danach geprüft.
+macOS-Kandidaten für Apple Silicon und Intel sind mit Developer ID Installer
+signiert. Die Apple-Notarisierung ist noch nicht abgeschlossen.
 
 Das bereits veröffentlichte `7.12.0-hermes.1` enthält Wheels, ein Paketarchiv und
 Desktop-Patches, aber **keine `.exe` oder `.pkg`**. Dessen Archiv ist nicht das
