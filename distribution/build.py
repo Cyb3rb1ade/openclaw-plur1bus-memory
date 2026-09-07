@@ -152,7 +152,7 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
     work = Path(tempfile.mkdtemp(prefix="plur1bus-distribution-"))
     bundle = work / name
     bundle.mkdir()
-    for filename in ("installer.py", "install.sh", "install.ps1", "Install PLUR1BUS.command", "README.md"):
+    for filename in ("installer.py", "native_launcher.py", "install.sh", "install.ps1", "Install PLUR1BUS.command", "README.md"):
         copy(REPO / "distribution" / filename, bundle / filename)
     (bundle / "install.sh").chmod(0o755)
     (bundle / "Install PLUR1BUS.command").chmod(0o755)

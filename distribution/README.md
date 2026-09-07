@@ -80,6 +80,33 @@ repeat the **same arguments** with:
 --apply --confirm HASH_FROM_PLAN --runtimes-stopped
 ```
 
+### Additional native Windows ARM desktop launcher
+
+This is an optional, separate launcher for an already prepared native ARM64
+Hermes tree; it never replaces the normal Hermes shortcut. It requires an
+existing standard-GIL CPython 3.13 ARM64 virtual environment and an existing
+ARM64 Desktop executable. It does not download Python, create a venv, modify
+the registry, or change PATH/global environment. Review the plan binding all
+four absolute paths, then repeat the same command with its confirmation:
+
+```powershell
+installer.exe --native-arm-launcher --home "$env:LOCALAPPDATA\hermes" `
+  --native-root "$env:LOCALAPPDATA\hermes\hermes-agent" `
+  --native-python "$env:LOCALAPPDATA\hermes\hermes-agent\venv-arm64\Scripts\python.exe" `
+  --native-desktop-exe "$env:LOCALAPPDATA\hermes\hermes-agent\apps\desktop\release\win-arm64-unpacked\Hermes.exe"
+```
+
+Repeat those exact four path arguments with `--apply --confirm HASH_FROM_PLAN`.
+Unlike package installation, this launcher-only operation neither writes a
+profile nor touches a running Hermes process, so it has no `--runtimes-stopped`
+requirement.
+
+Confirmed apply writes only `%LOCALAPPDATA%\hermes\bin\plur1bus-native-arm-desktop.cmd`
+and its receipt/backup under that same Hermes home. The launcher supplies
+`HERMES_HOME`, `HERMES_DESKTOP_HERMES_ROOT`, and `HERMES_DESKTOP_PYTHON` only
+to that process. Symlinks and Windows reparse points in the bound or managed
+paths are refused; a foreign pre-existing launcher is not overwritten.
+
 Use `--activate` explicitly to select `memory.provider: plur1bus` and enable its
 two backend plugins. Without it, existing provider selection is preserved.
 Use repeated `--profile NAME`, or `--profile all` for existing profiles only.

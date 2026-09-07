@@ -12,6 +12,14 @@ import sys
 import tempfile
 import time
 
+# When imported by the distribution unit tests this file is not the process
+# entrypoint, so retain the sibling-module lookup used by the frozen/script form.
+_DISTRIBUTION_DIR = str(Path(__file__).resolve().parent)
+if _DISTRIBUTION_DIR not in sys.path:
+    sys.path.insert(0, _DISTRIBUTION_DIR)
+from native_launcher import apply as apply_native_launcher
+from native_launcher import plan as plan_native_launcher
+
 MANIFEST = "distribution.json"
 RECEIPT = "plur1bus-install.json"
 DESKTOP_RECEIPT = "plur1bus-desktop-install.json"
@@ -472,9 +480,26 @@ def main():
     parser.add_argument("--retrieval-target", help="explicit embedding/reranker JSON; separate from package installation")
     parser.add_argument("--retrieval-kind", choices=("embedding", "reranker"), default="embedding")
     parser.add_argument("--retrieval-action", choices=("plan", "prepare", "stage", "validate", "activate"), default="plan")
+    parser.add_argument("--native-arm-launcher", action="store_true", help="plan/apply a separate Windows ARM desktop launcher; never changes Hermes shortcuts")
+    parser.add_argument("--native-root", help="existing Hermes source root bound to the separate ARM launcher")
+    parser.add_argument("--native-python", help="existing ARM64 CPython 3.13 Hermes venv executable")
+    parser.add_argument("--native-desktop-exe", help="existing ARM64 Hermes Desktop executable")
     args = parser.parse_args()
     interactive = (args.interactive or len(sys.argv) == 1) and sys.stdin.isatty()
     try:
+        if args.native_arm_launcher:
+            if not args.home or not all((args.native_root, args.native_python, args.native_desktop_exe)):
+                raise ValueError("--native-arm-launcher requires --home, --native-root, --native-python, and --native-desktop-exe")
+            if any((args.interactive, args.profile, args.activate, args.desktop_only, args.no_deps,
+                    args.runtimes_stopped, args.rollback, args.retrieval_target)):
+                raise ValueError("native ARM launcher mode cannot be combined with package or retrieval operations")
+            result = plan_native_launcher(args.home, args.native_root, args.native_python, args.native_desktop_exe)
+            print(json.dumps(result, indent=2))
+            if args.apply:
+                apply_native_launcher(result, args.confirm)
+            return 0
+        if any((args.native_root, args.native_python, args.native_desktop_exe)):
+            raise ValueError("native ARM launcher paths require --native-arm-launcher")
         if interactive:
             print("PLUR1BUS for Hermes — package installation and model/memory changes require separate review. Stop affected runtimes before writes.")
             suggested_home = os.environ.get("HERMES_HOME") or str(Path(os.environ["LOCALAPPDATA"]) / "hermes" if sys.platform == "win32" and "LOCALAPPDATA" in os.environ else Path.home() / ".hermes")
