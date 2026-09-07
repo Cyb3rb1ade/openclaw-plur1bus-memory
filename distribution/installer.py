@@ -23,6 +23,7 @@ from native_launcher import plan as plan_native_launcher
 MANIFEST = "distribution.json"
 RECEIPT = "plur1bus-install.json"
 DESKTOP_RECEIPT = "plur1bus-desktop-install.json"
+CPU_TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 
 
 def redirected(path):
@@ -79,9 +80,15 @@ def atomic_write(path, data):
             os.unlink(temporary)
 
 
-def run_python(python, code, data=None):
-    result = subprocess.run([str(python), "-I", "-X", "utf8", "-c", code], input=data,
-                            capture_output=True, text=True, encoding="utf-8")
+def run_python(python, code, data=None, timeout=None):
+    try:
+        arguments = [str(python), "-I", "-X", "utf8", "-c", code]
+        options = {"input": data, "capture_output": True, "text": True, "encoding": "utf-8"}
+        if timeout is not None:
+            options["timeout"] = timeout
+        result = subprocess.run(arguments, **options)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("Hermes Python preflight timed out") from error
     if result.returncode:
         raise ValueError("Hermes Python preflight failed; inspect its installation (no raw config is logged)")
     return result.stdout
@@ -111,6 +118,47 @@ print(json.dumps({'fingerprint': hashlib.sha256(json.dumps(packages).encode()).h
                   'ensurepipAvailable': importlib.util.find_spec('ensurepip') is not None}))
 """
     return json.loads(run_python(python, code))
+
+
+def torch_version(python):
+    """Read installed Torch metadata without importing its native extension."""
+    value = run_python(python, """
+import importlib.metadata, json
+try:
+    value = importlib.metadata.version('torch')
+except importlib.metadata.PackageNotFoundError:
+    value = None
+print(json.dumps(value))
+""")
+    version = json.loads(value)
+    if version is not None and (not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9.+!_-]{1,128}", version)):
+        raise ValueError("invalid installed Torch metadata")
+    return version
+
+
+def cpu_torch_decision(info, installed, dependencies):
+    """Bind CPU Torch only for a fresh Linux/Windows-x64 dependency install."""
+    platform_name = info["platform"]
+    machine = str(info.get("architecture", "")).upper()
+    eligible = (platform_name == "linux" and machine in {"AMD64", "X86_64"}) or (
+        platform_name == "win32" and machine in {"AMD64", "X86_64"})
+    if installed:
+        return {"action": "preserve", "version": installed, "index": None}
+    if dependencies and eligible:
+        return {"action": "install-cpu", "version": None, "index": CPU_TORCH_INDEX}
+    return {"action": "resolver-default", "version": None, "index": None}
+
+
+def verify_cpu_torch(python, expected_version):
+    """Verify the confirmed Torch installation uses no CUDA or HIP runtime."""
+    state = json.loads(run_python(python, """
+import json, torch
+print(json.dumps({'version': torch.__version__,
+                  'cuda': getattr(torch.version, 'cuda', None),
+                  'hip': getattr(torch.version, 'hip', None)}))
+""", timeout=60))
+    if state != {"version": expected_version, "cuda": None, "hip": None}:
+        raise ValueError("installed Torch is not the confirmed CPU runtime")
 
 
 def verify_bundle(bundle):
@@ -230,12 +278,13 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             if dest.exists() and not dest.is_file():
                 raise ValueError("file destination is not a regular file")
             destinations[name + "/" + relative] = digest(dest.read_bytes()) if dest.exists() else None
+    torch = None if desktop_only else cpu_torch_decision(info, torch_version(python), dependencies)
     result = {"schema": 1, "version": manifest["version"], "bundle": str(bundle), "home": str(home),
               "manifest": digest((bundle / MANIFEST).read_bytes()), "python": str(python) if not desktop_only else None, "pythonInfo": info,
               "desktopOnly": desktop_only,
               "profiles": list(selected), "activate": activate, "dependencies": dependencies,
               "configs": configs, "receipts": receipts, "destinations": destinations, "wheels": wheels,
-              "nativeWheels": native_wheels,
+              "nativeWheels": native_wheels, "torch": torch,
               "effects": "Install Python wheels into selected Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile writes. File rollback does not roll back pip dependencies."}
     if not desktop_only:
         environment = environment_state(python)
@@ -245,6 +294,10 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
         result["bootstrapPip"] = not environment["pipAvailable"]
         if result["bootstrapPip"]:
             result["effects"] += " Confirmed apply first bootstraps pip in this venv using Python's bundled ensurepip."
+        if torch["action"] == "install-cpu":
+            result["effects"] += " Confirmed apply installs Torch from PyTorch's official CPU index before resolving PLUR1BUS dependencies; the resolver is constrained to that CPU version."
+        elif torch["action"] == "preserve":
+            result["effects"] += " Existing Torch is preserved and constrained against replacement during dependency resolution."
     else:
         result["effects"] = "Install desktop frontend only. No Python, backend, model, provider configuration or host patch changes."
     # A frozen one-file executable extracts into a different directory per run.
@@ -263,7 +316,8 @@ def apply_install(plan, confirmation, stopped=False):
     lock = resolve_inside(home, ".plur1bus-install-lock")
     lock.mkdir()  # Refuse concurrent installation; never steal an existing lock.
     transaction = None
-    journal = {"schema": 1, "status": "preparing", "home": str(home), "files": {}, "version": plan["version"], "pipChanged": False}
+    journal = {"schema": 1, "status": "preparing", "home": str(home), "files": {}, "version": plan["version"],
+               "pipChanged": False, "torch": None if plan["torch"] is None else dict(plan["torch"])}
     try:
         # Recheck under the lock, including every target and configuration digest.
         if plan_install(bundle, home, plan["profiles"], plan["python"], plan["activate"], plan["dependencies"], plan["desktopOnly"]) != plan:
@@ -327,10 +381,31 @@ def apply_install(plan, confirmation, stopped=False):
             atomic_write(transaction / "pip-before.txt", before.stdout)
             before_check = subprocess.run([plan["python"], "-I", "-m", "pip", "check"], capture_output=True, text=True)
             atomic_write(transaction / "pip-check-before.txt", before_check.stdout.encode())
+            constraint = None
+            if plan["torch"]["action"] == "install-cpu":
+                journal.update(status="installing-cpu-torch", pipChanged=True)
+                record()
+                with (transaction / "pip-cpu-torch.log").open("w", encoding="utf-8") as log:
+                    subprocess.run([plan["python"], "-I", "-m", "pip", "install", "--disable-pip-version-check",
+                                    "--no-cache-dir", "--only-binary=:all:", "--index-url", plan["torch"]["index"], "torch"],
+                                   stdout=log, stderr=subprocess.STDOUT, check=True)
+                installed_torch = torch_version(plan["python"])
+                if not installed_torch or not installed_torch.endswith("+cpu"):
+                    raise ValueError("official CPU index did not install a CPU Torch build")
+                verify_cpu_torch(plan["python"], installed_torch)
+                constraint = transaction / "torch-constraint.txt"
+                atomic_write(constraint, ("torch==" + installed_torch + "\n").encode("utf-8"))
+                journal["torch"]["version"] = installed_torch
+                record()
+            elif plan["torch"]["action"] == "preserve":
+                constraint = transaction / "torch-constraint.txt"
+                atomic_write(constraint, ("torch==" + plan["torch"]["version"] + "\n").encode("utf-8"))
             journal.update(status="installing-python", pipChanged=True)
             record()
             with (transaction / "pip.log").open("w", encoding="utf-8") as log:
                 command = [plan["python"], "-I", "-m", "pip", "install", "--disable-pip-version-check"]
+                if constraint is not None:
+                    command += ["--constraint", str(constraint)]
                 if not plan["dependencies"]:
                     command += ["--no-deps", "--force-reinstall"]
                 command += [str(resolve_inside(bundle, wheel)) for wheel in plan["nativeWheels"]]
@@ -346,6 +421,12 @@ def apply_install(plan, confirmation, stopped=False):
             atomic_write(transaction / "pip-check-after.txt", after_check.stdout.encode())
             if after_check.returncode and (not after_check.stdout.strip() or set(after_check.stdout.splitlines()) - set(before_check.stdout.splitlines())):
                 raise ValueError("new dependency conflicts; plugin files not activated, inspect pip-check-after.txt")
+            if plan["torch"]["action"] == "install-cpu" and torch_version(plan["python"]) != journal["torch"]["version"]:
+                raise ValueError("dependency resolver changed the planned CPU Torch version")
+            if plan["torch"]["action"] == "install-cpu":
+                verify_cpu_torch(plan["python"], journal["torch"]["version"])
+            if plan["torch"]["action"] == "preserve" and torch_version(plan["python"]) != plan["torch"]["version"]:
+                raise ValueError("dependency resolver replaced an existing Torch installation")
             expected = manifest["pythonVersion"]
             run_python(plan["python"], "import plur1bus_hermes,plur1bus_controls,sys; from pathlib import Path; "
                        "assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == " + repr(expected) + "; "

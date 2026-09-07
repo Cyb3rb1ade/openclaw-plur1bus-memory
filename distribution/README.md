@@ -116,6 +116,14 @@ installation receipt prevents accidental downgrades.
 
 Default installation resolves dependencies, including the `local-onnx` extra.
 For the byte-pinned local BGE reranker, see [preparation and activation](docs/hermes-bge-onnx.md).
+For a fresh Linux x86-64 or Windows x86-64 Hermes venv with no installed Torch, the
+read-only plan explicitly shows a confirmed CPU-only Torch install from
+PyTorch's official https://download.pytorch.org/whl/cpu index. It uses no pip
+cache and constrains the later resolver to the installed CPU version, so a
+CUDA/NVIDIA package cannot be selected silently. Any existing Torch version,
+including a GPU build, is retained and constrained rather than replaced. This
+does not apply on Windows ARM or Intel macOS, where local ONNX/remote providers
+remain the supported fresh-install path.
 If a release includes a reviewed native Intel LanceDB wheel, the plan lists it
 under `nativeWheels`; only a macOS x86_64 target interpreter with dependency
 installation enabled selects it. Apple Silicon, Windows, Linux and desktop-only

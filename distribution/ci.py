@@ -6,6 +6,8 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
+import tempfile
+import venv
 
 from build import build, REPO, validate_intel_wheel, validate_windows_arm_wheel
 from verify import verify
@@ -92,6 +94,42 @@ def require_clean_source():
         raise ValueError("candidate CI checkout is not clean; do not publish its artifacts")
 
 
+def fresh_cpu_torch_smoke(bundle):
+    """Install the built bundle into a no-Torch Linux x64 venv, not CI's venv."""
+    if sys.platform != "linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
+        return False
+    with tempfile.TemporaryDirectory(prefix="plur1bus-fresh-cpu-torch-") as temporary:
+        root = Path(temporary)
+        environment = root / "venv"
+        venv.EnvBuilder(with_pip=True).create(environment)
+        python = environment / "bin" / "python"
+        subprocess.run([str(python), "-I", "-m", "pip", "install", "--disable-pip-version-check", "PyYAML>=6,<7"], check=True)
+        absent = subprocess.check_output([str(python), "-I", "-c",
+            "import importlib.metadata as m; "
+            "\ntry: m.version('torch')\nexcept m.PackageNotFoundError: print('absent')\nelse: raise SystemExit('Torch inherited into fresh venv')"],
+            text=True).strip()
+        if absent != "absent":
+            raise ValueError("fresh CPU Torch smoke inherited Torch")
+        home = root / "hermes-home"
+        home.mkdir()
+        (home / "config.yaml").write_text("memory: {}\nplugins: {}\n", encoding="utf-8")
+        command = [str(python), str(bundle / "installer.py"), "--home", str(home), "--python", str(python),
+                   "--profile", "default"]
+        plan = json.loads(subprocess.check_output(command, text=True))
+        if plan.get("torch", {}).get("action") != "install-cpu":
+            raise ValueError("fresh Linux x64 plan did not bind CPU Torch")
+        subprocess.run([*command, "--apply", "--confirm", plan["confirmation"], "--runtimes-stopped"], check=True)
+        subprocess.run([str(python), "-I", "-c", """
+import importlib.metadata as metadata, torch
+assert torch.version.cuda is None and torch.version.hip is None
+assert torch.__version__.endswith('+cpu')
+assert not [dist.metadata['Name'] for dist in metadata.distributions()
+            if (dist.metadata.get('Name') or '').lower().startswith(('nvidia-', 'cuda-'))]
+print('fresh CPU Torch bundle install passed')
+"""], check=True)
+    return True
+
+
 def main():
     native = provision_native()
     environment = os.environ.copy()
@@ -104,12 +142,15 @@ def main():
     if json.loads((bundle / "distribution.json").read_text(encoding="utf-8"))["dirty"]:
         raise ValueError("candidate source changed during packaging")
     executable = next(output.glob("*.exe")) if sys.platform == "win32" else None
+    fresh_cpu_torch_ran = fresh_cpu_torch_smoke(bundle)
     verify(bundle, executable)
     # Evidence is uploaded alongside, not folded into checksums of package files.
     (output / "verification.json").write_text(json.dumps({
         "platform": sys.platform, "architecture": platform.machine(), "python": sys.version,
         "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
-        "gates": ["python-regressions", "bundle-checksums", "real-wheel-install", "real-lancedb-stub-embedding-smoke", "file-rollback"],
+        "gates": ["python-regressions", "bundle-checksums", "real-wheel-install",
+                  *(["fresh-cpu-torch-install"] if fresh_cpu_torch_ran else []),
+                  "real-lancedb-stub-embedding-smoke", "file-rollback"],
         "nativeExecutableSmoke": bool(executable), "published": False, "signed": False,
     }, indent=2) + "\n", encoding="utf-8")
 
