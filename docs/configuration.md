@@ -486,6 +486,11 @@ in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
 Seit 7.12.2 zeigt der Push fuer alle anderen Typen die bereinigte Vorschau, weil
 er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
 
+`schicht15.maxPromotionsPerRun` begrenzt die KNOWLEDGE.md-Uebernahmen je
+24-Stunden-Fenster (0 = unbegrenzt). Bis 7.12.2 wurde die lebenslange Zahl
+verglichen, was einen Workspace nach dem Erreichen des Limits dauerhaft
+blockierte.
+
 `skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
 `merging.model` noch dessen Endpoint, Credential oder Header.
 

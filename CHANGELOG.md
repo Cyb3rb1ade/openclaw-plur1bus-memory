@@ -7,6 +7,28 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.3] — 2026-09-07
+
+### Behoben
+
+- **KNOWLEDGE.md wurde nie wieder aktualisiert.** `schicht15.maxPromotionsPerRun`
+  verglich die lebenslange Zahl übernommener Karten mit dem Limit; ein
+  Workspace, der je so viele Karten übernommen hatte, war dauerhaft blockiert
+  (live seit dem 27.06.2026 mit „7/3“). Das Limit zählt jetzt ein
+  24-Stunden-Fenster; Übernahmen ohne Zeitstempel aus alten Ständen zählen
+  nicht mehr, ein festgefahrener Workspace läuft beim nächsten Lauf wieder.
+  Die Dedup-Listen bleiben lebenslang.
+- **REM-Träume landeten im Neo-Store statt im Agenten-Workspace.** Für die
+  agenteneigene Partition wurde das Store-Verzeichnis als Workspace übergeben;
+  DREAMS.md-Tagebuch, Vault-Notiz (`memory/dream-diary/rem/`), Stimmung und
+  Seelen-Skizze gingen dorthin, die Traumseite des Hosts sah nie einen
+  PLUR1BUS-Traum und die Erzählung lief ohne Stimmung. Die eigene private
+  Partition schreibt jetzt in den Agenten-Workspace (`resolveRemOutputRoot`),
+  fremde Agenten-Partitionen und Nutzer-Pools bleiben im Store.
+- **Light-Dream-Tagebuch akzeptierte nur die Schreibweise „agent“**, die
+  ACL-Bindungen liefern aber „agent-private“; beide gelten jetzt
+  (`diaryScopeAllowed`).
+
 ## [7.12.2] — 2026-09-07
 
 ### Geändert

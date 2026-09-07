@@ -348,7 +348,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { buildRemPartitions, describeRemPartitionRun, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
@@ -7246,11 +7246,11 @@ const plugin = {
                 const remRuns = [];
                 for (const remAclPartition of remAclPartitions) {
                   const remStore = createOwnerBoundNeoStore(remAclPartition);
-                  const remOutputRoot = remAclPartition.scope === "workspace"
-                    && memoryCtx?.workspaceDir
-                    && remAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity
-                    ? memoryCtx.workspaceDir
-                    : remStore.paths.workspaceDir;
+                  const remOutputRoot = resolveRemOutputRoot({
+                    partition: remAclPartition,
+                    memoryCtx,
+                    storeWorkspaceDir: remStore.paths.workspaceDir,
+                  });
                   const remTarget = createOwnerBoundTarget(
                     remAclPartition,
                     remStore,
