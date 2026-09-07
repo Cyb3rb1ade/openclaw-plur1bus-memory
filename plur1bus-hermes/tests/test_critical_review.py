@@ -4,6 +4,8 @@ from plur1bus_hermes.critical import classify_critical
 from plur1bus_hermes.critical_review import (
     assign_short_refs,
     build_preview,
+    is_suppressed_type,
+    resolve_hidden_types,
     resolve_short_ref,
     sanitize_preview,
     translate_reason,
@@ -85,11 +87,31 @@ class SourceRoleGatingTests(unittest.TestCase):
 
 
 class PreviewPrivacyTests(unittest.TestCase):
-    def test_suppresses_sensitive_types(self):
-        for type_ in ("zugang_passwort", "gesundheit", "geld_konto"):
-            preview = build_preview({"type": type_, "text": "geheim"}, "de")
-            self.assertTrue(preview["suppressed"])
-            self.assertEqual(preview["text"], "")
+    def test_credentials_are_always_suppressed_but_health_and_finance_default_visible(self):
+        credential = build_preview({"type": "zugang_passwort", "text": "geheim"}, "de")
+        self.assertTrue(credential["suppressed"])
+        self.assertEqual(credential["text"], "")
+        for type_ in ("gesundheit", "geld_konto"):
+            preview = build_preview({"type": type_, "text": "eigene Aussage"}, "de")
+            self.assertFalse(preview["suppressed"])
+            self.assertEqual(preview["text"], "eigene Aussage")
+
+    def test_hide_types_extend_but_cannot_remove_credentials(self):
+        self.assertEqual(resolve_hidden_types([" gesundheit "]), {"zugang_passwort", "gesundheit"})
+        self.assertTrue(is_suppressed_type("gesundheit", ["gesundheit"]))
+        self.assertTrue(build_preview({"type": "geld_konto", "text": "secret"}, hide_types=["geld_konto"])["suppressed"])
+        self.assertTrue(build_preview({"type": "zugang_passwort", "text": "secret"}, hide_types=[])["suppressed"])
+
+    def test_content_suppressed_is_never_overridden_by_visible_type_policy(self):
+        preview = build_preview({"type": "gesundheit", "text": "geheim", "contentSuppressed": True})
+        self.assertTrue(preview["suppressed"])
+        self.assertEqual(preview["text"], "")
+
+    def test_content_fallback_is_sanitized_and_bounded(self):
+        preview = build_preview({"type": "person", "content": "<secret>\n" + "x" * 200})
+        self.assertFalse(preview["suppressed"])
+        self.assertNotIn("<", preview["text"])
+        self.assertLessEqual(len(preview["text"]), 160)
 
     def test_secret_content_never_leaks(self):
         preview = build_preview({"type": "zugang_passwort", "text": "api-key=supergeheim"}, "de")

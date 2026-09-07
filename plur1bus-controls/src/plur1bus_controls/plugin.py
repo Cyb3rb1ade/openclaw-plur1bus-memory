@@ -295,7 +295,7 @@ class Plur1busControlsPlugin:
                             return
                         self._delivery_tasks.add(route_key)
                         await self._deliver_proactive(
-                            SimpleNamespace(source=source_snapshot), live_gateway, current
+                            SimpleNamespace(source=source_snapshot), live_gateway, current, identity
                         )
                         current = None  # delivery owns and closes it in its finally block
                     finally:
@@ -315,7 +315,7 @@ class Plur1busControlsPlugin:
         self._delivery_tasks.add(route_key)
         try:
             task = asyncio.create_task(
-                self._deliver_proactive(event, gateway, runtime)
+                self._deliver_proactive(event, gateway, runtime, identity)
             )
         except RuntimeError as error:
             self._delivery_tasks.discard(route_key)
@@ -338,7 +338,39 @@ class Plur1busControlsPlugin:
 
         task.add_done_callback(completed)
 
-    def _render_critical_message(self, item: dict[str, Any], ref: str) -> str:
+    @staticmethod
+    def _critical_hide_types(runtime: Any) -> Any:
+        config = getattr(runtime, "config", {})
+        critical_push = config.get("criticalPush") if isinstance(config, dict) else None
+        return critical_push.get("hideTypes") if isinstance(critical_push, dict) else None
+
+    @staticmethod
+    def _is_private_owner_route(source: Any, runtime: Any, identity: RequestIdentity | None) -> bool:
+        """Require the direct, identity-bound owner route before rendering content."""
+        if identity is None or identity.chat_type.lower() not in {"dm", "private", "direct"}:
+            return False
+        if not is_mutation_authorized(getattr(runtime, "config", {}), identity):
+            return False
+        if source is None:
+            return False
+        if (
+            Plur1busControlsPlugin._host_platform(source) != str(identity.platform)
+            or str(getattr(source, "chat_id", "") or "") != str(identity.chat_id)
+            or str(getattr(source, "thread_id", "") or "") != str(identity.thread_id or "")
+        ):
+            return False
+        binding = getattr(runtime, "scope_binding", None)
+        if (
+            binding is None
+            or getattr(binding, "scope_type", None) != "agent-private"
+            or str(getattr(binding, "agent_id", "") or "") != str(getattr(runtime, "agent_id", "") or "")
+        ):
+            return False
+        return str(getattr(runtime, "agent_id", "") or "") == str(
+            identity.profile or getattr(runtime, "agent_id", "")
+        )
+
+    def _render_critical_message(self, item: dict[str, Any], ref: str, *, hide_types: Any = None) -> str:
         """Verständliche Critical-Review-Nachricht statt ``reason=...``-Rohwerten."""
         reason = translate_reason(
             str(item.get("reason") or ""),
@@ -346,7 +378,7 @@ class Plur1busControlsPlugin:
             lang="de",
         )
         source = translate_source_role(str(item.get("sourceRole") or ""), "de")
-        preview = build_preview(item, lang="de")
+        preview = build_preview(item, lang="de", hide_types=hide_types)
         timestamp = str(item.get("sourceTimestamp") or item.get("createdAt") or "").strip()[:64]
         lines = [
             "🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt.",
@@ -380,8 +412,7 @@ class Plur1busControlsPlugin:
 
     @staticmethod
     def _public_critical_item(item: dict[str, Any], ref: str) -> dict[str, Any]:
-        """Render only scope-valid, safe card fields for the list command."""
-        preview = build_preview(item, lang="de")
+        """Render metadata only: list output must never include card content."""
         return {
             "ref": ref,
             "type": translate_type(str(item.get("type") or ""), "de"),
@@ -390,9 +421,6 @@ class Plur1busControlsPlugin:
             ),
             "source": translate_source_role(str(item.get("sourceRole") or ""), "de"),
             "time": str(item.get("sourceTimestamp") or item.get("createdAt") or "").strip()[:64] or "unbekannt",
-            "preview": preview["text"] if not preview["suppressed"] else "",
-            "previewSuppressed": bool(preview["suppressed"]),
-            "previewNote": preview["reason"] if preview["suppressed"] else "",
             "actions": {
                 "accept": f"/plur1bus critical accept {ref}",
                 "reject": f"/plur1bus critical reject {ref}",
@@ -400,10 +428,13 @@ class Plur1busControlsPlugin:
             },
         }
 
-    async def _deliver_proactive(self, event: Any, gateway: Any, runtime: Any) -> None:
+    async def _deliver_proactive(
+        self, event: Any, gateway: Any, runtime: Any, identity: RequestIdentity | None = None
+    ) -> None:
         """Deliver due reminders and pending critical reviews through the live adapter."""
         try:
             source = getattr(event, "source", None)
+            private_owner_route = self._is_private_owner_route(source, runtime, identity)
             resolve_adapter = getattr(gateway, "_adapter_for_source", None)
             adapter = resolve_adapter(source) if callable(resolve_adapter) else None
             if adapter is None or source is None:
@@ -411,7 +442,14 @@ class Plur1busControlsPlugin:
             domain = runtime._domain
             scope_kwargs = self._scope_kwargs(runtime)
             reminders = domain.due_reminders(**scope_kwargs)
-            pending_criticals = domain.critical_items("pending_review", **scope_kwargs)
+            # Critical content is eligible for a preview only on the direct,
+            # authenticated owner route. Keep unrelated reminder/proactive
+            # delivery behavior unchanged for other authorized routes.
+            pending_criticals = (
+                domain.critical_items("pending_review", **scope_kwargs)
+                if private_owner_route
+                else []
+            )
             # ``critical_items`` intentionally projects cards, not delivery
             # metadata. Fold the scoped append-only ledger here so a successful
             # prior delivery is never re-notified merely because its card stays
@@ -456,7 +494,7 @@ class Plur1busControlsPlugin:
             )
             if not reminders and not criticals and not proactive:
                 return
-            ref_map = domain.critical_reference_map(**scope_kwargs)
+            ref_map = domain.critical_reference_map(**scope_kwargs) if criticals else {}
             lines = []
             if reminders:
                 lines.append("PLUR1BUS reminders:")
@@ -467,7 +505,9 @@ class Plur1busControlsPlugin:
             if criticals:
                 for item in criticals:
                     ref = str(item.get("shortRef") or ref_map.get(str(item["id"]), ""))
-                    lines.append(self._render_critical_message(item, ref))
+                    lines.append(self._render_critical_message(
+                        item, ref, hide_types=self._critical_hide_types(runtime)
+                    ))
             if proactive:
                 lines.extend(str(item.get("text") or "") for item in proactive)
             metadata = {}

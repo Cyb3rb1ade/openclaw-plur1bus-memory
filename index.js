@@ -7206,6 +7206,7 @@ const plugin = {
                   // findRecentUnclassified, der das 3h-Cron-Intervall überdeckt.
                   sinceMinutes: cpCfg.sinceMinutes,
                   maxPerDay: cpCfg.maxPerDay ?? 3,
+                  hideTypes: cpCfg.hideTypes,
                 });
                 api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
                 return cronInternal

@@ -118,11 +118,28 @@ def _as_float(value: Any) -> float | None:
 
 # ─── Vorschau- und Datenschutzpolitik ───────────────────────────────────────
 
-_SUPPRESSED_TYPES = {"zugang_passwort", "gesundheit", "geld_konto"}
+DEFAULT_HIDDEN_TYPES = frozenset({"zugang_passwort"})
+_ALWAYS_HIDDEN_TYPES = frozenset({"zugang_passwort"})
 
 
-def is_suppressed_type(type_: str | None) -> bool:
-    return str(type_ or "") in _SUPPRESSED_TYPES
+def resolve_hidden_types(hide_types: Any = None) -> set[str]:
+    """Return credentials plus valid, explicitly configured hidden types."""
+    resolved = set(_ALWAYS_HIDDEN_TYPES)
+    if isinstance(hide_types, (str, bytes, bytearray)):
+        return resolved
+    try:
+        entries = iter(hide_types) if hide_types is not None else ()
+    except TypeError:
+        return resolved
+    for entry in entries:
+        if isinstance(entry, str) and entry.strip():
+            resolved.add(entry.strip())
+    return resolved
+
+
+def is_suppressed_type(type_: str | None, hide_types: Any = None) -> bool:
+    """Return whether a type is hidden by the immutable/configured policy."""
+    return str(type_ or "") in resolve_hidden_types(hide_types)
 
 
 _PREVIEW_MAX_LEN = 160
@@ -140,7 +157,13 @@ def sanitize_preview(text: str | None, max_len: int = _PREVIEW_MAX_LEN) -> str:
     return text
 
 
-def build_preview(card: dict[str, Any], lang: str = "de") -> dict[str, Any]:
+def build_preview(
+    card: dict[str, Any],
+    lang: str = "de",
+    *,
+    hide_types: Any = None,
+) -> dict[str, Any]:
+    """Build a bounded preview using the current, not persisted, privacy policy."""
     type_ = str(card.get("type") or "")
     secret_suppressed = bool(card.get("contentSuppressed"))
     if type_ == "zugang_passwort" or secret_suppressed:
@@ -154,7 +177,7 @@ def build_preview(card: dict[str, Any], lang: str = "de") -> dict[str, Any]:
                 "other sensitive information."
             )
         return {"suppressed": True, "text": "", "reason": reason}
-    if is_suppressed_type(type_):
+    if is_suppressed_type(type_, hide_types):
         reason = (
             "Der Inhalt wird aus Datenschutzgründen ausgeblendet."
             if lang == "de"

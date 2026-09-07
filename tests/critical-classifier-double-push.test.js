@@ -82,3 +82,21 @@ describe("critical-classifier tombstone guard", () => {
     );
   });
 });
+
+describe("critical-classifier hideTypes", () => {
+  const healthModel = { complete: async () => ({ text: "gesundheit" }) };
+  // A user statement: the provenance gate keeps assistant-only hits out of the push.
+  const healthCard = { id: "h1", content: "Die OP ist zwei Wochen her, Liegen ist noch blöd", title: "x", sourceMessageRole: "user" };
+
+  it("shows the health preview by default and hides it when hideTypes says so", async () => {
+    for (const [hideTypes, expectPreview] of [[undefined, true], [["gesundheit"], false]]) {
+      const statePath = mkdtempSync(join(tmpdir(), "crit-state-"));
+      const db = makeDb({ findRecentUnclassified: async () => [healthCard] });
+      const res = await runClassifier(db, "agentH", { model: healthModel, statePath, hideTypes });
+      assert.strictEqual(res.pushed, 1);
+      const text = res.pushMessages[0].text;
+      if (expectPreview) assert.match(text, /zwei Wochen her/);
+      else { assert.doesNotMatch(text, /zwei Wochen/); assert.match(text, /ausgeblendet/); }
+    }
+  });
+});

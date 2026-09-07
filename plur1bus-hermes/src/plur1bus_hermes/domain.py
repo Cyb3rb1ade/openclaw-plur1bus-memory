@@ -2204,7 +2204,11 @@ class Plur1busDomain:
             return [
                 {
                     **item,
-                    **({"reason": ledger[str(item["id"])]["reason"]} if "reason" in ledger.get(str(item["id"]), {}) else {}),
+                    **{
+                        field: ledger[str(item["id"])][field]
+                        for field in ("reason", "sourceRole", "contentSuppressed")
+                        if field in ledger.get(str(item["id"]), {})
+                    },
                     "status": "pending_review",
                 }
                 for item in page["items"]
@@ -2251,8 +2255,10 @@ class Plur1busDomain:
             if ledger is not None and ledger.get("status") != "pending_review":
                 continue
             item = dict(card)
-            if ledger is not None and "reason" in ledger:
-                item["reason"] = ledger["reason"]
+            if ledger is not None:
+                for field in ("reason", "sourceRole", "contentSuppressed"):
+                    if field in ledger:
+                        item[field] = ledger[field]
             item["status"] = "pending_review"
             pending.append(item)
         return pending

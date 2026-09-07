@@ -72,6 +72,26 @@ class CriticalWorkflowTests(unittest.TestCase):
             self.assertEqual(domain.critical_items(), [])
             self.assertEqual(len(domain.critical_items(None)), 1)
 
+    def test_pending_ledger_content_suppression_survives_card_projection(self):
+        temporary, domain, _table = self._domain_with_cards([
+            {"id": "53628ada-8595-43dc-92da-216fe2c69836", "type": "gesundheit", "content": "do-not-render"},
+        ])
+        with temporary:
+            domain._append_jsonl(
+                domain.state_dir / "critical-push.jsonl",
+                {
+                    "id": "53628ada-8595-43dc-92da-216fe2c69836",
+                    "status": "pending_review",
+                    "contentSuppressed": True,
+                },
+            )
+            pending = domain.critical_items()
+            self.assertEqual(len(pending), 1)
+            self.assertTrue(pending[0]["contentSuppressed"])
+            selector = domain._scope_selector()
+            all_pending = domain._all_pending_critical_items(selector)
+            self.assertTrue(all_pending[0]["contentSuppressed"])
+
     def test_review_by_short_reference_accepts_pending(self):
         temporary, domain, _table = self._domain_with_cards([
             {"id": "a4563cc9-7611-4528-992a-075f8889a018"},

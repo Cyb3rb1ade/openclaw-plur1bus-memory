@@ -7,6 +7,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.2-hermes.1 candidate
+
+- Port upstream 7.12.2 Critical Push previews: health and finance are visible
+  by default in authorized owner review; credentials stay hidden. Additional
+  hidden types are configurable through `criticalPush.hideTypes`.
+- Includes the pending native distribution, CPU-first x64 installation and
+  guarded Windows ARM desktop launcher work. This entry is not a release or
+  full feature-parity certificate; final native guest acceptance remains required.
+
 ### 7.12.0-hermes.2 / Python 7.12.0.post2 — Distributionskandidat
 
 - Installer-Modellverwaltung: explizites Ziel, Modellvorbereitung/Probe,

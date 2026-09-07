@@ -2,7 +2,7 @@
 
 This directory contains the installable Hermes memory-provider package for PLUR1BUS.
 
-Hermes release candidate: **7.12.0-hermes.2**, Python **7.12.0.post2** (not published).
+Hermes release candidate: **7.12.2-hermes.1**, Python **7.12.2.post1** (not published).
 Compatibility was inspected against Hermes 0.21.0. Detailed coverage and
 remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` and
 `docs/audits/hermes-7.12.0-contract-delta.md` in the repository.
@@ -98,6 +98,22 @@ implementations. This candidate does not claim full 7.10 UI/Workshop parity.
 No production cutover, live installation or publication is implied by a build.
 `plur1bus-hermes-parity --strict` deliberately reports incomplete upstream
 coverage even when the retained native-runtime baseline is ready.
+
+### Critical Push privacy
+
+Critical-review previews are rendered only for the authenticated owner in a
+private direct chat. Health and finance cards show a sanitized, 160-character
+preview by default so the owner can make an informed review decision; the
+`/plur1bus critical` list itself is metadata-only. Credential cards and cards
+marked `contentSuppressed` never show their content. Add types to
+`criticalPush.hideTypes` to suppress further previews, for example:
+
+```json
+{"criticalPush": {"hideTypes": ["gesundheit", "geld_konto"]}}
+```
+
+This extends the immutable credential suppression; it cannot re-enable a
+credential preview.
 
 ### Retrieval configuration
 

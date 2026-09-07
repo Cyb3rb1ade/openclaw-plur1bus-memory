@@ -3,7 +3,7 @@
   "label": "PLUR1BUS",
   "description": "Scoped PLUR1BUS status and reviewed Skill Workshop actions for the active memory partition.",
   "icon": "Brain",
-  "version": "7.12.0-hermes.2",
+  "version": "7.12.2-hermes.1",
   "tab": {
     "path": "/plur1bus",
     "position": "after:memory"

@@ -94,11 +94,15 @@ describe("Source-Role / Provenienz", () => {
 });
 
 describe("Vorschau- und Datenschutzpolitik", () => {
-  it("unterdrückt sensible Typen vollständig", () => {
+  it("unterdrückt standardmäßig nur Zugangsdaten; weitere Typen per hideTypes", () => {
     assert.equal(isSuppressedType("zugang_passwort"), true);
-    assert.equal(isSuppressedType("gesundheit"), true);
-    assert.equal(isSuppressedType("geld_konto"), true);
+    assert.equal(isSuppressedType("gesundheit"), false);
+    assert.equal(isSuppressedType("geld_konto"), false);
     assert.equal(isSuppressedType("person"), false);
+    assert.equal(isSuppressedType("gesundheit", ["gesundheit"]), true);
+    assert.equal(isSuppressedType("geld_konto", ["gesundheit", "geld_konto"]), true);
+    assert.equal(isSuppressedType("zugang_passwort", []), true, "Zugangsdaten bleiben auch bei leerer Liste ausgeblendet");
+    assert.equal(isSuppressedType("person", ["gesundheit"]), false);
   });
 
   it("zugang_passwort: vollständige Content-Unterdrückung", () => {
@@ -109,11 +113,20 @@ describe("Vorschau- und Datenschutzpolitik", () => {
     assert.match(p.reason, /ausgeblendet/);
   });
 
-  it("gesundheit/geld_konto: konservative Unterdrückung", () => {
+  it("gesundheit/geld_konto: Vorschau sichtbar, weil der Push nur an den Besitzer geht", () => {
     for (const type of ["gesundheit", "geld_konto"]) {
-      const p = buildPreview({ type, text: "private daten" }, { lang: "de" });
+      const p = buildPreview({ type, text: "Die OP ist zwei Wochen her, Liegen ist noch blöd." }, { lang: "de" });
+      assert.equal(p.suppressed, false);
+      assert.match(p.text, /OP ist zwei Wochen her/);
+    }
+  });
+
+  it("gesundheit/geld_konto: per hideTypes wieder vollständig unterdrückt", () => {
+    for (const type of ["gesundheit", "geld_konto"]) {
+      const p = buildPreview({ type, text: "private daten" }, { lang: "de", hideTypes: ["gesundheit", "geld_konto"] });
       assert.equal(p.suppressed, true);
       assert.equal(p.text, "");
+      assert.match(p.reason, /ausgeblendet/);
     }
   });
 
@@ -348,5 +361,15 @@ describe("Nachricht (UX-Vertrag)", () => {
     const msg = buildCriticalMessage(sensitive, { lang: "de" });
     assert.doesNotMatch(msg.text, /geheim/);
     assert.match(msg.text, /ausgeblendet/);
+  });
+
+  it("Gesundheitskarte zeigt die Vorschau, damit der Besitzer entscheiden kann", () => {
+    const health = { ...card, type: "gesundheit", text: "Naja, die OP ist jetzt zwei Wochen her… trotzdem ist Liegen noch ziemlich blöd" };
+    const msg = buildCriticalMessage(health, { lang: "de" });
+    assert.match(msg.text, /OP ist jetzt zwei Wochen her/);
+    assert.doesNotMatch(msg.text, /ausgeblendet/);
+    const hidden = buildCriticalMessage(health, { lang: "de", hideTypes: ["gesundheit"] });
+    assert.doesNotMatch(hidden.text, /zwei Wochen/);
+    assert.match(hidden.text, /ausgeblendet/);
   });
 });
