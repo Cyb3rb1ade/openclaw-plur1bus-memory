@@ -14,6 +14,12 @@ import site
 from installer import verify_bundle
 
 
+def verify_entrypoint(bundle):
+    """Start the shipped CLI in isolation before importing any artifact code."""
+    subprocess.run([sys.executable, "-I", str(bundle / "installer.py"), "--help"],
+                   check=True, timeout=30, capture_output=True, text=True, encoding="utf-8")
+
+
 def dependency_modules(system, architecture):
     """Import the supported local provider stack, without requiring Torch on ONNX-only targets."""
     modules = ["lancedb", "numpy", "onnxruntime", "tokenizers", "certifi"]
@@ -24,6 +30,7 @@ def dependency_modules(system, architecture):
 
 def verify(bundle, executable=None):
     manifest = verify_bundle(bundle)
+    verify_entrypoint(bundle)
     spec = importlib.util.spec_from_file_location("artifact_installer", bundle / "installer.py")
     implementation = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(implementation)
