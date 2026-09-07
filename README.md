@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.4 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
+**PLUR1BUS 7.12.5 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
 
-Current source version: **7.12.4**. PLUR1BUS 7.12.4 supports OpenClaw `2026.8.1`
+Current source version: **7.12.5**. PLUR1BUS 7.12.5 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,19 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.5 — umlauts survive query refinement, recall timeouts name the slot state
+
+- The recall query refiner decomposed text with NFKD and then stripped the
+  combining marks, so every German query with ä, ö or ü was split apart
+  (`Gespräch` became `Gespra ch`, `läuft` became `la uft`) and umlaut
+  stopwords such as `über` or `für` never matched. Combining marks are kept
+  and the text is recomposed to NFC.
+- When a recall times out before it ever received a worker slot, the warning
+  now says so (`started=no`), reports the wait time, the active slot count and
+  `maxConcurrentRecall`, and the job is dropped from the queue instead of
+  running uselessly later. This is the signal to watch when
+  `runtime.maxConcurrentRecall` is too low for the host.
 
 ### New in v7.12.4 — the transcript is undated, semantic-discover script imports homedir
 

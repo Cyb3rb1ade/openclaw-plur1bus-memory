@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.5] — 2026-09-07
+
+### Behoben
+
+- **Umlaute überlebten die Query-Verfeinerung nicht.** `lib/query-refiner.js`
+  zerlegte den Text mit NFKD und warf danach die kombinierenden Zeichen weg —
+  aus „Gespräch" wurde „Gespra ch", aus „läuft" „la uft", und Stopwörter mit
+  Umlaut („über", „für", „können") matchten nie. Kombinierende Zeichen bleiben
+  erhalten, das Ergebnis wird nach NFC zurückgeführt. Betraf jede deutsche
+  Anfrage mit ä, ö, ü, sobald die Verfeinerung ansprang.
+
+### Geändert
+
+- **Recall-Timeouts nennen die Slot-Lage.** Läuft ein Recall in sein Timeout,
+  bevor er je einen Worker-Slot bekam, sagt die Warnzeile jetzt `started=no`,
+  dazu `queueWaitMs`, `activeCount` und `maxConcurrent`; der Job wird aus der
+  Queue genommen statt später sinnlos anzulaufen. Damit lässt sich aus dem Log
+  ablesen, ob `runtime.maxConcurrentRecall` für den Host zu klein ist.
+
 ## [7.12.4] — 2026-09-07
 
 ### Behoben
