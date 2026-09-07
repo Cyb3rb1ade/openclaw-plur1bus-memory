@@ -7,6 +7,28 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.1] — 2026-09-07
+
+### Behoben
+
+- **Scoped-Embedding-Owner startete auf macOS nicht** (#132). Der Owner band
+  immer einen abstrakten Linux-Unix-Socket, den macOS mit `listen EINVAL`
+  ablehnt. Linux behält seine Adresse unverändert; andere Unix-Plattformen
+  wählen den Owner über einen deterministischen, exklusiven Loopback-TCP-Claim
+  ohne Datenverkehr, die Datenebene bleibt der private Dateisystem-Socket mit
+  256-Bit-Token. Zu lange macOS-Socketpfade (103 Byte) werden vor jeder
+  Mutation diagnostiziert (`scoped_embedding_socket_path_too_long`).
+- **Sechs macOS-Testfehler** (#131, nur Tests/Doku/CI): kanonische Pfade
+  (`realpathSync`), fähigkeitsgesteuerte Skips der Shared-Memory-Integration
+  auf Hosts ohne stabile fd-Verzeichnisführung, dazu ein Negativtest, dass
+  solche Hosts geteilte Schreibzugriffe ablehnen, ohne ein Shared-Root
+  anzulegen. Zwei fokussierte macOS-CI-Jobs neben der Linux-Suite.
+
+### Geändert
+
+- Kompatibilität zusätzlich gegen OpenClaw 2026.9.2 verifiziert (volle Suite
+  am 9.2-Host: dieselben drei absichtlichen Baseline-Fehlschläge wie auf 9.1).
+
 ## [7.12.0] — 2026-09-05
 
 ### Geändert
