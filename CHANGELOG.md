@@ -7,7 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-## [7.12.5] — 2026-09-07
+## [7.12.6] — 2026-09-07
+
+### Behoben
+
+- **Recall lieferte keine Erinnerungen mehr.** LanceDB gibt Int64-Spalten
+  (`expiresAt`, `validFrom`, `validUntil`, `updatedAt`, `remindAt`, …) als
+  BigInt zurück. Die Lebenszeitprüfung der Recall-Pipeline akzeptierte nur
+  Zahlen; ein BigInt `0n` galt als „abgelaufen", und **jeder** Kandidat wurde
+  vor Score-Schwelle, ACL und Reranking verworfen. Auto-Recall injizierte in
+  jedem Turn null Erinnerungen, `memory_recall` meldete „no results", obwohl
+  die Zeilen mit Scores um 0,5 in der Tabelle standen. `projectRecallEntry`
+  bringt alle Int64-Felder jetzt zentral auf sichere Zahlen, `isRecallEntryLive`
+  nimmt auch BigInt an. `MemoryDB.search` war nicht betroffen — deshalb fielen
+  manuelle Prüfungen nie auf.
 
 ### Behoben
 
