@@ -62,15 +62,18 @@ def verify(bundle, executable=None):
 import sys, importlib, json
 from pathlib import Path
 import plur1bus_hermes, plur1bus_controls
+roots = (Path(sys.prefix).resolve(), Path(sys.argv[5]).resolve())
 for name in json.loads(sys.argv[3]):
     importlib.import_module(name)
 for name in json.loads(sys.argv[4]):
     module = importlib.import_module(name)
-    assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), (name, module.__file__)
+    path = Path(module.__file__).resolve()
+    assert any(path == root or root in path.parents for root in roots), (name, module.__file__)
 from plur1bus_hermes.runtime import Plur1busRuntime
 assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == sys.argv[2]
 for module in (plur1bus_hermes, plur1bus_controls):
-    assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), (module.__file__, sys.prefix)
+    path = Path(module.__file__).resolve()
+    assert any(path == root or root in path.parents for root in roots), (module.__file__, sys.prefix)
 runtime = Plur1busRuntime(Path(sys.argv[1]), {'embedding': {'dimensions': 2}}, 'main')
 runtime._embedding.embed = lambda text, purpose='passage': [0.1, 0.2]
 runtime._reranker.rerank = lambda query, rows: rows
@@ -84,7 +87,8 @@ print('Installed wheel import and real LanceDB capture/recall passed (stub embed
 """
         native_modules = ["lancedb"] + (["pyarrow"] if sys.platform == "win32" else []) if native_install else []
         subprocess.run([str(python), "-I", "-c", smoke, str(root / "data"), manifest["pythonVersion"],
-                        json.dumps(dependency_modules(sys.platform, platform.machine())), json.dumps(native_modules)], check=True)
+                        json.dumps(dependency_modules(sys.platform, platform.machine())), json.dumps(native_modules),
+                        str(home / "plugins/plur1bus")], check=True)
         target = root / "reranker-target.json"
         target.write_text('{"provider":"disabled"}', encoding="utf-8")
         retrieval = [str(python), "-I", str(bundle / "installer.py"), "--bundle", str(bundle),

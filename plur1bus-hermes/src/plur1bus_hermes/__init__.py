@@ -1,6 +1,6 @@
 """Installable Hermes memory-provider plugin for PLUR1BUS."""
 
-__version__ = "7.12.7.post1"
+__version__ = "7.12.7.post2"
 
 from .provider import Plur1busMemoryProvider
 from .service import Plur1busServiceContainer

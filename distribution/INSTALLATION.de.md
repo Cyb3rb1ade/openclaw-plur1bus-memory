@@ -3,7 +3,7 @@
 ## Verfügbarkeit und Geltungsbereich
 
 Stand **7. September 2026**: Diese Anleitung beschreibt das veröffentlichte
-Hermes-Release **7.12.7-hermes.1**. Portable Archive und Python-Wheels sind die
+Hermes-Release **7.12.7-hermes.2**. Portable Archive und Python-Wheels sind die
 plattformübergreifenden Referenzartefakte. Native Installer sind separat nach
 Architektur gekennzeichnet; Signatur und Notarisierung sind je Asset in der
 Release-Beschreibung ausgewiesen.

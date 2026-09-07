@@ -94,6 +94,13 @@ def run_python(python, code, data=None, timeout=None):
     return result.stdout
 
 
+def module_path_allowed(module_path, prefix, managed_plugin_root):
+    """Allow venv imports plus Hermes' in-home plugin bridge, never outside it."""
+    path = Path(module_path).resolve()
+    roots = (Path(prefix).resolve(), Path(managed_plugin_root).resolve())
+    return any(path == root or root in path.parents for root in roots)
+
+
 def read_config(python, path):
     return json.loads(run_python(python,
         "import json,sys,yaml; print(json.dumps(yaml.safe_load(sys.stdin.read()) or {}))", path.read_text(encoding="utf-8")))
@@ -460,10 +467,13 @@ def apply_install(plan, confirmation, stopped=False):
             if plan["torch"]["action"] == "preserve":
                 verify_cpu_torch(plan["python"], plan["torch"]["version"], require_cpu=False)
             expected = manifest["pythonVersion"]
+            managed_plugin_root = resolve_inside(home, "plugins/plur1bus").resolve()
             run_python(plan["python"], "import plur1bus_hermes,plur1bus_controls,sys; from pathlib import Path; "
                        "assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == " + repr(expected) + "; "
-                       "assert all(Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()) "
-                       "for module in (plur1bus_hermes, plur1bus_controls)), 'wheel import escaped target venv'")
+                       "roots = (Path(sys.prefix).resolve(), Path(" + repr(str(managed_plugin_root)) + ").resolve()); "
+                       "assert all(any(path == root or root in path.parents for root in roots) "
+                       "for path in (Path(plur1bus_hermes.__file__).resolve(), Path(plur1bus_controls.__file__).resolve())), "
+                       "'wheel import escaped target venv or managed Hermes plugin root'")
         journal["status"] = "writing-files"
         record()
         for relative, data in incoming.items():

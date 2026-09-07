@@ -1,7 +1,7 @@
 # PLUR1BUS for Hermes — portable distribution
 
 **Deutsch: [Installation Schritt für Schritt für alle Plattformen](INSTALLATION.de.md).**
-This document describes the `7.12.7-hermes.1` release. Portable archives and
+This document describes the `7.12.7-hermes.2` release. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.

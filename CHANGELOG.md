@@ -7,6 +7,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.7-hermes.2 — bugfix release
+
+- Fix installer preflight for Hermes' managed in-home `site-packages` bridge
+  while continuing to reject imports escaping both the venv and Hermes home.
+- Add regression coverage for the managed bridge path and refresh release
+  metadata to `7.12.7-hermes.2` / `7.12.7.post2`.
+
 ### Hermes 7.12.7-hermes.1 — release candidate
 
 - Portiert die vollständige v7.12.7-Differenz: Workspace-Provenienz für

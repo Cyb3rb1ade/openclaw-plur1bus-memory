@@ -185,6 +185,16 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.plan()
 
+    def test_managed_plugin_bridge_path_is_allowed_but_external_path_is_not(self):
+        managed = self.home / "plugins/plur1bus"
+        managed.mkdir(parents=True)
+        (managed / "__init__.py").write_text("", encoding="utf-8")
+        self.assertTrue(installer.module_path_allowed(managed / "__init__.py", self.root / "venv", managed))
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "__init__.py").write_text("", encoding="utf-8")
+        self.assertFalse(installer.module_path_allowed(outside / "__init__.py", self.root / "venv", managed))
+
     def test_new_pip_conflict_prevents_activation_and_keeps_journal(self):
         plan = self.plan(activate=True)
         original = (self.home / "config.yaml").read_bytes()

@@ -1,6 +1,6 @@
 # Distribution acceptance history
 
-## 7.12.7-hermes.1 — 2026-09-07
+## 7.12.7-hermes.2 — 2026-09-07
 
 Release verification gates for the Hermes port completed on the reviewed merge
 commit. The release package is portable-first: the source archive, installer,
