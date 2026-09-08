@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 
 _QUESTION_FILLERS = {
@@ -19,7 +20,7 @@ _ACRONYMS = {
 
 def refine_query(query: str) -> str:
     """Return one conservative content-focused query variant."""
-    tokens = re.findall(r"[\wäöüß-]+", str(query or "").lower())
+    tokens = re.findall(r"[\wäöüß-]+", unicodedata.normalize("NFC", str(query or "")).lower())
     refined = []
     for token in tokens:
         if token in _QUESTION_FILLERS:

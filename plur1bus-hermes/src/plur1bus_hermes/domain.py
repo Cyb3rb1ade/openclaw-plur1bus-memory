@@ -727,6 +727,8 @@ class Plur1busDomain:
         state_dir = self._scope_state_dir(selector)
         ledger_path = state_dir / "knowledge-promotions.jsonl"
         ledger = self._read_jsonl(ledger_path)
+        if self._recent_knowledge_promotions(ledger, selector) >= maximum:
+            return {"proposed": [], "skipped": True, "reason": "promotion-window-limit"}
         known = {
             (str(item.get("memoryId") or ""), str(item.get("fingerprint") or ""))
             for item in ledger
@@ -793,7 +795,15 @@ class Plur1busDomain:
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         if selector.scope_type != "agent-private":
             return {"confirmed": False, "reason": "private-scope-required"}
+        config = self.config.get("schicht15")
+        config = config if isinstance(config, Mapping) else {}
+        if config.get("enabled") is not True:
+            return {"confirmed": False, "reason": "disabled"}
         ledger_path = self._scope_state_dir(selector) / "knowledge-promotions.jsonl"
+        ledger = self._read_jsonl(ledger_path)
+        if any(item.get("proposalId") == proposal_id and item.get("status") == "confirmed"
+               and _row_matches_scope(item, selector) for item in ledger):
+            return {"confirmed": True, "reason": "already-confirmed", "proposalId": proposal_id}
         candidates = [
             item for item in self._read_jsonl(ledger_path)
             if str(item.get("proposalId") or "") == proposal_id
@@ -802,6 +812,9 @@ class Plur1busDomain:
         ]
         if len(candidates) != 1:
             return {"confirmed": False, "reason": "proposal-not-found"}
+        maximum = self._bounded_int(config.get("maxPromotionsPerRun"), 3, 0, 3)
+        if maximum == 0 or self._recent_knowledge_promotions(ledger, selector) >= maximum:
+            return {"confirmed": False, "reason": "promotion-window-limit"}
         proposal = candidates[0]
         memory_id = safe_memory_id(str(proposal.get("memoryId") or ""))
         rows = [row for row in self._metadata_rows_for_scope(selector) if str(row.get("id") or "") == memory_id]
@@ -833,6 +846,22 @@ class Plur1busDomain:
         event = {**proposal, "status": "confirmed", "confirmedAt": _utcnow()}
         self._append_jsonl(ledger_path, event)
         return {"confirmed": True, "proposalId": proposal_id, "memoryId": memory_id}
+
+    @staticmethod
+    def _recent_knowledge_promotions(ledger, selector) -> int:
+        """Count unique confirmations in the last 24h; retain lifetime dedup separately."""
+        now = time.time()
+        recent = set()
+        for item in ledger:
+            if item.get("status") != "confirmed" or not _row_matches_scope(item, selector):
+                continue
+            try:
+                stamp = datetime.fromisoformat(str(item.get("confirmedAt") or "").replace("Z", "+00:00"))
+                if stamp.tzinfo is not None and now - 86400 < stamp.timestamp() <= now:
+                    recent.add(str(item.get("proposalId") or item.get("memoryId")))
+            except (ValueError, TypeError, OverflowError):
+                continue  # Legacy entries without timestamps remain lifetime dedup only.
+        return len(recent)
 
     def contradiction_context(self, rows: list[dict[str, Any]], *, acl_bindings: Any = None) -> str:
         """Disclose only pairs whose two cards already passed this recall's gates."""
@@ -1690,6 +1719,17 @@ class Plur1busDomain:
                   "aclBindings": selector.acl_bindings, "digest": digest, "insights": insights,
                   "episodeCount": len(payload), "createdAt": _utcnow(), "visibility": "derived-not-memory"}
         self._append_jsonl(path, record)
+        dreaming = self.config.get("dreaming")
+        narrative = dreaming.get("narrative") if isinstance(dreaming, Mapping) else None
+        if not isinstance(narrative, Mapping) or narrative.get("diary", True) is not False:
+            diary = append_dream_diary_entry(
+                workspace_dir=self._scope_workspace_dir(selector), workspace_root=self.data_dir,
+                agent_id=self.agent_id, narrative="\n\n".join(insights),
+                scope=selector.acl_bindings, mode="light",
+                timezone_name=str(self.config.get("timezone") or "") or None,
+            )
+            if not diary.get("written") and diary.get("code") != "already_present":
+                logging.getLogger(__name__).warning("light dream diary write failed: %s", diary.get("code"))
         return {"executed": True, "id": record["id"], "insights": insights}
 
     def run_consolidation(

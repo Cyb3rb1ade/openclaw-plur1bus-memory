@@ -109,7 +109,7 @@ def parity_report() -> dict[str, Any]:
         "totalRequired": len(required),
         "counts": dict(counts),
         "features": list(FEATURES),
-        "coverageVersion": "7.12.0",
+        "coverageVersion": "7.12.7",
         "coverageStatus": coverage_status,
         "coverage710": list(COVERAGE_710),
         "coverage712": list(COVERAGE_712),

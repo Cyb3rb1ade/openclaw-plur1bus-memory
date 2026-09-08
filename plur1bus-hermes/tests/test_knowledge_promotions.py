@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import lancedb
 
@@ -77,6 +78,39 @@ class KnowledgePromotionTests(unittest.TestCase):
         result = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["reason"], "proposal-stale")
+
+    def test_confirmation_is_idempotent(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        self.assertTrue(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["confirmed"])
+        path = self.domain.workspace_dir / "KNOWLEDGE.md"
+        before = path.read_bytes()
+        repeated = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
+        self.assertEqual(repeated.get("reason"), "already-confirmed")
+        self.assertEqual(before, path.read_bytes())
+
+    def test_daily_limit_expires_without_losing_lifetime_dedup(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+        now = datetime.now(timezone.utc)
+        for index in range(3):
+            self.domain._append_jsonl(ledger, {**proposal, "proposalId": f"old-{index}",
+                "memoryId": f"619c3d51-1d9d-4736-8bf9-91b38aff824{index}", "status": "confirmed",
+                "confirmedAt": now.isoformat()})
+        result = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
+        self.assertFalse(result["confirmed"])
+        self.assertEqual(result["reason"], "promotion-window-limit")
+        self.assertFalse((self.domain.workspace_dir / "KNOWLEDGE.md").exists())
+        rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+        for row in rows:
+            if row.get("status") == "confirmed":
+                row["confirmedAt"] = (now - timedelta(hours=25)).isoformat()
+        ledger.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        self.assertTrue(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["confirmed"])
+
+    def test_disabled_feature_rejects_outstanding_confirmation(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        self.domain.config["schicht15"]["enabled"] = False
+        self.assertEqual(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["reason"], "disabled")
 
     def test_knowledge_writer_rejects_dangling_or_ambiguous_managed_paths(self) -> None:
         target = self.root / "KNOWLEDGE.md"

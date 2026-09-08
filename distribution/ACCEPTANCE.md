@@ -1,5 +1,15 @@
 # Distribution acceptance history
 
+## 7.12.7-hermes.3 — independent review candidate
+
+The 7.12.3–7.12.7 native delta is reviewed in
+`docs/audits/hermes-7.12.7-delta-review.md`. Unlike the earlier JS-only delta
+merge, this candidate includes Python adaptations and execution regressions.
+Local Python: 768 passed and 63 subtests. Fresh source, package, real-model,
+guest and publication evidence is attached to the release only after execution.
+The `.2` matrix manifest was repaired; it had included itself and a removed
+unsigned macOS ARM asset. Existing package bytes were not changed.
+
 ## 7.12.7-hermes.2 — 2026-09-07
 
 Release verification gates for the Hermes port completed on the reviewed merge

@@ -55,8 +55,23 @@ class OptInLlmCognitionTests(unittest.TestCase):
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"scopeKey": self.binding.scope_key, "summary": "Plan a safe migration", "emotionalDominant": "trust"}) + "\n", encoding="utf-8")
         self.assertTrue(domain.run_light_dream()["executed"])
+        diary = domain.workspace_dir / "DREAMS.md"
+        self.assertIn("A tentative recurring planning theme.", diary.read_text(encoding="utf-8"))
+        before = diary.read_bytes()
+        self.assertEqual(domain.run_light_dream()["reason"], "already-processed")
+        self.assertEqual(diary.read_bytes(), before)
         self.assertTrue(domain.run_llm_meta_reflection()["executed"])
         self.assertFalse((domain.neo_dir / "memory-cognition.jsonl").exists())
+
+    def test_light_dream_respects_diary_opt_out(self):
+        domain = Plur1busDomain(self.root, "main", {"lightDream": {"enabled": True},
+            "dreaming": {"narrative": {"diary": False}}})
+        domain.set_llm_backend(_Backend())
+        path = domain.neo_dir / "episodes.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"scopeKey": self.binding.scope_key, "summary": "Planning"}) + "\n")
+        self.assertTrue(domain.run_light_dream()["executed"])
+        self.assertFalse((domain.workspace_dir / "DREAMS.md").exists())
 
     def test_extraction_is_pending_then_requires_existing_scoped_card(self):
         domain = Plur1busDomain(self.root, "main", {"reminders": {"autoExtract": True}})

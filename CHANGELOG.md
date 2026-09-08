@@ -7,6 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.7-hermes.3 — independent delta review
+
+- Port missing native 7.12.3–7.12.7 behavior: 24-hour knowledge promotion
+  limits, private LightDream diary, undated transcript guidance, Unicode-safe
+  query refinement and the remote `requestTimeoutMs` setting.
+- Bound prefetch worker admission and cancel queued recalls whose caller
+  deadline elapsed; report whether the request started.
+- Make knowledge confirmation idempotent and reject outstanding approvals
+  after the feature is disabled.
+- Add release checksum validation that rejects self references and removed
+  assets. The existing `.2` checksum manifest was corrected without changing
+  its packages. See `docs/audits/hermes-7.12.7-delta-review.md` for every upstream
+  delta and the Hermes-specific treatment.
+
 ### Hermes 7.12.7-hermes.2 — bugfix release
 
 - Fix installer preflight for Hermes' managed in-home `site-packages` bridge

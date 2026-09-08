@@ -109,6 +109,18 @@ def _omlx_config(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _embedding_timeout_seconds(config: Mapping[str, Any]) -> float:
+    """Honor upstream millisecond timeout and the legacy Hermes seconds alias."""
+    try:
+        if "requestTimeoutMs" in config:
+            value = float(config["requestTimeoutMs"])
+            return math.floor(value) / 1000 if math.isfinite(value) and value >= 1000 else 15.0
+        value = float(config.get("timeoutSeconds", 15))
+        return value if math.isfinite(value) and value > 0 else 15.0
+    except (TypeError, ValueError, OverflowError):
+        return 15.0
+
+
 def _request_json(url: str, payload: dict[str, Any], config: dict[str, Any], *, default_key_env: str) -> dict[str, Any]:
     """Post an OpenAI-compatible request and return its JSON response."""
     key = os.environ.get(str(config.get("apiKeyEnv", default_key_env)), "") or str(config.get("apiKey", ""))
@@ -127,7 +139,7 @@ def _request_json(url: str, payload: dict[str, Any], config: dict[str, Any], *, 
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=float(config.get("timeoutSeconds", 15))) as response:
+        with urllib.request.urlopen(request, timeout=_embedding_timeout_seconds(config)) as response:
             loaded = json.loads(response.read().decode("utf-8"))
     except (OSError, urllib.error.HTTPError, urllib.error.URLError) as error:
         raise RuntimeError("oMLX request failed") from error
@@ -338,7 +350,7 @@ class EmbeddingBackend:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=float(config.get("timeoutSeconds", 15))) as response:
+            with urllib.request.urlopen(request, timeout=_embedding_timeout_seconds(config)) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (OSError, urllib.error.HTTPError, urllib.error.URLError) as error:
             raise RuntimeError("remote embedding request failed") from error
