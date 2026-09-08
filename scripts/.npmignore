@@ -1,0 +1,5 @@
+# Native host-helper tests may generate bytecode locally; never publish it.
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
