@@ -7,6 +7,34 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.8] — 2026-09-09
+
+### Behoben
+
+- **Die KNOWLEDGE.md-Warteschlange wurde nie um tote Einträge bereinigt.**
+  `knowledge_update` schließt entwertete Erinnerungen von der Promotion aus
+  (kanonisches KNOWLEDGE.md kennt keinen Status je Kapitel), entfernte
+  anschließend aber nur die tatsächlich übernommenen Schlüssel. Alles, was nie
+  promotbar werden kann — entwertet (ein Soft-Delete setzt `status="deleted"`
+  **und** `epistemicStatus="invalidated"`) oder gar nicht mehr in der Tabelle —
+  blieb dauerhaft in `.adaptive-learning/knowledge-pending.json` stehen und
+  zählte weiter in `pendingCount`. Der Wartungs-Hinweis meldete dem Agenten
+  damit Erkenntnisse, die es nicht mehr gab. Solche Einträge fliegen jetzt beim
+  nächsten Lauf raus, und zwar vor dem frühen Ausstieg „nichts zu übernehmen",
+  damit sich eine Warteschlange aus lauter Leichen überhaupt bereinigen kann.
+  Bereinigt wird ausschließlich, was die Abfrage wirklich erfragt hat: IDs
+  jenseits der 100er-Kappung und eine fehlgeschlagene Abfrage lassen die
+  Warteschlange unangetastet, damit offene Arbeit nie stillschweigend verloren
+  geht.
+
+### Verifikation
+
+- Neue Tests für die Auswahl der toten Schlüssel (entwertete Zeile, fehlende
+  Zeile, promotbare Zeile, fehlender Status als Altbestand, ID jenseits der
+  Kappung, nie gelaufene Abfrage, Reihenfolge und Dedupe, unbrauchbare
+  Einträge) und für `selectSafeUuids` als geteilte Quelle der abgefragten IDs.
+  Volle Suite mit den drei bekannten absichtlichen Baseline-Fehlschlägen.
+
 ## [7.12.7] — 2026-09-07
 
 ### Behoben

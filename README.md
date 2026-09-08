@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.7 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
+**PLUR1BUS 7.12.8 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
 
-Current source version: **7.12.7**. PLUR1BUS 7.12.7 supports OpenClaw `2026.8.1`
+Current source version: **7.12.8**. PLUR1BUS 7.12.8 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,19 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.8 — the KNOWLEDGE.md queue drops entries it can never promote
+
+- `knowledge_update` refuses to promote an invalidated memory into canonical
+  KNOWLEDGE.md, but afterwards removed only the keys it had actually
+  integrated. Anything unpromotable — invalidated (a soft delete sets both
+  `status="deleted"` and `epistemicStatus="invalidated"`) or gone from the
+  table — stayed queued forever in `.adaptive-learning/knowledge-pending.json`
+  and kept inflating `pendingCount`, so the maintenance nudge told the agent
+  that N insights were waiting when some of them no longer existed. The queue
+  now drops those entries on the next run, before the "nothing to integrate"
+  exit. Pruning is restricted to the ids the query actually asked for, so a
+  capped query or a failed fetch never drops pending work.
 
 ### New in v7.12.7 — MEMORY.md and USER.md reach the session again, embedding calls time out
 

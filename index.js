@@ -214,7 +214,8 @@ import {
   normalizeWorkspaceTarget,
   workspacePoolKey,
 } from "./lib/memory-request-context.js";
-import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
+import { safeUuid, safeUuidList, selectSafeUuids, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
+import { selectStalePendingKeys } from "./lib/knowledge-pending-prune.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
 import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
 import { ensureEpistemicCutoff, readEpistemicCutoff } from "./lib/epistemic-cutoff.js";
@@ -11055,6 +11056,7 @@ const plugin = {
               if (pendingIds.length > 0) {
                 try {
                   await db.init();
+                  const queriedIds = selectSafeUuids(pendingIds, 100);
                   const inList = safeUuidList(pendingIds, 100);
                   if (inList === null) {
                     api.logger.warn(`memory-lancedb-namespaced: knowledge_update — keine valid UUIDs in ${pendingIds.length} pending IDs`);
@@ -11067,6 +11069,16 @@ const plugin = {
                     pendingTexts = rows
                       .filter(r => normalizeEpistemicStatus(r.epistemicStatus) !== "invalidated")
                       .map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
+                    // Drop what can never be promoted (invalidated or gone from
+                    // the table). Only the ids this query actually asked for —
+                    // everything else stays queued. Without this the entries
+                    // pile up forever and keep the maintenance nudge counting
+                    // work that no longer exists.
+                    const stalePendingKeys = selectStalePendingKeys({ pending: agentPending, rows, queriedIds });
+                    if (stalePendingKeys.length > 0) {
+                      removeKnowledgePending(ctx.workspaceDir, stalePendingKeys);
+                      api.logger.info(`memory-lancedb-namespaced: knowledge_update — ${stalePendingKeys.length} nicht promotbare Warteschlangeneinträge entfernt (agent=${agentId})`);
+                    }
                   }
                 } catch (fetchErr) {
                   api.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
