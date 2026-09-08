@@ -35,9 +35,6 @@ jobs:
             python: '3.12'
           - os: macos-15
             python: '3.12'
-          - os: macos-15-intel
-            python: '3.12'
-            native: intel
           - os: windows-2025
             python: '3.12'
           - os: windows-11-arm
@@ -56,20 +53,6 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Download reviewed Intel LanceDB candidate from pinned run
-        if: matrix.native == 'intel'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          repository: Cyb3rb1ade/openclaw-plur1bus-memory
-          run-id: '34048642479'
-          name: lancedb-0.34.0-macos-x86_64-candidate
-          path: ${{ runner.temp }}/plur1bus-native-candidates/intel
-          github-token: ${{ github.token }}
-      - name: Bind Intel candidate paths and source provenance
-        if: matrix.native == 'intel'
-        run: |
-          echo "PLUR1BUS_INTEL_LANCEDB_WHEEL=$RUNNER_TEMP/plur1bus-native-candidates/intel/lancedb-0.34.0-cp39-abi3-macosx_10_15_x86_64.whl" >> "$GITHUB_ENV"
-          echo "PLUR1BUS_INTEL_LANCEDB_SOURCE=$RUNNER_TEMP/plur1bus-native-candidates/intel/UPSTREAM_COMMIT.txt" >> "$GITHUB_ENV"
       - name: Download reviewed Windows ARM storage candidates from pinned run
         if: matrix.native == 'windows-arm64'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
@@ -97,7 +80,7 @@ jobs:
           "PLUR1BUS_ARM_PYARROW_WHEEL=$env:RUNNER_TEMP/plur1bus-native-candidates/pyarrow/pyarrow-25.0.1-cp313-cp313-win_arm64.whl" >> $env:GITHUB_ENV
           "PLUR1BUS_ARM_PYARROW_SOURCE=$env:RUNNER_TEMP/plur1bus-native-candidates/pyarrow/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
       - name: Verify reviewed native artifacts before any dependency install
-        if: matrix.native == 'intel' || matrix.native == 'windows-arm64'
+        if: matrix.native == 'windows-arm64'
         run: python distribution/ci.py --provision-native
       - name: Build and test tools
         run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2'

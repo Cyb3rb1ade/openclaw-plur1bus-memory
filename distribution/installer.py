@@ -243,6 +243,36 @@ def managed(relative):
         "plugins/plur1bus/", "plugins/plur1bus-controls/", "desktop-plugins/plur1bus/"))
 
 
+def activation_status(config):
+    """Report provider/plugin consistency without exposing profile secrets."""
+    memory, plugins = config.get("memory", {}), config.get("plugins", {})
+    if not isinstance(memory, dict) or not isinstance(plugins, dict):
+        raise ValueError("invalid memory/plugins configuration")
+    enabled, disabled = plugins.get("enabled", []), plugins.get("disabled", [])
+    if not isinstance(enabled, list) or not isinstance(disabled, list) or not all(isinstance(v, str) for v in enabled + disabled):
+        raise ValueError("invalid plugin allow/deny lists")
+    provider = memory.get("provider") == "plur1bus"
+    missing = sorted({"plur1bus", "plur1bus-controls"} - (set(enabled) - set(disabled)))
+    return {"providerSelected": provider, "missingPlugins": missing,
+            "active": provider and not missing,
+            "inconsistent": provider and bool(missing)}
+
+
+def inspect_profiles(home, python=None):
+    """Read existing profiles for setup; never create profiles or modify config."""
+    home = root_path(home)
+    if home.parent.name == "profiles":
+        raise ValueError("select the root Hermes home, not a named profile")
+    python = interpreter(home, python)
+    rows = []
+    for name, target in targets(home, ["all"]).items():
+        config = read_config(python, resolve_inside(target, "config.yaml"))
+        if not isinstance(config, dict):
+            raise ValueError("invalid Hermes config mapping")
+        rows.append({"name": name, **activation_status(config)})
+    return {"home": str(home), "python": str(python), "profiles": rows}
+
+
 def plan_install(bundle, home, profiles=None, python=None, activate=False, dependencies=True, desktop_only=False):
     bundle, home = root_path(bundle), root_path(home)
     manifest = verify_bundle(bundle)
@@ -260,6 +290,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             raise ValueError("same-platform Python >=3.11 in a Hermes virtual environment required; global or Windows/WSL-crossed pip refused")
     selected = targets(home, profiles, desktop_only)
     destinations, configs, receipts = {}, {}, {}
+    profile_status, warnings = {}, []
     payload = {key[8:]: key for key in manifest["files"] if key.startswith("payload/")}
     if desktop_only:
         payload = {key: value for key, value in payload.items() if key.startswith("desktop-plugins/plur1bus/")}
@@ -298,6 +329,11 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             config = read_config(python, config_path)
             if not isinstance(config, dict):
                 raise ValueError("invalid Hermes config mapping")
+            profile_status[name] = activation_status(config)
+            if not activate and profile_status[name]["inconsistent"]:
+                warnings.append(f"{name}: PLUR1BUS is selected but required plugins are disabled/missing; dashboard or controls may be unavailable. Re-run with --activate to repair.")
+            elif not activate and not profile_status[name]["active"]:
+                warnings.append(f"{name}: files will be installed WITHOUT activating PLUR1BUS. Use --activate to enable it.")
         receipt = resolve_inside(target, DESKTOP_RECEIPT if desktop_only else RECEIPT)
         receipts[name] = digest(receipt.read_bytes()) if receipt.exists() else None
         previous = json.loads(receipt.read_text(encoding="utf-8")) if receipt.exists() else {}
@@ -316,6 +352,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
               "manifest": digest((bundle / MANIFEST).read_bytes()), "python": str(python) if not desktop_only else None, "pythonInfo": info,
               "desktopOnly": desktop_only,
               "profiles": list(selected), "activate": activate, "dependencies": dependencies,
+              "profileStatus": profile_status, "warnings": warnings,
               "configs": configs, "receipts": receipts, "destinations": destinations, "wheels": wheels,
               "nativeWheels": native_wheels, "torch": torch,
               "effects": "Install Python wheels into selected Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile writes. File rollback does not roll back pip dependencies."}
@@ -489,6 +526,10 @@ def apply_install(plan, confirmation, stopped=False):
             destination = resolve_inside(home, relative)
             if (digest(destination.read_bytes()) if destination.exists() else None) != state["after"]:
                 raise ValueError("installed-file verification failed")
+        if plan["activate"]:
+            for target in targets(home, plan["profiles"]).values():
+                if not activation_status(read_config(plan["python"], resolve_inside(target, "config.yaml")))["active"]:
+                    raise ValueError("installed profile activation verification failed")
         journal["status"] = "installed-restart-required"
         record()
         print("Installed; restart affected Hermes runtimes. Receipt/backup: " + str(transaction))
@@ -594,6 +635,7 @@ def main():
     parser.add_argument("--python")
     parser.add_argument("--profile", action="append", help="existing name, default, or all")
     parser.add_argument("--activate", action="store_true")
+    parser.add_argument("--inspect-profiles", action="store_true", help="read-only profile activation inventory for setup")
     parser.add_argument("--desktop-only", action="store_true", help="UI for a separate WSL/remote backend; no Python or config changes")
     parser.add_argument("--no-deps", action="store_true")
     parser.add_argument("--apply", action="store_true")
@@ -610,6 +652,11 @@ def main():
     args = parser.parse_args()
     interactive = (args.interactive or len(sys.argv) == 1) and sys.stdin.isatty()
     try:
+        if args.inspect_profiles:
+            if not args.home or any((args.apply, args.activate, args.rollback, args.retrieval_target, args.native_arm_launcher, args.desktop_only, args.interactive)):
+                raise ValueError("--inspect-profiles requires --home and cannot perform installation actions")
+            print(json.dumps(inspect_profiles(args.home, args.python)))
+            return 0
         if args.native_arm_launcher:
             if not args.home or not all((args.native_root, args.native_python, args.native_desktop_exe)):
                 raise ValueError("--native-arm-launcher requires --home, --native-root, --native-python, and --native-desktop-exe")
@@ -627,7 +674,9 @@ def main():
             print("PLUR1BUS for Hermes — package installation and model/memory changes require separate review. Stop affected runtimes before writes.")
             suggested_home = os.environ.get("HERMES_HOME") or str(Path(os.environ["LOCALAPPDATA"]) / "hermes" if sys.platform == "win32" and "LOCALAPPDATA" in os.environ else Path.home() / ".hermes")
             args.home = input("Hermes root home [" + suggested_home + "]: ").strip() or suggested_home
-            args.profile = [input("Existing profile name [default], or all: ").strip() or "default"]
+            print("Profiles: all = ALL existing profiles; default = root profile only; or enter one existing name.")
+            print("New profiles created later require setup again. No profiles are created here.")
+            args.profile = [input("Install for which profiles? [all]: ").strip() or "all"]
             args.desktop_only = input("Desktop UI only, backend in WSL/remote? [y/N]: ").strip().lower() == "y"
             if not args.desktop_only:
                 args.python = input("Hermes venv Python executable [automatic]: ").strip() or None
@@ -638,7 +687,11 @@ def main():
                     args.retrieval_kind = input("Model kind [embedding/reranker]: ").strip() or "embedding"
                     args.retrieval_action = "plan"
                 else:
-                    args.activate = input("Activate PLUR1BUS for these profiles? [y/N]: ").strip().lower() == "y"
+                    print("Activation selects PLUR1BUS as memory provider and enables its dashboard and controls. Models and memories are not changed.")
+                    activation = input("Install AND activate PLUR1BUS for the selected profiles? [Y/n]: ").strip().lower()
+                    if activation not in {"", "y", "yes", "n", "no"}:
+                        raise ValueError("answer yes or no for activation")
+                    args.activate = activation in {"", "y", "yes"}
         if not args.home:
             raise ValueError("--home is required in noninteractive use; no writes performed")
         if args.retrieval_target:
@@ -663,6 +716,8 @@ def main():
             result = plan_install(args.bundle, args.home, args.profile, args.python, args.activate, not args.no_deps, args.desktop_only)
             print(json.dumps({k: v for k, v in result.items() if k != "destinations"}, indent=2))
             if interactive:
+                print("Profiles: " + ", ".join(result["profiles"]))
+                print("Action: " + ("INSTALL AND ACTIVATE" if result["activate"] else "INSTALL FILES ONLY; activation unchanged"))
                 if input("After reviewing the plan and stopping runtimes, type INSTALL: ") != "INSTALL":
                     return 0
                 args.apply, args.runtimes_stopped, args.confirm = True, True, result["confirmation"]

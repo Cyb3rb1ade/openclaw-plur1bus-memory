@@ -126,12 +126,19 @@ def validate_windows_arm_wheel(path, expected_sha256, package):
 
 
 def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha256=None,
-          arm_lancedb_wheel=None, arm_lancedb_sha256=None, arm_pyarrow_wheel=None, arm_pyarrow_sha256=None):
+          arm_lancedb_wheel=None, arm_lancedb_sha256=None, arm_pyarrow_wheel=None, arm_pyarrow_sha256=None,
+          mac_app_sign_identity=None, mac_installer_sign_identity=None):
+    if (mac_app_sign_identity or mac_installer_sign_identity) and not mac_pkg:
+        raise ValueError("macOS signing identities require --mac-pkg")
+    if bool(mac_app_sign_identity) != bool(mac_installer_sign_identity):
+        raise ValueError("both macOS signing identities are required")
     if mac_pkg and sys.platform != "darwin":
         raise ValueError("macOS pkg must be built and tested on macOS")
     if windows_exe and sys.platform != "win32":
         raise ValueError("Windows executable must be built and tested on Windows")
     native_target = native_artifact_target() if mac_pkg or windows_exe else None
+    if mac_pkg and native_target != "macos-arm64":
+        raise ValueError("the graphical macOS setup package supports Apple Silicon only")
     if bool(intel_wheel) != bool(intel_sha256):
         raise ValueError("native wheel path and approved SHA-256 must be supplied together")
     vendor = validate_intel_wheel(intel_wheel, intel_sha256) if intel_wheel else None
@@ -219,9 +226,9 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
     shutil.make_archive(str(output / release_stem), "zip", work, name)
     shutil.make_archive(str(output / release_stem), "gztar", work, name)
     if mac_pkg:
-        subprocess.run(["pkgbuild", "--root", str(bundle), "--install-location", "/Applications/PLUR1BUS Installer",
-                        "--identifier", "io.plur1bus.hermes.installer", "--version", version.replace("-hermes", ""),
-                        str(output / (release_stem + "-unsigned.pkg"))], check=True)
+        from macos_pkg import build_pkg
+        suffix = ".pkg" if mac_app_sign_identity else "-unsigned.pkg"
+        build_pkg(bundle, work, output / (release_stem + suffix), version, mac_app_sign_identity, mac_installer_sign_identity)
     if windows_exe:
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile",
                         "--name", release_stem + "-setup-unsigned", "--distpath", str(output), "--workpath", str(work / "pyinstaller"),
@@ -240,6 +247,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
     parser.add_argument("--mac-pkg", action="store_true")
+    parser.add_argument("--mac-app-sign-identity", help="Developer ID Application identity; notarization is a separate gate")
+    parser.add_argument("--mac-installer-sign-identity", help="Developer ID Installer identity; requires app identity")
     parser.add_argument("--windows-exe", action="store_true")
     parser.add_argument("--intel-lancedb-wheel", help="native-tested LanceDB 0.34.0 Intel wheel from the reviewed build")
     parser.add_argument("--intel-lancedb-sha256", help="approved wheel SHA-256 from native CI provenance")
@@ -249,4 +258,5 @@ if __name__ == "__main__":
     parser.add_argument("--arm-pyarrow-sha256", help="approved PyArrow wheel SHA-256")
     args = parser.parse_args()
     build(args.output, args.mac_pkg, args.windows_exe, args.intel_lancedb_wheel, args.intel_lancedb_sha256,
-          args.arm_lancedb_wheel, args.arm_lancedb_sha256, args.arm_pyarrow_wheel, args.arm_pyarrow_sha256)
+          args.arm_lancedb_wheel, args.arm_lancedb_sha256, args.arm_pyarrow_wheel, args.arm_pyarrow_sha256,
+          args.mac_app_sign_identity, args.mac_installer_sign_identity)

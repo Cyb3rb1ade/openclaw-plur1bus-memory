@@ -100,6 +100,67 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("1024", unknown.read_text())
         self.assertTrue((self.home / "profiles/alpha/plugins/plur1bus/__init__.py").exists())
 
+    def test_coder_style_partial_activation_is_reported_and_repaired(self):
+        partial = {"memory": {"provider": "plur1bus"}, "plugins": {"enabled": ["plur1bus-controls"]}, "model": "keep"}
+        path = self.home / "profiles/alpha/config.yaml"
+        path.write_text(json.dumps(partial))
+        preview = self.plan(profiles=["alpha"])
+        self.assertTrue(preview["profileStatus"]["alpha"]["inconsistent"])
+        self.assertIn("--activate", preview["warnings"][0])
+        self.assertEqual(json.loads(path.read_text()), partial)
+        original_default = (self.home / "config.yaml").read_bytes()
+        plan = self.plan(profiles=["alpha"], activate=True)
+        self.assertEqual(plan["warnings"], [])
+        self.apply(plan)
+        config = installer.read_config(sys.executable, path)
+        self.assertTrue(installer.activation_status(config)["active"])
+        self.assertEqual(config["model"], "keep")
+        self.assertEqual((self.home / "config.yaml").read_bytes(), original_default)
+
+    def test_all_activation_includes_every_existing_profile(self):
+        plan = self.plan(profiles=["all"], activate=True)
+        self.assertEqual(plan["profiles"], ["alpha", "default"])
+        self.apply(plan)
+        inventory = installer.inspect_profiles(self.home, sys.executable)
+        self.assertTrue(all(row["active"] for row in inventory["profiles"]))
+        (self.home / "profiles/later").mkdir()
+        (self.home / "profiles/later/config.yaml").write_text(json.dumps(self.config))
+        self.assertFalse((self.home / "profiles/later/plugins").exists())
+
+    def test_profile_inventory_is_readonly_and_does_not_leak_config(self):
+        config = dict(self.config, api_key="SECRET-DO-NOT-OUTPUT")
+        (self.home / "config.yaml").write_text(json.dumps(config))
+        before = sorted(str(p) for p in self.home.rglob("*"))
+        inventory = installer.inspect_profiles(self.home, sys.executable)
+        self.assertEqual([p["name"] for p in inventory["profiles"]], ["alpha", "default"])
+        self.assertNotIn("SECRET", json.dumps(inventory))
+        self.assertEqual(sorted(str(p) for p in self.home.rglob("*")), before)
+
+    def test_explicit_disable_wins_in_activation_status(self):
+        config = {"memory": {"provider": "plur1bus"}, "plugins": {
+            "enabled": ["plur1bus", "plur1bus-controls"], "disabled": ["plur1bus"]}}
+        status = installer.activation_status(config)
+        self.assertFalse(status["active"])
+        self.assertTrue(status["inconsistent"])
+        self.assertEqual(status["missingPlugins"], ["plur1bus"])
+
+    def test_gui_inventory_rejects_install_action(self):
+        with patch.object(sys, "argv", ["installer.py", "--inspect-profiles", "--home", str(self.home), "--apply"]):
+            self.assertEqual(installer.main(), 4)
+        self.assertFalse((self.home / "plugins").exists())
+
+    def test_guided_defaults_select_all_and_activation_but_do_not_apply_without_confirmation(self):
+        result = {"profiles": ["alpha", "default"], "activate": True, "confirmation": "hash"}
+        with patch.object(sys, "argv", ["installer.py", "--interactive"]), \
+             patch.object(sys.stdin, "isatty", return_value=True), \
+             patch("builtins.input", side_effect=[str(self.home), "", "", str(sys.executable), "install", "", ""]), \
+             patch.object(installer, "plan_install", return_value=result) as plan, \
+             patch.object(installer, "apply_install") as apply:
+            self.assertEqual(installer.main(), 0)
+            self.assertEqual(plan.call_args.args[2], ["all"])
+            self.assertTrue(plan.call_args.args[4])
+            apply.assert_not_called()
+
     def test_stale_config_or_payload_refused(self):
         plan = self.plan()
         (self.home / "config.yaml").write_text("memory: {}")

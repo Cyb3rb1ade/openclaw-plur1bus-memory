@@ -2,8 +2,13 @@
 
 ## Verfügbarkeit und Geltungsbereich
 
-Stand **7. September 2026**: Diese Anleitung beschreibt das veröffentlichte
-Hermes-Release **7.12.7-hermes.3**. Portable Archive und Python-Wheels sind die
+**Ab 7.12.7-hermes.4:** Das macOS-PKG enthält den grafischen
+Einrichtungsassistenten. Bei älteren Assets (einschließlich 7.12.7-hermes.3)
+startet man nach dem PKG noch `Install PLUR1BUS.command` in
+`/Applications/PLUR1BUS Installer`.
+
+Stand **8. September 2026**: Diese Anleitung beschreibt
+Hermes **7.12.7-hermes.4**. Portable Archive und Python-Wheels sind die
 plattformübergreifenden Referenzartefakte. Native Installer sind separat nach
 Architektur gekennzeichnet; Signatur und Notarisierung sind je Asset in der
 Release-Beschreibung ausgewiesen.
@@ -27,7 +32,6 @@ Release ausdrücklich als optional gekennzeichneten Build-Artefakten.
 | Zielsystem | Paket / Start | Voraussetzung und Grenze |
 | --- | --- | --- |
 | macOS Apple Silicon | `plur1bus-VERSION-macos-arm64.pkg` oder entsprechendes ZIP/TAR | Native ARM64-Hermes-Umgebung |
-| macOS Intel | Architekturqualifiziertes ZIP/TAR; `.pkg` nur falls im Release aufgeführt | Native Intel-Hermes-Umgebung und passendes Intel-LanceDB-Wheel; ONNX oder Remote-Provider |
 | Windows x64 | `plur1bus-VERSION-windows-x64-setup-unsigned.exe` oder entsprechendes ZIP | Native x64-Hermes-Umgebung; passende Microsoft-C++-Runtime für native Bibliotheken |
 | Windows ARM64 | `plur1bus-VERSION-windows-arm64-setup-unsigned.exe` oder entsprechendes ZIP | Vorbereitete native CPython-3.13-Hermes-Umgebung, Standard-GIL; ARM-LanceDB **und** ARM-PyArrow im Paket |
 | Linux x64 / ARM64 | `plur1bus-VERSION.tar.gz` oder ZIP, darin `install.sh` | Native Hermes-Umgebung derselben Architektur |
@@ -75,11 +79,32 @@ beachten; gegebenenfalls auf signierte Pakete warten.
    Hermes-Environment verwenden. Als normaler Hermes-Benutzer arbeiten, nicht
    den PLUR1BUS-Assistenten pauschal mit `sudo`/als Administrator starten.
 
-## macOS: Apple Silicon und Intel
+## macOS: Apple Silicon
 
-Mit `.pkg`: Paket öffnen und installieren. Anschließend im Ordner
-`/Applications/PLUR1BUS Installer` **Install PLUR1BUS.command** öffnen.
-Erst dieser zweite Schritt startet die profilbezogene Installation.
+Der neue grafische Assistent benötigt macOS 13 oder neuer auf Apple Silicon.
+Die Einrichtung hat zwei klar getrennte Schritte:
+
+1. **PKG öffnen und installieren.** Der Apple-Installer legt die App
+   **PLUR1BUS einrichten** unter Programme ab. Start- und Abschlussseite weisen
+   ausdrücklich darauf hin: Noch kein Hermes-Profil wurde eingerichtet.
+2. **Programme → PLUR1BUS einrichten öffnen.** Kein Terminal nötig:
+   - Hermes-Home bestätigen oder über die Ordnerauswahl wählen; **Profile erkennen** klicken.
+   - Alle vorhandenen Profile sind vorausgewählt. Alternativ **Nur Standardprofil
+     (default)** klicken oder einzelne Profile an-/abwählen. Aktivierungsstatus
+     und unvollständige Aktivierungen werden pro Profil angezeigt.
+   - **PLUR1BUS aktivieren** ist vorausgewählt. Dies setzt den Memory-Provider
+     und aktiviert Hauptplugin, Dashboard und Controls. Abwählen bedeutet
+     ausdrücklich „nur Dateien installieren“, nicht „PLUR1BUS verfügbar machen“.
+   - **Installationsplan prüfen**, konkrete Profile kontrollieren, betroffene
+     Hermes-Laufzeiten beenden und **Jetzt installieren und aktivieren** klicken.
+   - Erfolgsmeldung abwarten und Hermes neu starten. Modelle/Zugangsdaten werden
+     nicht automatisch eingerichtet; bestehende Modelle und Erinnerungen bleiben erhalten.
+
+**Die Auswahl ist im grafischen PLUR1BUS-Assistenten, nicht auf Apples
+PKG-Komponentenseite.** Er läuft als normaler Benutzer und verändert kein
+erratenes Benutzerprofil aus einem privilegierten PKG-Skript heraus.
+Für später angelegte Profile denselben Assistenten erneut öffnen. Die Auswahl
+„alle“ gilt nur für die konkret aufgelisteten, bestehenden Profile.
 
 Alternativ das zur Architektur passende ZIP/TAR in einen neuen Ordner entpacken,
 im Terminal in den enthaltenen Ordner `plur1bus-VERSION` wechseln und starten:
@@ -88,11 +113,8 @@ im Terminal in den enthaltenen Ordner `plur1bus-VERSION` wechseln und starten:
 sh ./install.sh
 ```
 
-Bei Intel muss das Paket das geprüfte native LanceDB-Wheel enthalten. Der
-Installationsplan nennt es unter `nativeWheels`. Kein Apple-Silicon-Wheel und
-keine unter Rosetta laufende Python-Umgebung als nativen Intel-/ARM-Nachweis
-verwenden. Auf Intel wird kein Torch-basierter Provider automatisch provisioniert;
-einen unterstützten ONNX- oder Remote-Provider separat konfigurieren.
+Dieses Release bietet keine Intel-Mac-Edition. Keine unter Rosetta laufende
+Python-Umgebung als native Apple-Silicon-Installation verwenden.
 
 ## Windows x64
 
@@ -164,15 +186,16 @@ ist kein `npm install` des OpenClaw-Plugins erforderlich.
 ## Die Fragen des Assistenten
 
 1. **Hermes root home:** vorhandenes Home auswählen, nicht das entpackte Paket.
-2. **Existing profile name:** `default`, ein vorhandenes benanntes Profil oder
-   bewusst `all` für alle bestehenden Profile. Es werden keine Profile angelegt.
+2. **Install for which profiles:** `all` für alle bestehenden Profile ist im
+   neuen Terminalassistenten vorausgewählt. Alternativ `default` oder ein
+   vorhandenes benanntes Profil eingeben. Es werden keine Profile angelegt.
 3. **Desktop UI only:** normalerweise Nein; Ja nur für die getrennte Oberfläche
    eines bereits separat betriebenen WSL-/Remote-Backends.
 4. **Hermes venv Python executable:** tatsächliches passendes venv-Python wählen.
 5. **Operation:** `install` für Paketinstallation; Modellwechsel ist ein anderer Vorgang.
-6. **Activate PLUR1BUS:** Ja (`y`), wenn PLUR1BUS in diesen Profilen als
-   Memory-Provider aktiviert werden soll. Ohne Aktivierung bleibt die bisherige
-   Provider-Auswahl bestehen.
+6. **Install AND activate PLUR1BUS:** Ja ist im neuen Terminalassistenten
+   vorausgewählt (`Y/n`). Nein installiert nur Dateien und erhält die bisherige
+   Aktivierung. Ein widersprüchlicher Provider-/Plugin-Status wird im Plan gewarnt.
 7. Plan auf Version, Home, Profile, Architektur und Abhängigkeiten prüfen.
    Erst nach Stoppen der betroffenen Laufzeiten `INSTALL` eingeben.
 

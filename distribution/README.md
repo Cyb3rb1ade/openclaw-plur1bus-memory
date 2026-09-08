@@ -1,7 +1,10 @@
 # PLUR1BUS for Hermes — portable distribution
 
 **Deutsch: [Installation Schritt für Schritt für alle Plattformen](INSTALLATION.de.md).**
-This document describes the `7.12.7-hermes.3` release. Portable archives and
+**New in 7.12.7-hermes.4:** Graphical macOS setup and guided
+all-profiles/activation defaults. Older assets, including `7.12.7-hermes.3`,
+still stage the terminal `.command` launcher.
+This document describes the `7.12.7-hermes.4` release. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.
@@ -24,8 +27,7 @@ for implemented native variants and remaining parity/acceptance boundaries.
 
 | Environment | Artifact and launcher |
 | --- | --- |
-| macOS, Apple Silicon | Portable `.tar.gz` / `.zip`, `install.sh`; optional `.pkg` stages the same assistant in `/Applications/PLUR1BUS Installer` |
-| macOS, Intel | Portable archive is supported; a native `.pkg` requires the Intel LanceDB wheel and separately validated ML dependencies listed in the release assets |
+| macOS, Apple Silicon | Portable `.tar.gz` / `.zip`, `install.sh`; new `.pkg` installs `/Applications/PLUR1BUS einrichten.app` (macOS 13+) |
 | Linux / WSL2, x86-64 or ARM64 | Portable `.tar.gz`, run `install.sh` **inside Linux/WSL** |
 | Native Windows x86-64 | Portable `.zip` + `install.ps1`, or the Windows-built console setup `.exe` |
 | Native Windows ARM64 | ARM-qualified `.zip` / console setup `.exe`; pre-existing native CPython 3.13 Hermes venv and bundled ARM storage wheels required |
@@ -40,8 +42,16 @@ Termux and other unlisted platforms are not certified. Failed dependency
 resolution stops before plugin activation.
 
 The `.pkg` is an assistant container, not a privileged postinstall that guesses
-your user/profile. After installing it, open **Install PLUR1BUS.command** in that
-folder and review the plan. Python comes from existing Hermes or your PATH.
+your user/profile. Its welcome and conclusion explain the second step: open
+**PLUR1BUS einrichten** from Applications. The graphical setup discovers existing
+profiles, offers all/default/individual selection, and shows activation status.
+All listed profiles and activation are preselected; the final review shows exact
+names and requires confirming that affected runtimes are stopped. Deselecting
+activation explicitly means files-only, not an enabled PLUR1BUS provider.
+The GUI uses the same checksum-bound plan/apply transaction as the CLI, not a
+second installation implementation. Python comes from the existing Hermes venv;
+missing Hermes/Python is reported before installation. Newly created profiles
+require running setup again. The portable macOS archive retains the console path.
 The Windows `.exe` bundles its installer Python, but still uses the explicitly
 selected Hermes venv for the provider. Run the assistant as your normal user.
 Native artifacts are platform-qualified (for example,
@@ -66,6 +76,11 @@ a publisher signature; do not trust an archive from an unknown source.
 Running the launcher without arguments opens a guided terminal assistant. It
 asks for an existing Hermes root home and profile, displays a read-only plan,
 then requires typing `INSTALL` after stopping affected Hermes runtimes.
+The new guided defaults are all existing profiles plus activation; no write
+happens just by accepting those defaults. Noninteractive CLI defaults remain
+read-only, default-profile-only, and without activation. Both paths now warn
+when PLUR1BUS is selected but its required plugins are missing/disabled. An
+activated install verifies provider and both plugin allow/deny lists afterward.
 Native Windows normally uses `%LOCALAPPDATA%\hermes`; Linux/macOS/WSL use
 `~/.hermes`. `HERMES_HOME` is suggested but never silently applied.
 Hermes environments created by `uv` may omit `pip`. The preview uses Python's
@@ -307,6 +322,16 @@ python distribution/build.py --output /new/empty/artifact-directory
 # On macOS, additionally: --mac-pkg
 # On Windows with PyInstaller installed, additionally: --windows-exe
 ```
+
+The new macOS package builder requires an Apple Silicon host and Swift command
+line tools. It compiles the graphical setup, embeds the verified portable bundle,
+and builds a two-stage product PKG without privileged postinstall scripts.
+Without signing arguments the local setup app receives only an ad-hoc QA seal.
+For a Developer ID build pass both `--mac-app-sign-identity` and
+`--mac-installer-sign-identity` with the appropriate keychain identities. The
+builder signs the app with hardened runtime and timestamps before packaging;
+it then signs the product PKG. Apple notarization, stapling, Gatekeeper checks,
+and regenerated outer checksums remain mandatory before a signed release.
 
 `distribution.json` records source commit, dirty state, versions and file hashes.
 A dirty build must not be advertised as a commit-reproducible release.

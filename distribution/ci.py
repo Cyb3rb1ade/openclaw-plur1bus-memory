@@ -138,7 +138,10 @@ def main():
                     "distribution/tests"], cwd=REPO, env=environment, check=True)
     output = REPO / "distribution-artifacts"
     require_clean_source()
-    bundle = build(output, mac_pkg=sys.platform == "darwin", windows_exe=sys.platform == "win32", **native)
+    # The graphical PKG targets Apple Silicon. Any retained Intel compatibility
+    # runner validates its portable bundle only, not an Intel setup edition.
+    bundle = build(output, mac_pkg=sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"},
+                   windows_exe=sys.platform == "win32", **native)
     if json.loads((bundle / "distribution.json").read_text(encoding="utf-8"))["dirty"]:
         raise ValueError("candidate source changed during packaging")
     executable = next(output.glob("*.exe")) if sys.platform == "win32" else None

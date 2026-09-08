@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.7-hermes.4 — clear profile installation
+
+- Add a native macOS Apple Silicon setup app with graphical all/default/individual
+  profile selection, activation status, preview and explicit install confirmation.
+- Make the PKG's two stages explicit: install the setup app, then configure Hermes.
+- Default guided installation to all existing profiles plus activation; preserve
+  read-only/nonactivating defaults for unattended CLI use.
+- Warn about inconsistent memory-provider/plugin activation and verify both
+  required plugins after activation, including the missing-button Coder case.
+- Prevent Python bytecode writes into the signed setup app. Support Developer ID
+  app and installer signing; keep notarization a separate verified release gate.
+- Retire Intel macOS from the release matrix; retain macOS ARM64, Windows ARM64,
+  Windows x64 and Linux x64, with Linux ARM64 as an additional CI target.
+- No memory schema, model, embedding dimension or retrieval behavior changes.
+
 ### Hermes 7.12.7-hermes.3 — independent delta review
 
 - Port missing native 7.12.3–7.12.7 behavior: 24-hour knowledge promotion

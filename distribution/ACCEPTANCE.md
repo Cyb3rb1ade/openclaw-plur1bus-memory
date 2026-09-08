@@ -1,5 +1,15 @@
 # Distribution acceptance history
 
+## 7.12.7-hermes.4 — profile setup and activation
+
+Native graphical Apple Silicon setup and shared activation consistency checks.
+Pre-release implementation/UI evidence is in
+`docs/audits/hermes-installer-profile-wizard-2026-09-08.md`.
+Release evidence for the final commit, per-platform CI, signed/notarized package
+and downloaded asset checksums is attached to the GitHub release after execution.
+Historical real-model tests from .3 are not presented as fresh .4 guest tests.
+No Intel Mac release edition or productive profile/model migration is included.
+
 ## 7.12.7-hermes.3 — independent review candidate
 
 The 7.12.3–7.12.7 native delta is reviewed in
