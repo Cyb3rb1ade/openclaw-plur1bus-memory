@@ -7232,12 +7232,21 @@ const plugin = {
                 } catch (graphErr) {
                   graphPrune = { error: String(graphErr?.message || graphErr) };
                 }
+                // 7.12.26: verwaiste Vektor-Slots (Re-Embeddings, gecappte Zeilen)
+                // aus dem Sidecar raeumen; pruneAll hat keinen Aufrufer im Betrieb.
+                let vectorCompaction = null;
+                try {
+                  vectorCompaction = typeof commandStore.compactVectors === "function" ? commandStore.compactVectors() : null;
+                } catch (vectorErr) {
+                  vectorCompaction = { error: String(vectorErr?.message || vectorErr) };
+                }
                 const result = {
                   partitionResults: dailyRuns,
                   compacted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.compacted || 0), 0),
                   deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
                   merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
                   graphPrune,
+                  vectorCompaction,
                 };
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });

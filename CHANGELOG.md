@@ -7,6 +7,37 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.26] — 2026-09-10
+
+### Geändert
+
+- **Vektor-Sidecar für den Neo-Store.** Vektoren aus Journal, Kandidaten und
+  Verhaltenskarten liegen nicht mehr als JSON-Zahlenliste in der Zeile (rund
+  64 kB je Vektor bei 3072 Dimensionen), sondern als rohes Float32 in
+  `vectors.<gen>.f32` mit Byte-Offsets in `vector-index.json` je Workspace.
+  Verlustfrei: die bisherigen Werte sind bitgenau float32. Bei Bernhardine
+  schrumpfen 200 MB JSONL auf wenige MB Metadaten plus rund 37 MB Sidecar;
+  der Recall liest die benötigten Vektoren per Offset statt 32 MB Ziffern zu
+  parsen, und Cap-Prüfungen der JSONL-Dateien werden trivial.
+- **Lesen bleibt kompatibel:** Zeilen mit eingebettetem Vektor werden weiter
+  gelesen; Datensätze ohne Inline-Vektor bekommen einen memoisierten, nicht
+  enumerierbaren Getter `embedding`, der den Vektor bei Bedarf aus dem Sidecar
+  holt. `JSON.stringify` und Spreads tragen den Vektor nie mit.
+- **Drain** schreibt erst den Vektor (Datei, dann Index atomar), dann die
+  Statuszeile mit `embeddingStore: "sidecar"` und `embeddingDims`; ein
+  Inline-Vektor alter Zeilen wird dabei abgestreift.
+- **Kompaktierung:** `consolidate-daily` ruft `compactVectors()` und meldet
+  `vectorCompaction`; verwaiste Slots (Re-Embeddings, gecappte Zeilen) landen
+  in einer neuen Generation, der direkte Vorgänger bleibt bis zur nächsten
+  Kompaktierung für Leser mit altem Index liegen. `pruneAll` kompaktiert mit.
+- **Migration:** `node scripts/migrate-neo-vectors-sidecar.mjs [--root …]
+  [--workspace …] [--dry-run] [--json]` verschiebt Inline-Vektoren je Workspace
+  ins Sidecar (letzte Zeile je ID gewinnt), liest jeden zurück und prüft ihn
+  bitgenau, erst dann werden die JSONL-Dateien ohne `embedding` neu
+  geschrieben. Legacy-Workspace-Migration (`neo workspaces migrate`) kopiert
+  keine Sidecars; solche Datensätze bleiben ohne Vektor, bis sie neu
+  eingebettet werden.
+
 ## [7.12.25] — 2026-09-09
 
 ### Behoben

@@ -235,6 +235,7 @@ export const DEPLOY_FILES = [
   "lib/speaker-proposer.js",
   "lib/promoted-memory-reindex.js",
   "scripts/embed-promoted-memories.mjs",
+  "scripts/migrate-neo-vectors-sidecar.mjs",
   // ── transitive index.js runtime closure ───────────────────────────────────
   "lib/atomic-json.js",
   "lib/critical-push-classifier.js",
