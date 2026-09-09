@@ -216,6 +216,7 @@ import {
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, selectSafeUuids, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
 import { measureControlHealthStorage } from "./lib/control-plane-storage.js";
+import { isTruncatedKnowledgeBody, resolveKnowledgeUpdateMaxTokens, resolveKnowledgeUpdateTimeoutMs } from "./lib/knowledge-update-budget.js";
 import { selectStalePendingKeys } from "./lib/knowledge-pending-prune.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
 import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
@@ -11142,12 +11143,29 @@ const plugin = {
                 LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
                 // No temperature: providers like the Kimi coding endpoint allow exactly
                 // one value per thinking mode and answer HTTP 400 for anything else.
-                { maxTokens: 3000 },
+                // Das Budget waechst mit dem Bestand: der Aufruf gibt den ganzen
+                // Textkoerper zurueck, ein fester Deckel von 3000 lief mit der
+                // Datei aus dem Ruder (09.09.2026: 2752 bzw. 3121 Token allein
+                // fuer den Bestand, beide Laeufe schlugen fehl).
+                // Zeit und Menge gehoeren zusammen: der Standard von 30 s reicht
+                // nur fuer eine kleine Datei. Fuer die gewachsenen lief derselbe
+                // Aufruf seit dem 01.07.2026 in TimeoutError.
+                (() => {
+                  const maxTokens = resolveKnowledgeUpdateMaxTokens(currentBody);
+                  return { maxTokens, timeoutMs: resolveKnowledgeUpdateTimeoutMs(maxTokens) };
+                })(),
                 { agentId },
               ));
 
               if (!updated) {
                 return { content: [{ type: "text", text: "knowledge_update: LLM returned empty result." }] };
+              }
+              // Der Aufruf soll integrieren, nicht kuerzen. Kaeme die Antwort
+              // abgeschnitten zurueck, wuerde sie hier ungeprueft ueber den
+              // Bestand geschrieben und Wissen vernichten.
+              if (isTruncatedKnowledgeBody(currentBody, updated)) {
+                api.logger.warn(`memory-lancedb-namespaced: knowledge_update verworfen — Antwort (${updated.trim().length} Zeichen) deutlich kuerzer als der Bestand (${currentBody.trim().length}); KNOWLEDGE.md bleibt unveraendert`);
+                return { content: [{ type: "text", text: "knowledge_update: the model returned a shortened body; KNOWLEDGE.md was left untouched." }] };
               }
 
               let finalBody = updated;
@@ -11165,7 +11183,12 @@ const plugin = {
                   LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
                   // No temperature: providers like the Kimi coding endpoint allow exactly
                   // one value per thinking mode and answer HTTP 400 for anything else.
-                  { maxTokens: 4000 },
+                  // Die Verdichtung soll kuerzen, braucht aber Luft fuer den
+                  // Zwischenstand; das Ziel von 150 Zeilen deckelt das Ergebnis.
+                  (() => {
+                    const maxTokens = resolveKnowledgeUpdateMaxTokens(finalBody, { floor: 4000 });
+                    return { maxTokens, timeoutMs: resolveKnowledgeUpdateTimeoutMs(maxTokens) };
+                  })(),
                   { agentId },
                 ));
 
@@ -11199,10 +11222,23 @@ const plugin = {
               const lineCount = finalContent.split("\n").length;
               return { content: [{ type: "text", text: `KNOWLEDGE.md updated (${pendingTexts.length} memories integrated, ${lineCount} lines total).` }] };
             } catch (err) {
-              api.logger.warn("memory-lancedb-namespaced: knowledge_update failed", {
-                errorClass: normalizedLlmErrorClass(err),
-              });
-              return { content: [{ type: "text", text: "knowledge_update failed: provider or file operation unavailable." }] };
+              // Die Ursache stand bisher nur im strukturierten Teil, der nicht
+              // serialisiert wird — im Log blieb eine Meldung ohne Aussage, und
+              // der Agent gab sie so an den Nutzer weiter. Am 09.09.2026 hat das
+              // die Suche nach dem eigentlichen Fehler mehrfach in die Irre
+              // gefuehrt. Klasse und Meldung gehoeren in die Zeile.
+              // Nur die Klasse, niemals die Meldung: Provider-Fehler tragen
+              // Prompt-Fragmente und Zugangsdaten, und genau das sichert
+              // "Schicht 1.5 sanitizes provider failures in responses and logs"
+              // zu. Die Klasse stand bisher nur im strukturierten Teil des
+              // Log-Aufrufs, der nicht serialisiert wird — im Log blieb eine
+              // Zeile ohne Aussage, und die Sammelformel "provider or file
+              // operation unavailable" warf zwei verschiedene Ursachen
+              // zusammen. Am 09.09.2026 hat das die Fehlersuche mehrfach in
+              // die Irre gefuehrt.
+              const errorClass = normalizedLlmErrorClass(err);
+              api.logger.warn(`memory-lancedb-namespaced: knowledge_update failed (class=${errorClass})`);
+              return { content: [{ type: "text", text: `knowledge_update failed (${errorClass}).` }] };
             } finally {
               // Release lock
               try { if (existsSync(lockPath)) { const { unlinkSync } = await import("node:fs"); unlinkSync(lockPath); } } catch (_e) { dbg(_e); }

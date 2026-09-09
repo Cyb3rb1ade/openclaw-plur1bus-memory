@@ -7,6 +7,60 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.16] — 2026-09-09
+
+### Behoben
+
+- **Die Beförderung nach KNOWLEDGE.md lief seit dem 01.07.2026 in einen
+  Timeout.** Sichtbar wurde das erst, nachdem 7.12.15 die Fehlerklasse ins Log
+  brachte: `TimeoutError`, nicht der Provider und nicht die Datei. Der Aufruf
+  erzeugt den **ganzen** Textkörper und hatte dafür die Standardgrenze von 30
+  Sekunden. Für faxperts 1841 Bytes (~460 Token Ausgabe) reicht das; für Bernds
+  11 011 (~2752) und Bernhardines 12 487 (~3121) nicht mehr. Wieder ein Fehler,
+  der mit dem Wissensbestand mitwächst — die Beförderung starb genau in dem
+  Moment, in dem KNOWLEDGE.md nützlich geworden war, und niemand konnte es
+  sehen, weil die Meldung „provider or file operation unavailable" lautete. Die
+  Zeitgrenze richtet sich jetzt nach dem Ausgabebudget (25 ms je Token,
+  Untergrenze 30 s, Deckel 180 s): Bernd bekommt 122 s, Bernhardine 134 s.
+
+## [7.12.15] — 2026-09-09
+
+### Behoben
+
+- **`knowledge_update` verschluckte die Fehlerursache.** Der Fehler landete nur
+  im strukturierten Teil des Log-Aufrufs, der nicht serialisiert wird; übrig
+  blieben die Zeile „knowledge_update failed" ohne Angabe und die Antwort
+  „provider or file operation unavailable" — die der Agent so an den Nutzer
+  weitergab, obwohl sie zwei ganz verschiedene Ursachen zusammenwirft. Am
+  09.09.2026 hat das die Suche nach dem eigentlichen Fehler mehrfach in die
+  Irre geführt: erst die Vermutung Dateizugriff, dann das Token-Budget, beides
+  nicht belegbar, weil die Ursache nirgends stand. Die **Fehlerklasse** steht
+  jetzt in der Log-Zeile und in der Antwort an den Agenten, statt einer
+  Sammelformel, die zwei ganz verschiedene Ursachen zusammenwirft. Die
+  Provider-Meldung selbst bleibt bewusst draußen — sie trägt Prompt-Fragmente
+  und Zugangsdaten, und der Test „Schicht 1.5 sanitizes provider failures in
+  responses and logs" sichert das zu.
+
+## [7.12.14] — 2026-09-09
+
+### Behoben
+
+- **`knowledge_update` scheiterte, sobald KNOWLEDGE.md eine gewisse Größe
+  überschritt.** Der Aufruf gibt den **ganzen** Textkörper zurück, nicht nur die
+  Ergänzung, lief aber mit einem festen Ausgabebudget von 3000 Token. Solange
+  die Datei klein war, ging das gut; am 09.09.2026 brauchte allein der Bestand
+  2752 Token (Bernd, 11 011 Bytes) bzw. 3121 (Bernhardine, 12 487) — beide
+  Läufe endeten in `provider or file operation unavailable`, während derselbe
+  Aufruf für eine 1841 Bytes große Datei durchlief. Ein Fehler, der mit dem
+  Wissensbestand mitwächst und deshalb erst spät auffällt. Das Budget richtet
+  sich jetzt nach dem Bestand (Untergrenze 3000, Deckel 16 000).
+
+- **Eine abgeschnittene Antwort hätte den Bestand überschrieben.** Geprüft wurde
+  nur auf leeres Ergebnis. Kam der Textkörper gekürzt zurück, wurde er ungeprüft
+  über KNOWLEDGE.md geschrieben — der Aufruf soll integrieren, nicht kürzen.
+  Antworten, die den Bestand deutlich unterschreiten, werden jetzt verworfen und
+  die Datei bleibt unverändert; die Erstanlage ist davon ausgenommen.
+
 ## [7.12.13] — 2026-09-09
 
 ### Behoben

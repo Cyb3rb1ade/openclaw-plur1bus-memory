@@ -43,6 +43,7 @@ export const DEPLOY_FILES = [
   "lib/runtime-pressure-gate.js",
   "lib/control-plane-health.js",
   "lib/control-plane-storage.js",
+  "lib/knowledge-update-budget.js",
   "lib/control-plane-projection.js",
   "lib/memory-maintenance-gate.js",
   "lib/workspace-policy.js",
