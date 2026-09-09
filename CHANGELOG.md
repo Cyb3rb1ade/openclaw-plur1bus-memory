@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.13] — 2026-09-09
+
+### Behoben
+
+- **Die Größenmessung der Health-Karte blockierte die Ereignisschleife.** Sie
+  lief synchron über den ganzen Store; gemessen 1201 ms Blockade schon im
+  Leerlauf, in Produktion bis zu 16 Sekunden bei 12 646 Einträgen. In dieser
+  Zeit kam kein anderer Handler dran — 11 der 25 `before_prompt_build`-Timeouts
+  des 09.09.2026 lagen binnen 30 Sekunden eines Laufs von mindestens vier
+  Sekunden. Der Recall wurde also nicht zu langsam, ihm wurde die Laufzeit
+  entzogen. Die Messung ist jetzt asynchron und gibt alle 200 Einträge ab:
+  1201 ms Blockade werden zu 23 ms, bei identischem Ergebnis. Die
+  Gesamtlaufzeit steigt dabei von 1,2 auf 4,5 Sekunden — der richtige Tausch
+  für eine Hintergrundmessung. Der teuerste Posten war nicht `readdir`, sondern
+  `resolveInside` je Eintrag: drei Dateisystem-Aufrufe, bei vollem Deckel bis zu
+  30 000. Dieselbe Zusicherung — keinem Link folgen, den Baum nicht verlassen —
+  liefert das ohnehin gemachte `lstat`. Die Messung liegt jetzt in
+  `lib/control-plane-storage.js` und ist damit erstmals testbar.
+
 ## [7.12.12] — 2026-09-09
 
 ### Hinzugefügt

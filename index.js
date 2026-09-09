@@ -215,6 +215,7 @@ import {
   workspacePoolKey,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, selectSafeUuids, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
+import { measureControlHealthStorage } from "./lib/control-plane-storage.js";
 import { selectStalePendingKeys } from "./lib/knowledge-pending-prune.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
 import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
@@ -2967,7 +2968,6 @@ const CONTROL_HEALTH_MAX_PARTITIONS = 128;
 const CONTROL_HEALTH_CACHE_TTL_MS = 5 * 60_000;
 const CONTROL_HEALTH_REFRESH_INTERVAL_MS = 10 * 60_000;
 const CONTROL_HEALTH_FAILED_RETRY_MS = 30_000;
-const CONTROL_HEALTH_MAX_STORAGE_ENTRIES = 10_000;
 const CONTROL_HEALTH_SAFE_DIRECTORY_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const CONTROL_HEALTH_TABLE_PATH_NAMES = Object.freeze(["memories.lance", "memories"]);
 
@@ -3019,61 +3019,6 @@ function listControlHealthPartitions(basePath) {
   return partitions.toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Measure bytes below a trusted root without following links or reading file contents. */
-function measureControlHealthStorage(basePath, maxEntries = CONTROL_HEALTH_MAX_STORAGE_ENTRIES) {
-  let root;
-  try {
-    root = resolveInside(basePath);
-  } catch (error) {
-    if (isAbsentControlHealthPath(error)) return { bytes: 0, complete: true };
-    throw error;
-  }
-  let bytes = 0;
-  let entriesSeen = 0;
-  let complete = true;
-
-  const visit = (directory) => {
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch (error) {
-      if (isAbsentControlHealthPath(error)) return;
-      throw error;
-    }
-    for (const entry of entries) {
-      if (entriesSeen >= maxEntries) {
-        complete = false;
-        return;
-      }
-      const expected = resolve(directory, entry.name);
-      const canonical = resolveInside(directory, entry.name);
-      if (canonical !== expected) continue;
-      let stat;
-      try {
-        stat = lstatSync(canonical);
-      } catch (error) {
-        if (isAbsentControlHealthPath(error)) continue;
-        throw error;
-      }
-      entriesSeen += 1;
-      if (stat.isDirectory()) {
-        visit(canonical);
-        if (!complete) return;
-      } else if (stat.isFile()) {
-        const size = Number(stat.size);
-        if (!Number.isSafeInteger(size) || size < 0 || size > Number.MAX_SAFE_INTEGER - bytes) {
-          bytes = Number.MAX_SAFE_INTEGER;
-          complete = false;
-          return;
-        }
-        bytes += size;
-      }
-    }
-  };
-
-  visit(root);
-  return { bytes, complete };
-}
 
 /** Create an isolated non-mutating LanceDB row-counter for control-plane health. */
 function createControlHealthRowInspector(vectorDim, logger) {
