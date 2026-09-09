@@ -7,6 +7,29 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.19] — 2026-09-09
+
+### Behoben
+
+- **Chat-`status`/`doctor`/`curation` lasen einen anderen Neo-Store als die
+  Hooks — jetzt denselben, ohne Datenumzug.** Der Kommando-Pfad
+  (`runPlur1busCommand`) schlüsselte den Neo-Store seit Juli über den
+  ACL-Workspace-Principal (`workspace:v1:main`), die Hooks
+  `before_prompt_build`/`agent_end` über Pfad-Map → Alias → Basename
+  (`main`). Die Principal-Verzeichnisse waren leer, die Hook-Verzeichnisse
+  hielten alles (201 MB bei Bernd), und jeder Record trägt ohnehin
+  `workspaceKey: "main"`. Im Chat hieß das: `status` mit `turns: 0, hooks: {}`,
+  `doctor` mit „agent_end has not fired in this workspace yet", `curation`
+  ohne Kandidaten — obwohl alles lief. Neu: der Kommando-Pfad gibt nur noch
+  den vom Host aufgelösten Workspace-Pfad in die Auflösung, keinen Schlüssel;
+  damit landet er exakt im Hook-Store. Der rohe Chat-`workspaceKey` bleibt
+  draußen — die Tests `b13-sensitive-read-auth` und `plur1bus-internal-auth`
+  prüfen jetzt genau diese Invariante („Kommando und Hook landen im selben
+  Store, nie im vom Chat benannten"). Die leeren Principal-Verzeichnisse
+  (`workspace_v1_*`, `workspace-dir_v1_*`) sind Artefakte und können weg;
+  `acl-owner-v1_*` (Träume, Musteranalyse, Run-State) ist eine eigene
+  Owner-Partition und bleibt.
+
 ## [7.12.18] — 2026-09-09
 
 ### Hinzugefügt

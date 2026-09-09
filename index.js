@@ -7061,17 +7061,18 @@ const plugin = {
               const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
             }
-            // Bekannte Luecke (09.09.2026): dieser Schluessel ist der kanonische
-            // Workspace-Principal ("workspace-dir:v1:..."), die Hooks
-            // (before_prompt_build/agent_end) schreiben dagegen nach
-            // "<alias>--<hash>". status/doctor/curation lesen im Chat deshalb
-            // ein leeres Verzeichnis. Die Angleichung braucht eine Migration
-            // der bestehenden Neo-Verzeichnisse und bleibt ein eigener Schritt;
-            // der rohe Chat-workspaceKey darf hier nie hinein (siehe Tests
-            // b13-sensitive-read-auth / plur1bus-internal-auth).
+            // Denselben Neo-Store wie die Hooks: nur der vom Host aufgeloeste
+            // Workspace-Pfad geht hinein, kein Schluessel. workspaceKeyFromContext
+            // loest ihn dann wie bei before_prompt_build/agent_end ueber
+            // Pfad-Map -> Alias -> Basename auf ("main" fuer aliasierte
+            // Workspaces). Bis 7.12.18 stand hier der ACL-Principal
+            // ("workspace:v1:main") als expliziter Schluessel; der zeigte auf ein
+            // leeres Verzeichnis, und status/doctor/curation meldeten im Chat
+            // "hooks: {}", "not fired" und keine Kandidaten. Der rohe
+            // Chat-workspaceKey bleibt draussen (Tests b13-sensitive-read-auth,
+            // plur1bus-internal-auth).
             const commandStore = getNeoStore({
               workspaceDir: memoryCtx?.workspaceDir || "",
-              workspaceKey: memoryCtx?.workspaceIdentity || "",
               agentId: memoryCtx?.agentId || commandCtx.agentId || "command",
             });
             // ── Phase 5+6: silent cron-internal jobs ──────────────────────

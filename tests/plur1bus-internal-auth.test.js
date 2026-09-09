@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import plugin from "../index.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
-import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
+import { workspaceKeyFromContext } from "../lib/neo-arch.js";
 
 // Migration report publication requires verified fd-backed directory aliases,
 // which are unavailable on darwin; the migration write path fails closed there.
@@ -168,12 +168,13 @@ describe("/plur1bus internal auth gate", () => {
         channel: "cron",
       });
       assert.match(result.text, /"job": "gc-run"/);
-      const expectedKey = resolveMemoryRequestContext({
-        agentId: "agent-a",
-        workspaceDir: baseDbPath,
-        channel: "cron",
-        accountId: "cron",
-      }).workspaceIdentity;
+      // The command path must land in the same store the hooks use for this
+      // workspace: resolved from the runtime workspace dir alone, exactly as
+      // before_prompt_build/agent_end resolve theirs (7.12.19).
+      const expectedKey = workspaceKeyFromContext(
+        { agentId: "agent-a", workspaceDir: baseDbPath },
+        { rootDir: join(baseDbPath, "_neo") },
+      );
       assert.deepEqual(neoStores, [{ purpose: "general", workspaceKey: expectedKey }]);
       assert.notEqual(neoStores[0].workspaceKey, "attacker-workspace");
       const workspaceRoot = join(baseDbPath, "_neo", "workspaces");

@@ -198,7 +198,9 @@ describe("B13 sensitive command-read authorization matrix", () => {
     const start = source.indexOf("const commandStore = getNeoStore({", source.indexOf("const cronInternal"));
     const store = source.slice(start, source.indexOf("});", start) + 3);
     assert.match(store, /workspaceDir: memoryCtx\?\.workspaceDir \|\| ""/);
-    assert.match(store, /workspaceKey: memoryCtx\?\.workspaceIdentity \|\| ""/);
+    // No explicit key at all: the store is resolved from the host-resolved
+    // workspace path exactly like the hooks resolve theirs (7.12.19).
+    assert.doesNotMatch(store, /workspaceKey:/);
     assert.doesNotMatch(store, /commandCtx\.workspace(Key|Dir)/);
   });
 
