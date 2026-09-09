@@ -7,6 +7,88 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.18] — 2026-09-09
+
+### Hinzugefügt
+
+- **`plur1bus-command`: Chat-Kommandos als Operator ausführen.** Die 26
+  Chat-Kommandos waren nur über einen angebundenen Kanal erreichbar — ein Cron
+  mit `--message "/…"` geht ans Modell, `openclaw message` sendet nur als Bot.
+  Sie ließen sich damit weder automatisiert ausführen noch prüfen; am
+  09.09.2026 musste ein Mensch jeden Befehl per Telegram tippen. Neu: der
+  Gateway-RPC `plur1bus.command.run` (Scope `operator.write`, wie der
+  Feature-Cron-RPC) und das CLI `openclaw plur1bus-command --agent <id>
+  --session <key> "/…"`. Die Identität kommt aus der benannten
+  Direktchat-Sitzung — derselbe Kontext, den der Chat-Pfad baut (Nutzer,
+  Kanal, Konto, Gesprächsprinzipal). Besitzer-ACL und die zweistufige
+  Token-Bestätigung von `/correct` und `/forget` greifen exakt wie im Telegram;
+  nur Direktsitzungen des angegebenen Agenten werden akzeptiert.
+
+### Behoben
+
+- **`/correct` und `/forget` fanden ihr Ziel auch bei wörtlichem Zitat nicht.**
+  Die Zielsuche gilt nur als eindeutig, wenn der beste Treffer den zweiten um
+  mehr als 0,15 übertrifft. Die Vektorsuche bettet die Suchphrase aber als
+  kurzes Fragment ein; gegen ihren 1600-Zeichen-Ursprung erreicht das nur
+  einen mäßigen Score, und kurze generische Zeilen („Huhu, Diggi!",
+  Stimmungseinträge) liegen dann binnen 0,15. Am 09.09.2026 lieferte ein
+  Zitat, das in genau **einer** Erinnerung vorkommt, zweimal hintereinander die
+  Auswahlliste — und die Liste selbst ist nicht bedienbar, weil ihre Buttons
+  bewusst verworfen werden und der Hinweis nur „Suche schärfen" lautet. Damit
+  war die Zweistufigkeit beider Kommandos in einem gewachsenen Speicher
+  praktisch unerreichbar. Neu: enthält genau eine Kandidatin die Suchphrase
+  wörtlich (ab 12 Zeichen, unempfindlich gegen Groß-/Kleinschreibung,
+  Anführungszeichen und Leerraum), gilt sie als eindeutig. Wer eine Erinnerung
+  zitiert, meint sie. Und weil Menschen selten wörtlich zitieren, sondern
+  zusammenfassen („mein Mund ist voller Kreidestaub und Diggi hält einen Kuchen
+  mit 78,1 Kerzen" — über drei Sätze eines Traums hinweg, nach dem wörtlichen
+  Fix immer noch die Liste), greift ein zweiter Tie-Breaker über Wortabdeckung:
+  tragen mindestens 80 % der markanten Suchwörter (ab vier Zeichen, mindestens
+  drei) in genau einer Kandidatin und in jeder anderen mindestens 30 Punkte
+  weniger, ist auch das eindeutig. Zwei ähnlich gut abdeckende Kandidatinnen
+  bleiben eine Auswahlliste.
+- **`/correct confirm` scheiterte weiter an BigInt — der Fix aus 7.12.17 saß
+  auf dem falschen Pfad.** 7.12.17 machte `db-adapter.updateCard` BigInt-fest;
+  der Chat-Pfad läuft aber über `safe-update.js` (`buildUpdateEntry`), und dort
+  rechnete `(oldRow.versionNumber ?? 1) + 1` ebenfalls mit dem BigInt aus
+  LanceDB. Beim ersten `/correct confirm` über den neuen Operator-Pfad am
+  09.09.2026 stand dieselbe Meldung im Log. Jetzt werden alle Int64-Felder der
+  alten Zeile (Versionsnummer, Zähler, Zeitstempel, Gültigkeitsfenster) vor
+  dem Kopieren zu Number; ein Test füttert `buildUpdateEntry` mit einer
+  BigInt-Zeile und prüft, dass kein BigInt übrig bleibt.
+- **`/plur1bus reminder list` brach mit „Cannot convert a BigInt value to a
+  number" ab**, sobald es eine aktive Erinnerung gab: `remindAt` kommt aus
+  LanceDB als BigInt, und `new Date(1n)` wirft. Bei Bernhardine (fünf
+  präsentierte Erinnerungen) kam nur die Fehlermeldung, bei Bernd (keine
+  Erinnerungen) fiel es nicht auf. Sortierung und Anzeige rechnen jetzt mit
+  `Number(remindAt)`.
+- **`/mf` nahm jede wohlgeformte UUID an** und schrieb sie ins Feedback-Log —
+  `/mf 00000000-…-000000000000 +` wurde „gespeichert", und der Feedback-Bericht
+  zählte solche Einträge als Treffer. Jetzt muss die Erinnerung im Speicher des
+  Agenten existieren und für den Aufrufer sichtbar sein; gelöschte Karten
+  bekommen dieselbe Meldung wie unbekannte (kein Existenz-Orakel für
+  Tombstones). Geprüft wird — wie bei `/correct` und `/forget` — die private
+  Tabelle des Agenten; Karten aus Workspace-/User-Pools (`/share`) sind für
+  `/mf` damit nicht adressierbar (heute leer, dieselbe Grenze wie zuvor bei
+  `/correct`).
+- **`/state` zeigte „Memories: unknown cards"**, wenn der Store des Agenten in
+  diesem Prozess noch nicht geöffnet war (Bernhardine, 09.09.2026): die
+  Zählung fragte `db.table` ab, ohne vorher `init()` zu rufen. Jetzt wird der
+  Store bei Bedarf initialisiert; die Karte zeigt die echte Zahl.
+
+### Bekannt
+
+- **Chat-`status`/`doctor`/`curation` lesen einen anderen Neo-Store als die
+  Hooks.** Der Kommando-Pfad schlüsselt den Neo-Store über den kanonischen
+  Workspace-Principal (`workspace-dir:v1:…`), `before_prompt_build`/`agent_end`
+  schreiben dagegen nach `<alias>--<hash>` (z. B. `main--1802…`). Im Chat
+  meldet `doctor` deshalb „agent_end has not fired in this workspace yet" und
+  `status` `hooks: {}`, obwohl beide Hooks laufen. Der rohe Chat-`workspaceKey`
+  darf aus Sicherheitsgründen nicht als Schlüssel dienen (Tests
+  `b13-sensitive-read-auth`, `plur1bus-internal-auth`); die Angleichung
+  braucht eine Migration der bestehenden Verzeichnisse und ist ein eigener
+  Schritt.
+
 ## [7.12.17] — 2026-09-09
 
 ### Behoben

@@ -213,6 +213,7 @@ import {
   resolveToolMemoryRequestContext,
   normalizeWorkspaceTarget,
   workspacePoolKey,
+  describeDirectSessionRoute as describeOperatorDirectSession,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, selectSafeUuids, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
 import { measureControlHealthStorage } from "./lib/control-plane-storage.js";
@@ -6748,6 +6749,17 @@ const plugin = {
         return { lang, tone };
       };
 
+      // Every chat command is also reachable as operator (`openclaw plur1bus-command`),
+      // bound to a named direct chat session. The registry keeps the same specs
+      // the host receives, so both paths run the identical handler.
+      const pluginCommandHandlers = new Map();
+      const registerPluginCommand = (spec) => {
+        if (spec && typeof spec.name === "string" && typeof spec.handler === "function") {
+          pluginCommandHandlers.set(spec.name.toLowerCase(), spec);
+        }
+        return api.registerCommand(spec);
+      };
+
       if (typeof api.registerCommand === "function") {
         const parsePlur1busArgs = (commandCtx) => commandCtx.args?.trim().split(/\s+/).filter(Boolean) || [];
         const plur1busHelp = (mode = "quick", opts = {}) => ({
@@ -7049,6 +7061,14 @@ const plugin = {
               const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
             }
+            // Bekannte Luecke (09.09.2026): dieser Schluessel ist der kanonische
+            // Workspace-Principal ("workspace-dir:v1:..."), die Hooks
+            // (before_prompt_build/agent_end) schreiben dagegen nach
+            // "<alias>--<hash>". status/doctor/curation lesen im Chat deshalb
+            // ein leeres Verzeichnis. Die Angleichung braucht eine Migration
+            // der bestehenden Neo-Verzeichnisse und bleibt ein eigener Schritt;
+            // der rohe Chat-workspaceKey darf hier nie hinein (siehe Tests
+            // b13-sensitive-read-auth / plur1bus-internal-auth).
             const commandStore = getNeoStore({
               workspaceDir: memoryCtx?.workspaceDir || "",
               workspaceKey: memoryCtx?.workspaceIdentity || "",
@@ -7995,10 +8015,14 @@ const plugin = {
                   }
                   const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
                   if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
-                  active.sort((a, b) => (a.remindAt || 0) - (b.remindAt || 0));
+                  // remindAt kommt aus LanceDB als BigInt: `new Date(1n)` wirft
+                  // "Cannot convert a BigInt value to a number" — Bernhardines
+                  // /reminder list fiel am 09.09.2026 genau daran.
+                  const remindAtMs = (r) => Number(r.remindAt || 0);
+                  active.sort((a, b) => remindAtMs(a) - remindAtMs(b));
                   const lines = [t("reminder.list_header", { lang, tone })];
                   for (const r of active) {
-                    const when = r.remindAt ? new Date(r.remindAt).toISOString().replace("T", " ").slice(0, 16) : "?";
+                    const when = remindAtMs(r) ? new Date(remindAtMs(r)).toISOString().replace("T", " ").slice(0, 16) : "?";
                     lines.push(t("reminder.list_item", { lang, tone, vars: {
                       when,
                       text: String(r.text || "").slice(0, 80),
@@ -8308,10 +8332,48 @@ const plugin = {
             }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
+        // Operator path for chat commands: `/name args` runs the registered
+        // handler with the same identity-bound context the channel would build
+        // for that direct chat (channel, account, peer, sender = peer). The
+        // session key must name a direct chat of the requested agent; the
+        // handler's own authorization (allowedUserIds, confirmations) applies
+        // unchanged, so this grants nothing the chat owner could not do.
+        const runOperatorCommand = async ({ agentId, sessionKey, command }) => {
+          const trimmed = String(command || "").trim();
+          const match = /^\/([A-Za-z0-9_-]+)(?:@\S+)?(?:\s+([\s\S]*))?$/.exec(trimmed);
+          if (!match) throw new Error("command must look like /name [args]");
+          const spec = pluginCommandHandlers.get(match[1].toLowerCase());
+          if (!spec) throw new Error(`unknown PLUR1BUS command /${match[1]}`);
+          const direct = describeOperatorDirectSession(sessionKey, await hostRoutingLoader());
+          if (!direct) throw new Error("session key must name a direct chat session (agent:<id>:<channel>:<account>:direct:<peer>)");
+          if (direct.agentId !== safeAgentId(agentId)) throw new Error("session key belongs to a different agent");
+          // The host hands every command its workspaceDir; several handlers
+          // read it straight off the context (tone hint, vault paths).
+          const workspaceDir = await runtimeIfUsable(api)?.agent?.resolveAgentWorkspaceDir?.(api.config, direct.agentId);
+          const commandCtx = {
+            agentId: direct.agentId,
+            sessionKey: direct.sessionKey,
+            channel: direct.channel,
+            accountId: direct.accountId,
+            from: `${direct.channel}:${direct.peerId}`,
+            senderId: direct.peerId,
+            chatType: "private",
+            workspaceDir,
+            config: api.config,
+            args: (match[2] || "").trim(),
+            commandBody: trimmed,
+            origin: "operator",
+            source: "cli",
+          };
+          const result = await spec.handler(commandCtx);
+          const text = typeof result === "string" ? result : result?.text;
+          return { text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY" };
+        };
         if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
           registerFeatureCronNativeDispatch({
             api,
             runFeatureCommand: (commandCtx) => runPlur1busCommand(commandCtx),
+            runOperatorCommand,
           });
         }
 
@@ -8333,7 +8395,7 @@ const plugin = {
           { name: "plur1bus_conflicts", description: "Build PLUR1BUS conflict reports.", acceptsArgs: true, prefixTokens: ["obsidian", "conflicts", "build"] },
         ];
         for (const command of plur1busCommands) {
-          api.registerCommand({
+          registerPluginCommand({
             name: command.name,
             description: command.description,
             acceptsArgs: command.acceptsArgs ?? false,
@@ -8363,6 +8425,9 @@ const plugin = {
             let cardCount = null;
             try {
               cardCount = await pool.withDb(agentId, async (db) => {
+                // Ein frisch geoeffneter Store hat noch keine Tabelle; ohne
+                // init() stand bei Bernhardine "unknown cards" (09.09.2026).
+                if (!db?.table && typeof db?.init === "function") await db.init();
                 if (!db?.table) return null;
                 return db.table.countRows();
               });
@@ -8445,7 +8510,7 @@ const plugin = {
           }
         };
 
-        api.registerCommand({
+        registerPluginCommand({
           name: "state",
           description: "PLUR1BUS — system state (vault sync, sanity checks, ...). '/status' is reserved by OpenClaw.",
 
@@ -8453,14 +8518,14 @@ const plugin = {
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runStatusCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "enable",
           description: `PLUR1BUS — Feature enable. Known: ${listFeatures().join(", ")}`,
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: (commandCtx) => runFeatureToggle(commandCtx, true),
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "disable",
           description: `PLUR1BUS — Feature disable. Known: ${listFeatures().join(", ")}`,
           acceptsArgs: true,
@@ -8468,7 +8533,7 @@ const plugin = {
           handler: (commandCtx) => runFeatureToggle(commandCtx, false),
         });
 
-        api.registerCommand({
+        registerPluginCommand({
           name: "speaker",
           description: "PLUR1BUS — Speaker naming. /speaker list | name <label> <name> | proposals | confirm <label> | reject <label> | clear <label>",
           acceptsArgs: true,
@@ -9389,6 +9454,15 @@ const plugin = {
             if (!workspaceDir) {
               return { text: t("plur1bus.mf_no_workspace", { lang, tone }) };
             }
+            // Feedback nur fuer eine Erinnerung, die es gibt: bis 09.09.2026
+            // nahm /mf jede wohlgeformte UUID an und schrieb sie ins
+            // Feedback-Log, wo der Bericht sie dann als Top-Treffer zaehlte.
+            // Geloeschte Karten bekommen dieselbe Meldung wie unbekannte —
+            // kein Existenz-Orakel fuer Tombstones.
+            const target = await memoryDbAdapter.getCard(memoryCtx.agentId, parsed.memoryId, { ctx: memoryCtx }).catch(() => null);
+            if (!target || String(target.status || "") === "deleted") {
+              return { text: t("plur1bus.mf_not_found", { lang, tone, vars: { id: parsed.memoryId } }) };
+            }
             recordFeedback(workspaceDir, "", parsed.memoryId, parsed.feedback, {});
             return { text: t("plur1bus.mf_done", { lang, tone, vars: { id: parsed.memoryId, feedback: parsed.feedback } }) };
           } catch (err) {
@@ -9397,28 +9471,28 @@ const plugin = {
           }
         };
 
-        api.registerCommand({
+        registerPluginCommand({
           name: "memory",
           description: "PLUR1BUS — recall memories (e.g. /memory this week, /memory about Eva)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runMemoryCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "mf",
           description: "PLUR1BUS — give feedback on a memory. Syntax: /mf <id> + (or -, ~)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runMemoryFeedbackCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "forget",
           description: "PLUR1BUS — delete a memory (archive-first)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runForgetCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "correct",
           description: "PLUR1BUS — edit a memory. Syntax: /correct <old> zu <new>",
           acceptsArgs: true,
@@ -9426,7 +9500,7 @@ const plugin = {
           handler: runCorrectCommand,
         });
         for (const name of ["share", "teile"]) {
-          api.registerCommand({
+          registerPluginCommand({
             name,
             description: "PLUR1BUS — share a memory to the workspace or authenticated user pool",
             acceptsArgs: true,
@@ -9434,7 +9508,7 @@ const plugin = {
             handler: runShareCommand,
           });
         }
-        api.registerCommand({
+        registerPluginCommand({
           name: "wiki",
           description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
           acceptsArgs: true,

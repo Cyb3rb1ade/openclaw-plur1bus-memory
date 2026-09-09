@@ -147,3 +147,35 @@ describe("safeUpdate — supersede-after-store ordering", () => {
     );
   });
 });
+
+describe("buildUpdateEntry — Int64-Spalten kommen als BigInt", () => {
+  // Live-Zeile vom 09.09.2026: LanceDB liefert versionNumber, retrievalCount,
+  // Zeitstempel usw. als BigInt; `1n + 1` warf und kein /correct kam je durch.
+  it("rechnet die Versionsnummer hoch und liefert nur Number-Werte", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      versionNumber: 1n,
+      retrievalCount: 7n,
+      replayCount: 0n,
+      lastRetrievedAt: 1788736566892n,
+      sourceTimestamp: 1788736566892n,
+      halfLifeDays: 30n,
+      neverForget: 0n,
+      expiresAt: 0n,
+      validFrom: 0n,
+      validUntil: 0n,
+      lastStrengthenedAt: 0n,
+      lastDynamicsAt: 0n,
+      lastReplayed: 0n,
+      epistemicStatusUpdatedAt: 0n,
+      confirmed: 0n,
+    }, PATCH, EVIDENCE);
+    assert.strictEqual(next.versionNumber, 2);
+    assert.strictEqual(next.retrievalCount, 7);
+    assert.strictEqual(next.halfLifeDays, 30);
+    assert.strictEqual(next.sourceTimestamp, 1788736566892);
+    for (const [key, value] of Object.entries(next)) {
+      assert.notStrictEqual(typeof value, "bigint", `${key} darf kein BigInt bleiben`);
+    }
+  });
+});

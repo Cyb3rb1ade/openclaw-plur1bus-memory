@@ -12,6 +12,10 @@ import {
   loadOpenClawGatewayRuntime,
   parseFeatureCronRunnerArgs,
   registerFeatureCronNativeDispatch,
+  PLUGIN_COMMAND_GATEWAY_METHOD,
+  PLUGIN_COMMAND_CLI_COMMAND,
+  validatePluginCommandRequest,
+  executePluginCommandCli,
   validateFeatureCronRequest,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import { runFeatureCronRunner } from "../scripts/run-feature-cron.mjs";
@@ -67,6 +71,54 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     ]) {
       assert.throws(() => validateFeatureCronRequest(params), /feature cron request|agent|unknown/i);
     }
+  });
+
+  // Operator-Pfad: die Chat-Kommandos waren nur ueber einen angebundenen Kanal
+  // erreichbar. Mit runOperatorCommand registriert das Modul zusaetzlich den
+  // RPC plur1bus.command.run und das CLI plur1bus-command — ohne bleibt alles
+  // wie bisher (der Test darunter zaehlt dann weiterhin genau einen RPC).
+  it("registers the operator command RPC and CLI only when a runner is supplied", () => {
+    const gateway = [];
+    const clis = [];
+    registerFeatureCronNativeDispatch({
+      api: {
+        registerGatewayMethod(method, handler, options) { gateway.push({ method, handler, options }); },
+        registerCli(registrar, options) { clis.push({ registrar, options }); },
+      },
+      runFeatureCommand: async () => ({ text: "NO_REPLY" }),
+      runOperatorCommand: async () => ({ text: "ok" }),
+    });
+    const methods = gateway.map((g) => g.method);
+    assert.ok(methods.includes(PLUGIN_COMMAND_GATEWAY_METHOD));
+    assert.equal(gateway.find((g) => g.method === PLUGIN_COMMAND_GATEWAY_METHOD).options.scope, "operator.write");
+    assert.ok(clis.some((c) => c.options.descriptors[0].name === PLUGIN_COMMAND_CLI_COMMAND));
+  });
+
+  it("validates the operator command request strictly", () => {
+    const ok = validatePluginCommandRequest({ agentId: "main", sessionKey: "agent:main:telegram:default:direct:1", command: " /memory heute " });
+    assert.deepStrictEqual(ok, { agentId: "main", sessionKey: "agent:main:telegram:default:direct:1", command: "/memory heute" });
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "memory" }), /invalid PLUR1BUS command/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", command: "/x" }), /fields/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", extra: 1 }), /fields/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "", command: "/x" }), /session/);
+  });
+
+  it("runs the operator command through exactly one RPC call and prints only the text", async () => {
+    const calls = [];
+    let output = "";
+    const reply = await executePluginCommandCli({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:default:direct:55736530",
+      command: "/plur1bus_status",
+      callGateway: async (...args) => { calls.push(args); return { reply: { text: "Status: ok" } }; },
+      write: (chunk) => { output += chunk; },
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], PLUGIN_COMMAND_GATEWAY_METHOD);
+    assert.deepStrictEqual(calls[0][2], { agentId: "main", sessionKey: "agent:main:telegram:default:direct:55736530", command: "/plur1bus_status" });
+    assert.deepStrictEqual(calls[0][3], { progress: false, scopes: ["operator.write"] });
+    assert.deepStrictEqual(reply, { text: "Status: ok" });
+    assert.equal(output, "Status: ok\n");
   });
 
   it("registers one write-scoped RPC and one lazy root CLI capability", () => {
