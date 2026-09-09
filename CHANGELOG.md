@@ -7,6 +7,59 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.20] — 2026-09-09
+
+### Behoben
+
+- **Auto-Capture journalisierte bei jedem `agent_end` den ganzen Verlauf neu
+  und stellte ihn neu in die Embedding-Warteschlange.** Die Turn-Identität
+  enthielt `sessionId` (wechselt beim Host pro Lauf/Kompaktierung) und
+  `turnIndex` (verschiebt sich bei jeder Kompaktierung). Bernhardines Journal:
+  5273 Einträge, 258 verschiedene Inhalte, 8 Session-IDs in den letzten 800
+  Zeilen; pro Turn ~240 neue Queue-Einträge (Turns, Kandidaten,
+  Verhaltenskarten), Rückstau 610 → 1494 an einem Nachmittag. Die
+  Turn-ID bildet sich jetzt aus Sitzungsschlüssel, Rolle, normiertem Inhalt,
+  Tool-Call-IDs und der Ordnungszahl gleicher Nachrichten im Verlauf —
+  stabil über Läufe und Kompaktierungen; `sessionId`/`turnIndex` bleiben als
+  Felder erhalten.
+- **Der Hook kehrte bei Rückstau erst nach ~62 s zurück** (Host-Grenze 60 s):
+  der Embedding-Drain im `finally` lief bis zum Worker-Abbruch (55 s) und
+  brauchte danach noch den laufenden Embed-Aufruf. Bei Bernhardine 26
+  Worker-Timeouts und 22 Host-Timeouts an einem Tag, Bernd (leere Queue) keine.
+  Der Drain bekommt jetzt `deadlineMs` = Rest des Capture-Budgets minus 10 s
+  Marge und startet unter 3 s Rest gar nicht.
+- **Neuer Feature-Cron `embedding-drain`** (03:20 Europe/Berlin, 3 min je
+  Agent gestaffelt, model-frei, nur mit Neo) als geplanter Abnehmer für das,
+  was der knappe Hook-Drain liegen lässt. Installer und Feature-Cron-RPC
+  kennen ihn.
+- **`tests/auto-capture-batch.test.js` scheiterte in zwei Fällen und hing.**
+  Seit dem Fail-closed für den Incognito-Klassifizierer braucht jede
+  Capture-Fixture den Klassifizierer-Stub; fünf `register(api)`-Aufrufe
+  hatten keinen, die Turns wurden vor dem Embedding übersprungen, und der
+  Abbruch-Test wartete auf einen Embed, der nie begann. Jetzt 9/9 in 4 s.
+
+### Migration
+
+- **Alt-Generationen der Neo-Verzeichnisse zusammengeführt** (`main`,
+  `workspace`, `workspace--dc57…` → `main--1802…`; `bernhardine`,
+  `workspace-bernhardine`, `workspace-bernhardine--7722…` → `bernhardine--0279…`;
+  `heisenberg`, `workspace-heisenberg`, `workspace-heisenberg--3be0…` →
+  `heisenberg--0da4…`; `faxpert`, `workspace-faxpert` → `workspace-faxpert--983d…`)
+  über `migrateNeoWorkspaces`, danach Inhalts-Dedupe der Turn-Journale (die
+  Alt-Generationen waren mit demselben Bug entstanden: 4–10 % verschiedene
+  Inhalte), Bereinigung der Embedding-Warteschlange auf verschwundene Ziele
+  und Neuaufbau des Record-Index. Alt-Verzeichnisse ins Backup verschoben.
+  Zweiter Schritt: `reaction-ledger` und `behavior-cards` per Inhalt
+  dedupliziert (Bernd 6680 → 1198 / 3860 → 685, Bernhardine 5000 → 281 /
+  5051 → 203), `sourceSignals` auf behaltene Reaktions-IDs umgebogen,
+  Queue-Einträge entfernter Ziele entfernt.
+- **Live-Nachweis (Bernhardine, erster und zweiter Turn nach dem Deploy):**
+  einmalige Welle von 184 Turns durch das neue ID-Schema, danach +2 Turns
+  pro Turn statt +184; Hook nach ~53 s zurück statt ~62 s, kein Timeout;
+  Hook-Drain stoppt planmäßig an seiner Frist. Bekannt: die Log-Zeile
+  `plur1bus-neo: worker captured turns=N` zählt weiterhin den ganzen
+  hereingereichten Verlauf, nicht das Neue — als Indikator irreführend.
+
 ## [7.12.19] — 2026-09-09
 
 ### Behoben

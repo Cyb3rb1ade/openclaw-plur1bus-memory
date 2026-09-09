@@ -28,6 +28,7 @@ describe("REQUIRED_FEATURE_CRONS", () => {
         "afterthought",
         "consolidate-daily",
         "auto-accept-stale",
+        "embedding-drain",
         "classify-recent",
         "rem-dream",
         "skill-miner",

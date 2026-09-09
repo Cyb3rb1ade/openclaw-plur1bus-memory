@@ -4953,6 +4953,11 @@ const plugin = {
     // der Aufrufer ein Ergebnis mit Restzahl bekommt statt eines Abbruchs.
     const NEO_MANUAL_DRAIN_MAX_ITEMS = 100000;
     const NEO_MANUAL_DRAIN_DEADLINE_MS = 480000;
+    // Hook-Drain: Marge fuer den laufenden Embed-Aufruf (die 7 s zwischen
+    // Worker-Abbruch und Rueckkehr waren genau der) und Mindestrest, unter
+    // dem sich ein Start nicht lohnt.
+    const NEO_HOOK_DRAIN_MARGIN_MS = 10000;
+    const NEO_HOOK_DRAIN_MIN_MS = 3000;
     const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
     const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
     let hostMemoryConfig = {};
@@ -9654,6 +9659,7 @@ const plugin = {
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+          const captureStartedAt = Date.now();
           const throwIfCaptureAborted = () => {
             if (!signal?.aborted) return;
             if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
@@ -9723,13 +9729,27 @@ const plugin = {
                 }
               };
               if (neoEmbeddingAutoDrainEnabled) {
-                runNeoEmbeddingDrain = async () => logDrain(await neoStore.drainEmbeddingQueue({
-                  impact: neoEmbeddingDrainImpact,
-                  maxItems: neoEmbeddingDrainMaxItems,
-                  dimensions: vectorDim,
-                  embedder: (text) => embeddings.embed(text, { agentId }),
-                  signal,
-                }));
+                runNeoEmbeddingDrain = async () => {
+                  // Der Drain bekommt nur, was vom Capture-Budget uebrig ist,
+                  // abzueglich einer Marge fuer den laufenden Embed-Aufruf.
+                  // Ohne Frist lief er bis zum Worker-Abbruch (55 s) und der
+                  // Hook kehrte erst nach ~62 s zurueck — jenseits der 60 s
+                  // des Hosts; bei Bernhardine an jedem Turn (09.09.2026).
+                  const remainingMs = runtimeScheduler.config.captureTimeoutMs
+                    - (Date.now() - captureStartedAt) - NEO_HOOK_DRAIN_MARGIN_MS;
+                  if (remainingMs < NEO_HOOK_DRAIN_MIN_MS) {
+                    api.logger.info(`plur1bus-neo: embedding queue drain skipped — ${Math.max(0, remainingMs)}ms left in the capture budget`);
+                    return;
+                  }
+                  logDrain(await neoStore.drainEmbeddingQueue({
+                    impact: neoEmbeddingDrainImpact,
+                    maxItems: neoEmbeddingDrainMaxItems,
+                    dimensions: vectorDim,
+                    embedder: (text) => embeddings.embed(text, { agentId }),
+                    signal,
+                    deadlineMs: remainingMs,
+                  }));
+                };
               } else {
                 logDrain(neoResult?.drain);
               }

@@ -374,6 +374,8 @@ const ALL_FEATURES_DISABLED = Object.freeze({
   skillMiner: { enabled: false },
   obsidianBridge: { enabled: false },
   gc: { enabled: false },
+  // embedding-drain haengt am Neo-Schalter (7.12.20).
+  neo: { enabled: false },
 });
 
 function validCronConfigSnapshot({ pluginConfig = {}, runtimeConfig = {} } = {}) {
@@ -753,7 +755,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     }
   });
 
-  it("creates the exact nine per-agent jobs without model, auth, token, or API overrides", async () => {
+  it("creates the exact ten per-agent jobs without model, auth, token, or API overrides", async () => {
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
       pluginConfig: {
@@ -791,13 +793,14 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     });
 
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(cronAdds.length, 9);
+    assert.strictEqual(cronAdds.length, 10);
     const byName = new Map(cronAdds.map((args) => [args[args.indexOf("--name") + 1], args]));
     assert.deepStrictEqual([...byName.keys()], [
       "plur1bus persona-evolve main",
       "plur1bus afterthought main",
       "plur1bus consolidate-daily main",
       "plur1bus auto-accept-stale main",
+      "plur1bus embedding-drain main",
       "plur1bus classify-recent main",
       "plur1bus rem-dream main",
       "plur1bus skill-miner main",
