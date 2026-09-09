@@ -263,6 +263,8 @@ import {
   listNeoWorkspaceKeys,
   neoSessionKeysFromContext,
   routeNeoRecall,
+  searchNeoCandidatesGlobal,
+  dedupeNeoLanesAgainstTexts,
   transitionRecordStatus,
   workspaceKeyFromContext,
   turnEventsFromMessages,
@@ -4999,6 +5001,26 @@ const plugin = {
     // 1 s. Ueberzieht er das Teilbudget, bricht nur er ab; die Erfassung
     // behaelt den Rest und Neo holt beim naechsten Turn warm auf.
     const neoAgentEndBudgetMs = Math.max(1000, Number(neoCfg.agentEndBudgetMs || 20000));
+    // 7.12.27: Suche ueber alle Kandidaten (nicht nur das 500er-Fenster).
+    // Defaults hier, nicht im Schema (Installer-Profile).
+    const neoGlobalRecallCfg = neoCfg.recall?.global || {};
+    const neoGlobalRecall = {
+      enabled: neoGlobalRecallCfg.enabled !== false,
+      topK: Math.max(1, Math.min(200, Number(neoGlobalRecallCfg.topK) || 30)),
+      minSimilarity: Number.isFinite(Number(neoGlobalRecallCfg.minSimilarity)) ? Math.max(0, Math.min(1, Number(neoGlobalRecallCfg.minSimilarity))) : 0.35,
+      halfLifeDays: Number(neoGlobalRecallCfg.halfLifeDays) > 0 ? Number(neoGlobalRecallCfg.halfLifeDays) : 30,
+      maxCandidates: Math.max(100, Number(neoGlobalRecallCfg.maxCandidates) || 20000),
+      dedupeThreshold: Number.isFinite(Number(neoGlobalRecallCfg.dedupeThreshold)) ? Math.max(0, Math.min(1, Number(neoGlobalRecallCfg.dedupeThreshold))) : 0.8,
+    };
+    const runNeoGlobalSearch = (store, neoItems, queryVector, requester) => {
+      if (!neoGlobalRecall.enabled || !Array.isArray(queryVector) || queryVector.length === 0) return null;
+      const excludeIds = new Set(neoItems.map((item) => (item?.id ? String(item.id) : "")).filter(Boolean));
+      const global = searchNeoCandidatesGlobal(store, { queryVector, requester, excludeIds, ...neoGlobalRecall });
+      for (const hit of global.hits) neoItems.push(hit.item);
+      const top = global.hits[0];
+      api.logger?.info?.(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} ms=${global.ms}`);
+      return new Set(global.hits.map((hit) => String(hit.item.id)));
+    };
     // Der Wartungslauf nimmt sich die Warteschlange am Stueck vor. Die Frist
     // liegt bewusst unter dem RPC-Timeout des Feature-Cron-Pfads (540s), damit
     // der Aufrufer ein Ergebnis mit Restzahl bekommt statt eines Abbruchs.
@@ -6764,6 +6786,8 @@ const plugin = {
             let queryVector = null;
             try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(params?.query || "", { agentId: requester.requesterAgentId }) : embeddings.embed(params?.query || "", { agentId: requester.requesterAgentId })); }
             catch (error) { api.logger?.debug?.(`plur1bus-neo: corpus query embedding unavailable: ${String(error)}`); }
+            try { runNeoGlobalSearch(store, items, queryVector, requester); }
+            catch (globalErr) { api.logger?.debug?.(`plur1bus-neo: corpus global search failed: ${String(globalErr)}`); }
             const lanes = routeNeoRecall(items, params?.query || "", { ...requester, queryVector, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
             return Object.entries(lanes)
               .flatMap(([lane, rows]) => rows.map(row => ({ lane, row })))
@@ -11673,9 +11697,19 @@ const plugin = {
             }, { workspaceAliases: memoryWorkspaceAliases });
         if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
         let neoContext = "";
+        let neoLanes = null;
+        let neoGlobalIds = null;
+        let neoInjectionKey = null;
         if (neoEnabled) {
+          // 7.12.27: Der Warm-up bei gateway_start erreicht nur die erste
+          // Plugin-Instanz; Instanzen, die der Host spaeter je Agent anlegt,
+          // trafen agent_end mit kaltem Worker (spawnMs 592 trotz Warm-up,
+          // 10.09.2026 00:20). Der Recall laeuft vor agent_end — hier
+          // anwerfen, ensureWorker ist idempotent.
+          try { neoWorkerRuntime?.warmUp?.(); } catch (_) { /* best-effort */ }
           try {
             const injectionKey = markNeoRecallInjection(event, ctx);
+            neoInjectionKey = injectionKey;
             const neoStore = getNeoStore(ctx, event);
             const requester = neoRequester(ctx, event);
             neoStore.recordHook("before_prompt_build", {
@@ -11688,10 +11722,13 @@ const plugin = {
               let queryVector = null;
               try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId })); }
               catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
-              neoContext = formatNeoRecallContext(
-                routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 }),
-                { idempotencyKey: injectionKey || undefined },
-              );
+              try {
+                neoGlobalIds = runNeoGlobalSearch(neoStore, neoItems, queryVector, requester);
+              } catch (globalErr) {
+                api.logger?.warn?.(`plur1bus-neo: global candidate search failed: ${String(globalErr)}`);
+              }
+              neoLanes = routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 });
+              neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
             }
           } catch (neoErr) {
             api.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
@@ -12575,6 +12612,20 @@ const plugin = {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
           throwIfAborted(signal, "recall aborted");
+          // 7.12.27: Globale Neo-Treffer, die als LanceDB-Erinnerung schon im
+          // selben Prompt stehen, nicht doppelt injizieren.
+          if (neoLanes && neoGlobalIds?.size > 0 && Array.isArray(ordered) && ordered.length > 0) {
+            try {
+              const memoryTexts = ordered.map((row) => row?.entry?.text || row?.text || "").filter(Boolean);
+              const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold });
+              if (deduped.dropped > 0) {
+                neoContext = formatNeoRecallContext(deduped.lanes, { idempotencyKey: neoInjectionKey || undefined });
+                api.logger?.info?.(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories`);
+              }
+            } catch (dedupeErr) {
+              api.logger?.debug?.(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
+            }
+          }
           return { prependContext: applyGlobalInjectBudget({
             blocks: [
               { name: "neo", text: neoContext, droppable: true },

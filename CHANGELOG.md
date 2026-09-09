@@ -7,6 +7,40 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.27] — 2026-09-10
+
+### Hinzugefügt
+
+- **Suche über alle Neo-Kandidaten.** Der Neo-Recall bewertete bisher nur die
+  letzten 500 Kandidaten und 200 Verhaltenskarten. Jetzt läuft zusätzlich eine
+  Cosinus-Suche über den gesamten Bestand des Workspaces auf dem Vektor-Sidecar
+  (Brute-Force, ein Deskriptor; bei Bernhardine rund 2400 × 3072 float32,
+  gemessen 0,4–0,6 s je Recall, davon etwa 0,3 s für das Parsen der bis zu
+  5000 Kandidatenzeilen — der Bestand ist durch den 5000-Zeilen-Cap ein
+  rollierendes Fenster von rund 2500 eindeutigen Kandidaten). Vorfilter: Status `candidate`, `active` oder
+  `promoted`, nicht `stale`, ACL des Anfragenden; Mindest-Cosinus 0,35; Top-30;
+  Rezenz-Abschlag `sim × (0,85 + 0,15 × 0,5^(Alter/30 Tage))`. Die Treffer
+  konkurrieren danach mit dem Fenster in den bestehenden Lanes. Treffer, die
+  als LanceDB-Erinnerung im selben Prompt schon stehen (Token-Jaccard ≥ 0,8),
+  werden aus dem Neo-Block entfernt. Gilt für den Prompt-Recall und die
+  Korpus-Suche (`plur1bus.corpus`).
+- **Konfiguration** `neo.recall.global`: `enabled`, `topK`, `minSimilarity`,
+  `halfLifeDays`, `maxCandidates`, `dedupeThreshold` (Defaults im Normalizer).
+- **Log:** `plur1bus-neo: global candidate search scanned=… eligible=…
+  withVector=… hits=… topSim=… ms=…` je Recall, plus `dropped N hit(s)` bei
+  Dedupe. Nachweis über den Recall-Trace, nicht über Gefühl: der Mehrwert liegt
+  bei Aussagen, die nie zu Erinnerungen wurden — das Langzeitgedächtnis in
+  LanceDB sucht schon über alles.
+- `store.readVectors(ids)` liest viele Sidecar-Vektoren mit einem Deskriptor.
+
+### Behoben
+
+- **Neo-Worker-Warm-up greift jetzt für jede Plugin-Instanz.** Der Warm-up bei
+  `gateway_start` (7.12.24) erreichte nur die erste Instanz; Instanzen, die der
+  Host später je Agent anlegt, trafen agent_end mit kaltem Worker (`spawnMs`
+  592 trotz Warm-up). Der Worker wird jetzt zusätzlich zu Beginn des
+  Prompt-Recalls angeworfen, der vor agent_end läuft.
+
 ## [7.12.26] — 2026-09-10
 
 ### Geändert
