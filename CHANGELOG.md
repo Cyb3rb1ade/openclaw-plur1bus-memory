@@ -7,6 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.23] — 2026-09-09
+
+### Geändert
+
+- **Kern-Erinnerungen bekommen im Cron `emotion-refine` immer Tier 3.** Neue
+  Option `emotion.t3.refineImportanceMin` (Default 0,9, Werte über 1 schalten
+  die Regel ab): Im Modus `deferred` werden Erinnerungen ab dieser Wichtigkeit
+  auch dann auf `emotionStatus = pending_t3` gesetzt, wenn Tier 1/2 sicher ist.
+  Hintergrund: Bei Bernhardine standen 26 von 29 hochwichtigen Erinnerungen
+  der letzten Woche auf „neutral“; die emotionale Intensität wirkt aber auf
+  Recall-Gewicht und Zerfall, und das Lexikon übersieht Ironie oder Sorge im
+  Sachton. Kosten: wenige zusätzliche LLM-Aufrufe am Tag, ausschließlich im
+  Cron. Gilt für Auto-Capture, Merge-Pfad und `memory_store`-Tool.
+
 ## [7.12.22] — 2026-09-09
 
 ### Geändert

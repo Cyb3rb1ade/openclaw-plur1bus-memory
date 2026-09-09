@@ -4847,13 +4847,22 @@ const plugin = {
     // Verhalten.
     const emotionT3CaptureMode = emotionCfg.t3?.captureMode === "inline" ? "inline" : "deferred";
     const emotionDeferredCapture = emotionT3CaptureMode === "deferred" && emotionT3Enabled && emotionTier === "auto";
+    // 7.12.23: Kern-Erinnerungen (importance ab dieser Schwelle) bekommen im
+    // Cron immer Tier 3, auch wenn Tier 1/2 sicher "neutral" sagt — dort
+    // wirkt die emotionale Intensitaet auf Recall-Gewicht und Zerfall, und
+    // das Lexikon uebersieht Ironie oder Sorge im Sachton. Werte > 1 schalten
+    // die Regel ab. Default im Normalizer, nicht im Schema.
+    const emotionT3RefineImportanceMinRaw = Number(emotionCfg.t3?.refineImportanceMin);
+    const emotionT3RefineImportanceMin = Number.isFinite(emotionT3RefineImportanceMinRaw) && emotionT3RefineImportanceMinRaw >= 0
+      ? emotionT3RefineImportanceMinRaw
+      : 0.9;
     if (emotionT3Enabled) {
       api.logger.info(`memory-lancedb-namespaced: emotion tier-3 capture mode ${emotionDeferredCapture ? "deferred (emotion-refine cron)" : "inline"}`);
     }
     /**
      * Emotionsbewertung fuer eine neu zu speichernde Erinnerung.
      * @param {string} text
-     * @param {{agentId?: string, signal?: AbortSignal}} [context]
+     * @param {{agentId?: string, signal?: AbortSignal, importance?: number}} [context]
      * @returns {Promise<{emotion: object, emotionStatus: "final"|"pending_t3"}>}
      */
     const classifyEmotionForStore = async (text, context = {}) => {
@@ -4863,10 +4872,12 @@ const plugin = {
       }
       // Gleiche Tier-1/2-Route wie sonst, nur ohne den Tier-3-Sprung; der
       // Cron greift genau dort, wo der Router eskaliert haette.
-      const emotion = await inferEmotionalValenceAsync(text, "user", null, { ...context, skipTier3: true });
+      const { importance, ...engineContext } = context;
+      const emotion = await inferEmotionalValenceAsync(text, "user", null, { ...engineContext, skipTier3: true });
       // Fehlende Konfidenz (synchroner Tier-1-Fallback) zaehlt als unsicher.
       const confident = Number.isFinite(emotion?.confidence) && emotion.confidence >= emotionT3EscalationConfidence;
-      return { emotion, emotionStatus: confident ? "final" : "pending_t3" };
+      const coreMemory = Number.isFinite(Number(importance)) && Number(importance) >= emotionT3RefineImportanceMin;
+      return { emotion, emotionStatus: confident && !coreMemory ? "final" : "pending_t3" };
     };
 
     // Base DB path — früh auflösen, damit Meta-Cognition-State-Read (und
@@ -10088,7 +10099,7 @@ const plugin = {
                 });
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal });
+                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal, importance: captureImportanceResult.importance });
                 throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
@@ -10986,7 +10997,7 @@ const plugin = {
                       }
                       const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
-                      const { emotion: mergedEmotion, emotionStatus: mergedEmotionStatus } = await classifyEmotionForStore(mergeResult.mergedText, { agentId });
+                      const { emotion: mergedEmotion, emotionStatus: mergedEmotionStatus } = await classifyEmotionForStore(mergeResult.mergedText, { agentId, importance: mergedImportance });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
                       const mergedEntry = applyDynamicsDefaults({
@@ -11027,7 +11038,7 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const { emotion, emotionStatus } = await classifyEmotionForStore(params.text, { agentId });
+              const { emotion, emotionStatus } = await classifyEmotionForStore(params.text, { agentId, importance });
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,

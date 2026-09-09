@@ -205,6 +205,54 @@ test("memory_store defers tier 3: row is stored with emotionStatus=pending_t3 an
   }
 });
 
+async function storeWithImportance(t, { importance, configOverrides }) {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  installEmbeddingStub(t);
+  const agentId = `emotion-core-${String(importance).replace(".", "_")}-${Math.random().toString(36).slice(2, 8)}`;
+  const runtimeLlm = {
+    async complete() {
+      return { text: T3_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
+    },
+  };
+  const pluginModule = await loadFreshPlugin();
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true, ...configOverrides } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  const storeTool = api._toolFactories.at(-1)({ agentId, workspaceDir })
+    .find((tool) => tool.name === "memory_store");
+  await storeTool.execute("store-core", {
+    text: "Evas Geburtstag ist am 14. Maerz, sie mag keine Ueberraschungspartys.",
+    category: "fact",
+    importance,
+  });
+  const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
+  try {
+    await db.init();
+    const rows = await db.table.query().select(["emotionStatus", "importance"]).limit(5).toArray();
+    assert.equal(rows.length, 1);
+    return { emotionStatus: rows[0].emotionStatus, importance: Number(rows[0].importance) };
+  } finally {
+    await db.shutdown();
+  }
+}
+
+// 7.12.23: escalationConfidence 0 macht jede lokale Bewertung "sicher" —
+// nur die Wichtigkeitsregel kann die Zeile dann noch auf pending_t3 setzen.
+test("core memories (importance >= refineImportanceMin) are always queued for tier 3", async (t) => {
+  const core = await storeWithImportance(t, { importance: 0.95, configOverrides: { escalationConfidence: 0 } });
+  assert.ok(core.importance >= 0.9, `stored importance ${core.importance}`);
+  assert.equal(core.emotionStatus, "pending_t3");
+});
+
+test("ordinary memories stay final when tier 1/2 is confident", async (t) => {
+  const ordinary = await storeWithImportance(t, { importance: 0.5, configOverrides: { escalationConfidence: 0 } });
+  assert.equal(ordinary.emotionStatus, "final");
+});
+
+test("refineImportanceMin above 1 disables the core-memory rule", async (t) => {
+  const core = await storeWithImportance(t, { importance: 0.95, configOverrides: { escalationConfidence: 0, refineImportanceMin: 2 } });
+  assert.equal(core.emotionStatus, "final");
+});
+
 test("internal emotion-refine refines pending rows with tier 3 and marks them final", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = "emotion-refine-agent";
