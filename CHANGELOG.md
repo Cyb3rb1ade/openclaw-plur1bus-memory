@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.17] — 2026-09-09
+
+### Behoben
+
+- **`/correct` legte nie eine neue Version an.** LanceDB liefert int64-Spalten
+  als BigInt, und `updateCard` rechnete `(existing.versionNumber ?? 1) + 1` —
+  `1n + 1` wirft „Cannot mix BigInt and other types". Jedes `/correct` endete
+  darin, bevor die neue Version geschrieben wurde; in 21 000 Zeilen von Bernd
+  und Bernhardine existierte deshalb keine einzige zweite Version, kein
+  `previousVersion`, kein `supersededBy`. Sichtbar wurde es am 09.09.2026
+  durch ein getipptes `/correct` (`[memory-edit.correct.update] failed`). Der
+  Zähler wird jetzt vor dem Rechnen in eine Number gewandelt. Die bestehende
+  Test-Fixture nutzte `versionNumber: 1` als Number und konnte den Fehler
+  darum nie zeigen; ein Fall mit BigInt kommt hinzu.
+
 ## [7.12.16] — 2026-09-09
 
 ### Behoben
