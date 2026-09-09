@@ -348,6 +348,64 @@ describe("reserved store directories", () => {
     assert.deepStrictEqual(snapshot.cards.byAgent, [{ id: "main", cards: 4 }]);
     assert.equal(snapshot.lastError, null);
   });
+
+  // Der `_neo`-Fix nahm nur den Unterstrich. Die beiden eigenen
+  // Punkt-Verzeichnisse des Stores fielen weiter durch PUBLIC_ID_RE und
+  // hielten die Karte auf "degraded" — am 09.09.2026 in jedem Durchlauf.
+  it("skips the store's own dot directories without degrading the snapshot", async () => {
+    const scan = createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      listPartitions: async () => ["main", "_neo", ".plur1bus-authority", ".plur1bus-shared"],
+      inspectRows: async ({ partitionId }) => (partitionId === "main" ? 4 : 0),
+      measureStorage: async () => ({ bytes: 10, complete: true }),
+    });
+    const snapshot = await scan();
+    assert.equal(snapshot.status, "ready");
+    assert.deepStrictEqual(snapshot.cards.byAgent, [{ id: "main", cards: 4 }]);
+    assert.equal(snapshot.lastError, null);
+  });
+
+  // Der Store waechst ueber den Messdeckel hinaus (12 646 Eintraege bei einer
+  // Grenze von 10 000). Das ist eine Messgrenze, kein Gesundheitsproblem.
+  it("stays ready when the size measurement is truncated, and says so", async () => {
+    const scan = createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      listPartitions: async () => ["main"],
+      inspectRows: async () => 4,
+      measureStorage: async () => ({ bytes: 4096, complete: false }),
+    });
+    const snapshot = await scan();
+    assert.equal(snapshot.status, "ready");
+    assert.equal(snapshot.lastError, null);
+    assert.deepStrictEqual(snapshot.storage, { bytes: 4096, complete: false });
+  });
+
+  // Ein echter Messfehler bleibt ein Fehler.
+  it("still degrades when the size measurement throws", async () => {
+    const scan = createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      listPartitions: async () => ["main"],
+      inspectRows: async () => 4,
+      measureStorage: async () => { throw new Error("disk gone"); },
+    });
+    const snapshot = await scan();
+    assert.equal(snapshot.status, "degraded");
+    assert.deepStrictEqual(snapshot.lastError, { component: "storage", code: "storage_measure_failed" });
+    assert.deepStrictEqual(snapshot.storage, { bytes: null, complete: false });
+  });
+
+  // Ein Name, der wirklich nicht zum Kontrakt passt, muss weiterhin auffallen.
+  it("still degrades on a partition name that is neither reserved nor valid", async () => {
+    const scan = createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      listPartitions: async () => ["main", "9-starts-with-a-digit"],
+      inspectRows: async () => 1,
+      measureStorage: async () => ({ bytes: 10, complete: true }),
+    });
+    const snapshot = await scan();
+    assert.equal(snapshot.status, "degraded");
+    assert.deepStrictEqual(snapshot.lastError, { component: "health", code: "partition_id_unsupported" });
+  });
 });
 
 describe("shared user pool labels in the scan", () => {

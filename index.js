@@ -315,7 +315,7 @@ import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import { redactError, safeDebug, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
-import { throwIfAborted } from "./lib/abort.js";
+import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
   LLM_ROUTE_KINDS,
@@ -4993,6 +4993,19 @@ const plugin = {
     const neoEmbeddingAutoDrainEnabled = neoEmbeddingDrainCfg.enabled !== false;
     const neoEmbeddingDrainImpact = neoEmbeddingDrainCfg.impact || "low";
     const neoEmbeddingDrainMaxItems = Math.max(1, Number(neoEmbeddingDrainCfg.maxItems || 250));
+    // Teilbudget fuer den agent_end-Worker. Er lief bisher auf dem vollen
+    // Capture-Signal: beim ersten Turn nach einer Ruhephase ist der Neo-Store
+    // kalt (bernhardine: 250-625 MB) und der Worker brauchte am 09.09.2026
+    // 56 der 60 Sekunden — die Erfassung danach lief in den Abbruch und
+    // speicherte nichts. Zwei Minuten spaeter, warm, dauerte dieselbe Arbeit
+    // 1 s. Ueberzieht er das Teilbudget, bricht nur er ab; die Erfassung
+    // behaelt den Rest und Neo holt beim naechsten Turn warm auf.
+    const neoAgentEndBudgetMs = Math.max(1000, Number(neoCfg.agentEndBudgetMs || 20000));
+    // Der Wartungslauf nimmt sich die Warteschlange am Stueck vor. Die Frist
+    // liegt bewusst unter dem RPC-Timeout des Feature-Cron-Pfads (540s), damit
+    // der Aufrufer ein Ergebnis mit Restzahl bekommt statt eines Abbruchs.
+    const NEO_MANUAL_DRAIN_MAX_ITEMS = 100000;
+    const NEO_MANUAL_DRAIN_DEADLINE_MS = 480000;
     const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
     const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
     let hostMemoryConfig = {};
@@ -7096,7 +7109,7 @@ const plugin = {
               agentId: memoryCtx?.agentId || commandCtx.agentId || "command",
             });
             // ── Phase 5+6: silent cron-internal jobs ──────────────────────
-            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream>
+            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream|embedding-drain>
             // Wird ausschliesslich aus den OpenClaw-managed Cron-Jobs gefeuert
             // (delivery.mode=none).
             if (actionKey === "internal") {
@@ -7490,6 +7503,31 @@ const plugin = {
                 });
                 api.logger?.info?.(`plur1bus internal gc-run[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "gc-run", ...result });
+              }
+              // Wartungsgriff fuer die Neo-Embedding-Warteschlange. Bisher lief der
+              // Drain ausschliesslich als Nebenjob nach jeder Erfassung, gedeckelt
+              // auf maxItems und auf das, was vom Capture-Budget uebrig war. Kommt
+              // mehr herein als abfliesst, holt er nie auf: am 09.09.2026 standen
+              // fuer bernhardine knapp 3000 Eintraege offen, seit Wochen zwischen
+              // 3000 und 4200 pendelnd. Ohne Vektor faellt der mit 0,75 gewichtete
+              // Anteil der Neo-Bewertung auf null, der Datensatz rankt nur noch
+              // ueber Token-Ueberlappung. Dieser Lauf nimmt sich die Warteschlange
+              // am Stueck vor, bleibt aber unter dem RPC-Timeout (540s) und meldet
+              // den Rest, damit man ihn bis pending=0 wiederholen kann.
+              if (subKey === "embedding-drain") {
+                if (!neoEnabled) {
+                  return formatJsonCommandResult({ job: "embedding-drain", skipped: true, reason: "neo_disabled" });
+                }
+                const neoStore = getNeoStore(commandCtx, {}, "embedding-drain");
+                const result = await neoStore.drainEmbeddingQueue({
+                  impact: neoEmbeddingDrainImpact,
+                  maxItems: NEO_MANUAL_DRAIN_MAX_ITEMS,
+                  deadlineMs: NEO_MANUAL_DRAIN_DEADLINE_MS,
+                  dimensions: vectorDim,
+                  embedder: (text) => embeddings.embed(text, { agentId: internalAgent }),
+                });
+                api.logger?.info?.(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "embedding-drain", ...result });
               }
               if (subKey === "feedback-report") {
                 if (!commandCtx.workspaceDir) {
@@ -9653,7 +9691,7 @@ const plugin = {
                 embeddingDrainEnabled: false,
                 embeddingDrainImpact: neoEmbeddingDrainImpact,
                 embeddingDrainMaxItems: neoEmbeddingDrainMaxItems,
-                signal,
+                signal: deriveBudgetedSignal(signal, neoAgentEndBudgetMs),
               });
               if (neoResult?.capture) {
                 api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
@@ -9675,7 +9713,11 @@ const plugin = {
                 logDrain(neoResult?.drain);
               }
             } catch (neoErr) {
-              api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
+              if (isBudgetExhaustion(neoErr, signal)) {
+                api.logger.warn(`plur1bus-neo: worker capture exceeded its ${neoAgentEndBudgetMs}ms budget (kalter Store?) — die Erfassung laeuft weiter, Neo holt beim naechsten Turn auf`);
+              } else {
+                api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
+              }
             }
           }
 
@@ -9941,6 +9983,13 @@ const plugin = {
                 if (settlement.status === "rejected") {
                   api.logger.warn(`memory-lancedb-namespaced: late capture store settlement failed: ${String(settlement.error)}`);
                 }
+                // Ist das Budget alle, scheitert jeder weitere Eintrag am selben
+                // Abbruch. Frueher stand deshalb je Restposten eine eigene
+                // Fehlerzeile im Log (09.09.2026: vier Stueck fuer bernhardine),
+                // was nach Datenverlust aussah, obwohl das Bereits-Gespeicherte
+                // steht und der Rest beim naechsten Turn drankommt. Einmal
+                // abbrechen, der aeussere Block meldet den Zaehlstand.
+                if (isAbortError(err)) throw err;
                 api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
               }
             }
@@ -10362,7 +10411,14 @@ const plugin = {
               }
             }
           } catch (err) {
-            api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
+            if (isAbortError(err)) {
+              // Ohne Zaehler: `stored`/`skipped` leben im try-Block und sind
+              // hier nicht sichtbar. Was gespeichert wurde, steht ohnehin je
+              // Eintrag im Log ("stored memory ...").
+              api.logger.info(`memory-lancedb-namespaced: capture budget exhausted for agent=${agentId} — das bereits Gespeicherte steht, der Rest folgt beim naechsten Turn`);
+            } else {
+              api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
+            }
           }
           });
           } finally {

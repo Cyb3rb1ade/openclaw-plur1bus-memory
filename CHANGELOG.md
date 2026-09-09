@@ -7,6 +7,138 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.12] — 2026-09-09
+
+### Hinzugefügt
+
+- **Vier interne Features sind wieder erreichbar.** `reminder-dispatch`,
+  `feedback-report`, `proactive-check` und `meta-reflect` liessen sich
+  ausschliesslich über ein Chat-Kommando auslösen, und das setzt einen
+  angebundenen Kanal voraus — über Cron oder Kommandozeile gab es keinen Weg
+  zu ihnen. Sie waren damit weder zu betreiben noch zu prüfen. Ein Cron mit
+  `--message "/plur1bus_status"` hilft nicht: der Turn geht an das Modell,
+  nicht in den nativen Dispatch (am 09.09.2026 gemessen). Alle vier brauchen
+  `workspaceDir`, das der Feature-Cron-Pfad seit 7.12.9 auflöst; sie stehen
+  jetzt in `FEATURE_CRON_NAMES` und laufen über
+  `openclaw plur1bus-feature-cron --agent <id> --feature <name>`.
+
+## [7.12.11] — 2026-09-09
+
+### Behoben
+
+- **Der Recall-Hook wurde vom Host getötet, bevor der eigene Rückfall greifen
+  konnte.** `runtime.recallTimeoutMs` stand auf 20 s, das Hook-Fenster des
+  Hosts für `before_prompt_build` liegt per Vorgabe bei 15 s
+  (`plugins.entries.*.hooks.timeoutMs`). Jeder langsame Recall lief also in
+  `[hooks] before_prompt_build handler … failed: timed out after 15000ms` —
+  am 08.09.2026 17-mal, am 09.09. 24-mal — und der Turn bekam **gar nichts**
+  statt eines Teilergebnisses. Das harte Budget gehört unter das Fenster des
+  Hosts. Dazu wird das weiche Budget nicht mehr als feste Differenz von 10 s
+  darunter gebildet, sondern anteilig: die feste Differenz setzte ein grosses
+  hartes Budget voraus und wäre bei 12 s auf Millisekunden zusammengefallen.
+  Beim bisherigen Wert von 20 s ergibt die neue Formel unverändert 10 s.
+
+- **Ein erschöpftes Capture-Budget sah aus wie Datenverlust.** Lief die
+  Erfassung in ihr Zeitlimit, scheiterte jeder verbleibende Eintrag am selben
+  Abbruch und schrieb eine eigene Fehlerzeile — am 09.09.2026 vier Stück für
+  bernhardine, gefolgt von `capture failed for agent=…`. Tatsächlich stand das
+  bereits Gespeicherte, und der Rest kam beim nächsten Turn dran. Der Abbruch
+  wird jetzt einmal sauber gemeldet (`capture budget exhausted … der Rest folgt
+  beim naechsten Turn`, auf Info-Ebene) und von einem echten Speicherfehler
+  unterschieden, der weiterhin als Warnung erscheint.
+
+## [7.12.10] — 2026-09-09
+
+### Behoben
+
+- **Die Health-Karte stand auch nach dem Verzeichnis-Fix auf „degraded".** Es
+  waren zwei Ursachen gleichzeitig aktiv; 7.12.9 behob nur die erste. Die
+  zweite ist der Deckel der Größenmessung: `measureControlHealthStorage`
+  steigt nach 10 000 Verzeichniseinträgen aus, damit der Scan beschränkt
+  bleibt, und der Store hatte am 09.09.2026 bereits 12 646. Das setzte
+  `storage_scan_incomplete` und damit den Gesamtzustand herab, obwohl jede
+  einzelne Partition sauber war. Eine abgeschnittene Messung ist aber eine
+  Messgrenze, kein Gesundheitsproblem — der Snapshot trägt `storage.complete:
+  false` bereits selbst bis in die Oberfläche. Der Gesamtzustand wird deshalb
+  nicht mehr daraus herabgestuft; ein echter Fehler beim Messen
+  (`storage_measure_failed`) bleibt degradierend.
+
+- **Der Installer kannte `auto-accept-stale` nicht** (nachgezogen aus 7.12.9,
+  siehe dort): der Job steht jetzt in `NATIVE_FEATURES` und in
+  `REQUIRED_FEATURE_CRONS`, wird über sein Kommando erkannt und pro Agent um
+  zwei Minuten gestaffelt, mit Basis 04:50 statt der von `gc-run` belegten
+  04:45.
+
+## [7.12.9] — 2026-09-09
+
+### Hinzugefügt
+
+- **`/plur1bus internal embedding-drain` als Wartungslauf.** Die
+  Neo-Embedding-Warteschlange wurde bisher ausschliesslich als Nebenjob nach
+  jeder Erfassung abgearbeitet — gedeckelt auf `maxItems` und auf das, was vom
+  Capture-Budget übrig blieb. Kommt mehr herein als abfliesst, holt sie nie auf:
+  am 09.09.2026 standen für bernhardine knapp 3000 Einträge offen, seit Wochen
+  zwischen 3000 und 4200 pendelnd, und es gab keinen Griff, das gezielt
+  abzubauen. Ohne Vektor fällt der mit 0,75 gewichtete Anteil der
+  Neo-Bewertung auf null, der Datensatz rankt nur noch über
+  Token-Überlappung. Der neue Lauf ist model-frei wie die übrigen
+  Feature-Crons (`openclaw plur1bus-feature-cron --agent <id> --feature
+  embedding-drain`), nimmt sich die Warteschlange am Stück vor, bleibt mit einer
+  Frist von 480 s unter dem RPC-Timeout und meldet den Rest, damit man ihn bis
+  `pending=0` wiederholen kann.
+
+### Behoben
+
+- **Der erste `agent_end` nach einer Ruhephase speicherte nichts.** Der
+  Neo-`agent_end`-Worker lief auf dem vollen Capture-Signal. Ist der Neo-Store
+  kalt — nach einem Gateway-Neustart oder einer langen Gesprächspause —, braucht
+  er den Grossteil des 60-Sekunden-Budgets: am 09.09.2026 um 11:27:20 für
+  bernhardine 56 Sekunden (`worker captured turns=221`). Die Erfassung danach
+  fand 203 Texte, bekam noch vier Sekunden und brach ab
+  (`capture worker timed out`, `failed to store capture: AbortError`, nichts
+  gespeichert). Zwei Minuten später, warm, dauerte dieselbe Arbeit eine Sekunde
+  und die Erfassung lief durch (`stored=4`). Der Worker bekommt jetzt ein
+  eigenes Teilbudget (`neo.agentEndBudgetMs`, Vorgabe 20 000 ms). Überzieht er
+  es, bricht nur er ab, die Erfassung behält den Rest, und Neo holt beim
+  nächsten Turn warm auf. Ein Abbruch durch das Teilbudget wird getrennt von
+  einem echten Worker-Fehler protokolliert.
+
+- **Feature-Crons liefen ohne Workspace-Verzeichnis.** Der Gateway-Handler hinter
+  `plur1bus-feature-cron` baute den Kommandokontext nur aus `agentId`, Kanal und
+  Konfiguration. Der Chat-Pfad liefert `workspaceDir` mit, dieser RPC-Pfad nicht
+  — und die Features, die es lesen, standen still: `afterthought` übersprang sich
+  bei **jedem** Lauf für alle drei Agenten mit `{"skipped":true,"reason":
+  "missing_workspace"}` (seit dem 07.09.2026, der Cron meldete dabei „ok", was
+  es unsichtbar machte), `persona-evolve` warf seit dem 06.09.2026
+  `The "path" argument must be of type string. Received undefined`. Der Handler
+  löst das Verzeichnis jetzt selbst über `resolveAgentWorkspaceDir` auf; gelingt
+  das nicht, sagt eine Warnung im Log, dass workspace-gebundene Features
+  übersprungen werden, statt sie still ins Leere laufen zu lassen.
+
+- **`auto-accept-stale` lief über das Modell und wurde vom Installer nicht
+  verwaltet.** Der Job ist model-frei — er liest unbestätigte Critical-Karten
+  und markiert sie —, fehlte aber in `FEATURE_CRON_NAMES` und in
+  `NATIVE_FEATURES`. Damit blieb als einzige Cron-Form der `agentTurn`, der
+  `/plur1bus internal auto-accept-stale` an das Modell schickte statt in den
+  nativen Dispatch: `cron: job execution timed out (last phase:
+  model-call-started)`, neun Läufe in Folge für alle drei Agenten. Der Job ist
+  jetzt zusätzlich Teil von `REQUIRED_FEATURE_CRONS`, wird also vom Installer
+  angelegt und — wie bei `consolidate-daily` — über sein Kommando erkannt:
+  gewachsene Namen wie `auto-accept-stale-criticals-<agent>` werden auf die
+  native Form umgezogen, statt dass daneben ein kanonischer Zwilling entsteht.
+  Die Basisminute liegt bewusst auf 04:50 statt 04:45, weil dort schon
+  `gc-run` läuft und beide Jobs am 09.09.2026 gleichzeitig starteten; per Agent
+  wird um zwei Minuten gestaffelt, damit nicht drei Starts auf dieselbe Minute
+  fallen und den 60-Sekunden-Watchdog auslösen.
+
+- **Die Health-Karte stand dauerhaft auf „degraded".** Der Partitions-Scan
+  überging nur reservierte Namen mit führendem Unterstrich (der `_neo`-Fix).
+  Die beiden eigenen Punkt-Verzeichnisse des Stores, `.plur1bus-authority` und
+  `.plur1bus-shared`, fielen weiter durch `PUBLIC_ID_RE` und setzten
+  `partition_id_unsupported` — in jedem einzelnen Durchlauf. Reservierte
+  Verzeichnisse werden jetzt an beiden Präfixen erkannt; ein Name, der wirklich
+  nicht zum Kontrakt passt, meldet weiterhin.
+
 ## [7.12.8] — 2026-09-09
 
 ### Behoben

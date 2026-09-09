@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.8",
+  "version": "7.12.12",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
@@ -357,6 +357,11 @@
           "enabled": {
             "type": "boolean",
             "default": true
+          },
+          "agentEndBudgetMs": {
+            "type": "number",
+            "minimum": 1000,
+            "description": "Sub-budget in ms for the Neo agent_end worker inside the capture window. Overrunning it aborts only the worker, and the capture keeps the rest. Default 20000."
           },
           "mode": {
             "type": "string",

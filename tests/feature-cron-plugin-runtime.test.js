@@ -112,6 +112,73 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
   });
 
+  // Ohne workspaceDir uebersprang afterthought sich bei jedem Cron-Lauf still
+  // ("missing_workspace", Cron meldete ok) und persona-evolve warf
+  // "The path argument must be of type string. Received undefined".
+  it("accepts the model-free auto-accept-stale job and still rejects unknown names", async () => {
+    const seen = [];
+    const capture = responseCapture();
+    const handler = createFeatureCronGatewayHandler({
+      runFeatureCommand: async (ctx) => { seen.push(ctx); return { text: "done" }; },
+      config: {},
+    });
+    await handler({ params: { agentId: "main", feature: "auto-accept-stale" }, respond: capture.respond });
+    assert.equal(seen[0].args, "internal auto-accept-stale");
+    const drain = responseCapture();
+    await handler({ params: { agentId: "main", feature: "embedding-drain" }, respond: drain.respond });
+    assert.equal(seen[1].args, "internal embedding-drain");
+    assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+
+    for (const feature of ["reminder-dispatch", "feedback-report", "proactive-check", "meta-reflect"]) {
+      const extra = responseCapture();
+      const before = seen.length;
+      await handler({ params: { agentId: "main", feature }, respond: extra.respond });
+      assert.equal(seen[before].args, `internal ${feature}`, feature);
+      assert.equal(extra.calls[0][0], true, feature);
+    }
+
+    const rejected = responseCapture();
+    await handler({ params: { agentId: "main", feature: "definitely-not-a-feature" }, respond: rejected.respond });
+    assert.equal(rejected.calls[0][0], false);
+  });
+
+  it("resolves the agent workspace and hands it to the command", async () => {
+    const seen = [];
+    const capture = responseCapture();
+    const asked = [];
+    const handler = createFeatureCronGatewayHandler({
+      runFeatureCommand: async (ctx) => { seen.push(ctx); return { text: "done" }; },
+      config: { lab: true },
+      resolveWorkspaceDir: async (cfg, agentId) => { asked.push([cfg, agentId]); return "/root/.openclaw/workspace-bernhardine"; },
+    });
+    await handler({ params: { agentId: "bernhardine", feature: "afterthought" }, respond: capture.respond });
+    assert.deepStrictEqual(asked, [[{ lab: true }, "bernhardine"]]);
+    assert.equal(seen[0].workspaceDir, "/root/.openclaw/workspace-bernhardine");
+    assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+  });
+
+  it("runs on and says so when the workspace cannot be resolved", async () => {
+    for (const resolver of [
+      async () => { throw new Error("runtime unavailable"); },
+      async () => undefined,
+      async () => "",
+    ]) {
+      const seen = [];
+      const warnings = [];
+      const capture = responseCapture();
+      const handler = createFeatureCronGatewayHandler({
+        runFeatureCommand: async (ctx) => { seen.push(ctx); return { text: "done" }; },
+        config: { lab: true },
+        logger: { warn: (message) => warnings.push(message) },
+        resolveWorkspaceDir: resolver,
+      });
+      await handler({ params: { agentId: "agent-a", feature: "gc-run" }, respond: capture.respond });
+      assert.equal("workspaceDir" in seen[0], false, "no empty workspaceDir is passed on");
+      assert.ok(warnings.some((message) => message.includes("without a workspace dir")), "the skip must be visible in the log");
+      assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+    }
+  });
+
   it("preserves ReplyPayload and literal NO_REPLY through exactly one RPC call", async () => {
     for (const text of ["deliver this", "NO_REPLY"]) {
       const calls = [];
