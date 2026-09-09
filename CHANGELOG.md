@@ -7,6 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.21] — 2026-09-09
+
+### Behoben
+
+- **Die Log-Zeile `plur1bus-neo: worker captured turns=N` zählte den ganzen
+  hereingereichten Verlauf, nicht das Neue.** Nach dem Turn-ID-Fix in 7.12.20
+  stand dort weiter `turns=183`, obwohl der Lauf zwei Turns geschrieben hatte —
+  genau die Zahl, an der man den alten Fehler erkannt hätte. `captureNeoFromAgentEnd`
+  liefert jetzt zusätzlich `appended` (was der Lauf wirklich neu geschrieben
+  hat), der Worker zählt das als `turns/candidates/reactions/behaviorCards` und
+  führt den Verlauf getrennt als `transcript`. Die Zeile lautet jetzt
+  `worker captured new turns=2, candidates=4, reactions=1, behaviorCards=0
+  (transcript turns=183)`.
+
 ## [7.12.20] — 2026-09-09
 
 ### Behoben

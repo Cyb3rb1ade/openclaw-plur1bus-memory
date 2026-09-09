@@ -9721,7 +9721,8 @@ const plugin = {
                 signal: deriveBudgetedSignal(signal, neoAgentEndBudgetMs),
               });
               if (neoResult?.capture) {
-                api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
+                const transcriptTurns = neoResult.capture.transcript?.turns;
+                api.logger.info(`plur1bus-neo: worker captured new turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${Number.isFinite(transcriptTurns) ? ` (transcript turns=${transcriptTurns})` : ""}${background ? " (background)" : ""}`);
               }
               const logDrain = (drain) => {
                 if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {

@@ -59,6 +59,7 @@ describe("neo worker runtime", () => {
           candidates: 2,
           reactions: 1,
           behaviorCards: 1,
+          transcript: { turns: 2, candidates: 2, reactions: 1, behaviorCards: 1 },
         },
         drain: null,
       });
@@ -109,6 +110,7 @@ describe("neo worker runtime", () => {
         candidates: 2,
         reactions: 1,
         behaviorCards: 1,
+        transcript: { turns: 2, candidates: 2, reactions: 1, behaviorCards: 1 },
       });
       assert.ok(result.drain);
       assert.equal(result.drain.processed, 0);
@@ -162,6 +164,7 @@ describe("neo worker runtime", () => {
         candidates: 0,
         reactions: 0,
         behaviorCards: 0,
+        transcript: { turns: 0, candidates: 0, reactions: 0, behaviorCards: 0 },
       });
       assert.equal(result.drain.processed, 0);
       assert.equal(result.drain.deferred, 1);
