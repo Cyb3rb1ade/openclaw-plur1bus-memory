@@ -50,8 +50,11 @@ describe("searchNeoCandidatesGlobal", () => {
       const store = await seedStore(root);
       const query = [1, 0, 0, 0];
       const result = searchNeoCandidatesGlobal(store, { queryVector: query, now: NOW, minSimilarity: 0.5, halfLifeDays: 30 });
-      assert.equal(result.scanned, 10, "original lines plus the drain's status lines");
+      // 7.12.28: die Suche laeuft ueber den Metadatenindex (eine Zeile je
+      // Append, keine Statuszeilen des Drains) — scanned zaehlt IDs.
+      assert.equal(result.scanned, 5, "index holds one entry per id");
       assert.equal(result.unique, 5, "one revision per id");
+      assert.equal(result.index, "cached", "append path parsed the index in-process; other threads see tail/full");
       assert.equal(result.eligible, 4, "pruned candidate is filtered before scoring");
       assert.equal(result.withVector, 4);
       // Rezenz: 120 Tage alt bei Halbwertszeit 30 → Faktor 0,85 + 0,15·0,0625 ≈ 0,859,

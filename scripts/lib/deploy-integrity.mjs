@@ -236,6 +236,7 @@ export const DEPLOY_FILES = [
   "lib/promoted-memory-reindex.js",
   "scripts/embed-promoted-memories.mjs",
   "scripts/migrate-neo-vectors-sidecar.mjs",
+  "scripts/build-neo-candidate-index.mjs",
   // ── transitive index.js runtime closure ───────────────────────────────────
   "lib/atomic-json.js",
   "lib/critical-push-classifier.js",

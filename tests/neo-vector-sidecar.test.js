@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createNeoStore, migrateInlineVectorsToSidecar } from "../lib/neo-arch.js";
+import { createNeoStore, transitionRecordStatus, migrateInlineVectorsToSidecar } from "../lib/neo-arch.js";
 
 // 7.12.26: Vektoren liegen als Float32 im Sidecar, nicht mehr in den JSONL-Zeilen.
 // Testwerte sind bewusst float32-exakt (dyadische Brueche), damit deepStrictEqual
@@ -173,8 +173,15 @@ describe("neo vector sidecar", () => {
       assert.ok(existsSync(join(store.paths.workspaceDir, "vectors.0.f32")), "previous generation kept for readers holding the old index");
       assert.ok(existsSync(join(store.paths.workspaceDir, "vectors.1.f32")));
 
-      // Datensatz B verschwindet aus der JSONL (z. B. Cap): naechste Kompaktierung raeumt ihn.
+      // Datensatz B wird verworfen und verschwindet aus der JSONL (z. B. Cap).
+      store.appendCandidates([transitionRecordStatus(b, "pruned")]);
       writeFileSync(store.paths.candidates, readFileSync(store.paths.candidates, "utf8").split("\n").filter((l) => l && !l.includes('"id":"mem-b"')).join("\n") + "\n");
+      // 7.12.28: Solange der Metadatenindex B noch fuehrt, bleibt der Vektor.
+      const held = store.compactVectors();
+      assert.equal(held.orphans, 0, "indexed candidate keeps its vector beyond the journal window");
+      assert.equal(held.rewritten, false);
+      // Die Index-Kompaktierung streicht den verworfenen Eintrag; erst dann raeumt der Sidecar.
+      assert.equal(store.compactCandidateIndex().removedStatus, 1);
       const second = store.compactVectors();
       assert.equal(second.orphans, 1);
       assert.equal(second.generation, 2);

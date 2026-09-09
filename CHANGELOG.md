@@ -7,6 +7,53 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.28] — 2026-09-10
+
+### Hinzugefügt
+
+- **Kandidaten-Metadatenindex `candidate-index.jsonl`.** Die globale Suche
+  (7.12.27) parste je Recall die komplette Kandidaten-JSONL (Bernhardine: 5000
+  Zeilen, 10 MB, rund 0,3 s auf dem Main-Thread) und sah nur, was der
+  5000-Zeilen-Cap noch enthielt — ein rollierendes Fenster von rund 2500
+  eindeutigen Kandidaten. Der Index hält je Kandidat eine schlanke Projektion
+  (Statement, Status, Sichtbarkeit, Herkunft, Zeiten; kein
+  `normalizedStatement`, kein Vektor; Bernhardine: 3,1 MB für 2845 Einträge),
+  wird bei jedem Kandidaten-Append im selben Write-Lock mitgeschrieben
+  (append-only, kein Zeilen-Cap) und beim Lesen inkrementell nachgeladen:
+  Prozess-Cache je Datei mit (Inode, Größe, mtime), unter gleicher Inode wird
+  nur der neue Tail geparst, angeschnittene Zeilen werden zurückgehalten.
+  Gemessen auf Bernhardines Store: erster Recall 0,35 s (Vollparse), danach
+  0,06–0,14 s je Recall, davon der Großteil das Laden der rund 1800 Vektoren
+  aus dem Sidecar.
+- **Horizont unabhängig vom Cap.** Der Index behält bis zu
+  `neo.recall.global.maxCandidates` (20 000) Kandidaten nach Revisionszeit;
+  die Kompaktierung des Vektor-Sidecars zählt Index-IDs als lebend. Kandidaten,
+  die aus dem 5000-Zeilen-Fenster der JSONL fallen, bleiben damit suchbar —
+  mit Text und Vektor.
+- **Kompaktierung** (jüngste Revision je ID, nur `candidate`/`active`/
+  `promoted`, kein injizierter Kontext, Cap nach Revisionszeit) läuft in
+  `consolidate-daily` vor der Sidecar-Kompaktierung (`candidateIndex` im
+  Log), in `pruneAll`, und automatisch, sobald die Datei doppelt so viele
+  Zeilen wie IDs trägt.
+- **Bootstrap und Self-Heal.** Fehlt der Index, entsteht er beim nächsten
+  Kandidaten-Append aus dem Journal; bis dahin läuft die Suche über das
+  Journal-Fenster (`index=missing` im Log). Je Append werden die letzten 50
+  Journalzeilen gegen den Index geprüft, damit Zeilen eines älteren
+  Plugin-Stands nachgetragen werden.
+- **Skript** `scripts/build-neo-candidate-index.mjs [--root] [--workspace]
+  [--rebuild] [--max-entries] [--dry-run] [--json]` legt die Indizes beim
+  Deploy an (mit gestopptem Gateway ausführen).
+- **Log:** `global candidate search … index=cached|tail:N|full|missing/<Zeilen>
+  ms=…`. Store-Methoden `readCandidateIndex`, `ensureCandidateIndex`,
+  `rebuildCandidateIndex`, `compactCandidateIndex`, `candidateIndexStats`.
+
+### Geändert
+
+- Treffer der globalen Suche sind Kopien der Index-Einträge (der Vektor wird
+  nur der Kopie angehängt); die Prozess-Cache-Einträge bleiben vektorfrei.
+- `scanned` in der Log-Zeile zählt jetzt Index-Einträge (IDs), nicht
+  Journalzeilen.
+
 ## [7.12.27] — 2026-09-10
 
 ### Hinzugefügt

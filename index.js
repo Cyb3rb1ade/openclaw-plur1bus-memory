@@ -5018,7 +5018,7 @@ const plugin = {
       const global = searchNeoCandidatesGlobal(store, { queryVector, requester, excludeIds, ...neoGlobalRecall });
       for (const hit of global.hits) neoItems.push(hit.item);
       const top = global.hits[0];
-      api.logger?.info?.(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} ms=${global.ms}`);
+      api.logger?.info?.(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} index=${global.index}${global.indexLines ? `/${global.indexLines}` : ""} ms=${global.ms}`);
       return new Set(global.hits.map((hit) => String(hit.item.id)));
     };
     // Der Wartungslauf nimmt sich die Warteschlange am Stueck vor. Die Frist
@@ -7256,6 +7256,15 @@ const plugin = {
                 } catch (graphErr) {
                   graphPrune = { error: String(graphErr?.message || graphErr) };
                 }
+                // 7.12.28: Kandidaten-Metadatenindex auf die juengste Revision je ID
+                // ziehen (Cap = neo.recall.global.maxCandidates), bevor der Sidecar
+                // kompaktiert wird — dessen Live-Menge liest den Index mit.
+                let candidateIndex = null;
+                try {
+                  candidateIndex = typeof commandStore.compactCandidateIndex === "function" ? commandStore.compactCandidateIndex({ maxEntries: neoGlobalRecall.maxCandidates }) : null;
+                } catch (indexErr) {
+                  candidateIndex = { error: String(indexErr?.message || indexErr) };
+                }
                 // 7.12.26: verwaiste Vektor-Slots (Re-Embeddings, gecappte Zeilen)
                 // aus dem Sidecar raeumen; pruneAll hat keinen Aufrufer im Betrieb.
                 let vectorCompaction = null;
@@ -7270,6 +7279,7 @@ const plugin = {
                   deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
                   merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
                   graphPrune,
+                  candidateIndex,
                   vectorCompaction,
                 };
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
