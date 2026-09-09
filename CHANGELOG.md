@@ -7,6 +7,45 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.24] — 2026-09-09
+
+### Behoben
+
+- **Reminder-Schleife aus der eigenen Nudge.** Die `<reminder-nudge>` zitiert
+  den Reminder-Text samt Zeitfloskel; landete sie im Capture, wurde daraus
+  jede Runde ein neuer Reminder („in 1 minute“, 23 Stück an einem Tag bei
+  Bernhardine). Der Nudge-Block ist jetzt injizierter Kontext (wird vor dem
+  Capture gefiltert), `planReminderExtraction` entfernt ihn zusätzlich aus dem
+  Text und verwirft Reminder, die nur aus der Zeitfloskel bestehen
+  (`reason: no_topic`).
+- **agent_end-Watermark nach Kompaktierung.** Sinkt die Nachrichtenzahl unter
+  die gespeicherte Marke (z. B. 274 → 221), wird die Marke zurückgesetzt statt
+  den Nachbearbeitungsblock (Session-Digest, Light-Dream, Insights) bis zum
+  Wiedererreichen der alten Länge zu überspringen.
+- **Graph-Kanten auf verschwundene Erinnerungen.** `consolidate-daily` entfernt
+  jetzt Kanten, deren Endpunkte in der Agententabelle nicht mehr aktiv sind
+  (main: 800 von 5004, bernhardine: 73 von 5026), sowie die schwachen Altkanten
+  aus `shouldPrune`. Episode-Anker werden gegen `episodes.jsonl` aufgelöst,
+  Kanten in fremde Scopes bleiben unangetastet, Datensätze werden wörtlich
+  zurückgeschrieben (`rewriteGraphEdges`). Ergebnis in der Log-Zeile als
+  `graphPrune`.
+- **Operator-Pfad antwortete auf Englisch.** `openclaw plur1bus-command` setzt
+  jetzt `ctx.lang` aus `--locale <code>` oder der Plugin-Option `language`;
+  der RPC akzeptiert das optionale Feld `locale` (streng validiert).
+
+### Geändert
+
+- **Neo-Worker: Warm-up und Zeitmessung.** Der erste agent_end nach einem
+  Gateway-Neustart brauchte 8–18 s bis „worker captured“ (sonst 0,4–1 s);
+  offline lief derselbe Lauf in 0,2 s. Der Worker-Thread wird jetzt 20 s nach
+  `gateway_start` vorab gestartet, und die Log-Zeile trägt `timings`
+  (`storeMs`, `captureMs`, `drainMs`, `workerMs`, `queueWaitMs`, `spawnMs`,
+  `roundTripMs`), damit der nächste Kaltstart die Ursache zeigt statt einer
+  Vermutung.
+- **Neo-Store räumt Rewrite-Leichen weg.** `<datei>.<pid>.<ts>.tmp` älter als
+  15 Minuten (abgebrochene capJsonl/pruneAll-Rewrites; bernhardine hatte zwei
+  mit 388 MB) werden beim Öffnen des Stores gelöscht.
+
 ## [7.12.23] — 2026-09-09
 
 ### Geändert

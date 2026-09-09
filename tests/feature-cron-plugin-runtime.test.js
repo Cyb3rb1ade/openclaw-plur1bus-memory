@@ -100,6 +100,14 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "memory" }), /invalid PLUR1BUS command/);
     assert.throws(() => validatePluginCommandRequest({ agentId: "main", command: "/x" }), /fields/);
     assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", extra: 1 }), /fields/);
+    // 7.12.24: optionales locale, streng validiert
+    assert.deepStrictEqual(
+      validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", locale: " de " }),
+      { agentId: "main", sessionKey: "s", command: "/x", locale: "de" },
+    );
+    assert.equal(Object.hasOwn(validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x" }), "locale"), false);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", locale: "deutsch" }), /locale/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", locale: "" }), /locale/);
     assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "", command: "/x" }), /session/);
   });
 

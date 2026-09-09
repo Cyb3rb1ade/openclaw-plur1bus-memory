@@ -361,6 +361,7 @@ import {
   readBoundGraph,
   createGraphMetrics,
   writeGraphConstellationReport,
+  pruneGraphEdges,
   extractGraphSignals,
 } from "./lib/memory-graph.js";
 import {
@@ -5087,6 +5088,19 @@ const plugin = {
     const neoWorkerRuntime = neoEnabled
       ? createNeoWorkerRuntime({ logger: api.logger })
       : null;
+    // 7.12.24: Der erste agent_end nach einem Gateway-Neustart brauchte 8–18 s
+    // bis "worker captured" (sonst 0,4–1 s). Den Worker-Thread deshalb kurz
+    // nach dem Start anwerfen, ausserhalb jedes Turns.
+    const NEO_WORKER_WARMUP_DELAY_MS = 20_000;
+    if (neoWorkerRuntime && typeof api.on === "function") {
+      api.on("gateway_start", () => {
+        const timer = setTimeout(() => {
+          const ok = neoWorkerRuntime.warmUp();
+          api.logger?.info?.(`plur1bus-neo: worker warm-up ${ok ? "done" : "skipped"}`);
+        }, NEO_WORKER_WARMUP_DELAY_MS);
+        timer?.unref?.();
+      }, { timeoutMs: 5_000 });
+    }
     if (neoEnabled && neoMode === "slot") {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
@@ -7192,11 +7206,38 @@ const plugin = {
                       : await pool.withDb(internalAgent, runDailyPartition);
                   dailyRuns.push({ scope: dailyPartition.scope, result: partitionResult });
                 }
+                // 7.12.24: Graph-Kanten auf geloeschte oder zusammengefuehrte
+                // Erinnerungen wurden nie entfernt (main: 800 von 5004, bernhardine:
+                // 73 von 5026 am 09.09.2026) und belegten Platz unter dem 5000er-Cap.
+                let graphPrune = null;
+                try {
+                  const graphEdges = commandStore.readGraphEdges(100_000);
+                  if (graphEdges.length > 0) {
+                    const liveRows = await pool.withDb(internalAgent, async (agentDb) => {
+                      if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
+                      if (!agentDb?.table) return null;
+                      return agentDb.table.query().select(["id", "status"]).limit(500_000).toArray();
+                    });
+                    if (Array.isArray(liveRows)) {
+                      const liveMemoryIds = new Set(liveRows
+                        .filter((row) => !row.status || row.status === "active")
+                        .map((row) => String(row.id)));
+                      const episodeIds = new Set(commandStore.readEpisodes(100_000).map((episode) => String(episode.id)));
+                      const pruned = pruneGraphEdges(graphEdges, { liveMemoryIds, episodeIds });
+                      if (pruned.after !== pruned.before) commandStore.rewriteGraphEdges(pruned.kept);
+                      const { kept: _kept, ...graphPruneCounts } = pruned;
+                      graphPrune = graphPruneCounts;
+                    }
+                  }
+                } catch (graphErr) {
+                  graphPrune = { error: String(graphErr?.message || graphErr) };
+                }
                 const result = {
                   partitionResults: dailyRuns,
                   compacted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.compacted || 0), 0),
                   deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
                   merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
+                  graphPrune,
                 };
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
@@ -8466,7 +8507,7 @@ const plugin = {
         // session key must name a direct chat of the requested agent; the
         // handler's own authorization (allowedUserIds, confirmations) applies
         // unchanged, so this grants nothing the chat owner could not do.
-        const runOperatorCommand = async ({ agentId, sessionKey, command }) => {
+        const runOperatorCommand = async ({ agentId, sessionKey, command, locale }) => {
           const trimmed = String(command || "").trim();
           const match = /^\/([A-Za-z0-9_-]+)(?:@\S+)?(?:\s+([\s\S]*))?$/.exec(trimmed);
           if (!match) throw new Error("command must look like /name [args]");
@@ -8493,6 +8534,12 @@ const plugin = {
             origin: "operator",
             source: "cli",
           };
+          // 7.12.24: Ohne Chatverlauf fiel die Sprache auf Englisch zurueck.
+          // resolveLocale nimmt ctx.lang vor der Nachrichten-Erkennung.
+          const operatorLang = (typeof locale === "string" && locale.trim())
+            || (typeof cfg.language === "string" && cfg.language.trim())
+            || "";
+          if (operatorLang) commandCtx.lang = operatorLang;
           const result = await spec.handler(commandCtx);
           const text = typeof result === "string" ? result : result?.text;
           return { text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY" };
@@ -9844,7 +9891,10 @@ const plugin = {
               });
               if (neoResult?.capture) {
                 const transcriptTurns = neoResult.capture.transcript?.turns;
-                api.logger.info(`plur1bus-neo: worker captured new turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${Number.isFinite(transcriptTurns) ? ` (transcript turns=${transcriptTurns})` : ""}${background ? " (background)" : ""}`);
+                const neoTimings = neoResult.timings && typeof neoResult.timings === "object"
+                  ? ` timings=${JSON.stringify(neoResult.timings)}`
+                  : "";
+                api.logger.info(`plur1bus-neo: worker captured new turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${Number.isFinite(transcriptTurns) ? ` (transcript turns=${transcriptTurns})` : ""}${neoTimings}${background ? " (background)" : ""}`);
               }
               const logDrain = (drain) => {
                 if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
@@ -10250,8 +10300,16 @@ const plugin = {
             // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
             const neoStore = getNeoStore(ctx, event);
             const hooks = neoStore.readHooks();
-            const lastCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
+            const recordedCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
             const currentCount = event.messages?.length || 0;
+            // 7.12.24: Nach einer Kompaktierung ist der Verlauf kuerzer als die
+            // Marke (z. B. 274 → 221); ohne Reset blieb dieser Block stumm, bis
+            // der Verlauf die alte Laenge wieder ueberschritt.
+            let lastCount = recordedCount;
+            if (currentCount < recordedCount) {
+              api.logger.info(`memory-lancedb-namespaced: message count dropped (${recordedCount} → ${currentCount}), resetting the agent_end watermark`);
+              lastCount = 0;
+            }
 
             if (currentCount <= lastCount) {
               api.logger.info(`memory-lancedb-namespaced: no new messages since last processing (${lastCount} → ${currentCount})`);
