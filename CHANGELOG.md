@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.25] — 2026-09-09
+
+### Behoben
+
+- **Erster agent_end nach jedem Gateway-Neustart brauchte 10–17 s im
+  Neo-Worker.** Die `timings` aus 7.12.24 zeigten es (`captureMs 16798`, alles
+  andere im Millisekundenbereich), offline reproduziert mit Bernhardines Store:
+  Der Cap-Schutz in `appendJsonl` merkt sich die nächste Prüfschwelle nur im
+  Prozess. Nach einem Neustart lief der erste Append deshalb wieder in den
+  Tail-Read über die 154-MB-Kandidatendatei und den anschließenden Vollrewrite
+  auf 5000 Zeilen. Der Stand liegt jetzt in einem Sidecar `<datei>.cap.json`
+  (Schwelle plus Dateigröße); schrumpft die Datei unter die notierte Größe
+  (Prune, Merge), wird neu geprüft. Der erste Turn nach dem Deploy von 7.12.25
+  zahlt die Prüfung ein letztes Mal, danach ist der Neustart-Effekt weg.
+
 ## [7.12.24] — 2026-09-09
 
 ### Behoben
