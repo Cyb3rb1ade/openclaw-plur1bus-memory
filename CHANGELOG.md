@@ -7,6 +7,35 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.22] — 2026-09-09
+
+### Geändert
+
+- **Emotions-Tier-3 aus dem Turn in den Cron `emotion-refine` verlegt.** Der
+  Capture-Pfad rief bisher je neu gespeicherter Erinnerung den LLM-Klassifizierer
+  (Tier 3) auf, sobald Tier 1/2 unter der Eskalationsschwelle lagen — 4–16 s je
+  Erinnerung, mehrere je Turn, und damit der größte Posten im agent_end-Budget.
+  Seit 7.12.22 bewertet der Capture-Pfad (Auto-Capture, Merge-Pfad und das
+  `memory_store`-Tool) neue Erinnerungen nur noch lexikalisch (Tier 1/2),
+  speichert das Ergebnis vorläufig und setzt Zeilen unter der Schwelle auf die
+  neue Spalte `emotionStatus = pending_t3`. Der Feature-Cron
+  `plur1bus emotion-refine` (stündlich, ohne Zustellung, je Agent) bessert diese
+  Zeilen mit Tier 3 nach (`/plur1bus internal emotion-refine`; max. 100 Zeilen
+  und 240 s je Lauf; bei drei Provider-Fehlern am Stück bricht der Lauf ab und
+  die Zeilen bleiben `pending_t3`). Welche Erinnerungen Tier 3 bekommen, ändert
+  sich nicht — nur der Zeitpunkt. Die Stimmungszeile der Antwort ist nicht
+  betroffen, sie entsteht im Recall aus der aktuellen Nachricht.
+- **Neue Option `emotion.t3.captureMode`** (`deferred` = Default, `inline` =
+  altes Verhalten). Ein fest verdrahteter Tier (`emotion.tier != auto`) oder ein
+  abgeschaltetes Tier 3 lassen den Capture-Pfad ebenfalls unverändert.
+- **Installer:** `scripts/setup-feature-crons.mjs` (und der automatische Lauf
+  beim Gateway-Start) plant `plur1bus emotion-refine <agent>` für jeden
+  gebundenen Agenten, solange `emotion.t3.enabled` nicht `false` und
+  `captureMode` nicht `inline` ist — jetzt bis zu zehn Jobs je Agent.
+- **Schema:** neue Spalte `emotionStatus` (`final` | `pending_t3`); Bestand
+  wird bei der Lazy-Migration als `final` angelegt, kein Backfill.
+- `emotionScoreToLegacy` liefert zusätzlich `confidence` und `tierUsed`.
+
 ## [7.12.21] — 2026-09-09
 
 ### Behoben

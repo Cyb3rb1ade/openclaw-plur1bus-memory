@@ -61,6 +61,7 @@ const TABLE_NAME = "memories";
       "emotionalIntensity",
       "emotionalDominant",
       "moodContextAtCapture",
+      "emotionStatus",
       "replayCount",
       "lastReplayed",
       "retrievalCount",

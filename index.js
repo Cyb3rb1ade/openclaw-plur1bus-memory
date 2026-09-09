@@ -1450,6 +1450,7 @@ class MemoryDB {
     if (normalized.emotionalIntensity == null) normalized.emotionalIntensity = 0.0;
     if (normalized.emotionalDominant == null) normalized.emotionalDominant = "neutral";
     if (normalized.moodContextAtCapture == null) normalized.moodContextAtCapture = "";
+    if (normalized.emotionStatus == null) normalized.emotionStatus = "final";
     if (normalized.replayCount == null) normalized.replayCount = 0;
     if (normalized.lastReplayed == null) normalized.lastReplayed = 0;
     if (normalized.retrievalCount == null) normalized.retrievalCount = 0;
@@ -1585,6 +1586,9 @@ class MemoryDB {
             { name: 'emotionalIntensity', valueSql: '0.0' },
             { name: 'emotionalDominant', valueSql: "'neutral'" },
             { name: 'moodContextAtCapture', valueSql: "''" },
+            // 7.12.22: Bestand gilt als fertig klassifiziert; nur neue Zeilen
+            // aus dem entkoppelten Capture stehen auf pending_t3.
+            { name: 'emotionStatus', valueSql: "'final'" },
             { name: 'replayCount', valueSql: '0' },
             { name: 'lastReplayed', valueSql: '0' },
             { name: 'retrievalCount', valueSql: '0' },
@@ -1689,6 +1693,7 @@ class MemoryDB {
             emotionalIntensity: 0,
             emotionalDominant: "neutral",
             moodContextAtCapture: "",
+            emotionStatus: "final",
             replayCount: 0,
             lastReplayed: 0,
             retrievalCount: 0,
@@ -1946,6 +1951,7 @@ class MemoryDB {
         emotionalIntensity: r.emotionalIntensity ?? 0,
         emotionalDominant: r.emotionalDominant || "neutral",
         moodContextAtCapture: deserializeEmotionalValence(r.moodContextAtCapture),
+        emotionStatus: r.emotionStatus || "final",
         replayCount: r.replayCount ?? 0,
         lastReplayed: r.lastReplayed ?? 0,
         retrievalCount: r.retrievalCount ?? 0,
@@ -4829,6 +4835,39 @@ const plugin = {
     if (emotionTier !== "auto") {
       api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
     }
+    // 7.12.22: Tier 3 fuer neue Erinnerungen laeuft nicht mehr im Turn. Die
+    // LLM-Klassifikation je gespeicherter Erinnerung (4–16 s, mehrere je
+    // Turn) dominierte das agent_end-Budget. Im Modus "deferred" (Default)
+    // bewertet der Capture-Pfad nur lexikalisch (Tier 1/2), speichert das
+    // Ergebnis vorlaeufig und markiert Zeilen unter der Eskalationsschwelle
+    // als emotionStatus=pending_t3; der Feature-Cron `emotion-refine` holt
+    // Tier 3 nach. Die Stimmungszeile der Antwort ist davon unberuehrt, sie
+    // entsteht im Recall aus der aktuellen Nachricht. Ein fest verdrahteter
+    // Tier (emotion.tier != auto) und captureMode "inline" behalten das alte
+    // Verhalten.
+    const emotionT3CaptureMode = emotionCfg.t3?.captureMode === "inline" ? "inline" : "deferred";
+    const emotionDeferredCapture = emotionT3CaptureMode === "deferred" && emotionT3Enabled && emotionTier === "auto";
+    if (emotionT3Enabled) {
+      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 capture mode ${emotionDeferredCapture ? "deferred (emotion-refine cron)" : "inline"}`);
+    }
+    /**
+     * Emotionsbewertung fuer eine neu zu speichernde Erinnerung.
+     * @param {string} text
+     * @param {{agentId?: string, signal?: AbortSignal}} [context]
+     * @returns {Promise<{emotion: object, emotionStatus: "final"|"pending_t3"}>}
+     */
+    const classifyEmotionForStore = async (text, context = {}) => {
+      if (!emotionDeferredCapture) {
+        const emotion = await inferEmotionalValenceAsync(text, "user", null, context);
+        return { emotion, emotionStatus: "final" };
+      }
+      // Gleiche Tier-1/2-Route wie sonst, nur ohne den Tier-3-Sprung; der
+      // Cron greift genau dort, wo der Router eskaliert haette.
+      const emotion = await inferEmotionalValenceAsync(text, "user", null, { ...context, skipTier3: true });
+      // Fehlende Konfidenz (synchroner Tier-1-Fallback) zaehlt als unsicher.
+      const confident = Number.isFinite(emotion?.confidence) && emotion.confidence >= emotionT3EscalationConfidence;
+      return { emotion, emotionStatus: confident ? "final" : "pending_t3" };
+    };
 
     // Base DB path — früh auflösen, damit Meta-Cognition-State-Read (und
     // spätere Initialisierung) denselben Pfad verwenden.
@@ -4953,6 +4992,11 @@ const plugin = {
     // der Aufrufer ein Ergebnis mit Restzahl bekommt statt eines Abbruchs.
     const NEO_MANUAL_DRAIN_MAX_ITEMS = 100000;
     const NEO_MANUAL_DRAIN_DEADLINE_MS = 480000;
+    // emotion-refine (7.12.22): je Lauf hoechstens so viele pending_t3-Zeilen
+    // mit Tier 3 nachbessern; die Frist bleibt deutlich unter dem RPC-Timeout.
+    const EMOTION_REFINE_MAX_ROWS = 100;
+    const EMOTION_REFINE_DEADLINE_MS = 240000;
+    const EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES = 3;
     // Hook-Drain: Marge fuer den laufenden Embed-Aufruf (die 7 s zwischen
     // Worker-Abbruch und Rueckkehr waren genau der) und Mindestrest, unter
     // dem sich ein Start nicht lohnt.
@@ -7501,6 +7545,73 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "embedding-drain", ...result });
               }
+              if (subKey === "emotion-refine") {
+                if (!emotionT3Enabled) {
+                  return formatJsonCommandResult({ job: "emotion-refine", skipped: true, reason: "emotion_t3_disabled" });
+                }
+                const refineStartedAt = Date.now();
+                const runtimeLlm = commandCtx?.runtimeContext?.llm;
+                const result = await pool.withDb(internalAgent, async (agentDb) => {
+                  if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
+                  const counts = { refined: 0, finalized: 0, failed: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
+                  if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus")) {
+                    return { ...counts, skipped: true, reason: "no_emotion_status_column" };
+                  }
+                  const rows = await agentDb.table.query()
+                    .where("emotionStatus = 'pending_t3'")
+                    .limit(EMOTION_REFINE_MAX_ROWS + 1)
+                    .toArray();
+                  counts.scanned = Math.min(rows.length, EMOTION_REFINE_MAX_ROWS);
+                  let consecutiveFailures = 0;
+                  for (const row of rows.slice(0, EMOTION_REFINE_MAX_ROWS)) {
+                    if (Date.now() - refineStartedAt > EMOTION_REFINE_DEADLINE_MS) {
+                      counts.deadlineHit = true;
+                      break;
+                    }
+                    const status = String(row.status || "active");
+                    if (status !== "active") {
+                      // Ueberholte oder geloeschte Zeilen brauchen keinen LLM-Lauf,
+                      // sollen aber nicht bei jedem Lauf erneut gescannt werden.
+                      await agentDb.update(row.id, { emotionStatus: "final" });
+                      counts.finalized++;
+                      continue;
+                    }
+                    const refined = await inferEmotionalValenceAsync(
+                      String(row.text || "").slice(0, 2000),
+                      "user",
+                      3,
+                      { agentId: internalAgent, runtimeLlm },
+                    );
+                    // Ein Provider-Ausfall kommt als neutraler Tier-3-Fallback
+                    // mit Konfidenz 0 zurueck (lib/tier3-llm.js), nie als Wurf.
+                    const refineFailed = refined?.tierUsed !== 3
+                      || (!(Number(refined.confidence) > 0)
+                        && refined.emotionalDominant === "neutral"
+                        && !(Number(refined.emotionalIntensity) > 0));
+                    if (refineFailed) {
+                      // Provider-Ausfall: Zeile bleibt pending, naechster Lauf
+                      // versucht es erneut. Mehrere Fehlschlaege am Stueck =
+                      // Route tot, Lauf abbrechen statt Zeitbudget verheizen.
+                      counts.failed++;
+                      if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
+                      continue;
+                    }
+                    consecutiveFailures = 0;
+                    await agentDb.update(row.id, {
+                      emotionalValence: serializeEmotionalValence(refined),
+                      emotionalIntensity: Number(refined.emotionalIntensity) || 0,
+                      emotionalDominant: refined.emotionalDominant || "neutral",
+                      emotionStatus: "final",
+                    });
+                    counts.refined++;
+                  }
+                  counts.pending = Math.max(0, rows.length - counts.refined - counts.finalized);
+                  counts.ms = Date.now() - refineStartedAt;
+                  return counts;
+                });
+                api.logger?.info?.(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "emotion-refine", ...result });
+              }
               if (subKey === "feedback-report") {
                 if (!commandCtx.workspaceDir) {
                   return formatJsonCommandResult({ job: "feedback-report", skipped: true, reason: "no_workspace" });
@@ -7579,7 +7690,7 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect"] });
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -9977,7 +10088,7 @@ const plugin = {
                 });
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId, signal });
+                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal });
                 throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
@@ -10011,6 +10122,7 @@ const plugin = {
                   emotionalIntensity: captureEmotion.emotionalIntensity,
                   emotionalDominant: captureEmotion.emotionalDominant,
                   moodContextAtCapture: serializeEmotionalValence(captureMoodContext),
+                  emotionStatus: captureEmotionStatus,
                   topics: graphSignals.topics,
                   entities: graphSignals.entities,
                   people: graphSignals.people,
@@ -10874,7 +10986,7 @@ const plugin = {
                       }
                       const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
-                      const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
+                      const { emotion: mergedEmotion, emotionStatus: mergedEmotionStatus } = await classifyEmotionForStore(mergeResult.mergedText, { agentId });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
                       const mergedEntry = applyDynamicsDefaults({
@@ -10886,6 +10998,7 @@ const plugin = {
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
+                        emotionStatus: mergedEmotionStatus,
                         validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
                       }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
                       return { mergedEntry, mergeResult, mergedImportance };
@@ -10914,7 +11027,7 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const emotion = await inferEmotionalValenceAsync(params.text, "user", null, { agentId });
+              const { emotion, emotionStatus } = await classifyEmotionForStore(params.text, { agentId });
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
@@ -10925,6 +11038,7 @@ const plugin = {
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
+                emotionStatus,
                 validFrom: capturedValidFrom, validUntil: capturedValidUntil,
               }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
               await db.store(entry);

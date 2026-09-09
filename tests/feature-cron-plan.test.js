@@ -29,6 +29,7 @@ describe("REQUIRED_FEATURE_CRONS", () => {
         "consolidate-daily",
         "auto-accept-stale",
         "embedding-drain",
+        "emotion-refine",
         "classify-recent",
         "rem-dream",
         "skill-miner",
