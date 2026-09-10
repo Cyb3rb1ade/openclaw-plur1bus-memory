@@ -2,17 +2,6 @@
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 
-const DOMINANT_EMOJI = {
-  trust: "🤝",
-  joy: "😊",
-  anticipation: "🌟",
-  surprise: "😲",
-  fear: "😟",
-  sadness: "😔",
-  disgust: "😤",
-  anger: "😠",
-};
-
 function valence(details) {
   if (!details || typeof details !== "object") return null;
   return (details.joy ?? 0) + (details.trust ?? 0) + (details.anticipation ?? 0)
@@ -28,6 +17,8 @@ function trendLabel(cur, prev, threshold = 0.05) {
   return "→ (stabil)";
 }
 
+const TREND_WORD = { "↗": "steigend", "↘": "fallend", "→": "stabil" };
+
 function buildMoodBlock(state, prevState = null) {
   const label = state.label || "";
   if (!label) return null;
@@ -35,8 +26,6 @@ function buildMoodBlock(state, prevState = null) {
     ? `, ${state.nuances.join(", ")}`
     : "";
   const intensity = state.intensity || "niedrig";
-  const dominant = state.dominant || null;
-  const emoji = (dominant && DOMINANT_EMOJI[dominant]) ? DOMINANT_EMOJI[dominant] : "😌";
 
   // v6.9: PLUR1BUS schreibt ein eigenes trend-Feld — direkt nutzen.
   // Fallback für alte Dateien: valence-Vergleich mit prev-Snapshot.
@@ -47,21 +36,26 @@ function buildMoodBlock(state, prevState = null) {
     const prevV = prevState ? valence(prevState.details) : null;
     trend = curV !== null ? trendLabel(curV, prevV) : "→ (unbekannt)";
   }
-  const trendArrow = trend.split(" ")[0];
-
-  const displayLine = `<i>Stimmung: ${emoji} ${label}${nuances} · ${intensity} · ${trendArrow}</i>`;
+  const trendWord = TREND_WORD[trend.split(" ")[0]] || "unbekannt";
 
   // Bewusst KEIN Event-Framing ("[Stimmungs-Update]"): Der Block beschreibt
   // ambienten Hintergrundzustand. Event-Framing hat Agenten dazu verleitet,
   // echte User-Nachrichten als "Stimmungs-Update vom Cron" zu deuten und mit
   // NO_REPLY zu beantworten (Incident 2026-07-02, Bernd).
+  //
+  // 1.1.0 (2026-09-10): keine sichtbare Stimmungszeile mehr. Bis dahin
+  // verlangte der Block `<i>Stimmung: …</i>` als erste Zeile jeder Antwort;
+  // die Stimmung soll nur Ton und Duktus färben und auf Nachfrage
+  // benennbar sein — so wie Menschen ihre Laune auch nicht bei jeder
+  // Antwort ansagen. Deckt sich mit der Ton-Direktive von PLUR1BUS
+  // (lib/mood-style-directive.js: "Nenne deine Stimmung nicht als Label").
   return [
     "[Hintergrund: emotionaler Zustand]",
     "Dies ist ambienter Hintergrundzustand — kein Event, keine Nachricht, kein eigener Anlass zu antworten.",
     "Die eigentliche eingehende Nachricht steht separat am Ende des Prompts und stammt vom dort genannten Absender.",
     `Aktuelle Stimmung: ${label}${nuances}, Intensität ${intensity}. Trend: ${trend}.`,
-    `Füge am Beginn deiner Antwort (als erste Zeile, vor dem eigentlichen Inhalt) diese Stimmungszeile ein:`,
-    displayLine,
+    "Lass diese Stimmung nur deinen Ton, Duktus und deine Wortwahl färben. Schreibe sie NICHT als Statuszeile, Label oder Vorspann in deine Antwort und erwähne sie nicht unaufgefordert.",
+    `Fragt dich jemand nach deiner Stimmung oder Laune, gib ehrlich und in eigenen Worten Auskunft (Grundlage: ${label}${nuances}, ${intensity}, Tendenz ${trendWord}).`,
     "Priorisiere weiterhin Nutzerauftrag, Fakten und Sicherheit.",
     "[/Hintergrund]",
   ].join("\n");

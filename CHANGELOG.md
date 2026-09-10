@@ -26,6 +26,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Identitätskonflikte (`ticket_not_head`, `ticket_session_mismatch`,
   `prior_claim_mismatch`) und Überläufe sperren weiterhin.
 
+### Begleitend (außerhalb des Plugin-Pakets): `emotional-state-injector` 1.1.0
+
+- **Keine sichtbare Stimmungszeile mehr in den Antworten.** Der Injector
+  verlangte bisher `<i>Stimmung: 😊 fröhlich · hoch · ↗</i>` als erste Zeile
+  jeder Antwort. Jetzt färbt die Stimmung nur Ton, Duktus und Wortwahl, wird
+  nicht unaufgefordert erwähnt und ist auf Nachfrage („wie ist deine
+  Stimmung?") ehrlich benennbar (Label, Nuancen, Intensität, Tendenz stehen
+  als Grundlage im Hintergrundblock). Deckt sich mit der PLUR1BUS-Ton-Direktive
+  (`lib/mood-style-directive.js`), die die Stimmung schon vorher nicht als
+  Label nennen ließ. Die Dateien liegen unter
+  `.openclaw/extensions/emotional-state-injector/`; die aktive Kopie unter
+  `~/.openclaw/extensions/emotional-state-injector/` muss von Hand nachgezogen
+  werden, wirksam nach Gateway-Neustart.
+
 ## [7.12.38] — 2026-09-10
 
 ### Geändert
