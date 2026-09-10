@@ -7,6 +7,22 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.32] — 2026-09-10
+
+### Behoben
+
+- **Dispatch-Ticket auch für Sprach- und Bildnachrichten.** Die Beobachtung
+  von `reply_dispatch` verlangte einen vorhandenen `CommandBody` unter 4000
+  Zeichen; Fotos ohne Bildunterschrift (leerer Text) und lange Sprachnachrichten
+  (Transkript) erzeugten kein Ticket (`[memory-turn-routes.command-body]
+  failed: invalid_command_body`), und der Prompt-Hook fiel mit `reason=ticket`
+  auf den unauthentifizierten Kontext zurück — erster Live-Nachweis nach
+  7.12.30 (Eva, 10.09.2026 12:47: Provider und Konto passten, Ticket fehlte).
+  Der Text dient nur der Frage, ob ein `/`-Kommando vorliegt: es gilt jetzt
+  der erste vorhandene Text aus `CommandBody`, `BodyForCommands`,
+  `BodyForAgent`, `Body`, `RawBody`, `Transcript`, ohne Längenpflicht; fehlt
+  jeder Text, ist es kein Kommando.
+
 ## [7.12.31] — 2026-09-10
 
 ### Hinzugefügt
