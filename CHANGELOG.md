@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.42] — 2026-09-10
+
+### Geändert
+
+- **Episoden-Karten: Erwähnte Personen getrennt von Sprechern, Emotion aus
+  dem Gespräch.** Bernds Feintuning-Befund vom 10.09.2026 22:1x:
+  - `participants` sind nur noch die, die gesprochen haben; Personen, ÜBER die
+    gesprochen wurde, stehen im neuen Feld `mentioned` (Karte und
+    Neo-Datensatz). Der episodische Recall wertet `mentioned` schwächer als
+    `participants`, damit „wann war X dabei?" keine Karten trifft, in denen X
+    nur Thema war.
+  - Die Emotion der Karte kommt jetzt vom Modell, das das Gespräch gelesen
+    hat (`emotion` + neue Stärke `emotionIntensity` niedrig/mittel/hoch →
+    0,3/0,55/0,8); sachliche Gespräche bleiben `neutral`. Die EmotionEngine
+    beschreibt den inneren Zustand des Agenten und lieferte „sadness 0,76"
+    für einen sachlichen Testabend; sie bleibt nur Rückfall ohne Modell.
+  - Unverändert: Episoden fassen bis zu 50 Turns binnen 30-Minuten-Pausen;
+    Bernds 50-Turn-Karte entstand aus dem Testschub mit Dutzenden kurzen
+    Nachrichten.
+
 ## [7.12.41] — 2026-09-10
 
 ### Behoben

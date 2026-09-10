@@ -100,6 +100,7 @@ describe("episodes (7.12.40): Metadaten", () => {
         topics: ["Schulterschmerzen", "Kissen", "", "x".repeat(80), "Salbe", "Schulterschmerzen", "Nacht", "Sechstes"],
         people: ["Eva", "Christian", "Bernd dasBot", 42],
         emotion: "Sadness",
+        emotionIntensity: "niedrig",
       }) + "\n```";
     };
     const base = createEpisode(turns, { participantNames: names, agentId: "main", mood: { dominant: "fear", intensity: "niedrig", details: { fear: 0.1 } } });
@@ -110,12 +111,21 @@ describe("episodes (7.12.40): Metadaten", () => {
     assert.match(ep.summary, /Kissen/);
     assert.equal(ep.narrativeArc, "exploration", "invalid arc falls back");
     assert.deepEqual(ep.topics, ["Schulterschmerzen", "Kissen", "Salbe", "Nacht", "Sechstes"], "max 5, dedup, length bounds");
-    assert.deepEqual(ep.participants, ["Christian", "Bernd dasBot", "Eva"], "speakers first, mentioned people after, no duplicates");
-    assert.equal(ep.emotionalDominant, "sadness", "engine was low → LLM emotion counts");
-    // Engine mittel/hoch schlaegt das Modell.
+    assert.deepEqual(ep.participants, ["Christian", "Bernd dasBot"], "7.12.42: only speakers are participants");
+    assert.deepEqual(ep.mentioned, ["Eva"], "mentioned people live in their own field, no speakers, no numbers");
+    assert.equal(ep.emotionalDominant, "sadness", "the model read the conversation → its emotion counts");
+    assert.equal(ep.emotionalIntensity, 0.3, "niedrig → 0.3");
+    // 7.12.42: das Modell schlaegt die Engine — auch bei hohem Engine-Ausschlag.
     const strong = createEpisode(turns, { participantNames: names, mood: { dominant: "joy", intensity: "hoch", details: { joy: 0.8 } } });
-    const ep2 = applyEnrichment(strong, { emotion: "sadness" }, { turns, names });
-    assert.equal(ep2.emotionalDominant, "joy");
+    const ep2 = applyEnrichment(strong, { emotion: "neutral", emotionIntensity: "hoch" }, { turns, names });
+    assert.equal(ep2.emotionalDominant, "neutral", "sachliches Gespraech bleibt neutral, egal wie die Engine steht");
+    assert.ok(ep2.emotionalIntensity <= 0.3);
+    const ep3 = applyEnrichment(strong, { emotion: "anticipation", emotionIntensity: 0.9 }, { turns, names });
+    assert.equal(ep3.emotionalDominant, "anticipation");
+    assert.equal(ep3.emotionalIntensity, 0.9);
+    // Ohne Emotion vom Modell bleibt die Engine massgeblich.
+    const ep4 = applyEnrichment(strong, { title: "x" }, { turns, names });
+    assert.equal(ep4.emotionalDominant, "joy");
   });
 
   it("ohne Modell bleiben Titel/Summary generisch, mit Modell kommt alles in die Karte", async () => {
@@ -141,6 +151,7 @@ describe("episodes (7.12.40): Metadaten", () => {
     assert.ok(files.some((f) => f.includes("milchsuppe-für-morgen")), files.join(","));
     const card = readFileSync(written.path, "utf8");
     assert.match(card, /participants: \[Christian, Bernd dasBot\]/);
+    assert.ok(!card.includes("mentioned:"), "no mentioned line when nobody was mentioned");
     assert.match(card, /topics: \[Milchsuppe, Abendessen\]/);
     assert.match(card, /emotional_dominant: joy/);
     assert.match(card, /# Milchsuppe für morgen/);
@@ -203,5 +214,22 @@ describe("episodes (7.12.40): Metadaten", () => {
     const w3 = writeEpisodeToVault(ep3, dir, { replacePath: w2.path });
     assert.equal(w3.replaced, false);
     assert.equal((readFileSync(w3.path, "utf8").match(/^episode_id:/gm) || []).length, 3);
+  });
+
+  it("7.12.42: mentioned steht in der Karte und zaehlt beim episodischen Recall schwaecher als participants", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const names = { user: "Christian", assistant: "Bernd dasBot" };
+    const turns = [turn("user", "Bernhardine hat gestern was Lustiges gesagt", 0), turn("assistant", "Typisch Bernhardine.", 1)];
+    const ep = applyEnrichment(createEpisode(turns, { participantNames: names, title: "Über Bernhardine" }), { people: ["Bernhardine", "Audrey Hepburn"], emotion: "joy", emotionIntensity: "mittel" }, { turns, names });
+    const w = writeEpisodeToVault(ep, dir);
+    const card = readFileSync(w.path, "utf8");
+    assert.match(card, /participants: \[Christian, Bernd dasBot\]/);
+    assert.match(card, /mentioned: \[Bernhardine, Audrey Hepburn\]/);
+    assert.match(card, /emotional_dominant: joy/);
+    assert.match(card, /emotional_intensity: 0.55/);
+    const { recallEpisodically } = await import("../lib/episodes.js");
+    const hits = await recallEpisodically("wann war bernhardine dabei", null, [ep], { minScore: 0 });
+    assert.equal(hits.length, 1);
+    assert.ok(hits[0].score < 0.5, `mention alone scores low: ${hits[0].score}`);
   });
 });
