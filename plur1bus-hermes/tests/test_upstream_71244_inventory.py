@@ -44,10 +44,8 @@ class Upstream71244InventoryTests(unittest.TestCase):
         """Require evidence before a historical snapshot's audit progresses."""
         self.assertTrue(AUDIT_METADATA_FIELDS <= set(row))
         self.assertIn(row["auditStatus"], ALLOWED_AUDIT_STATUSES)
-        self.assertIsInstance(row["auditEvidence"], list)
-        self.assertIsInstance(row["auditTests"], list)
-        self.assertTrue(all(isinstance(item, str) and item for item in row["auditEvidence"]))
-        self.assertTrue(all(isinstance(item, str) and item for item in row["auditTests"]))
+        self._assert_nonblank_string_list(row["auditEvidence"])
+        self._assert_nonblank_string_list(row["auditTests"])
         if row["auditStatus"] == "unreviewed":
             self.assertFalse(row["auditEvidence"])
             self.assertFalse(row["auditTests"])
@@ -55,6 +53,21 @@ class Upstream71244InventoryTests(unittest.TestCase):
             self.assertTrue(row["auditEvidence"])
         if row["auditStatus"] == "verified":
             self.assertTrue(row["auditTests"])
+
+    def _assert_nonblank_string_list(self, values: object) -> None:
+        """Reject blank or non-string proof entries without coercion."""
+        self.assertIsInstance(values, list)
+        self.assertTrue(
+            all(isinstance(item, str) and item.strip() for item in values)
+        )
+
+    def _assert_verified_commit_proofs(self, row: dict[str, object]) -> None:
+        """Require nonblank evidence and tests for a verified commit row."""
+        if row["nativeStatus"] == "verified":
+            self.assertTrue(row["nativeEvidence"])
+            self.assertTrue(row["tests"])
+            self._assert_nonblank_string_list(row["nativeEvidence"])
+            self._assert_nonblank_string_list(row["tests"])
 
     def _assert_legacy_row(
         self, actual: dict[str, object], expected: dict[str, str]
@@ -85,8 +98,7 @@ class Upstream71244InventoryTests(unittest.TestCase):
             self.assertIsInstance(row["files"], list)
             self.assertIsInstance(row["nativeEvidence"], list)
             self.assertIsInstance(row["tests"], list)
-            if row["nativeStatus"] == "verified":
-                self.assertTrue(row["nativeEvidence"] and row["tests"])
+            self._assert_verified_commit_proofs(row)
 
     def test_pinned_refs_and_changed_files_are_git_derived(self) -> None:
         self.assertEqual(self.data["upstreamBase"], UPSTREAM_BASE)
@@ -126,6 +138,32 @@ class Upstream71244InventoryTests(unittest.TestCase):
         }
         with self.assertRaises(AssertionError):
             self._assert_legacy_row(altered, expected)
+
+    def test_audit_metadata_rejects_blank_or_non_string_proof_items(self) -> None:
+        expected = self._pinned_legacy_groups()["FEATURES"][0]
+        for field, invalid in (("auditEvidence", "  "), ("auditTests", 7)):
+            with self.subTest(field=field, invalid=invalid):
+                audited = {
+                    **expected,
+                    "auditStatus": "verified",
+                    "auditEvidence": ["reachable native call path reviewed"],
+                    "auditTests": ["test_native_call_path"],
+                }
+                audited[field] = [invalid]
+                with self.assertRaises(AssertionError):
+                    self._assert_legacy_row(audited, expected)
+
+    def test_verified_commit_rejects_blank_or_non_string_proof_items(self) -> None:
+        for field, invalid in (("nativeEvidence", "  "), ("tests", 7)):
+            with self.subTest(field=field, invalid=invalid):
+                commit = {
+                    "nativeStatus": "verified",
+                    "nativeEvidence": ["reachable native call path reviewed"],
+                    "tests": ["test_native_call_path"],
+                }
+                commit[field] = [invalid]
+                with self.assertRaises(AssertionError):
+                    self._assert_verified_commit_proofs(commit)
 
     def test_preservation_hashes_are_read_from_the_immutable_hermes_baseline(self) -> None:
         preservation = self.data["hermesPreservation"]
