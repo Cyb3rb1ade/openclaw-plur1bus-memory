@@ -57,6 +57,11 @@ from .valid_time import (
 from .runtime_scheduler import AdmissionRejected, BoundedExecutor
 from .durable_merge import build_proposal, persist_proposal
 from .writer_lock import serialized_memory_write
+from .turn_identity import (
+    canonical_capture_id,
+    canonical_captured_at,
+    mint_capture_identity,
+)
 
 from . import file_lock as fcntl
 
@@ -662,16 +667,18 @@ class Plur1busRuntime:
         self._futures: set[Future[None]] = set()
         self._lock = threading.RLock()
         self._retry_lock = threading.RLock()
-        self._retry_inflight: set[tuple[str, str, str, str, str, str, str, str, str, str, str]] = set()
+        self._retry_inflight: set[tuple[str, ...]] = set()
         self._legacy_retry_queue_warned = False
 
     def capture_async(self, user: str, assistant: str, session_id: str, *, importance: float | None = None,
                       valid_from: Any = None, valid_until: Any = None, expires_at: Any = None,
                       ttl: Any = None) -> None:
         self._resubmit_capture_retries()
+        capture_id, captured_at = mint_capture_identity()
         self._submit_capture(
             {"user": user, "assistant": assistant, "sessionId": session_id, "importance": importance,
-             "validFrom": valid_from, "validUntil": valid_until, "expiresAt": expires_at, "ttl": ttl},
+             "validFrom": valid_from, "validUntil": valid_until, "expiresAt": expires_at, "ttl": ttl,
+             "captureId": capture_id, "capturedAt": captured_at},
             attempts=0,
         )
 
@@ -684,6 +691,7 @@ class Plur1busRuntime:
                 str(payload.get("sessionId") or ""),
                 payload.get("importance"),
                 payload.get("validFrom"), payload.get("validUntil"), payload.get("expiresAt"), payload.get("ttl"),
+                capture_id=payload.get("captureId"), captured_at=payload.get("capturedAt"),
             )
         except AdmissionRejected as error:
             # Queue pressure did not execute the capture, so preserve the
@@ -790,17 +798,46 @@ class Plur1busRuntime:
             self._legacy_retry_queue_warned = True
 
     @staticmethod
-    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str, str, str, str, str, str, str]:
+    def _retry_key(entry: dict[str, Any]) -> tuple[str, ...]:
         return (
             str(entry.get("agentId") or ""), str(entry.get("scopeKey") or ""),
             str(entry.get("aclBinding") or ""),
             str(entry.get("user") or ""),
             str(entry.get("assistant") or ""),
             str(entry.get("sessionId") or ""),
+            str(entry.get("captureId") or ""),
             str(entry.get("importance") if entry.get("importance") is not None else ""),
             str(entry.get("validFrom") or ""), str(entry.get("validUntil") or ""),
             str(entry.get("expiresAt") or ""), str(entry.get("ttl") or ""),
         )
+
+    @staticmethod
+    def _assign_legacy_retry_identity(entry: dict[str, Any]) -> dict[str, Any] | None:
+        """Return an identity-complete retry entry, preserving invalid evidence.
+
+        This runs only after exact ownership validation and under the queue
+        lock.  A legacy entry lacking an identity receives one once and that
+        mutation is made durable before replay.  A malformed supplied identity
+        is intentionally left untouched rather than silently becoming a new
+        capture admission.
+        """
+        capture_id = entry.get("captureId")
+        captured_at = entry.get("capturedAt")
+        if capture_id is None or str(capture_id).strip() == "":
+            minted_id, minted_at = mint_capture_identity()
+            return {**entry, "captureId": minted_id, "capturedAt": minted_at}
+        try:
+            normalized_id = canonical_capture_id(str(capture_id))
+            if captured_at is None or str(captured_at).strip() == "":
+                _unused, normalized_at = mint_capture_identity()
+            else:
+                normalized_at = canonical_captured_at(str(captured_at))
+        except ValueError:
+            LOGGER.warning("preserving malformed capture retry identity without replay")
+            return None
+        if normalized_id == capture_id and normalized_at == captured_at:
+            return entry
+        return {**entry, "captureId": normalized_id, "capturedAt": normalized_at}
 
     def _retry_entry_is_owned(self, entry: dict[str, Any]) -> bool:
         """Accept retry work only when every persisted scope binding is exact."""
@@ -878,10 +915,17 @@ class Plur1busRuntime:
                 return
             pending = []
             dead_letters = []
-            for entry in entries:
+            changed = False
+            for index, entry in enumerate(entries):
                 if not self._retry_entry_is_owned(entry):
                     LOGGER.warning("refusing capture retry with a mismatched agent or scope binding")
                     continue
+                identified = self._assign_legacy_retry_identity(entry)
+                if identified is None:
+                    continue
+                if identified is not entry:
+                    entries[index] = entry = identified
+                    changed = True
                 try:
                     attempts = int(entry.get("attempts", 0))
                 except (TypeError, ValueError):
@@ -898,6 +942,10 @@ class Plur1busRuntime:
                     continue
                 pending.append((entry, attempts))
                 self._retry_inflight.add(self._retry_key(entry))
+            # The newly assigned legacy identity must survive a crash before
+            # this process can submit its replay to the executor.
+            if changed and not dead_letters:
+                self._write_capture_retries_locked(entries)
             if dead_letters:
                 self._append_capture_dead_letters_locked(dead_letters)
                 dead_keys = {self._retry_key(entry) for entry in dead_letters}
@@ -1662,12 +1710,15 @@ class Plur1busRuntime:
     def _capture_turn(self, user: str, assistant: str, session_id: str,
                       importance: float | None = None, valid_from: Any = None,
                       valid_until: Any = None, expires_at: Any = None,
-                      ttl: Any = None) -> None:
+                      ttl: Any = None, *, capture_id: str | None = None,
+                      captured_at: str | None = None) -> None:
         self._domain.on_turn(
             user,
             assistant,
             session_id,
             acl_bindings=self.scope_binding.as_dict(),
+            capture_id=capture_id,
+            captured_at=captured_at,
         )
         temporal = any(value is not None for value in (valid_from, valid_until, expires_at, ttl))
         if importance is None and not temporal:

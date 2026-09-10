@@ -53,6 +53,13 @@ from .proactive import ProactiveEngine
 from .speakers import SpeakerMappingStore
 from .shared_pools import SharedPoolStore, SharedPrincipal
 from .validation import safe_agent_id, safe_memory_id
+from .turn_identity import (
+    canonical_capture_id,
+    canonical_captured_at,
+    episode_record_id,
+    mint_capture_identity,
+    turn_record_id,
+)
 
 
 def _utcnow() -> str:
@@ -435,6 +442,7 @@ class Plur1busDomain:
                 selected.append(row)
         return selected
 
+    @serialized_memory_write
     def on_turn(
         self,
         user: str,
@@ -445,23 +453,84 @@ class Plur1busDomain:
         scope_key: str | None = None,
         aclBindings: Any = None,
         scopeKey: str | None = None,
+        capture_id: str | None = None,
+        captured_at: str | None = None,
     ) -> None:
-        """Persist a turn journal entry and a compact episodic record."""
+        """Persist one idempotent journal pair and per-capture episode.
+
+        Journal rows and the episode are exactly-once for a durable capture
+        identity under this writer lock.  Mood, open-thread and reminder files
+        remain independent side effects: a process crash between those files
+        is intentionally not represented as a universal transaction.
+        """
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         neo_dir = self._scope_neo_dir(selector)
-        now = _utcnow()
+        if capture_id is None:
+            capture_id, default_captured_at = mint_capture_identity()
+            captured_at = captured_at or default_captured_at
+        capture_id = canonical_capture_id(capture_id)
+        if captured_at is None:
+            _unused, captured_at = mint_capture_identity()
+        captured_at = canonical_captured_at(captured_at)
+        expected_content = {
+            role: str(content or "").strip()
+            for role, content in (("user", user), ("assistant", assistant))
+        }
+        journal_path = neo_dir / "turn-journal.jsonl"
+        existing_journal = self._read_jsonl(journal_path)
+        existing_by_id = {str(row.get("id") or ""): row for row in existing_journal}
+        # The canonical capture UUID is an admission identity, never a host
+        # message identity or an ACL credential.  It may not be reused in a
+        # second physical scope, even though the derived UUID5 would differ.
+        all_capture_rows = list(existing_journal)
+        private_journal_path = self.neo_dir / "turn-journal.jsonl"
+        if private_journal_path != journal_path:
+            all_capture_rows.extend(self._read_jsonl(private_journal_path))
+        scopes_root = self.neo_dir / "scopes"
+        if scopes_root.is_dir():
+            for path in scopes_root.glob("*/turn-journal.jsonl"):
+                if path != journal_path:
+                    all_capture_rows.extend(self._read_jsonl(path))
+        # A record ID includes session and scope, so scan the persisted capture
+        # source identity too; otherwise a changed session could evade a row-ID
+        # comparison and create a second logical capture.
+        for row in all_capture_rows:
+            if row.get("captureId") != capture_id:
+                continue
+            if (str(row.get("agentId") or "") != self.agent_id
+                    or str(row.get("scopeKey") or "") != selector.scope_key
+                    or str(row.get("sessionId") or "") != str(session_id)
+                    or str(row.get("capturedAt") or "") != captured_at):
+                raise ValueError("capture identity conflicts with durable journal source")
+            if (("sourceUser" in row and row.get("sourceUser") != expected_content["user"])
+                    or ("sourceAssistant" in row
+                        and row.get("sourceAssistant") != expected_content["assistant"])):
+                raise ValueError("capture identity conflicts with durable journal source")
+            role = str(row.get("role") or "")
+            if role not in expected_content or str(row.get("content") or "") != expected_content[role]:
+                raise ValueError("capture identity conflicts with durable journal source")
         turn_ids = []
         for index, (role, content) in enumerate((("user", user), ("assistant", assistant))):
             text = str(content or "").strip()
             if not text:
                 continue
             analysis = analyze_text(text)
-            turn_id = str(uuid.uuid4())
+            turn_id = turn_record_id(capture_id, self.agent_id, selector.scope_key, session_id, role)
             turn_ids.append(turn_id)
-            self._append_jsonl(neo_dir / "turn-journal.jsonl", {
+            existing = existing_by_id.get(turn_id)
+            if existing is not None:
+                if (existing.get("captureId") != capture_id
+                        or str(existing.get("content") or "") != text
+                        or str(existing.get("sessionId") or "") != str(session_id)
+                        or str(existing.get("role") or "") != role
+                        or str(existing.get("capturedAt") or "") != captured_at):
+                    raise ValueError("capture identity conflicts with durable journal row")
+                continue
+            self._append_jsonl(journal_path, {
                 "id": turn_id,
+                "captureId": capture_id,
                 "workspaceKey": self.agent_id,
                 "agentId": self.agent_id,
                 "scopeKey": selector.scope_key,
@@ -470,6 +539,8 @@ class Plur1busDomain:
                 "turnIndex": index,
                 "role": role,
                 "content": text,
+                "sourceUser": expected_content["user"],
+                "sourceAssistant": expected_content["assistant"],
                 "categories": ["user_explicit" if role == "user" else "assistant_claim"],
                 "cognition": analysis,
                 "speakerSegments": self._speakers.segment(text),
@@ -479,22 +550,37 @@ class Plur1busDomain:
                     "promptInjectable": False,
                     "dreamEligible": role == "user",
                 },
-                "createdAt": now,
+                "capturedAt": captured_at,
+                "createdAt": captured_at,
             })
         if turn_ids:
             combined = "\n".join(text for text in (user.strip(), assistant.strip()) if text)
             analysis = self._analyze_text(combined)
+            episode_id = episode_record_id(capture_id, self.agent_id, selector.scope_key, session_id)
+            episodes_path = neo_dir / "episodes.jsonl"
+            existing_episodes = self._read_jsonl(episodes_path)
+            episode = next((row for row in existing_episodes if row.get("id") == episode_id), None)
+            if episode is not None:
+                if (episode.get("captureId") != capture_id
+                        or str(episode.get("sessionId") or "") != str(session_id)
+                        or episode.get("turnIds") != turn_ids):
+                    raise ValueError("capture identity conflicts with durable episode")
+                return
+            # No journal duplicate is emitted above.  Materializing the
+            # episode after a partial journal replay is deliberate.
             mood = self._mood.update(analysis["emotion"])
-            self._append_jsonl(neo_dir / "episodes.jsonl", {
-                "id": str(uuid.uuid4()),
+            self._append_jsonl(episodes_path, {
+                "id": episode_id,
+                "captureId": capture_id,
                 "workspaceKey": self.agent_id,
                 "agentId": self.agent_id,
                 "scopeKey": selector.scope_key,
                 "aclBindings": selector.acl_bindings,
-                "title": f"Conversation {now[:10]}",
+                "title": f"Conversation {captured_at[:10]}",
                 "summary": combined[:1000],
-                "startTime": now,
-                "endTime": now,
+                "sessionId": session_id,
+                "startTime": captured_at,
+                "endTime": captured_at,
                 "memoryIds": [],
                 "turnIds": turn_ids,
                 "importance": self._importance(combined, "user"),
@@ -505,14 +591,15 @@ class Plur1busDomain:
                 "temporal": analysis["temporal"],
                 "moodContext": mood,
                 "turnCount": len(turn_ids),
-                "createdAt": now,
+                "capturedAt": captured_at,
+                "createdAt": captured_at,
             })
             self._append_jsonl(neo_dir / "emotional-state.jsonl", {
                 "agentId": self.agent_id,
                 "scopeKey": selector.scope_key,
                 "aclBindings": selector.acl_bindings,
                 "sessionId": session_id,
-                "createdAt": now,
+                "createdAt": captured_at,
                 **analysis["emotion"],
             })
             for thread in extract_open_threads(user):
@@ -524,7 +611,7 @@ class Plur1busDomain:
                     "sessionId": session_id,
                     "text": thread,
                     "status": "open",
-                    "createdAt": now,
+                    "createdAt": captured_at,
                 })
             # Reminder extraction only produces private pending proposals; it
             # cannot schedule anything or infer a relative date on its own.

@@ -6,6 +6,7 @@ import json
 import tempfile
 import time
 import unittest
+import uuid
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any, Callable
@@ -89,6 +90,8 @@ class CaptureRetryTests(unittest.TestCase):
         self.assertEqual(entry["agentId"], "main")
         self.assertEqual(entry["scopeKey"], self.runtime.scope_key)
         self.assertEqual(entry["aclBinding"], self.runtime.scope_binding.acl_binding)
+        self.assertEqual(str(uuid.UUID(entry["captureId"])), entry["captureId"])
+        self.assertIn("+00:00", entry["capturedAt"])
         errors = (self.root / "state" / "capture-errors.jsonl").read_text(encoding="utf-8")
         self.assertIn("oMLX request failed", errors)
 
@@ -107,6 +110,67 @@ class CaptureRetryTests(unittest.TestCase):
         )
         self.assertTrue(self._wait_until(lambda: not self._retry_entries()))
         self.assertEqual(self._retry_entries(), [])
+
+    def test_retry_keeps_original_journal_identity(self) -> None:
+        self.runtime.capture_async("stable user", "stable assistant", "session-id")
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: len(self._retry_entries()) == 1))
+        before = self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl")
+        self.embedding.fail = False
+        self.runtime._resubmit_capture_retries()
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: not self._retry_entries()))
+        after = self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl")
+        self.assertEqual(len(before), 2)
+        self.assertEqual(after, before)
+
+    def test_legacy_owned_retry_receives_identity_before_restart_replay(self) -> None:
+        payload = {
+            "user": "legacy user", "assistant": "legacy assistant", "sessionId": "legacy-session",
+            "attempts": 1, "agentId": "main", "scopeKey": self.runtime.scope_key,
+            "aclBinding": self.runtime.scope_binding.acl_binding,
+        }
+        self.runtime._write_capture_retries([payload])
+        self.runtime._resubmit_capture_retries()
+        entries = self._retry_entries()
+        self.assertEqual(len(entries), 1)
+        self.assertIn("captureId", entries[0])
+        self.assertIn("capturedAt", entries[0])
+
+        self.runtime.shutdown()
+        config = {
+            "dataDir": "plur1bus", "agentId": "main",
+            "embedding": {"provider": "omlx", "model": "embed", "dimensions": 4},
+            "reranker": {"provider": "disabled"},
+        }
+        restarted = Plur1busRuntime(self.root, config, "main")
+        embedding = StubEmbedding()
+        embedding.fail = False
+        restarted._embedding = embedding
+        try:
+            restarted._resubmit_capture_retries()
+            restarted.flush()
+            self.assertTrue(self._wait_until(lambda: not restarted._read_capture_retries()))
+            journal = restarted._domain._read_jsonl(restarted._domain.neo_dir / "turn-journal.jsonl")
+            self.assertEqual({row["captureId"] for row in journal}, {entries[0]["captureId"]})
+        finally:
+            restarted.shutdown()
+        # The restarted runtime owns shutdown now; keep tearDown idempotent.
+        self.runtime = restarted
+
+    def test_foreign_retry_entry_is_preserved_without_identity_assignment(self) -> None:
+        foreign = {
+            "user": "foreign", "assistant": "secret", "sessionId": "foreign-session", "attempts": 1,
+            "agentId": "other", "scopeKey": self.runtime.scope_key,
+            "aclBinding": self.runtime.scope_binding.acl_binding,
+        }
+        self.runtime._write_capture_retries([foreign])
+        self.runtime._resubmit_capture_retries()
+        entries = self._retry_entries()
+        self.assertEqual(entries, [foreign])
+        self.assertNotIn("captureId", entries[0])
 
     def test_gives_up_after_max_capture_retries(self) -> None:
         self.assertEqual(MAX_CAPTURE_RETRIES, 5)
