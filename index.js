@@ -128,6 +128,7 @@ import {
   parseLegacyMigrationArgs,
 } from "./lib/shared-memory-migration.js";
 import { recordFeedback } from "./lib/feedback-log.js";
+import { createDeferredDynamicsQueue } from "./lib/deferred-dynamics-queue.js";
 import {
   parseCorrection,
   resolveCandidates,
@@ -4677,6 +4678,15 @@ const plugin = {
     const replyOutcomeMaxAssistantChars = replyOutcomeCfg.maxAssistantChars;
     const replyOutcomeMaxOutcomeLogEntries = replyOutcomeCfg.maxOutcomeLogEntries;
     const replyOutcomeMaxFeedbackLogEntries = replyOutcomeCfg.maxFeedbackLogEntries;
+    // 7.12.30: Die Memory-Dynamik des Reply-Outcome-Trackings (LanceDB-Updates
+    // je erinnerter Erinnerung) laeuft nicht mehr im Prompt-Hook, sondern
+    // seriell je Agent, angestossen nach dem Recall des Turns.
+    const replyOutcomeDynamics = createDeferredDynamicsQueue({
+      logger: api.logger,
+      maxBacklog: Math.max(1, Number(replyOutcomeCfg.dynamicsMaxBacklog) || 20),
+      fallbackDelayMs: Math.max(0, Number(replyOutcomeCfg.dynamicsFallbackDelayMs ?? 10_000)),
+    });
+    const REPLY_OUTCOME_SYNC_LOG_MS = 1000;
 
     // Temporal continuity context config
     const temporalContextCfg = cfg.temporalContext || {};
@@ -5011,7 +5021,11 @@ const plugin = {
       halfLifeDays: Number(neoGlobalRecallCfg.halfLifeDays) > 0 ? Number(neoGlobalRecallCfg.halfLifeDays) : 30,
       maxCandidates: Math.max(100, Number(neoGlobalRecallCfg.maxCandidates) || 20000),
       dedupeThreshold: Number.isFinite(Number(neoGlobalRecallCfg.dedupeThreshold)) ? Math.max(0, Math.min(1, Number(neoGlobalRecallCfg.dedupeThreshold))) : 0.8,
+      // 7.12.30: Budget fuer die Anfrage-Einbettung im Prompt-Recall; danach
+      // laeuft der Neo-Pfad ohne Vektor weiter (Lanes lexikalisch).
+      embedTimeoutMs: Math.max(500, Number(neoGlobalRecallCfg.embedTimeoutMs) || 4000),
     };
+    const NEO_RECALL_PRELUDE_LOG_MS = 2000;
     const runNeoGlobalSearch = (store, neoItems, queryVector, requester) => {
       if (!neoGlobalRecall.enabled || !Array.isArray(queryVector) || queryVector.length === 0) return null;
       const excludeIds = new Set(neoItems.map((item) => (item?.id ? String(item.id) : "")).filter(Boolean));
@@ -5114,6 +5128,8 @@ const plugin = {
     // bis "worker captured" (sonst 0,4–1 s). Den Worker-Thread deshalb kurz
     // nach dem Start anwerfen, ausserhalb jedes Turns.
     const NEO_WORKER_WARMUP_DELAY_MS = 20_000;
+// 7.12.30: Sentinel fuer das Embedding-Budget im Prompt-Recall.
+const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     if (neoWorkerRuntime && typeof api.on === "function") {
       api.on("gateway_start", () => {
         const timer = setTimeout(() => {
@@ -11641,14 +11657,21 @@ const plugin = {
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
         if (!ctx?.workspaceDir || !event?.prompt || skipInternalRecall) return;
         if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return;
+        const outcomeAgentId = ctx?.agentId || "default";
+        const startedAt = Date.now();
         try {
-          await completePendingReplyOutcomes(ctx.workspaceDir, {
-            agentId: ctx?.agentId || "default",
+          // 7.12.30: Der Host fuehrt die Handler nacheinander aus; dieser lief vor
+          // dem Recall und wartete auf bis zu zwoelf LanceDB-Updates. Jetzt bleiben
+          // nur Klassifikation und Log-Dateien hier, die DB-Arbeit geht in die
+          // Warteschlange und startet nach dem Recall (siehe replyOutcomeDynamics).
+          const completed = await completePendingReplyOutcomes(ctx.workspaceDir, {
+            agentId: outcomeAgentId,
             sessionKey: sessionKeyFrom(event, ctx),
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             replyText: event.prompt,
             dbPool: pool,
             applyDynamics: true,
+            dynamicsScheduler: (run, meta) => replyOutcomeDynamics.enqueue(outcomeAgentId, run, meta),
             logger: api.logger,
             maxAgeMs: replyOutcomeMaxAgeMs,
             maxMemoryIds: replyOutcomeMaxMemoryIds,
@@ -11657,6 +11680,11 @@ const plugin = {
             maxOutcomeLogEntries: replyOutcomeMaxOutcomeLogEntries,
             maxFeedbackLogEntries: replyOutcomeMaxFeedbackLogEntries,
           });
+          const ms = Date.now() - startedAt;
+          if (Array.isArray(completed) && completed.length > 0) {
+            const line = `reply-outcome: completed outcomes=${completed.length} memoryIds=${completed.reduce((sum, entry) => sum + (entry.memoryIds?.length || 0), 0)} syncMs=${ms} queued=${replyOutcomeDynamics.pending(outcomeAgentId)} agent=${outcomeAgentId}`;
+            if (ms >= REPLY_OUTCOME_SYNC_LOG_MS) api.logger?.info?.(line); else api.logger?.debug?.(line);
+          }
         } catch (err) {
           api.logger?.warn?.(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);
         }
@@ -11702,6 +11730,11 @@ const plugin = {
         }
         const routingCapability = await hostRoutingLoader();
         const turnRoutes = await getMemoryTurnRoutes();
+        // 7.12.30: Phasenzeiten des Vorlaufs (Identitaet, Neo-Fenster, Embedding,
+        // globale Suche, Lanes). Der Host bricht den Hook nach 15 s ab; am
+        // 09./10.09.2026 passierte das dutzendfach, ohne dass eine Logzeile den
+        // Verbleib der Zeit zeigte.
+        const recallPrelude = { startedAt: Date.now(), identityMs: 0, hookRecordMs: 0, windowMs: 0, embedMs: 0, embedTimedOut: false, globalMs: 0, lanesMs: 0 };
         const memoryCtx = turnRoutes
           ? await resolveHostHookMemoryContext({
               ...ctx,
@@ -11736,32 +11769,72 @@ const plugin = {
           // 10.09.2026 00:20). Der Recall laeuft vor agent_end — hier
           // anwerfen, ensureWorker ist idempotent.
           try { neoWorkerRuntime?.warmUp?.(); } catch (_) { /* best-effort */ }
+          recallPrelude.identityMs = Date.now() - recallPrelude.startedAt;
           try {
             const injectionKey = markNeoRecallInjection(event, ctx);
             neoInjectionKey = injectionKey;
             const neoStore = getNeoStore(ctx, event);
             const requester = neoRequester(ctx, event);
-            neoStore.recordHook("before_prompt_build", {
+            // 7.12.30: Hook-Zaehler ohne synchronen Lock (Atomics.wait bis 5 s
+            // im Main-Thread); fire-and-forget, asynchron gewartet.
+            const hookRecordStartedAt = Date.now();
+            const hookMeta = {
               agentId: ctx?.agentId || "default",
               promptLength: event?.prompt?.length || 0,
               runner: event?.runner || event?.provider || "",
-            });
+            };
+            if (typeof neoStore.recordHookAsync === "function") {
+              neoStore.recordHookAsync("before_prompt_build", hookMeta)
+                .catch((hookErr) => api.logger?.debug?.(`plur1bus-neo: before_prompt_build hook record skipped: ${String(hookErr?.message || hookErr)}`));
+            } else {
+              neoStore.recordHook("before_prompt_build", hookMeta);
+            }
+            recallPrelude.hookRecordMs = Date.now() - hookRecordStartedAt;
             if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
+              const windowStartedAt = Date.now();
               const neoItems = [...neoStore.readCandidates(500, requester), ...neoStore.readBehaviorCards(200, requester)];
+              recallPrelude.windowMs = Date.now() - windowStartedAt;
               let queryVector = null;
-              try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId })); }
-              catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
+              const embedStartedAt = Date.now();
+              try {
+                const embedPromise = Promise.resolve(typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId }));
+                let embedTimer = null;
+                const embedTimeout = new Promise((resolve) => { embedTimer = setTimeout(() => resolve(NEO_EMBED_TIMEOUT), neoGlobalRecall.embedTimeoutMs); });
+                try {
+                  const outcome = await Promise.race([embedPromise, embedTimeout]);
+                  if (outcome === NEO_EMBED_TIMEOUT) {
+                    recallPrelude.embedTimedOut = true;
+                    embedPromise.catch(() => {});
+                    api.logger?.warn?.(`plur1bus-neo: prompt query embedding exceeded ${neoGlobalRecall.embedTimeoutMs} ms, continuing without vector`);
+                  } else {
+                    queryVector = outcome;
+                  }
+                } finally {
+                  if (embedTimer) clearTimeout(embedTimer);
+                }
+              } catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
+              recallPrelude.embedMs = Date.now() - embedStartedAt;
+              const globalStartedAt = Date.now();
               try {
                 neoGlobalIds = runNeoGlobalSearch(neoStore, neoItems, queryVector, requester);
               } catch (globalErr) {
                 api.logger?.warn?.(`plur1bus-neo: global candidate search failed: ${String(globalErr)}`);
               }
+              recallPrelude.globalMs = Date.now() - globalStartedAt;
+              const lanesStartedAt = Date.now();
               neoLanes = routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 });
               neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
+              recallPrelude.lanesMs = Date.now() - lanesStartedAt;
             }
           } catch (neoErr) {
             api.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
           }
+        }
+        {
+          const preludeMs = Date.now() - recallPrelude.startedAt;
+          const preludeLine = `plur1bus-neo: recall prelude total=${preludeMs}ms identity=${recallPrelude.identityMs}ms hookRecord=${recallPrelude.hookRecordMs}ms window=${recallPrelude.windowMs}ms embed=${recallPrelude.embedMs}ms${recallPrelude.embedTimedOut ? "(timeout)" : ""} global=${recallPrelude.globalMs}ms lanes=${recallPrelude.lanesMs}ms authenticated=${memoryCtx?.userPrincipal ? "yes" : "no"} agent=${ctx?.agentId || "default"}`;
+          if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) api.logger?.info?.(preludeLine);
+          else api.logger?.debug?.(preludeLine);
         }
         if (!event.prompt || event.prompt.length < 5) return neoContext ? { prependContext: neoContext } : undefined;
         // Skip heavy LanceDB recall for internal dreaming/sleep magic messages —
@@ -12674,6 +12747,9 @@ const plugin = {
         }
         }));
         });
+        // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
+        // Reply-Outcome-Dynamik die Tabelle anfassen.
+        if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
         if (scheduledRecall.ok) {
           if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
             api.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);

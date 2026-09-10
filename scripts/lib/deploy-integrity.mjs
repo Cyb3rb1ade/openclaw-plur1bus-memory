@@ -69,6 +69,7 @@ export const DEPLOY_FILES = [
   "lib/event-loop-lag-snapshot.js",
   "lib/explainability.js",
   "lib/feedback-log.js",
+  "lib/deferred-dynamics-queue.js",
   "lib/frontmatter.js",
   "lib/reply-outcome-tracking.js",
   "lib/input-limits.js",

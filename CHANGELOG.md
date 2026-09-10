@@ -7,6 +7,62 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.30] — 2026-09-10
+
+### Behoben
+
+- **Hook-Identität gegen OpenClaw 2026.9 (kein User-Principal in DM-Turns).**
+  Seit 2026.9 trägt ein Session-Eintrag Kanal, Konto, Ziel und Thread unter
+  `entry.delivery` (`route`, `context`, `origin`); die Felder
+  `deliveryContext`/`origin`/`lastChannel`/`lastAccountId`/`lastTo`/
+  `lastThreadId` fehlen. Der Prompt-Hook prüfte nur die alten Felder, fand
+  keinen Kanal und fiel in **jedem** DM-Turn mit `reason=provider` auf den
+  unauthentifizierten Basis-Kontext zurück (Log 10.09.2026: 12 Warnungen, alle
+  DM-Turns). Folge: Erinnerungen im user-Scope (Träume, `ownerUserId`) wurden
+  nie erinnert (`acl.user.missing_principal`). Beide Formen werden jetzt
+  gleichwertig gelesen, Widersprüche bleiben ein Fehler. Liefert der Host kein
+  `messageProvider`, gilt der Provider des kanonischen Session-Keys.
+- **Fallback-Warnung mit Diagnose.** `memory-request-context.hook` nennt jetzt
+  Schritt, Hook-Provider, Entry-Provider, Entry-Konto, Dauer des
+  Session-Eintrag-Lesens und Gesamtdauer. Dauert das Lesen des Eintrags (Host,
+  synchron aus der Agenten-SQLite) über 1 s, kommt eine eigene Warnung.
+- **Reply-Outcome-Tracking blockierte den Prompt-Hook bis zum Host-Timeout.**
+  Der Host führt die `before_prompt_build`-Handler eines Plugins nacheinander
+  aus, jeder mit eigenem 15-s-Timeout. Das Reply-Outcome-Tracking lief als
+  erster Handler und wartete auf bis zu zwölf sequenzielle LanceDB-Updates
+  (`getById` + `update` je erinnerter Erinnerung, gemessen ~1,2 s je Update
+  auf den fragmentierten Tabellen). Der Recall-Handler startete erst nach
+  dessen Timeout: jeder DM-Turn mit positivem oder negativem Feedback kostete
+  15 s extra (Log 09./10.09.2026: zehn Timeouts, jeder mit einem Outcome mit
+  10–12 Memory-IDs zur selben Sekunde; der neutrale Fall blieb ohne Timeout).
+  Jetzt bleiben Klassifikation und Log-Dateien im Hook; die DB-Arbeit geht in
+  eine serielle Warteschlange je Agent (`lib/deferred-dynamics-queue.js`),
+  die nach dem Recall des Turns anläuft, spätestens nach
+  `replyOutcomeTracking.dynamicsFallbackDelayMs` (10 s); Rückstau-Deckel
+  `dynamicsMaxBacklog` (20). Logzeilen: `reply-outcome: completed outcomes=…
+  memoryIds=… syncMs=… queued=…` und `reply-outcome: dynamics applied
+  entries=… waitMs=… ms=…` (Info ab 2 s).
+- **Prompt-Recall: Phasenzeiten und Budget.** Neue Logzeile
+  `plur1bus-neo: recall prelude total=… identity=… hookRecord=… window=…
+  embed=… global=… lanes=… authenticated=yes|no` (Info ab 2 s, sonst Debug).
+  Die Anfrage-Einbettung läuft unter Budget `neo.recall.global.embedTimeoutMs`
+  (Default 4000 ms); danach geht es ohne Vektor weiter. Der Hook-Zähler im
+  Neo-Store wird asynchron geschrieben (`recordHookAsync`), statt mit
+  `Atomics.wait` bis zu 5 s im Main-Thread auf den Workspace-Lock zu warten.
+  Das Lesen des Session-Eintrags (Host, synchron aus der Agenten-SQLite) ist
+  mit 10–90 ms gemessen unverdächtig; es wird trotzdem gemessen und ab 1 s
+  gemeldet.
+
+### Bekannt, nicht Teil dieses Releases
+
+- Die LanceDB-Tabellen sind stark fragmentiert (main 1577 Fragmente / 1349
+  Versionen, Bernhardine 3109 / 2518); `optimize()` ist nur über den
+  Dashboard-Schalter erreichbar und lief nie automatisch. Das treibt die
+  ~1,2 s je Update und den 5–8-s-Recall. Vorschlag: nächtlicher `optimize`
+  je Partition in `consolidate-daily` (7.12.31).
+- `feedback-log.jsonl` (main 5,4 MB, Bernhardine 4,3 MB) wird je Turn im
+  Main-Thread komplett gelesen und neu geschrieben: gemessen 0,2–0,3 s.
+
 ## [7.12.29] — 2026-09-10
 
 ### Behoben
