@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.39] — 2026-09-10
+
+### Behoben
+
+- **Hook-Identität: eine zweite Nachricht während eines laufenden Turns
+  sperrte die Session für die nächsten Turns.** Der Host baut für eine
+  Nachricht, die während eines Turns eintrifft, keinen eigenen Prompt; das
+  beim Dispatch registrierte Ticket blieb liegen, lief nach 60 s ab, und die
+  Bereinigung des Ticket-Registers markierte die Session daraufhin für
+  weitere 60 s als „tainted". Die folgenden Turns liefen dann mit
+  `observe:session_tainted|claim:session_tainted` ohne user-Scope (keine
+  Träume, keine Outcome-Identität) — Bernd 10.09.2026 19:31 (zweite
+  Nachricht), 19:32 und 19:33 (gesperrt). Ein abgelaufenes Ticket ist ohnehin
+  nie beanspruchbar (`ticket_expired`), der Taint schützte also nichts.
+  Jetzt wird ein abgelaufenes, nie beanspruchtes Ticket still verworfen
+  (`explain()` zeigt `observe:expired_unclaimed`); Reihenfolge- und
+  Identitätskonflikte (`ticket_not_head`, `ticket_session_mismatch`,
+  `prior_claim_mismatch`) und Überläufe sperren weiterhin.
+
 ## [7.12.38] — 2026-09-10
 
 ### Geändert

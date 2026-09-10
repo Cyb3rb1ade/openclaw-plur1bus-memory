@@ -1288,6 +1288,42 @@ describe("B13 canonical memory request context", () => {
     assert.match(resolved.userPrincipal, /^user:v1:/);
   });
 
+  it("7.12.39: an unclaimed ticket that expires is dropped, not a session taint (second message during a running turn)", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-expired-unclaimed-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    let current = 1000;
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10 });
+    // Message 2 arrives while turn 1 runs: the host builds no prompt for it.
+    registry.observeReplyDispatch(dispatchFixture({ runId: "" }));
+    current = 1015;
+    // Message 3 arrives after the TTL: it must get its own ticket and claim it.
+    registry.observeReplyDispatch(dispatchFixture({ runId: "" }));
+    assert.equal(registry.stateCounts().tainted, 0, "expiry of an unclaimed ticket must not taint");
+    assert.equal(registry.pendingCount(), 1);
+    const third = await resolveHook(hookFixture({ workspaceDir, runId: "run-b" }), registry, sessionEntryFixture());
+    assert.match(third.userPrincipal, /^user:v1:/, "the next turn recovers immediately");
+    assert.doesNotMatch(registry.explain("agent:a:telegram:direct:chat-a"), /tainted/);
+    assert.equal(registry.stateCounts().tainted, 0);
+  });
+
+  it("7.12.39: two messages inside the TTL — the head ticket is claimed, nothing lingers or taints afterwards", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-double-message-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    let current = 1000;
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10 });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "" }));
+    current = 1005;
+    registry.observeReplyDispatch(dispatchFixture({ runId: "" }));
+    current = 1006;
+    const claimed = await resolveHook(hookFixture({ workspaceDir, runId: "run-b" }), registry, sessionEntryFixture());
+    assert.match(claimed.userPrincipal, /^user:v1:/);
+    current = 1020;
+    // Both tickets are past their TTL: the claimed one retires to a tombstone
+    // (existing behavior), the unclaimed one is dropped — no taint either way.
+    assert.deepEqual(registry.stateCounts(), { pending: 0, runIndex: 0, claimed: 0, retired: 1, tainted: 0, globalTaint: false });
+    assert.equal(registry.lastObserve("agent:a:telegram:direct:chat-a"), "expired_unclaimed");
+  });
+
   it("clears run indexes with session taints and lets global overflow expire", () => {
     let current = 1000;
     const registry = createMemoryTurnRouteRegistry({
