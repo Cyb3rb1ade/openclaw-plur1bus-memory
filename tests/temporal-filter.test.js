@@ -6,7 +6,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyTemporalFilter, temporalRangeFromAnchor } from "../lib/temporal-filter.js";
+import { applyTemporalFilter, applyTemporalFilterSafe, temporalRangeFromAnchor } from "../lib/temporal-filter.js";
+import { parseTemporal, stripDurationPhrases } from "../lib/temporal-parser.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 
 describe("applyTemporalFilter", () => {
@@ -24,6 +25,49 @@ describe("applyTemporalFilter", () => {
     const filtered = applyTemporalFilter(results, { type: "range", from: 2000, to: 8000 });
     assert.strictEqual(filtered.length, 1);
     assert.strictEqual(filtered[0].entry.createdAt, 5000);
+  });
+});
+
+describe("7.12.41: Zeithinweise duerfen den Recall nicht leeren", () => {
+  const NOW = Date.UTC(2026, 8, 10, 19, 42, 45); // 10.09.2026 19:42:45Z
+
+  it("Dauer-Angaben (bis heute, bis jetzt, bis dato, until today, so far) sind keine Tagesfenster", () => {
+    for (const q of [
+      "Du hattest mir doch mal die eMail fertig gemacht, ich habe bis heute keine Antwort erhalten.",
+      "Bis jetzt hat sich niemand gemeldet.",
+      "Bis dato keine Rückmeldung.",
+      "I have not received an answer until today.",
+      "No reply so far, what did we send?",
+    ]) {
+      assert.equal(parseTemporal(q, NOW), null, q);
+    }
+  });
+
+  it("echte Tagesangaben bleiben: heute, bis heute Abend, bis heute 18 Uhr, gestern", () => {
+    const today = parseTemporal("Was haben wir heute besprochen?", NOW);
+    assert.equal(today?.type, "range");
+    assert.equal(today.from, Date.UTC(2026, 8, 10));
+    assert.equal(parseTemporal("Erinnere mich bis heute Abend an den Anruf", NOW)?.type, "range");
+    assert.equal(parseTemporal("Das muss bis heute 18 Uhr raus", NOW)?.type, "range");
+    assert.equal(parseTemporal("Was war gestern?", NOW)?.from, Date.UTC(2026, 8, 9));
+    assert.equal(stripDurationPhrases("bis heute nichts, aber heute Abend").trim(), "nichts, aber heute Abend");
+  });
+
+  it("applyTemporalFilterSafe behaelt alle Treffer, wenn der Filter alles entfernen wuerde", () => {
+    const results = [
+      { entry: { id: "a", createdAt: 1000 }, score: 0.5 },
+      { entry: { id: "b", createdAt: 2000 }, score: 0.6 },
+    ];
+    const dropped = applyTemporalFilterSafe(results, { type: "range", from: 5000, to: 9000 });
+    assert.deepStrictEqual(dropped, { results, filtered: false, dropped: true, before: 2 });
+    const partial = applyTemporalFilterSafe(results, { type: "range", from: 1500, to: 9000 });
+    assert.equal(partial.results.length, 1);
+    assert.equal(partial.filtered, true);
+    assert.equal(partial.dropped, false);
+    const none = applyTemporalFilterSafe(results, null);
+    assert.equal(none.results, results);
+    assert.equal(none.filtered, false);
+    assert.deepStrictEqual(applyTemporalFilterSafe([], { type: "range", from: 0, to: 1 }).results, []);
   });
 });
 

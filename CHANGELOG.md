@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.41] — 2026-09-10
+
+### Behoben
+
+- **Zeitfilter des Recalls leerte die Erinnerungen bei „bis heute".** Bernd,
+  10.09.2026 21:42: „…ich habe bis heute keine Antwort erhalten" — der
+  Zeitparser erkannte „heute", filterte auf den heutigen Tag und warf alle
+  39 Treffer weg (`temporal filter applied (39 → 0)`, null injizierte
+  Erinnerungen für eine Frage nach einer alten E-Mail). Zwei Änderungen:
+  - Dauer-Angaben „bis heute", „bis jetzt", „bis dato", „until today/now",
+    „so far", „to date" gelten nicht mehr als Tagesfenster; echte Fristen
+    mit Tageszeit oder Uhrzeit („bis heute Abend", „bis heute 18 Uhr") und
+    „heute"/„gestern" allein bleiben erhalten (`lib/temporal-parser.js`,
+    `stripDurationPhrases`).
+  - Sicherheitsnetz: Entfernt ein Zeitfenster (auch ein aufgelöster Anker)
+    ALLE Treffer, bleiben die ungefilterten stehen; Logzeile
+    `temporal filter would remove all N results — kept unfiltered`
+    (`applyTemporalFilterSafe` in `lib/temporal-filter.js`). Teilfilterung
+    verhält sich wie bisher, inklusive Trace-Ablehnungen.
+
 ## [7.12.40] — 2026-09-10
 
 ### Behoben
