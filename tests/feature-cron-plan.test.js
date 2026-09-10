@@ -58,8 +58,8 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     assert.strictEqual(personaEvolve.needsDelivery, false);
     assert.match(personaEvolve.command, /\/plur1bus internal persona-evolve/);
     assert.strictEqual(personaEvolve.schedule.kind, "cron");
-    // Low-traffic weekly slot (Sunday).
-    assert.match(personaEvolve.schedule.expr, /^\S+\s+\S+\s+\S+\s+\S+\s+0$/);
+    // 7.12.38: low-traffic DAILY slot; the brakes live in evolvePersonaVoice.
+    assert.match(personaEvolve.schedule.expr, /^\S+\s+\S+\s+\*\s+\*\s+\*$/);
 
     assert.strictEqual(afterthought.needsDelivery, true);
     assert.match(afterthought.command, /\/plur1bus internal afterthought/);
@@ -328,6 +328,26 @@ describe("selectEnabledFeatureCronSpecs", () => {
     );
   });
 
+  it("7.12.38: persona-evolve ships daily, honours personaVoice.cron/timezone and fails closed on invalid overrides", () => {
+    const shipped = selectEnabledFeatureCronSpecs(sourceConfig({})).find((spec) => spec.feature === "persona-evolve");
+    assert.deepStrictEqual(shipped.schedule, { kind: "cron", expr: "15 4 * * *" });
+    assert.ok(!("timezone" in shipped), "the shipped spec keeps local time (no timezone key)");
+
+    const custom = selectEnabledFeatureCronSpecs(sourceConfig({
+      personaVoice: { enabled: true, cron: "30 5 * * 0", timezone: "Europe/Berlin" },
+    })).find((spec) => spec.feature === "persona-evolve");
+    assert.deepStrictEqual(custom.schedule, { kind: "cron", expr: "30 5 * * 0" });
+    assert.strictEqual(custom.timezone, "Europe/Berlin");
+
+    for (const personaVoice of [
+      { enabled: true, cron: "not a cron" },
+      { enabled: true, cron: "15 4 * * *", timezone: "Not/AZone" },
+    ]) {
+      const specs = selectEnabledFeatureCronSpecs(sourceConfig({ personaVoice }));
+      assert.ok(!specs.some((spec) => spec.feature === "persona-evolve"), `invalid override must drop the job: ${JSON.stringify(personaVoice)}`);
+    }
+  });
+
   it("uses the raw skill-miner schedule and fails closed on explicit invalid values", () => {
     const custom = selectEnabledFeatureCronSpecs(sourceConfig({
       skillMiner: { enabled: true, cron: "7 6 * * 2", timezone: null },
@@ -423,7 +443,7 @@ describe("planFeatureCrons", () => {
     name: "plur1bus persona-evolve",
     command: "/plur1bus internal persona-evolve",
     message: "/plur1bus internal persona-evolve",
-    schedule: { kind: "cron", expr: "15 4 * * 0" },
+    schedule: { kind: "cron", expr: "15 4 * * *" },
     needsDelivery: false,
   };
   const afterthoughtSpec = {
@@ -599,6 +619,64 @@ describe("staggerPersonaEvolveSchedule", () => {
   it("leaves non-cron schedules unchanged", () => {
     const every = { kind: "every", everyMs: 1000 };
     assert.deepStrictEqual(staggerPersonaEvolveSchedule(every, 5), every);
+  });
+});
+
+describe("persona-evolve weekly → daily migration (7.12.38)", () => {
+  const personaSpec = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "persona-evolve");
+  const agents = [
+    { id: "main", isDefault: true },
+    { id: "bernhardine", isDefault: false },
+    { id: "heisenberg", isDefault: false },
+  ];
+  function personaJob(id, agentId, expr, extra = {}) {
+    return {
+      id,
+      name: `plur1bus persona-evolve ${agentId}`,
+      agentId,
+      enabled: true,
+      payload: { message: "/plur1bus internal persona-evolve" },
+      schedule: { kind: "cron", expr },
+      delivery: { mode: "none" },
+      ...extra,
+    };
+  }
+
+  it("migrates exactly the shipped staggered weekly slots to the daily stagger", () => {
+    const existing = [
+      personaJob("p-main", "main", "15 4 * * 0"),
+      personaJob("p-bernhardine", "bernhardine", "20 4 * * 0"),
+      personaJob("p-heisenberg", "heisenberg", "25 4 * * 0"),
+    ];
+    const plan = planFeatureCrons(existing, [personaSpec], { agents });
+    assert.deepStrictEqual(plan.create, []);
+    assert.deepStrictEqual(plan.update, [
+      { id: "p-main", name: "plur1bus persona-evolve main", schedule: { kind: "cron", expr: "15 4 * * *" }, timezone: null },
+      { id: "p-bernhardine", name: "plur1bus persona-evolve bernhardine", schedule: { kind: "cron", expr: "20 4 * * *" }, timezone: null },
+      { id: "p-heisenberg", name: "plur1bus persona-evolve heisenberg", schedule: { kind: "cron", expr: "25 4 * * *" }, timezone: null },
+    ]);
+  });
+
+  it("leaves operator schedules alone, keeps an existing timezone, and is idempotent", () => {
+    const existing = [
+      personaJob("p-main", "main", "15 4 * * *"),
+      personaJob("p-bernhardine", "bernhardine", "7 6 * * 2"),
+      personaJob("p-heisenberg", "heisenberg", "25 4 * * 0", { schedule: { kind: "cron", expr: "25 4 * * 0", tz: "Europe/Berlin" } }),
+    ];
+    const plan = planFeatureCrons(existing, [personaSpec], { agents });
+    assert.deepStrictEqual(plan.update, [
+      { id: "p-heisenberg", name: "plur1bus persona-evolve heisenberg", schedule: { kind: "cron", expr: "25 4 * * *" }, timezone: "Europe/Berlin" },
+    ]);
+    const migrated = existing.map((job) => {
+      const update = plan.update.find((u) => u.id === job.id);
+      return update ? { ...job, schedule: { ...job.schedule, ...update.schedule } } : job;
+    });
+    assert.deepStrictEqual(planFeatureCrons(migrated, [personaSpec], { agents }).update, []);
+  });
+
+  it("does not touch a weekly job whose name is not canonical", () => {
+    const foreign = { ...personaJob("p-x", "main", "15 4 * * 0"), name: "meine persona" };
+    assert.strictEqual(featureCronPlan.planPersonaEvolveScheduleMigration(foreign, { ...personaSpec, agentId: "main", agentIndex: 0 }), null);
   });
 });
 
@@ -930,8 +1008,8 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
     assert.strictEqual(mainPersona.agent, "main");
     assert.strictEqual(bernhardinePersona.agent, "bernhardine");
     // main is index 0 -> base schedule; bernhardine is index 1 -> +5 min.
-    assert.strictEqual(mainPersona.schedule.expr, "15 4 * * 0");
-    assert.strictEqual(bernhardinePersona.schedule.expr, "20 4 * * 0");
+    assert.strictEqual(mainPersona.schedule.expr, "15 4 * * *");
+    assert.strictEqual(bernhardinePersona.schedule.expr, "20 4 * * *");
   });
 
   it("plans persona-evolve enabled, no delivery flags", () => {

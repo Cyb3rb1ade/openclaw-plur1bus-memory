@@ -4773,11 +4773,23 @@ const plugin = {
     const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
     const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
     const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
-    // 7.12.37: Deckel der injizierten Stimm-Direktive (Default 1600 wie
-    // DEFAULT_MAX_DIRECTIVE_CHARS in lib/persona-voice.js, das lazy geladen wird).
+    // 7.12.38: Obergrenze des verwalteten Blocks (Seed + Gelerntes, Default 24)
+    // und daraus abgeleiteter Deckel der injizierten Stimm-Direktive
+    // (Formel wie directiveCharsForBullets in lib/persona-voice.js, das lazy
+    // geladen wird: Zeilen x 130 + 80). Bremsen der taeglichen Evolution:
+    // fruehestens alle N Tage und nur mit N neuen echten Outcomes.
+    const personaMaxBullets = Number.isFinite(Number(cfg.personaVoice?.maxBullets)) && Number(cfg.personaVoice.maxBullets) >= 6
+      ? Math.floor(Number(cfg.personaVoice.maxBullets))
+      : 24;
     const personaDirectiveMaxChars = Number.isFinite(Number(cfg.personaVoice?.maxDirectiveChars)) && Number(cfg.personaVoice.maxDirectiveChars) >= 200
       ? Math.floor(Number(cfg.personaVoice.maxDirectiveChars))
-      : 1600;
+      : personaMaxBullets * 130 + 80;
+    const personaEvolveMinDaysBetween = Number.isFinite(Number(cfg.personaVoice?.minDaysBetween)) && Number(cfg.personaVoice.minDaysBetween) >= 0
+      ? Number(cfg.personaVoice.minDaysBetween)
+      : 2;
+    const personaEvolveMinOutcomes = Number.isFinite(Number(cfg.personaVoice?.minOutcomes)) && Number(cfg.personaVoice.minOutcomes) >= 1
+      ? Math.floor(Number(cfg.personaVoice.minOutcomes))
+      : 10;
     const wikiLlmCfg = createFeatureRoute("wiki", {});
     const overlayLlmCfg = createFeatureRoute("continuity-overlay", cfg.continuityEngine?.overlays || {});
     const overlayAuditLlmCfg = createFeatureRoute("overlay-audit-contradiction", {});
@@ -7636,11 +7648,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   return formatJsonCommandResult({ job: "persona-evolve", skipped: true, reason: "not_configured" });
                 }
                 const { evolvePersonaVoice } = await import("./lib/persona-voice.js");
-                const outcomes = readReplyOutcomeLog(commandCtx.workspaceDir, 200);
+                // 7.12.38: 300 statt 200 — Heartbeat-Turns (~12/Woche je Agent)
+                // stehen mit im Log und werden erst in evolvePersonaVoice gefiltert.
+                const outcomes = readReplyOutcomeLog(commandCtx.workspaceDir, 300);
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await evolvePersonaVoice({
                   workspaceDir: commandCtx.workspaceDir,
                   outcomes,
+                  maxBullets: personaMaxBullets,
+                  minDaysBetween: personaEvolveMinDaysBetween,
+                  minOutcomes: personaEvolveMinOutcomes,
                   llmCfg: withLlmCallContext(
                     personaVoiceLlmCfg,
                     typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
