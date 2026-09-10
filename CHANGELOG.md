@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.37] — 2026-09-10
+
+### Behoben
+
+- **Persona-Voice: die injizierte Stimm-Direktive wurde bei 400 Zeichen
+  abgeschnitten.** Der Deckel stammte aus der Zeit mit drei Seed-Bullets;
+  seit der verwaltete Block bis zwölf Zeilen wachsen darf, sah das Modell bei
+  allen drei Agenten nur die ersten drei bis vier Zeilen (Bernhardine 686
+  Zeichen, 7 Bullets, 3 sichtbar: Anrede, „Wahrheit zuerst", Ironie und die
+  Kaffee-Marotte fehlten; Bernd 643/6/4; Heisenberg 801/7/3). Jede
+  Weiterentwicklung hängt als neue Zeile am Ende — also immer im
+  abgeschnittenen Teil. Deckel jetzt 1600 Zeichen (zwölf Zeilen zu ~130),
+  konfigurierbar über `personaVoice.maxDirectiveChars` (min. 200); der
+  Direktiven-Cache berücksichtigt die Grenze (bisher prägte der erste Aufruf
+  den Text für alle folgenden).
+- Hintergrund zur Wochen-Evolution: die Cron-Läufe vom 06.09.2026 scheiterten
+  noch am fehlenden Workspace im Cron-Pfad (behoben in 7.12.9); der nächste
+  Lauf ist Sonntag 04:15/04:20/04:25, die Hürde (≥ 10 Antwort-Ergebnisse in
+  7 Tagen, > 50 % positiv) nehmen Bernd (89 %) und Bernhardine (65 %).
+
 ## [7.12.36] — 2026-09-10
 
 ### Behoben
