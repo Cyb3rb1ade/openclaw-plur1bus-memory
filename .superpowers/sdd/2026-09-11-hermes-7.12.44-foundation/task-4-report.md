@@ -17,11 +17,16 @@ The reviewed source pins are:
 - Focused Task 4 review base (excluding root-only future plans): `4c3194f`
 - Narrow persona fix reviewed: `02d9f9f`
 
+The original Task 4 implementation range is `4c3194f..9e255f4`.
+The first review fix implementation range is `9e255f4..203fa1c`; root-only
+plan commits through `ebc5164` are intentionally not part of either range.
+
 Both pinned parents are ancestors of the candidate. At review time the
 candidate differed by 111 paths from the Hermes baseline and 317 paths from
 the upstream candidate. The committed focused range
-`git diff --check 4c3194f..624d045` passed. The broader parent diffs still
-contain inherited whitespace findings in dashboard patch files and legacy
+`git diff --check 4c3194f..9e255f4` passed. After the review fix committed,
+`git diff --check 9e255f4..203fa1c` also passed. The broader parent diffs
+still contain inherited whitespace findings in dashboard patch files and legacy
 bridge files; those are outside Task 4 and are not waived by this report.
 
 ## Immutable history gate: RED then GREEN
@@ -59,6 +64,21 @@ GREEN used the same command after adding explicit empty audit metadata to all
 85 historical rows: **7 passed** in 1.593 s. The suite also verifies all 37
 non-merge commit rows, all 90 changed upstream files, and baseline preservation
 hashes. No source-row status/evidence/detail field changed.
+
+### Review fix 1: nonblank proof items
+
+The first independent review found that a truthy whitespace-only proof such as
+`"  "` passed the original validator, and verified commit rows only required
+truthy lists. The fix adds one shared proof-list check: entries must be strings
+whose `strip()` is nonempty. It is applied to all audit evidence/test lists and
+to evidence/test lists of every verified commit.
+
+RED used the inventory command above after adding regressions for whitespace
+and non-string entries: 9 tests ran with one expected whitespace failure and
+two expected missing-helper errors. GREEN used the same command after the
+validator was wired into both paths: **9 passed** in 1.678 s. The evidence-only
+implementation is `203fa1c`; broad QA was not rerun because no runtime code or
+dependency changed.
 
 ## Current persona result versus historical finding
 
