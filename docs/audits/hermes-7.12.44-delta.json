@@ -1,0 +1,2322 @@
+{
+  "upstreamBase": "v7.12.7",
+  "upstreamHead": "a3f48f28ac647e81c5260e8a1dbab7977bf9fb51",
+  "hermesBase": "c12ec2bba63d74ac8add8782ab6761472b4149c6",
+  "nativePortCoverage": "incomplete",
+  "commits": [
+    {
+      "sha": "c59366f637db5b636c2d822351018b88476f37fb",
+      "subject": "7.12.44: eine Turn-Identität für Journal und Episoden",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/neo-arch.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/neo-turn-identity.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "1c4dd00dfa419deb78d82437ccca126ed8178bdb",
+      "subject": "7.12.43: Stimm-Mitsprecher sind Teilnehmer, Nachmigration älterer Karten",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/episodes.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/episodes-metadata.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "14098e48741486bd2ec9cb485ad0898220820c6d",
+      "subject": "7.12.42: Emotions-Prompt fragt nach spürbarer Stimmung, neutral nur ohne Gefühlsregung",
+      "files": [
+        "CHANGELOG.md",
+        "lib/episodes.js",
+        "tests/episodes-metadata.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "81ac2f7213b7ff87cd845a42da86a55e0c89fdc7",
+      "subject": "7.12.42: Episoden — mentioned getrennt von participants, Emotion vom Modell",
+      "files": [
+        "CHANGELOG.md",
+        "lib/episodes.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/episodes-metadata.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "b8f63736ebceff9066ae517452a08d309afb1fb0",
+      "subject": "7.12.41: Zeitfilter leert den Recall nicht mehr („bis heute\")",
+      "files": [
+        "CHANGELOG.md",
+        "lib/recall-pipeline.js",
+        "lib/temporal-filter.js",
+        "lib/temporal-parser.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/release-750-compat.test.js",
+        "tests/temporal-filter.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "0386a00a8ccbcf231e7104afa40965f354c750e0",
+      "subject": "7.12.40: Episoden werden fortgeschrieben statt zerstückelt",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/episodes.js",
+        "lib/neo-arch.js",
+        "tests/episodes-metadata.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "27d3c54e4190787d18fda9f38887519d3f6d247b",
+      "subject": "7.12.40: Episoden-Karten mit brauchbaren Metadaten",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/episodes.js",
+        "lib/neo-arch.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/episodes-metadata.test.js",
+        "tests/neo-lock-takeover.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "5b5092faa5bccaceb73bc9feccf93ae3a33a3f53",
+      "subject": "emotional-state-injector 1.1.0: keine sichtbare Stimmungszeile mehr",
+      "files": [
+        ".openclaw/extensions/emotional-state-injector/index.js",
+        ".openclaw/extensions/emotional-state-injector/index.test.js",
+        ".openclaw/extensions/emotional-state-injector/openclaw.plugin.json",
+        ".openclaw/extensions/emotional-state-injector/package.json",
+        "CHANGELOG.md"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "15840681d59f183ece0859ddf59a220332e2e5f3",
+      "subject": "7.12.39: abgelaufenes unbeanspruchtes Ticket sperrt die Session nicht mehr",
+      "files": [
+        "CHANGELOG.md",
+        "lib/memory-request-context.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/b13-memory-request-context.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "420106dfc4752cc543e84b569a3e4a061c0321bb",
+      "subject": "7.12.38: bereits vorhandener Marker zählt nicht als Evolution (duplicate_marker)",
+      "files": [
+        "CHANGELOG.md",
+        "lib/persona-voice.js",
+        "tests/persona-voice.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "0a7ae208593dcfd3ef5f12032760185a9b61d7ff",
+      "subject": "7.12.38: Persona-Evolution täglich mit Bremsen, Belegen und ADD/REPLACE",
+      "files": [
+        "CHANGELOG.md",
+        "README.md",
+        "index.js",
+        "lib/persona-voice.js",
+        "lib/setup/feature-cron-plan.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/feature-cron-bootstrap.test.js",
+        "tests/feature-cron-plan.test.js",
+        "tests/persona-voice.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "600aa2b0ac1a6ef272962b7723f67997b399abfe",
+      "subject": "7.12.37: Persona-Voice-Direktive nicht mehr bei 400 Zeichen gekappt",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/persona-voice.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/persona-voice.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "a881c6a0b3daa82a191936751c504eec02bfddb6",
+      "subject": "ci: security audit step is informational (advisories without upstream fix)",
+      "files": [
+        ".github/workflows/ci.yml"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "59a1459be017b2e708c9300b190ef5c7eeabb04a",
+      "subject": "7.12.36: Ticket-Register, Dynamik-Queue und Neo-Worker prozessweit",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/deferred-dynamics-queue.js",
+        "lib/memory-request-context.js",
+        "lib/neo-worker-runtime.js",
+        "lib/process-singleton.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/lib/deploy-integrity.mjs",
+        "tests/process-singletons.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "3a6b7ba2fdab09d28ac92bdc3367132e76da599f",
+      "subject": "7.12.35: reply_dispatch-Registrierung und -Aufrufe im Log (Diagnose)",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "2ae7d597da506f34937bfffe7a0040b60517629f",
+      "subject": "7.12.34: Ticket-Diagnose trennt Beobachtung und Anspruch",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/memory-request-context.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/release-750-compat.test.js",
+        "tests/turn-routes-dispatch-body.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "a72c3eb94f83c6d872540ebf90fa1999efa50e54",
+      "subject": "7.12.33: Dispatch-Ticket-Diagnose, Optimize-Budget 240 s, README-Highlights 7.12.9-7.12.33",
+      "files": [
+        "CHANGELOG.md",
+        "README.md",
+        "index.js",
+        "lib/lancedb-optimize.js",
+        "lib/memory-request-context.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/lancedb-optimize.test.js",
+        "tests/release-750-compat.test.js",
+        "tests/turn-routes-dispatch-body.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "d4222c91b14a12540bdb70aecab2a3426ea09aa5",
+      "subject": "7.12.32: Dispatch-Ticket auch fuer Sprach- und Bildnachrichten",
+      "files": [
+        "CHANGELOG.md",
+        "lib/memory-request-context.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/release-750-compat.test.js",
+        "tests/turn-routes-dispatch-body.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "417ed73e933cbf7980b52f498d67128010059469",
+      "subject": "7.12.31: Naechtliche LanceDB-Kompaktierung in consolidate-daily",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/db-adapter.js",
+        "lib/lancedb-optimize.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/lib/deploy-integrity.mjs",
+        "tests/lancedb-optimize.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "9c9a4cc1d737ecb514e7af350e9a1cdd8181cf44",
+      "subject": "7.12.30: Reply-Outcome-Dynamik aus dem Prompt-Hook, Hook-Identitaet fuer 2026.9",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/deferred-dynamics-queue.js",
+        "lib/feedback-log.js",
+        "lib/memory-request-context.js",
+        "lib/neo-arch.js",
+        "lib/reply-outcome-tracking.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/lib/deploy-integrity.mjs",
+        "tests/deferred-dynamics-queue.test.js",
+        "tests/hook-identity-delivery.test.js",
+        "tests/neo-record-hook-async.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "705337dafb9d13bb515dec406bd1882fef515276",
+      "subject": "7.12.29: ACL-Guard mit Diagnose, kein Where-Fallback bei ACL, Decay je Partition",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/jobs/daily-consolidation.js",
+        "lib/jobs/memory-compaction.js",
+        "lib/jobs/memory-dynamics-maintenance.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/acl-guard-diagnostics.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "287987725c6473f54e628f93cee0fba44e0ef638",
+      "subject": "7.12.28: Kandidaten-Metadatenindex fuer die globale Neo-Suche",
+      "files": [
+        ".gitignore",
+        "CHANGELOG.md",
+        "index.js",
+        "lib/neo-arch.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/build-neo-candidate-index.mjs",
+        "scripts/lib/deploy-integrity.mjs",
+        "scripts/migrate-neo-vectors-sidecar.mjs",
+        "tests/neo-candidate-index.test.js",
+        "tests/neo-global-search.test.js",
+        "tests/neo-vector-sidecar.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "29e0dc79d6d6a48e8b048b652212d39bdab8f59a",
+      "subject": "7.12.27: Suche ueber alle Neo-Kandidaten + Worker-Warm-up je Instanz",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/neo-arch.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/neo-global-search.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "a862112a1e321e95ec75a8071eebc633511d1482",
+      "subject": "7.12.26: Vektor-Sidecar fuer den Neo-Store",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/neo-arch.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/lib/deploy-integrity.mjs",
+        "tests/neo-vector-sidecar.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "894d1b51ffa96b2e9da8ff875fa4a17ff9253a80",
+      "subject": "7.12.25: Cap-Pruefschwelle in appendJsonl ueber Neustarts persistieren",
+      "files": [
+        "CHANGELOG.md",
+        "lib/neo-arch.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/neo-cap-rewrite-thrash.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "84d2a4c7db3679ebea07d334dc644bfb6f7e80b1",
+      "subject": "7.12.24: Reminder-Schleife, Watermark-Reset, Graph-Prune, Operator-Locale, Neo-Worker-Warm-up",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/memory-graph.js",
+        "lib/neo-arch.js",
+        "lib/neo-worker-runner.js",
+        "lib/neo-worker-runtime.js",
+        "lib/reminder-extraction.js",
+        "lib/setup/feature-cron-plugin-runtime.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/feature-cron-plugin-runtime.test.js",
+        "tests/memory-graph-prune.test.js",
+        "tests/neo-worker-runtime.test.js",
+        "tests/release-750-compat.test.js",
+        "tests/reminder-extraction.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "a63cbb773815fa4716a6c2adbe614e807e8d3f2d",
+      "subject": "7.12.23: Kern-Erinnerungen bekommen im Cron emotion-refine immer Tier 3",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/emotion-refine-cron.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "332f13befcf9e441047038c7332a1fb8b42ecd29",
+      "subject": "7.12.22: Emotions-Tier-3 aus dem Turn in den Cron emotion-refine verlegen",
+      "files": [
+        "CHANGELOG.md",
+        "README.md",
+        "index.js",
+        "lib/emotion-engine.js",
+        "lib/emotion.js",
+        "lib/safe-update.js",
+        "lib/setup/feature-cron-native.js",
+        "lib/setup/feature-cron-plan.js",
+        "lib/setup/feature-cron-plugin-runtime.js",
+        "lib/wiki-command.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/emotion-refine-cron.test.js",
+        "tests/feature-cron-bootstrap.test.js",
+        "tests/feature-cron-plan.test.js",
+        "tests/migration-robustness.test.js",
+        "tests/release-750-compat.test.js",
+        "tests/smoke-migration.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "0ad144b76295932fd07db9c6d20817256401d400",
+      "subject": "fix(neo): 7.12.21 — the worker capture log line counts what was newly written",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/neo-arch.js",
+        "lib/neo-worker-runner.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/neo-worker-runtime.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "3669efa4a623fc3f59eae28d202755f839d3323c",
+      "subject": "fix(capture): 7.12.20 — stable turn identity, bounded hook drain, embedding-drain cron",
+      "files": [
+        "CHANGELOG.md",
+        "README.md",
+        "index.js",
+        "lib/neo-arch.js",
+        "lib/setup/feature-cron-native.js",
+        "lib/setup/feature-cron-plan.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/auto-capture-batch.test.js",
+        "tests/feature-cron-bootstrap.test.js",
+        "tests/feature-cron-plan.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "66b7eb8d0ce2ac77a74a82d164cba14b364fa9c2",
+      "subject": "fix(neo): 7.12.19 — chat status/doctor/curation read the same Neo store the hooks write",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/b13-sensitive-read-auth.test.js",
+        "tests/plur1bus-internal-auth.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "1ece8faee10dce4f61fdab7d3e9c0da22c5f3044",
+      "subject": "feat(operator): 7.12.18 — run chat commands as operator; /correct works end to end",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/i18n-dictionary.js",
+        "lib/safe-update.js",
+        "lib/setup/feature-cron-plugin-runtime.js",
+        "lib/telegram-commands/memory-edit.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/candidate-literal-match.test.js",
+        "tests/feature-cron-plugin-runtime.test.js",
+        "tests/openclaw-restricted-registration.test.js",
+        "tests/release-750-compat.test.js",
+        "tests/safe-update-dataloss.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "4a27ef3e87a7e2b8c397252c57becda926374efe",
+      "subject": "fix(memory): 7.12.17 — /correct never created a new version (BigInt arithmetic)",
+      "files": [
+        "CHANGELOG.md",
+        "lib/db-adapter.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/db-adapter-updatecard-dataloss.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "ae9c9137a9c9a79bc32e9156ebbd18467e3763db",
+      "subject": "fix(knowledge): 7.12.14 through 7.12.16 — KNOWLEDGE.md promotion works again",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/knowledge-update-budget.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/lib/deploy-integrity.mjs",
+        "tests/knowledge-update-budget.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "eafa43a72bcca7959c0027b1d193504c7a540087",
+      "subject": "fix(health): 7.12.13 — the storage measurement no longer blocks the event loop",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/control-plane-storage.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/lib/deploy-integrity.mjs",
+        "tests/control-plane-storage.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "01123f8297efbd8da1bf9a4e68da6487d5b2aa8b",
+      "subject": "fix(memory): 7.12.9 through 7.12.12 — capture budget, feature-cron workspace, health card, recall window",
+      "files": [
+        "CHANGELOG.md",
+        "index.js",
+        "lib/abort.js",
+        "lib/control-plane-health.js",
+        "lib/runtime-scheduler.js",
+        "lib/setup/feature-cron-native.js",
+        "lib/setup/feature-cron-plan.js",
+        "lib/setup/feature-cron-plugin-runtime.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "tests/abort-budget.test.js",
+        "tests/control-plane-health.test.js",
+        "tests/feature-cron-bootstrap.test.js",
+        "tests/feature-cron-plan.test.js",
+        "tests/feature-cron-plugin-runtime.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    },
+    {
+      "sha": "a58afb0a159cc6ba7aaada1bf46b62cb24318e53",
+      "subject": "fix(knowledge): 7.12.8 — the promotion queue drops entries it can never promote",
+      "files": [
+        "CHANGELOG.md",
+        "README.md",
+        "index.js",
+        "lib/knowledge-pending-prune.js",
+        "lib/sql-safety.js",
+        "openclaw.plugin.json",
+        "package-lock.json",
+        "package.json",
+        "scripts/lib/deploy-integrity.mjs",
+        "tests/knowledge-pending-prune.test.js",
+        "tests/release-750-compat.test.js"
+      ],
+      "nativeStatus": "unreviewed",
+      "nativeEvidence": [],
+      "tests": []
+    }
+  ],
+  "changedFiles": [
+    ".github/workflows/ci.yml",
+    ".gitignore",
+    ".openclaw/extensions/emotional-state-injector/index.js",
+    ".openclaw/extensions/emotional-state-injector/index.test.js",
+    ".openclaw/extensions/emotional-state-injector/openclaw.plugin.json",
+    ".openclaw/extensions/emotional-state-injector/package.json",
+    "CHANGELOG.md",
+    "README.md",
+    "index.js",
+    "lib/abort.js",
+    "lib/control-plane-health.js",
+    "lib/control-plane-storage.js",
+    "lib/db-adapter.js",
+    "lib/deferred-dynamics-queue.js",
+    "lib/emotion-engine.js",
+    "lib/emotion.js",
+    "lib/episodes.js",
+    "lib/feedback-log.js",
+    "lib/i18n-dictionary.js",
+    "lib/jobs/daily-consolidation.js",
+    "lib/jobs/memory-compaction.js",
+    "lib/jobs/memory-dynamics-maintenance.js",
+    "lib/knowledge-pending-prune.js",
+    "lib/knowledge-update-budget.js",
+    "lib/lancedb-optimize.js",
+    "lib/memory-graph.js",
+    "lib/memory-request-context.js",
+    "lib/neo-arch.js",
+    "lib/neo-worker-runner.js",
+    "lib/neo-worker-runtime.js",
+    "lib/persona-voice.js",
+    "lib/process-singleton.js",
+    "lib/recall-pipeline.js",
+    "lib/reminder-extraction.js",
+    "lib/reply-outcome-tracking.js",
+    "lib/runtime-scheduler.js",
+    "lib/safe-update.js",
+    "lib/setup/feature-cron-native.js",
+    "lib/setup/feature-cron-plan.js",
+    "lib/setup/feature-cron-plugin-runtime.js",
+    "lib/sql-safety.js",
+    "lib/telegram-commands/memory-edit.js",
+    "lib/temporal-filter.js",
+    "lib/temporal-parser.js",
+    "lib/wiki-command.js",
+    "openclaw.plugin.json",
+    "package-lock.json",
+    "package.json",
+    "scripts/build-neo-candidate-index.mjs",
+    "scripts/lib/deploy-integrity.mjs",
+    "scripts/migrate-neo-vectors-sidecar.mjs",
+    "tests/abort-budget.test.js",
+    "tests/acl-guard-diagnostics.test.js",
+    "tests/auto-capture-batch.test.js",
+    "tests/b13-memory-request-context.test.js",
+    "tests/b13-sensitive-read-auth.test.js",
+    "tests/candidate-literal-match.test.js",
+    "tests/control-plane-health.test.js",
+    "tests/control-plane-storage.test.js",
+    "tests/db-adapter-updatecard-dataloss.test.js",
+    "tests/deferred-dynamics-queue.test.js",
+    "tests/emotion-refine-cron.test.js",
+    "tests/episodes-metadata.test.js",
+    "tests/feature-cron-bootstrap.test.js",
+    "tests/feature-cron-plan.test.js",
+    "tests/feature-cron-plugin-runtime.test.js",
+    "tests/hook-identity-delivery.test.js",
+    "tests/knowledge-pending-prune.test.js",
+    "tests/knowledge-update-budget.test.js",
+    "tests/lancedb-optimize.test.js",
+    "tests/memory-graph-prune.test.js",
+    "tests/migration-robustness.test.js",
+    "tests/neo-candidate-index.test.js",
+    "tests/neo-cap-rewrite-thrash.test.js",
+    "tests/neo-global-search.test.js",
+    "tests/neo-lock-takeover.test.js",
+    "tests/neo-record-hook-async.test.js",
+    "tests/neo-turn-identity.test.js",
+    "tests/neo-vector-sidecar.test.js",
+    "tests/neo-worker-runtime.test.js",
+    "tests/openclaw-restricted-registration.test.js",
+    "tests/persona-voice.test.js",
+    "tests/plur1bus-internal-auth.test.js",
+    "tests/process-singletons.test.js",
+    "tests/release-750-compat.test.js",
+    "tests/reminder-extraction.test.js",
+    "tests/safe-update-dataloss.test.js",
+    "tests/smoke-migration.test.js",
+    "tests/temporal-filter.test.js",
+    "tests/turn-routes-dispatch-body.test.js"
+  ],
+  "legacyFeatures": {
+    "FEATURES": [
+      {
+        "id": "capture-recall",
+        "status": "partial",
+        "evidence": "native lifecycle, TTL and opt-in private lossless LLM-selected automatic store merges; unrestricted semantic rewrite/compaction policy is not claimed",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "agent-isolation",
+        "status": "ready",
+        "evidence": "per-agent LanceDB, Neo, state, workspace",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "omlx-providers",
+        "status": "ready",
+        "evidence": "LLM config plus embedding and /v1/rerank adapters",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "legacy-reembedding",
+        "status": "partial",
+        "evidence": "private and isolated named-writer staged activate/recover; mixed recall requires matching certified model fingerprints; non-cooperating processes require real shutdown",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "legacy-artifacts",
+        "status": "partial",
+        "evidence": "complete explicit-root offline snapshot export/restore with configs/artifacts, retained originals and resume guards; no automatic external discovery or path relocation",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "embedding-cache",
+        "status": "partial",
+        "evidence": "agent-scoped persistence, single/batch coalescing, corrupt-vector repair and bounded 90-percent soft byte pruning; exact upstream configuration/metrics contract differs",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "llm-result-cache",
+        "status": "partial",
+        "evidence": "upstream deterministic purposes plus native episode/workshop/emotion consumers, persistent LRU and byte pruning; not all upstream live transformations exist in Hermes",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "memory-graph",
+        "status": "partial",
+        "evidence": "native graph and recall edges; extended graph contracts differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "semantic-lens",
+        "status": "partial",
+        "evidence": "default-off additive booster with category caps, bounded 50-ms caller wait and one worker/no backlog; upstream selector parity not claimed",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "conversation-reactivation",
+        "status": "partial",
+        "evidence": "native triggers, scope-session isolation, cooldown, bounded 50-ms caller wait and primary fallback; native reads retain generation leases rather than being forcibly killed; upstream selector/format differs",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "episodes-emotion-temporal",
+        "status": "partial",
+        "evidence": "turn journal and temporal fields; episode/emotion contracts differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "memory-dynamics",
+        "status": "partial",
+        "evidence": "strength/consolidation is not upstream TTL or store-merge parity",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "dreaming",
+        "status": "partial",
+        "evidence": "bounded REM and fallback; full dream workflow differs",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "critical-push",
+        "status": "partial",
+        "evidence": "authorized own-reply action bound to scoped host message ID/route and latest ledger state; reactions lack a general-plugin hook",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "feedback",
+        "status": "partial",
+        "evidence": "manual feedback exists; automatic outcome tracking is absent",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "reminder-state",
+        "status": "partial",
+        "evidence": "opt-in absolute-time extraction produces private pending proposals; explicit confirmation schedules an existing scoped card",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "shared-memory-copy",
+        "status": "ready",
+        "evidence": "explicit agent-scoped sharing",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "obsidian-basic",
+        "status": "partial",
+        "evidence": "scoped desktop/web/CLI reviewed note import, opt-in hourly change reviews, stable IDs and verified acknowledgement; arbitrary vault discovery and mirror conflict resolution remain open",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "controls",
+        "status": "partial",
+        "evidence": "native commands cover an intentionally narrower operator surface",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "scheduler",
+        "status": "partial",
+        "evidence": "reviewed per-user launchd, systemd/WSL and Windows Task Scheduler definitions/load commands plus OS-owned job locks; native Windows/WSL scheduler acceptance remains open",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "backup-cutover",
+        "status": "partial",
+        "evidence": "offline exact-root export/restore, retained backups and interrupted-restore guards; full-parity cutover stays gated",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "contradiction-live",
+        "status": "partial",
+        "evidence": "independent bounded disclosure toggle; both cards must pass current recall gates; upstream graph/selector/format semantics still differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "proactive-delivery",
+        "status": "partial",
+        "evidence": "opt-in independent in-process ticks after authorized route registration; cold restart needs a fresh gateway event",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "identity-authorization",
+        "status": "ready",
+        "evidence": "pre-gateway MessageEvent identity, user allowlist, private-chat fallback",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "confirmation-bound-mutations",
+        "status": "ready",
+        "evidence": "one-time nonce bound to exact command, user, chat and expiry",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "obsidian-advanced",
+        "status": "partial",
+        "evidence": "managed native files, not the full dynamic operator workflow",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "speaker-mapping",
+        "status": "ready",
+        "evidence": "persistent aliases, turn segmentation, controls mapping",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "code-index",
+        "status": "ready",
+        "evidence": "bounded Python, JavaScript, TypeScript workspace symbol index",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "afterthought-meta-cognition",
+        "status": "partial",
+        "evidence": "additive hints, not full configurable session-LLM reporting",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "explainable-recall",
+        "status": "ready",
+        "evidence": "per-result vector/rerank rationale and bounded decision trace",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "proactive-pattern-nudges",
+        "status": "partial",
+        "evidence": "native patterns/governor and independent authorized-route ticks; cold-start route registration still required",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "afterthought-followups",
+        "status": "partial",
+        "evidence": "native governor and independent authorized-route ticks; cold-start route registration still required",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "meta-reflection",
+        "status": "partial",
+        "evidence": "aggregate feedback, not full upstream reflection contract",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "temperament-mood",
+        "status": "partial",
+        "evidence": "mood presets/context; Persona Voice and full style contract differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "multi-namespace-recall",
+        "status": "ready",
+        "evidence": "single writer, read-only legacy routes, globally bounded rerank and dedupe",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "shared-memory-pools",
+        "status": "ready",
+        "evidence": "hashed workspace/user pools, copy-never-move, additive vector recall",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "recall-hardening",
+        "status": "partial",
+        "evidence": "native caps/compression; fallback and validity-aware behavior differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "long-input-commands",
+        "status": "ready",
+        "evidence": "semantic preparation for recall, forget, correct and 100k source guidance",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "correction-reinforcement",
+        "status": "partial",
+        "evidence": "archive-first correction; safe-update and merge-lineage contracts differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "gc-compaction-conflicts",
+        "status": "partial",
+        "evidence": "explicit merge proposals include repair of metadata/mirror/cognition/graph materialization before source retirement; upstream automatic compaction differs",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "feature-profiles-toggles",
+        "status": "partial",
+        "evidence": "atomic native allowlist, not full upstream configuration mapping",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "job-rate-limits",
+        "status": "ready",
+        "evidence": "persisted per-agent hourly, daily and weekly gates plus overlap lock",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "emotion-tier-routing",
+        "status": "partial",
+        "evidence": "local-only lazy Transformer/prototype T2 or explicit T1 fallback; configured T3; live model quality not verified",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "temporal-query-ranges",
+        "status": "partial",
+        "evidence": "validAt and created-time ranges exist; full historical store-merge contract is absent",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "poor-result-query-refinement",
+        "status": "ready",
+        "evidence": "one bounded content-focused second query before global rerank",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "critical-push-budget",
+        "status": "ready",
+        "evidence": "exactly-once classification ledger and persisted per-agent daily max",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "epistemic-capture",
+        "status": "ready",
+        "evidence": "observed/untrusted capture decision, restore-safe fail-closed cutoff, legacy rows stay unstamped",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "inject-budget",
+        "status": "ready",
+        "evidence": "recall.globalInjectMaxChars default 17000 caps memory context before structural blocks",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "tombstone-bulk-writers",
+        "status": "ready",
+        "evidence": "migration and workspace-migration reinserts pass the canonical scope-bound tombstone guard",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "derived-record-visibility",
+        "status": "ready",
+        "evidence": "dream records carry visibility stamps beside physical scope partitions and the own-agent legacy fallback",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "inject-marker-line-headers",
+        "status": "ready",
+        "evidence": "runtime inject headers recognized only as line headers in capture trust decisions",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "critical-batch",
+        "status": "ready",
+        "evidence": "ACL-bound snapshot, multiple refs/all, per-card error isolation",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "operator-status",
+        "status": "ready",
+        "evidence": "server-scoped dashboard status plus reviewed session-bound Workshop actions and explicit local CLI",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "physical-compaction",
+        "status": "ready",
+        "evidence": "explicit operator CLI --apply, exact writer route, no semantic GC",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "private-dream-diary",
+        "status": "ready",
+        "evidence": "private-only idempotent managed DREAMS.md block",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "skill-farming",
+        "status": "partial",
+        "evidence": "opt-in procedural proposals, evidence hashes, exact revision approval and conflict-safe native publication; published skills are profile-wide",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "curation-drop-injected",
+        "status": "excluded",
+        "evidence": "no neo-conflict or injected behavior-card surface exists in Hermes; upstream-only contracts",
+        "auditStatus": "unreviewed"
+      }
+    ],
+    "COVERAGE_710": [
+      {
+        "id": "validity-and-expiry",
+        "status": "partial",
+        "detail": "native validAt/validity windows, absolute expiresAt and session/short TTL are wired; historical automatic store-time merge parity remains open",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "store-merge-lineage",
+        "status": "partial",
+        "detail": "explicit lossless proposals plus opt-in private LLM-selected store merges; stable retry IDs, validity lineage, repair and final revalidation; arbitrary semantic rewrite and full automatic compaction differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "llm-result-cache",
+        "status": "partial",
+        "detail": "native cache integration is narrower than the complete upstream live-call contract",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "reminder-extraction",
+        "status": "partial",
+        "detail": "absolute-time opt-in extraction and scoped pending confirmation implemented; relative dates are deliberately not guessed",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "cognition-tiers",
+        "status": "partial",
+        "detail": "opt-in Persona Voice, knowledge promotion, LightDream, LLM reflection and scoped episode narrative jobs; reaction events and complete graph/entity parity remain open",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "local-jina-v3",
+        "status": "not-ported",
+        "detail": "native Transformers remote-code chain is not independently audited; explicit fail-closed guard, existing sidecar model support retained",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "dashboard",
+        "status": "partial",
+        "detail": "server-scoped status plus reviewed Workshop approve/publish previews and session-bound one-use actions; no generic operator command or full workflow UI",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "reembedding",
+        "status": "partial",
+        "detail": "bounded private/isolated named-writer activate/recover under cooperating runtime leases; mixed recall requires matching certified encoders; non-cooperating processes and automatic switching remain unsupported",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "trusted-critical-reply",
+        "status": "partial",
+        "detail": "own-reply flag plus scoped outgoing message ID/route and fresh authorization gate explicit outcomes; no generic reaction hook",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "skill-workshop",
+        "status": "partial",
+        "detail": "native mine/show/approve/publish workflow with source revalidation and no manual overwrite; native publication is profile-wide, not agent-ACL protected",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "obsidian-operator-ui",
+        "status": "partial",
+        "detail": "desktop/web/CLI scoped workspace discovery and exact-revision consent implemented; no arbitrary filesystem selector or complete mirror conflict-resolution UI",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "proactive-delivery",
+        "status": "partial",
+        "detail": "independent async ticks after one authorized gateway route registration; no durable cold-start route ownership",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "openclaw-host-internals",
+        "status": "host-specific",
+        "detail": "public SDK memory slot, Cron ownership, iframe actions and native dream renderer have no identical Hermes interface",
+        "auditStatus": "unreviewed"
+      }
+    ],
+    "COVERAGE_712": [
+      {
+        "id": "validity-and-expiry",
+        "status": "partial",
+        "detail": "native validAt/validity windows, absolute expiresAt and session/short TTL are wired; historical automatic store-time merge parity remains open",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "store-merge-lineage",
+        "status": "partial",
+        "detail": "explicit lossless proposals plus opt-in private LLM-selected store merges; stable retry IDs, validity lineage, repair and final revalidation; arbitrary semantic rewrite and full automatic compaction differ",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "llm-result-cache",
+        "status": "partial",
+        "detail": "native cache integration is narrower than the complete upstream live-call contract",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "reminder-extraction",
+        "status": "partial",
+        "detail": "absolute-time opt-in extraction and scoped pending confirmation implemented; relative dates are deliberately not guessed",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "cognition-tiers",
+        "status": "partial",
+        "detail": "opt-in Persona Voice, knowledge promotion, LightDream, LLM reflection and scoped episode narrative jobs; reaction events and complete graph/entity parity remain open",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "local-jina-v3",
+        "status": "not-ported",
+        "detail": "native Transformers remote-code chain is not independently audited; explicit fail-closed guard, existing sidecar model support retained",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "dashboard",
+        "status": "partial",
+        "detail": "server-scoped status plus reviewed Workshop approve/publish previews and session-bound one-use actions; no generic operator command or full workflow UI",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "reembedding",
+        "status": "partial",
+        "detail": "bounded private/isolated named-writer activate/recover under cooperating runtime leases; mixed recall requires matching certified encoders; non-cooperating processes and automatic switching remain unsupported",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "trusted-critical-reply",
+        "status": "partial",
+        "detail": "own-reply flag plus scoped outgoing message ID/route and fresh authorization gate explicit outcomes; no generic reaction hook",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "skill-workshop",
+        "status": "partial",
+        "detail": "native mine/show/approve/publish workflow with source revalidation and no manual overwrite; native publication is profile-wide, not agent-ACL protected",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "obsidian-operator-ui",
+        "status": "partial",
+        "detail": "desktop/web/CLI scoped workspace discovery and exact-revision consent implemented; no arbitrary filesystem selector or complete mirror conflict-resolution UI",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "proactive-delivery",
+        "status": "partial",
+        "detail": "independent async ticks after one authorized gateway route registration; no durable cold-start route ownership",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "openclaw-host-internals",
+        "status": "host-specific",
+        "detail": "public SDK memory slot, Cron ownership, iframe actions and native dream renderer have no identical Hermes interface",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "local-jina-v5-nano",
+        "status": "partial",
+        "detail": "native pinned Q8 ONNX, explicit license/download gate, 512-token sequential inference and normalized Matryoshka dimensions; macOS real-model smoke verified, broader quality/platform acceptance remains open",
+        "auditStatus": "unreviewed"
+      },
+      {
+        "id": "nano-new-install-migration",
+        "status": "partial",
+        "detail": "shared installer exposes backed-up model workflows for private and isolated named writers; exact new-candidate real-model all-agent acceptance remains open",
+        "auditStatus": "unreviewed"
+      }
+    ]
+  },
+  "hermesPreservation": {
+    "baseline": "c12ec2bba63d74ac8add8782ab6761472b4149c6",
+    "modifiedHermesHostInstallerScripts": [
+      "scripts/configure-hermes-omlx.sh",
+      "scripts/hermes-desktop-host.py",
+      "scripts/install-hermes-plugins.sh",
+      "scripts/install-mtplx-agent.sh",
+      "scripts/install-mtplx-embed-agent.sh",
+      "scripts/install-mtplx-embed.sh",
+      "scripts/lib/hermes-home.sh",
+      "scripts/mtplx-bind-agent.sh",
+      "scripts/mtplx-embed",
+      "scripts/mtplx-hermes-up",
+      "scripts/run-hermes-workspace-migration-job.sh"
+    ],
+    "files": [
+      {
+        "path": "distribution/ACCEPTANCE.md",
+        "sha256": "e83b50b01a5aed2dc1a8893ad8aa0165fdb6a359b860ebdbfa9606b401f138e5"
+      },
+      {
+        "path": "distribution/INSTALLATION.de.md",
+        "sha256": "3b739aea2615f4c8ab479a4b0f72ca68db9a1a2bda082627a037221f6b369c6c"
+      },
+      {
+        "path": "distribution/Install PLUR1BUS.command",
+        "sha256": "092c6551f274a172a6ed4e4592a345e8753bd75200013aacb87c02c721b00f2b"
+      },
+      {
+        "path": "distribution/README.md",
+        "sha256": "b352aa69ff0151b710593deaa3b2aef40c275c6480a6bc38ecd0cd7446d67c03"
+      },
+      {
+        "path": "distribution/build.py",
+        "sha256": "173e41ff75b040abf384e28763d829751f69d662aba8d5d3ffb03fa821c723cd"
+      },
+      {
+        "path": "distribution/ci.py",
+        "sha256": "e198c9ae660effae5513f829ad9e3e123cef57694a8d4ad11c14d05cff1ddb92"
+      },
+      {
+        "path": "distribution/install.ps1",
+        "sha256": "eb220e742c6be5696d29d836e8e78a7333633d1662640629fae63ffbcdd99b79"
+      },
+      {
+        "path": "distribution/install.sh",
+        "sha256": "0ef37b2d045c4acadc5d340969403e3a3742c18e92da2f02069a96f14197b73a"
+      },
+      {
+        "path": "distribution/installer.py",
+        "sha256": "272e9d0f2489f8338749856eae934957f70e79449593301e172a8d16d51c8861"
+      },
+      {
+        "path": "distribution/macos/Setup.swift",
+        "sha256": "c6ddee4780326b5aac133de04eb0d964189abdf564062246e951343f566088e2"
+      },
+      {
+        "path": "distribution/macos_pkg.py",
+        "sha256": "adca038673d48a63c8d6955170af9a3d3e99c9d875752adf8ac4f39d1c7fe9a5"
+      },
+      {
+        "path": "distribution/native_launcher.py",
+        "sha256": "7a25f39c641b23c60df0309634e17c439e8f641c363098b00a3a6bb24c52e0c5"
+      },
+      {
+        "path": "distribution/release_checksums.py",
+        "sha256": "26397bc6f78eb59e6b74bcc7d43e4403bf57197e762db2446e68c57871bd21e3"
+      },
+      {
+        "path": "distribution/tests/test_artifact_entrypoint.py",
+        "sha256": "d33d4dbd1422bfb7c8864116d2f3444cd2d490b3a26915ec7c60fa7d27cfbbfa"
+      },
+      {
+        "path": "distribution/tests/test_artifact_names.py",
+        "sha256": "19e8dabd49eb09fb24bb00afe4291c039bd8b1b6ce2a7cfbdf473d0a21ebe71d"
+      },
+      {
+        "path": "distribution/tests/test_ci_native_artifacts.py",
+        "sha256": "63f2fd779685b7347d37530e2c333b3fcc8c160597faeb1a1618bb0e0762916e"
+      },
+      {
+        "path": "distribution/tests/test_cpu_torch.py",
+        "sha256": "3707e40d2d166a46c6743213ee4819126fb7f39990692e414f9561d824637559"
+      },
+      {
+        "path": "distribution/tests/test_installer.py",
+        "sha256": "d145965ec6ff9ab088af1a568a7b5ea78537605704c45f00f9b077e85409c0ae"
+      },
+      {
+        "path": "distribution/tests/test_macos_setup.py",
+        "sha256": "b0ec5482e08cadedc7ebbf8b4339e0f61acb86d3ae7e1ce36764c59d602eadd9"
+      },
+      {
+        "path": "distribution/tests/test_native_launcher.py",
+        "sha256": "b7d8e69c0d85f3a172043e0c1d5a0f8a8ea7d5e5957e732d188699a54fdca98a"
+      },
+      {
+        "path": "distribution/tests/test_native_wheels.py",
+        "sha256": "726dd42f333dd0ff7434e05024d0e94b954c1974f0cb8c5b5002ada581e24499"
+      },
+      {
+        "path": "distribution/tests/test_pip_bootstrap.py",
+        "sha256": "660ec7dcf93916d37f14631f37ed7345a7ab4f58b7d764c4e9584c172030d920"
+      },
+      {
+        "path": "distribution/tests/test_platform_dependencies.py",
+        "sha256": "44a0ac6a049e450caed8a58159123b26464a81536732bf9bae3b80efcdfc90da"
+      },
+      {
+        "path": "distribution/tests/test_release_checksums.py",
+        "sha256": "2184330bbf26cdc1f03fe2a8b488ece36f7ec0bc7b23c0ae0ba75b3d3928dd36"
+      },
+      {
+        "path": "distribution/tests/test_verify_provider_stack.py",
+        "sha256": "7bbd27769756c9b014890c071d1187575a4ae1bd2aa578c67a5aadb653abebcd"
+      },
+      {
+        "path": "distribution/verify.py",
+        "sha256": "5b6c2d362e6c10cb7f8ae0ee755339585b53ce222527ab77530542221f8f5b64"
+      },
+      {
+        "path": "hermes-dashboard/.npmignore",
+        "sha256": "c4b08dd0d77990f55007fba177eb41c0060dfb37c57c9d7e6102cff2eccfbb06"
+      },
+      {
+        "path": "hermes-dashboard/patches/hermes-desktop-live-profile.patch",
+        "sha256": "701ddd6a88670b61f351059912b48f7402e4aa1d10f87626f2b08a69e0372aaf"
+      },
+      {
+        "path": "hermes-dashboard/patches/hermes-desktop-sidebar-action.patch",
+        "sha256": "08b35bcbc416229b542c829f4f97e379230fe9b39ca2a9422554c79f9b6d87c7"
+      },
+      {
+        "path": "hermes-dashboard/plur1bus/dashboard/dist/index.js",
+        "sha256": "bb77157c4417248c73083eb0f59461db9cfba284c9b2c3353751c71a93044906"
+      },
+      {
+        "path": "hermes-dashboard/plur1bus/dashboard/dist/style.css",
+        "sha256": "1ab8c485868c6b5fd11d21b3dda3ece796b1501ce5c0187ced843d435555f643"
+      },
+      {
+        "path": "hermes-dashboard/plur1bus/dashboard/manifest.json",
+        "sha256": "c50f44e8c731f3f0b49fecae5f66a05e2456f4e4b60a16dbb0a6438a92f5f193"
+      },
+      {
+        "path": "hermes-dashboard/plur1bus/dashboard/plugin_api.py",
+        "sha256": "9ff89c0a26da8e1917c846362580e089253ebea49f467c521f0734f1393e5a44"
+      },
+      {
+        "path": "hermes-dashboard/plur1bus/desktop/README.md",
+        "sha256": "bc921c0147957973f3d16005a95e03d589ddf7fc24d6619c999079e518a63954"
+      },
+      {
+        "path": "hermes-dashboard/plur1bus/desktop/plugin.js",
+        "sha256": "8d613e24163fadb829aa214d25d696226e07343388d4b58605020a1320bf604a"
+      },
+      {
+        "path": "hermes-dashboard/plur1bus/desktop/test-harness.mjs",
+        "sha256": "29eb8b2da86999f9c1626a0f042090b8b9dda35f167ed4ce1ee5818785cd80e2"
+      },
+      {
+        "path": "hermes-dashboard/tests/test_desktop_actions.py",
+        "sha256": "6ca4b24133839cf6ad8b4567a697a9dbc17a8c40ef70656425a9bfdceffa9f55"
+      },
+      {
+        "path": "hermes-dashboard/tests/test_host_preparation.py",
+        "sha256": "6c476d734b551bff657b2b5fe54af5c5811fbb08947a4d2eb38a0d600dc0f248"
+      },
+      {
+        "path": "hermes-dashboard/tests/test_installer_dashboard.py",
+        "sha256": "a4ef45397a541efbef391af96ba2a11c8ad1d838e65b2d24144624c0be9d4ab7"
+      },
+      {
+        "path": "hermes-dashboard/tests/test_obsidian_actions.py",
+        "sha256": "2d852b74c6dfa418600665ace0ca0d2cf782a45d6d1c718b0dd09e2a1b4cefe6"
+      },
+      {
+        "path": "hermes-dashboard/tests/test_plur1bus_dashboard.py",
+        "sha256": "5aee1c0daf5f1fb7312b7407dac487af96ad51c57ce175beb6569c6ab8b927bc"
+      },
+      {
+        "path": "hermes-dashboard/tests/test_retrieval_actions.py",
+        "sha256": "d40113efdd8008c89954070359b9285bf554c3cf623d89f477d2c7e5b2d3e755"
+      },
+      {
+        "path": "plur1bus-controls/.npmignore",
+        "sha256": "cfa52eacb3bac2fc882a3367604663c1018b8275e2fe0fa91c0553897d19c570"
+      },
+      {
+        "path": "plur1bus-controls/README.md",
+        "sha256": "6db5a38f246f099cfd5159da16262497e27f7f4168d0bf98435bbe721dc0b640"
+      },
+      {
+        "path": "plur1bus-controls/pyproject.toml",
+        "sha256": "07571cddfb09d93daec9fb6c1e549e6655e5d339ebfb8b848e9de075b8701d09"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/__init__.py",
+        "sha256": "fbf2d246b64e59e9ea24c958cc255b32e490a83e0e7e107ce06c26f689d1fd4f"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/background_delivery.py",
+        "sha256": "6a75c099727d3b2bcca07381a2dd4c54bfc5212e92d26ea25c6b35e5ca0af3ef"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/cli.py",
+        "sha256": "03ad7797bf5abee186ff89ababfd56f24087ead0924e9d3a8000eaaea5d65caf"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/command_parse.py",
+        "sha256": "2d97f6a79fa938b74db12092e2021a0b7a0a92aa05b519dc24daf2a69e312ca9"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/commands.py",
+        "sha256": "e922ea57d181d64578ab0bd0dada35392bdef88f6b9bd2bcd398a88c1bdb98e7"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/confirmations.py",
+        "sha256": "e88de2bad5b6ab7655d4fd5c68aa7b3c38dd3d26be0c2b07c602a5c257a94aa7"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/hooks.py",
+        "sha256": "3f58ec52680a932ab6769f741a20e8dc04a6295ea2dedbd3e43bc11c869d2059"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/plugin.py",
+        "sha256": "db988fc8340065fb6830e7587162e2774aebba50771e34b75ffe809f20e0044d"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/plugin.yaml",
+        "sha256": "734c2c2de5999aee99120e02f7871e190d19eea086cc894e8514cbcc801e0044"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/request_context.py",
+        "sha256": "7d4f21b43f600a052de15545c5cd2c7961e4a290e7c8a8b076d2d5b1588fee31"
+      },
+      {
+        "path": "plur1bus-controls/src/plur1bus_controls/service.py",
+        "sha256": "f5d88af2262dbe78112e44381ba45144b1a5808628918aa5cf297f160d201580"
+      },
+      {
+        "path": "plur1bus-controls/tests/test_scope_controls.py",
+        "sha256": "a814edc1ba5f9f2322585d5f74a5579252ecd663dcc78597e2080023ece4a519"
+      },
+      {
+        "path": "plur1bus-hermes/.npmignore",
+        "sha256": "cfa52eacb3bac2fc882a3367604663c1018b8275e2fe0fa91c0553897d19c570"
+      },
+      {
+        "path": "plur1bus-hermes/README.md",
+        "sha256": "af4914b3956096f4106f9967a5e5ddc6a7f12050cbceb42f4efedeaf10b9a189"
+      },
+      {
+        "path": "plur1bus-hermes/pyproject.toml",
+        "sha256": "8699c07deab2d14724ccd527572b94221a31a364f96373205d631b0c0aac85d0"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/__init__.py",
+        "sha256": "341357f0ca0bcb38b8f545a53fb35fc3e4b94d7549558dfa33c80c6feed6e911"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/automatic_merge.py",
+        "sha256": "0b5054c95f274f70707bdf4fd6732d007ed267c7033b8fc996ebc16b1e8159dd"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/bge_onnx.py",
+        "sha256": "64462ea16c7f5fbd6da7c91f1977b1012dc9872cb4f611e9e5574cce688f28e2"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/cache.py",
+        "sha256": "473bc591605ad48f8ed9fd5cbc0d7fa951fe77bda1e1beba59e493bd9a749f7f"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/cache_budget.py",
+        "sha256": "d2f0d021103212873f3056d2b18e2aca9cf7eaa1cf1005f287c7ff7513e2de31"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/cli.py",
+        "sha256": "f2e061410023cdc926cc2edf3c45b5866d0ad5711cfb3ed3f3589dee2ccd42bc"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/code_index.py",
+        "sha256": "644d4c5ece707367ec170b816ba78ad270238e4dc16ba614bc1147df6d1d280d"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/cognition.py",
+        "sha256": "fd2cb98b5b24ca1135427ad81b49aa73b8535dc743aa861fb44a34aebce02a45"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/cognitive_prompt.py",
+        "sha256": "25888aae9d1c331f8f6a274f8c2ff1a719d590ff9e5e35c928c763a3a3f10291"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/contradiction_disclosure.py",
+        "sha256": "e2ac255d7bf98345e4ecdb306af087c9c9cb32f4784fd43c526a9b70e37dcba0"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/controls_bridge.py",
+        "sha256": "fc7fee9a0ad0a637d9324bda21f4b03e0898b18910d1d5fa794491036cf2a80a"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/critical.py",
+        "sha256": "49500329c3d5e70155763fbe87d6b6744c36bd356856989a512ddbe4ecdc13ac"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/critical_reply_intent.py",
+        "sha256": "5211b4477d70970816afa6bcbea156d55942f59409a499b73970b3a02cd38a1c"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/critical_review.py",
+        "sha256": "b7937ed99954bddb99962fdb81cd128c56856ad9679dc384cd760e64ca54cd3d"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/cutover.py",
+        "sha256": "abc95fd7966144216586626863eee3f113b07b92a8409837901be58f1da67757"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/domain.py",
+        "sha256": "3f1ef56af6b62c2bb444f0c8f7001c4882a1da6171e1782f31b82648f9fb3284"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/dream_diary.py",
+        "sha256": "80daab142cc3eb9c45fb8291cb60360c9adac320497dba141888d56f56cd6848"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/dreaming.py",
+        "sha256": "2488b05662414264a38c824d56052af489e55a748e79e4043d58a66a325afb1f"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/durable_merge.py",
+        "sha256": "f0a937e1caf6ac1998ec3a5aa5c0bce4b719b018c10c32ea3da4412eefb164d4"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/episode_narrative.py",
+        "sha256": "bcbce50563e1eaf829e7aa2671f1323518c55026d5b79b69325c243f4d12d44a"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/epistemic.py",
+        "sha256": "d660b4e255fe53495fad768fd50b4eb81f9a5ff244144bc932c92a61d4c0ffac"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/feature_profiles.py",
+        "sha256": "edd725354e32e92161c0120fdc3c641259c03d6747808a6e47a57347ad352ecf"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/file_io.py",
+        "sha256": "657b81060491071e57f292219a93b3a2d660cf9860f68daabeacd2f237d88b8d"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/file_lock.py",
+        "sha256": "24fff33af0009406755dd0236a5cd5eb7dafd12f445f72f9c7503f0c075cc5e2"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/generation.py",
+        "sha256": "b87da8c6818331f76ced983942fa3d434ee1d5e42101a8052f7791c0d2efbd1e"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/identity_migrate.py",
+        "sha256": "56b7ed2e7f80cbabd80fc2036db4775461d2682ec459dde69a4209baef08b2b0"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/inject_budget.py",
+        "sha256": "34b4e41344701d699f761e709bd93a3499840b97ef9d5c7d2e4410ee0a9be8e5"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/inject_markers.py",
+        "sha256": "94433b722d742ca4646da533372e8fdf77c613badd7e1d3e84aa6f3c5475a866"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/jina_v5_nano.py",
+        "sha256": "f5d82ff2b4703db04256b1e78d246267aae5c2b109a35d6bec2fe2eedaf269c0"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/job_install.py",
+        "sha256": "5b6dbcdbe8b199a65621e83acfb10dc5e3dca731bbf1b72cd7d2ca47729bbeb3"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/jobs.py",
+        "sha256": "8ef9a2a5208386106902b3f8523ab73c8a11c2236e065c623acc3898f25b7373"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/knowledge.py",
+        "sha256": "3f14548fc1159e64ce4274920e36de1e0934b5e8e9bebabb87e77aac3dd4a774"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/legacy_assets.py",
+        "sha256": "81fd994376120cbf4afbf114aca1cd421311b26ab4bd552a3c15596520ce6fb2"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/llm_backend.py",
+        "sha256": "2e34466c784626a87584d6b8ac4602101f231168472fb8c61afa84abf2ae9878"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/llm_cache.py",
+        "sha256": "9d4ba3e8f0e81896b518b87581bdc76c7e9d4cc95b891dc736354dc06217be6d"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/materialization_repair.py",
+        "sha256": "9e21dfa575a432fd04edb117cb3c52dfa625c53786b038e260f16937e7567bca"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/migrate.py",
+        "sha256": "35e158404604ee339130312ca677372d01343cc605b4eb7fb1bb283b63f4fcc4"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/mood.py",
+        "sha256": "82baf399f97eaf0bca51333fbc2af8eb0e9d071d7d3273742d7570d1cd48b8f2"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/namespaces.py",
+        "sha256": "1d845e494913e749a06e73b2641151a9945605ba63962c17504bfb33c427c9ee"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/obsidian_maintenance.py",
+        "sha256": "fccbfc9c92e41f58174158e9a4a17db357f48a3dbce5cdfe07d3d961dd6b7bec"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/obsidian_sync.py",
+        "sha256": "d8c7541d182c656106a43fccbc87a4e2d6f5dffcc06210b8a46e1c4e72188973"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/operator_cli.py",
+        "sha256": "090f1856e1e19bf8c9a9b1045f917e1b9a8127ec8d1debff2bc217475cb0132f"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/operator_status.py",
+        "sha256": "3794b840a7d2951ac4e0fac29c0dd6748a4ae41b296149d5b6a1ea41e5279ee1"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/parity.py",
+        "sha256": "38cbea14e24668bf2641985b436bd0a82677bba6ce18e1e738955b5d8a9ec54a"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/persona_voice.py",
+        "sha256": "e0d1c7555205316bb8e937238cb3f7578f24459c0141a9f2b92ba6f5cf2de32d"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/platform_jobs.py",
+        "sha256": "6516598d8b77699f690c91b4b7140ba1c038911ae23c9d13d6922cb691ecd5e5"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/plugin.yaml",
+        "sha256": "9fafb73c426107f17f8c4ccd1b7166e14ec3a27b740ffcee0d12f0d8c7c9d0ad"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/proactive.py",
+        "sha256": "09bd431706da5690395f97bab13ff868326ade42d73d176fd9f6774fc5b62626"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/provider.py",
+        "sha256": "ff28fbf4409c4055733cbb1d98431495f0ec8b244adfe96915ae9808abb5e127"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/query_refinement.py",
+        "sha256": "05faaa880470e40059f34d9e173669c76892d4816f10c7d888f32c4f6113d426"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/rate_gate.py",
+        "sha256": "95087901f86b985b0821784be81248e3e962b5ddf2e0d9aeeec85608571d430f"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/reembed.py",
+        "sha256": "0515d5926e4133af277ac06ee6b0159e4879ceb4965ab3cc6c2fa5f8c02bf89f"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/reembed_staged.py",
+        "sha256": "7a977534bd1a34e0dcdf9b284132c660779c2fc73d9c8e452621b3d5de39a9af"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/restore_guard.py",
+        "sha256": "65b9c19b545ee113747fd30a3a0cc1102b4637465240caefd918f44bbf8c4cae"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/retrieval_admin.py",
+        "sha256": "e69ad49d31720d4f9137a0ae0e7baef4a0de71d0de8718d92cf4c20ac547c7e2"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/runtime.py",
+        "sha256": "81df5c550127d8dd2206765091d265d74412ab9f11e384ad488ff28316702ed9"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/runtime_lease.py",
+        "sha256": "10f440e21a816b669eff68b5026d21700f59f310a29567bad96074f6e3886064"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/runtime_scheduler.py",
+        "sha256": "c311222f46d002015bf2fb04541b44fdd7264665188ab8ff53f830e09b5e6d56"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/semantic_input.py",
+        "sha256": "163d5be1ae5f51c72a0296d3f1a801662c744b5234e80f6b3fbd48e8e65e4fc9"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/service.py",
+        "sha256": "383d718dcfd689d0d301c06ee13494ca5fbfea6700c73d46414fe9bb2931db65"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/setup_retrieval.py",
+        "sha256": "d91170563feea164814146f21dc3d44595d9cb000c80e72cf9d61cfb9a2b877f"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/shared_pools.py",
+        "sha256": "1058abd9ccbb63d61de7e04c4fa8d4346aa72f0148afa0ae0ba0582e9193b5b6"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/skill_workshop.py",
+        "sha256": "9466dee5e2bfc3a95283952f3f347ed74638e0373574ea2df5d37603de5460c7"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/snapshot.py",
+        "sha256": "c30df47110b8a793cdce21f8ddbc380167426f0394676a21f883c464b03ecf8f"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/source_sync.py",
+        "sha256": "1a3a4e806ff964bf59afaba48e1e2dc0d5fa253970c5e1343249542a54f77677"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/speakers.py",
+        "sha256": "3d5d3d718d6f0c3fe5696ae4e2b499fd24671425a55735baa791f100a7828bfa"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/tombstone.py",
+        "sha256": "e46b2991518baa28dbca3c6231d0e4e9669cbcef7bd7bf6ade7096ad8bf0275e"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/valid_time.py",
+        "sha256": "162ea9c9e712cebee1d123d95ef4e67ecb9ecc28f0ab5e19db7df442555de341"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/validation.py",
+        "sha256": "10f6e310924146babf152010af927a6ebe6992b44c7150ca4690bb8832e780d1"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/workspace_consent.py",
+        "sha256": "6fd91951d5563697504bd651938399c22a2d31307bcd1acc673c508f5f57ee97"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/workspace_migrate.py",
+        "sha256": "80a6349ab464a724e5614982a099aaa8b2f8fbb6459ff8793f7d54c2e0a4f178"
+      },
+      {
+        "path": "plur1bus-hermes/src/plur1bus_hermes/writer_lock.py",
+        "sha256": "e3e004feab8ba0bb2091e0354427ca35bb6827093a2a806536cbdae17d680753"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_automatic_merge.py",
+        "sha256": "48c482b126efe22cf1f386ab28a0d1b88ea8230bf06a76522d18b749bc8d35a8"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_background_delivery.py",
+        "sha256": "e644c97c67fb77757aaa1a32ab8792ffa93d5d7c7098db46f4e1ed71fbf9a548"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_bge_onnx.py",
+        "sha256": "29f94a6e0d3847f2036b2e4de91e70778abd4736a8fe4ab57877433a5525e8b7"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_cache.py",
+        "sha256": "0ea79a8626293a37f5667fb1c5b0147f715971e8ddd8dc36b3830fe715fe94b0"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_cache_budget.py",
+        "sha256": "193754ad3040da48323c7ff0b37d59e24abd496864ab2c0b102bd714057e2ad8"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_capture_retry.py",
+        "sha256": "33f3253fe69530486102dcae508181624de589ee8edf15f30c897da8eebe3306"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_capture_retry_scopes.py",
+        "sha256": "bdcfe37a39e6c56820ff68f5b7708bcb3c2c6a93f96a52cc252af424df3f5847"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_code_index.py",
+        "sha256": "4ea65949f6945ea9d479b08943551693b38ce6328c0ff90a118f4b13f2058e3c"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_cognition.py",
+        "sha256": "eec66668d435beb47109a280c57f0b06c896c39db74a1a17942523853afed054"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_cognitive_opt_in_and_reminders.py",
+        "sha256": "8e7b625be044f073729c4385e021b5c69683dc327abbbf731090814402fdebda"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_command_parse.py",
+        "sha256": "93f0707527385744f5a849036aac15db64e266115d9763a4fea9ef8428d7f46b"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_confirmations.py",
+        "sha256": "76cd7df18b914454c037e38feb0deab336e83fb6aa5520c2321ab0a4883d1d95"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_contradiction_disclosure.py",
+        "sha256": "4d1bd8364b2da76b886655da76b1a09b8a250cbb77bf3b0c035862b6f118adcb"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_controls.py",
+        "sha256": "31bd210d813486039f3bebe20b35078294f1af71eb3abbff87aecc4fa3a0d020"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_controls_security.py",
+        "sha256": "f6d021e41d054543a2b29a2a96784cbf94097b27feda4a9806354953fb606623"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_correction_reinforcement.py",
+        "sha256": "62832487dee4717bac253d5034dec190de175cd19544a24bafbf8e0f76be425b"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_critical_budget.py",
+        "sha256": "e21321046a1b29856fe9ab2a092e08c318a9a1c151bbbd80a08b650cc4cf7b72"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_critical_dreaming.py",
+        "sha256": "350dd916cd84652e501457984f96151eeca1a62b7255318a68a8a4e89d4ea04f"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_critical_host_wiring.py",
+        "sha256": "1d6a8aebf0f55fe07f5572d000d809cb339488c1cea4dcf0c3da9e3209b51fc2"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_critical_reply_intent.py",
+        "sha256": "a480f658412afaf3aab5fca9c90e05974a51dede3903a9bf3846753a3e223e0a"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_critical_review.py",
+        "sha256": "b3c0410565aa1d11268b4bdc64c92cf2fbe409dee8afca2fc5c4e23d783a3086"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_critical_workflow.py",
+        "sha256": "b2af5102b9ca00994253db886b66c1dccfa91a8e2757b536843b88c63e897bab"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_cutover.py",
+        "sha256": "f5bb6445ea8ab29e749179e4f7551ef516f0fb8c0b704ef7c66dcd800addf974"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_domain.py",
+        "sha256": "537c2d2c8927ece563a8297a2bda744c6bdc63016f0848167d03f3d44cf6d575"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_domain_indexes.py",
+        "sha256": "baf75c4fc0b51d275722948cc8587ef11530ac78415770219deb75a1db7ac272"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_dream_diary.py",
+        "sha256": "288b1c15d3d90869f4203ffe3d0e96f74da734b5f4d1a30c6dc3f4a352d0b0b1"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_durable_merge.py",
+        "sha256": "48b4e8e8657bd87bccc9179bbc40f0eb76d7e1143541042a148f4aa648302d5a"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_embedding_batch_coalescing.py",
+        "sha256": "69e23ab1f100f34dc8ca54ba3c8f5b3910e07855ef914c21e234022ff7e23be3"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_embedding_coalescing.py",
+        "sha256": "310155071186d0d72f4f524dae34b946aebc03e42de15df238ca33628b7f3504"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_embedding_fallback.py",
+        "sha256": "c6ac3907d81e1bfd0ad5d0073bd66a163d4859ccb2011f9b296ee3f892c5bdd9"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_emotion_tiers.py",
+        "sha256": "e62804fe9a694055ae072641b08d8f47f6ba3795cfbf10e545e677bcaffbd6b3"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_episode_narrative.py",
+        "sha256": "bc8064fe8a66a2ad04181fb1adb56baba8f78deb89edd755c61c6ba87af649df"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_epistemic_capture.py",
+        "sha256": "3a7fa397d8c491fa2ec4bbcaeec32fe52a2f0a8e205ffe82c35ae77393f81b72"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_epistemic_cutoff.py",
+        "sha256": "2ff35211ef4614c8e0110bc08165effa0debaa9ddac8b5be354cf98a3d120954"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_feature_profiles.py",
+        "sha256": "780faac86a0eae8027fe975c393e80e0d9ea5bc322b8e3aa4ffb5cbabba3f6e2"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_gc_compaction.py",
+        "sha256": "2e0a91259860d91299adb8fdfee07b3aafee9a8f5d4c2f5371fb6d6c4e3e4c2a"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_generation.py",
+        "sha256": "21179e4efeb0e225c20224efd45651a3451a72d3366d8637dd7733d87a1fc226"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_hermes_api_710.py",
+        "sha256": "0180dd0841104146813b5bdea3e66b25d1fb883855d6bac130f55b117cc0d912"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_inject_budget.py",
+        "sha256": "64890e8faa4dbbddd3a82d06e75093cb8f3d6de45c09f774101581a7c62febf2"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_inject_markers.py",
+        "sha256": "c6793a84f1aac7565643cda5bab4be418453a59efa40f872ac470f547bd98c35"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_jina_v5_nano.py",
+        "sha256": "1b6663cfbc9a01c999b7a4327dbbb543f6e04e7ca7e0489d162dc896e5618e8c"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_job_install.py",
+        "sha256": "9e8f18c78ea7dfa1b59a889f7723fdbb54bbf7193ab5e600086536a01f1e9213"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_jobs.py",
+        "sha256": "6aa0e565c1ee07b70b1431bb0e14b65f6bd93a012ffc866eb1bbd8c226873733"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_knowledge_promotions.py",
+        "sha256": "f78464282ee82d0acbbf935bf0bce74cdb245d1de471d62b4ed54a36e55a7c2f"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_legacy_assets.py",
+        "sha256": "90501e6158cdb64e3a49924728ce6c313451ba0ca60704d095fd8a2a9bd60aa5"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_live_contradiction.py",
+        "sha256": "d2ded66a7fe946b46bbd8454f2e6a0e1370e9174dd987a31357ce403a699cef5"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_llm_backend_cache.py",
+        "sha256": "b4e5fff9f92993921398b454b66decff0eab23a6da3018f7fe35c43920f23c3b"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_llm_cache.py",
+        "sha256": "a7335bf5966c0425fe8891f27049423bb548be376551e14f0ac756b447cab27f"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_local_model_profiles.py",
+        "sha256": "14fdce6ff8e7a972808a8df6c285a6cdad4fbc5b4cb61c3acbc9516354b13e53"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_manual_core_marker.py",
+        "sha256": "30e9ee1fde5d0ba19384131ad159d0bf9b054f0864079043e9bbab5d8d11003e"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_migrate.py",
+        "sha256": "6731853e1f9c8b572d284ca5bf70caed00988be6dcc98c584a3787a6841fc1f9"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_mood.py",
+        "sha256": "3d34bae422c5e34a9c8d1781b2a69ea095d2eb0ced9a3dec1477871d6cb24ab7"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_named_generation.py",
+        "sha256": "b7416066d2e86725ee9bff91dc69635f4eafd6cd8150b8bf91529f5e5e8fc0f3"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_namespaces.py",
+        "sha256": "59fdf0c8ee5b0ae574a2b2b9495f8d6a13971493d385b6324b9604fef51dd740"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_nano_integration.py",
+        "sha256": "ae0e29a7345ba3908b1d61fbe09924636254036711479563415ea079ae09b2dd"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_obsidian_maintenance.py",
+        "sha256": "c55a13bcfc25c770ade798d3639ba893b4ac2c8ec3ce76855d4e34a7bb82b1fa"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_obsidian_sync.py",
+        "sha256": "d48bfb65e70cb64370799d163eae152ac23e44e7c9433eeba1427742aeaa0afb"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_operator_cli.py",
+        "sha256": "92b63a14821b93142d0d066a288df86144313a67ccc5cd8401b18f8cc12d5b88"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_operator_status.py",
+        "sha256": "8e9a657d80141033eccad06679aac8bd0c778268c31c11cc36985316306942bb"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_opt_in_llm_cognition.py",
+        "sha256": "e8e9d2f2ac3892a3a751ccf88dcf7679d181daa3b3d63bd4fe241d6cd45ca314"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_parity.py",
+        "sha256": "35d27b68a23df5e79af559006d4bf10278b4eef4858fe0adb50bd45ba1aaf84f"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_persona_voice.py",
+        "sha256": "5b095d66761c8024d369bd6ac458f6976349224b1966303edb4304711eab61fb"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_platform_file_io.py",
+        "sha256": "95de05314c69e4a1b63878a55e2c8f7ff3cfd7b3d6d3b85261b66a14b990fad5"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_platform_jobs.py",
+        "sha256": "9d6b3d5f3cdbcd891f2f811463937a08dda2609ba10d2b31875903d717db23c2"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_proactive.py",
+        "sha256": "fc45769f5c18a0c8d2eab78c39256f2dd04c7a5e838c08d46b7b4ffc9542eb25"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_proactive_delivery.py",
+        "sha256": "8780bbc4037648f650c98b5530ec06395faef745a0551e794322b63b41eecfff"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_rate_gate.py",
+        "sha256": "f000d516396ee3e91c93c48b9d7225e4cb5a48912430e556611b2bc388b11dd3"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_recall_deadline.py",
+        "sha256": "64dd7d9da41084f4697d1b00853f6f0552a5da3b48f90821cfe6a6aec26ee0bb"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_recall_feature_gates.py",
+        "sha256": "99a3ff86cdadc3ae22dd428b510178979fb919d473c693b6bacd9d3472869d1f"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_recall_overlay.py",
+        "sha256": "efff2d2780a99c473125ee79c25ec3b207e384d47c2b042e2e904aa6c773862a"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_reembed.py",
+        "sha256": "4cc27fa18fb83df6ed7d31dd98b43eb5b1c751681e8c8597e06073051203ab32"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_reembed_staged.py",
+        "sha256": "5ce17059b927ffe8ca3e26daa30765f87e3122ea424084bd826d7db229878a39"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_rem_dream_similarity.py",
+        "sha256": "bcda913598bb5c1b99f197f33846b979e0db1e18df2288c9b844bd4eaae39b2e"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_rem_dream_visibility.py",
+        "sha256": "08ae998f258abcfaf29fe1a4507c5761dec16862ded0b48aa51863043a767c05"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_request_context.py",
+        "sha256": "e36fb5ef1f815ef88c7d788b8346508d5a633b93bd1025be75d4c9c4baaa4959"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_reranker_constructor.py",
+        "sha256": "2662dd90f57f83a0ea65e13ec3fa9558fd5863f21f6b8560155578540581be18"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_reranker_fallback.py",
+        "sha256": "b7217da885d23ec116cb7affa2482ec821f5e9ee5605a7c80bb921e528562fbb"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_retrieval_710.py",
+        "sha256": "948ce6ab9f7e5600f67d1bea4e1e37b54f2b18aaf6dd849aa4060804ab841e5b"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_retrieval_admin.py",
+        "sha256": "ebdd14297ba24b935ef449ab7f6353188c9e57fdc22e96468d73c2e294c7ccf9"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_runtime_forget_repeat.py",
+        "sha256": "4bc73d046b5e9c6e035b09c64debe6ae96ba6b771b27d51056622c790a0a280a"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_runtime_lease.py",
+        "sha256": "3ef12a792eedec89e68e3dd072a8e83afd8f80511e23893f9ac14494f6f65437"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_runtime_provider.py",
+        "sha256": "f9f45de12e136670d8d7fa62c6df7e3555569e1bab8f30f23c31080cfb828d9f"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_runtime_recall_additive_scopes.py",
+        "sha256": "c9fea3a88ef057e73c3d11a5ade320e885868076176795b2bc08141af5a39065"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_runtime_scheduler.py",
+        "sha256": "74cc78aaee2d36bd38b7a384a33d10f4df211bf289fe17297fea1b4bd384022a"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_scope_consumers.py",
+        "sha256": "fe17738c497d173fc8aade79faddfde693ca2d3c661f92cf100545a7fc1d586c"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_scope_isolation.py",
+        "sha256": "5516ec0173b0f0d0baa4b9f042e5ba9d9322ac9021f4f1ade27c886e09e87e34"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_security_followup_731.py",
+        "sha256": "3961507bbec78884f48777d494308eda299a25c865a1445dca9f39f93603e02b"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_semantic_input.py",
+        "sha256": "83799d5896bac6ac8205239a9dbd8ab01ca69b7f6b5fc56ab8595731248fcf31"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_setup_retrieval.py",
+        "sha256": "3b551619262ce90cc6cbb8bdf56ebb4ca3678c4f237ceb6edfb18ab9282135f6"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_shared_pools.py",
+        "sha256": "8c07190e57a33f12301c952ccfcd775aaa856bab3c534c2a9d1798b719a45189"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_skill_workshop.py",
+        "sha256": "2f9887c735f6f5a3e698111c432c2bdb9dc52a157d3318a07fcfcc3815ed433d"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_snapshot.py",
+        "sha256": "3fc09ffe88c1c418b982c2a647754bf0a58835f5c6a653f229c79f07c91fe34f"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_source_sync.py",
+        "sha256": "85a8e9b2b81748c83d5b182e507c7025aa81a85d5481b210ef9ac583f99cefe1"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_speakers.py",
+        "sha256": "de139fc91f63beb493997d5f74e5387b9dfe523854f34a8d97820b5c4574b0ac"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_temporal_refinement.py",
+        "sha256": "84c6329a65a038ff7fecb027171ecdcbee6c4f4b64b5a1b966ac62d9ef9e4a04"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_tombstone.py",
+        "sha256": "6a18d87f4ef72209805cdb073513a42b230bdbdf44e926c6289d867010724f91"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_tombstone_migration_guard.py",
+        "sha256": "02074dae2eda2ec00f021962baf60a0b510de3c8d56ce3237e141739e328fb5e"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_tombstone_repair_731.py",
+        "sha256": "b883f00e69ae30f08690fd5de383cfef4b3412619f03561fc23ca574795481b0"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_upstream_7127_contracts.py",
+        "sha256": "efa5e3300dce21d94857982147823619a7740752818605868760084558271113"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_valid_time_runtime.py",
+        "sha256": "ea742fa5de22a95c4a7d0df777a8d8cf0ab303e8403e04cf0935979056ec12ac"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_workspace_consent.py",
+        "sha256": "d903a3db1d4325ad40b9d0dba5d53621ad3b281f306abe8769df41299b334a93"
+      },
+      {
+        "path": "plur1bus-hermes/tests/test_workspace_migrate.py",
+        "sha256": "8381db36be237c84c2cf508a0a5f60301f1500be0cebf9572673b9f25f0c024e"
+      },
+      {
+        "path": "scripts/.npmignore",
+        "sha256": "bcb8ce759661b04c4e7758dee72929b52bfd21005068326635483ebb210230b6"
+      },
+      {
+        "path": "scripts/configure-hermes-omlx.sh",
+        "sha256": "0bd0b22100fbb4504eae36df6fa75fc65a54590d5803bb1a0f5dad3a030c5f01"
+      },
+      {
+        "path": "scripts/hermes-desktop-host.py",
+        "sha256": "2bbf9a99d551a732bb6db797357f86445ffdda15c1eaf444c78ca572711c123d"
+      },
+      {
+        "path": "scripts/install-hermes-plugins.sh",
+        "sha256": "38bf6de8fb00e55c7deee768e3db46ee6598d8185488ddb382a4146238120056"
+      },
+      {
+        "path": "scripts/install-mtplx-agent.sh",
+        "sha256": "9b30e57ab281aea1e591ab9f3b734ddd403b932fe6059caf1fe18277d38f4775"
+      },
+      {
+        "path": "scripts/install-mtplx-embed-agent.sh",
+        "sha256": "221316090913dfddbdbef14e156101fd80388275646d6609d75cdce1dac8e425"
+      },
+      {
+        "path": "scripts/install-mtplx-embed.sh",
+        "sha256": "20b214d13ad02e3f0623d3f70c5cc603c2cbef5edc58aafa0933cda99315d51f"
+      },
+      {
+        "path": "scripts/lib/hermes-home.sh",
+        "sha256": "19acb6bf7b0315553f2b3d7b4ca3565d1b567f3f148346b8865ee4d951f6f298"
+      },
+      {
+        "path": "scripts/mtplx-bind-agent.sh",
+        "sha256": "c98dbf7ac06544ad229d249a9c8eb04eda2421ebd8e638000c38de53b2c1e2f7"
+      },
+      {
+        "path": "scripts/mtplx-embed",
+        "sha256": "6f8734b02c175307324551e8b5c1e8273a4a6c47845c7f08c594ab9163f4e931"
+      },
+      {
+        "path": "scripts/mtplx-hermes-up",
+        "sha256": "0e8088b370089010bb22198e6be4f03b1a3f3383a756ae45bd73e8d5e709e2dd"
+      },
+      {
+        "path": "scripts/run-hermes-workspace-migration-job.sh",
+        "sha256": "2d4db5418d3ff0cbcef946cda105666cca6434a62bbcc0637d5cc28dca6080c3"
+      }
+    ]
+  },
+  "initialFindings": [
+    {
+      "id": "persona-directive-400-character-projection",
+      "status": "verified-gap",
+      "upstreamCommit": "600aa2b0ac1a6ef272962b7723f67997b399abfe",
+      "nativeEvidence": [
+        "plur1bus-hermes/src/plur1bus_hermes/persona_voice.py:104-120 defaults to 400 and caps every directive at 400 characters"
+      ],
+      "tests": [
+        "plur1bus-hermes/tests/test_persona_voice.py"
+      ]
+    },
+    {
+      "id": "episode-five-turn-minimum",
+      "status": "verified-gap",
+      "upstreamCommits": [
+        "0386a00a8ccbcf231e7104afa40965f354c750e0",
+        "c59366f637db5b636c2d822351018b88476f37fb"
+      ],
+      "nativeEvidence": [
+        "plur1bus-hermes/src/plur1bus_hermes/episode_narrative.py:11 and :45 reject narrative enrichment below five turns"
+      ],
+      "tests": [
+        "plur1bus-hermes/tests/test_episode_narrative.py"
+      ]
+    }
+  ]
+}
