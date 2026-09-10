@@ -8,15 +8,14 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from plur1bus_hermes.parity import parity_report
-
-
 ROOT = Path(__file__).resolve().parents[2]
 AUDIT_PATH = ROOT / "docs/audits/hermes-7.12.44-delta.json"
 UPSTREAM_BASE = "v7.12.7"
 UPSTREAM_HEAD = "a3f48f28ac647e81c5260e8a1dbab7977bf9fb51"
 HERMES_BASE = "c12ec2bba63d74ac8add8782ab6761472b4149c6"
 ALLOWED_NATIVE_STATUSES = {"unreviewed", "partial", "verified", "host-specific"}
+AUDIT_METADATA_FIELDS = {"auditStatus", "auditEvidence", "auditTests"}
+ALLOWED_AUDIT_STATUSES = {"unreviewed", "partial", "verified", "host-specific"}
 
 
 def git_output(*arguments: str) -> str:
@@ -27,6 +26,46 @@ def git_output(*arguments: str) -> str:
 class Upstream71244InventoryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.data = json.loads(AUDIT_PATH.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _pinned_legacy_groups() -> dict[str, list[dict[str, str]]]:
+        """Load historical source rows from the fixed Hermes baseline only."""
+        source = git_output(
+            "show", HERMES_BASE + ":plur1bus-hermes/src/plur1bus_hermes/parity.py"
+        )
+        baseline = {"__name__": "pinned_baseline_parity"}
+        exec(compile(source, "pinned_baseline_parity.py", "exec"), baseline)
+        return {
+            name: list(baseline[name])
+            for name in ("FEATURES", "COVERAGE_710", "COVERAGE_712")
+        }
+
+    def _assert_audit_metadata(self, row: dict[str, object]) -> None:
+        """Require evidence before a historical snapshot's audit progresses."""
+        self.assertTrue(AUDIT_METADATA_FIELDS <= set(row))
+        self.assertIn(row["auditStatus"], ALLOWED_AUDIT_STATUSES)
+        self.assertIsInstance(row["auditEvidence"], list)
+        self.assertIsInstance(row["auditTests"], list)
+        self.assertTrue(all(isinstance(item, str) and item for item in row["auditEvidence"]))
+        self.assertTrue(all(isinstance(item, str) and item for item in row["auditTests"]))
+        if row["auditStatus"] == "unreviewed":
+            self.assertFalse(row["auditEvidence"])
+            self.assertFalse(row["auditTests"])
+        else:
+            self.assertTrue(row["auditEvidence"])
+        if row["auditStatus"] == "verified":
+            self.assertTrue(row["auditTests"])
+
+    def _assert_legacy_row(
+        self, actual: dict[str, object], expected: dict[str, str]
+    ) -> None:
+        """Check immutable source fields independently from audit metadata."""
+        self.assertEqual(set(actual), set(expected) | AUDIT_METADATA_FIELDS)
+        self.assertEqual(
+            {key: value for key, value in actual.items() if key not in AUDIT_METADATA_FIELDS},
+            expected,
+        )
+        self._assert_audit_metadata(actual)
 
     def test_inventory_covers_every_nonmerge_commit(self) -> None:
         expected = set(
@@ -57,22 +96,36 @@ class Upstream71244InventoryTests(unittest.TestCase):
         self.assertEqual(set(self.data["changedFiles"]), expected_files)
         self.assertEqual(len(self.data["changedFiles"]), len(expected_files))
 
-    def test_legacy_inventory_preserves_all_source_groups_without_status_upgrades(self) -> None:
-        report = parity_report()
-        expected_groups = {
-            "FEATURES": report["features"],
-            "COVERAGE_710": report["coverage710"],
-            "COVERAGE_712": report["coverage712"],
-        }
+    def test_legacy_inventory_preserves_all_pinned_source_groups(self) -> None:
+        expected_groups = self._pinned_legacy_groups()
         self.assertEqual(set(self.data["legacyFeatures"]), set(expected_groups))
         for source_group, expected_rows in expected_groups.items():
             actual_rows = self.data["legacyFeatures"][source_group]
             self.assertEqual(len(actual_rows), len(expected_rows))
-            self.assertEqual(
-                [{key: value for key, value in row.items() if key != "auditStatus"} for row in actual_rows],
-                expected_rows,
-            )
-            self.assertTrue(all(row["auditStatus"] == "unreviewed" for row in actual_rows))
+            for actual, expected in zip(actual_rows, expected_rows, strict=True):
+                self._assert_legacy_row(actual, expected)
+
+    def test_audit_metadata_permits_evidenced_current_status_without_changing_history(self) -> None:
+        expected = self._pinned_legacy_groups()["FEATURES"][0]
+        audited = {
+            **expected,
+            "auditStatus": "verified",
+            "auditEvidence": ["reachable native call path reviewed"],
+            "auditTests": ["test_native_call_path"],
+        }
+        self._assert_legacy_row(audited, expected)
+
+    def test_audit_metadata_rejects_changed_historical_source_fields(self) -> None:
+        expected = self._pinned_legacy_groups()["FEATURES"][0]
+        altered = {
+            **expected,
+            "status": "ready",
+            "auditStatus": "verified",
+            "auditEvidence": ["reachable native call path reviewed"],
+            "auditTests": ["test_native_call_path"],
+        }
+        with self.assertRaises(AssertionError):
+            self._assert_legacy_row(altered, expected)
 
     def test_preservation_hashes_are_read_from_the_immutable_hermes_baseline(self) -> None:
         preservation = self.data["hermesPreservation"]

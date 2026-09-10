@@ -10,8 +10,10 @@ readable source of truth is `hermes-7.12.44-delta.json`.
 
 - 37 non-merge upstream commits and all 90 changed upstream paths are captured
   from Git, rather than from release headings.
-- Every commit is deliberately `unreviewed`. A populated commit inventory is
-  neither evidence of a reachable Python implementation nor a status upgrade.
+- Every commit remains deliberately `unreviewed` except `600aa2b` (the bounded
+  Persona Voice directive projection): its reachable native call path and
+  regression are recorded separately. A populated commit inventory is neither
+  evidence of a reachable Python implementation nor a status upgrade.
 - The pre-existing `FEATURES`, `COVERAGE_710`, and `COVERAGE_712` arrays are
   retained in their distinct source groups. Their source status/evidence is
   preserved and every audit row remains `unreviewed`.
@@ -40,3 +42,14 @@ dashboard behavior, model behavior, or guest acceptance have been reviewed.
 
 Result: 5 tests passed. The same suite was first run RED with the expected
 missing-audit-JSON error, before the audit document was created.
+
+## Historical snapshot rule
+
+The later foundation gate reads `FEATURES`, `COVERAGE_710`, and
+`COVERAGE_712` directly from
+`c12ec2bba63d74ac8add8782ab6761472b4149c6:plur1bus-hermes/src/plur1bus_hermes/parity.py`.
+It retains every original field in all 57/13/15 rows and permits only the
+separate `auditStatus`, `auditEvidence`, and `auditTests` fields. An
+evidence-backed audit status is therefore possible without silently rewriting
+historical status, detail, or evidence. The inventory still says
+`nativePortCoverage: incomplete`.
