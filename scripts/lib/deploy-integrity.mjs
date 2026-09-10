@@ -71,6 +71,7 @@ export const DEPLOY_FILES = [
   "lib/feedback-log.js",
   "lib/deferred-dynamics-queue.js",
   "lib/lancedb-optimize.js",
+  "lib/process-singleton.js",
   "lib/frontmatter.js",
   "lib/reply-outcome-tracking.js",
   "lib/input-limits.js",

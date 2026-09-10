@@ -128,7 +128,7 @@ import {
   parseLegacyMigrationArgs,
 } from "./lib/shared-memory-migration.js";
 import { recordFeedback } from "./lib/feedback-log.js";
-import { createDeferredDynamicsQueue } from "./lib/deferred-dynamics-queue.js";
+import { getSharedDeferredDynamicsQueue } from "./lib/deferred-dynamics-queue.js";
 import { resolveLancedbOptimizePlan, summarizeLancedbOptimize } from "./lib/lancedb-optimize.js";
 import {
   parseCorrection,
@@ -206,6 +206,7 @@ import {
   createHostIncognitoSessionClassifier,
   createHostRoutingLoader,
   createMemoryTurnRouteRegistry,
+  getSharedMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
   describeUserPoolLabels,
@@ -271,7 +272,7 @@ import {
   workspaceKeyFromContext,
   turnEventsFromMessages,
 } from "./lib/neo-arch.js";
-import { createNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
+import { createNeoWorkerRuntime, getSharedNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
 import {
   DISPLAY_SOURCES,
   sanitizeMemoryTextForPrompt,
@@ -4682,7 +4683,7 @@ const plugin = {
     // 7.12.30: Die Memory-Dynamik des Reply-Outcome-Trackings (LanceDB-Updates
     // je erinnerter Erinnerung) laeuft nicht mehr im Prompt-Hook, sondern
     // seriell je Agent, angestossen nach dem Recall des Turns.
-    const replyOutcomeDynamics = createDeferredDynamicsQueue({
+    const replyOutcomeDynamics = getSharedDeferredDynamicsQueue({
       logger: api.logger,
       maxBacklog: Math.max(1, Number(replyOutcomeCfg.dynamicsMaxBacklog) || 20),
       fallbackDelayMs: Math.max(0, Number(replyOutcomeCfg.dynamicsFallbackDelayMs ?? 10_000)),
@@ -5075,7 +5076,8 @@ const plugin = {
         turnRouteState.initPromise = (async () => {
           try {
             const routingCapability = await hostRoutingLoader();
-            turnRouteState.registry = createMemoryTurnRouteRegistry({ routingCapability, logger: api.logger });
+            // 7.12.36: prozessweit geteilt — siehe lib/process-singleton.js.
+            turnRouteState.registry = getSharedMemoryTurnRouteRegistry({ routingCapability, logger: api.logger });
             return turnRouteState.registry;
           } catch (error) {
             api.logger?.warn?.(`memory-lancedb-namespaced: turn route registry unavailable: ${String(error)}`);
@@ -5123,7 +5125,7 @@ const plugin = {
       }
     };
     const neoWorkerRuntime = neoEnabled
-      ? createNeoWorkerRuntime({ logger: api.logger })
+      ? getSharedNeoWorkerRuntime({ logger: api.logger })
       : null;
     // 7.12.24: Der erste agent_end nach einem Gateway-Neustart brauchte 8–18 s
     // bis "worker captured" (sonst 0,4–1 s). Den Worker-Thread deshalb kurz

@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.36] — 2026-09-10
+
+### Behoben
+
+- **Dispatch-Ticket erreicht den Prompt-Hook: Register prozessweit statt je
+  Plugin-Instanz.** OpenClaw 2026.9 legt je Agenten-Lauf eine neue
+  Plugin-Instanz an (`register()` lief am 10.09.2026 60-mal, zweimal je
+  Turn; 15:28:57 mitten in Bernds Turn). Die Dispatch-Beobachtung lief in der
+  Gateway-Instanz, der Prompt-Hook des Laufs fragte das leere Register der
+  neuen Instanz (`claim:no_ticket … pending=0`); das liegen gebliebene Ticket
+  lief ab und markierte die Session (`observe:session_tainted`). Ticket-
+  Register, Reply-Outcome-Warteschlange und Neo-Worker-Laufzeit sind jetzt
+  Einzelstücke je Prozess (`lib/process-singleton.js`, versionierte
+  `Symbol.for`-Schlüssel). Nebeneffekte: der Kick nach dem Recall erreicht
+  die Warteschlange (bisher immer erst die Rückfallfrist, `waitMs=10003`),
+  und es gibt einen Worker-Thread je Prozess statt je Instanz (5
+  WorkerThreads bei 4 Instanzen).
+
 ## [7.12.35] — 2026-09-10
 
 ### Diagnose
