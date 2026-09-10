@@ -7,6 +7,27 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.33] — 2026-09-10
+
+### Behoben
+
+- **Dispatch-Ticket: der Fallback nennt jetzt den Grund.** Auch nach 7.12.32
+  fiel ein einfacher Text-Turn (Bernd, 10.09.2026 13:30) mit `reason=ticket`
+  zurück, ohne Warnung aus der Beobachtung. Beobachtung und Anspruch merken
+  sich jetzt je Session ihren letzten Ausgang (`tail_dispatch`,
+  `command_turn:<kind>/<source>`, `command_source_present`, `empty_body`,
+  `slash_command`, `incomplete_identity`, `run_already_pending`,
+  `session_tainted`, `registered:run|session`; beim Anspruch `no_ticket`,
+  `ticket_expired`, `ticket_not_head`, `ticket_verify_failed`, …). Die
+  Fallback-Warnung `memory-request-context.hook` trägt ihn als `ticket=`,
+  der `reply_dispatch`-Handler loggt ihn auf Debug samt den vorhandenen
+  Kontextfeldern (nur Namen).
+- **LanceDB-Optimize-Budget 240 s statt 600 s.** Der Feature-Cron-RPC bricht
+  nach 540 s ab; `consolidate-daily` trägt davor noch Kompaktierung, Decay
+  und Graph-Prune. Ein längerer Lauf hätte den Cron als fehlgeschlagen
+  gemeldet, obwohl er weiterlief. Per `dailyConsolidation.lancedbOptimize.timeoutMs`
+  weiter einstellbar.
+
 ## [7.12.32] — 2026-09-10
 
 ### Behoben
@@ -39,7 +60,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `optimizeTable` mit `cleanupOlderThan = jetzt − keepVersionsHours` auf und
   loggt `lancedbOptimize` mit Fragmenten vor/nach, entfernten Versionen,
   Bytes und Dauer. Konfiguration `dailyConsolidation.lancedbOptimize`:
-  `enabled` (Default an), `keepVersionsHours` (24), `timeoutMs` (600000).
+  `enabled` (Default an), `keepVersionsHours` (24), `timeoutMs` (600000;
+  seit 7.12.33 240000, siehe dort).
 - `db-adapter.optimizeTable` liefert Fragment-Statistik vor/nach dem Lauf
   (`table.stats()`) und die Dauer; das Timeout ist per Option setzbar.
 

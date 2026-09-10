@@ -5,13 +5,13 @@ import { resolveLancedbOptimizePlan, summarizeLancedbOptimize } from "../lib/lan
 
 // 7.12.31: naechtliche LanceDB-Kompaktierung.
 describe("resolveLancedbOptimizePlan", () => {
-  it("defaults to enabled, 24 h of versions and a 10-minute budget", () => {
+  it("defaults to enabled, 24 h of versions and a 4-minute budget", () => {
     const now = Date.parse("2026-09-10T02:00:00Z");
     const plan = resolveLancedbOptimizePlan(undefined, now);
     assert.equal(plan.enabled, true);
     assert.equal(plan.keepVersionsHours, 24);
     assert.equal(plan.cleanupOlderThan.toISOString(), "2026-09-09T02:00:00.000Z");
-    assert.equal(plan.timeoutMs, 600_000);
+    assert.equal(plan.timeoutMs, 240_000);
   });
 
   it("honours the config and clamps nonsense", () => {
@@ -23,7 +23,7 @@ describe("resolveLancedbOptimizePlan", () => {
     assert.equal(plan.timeoutMs, 120_000);
     const clamped = resolveLancedbOptimizePlan({ keepVersionsHours: 0.1, timeoutMs: 5 }, now);
     assert.equal(clamped.keepVersionsHours, 24);
-    assert.equal(clamped.timeoutMs, 600_000);
+    assert.equal(clamped.timeoutMs, 240_000);
   });
 });
 

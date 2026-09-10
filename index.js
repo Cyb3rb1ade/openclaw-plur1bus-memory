@@ -11720,6 +11720,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       api.on("reply_dispatch", async (event) => {
         const turnRoutes = await getMemoryTurnRoutes();
         turnRoutes?.observeReplyDispatch(event);
+        // 7.12.33: Ausgang der Beobachtung (Debug); die Fallback-Warnung des
+        // Prompt-Hooks traegt denselben Grund als `ticket=`.
+        try {
+          const sessionKey = event?.sessionKey || event?.ctx?.SessionKey || "";
+          api.logger?.debug?.(`memory-turn-routes: dispatch ${turnRoutes?.explain?.(sessionKey) || "none"} session=${String(sessionKey).slice(0, 96)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} keys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|SenderId|ChatId|Provider|AccountId|OriginatingTo|SessionKey|RunId|isTailDispatch)$/.test(k)).join(",")}`);
+        } catch (_) { /* best-effort */ }
         return undefined;
       }, { priority: Number.MIN_SAFE_INTEGER });
 

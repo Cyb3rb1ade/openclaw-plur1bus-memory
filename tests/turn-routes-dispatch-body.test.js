@@ -52,3 +52,20 @@ describe("reply_dispatch observation body handling", () => {
     assert.equal(registry.pendingCount(), 1, "transcript alone is enough");
   });
 });
+
+describe("turn route explain() (7.12.33)", () => {
+  it("records why a dispatch was skipped and why a claim failed", () => {
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    registry.observeReplyDispatch(dispatch({ CommandBody: "/status" }, "run-a"));
+    assert.equal(registry.explain(SESSION_KEY), "observe:slash_command");
+    registry.observeReplyDispatch(dispatch({ CommandBody: "hallo", CommandTurn: { kind: "native", source: "native", body: "hallo" } }, "run-b"));
+    assert.equal(registry.explain(SESSION_KEY), "observe:command_turn:native/native");
+    assert.equal(registry.claimForPrompt({ runId: "run-b", sessionKey: SESSION_KEY, sessionId: "s" }, "account-session", () => true), null);
+    assert.match(registry.explain(SESSION_KEY), /^claim:no_ticket:account-session/);
+    registry.observeReplyDispatch(dispatch({ CommandBody: "hallo" }, "run-c"));
+    assert.equal(registry.explain(SESSION_KEY), "observe:registered:run");
+    assert.equal(registry.claimForPrompt({ runId: "run-c", sessionKey: SESSION_KEY, sessionId: "s" }, "account-session", () => false), null);
+    assert.equal(registry.explain(SESSION_KEY), "claim:ticket_verify_failed");
+    assert.equal(registry.explain("agent:x:telegram:default:direct:1"), "none");
+  });
+});
