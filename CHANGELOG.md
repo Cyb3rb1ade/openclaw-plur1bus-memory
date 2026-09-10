@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.31] — 2026-09-10
+
+### Hinzugefügt
+
+- **Nächtliche LanceDB-Kompaktierung in `consolidate-daily`.** Jede
+  Zeilenänderung (Memory-Dynamik, Abrufzähler, Emotion) legt in LanceDB ein
+  neues Fragment und eine neue Version an; `optimize()` war nur über den
+  Dashboard-Schalter erreichbar und lief nie automatisch. Stand 10.09.2026:
+  main 352 Fragmente (Median 1 Zeile, 1350 Versionen), Bernhardine 845
+  Fragmente (2519 Versionen). Auf einer Kopie von main: Vektorsuche 191 → 23
+  ms, Update 734 → 74 ms nach einem `optimize()` (352 → 12 Fragmente, 8 s);
+  live auf main am 10.09. 12:35 identisch (66 MB Versionen freigegeben,
+  Zeilenzahl unverändert). `consolidate-daily` ruft jetzt je Agent
+  `optimizeTable` mit `cleanupOlderThan = jetzt − keepVersionsHours` auf und
+  loggt `lancedbOptimize` mit Fragmenten vor/nach, entfernten Versionen,
+  Bytes und Dauer. Konfiguration `dailyConsolidation.lancedbOptimize`:
+  `enabled` (Default an), `keepVersionsHours` (24), `timeoutMs` (600000).
+- `db-adapter.optimizeTable` liefert Fragment-Statistik vor/nach dem Lauf
+  (`table.stats()`) und die Dauer; das Timeout ist per Option setzbar.
+
 ## [7.12.30] — 2026-09-10
 
 ### Behoben

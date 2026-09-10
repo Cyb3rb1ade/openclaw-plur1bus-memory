@@ -129,6 +129,7 @@ import {
 } from "./lib/shared-memory-migration.js";
 import { recordFeedback } from "./lib/feedback-log.js";
 import { createDeferredDynamicsQueue } from "./lib/deferred-dynamics-queue.js";
+import { resolveLancedbOptimizePlan, summarizeLancedbOptimize } from "./lib/lancedb-optimize.js";
 import {
   parseCorrection,
   resolveCandidates,
@@ -7308,6 +7309,29 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 } catch (vectorErr) {
                   vectorCompaction = { error: String(vectorErr?.message || vectorErr) };
                 }
+                // 7.12.31: LanceDB-Kompaktierung der Agententabelle (Fragmente
+                // zusammenfuehren, Versionen aelter als keepVersionsHours
+                // verwerfen). Lief bisher nur ueber den Dashboard-Schalter; die
+                // Tabellen standen bei 352/845 Fragmenten mit Median 1 Zeile.
+                let lancedbOptimize = null;
+                const optimizePlan = resolveLancedbOptimizePlan(dcCfg.lancedbOptimize);
+                if (!optimizePlan.enabled) {
+                  lancedbOptimize = { skipped: true, reason: "disabled" };
+                } else if (typeof memoryDbAdapter?.optimizeTable !== "function") {
+                  lancedbOptimize = { skipped: true, reason: "optimize_unavailable" };
+                } else {
+                  try {
+                    const outcome = await memoryDbAdapter.optimizeTable(internalAgent, {
+                      cleanupOlderThan: optimizePlan.cleanupOlderThan,
+                      timeoutMs: optimizePlan.timeoutMs,
+                    });
+                    lancedbOptimize = outcome?.ok
+                      ? { ok: true, ms: outcome.ms, keepVersionsHours: optimizePlan.keepVersionsHours, ...summarizeLancedbOptimize(outcome.stats, outcome.before, outcome.after) }
+                      : { ok: false, reason: outcome?.reason || "unknown" };
+                  } catch (optimizeErr) {
+                    lancedbOptimize = { ok: false, error: String(optimizeErr?.message || optimizeErr) };
+                  }
+                }
                 const result = {
                   partitionResults: dailyRuns,
                   compacted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.compacted || 0), 0),
@@ -7316,6 +7340,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   graphPrune,
                   candidateIndex,
                   vectorCompaction,
+                  lancedbOptimize,
                 };
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
