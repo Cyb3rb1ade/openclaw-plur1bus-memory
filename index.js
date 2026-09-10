@@ -11717,7 +11717,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     }
 
     if (autoRecall) {
-      api.on("reply_dispatch", async (event) => {
+      // 7.12.35: Registrierung und jeden Aufruf sichtbar machen — auf 7.12.34
+      // erschien fuer Bernds Turns (10.09.2026 14:27–15:04) keine einzige
+      // Handler-Zeile, `pending=0`; statisch war im Host kein Gate zu finden.
+      let replyDispatchInvocations = 0;
+      const replyDispatchRegistration = api.on("reply_dispatch", async (event, hookCtx) => {
+        replyDispatchInvocations += 1;
+        api.logger?.info?.(`memory-turn-routes: reply_dispatch handler invoked #${replyDispatchInvocations} dispatchKind=${String(hookCtx?.dispatchKind || "")} hasCtx=${Boolean(event?.ctx)} sessionKey=${String(event?.sessionKey || event?.ctx?.SessionKey || "").slice(0, 96)}`);
         const turnRoutes = await getMemoryTurnRoutes();
         turnRoutes?.observeReplyDispatch(event);
         // 7.12.33: Ausgang der Beobachtung (Debug); die Fallback-Warnung des
@@ -11731,7 +11737,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           else api.logger?.info?.(line);
         } catch (_) { /* best-effort */ }
         return undefined;
-      }, { priority: Number.MIN_SAFE_INTEGER });
+      }, { priority: Number.MIN_SAFE_INTEGER, eligibleDispatchKinds: ["agent", "acp"] });
+      api.logger?.info?.(`memory-turn-routes: reply_dispatch hook registered result=${replyDispatchRegistration === undefined ? "undefined" : typeof replyDispatchRegistration} autoRecall=${autoRecall}`);
 
       api.on("agent_end", async (event, ctx) => {
         if (!turnRouteState.initPromise) return;

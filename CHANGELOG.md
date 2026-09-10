@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.35] — 2026-09-10
+
+### Diagnose
+
+- **reply_dispatch: Registrierung und Aufrufe im Log.** Auf 7.12.34 erschien
+  für vier Text-Turns keine Handler-Zeile und der Anspruch meldete
+  `pending=0`; im Host-Code war kein Gate zu finden (Hook-Name gültig, keine
+  Konversations-/Prompt-Sperre, Dispatch-Art berechtigt, keine
+  Permission-Einschränkung in Session oder Config). Der Handler loggt jetzt
+  jeden Aufruf (`memory-turn-routes: reply_dispatch handler invoked #n
+  dispatchKind=…`), die Registrierung ihr Ergebnis, und er wird explizit für
+  die Dispatch-Arten `agent` und `acp` angemeldet.
+
 ## [7.12.34] — 2026-09-10
 
 ### Behoben
