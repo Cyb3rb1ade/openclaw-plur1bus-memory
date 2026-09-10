@@ -7,6 +7,32 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.29] — 2026-09-10
+
+### Behoben
+
+- **Memory-Decay lief für keine Agenten-Partition.** Der tägliche Decay-Scan
+  (`applyDailyDecayToAll`) las die ganze Tabelle ohne Scope-Filter. Hinter
+  dem partitionsgebundenen ACL-Guard brach er bei der ersten Fremd-Scope-Zeile
+  (Träume im user-Scope, alte workspace-Zeilen) mit `ACL denied for query` ab —
+  bei allen drei Agenten, täglich (`[dynamics] failed to fetch rows for decay`).
+  Der Scan pusht jetzt die Partition als Where-Klausel (Scope plus Besitzer-
+  Prädikat, wie die Kompaktierung) und prüft jede Zeile zusätzlich in JS; ein
+  Where, das die Tabelle nicht versteht, fällt auf den JS-Filter zurück, eine
+  ACL-Ablehnung nicht. consolidate-daily übergibt die freigegebene Partition.
+- **Kompaktierung: kein Where-Fallback bei ACL-Ablehnung.** `readPagedRows`
+  deutete jeden Wurf der gefilterten Abfrage als „Where nicht unterstützt" und
+  las die Tabelle ungefiltert neu — nach einer ACL-Ablehnung scheiterte das
+  garantiert an alten Fremd-Scope-Zeilen und riss die ganze Partition mit
+  (`consolidate-daily[bernhardine]: compaction agent-private threw: ACL denied
+  for query`, 10.09.2026 04:15). ACL-Fehler werden jetzt durchgereicht.
+- **ACL-Guard mit Diagnose.** Ablehnungen des partitionsgebundenen Guards
+  tragen `code: "PLUR1BUS_ACL_DENIED"`, `aclReason` und `rowId`, und der
+  Guard loggt Zeilen-ID, Scope, Besitzer, Grund, Operation und Partition
+  (`memory-lancedb-namespaced: ACL denied for query: id=… scope=… reason=…`).
+  Bisher stand im Log nur die Meldung ohne Zeile, was die Ursache der
+  Bernhardine-Kompaktierung offline nicht reproduzierbar machte.
+
 ## [7.12.28] — 2026-09-10
 
 ### Hinzugefügt

@@ -5184,10 +5184,28 @@ const plugin = {
         return { written: true, path: targetPath };
       },
     });
+    // 7.12.29: ACL-Ablehnungen tragen Code und Kontext. Aufrufer koennen sie
+    // damit von Query-Fehlern unterscheiden (memory-compaction fiel bisher bei
+    // einem ACL-Wurf auf eine Suche OHNE Where zurueck und scheiterte dann an
+    // alten Fremd-Scope-Zeilen), und der Grund steht im Log — bis 7.12.28 war
+    // aus "ACL denied for query" nicht ablesbar, welche Zeile gemeint war
+    // (consolidate-daily[bernhardine], 10.09.2026 04:15).
+    const aclDeniedError = (operation, row, reason, partition, kind = "denied") => {
+      const id = row?.id ? String(row.id).slice(0, 64) : "";
+      const scope = row?.scope || "agent-private";
+      const error = new Error(`ACL ${kind === "denied" ? "denied" : "partition mismatch"} for ${operation}`);
+      error.code = "PLUR1BUS_ACL_DENIED";
+      error.aclReason = reason || kind;
+      error.rowId = id;
+      const owner = partition?.agentId || partition?.workspaceIdentity || partition?.ownerUserId || "?";
+      pluginLogger?.warn?.(`memory-lancedb-namespaced: ACL ${kind} for ${operation}: id=${id || "?"} scope=${scope} agent=${row?.agentId || row?.storedBy || "?"} workspace=${row?.workspaceId || row?.workspaceKey || ""} reason=${reason || kind} partition=${partition?.scope || "?"}:${owner}`);
+      return error;
+    };
     const createOwnerBoundMemoryStore = (db, partition, requestContext) => {
       const assertRecord = (record, operation) => {
-        if (!record || !checkAccess(requestContext, record).allowed) {
-          throw new Error(`ACL denied for ${operation}`);
+        const access = record ? checkAccess(requestContext, record) : { allowed: false, reason: "acl.no_memory" };
+        if (!access.allowed) {
+          throw aclDeniedError(operation, record, access.reason, partition);
         }
         const candidate = {
           ...record,
@@ -5249,14 +5267,15 @@ const plugin = {
       const memoryStore = createOwnerBoundMemoryStore(db, partition, requestContext);
       const assertRows = (rows, operation) => {
         for (const row of rows || []) {
-          if (!checkAccess(requestContext, row).allowed) throw new Error(`ACL denied for ${operation}`);
+          const access = checkAccess(requestContext, row);
+          if (!access.allowed) throw aclDeniedError(operation, row, access.reason, partition);
           const workspaceIdentity = row.workspaceId || row.workspaceKey || "";
           if (!sameOwnerPartition({
             scope: row.scope || "agent-private",
             agentId: row.agentId || row.storedBy || "",
             workspaceIdentity,
             ownerUserId: row.ownerUserId || "",
-          }, partition)) throw new Error(`ACL partition mismatch for ${operation}`);
+          }, partition)) throw aclDeniedError(operation, row, "acl.partition_mismatch", partition, "mismatch");
         }
       };
       const guardedBuilder = (builder) => new Proxy(builder, {
