@@ -7,6 +7,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.44] — 2026-09-11
+
+### Behoben
+
+- **Episoden zeigten auf Turn-IDs, die es im Journal nie gab.** `agent_end`
+  in index.js baute die Turn-Events (Episoden, Träume, Watermark) mit rohem
+  `ctx.workspaceKey` und der Host-`sessionId`, der Neo-Worker sein Journal mit
+  normiertem Workspace-Schlüssel und stabilem Sitzungsschlüssel — dieselbe
+  Nachricht hatte zwei IDs. Folge: `memoryIds` der Karten („Enthaltene
+  Erinnerungen") verwiesen ins Leere (Bernd 10.09.2026: 0 von 112 IDs der
+  letzten zehn Episoden im Journal), und `episodes-rebuild` fand keine Turns.
+  Jetzt liefert `turnIdentityParams` (neo-arch.js) beiden Seiten dieselbe
+  Basis; neue Karten verlinken auf echte Journal-Turns.
+- `episodes-rebuild` findet Turns älterer Karten über das Zeitfenster der
+  Episode (±2 s um Start/Ende), wenn die IDs nicht passen; Ergebnis nennt
+  `byWindow`. Beim Neubau bekommen die Karten die Journal-IDs.
+
 ## [7.12.43] — 2026-09-10
 
 ### Geändert
