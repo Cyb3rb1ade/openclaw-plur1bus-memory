@@ -7,6 +7,79 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.41] — 2026-09-10
+
+### Behoben
+
+- **Zeitfilter des Recalls leerte die Erinnerungen bei „bis heute".** Bernd,
+  10.09.2026 21:42: „…ich habe bis heute keine Antwort erhalten" — der
+  Zeitparser erkannte „heute", filterte auf den heutigen Tag und warf alle
+  39 Treffer weg (`temporal filter applied (39 → 0)`, null injizierte
+  Erinnerungen für eine Frage nach einer alten E-Mail). Zwei Änderungen:
+  - Dauer-Angaben „bis heute", „bis jetzt", „bis dato", „until today/now",
+    „so far", „to date" gelten nicht mehr als Tagesfenster; echte Fristen
+    mit Tageszeit oder Uhrzeit („bis heute Abend", „bis heute 18 Uhr") und
+    „heute"/„gestern" allein bleiben erhalten (`lib/temporal-parser.js`,
+    `stripDurationPhrases`).
+  - Sicherheitsnetz: Entfernt ein Zeitfenster (auch ein aufgelöster Anker)
+    ALLE Treffer, bleiben die ungefilterten stehen; Logzeile
+    `temporal filter would remove all N results — kept unfiltered`
+    (`applyTemporalFilterSafe` in `lib/temporal-filter.js`). Teilfilterung
+    verhält sich wie bisher, inklusive Trace-Ablehnungen.
+
+## [7.12.40] — 2026-09-10
+
+### Behoben
+
+- **Episoden-Karten mit brauchbaren Metadaten.** Bernds Befund vom
+  10.09.2026 21:07: `participants` waren Wortfragmente („Endlich, Aber,
+  Test, Kumpel"), `topics` Rauschwörter („nicht, visible, thinking",
+  Zahlen-IDs), die Emotion wirkte willkürlich, Titel und Zusammenfassung
+  hießen immer „Gespräch vom …" / „2 Turns, 0 Min". Ursachen und Fixes:
+  - Teilnehmer kamen aus einem Regex auf großgeschriebene Wörter. Jetzt aus
+    den Sprecherrollen mit Namen aus `USER.md` (`**Name:**`) und
+    `IDENTITY.md` (`**Name:**`), gecacht nach mtime, Rückfall „Nutzer"/Agent-ID;
+    dazu Personen, die das Modell im Gespräch erkennt (`people`, max. 5).
+  - Themen: Platzhalter (`[Audio transcript …]`, `[media attached …]`), URLs,
+    Markup, Zahlen und Rauschwörter werden gestrichen; im Original
+    großgeschriebene, nicht satzinitiale Wörter (deutsche Nomen) zählen
+    dreifach. Mit Modell ersetzen dessen `topics` (3–5 Nomen/Phrasen) die
+    Heuristik.
+  - Emotion: Turn-Events tragen keine Valenz, die Mittelung lieferte immer
+    Null bzw. Restwerte. Quelle ist jetzt der Stimmungs-Snapshot der
+    EmotionEngine beim `agent_end`; dominant nur bei Intensität mittel/hoch,
+    sonst `neutral`; Intensität = stärkste Dimension. Meldet die Engine
+    nichts Nennenswertes, gilt die vom Modell benannte Gesprächs-Emotion.
+  - Die LLM-Anreicherung feuerte nie: Schwelle 5 Turns, aber jeder
+    `agent_end` liefert nur die 2–4 neuen Turns; zudem scheiterte
+    `JSON.parse` still an Code-Zäunen. Jetzt ab 2 Turns, 600 Zeichen je
+    Turn (Deckel 6000), Sprecher namentlich im Prompt, Antwort auch mit
+    ```` ```json ```` oder Vorspann geparst, Felder validiert (Arc, Längen,
+    Duplikate, keine Zahlen als Personen). Eine Modellantwort je `agent_end`
+    auf der Route `episode-extraction`, gedeckelt durch das LLM-Timeout.
+  - Karte: Zusammenfassung ersetzt den Platzhalter „Exploratives Gespräch
+    ohne klaren Arc"; `location` folgt dem Session-Key (`dm`, `group`, …)
+    statt dem ACL-Scope. Dateiname folgt dem Titel, also eine Datei je
+    Episode statt einer Sammeldatei je Tag.
+  - Der Episoden-Commit lief zweimal (19:32, 21:07) in
+    `Neo workspace writer backpressure: lock deadline exceeded`, weil der
+    5-s-Sync-Lock gegen den Embedding-Drain des Workers verlor — die Karte
+    kam erst beim nächsten Turn über den Watermark-Retry (Bernds „Folge-Turns
+    fehlen"). Jetzt `appendEpisodesAsync` mit langer Frist (60 s, Event-Loop
+    bleibt frei).
+  - **Episoden werden fortgeschrieben statt zerstückelt.** Bisher entstand
+    pro `agent_end` eine eigene Zwei-Turn-Episode, weil die 30-Minuten-
+    Gruppierung nur die neuen Turns sah. Jetzt hängen neue Turns an der
+    zuletzt geschriebenen Episode, solange die Pause zu ihr unter 30 Minuten
+    liegt und sie nicht voll ist (50 Turns): dieselbe Karte (gleiche
+    `episode_id`) wird mit allen Turns neu gebaut, Titel/Zusammenfassung/Themen
+    neu erzeugt (die neuesten Turns bekommen das Prompt-Budget), die alte
+    Kartendatei ersetzt (bei Titelwechsel umbenannt; Sammeldateien älterer
+    Versionen bleiben unangetastet, dort wird angehängt), der Datensatz mit
+    derselben id erneut angehängt (`readEpisodes` liefert die jüngste
+    Fassung). Zustand im Hook-Record `agent_end.openEpisode` (Turn-Snapshots
+    bis 600 Zeichen). Karten erscheinen weiterhin sofort nach dem Turn.
+
 ## [7.12.39] — 2026-09-10
 
 ### Behoben
