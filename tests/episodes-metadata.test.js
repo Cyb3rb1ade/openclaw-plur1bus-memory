@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   createEpisode,
   extractEpisodesFromTurns,
+  extractEpisodesWithState,
   enrichEpisodeNarratively,
   resolveParticipantNames,
   parseEpisodeJson,
@@ -144,5 +145,63 @@ describe("episodes (7.12.40): Metadaten", () => {
     assert.match(card, /emotional_dominant: joy/);
     assert.match(card, /# Milchsuppe für morgen/);
     assert.ok(!card.includes("Exploratives Gespräch ohne klaren Arc"));
+  });
+
+  it("Fortschreiben: neue Turns binnen 30 Minuten haengen an der offenen Episode (gleiche id), danach beginnt eine neue", async () => {
+    const names = { user: "Christian", assistant: "Bernd dasBot" };
+    const first = await extractEpisodesWithState([turn("user", "Schulter tut weh", 0), turn("assistant", "Kissen probieren", 1)], { participantNames: names, agentId: "main" });
+    assert.equal(first.episodes.length, 1);
+    assert.equal(first.continuedId, null);
+    assert.equal(first.openEpisode.id, first.episodes[0].id);
+    assert.equal(first.openEpisode.turns.length, 2);
+    // 5 Minuten spaeter: zwei weitere Turns
+    const later = [turn("user", "Und die Milchsuppe?", 300), turn("assistant", "Milchsuppe geht immer", 301)];
+    const second = await extractEpisodesWithState(later, { participantNames: names, agentId: "main", openEpisode: { ...first.openEpisode, vaultPath: "/tmp/x.md" } });
+    assert.equal(second.episodes.length, 1);
+    assert.equal(second.continuedId, first.episodes[0].id);
+    assert.equal(second.episodes[0].id, first.episodes[0].id);
+    assert.equal(second.episodes[0].turnCount, 4);
+    assert.equal(second.episodes[0].continued, true);
+    assert.equal(second.episodes[0].revision, 1);
+    assert.deepEqual(second.episodes[0].memoryIds, ["turn-user-0", "turn-assistant-1", "turn-user-300", "turn-assistant-301"]);
+    assert.equal(second.episodes[0].createdAt, first.episodes[0].createdAt, "Erstellzeit bleibt");
+    assert.equal(second.openEpisode.turns.length, 4);
+    assert.equal(second.openEpisode.vaultPath, "/tmp/x.md");
+    // 2 Stunden spaeter: neue Episode, alte bleibt unberuehrt
+    const much = [turn("user", "Ganz anderes Thema", 7200), turn("assistant", "Klar", 7201)];
+    const third = await extractEpisodesWithState(much, { participantNames: names, agentId: "main", openEpisode: second.openEpisode });
+    assert.equal(third.continuedId, null);
+    assert.notEqual(third.episodes[0].id, first.episodes[0].id);
+    assert.equal(third.episodes[0].turnCount, 2);
+    assert.equal(third.openEpisode.vaultPath, null);
+    // Wiederholte (schon bekannte) Turns allein loesen keine Fortschreibung aus
+    const repeat = await extractEpisodesWithState(later, { participantNames: names, agentId: "main", openEpisode: second.openEpisode });
+    assert.equal(repeat.continuedId, null);
+    // Volle Episode (maxEpisodeTurns) wird nicht weiter fortgeschrieben
+    const full = await extractEpisodesWithState([turn("user", "x", 400)], { participantNames: names, agentId: "main", maxEpisodeTurns: 4, openEpisode: second.openEpisode });
+    assert.equal(full.continuedId, null);
+  });
+
+  it("Fortschreiben ersetzt die eigene Karte im Vault, laesst Sammeldateien in Ruhe und raeumt bei Titelwechsel auf", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const ep1 = createEpisode([turn("user", "a", 0), turn("assistant", "b", 1)], { title: "Erste Fassung" });
+    const w1 = writeEpisodeToVault(ep1, dir);
+    assert.equal(w1.replaced, false);
+    const ep2 = { ...ep1, title: "Zweite Fassung", turnCount: 4, revision: 1, continued: true };
+    const w2 = writeEpisodeToVault(ep2, dir, { replacePath: w1.path });
+    assert.equal(w2.replaced, true);
+    assert.equal(readdirSync(join(dir, "memory", "episodes", "2026", "09")).length, 1, "alte Datei ist weg");
+    const card = readFileSync(w2.path, "utf8");
+    assert.match(card, /# Zweite Fassung/);
+    assert.match(card, /turn_count: 4/);
+    assert.match(card, /Fassung 2/);
+    assert.equal((card.match(/^episode_id:/gm) || []).length, 1);
+    // Sammeldatei (zwei Episoden) wird nicht ueberschrieben, sondern ergaenzt
+    const other = createEpisode([turn("user", "c", 0)], { title: "Zweite Fassung" });
+    writeEpisodeToVault(other, dir);
+    const ep3 = { ...ep2, revision: 2 };
+    const w3 = writeEpisodeToVault(ep3, dir, { replacePath: w2.path });
+    assert.equal(w3.replaced, false);
+    assert.equal((readFileSync(w3.path, "utf8").match(/^episode_id:/gm) || []).length, 3);
   });
 });

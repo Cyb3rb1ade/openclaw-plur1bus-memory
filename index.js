@@ -358,7 +358,7 @@ import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
-import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
+import { extractEpisodesWithState, writeEpisodeToVault } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
   buildEdgesForSession,
@@ -10575,14 +10575,18 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   // gleich bleibt, und genau das garantiert das haengende
                   // Watermark.
                   const episodedTurnIds = new Set(hooks?.agent_end?.episodedTurnIds || []);
+                  // 7.12.40: die zuletzt geschriebene Episode wird fortgeschrieben,
+                  // solange die Pause unter 30 Minuten liegt (Zustand im Hook-Record).
+                  const openEpisodeState = hooks?.agent_end?.openEpisode || null;
                   // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
                   // 7.12.40: Namen aus USER.md/IDENTITY.md, Stimmung der
                   // EmotionEngine und Session-Art fuer brauchbare Karten-Metadaten.
-                  postProcessing.push(extractEpisodesFromTurns(normalizedTurns, {
+                  postProcessing.push(extractEpisodesWithState(normalizedTurns, {
                     workspaceKey: ctx?.workspaceKey,
                     workspaceDir: ctx?.workspaceDir,
                     sessionKey: event?.sessionKey || ctx?.sessionKey || "",
                     mood: (() => { try { return emotionalPool.describe(agentId); } catch (_) { return null; } })(),
+                    openEpisode: openEpisodeState,
                     agentId,
                     llmCfg: mergingEnabled ? withLlmCallContext(
                       episodeExtractionLlmCfg,
@@ -10592,7 +10596,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     ) : null,
                     callLlm,
                     signal,
-                  }).then(async (episodes) => {
+                  }).then(async ({ episodes, openEpisode: nextOpenEpisode, continuedId }) => {
                     throwIfAborted(signal, "episode commit aborted");
                     // Nur vollstaendig bereits episodierte Spannen verwerfen.
                     // Teilueberlappung bleibt erhalten — sie enthaelt neue Turns.
@@ -10600,26 +10604,35 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     if (skipped > 0) {
                       api.logger.info(`memory-lancedb-namespaced: ${skipped} bereits episodierte Spanne(n) uebersprungen (agent=${agentId})`);
                     }
+                    const vaultPaths = new Map();
                     if (fresh.length > 0) {
                       throwIfAborted(signal, "episode commit aborted");
                       // 7.12.40: async mit langer Lock-Frist statt 5-s-Sync-Lock
                       // (Backpressure gegen den Embedding-Drain, s. neo-arch.js).
                       if (typeof neoStore.appendEpisodesAsync === "function") await neoStore.appendEpisodesAsync(fresh);
                       else neoStore.appendEpisodes(fresh);
-                      api.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId}`);
+                      const continuedCount = fresh.filter((ep) => ep.id === continuedId).length;
+                      api.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId} (continued=${continuedCount}, turns=${fresh.map((ep) => ep.turnCount).join("/")})`);
                       if (ctx?.workspaceDir) {
                         for (const ep of fresh) {
                           throwIfAborted(signal, "episode commit aborted");
-                          writeEpisodeToVault(ep, ctx.workspaceDir);
+                          const replacePath = continuedId && ep.id === continuedId ? openEpisodeState?.vaultPath || null : null;
+                          const written = writeEpisodeToVault(ep, ctx.workspaceDir, { replacePath });
+                          if (written?.written) vaultPaths.set(ep.id, written.path);
+                          else if (written?.error) api.logger.warn?.(`memory-lancedb-namespaced: episode card not written: ${written.error}`);
                         }
                       }
                     }
                     // Markiere als verarbeitet
                     const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
                     throwIfAborted(signal, "episode commit aborted");
+                    const openEpisodeRecord = nextOpenEpisode
+                      ? { ...nextOpenEpisode, vaultPath: vaultPaths.get(nextOpenEpisode.id) || nextOpenEpisode.vaultPath || null }
+                      : null;
                     neoStore.recordHook("agent_end", {
                       processedEpisodes: mergedEpisodes,
                       episodedTurnIds: mergeEpisodedTurnIds(episodedTurnIds, fresh, EPISODED_TURN_ID_MEMORY),
+                      openEpisode: openEpisodeRecord,
                     });
                     return true;
                   }).catch((epErr) => {

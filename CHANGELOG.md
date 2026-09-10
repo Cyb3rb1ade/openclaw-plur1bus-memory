@@ -47,9 +47,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
     kam erst beim nächsten Turn über den Watermark-Retry (Bernds „Folge-Turns
     fehlen"). Jetzt `appendEpisodesAsync` mit langer Frist (60 s, Event-Loop
     bleibt frei).
-  - Unverändert und als nächste Frage offen: pro `agent_end` entsteht eine
-    eigene kleine Episode (2–4 Turns), weil die 30-Minuten-Gruppierung nie
-    das ganze Gespräch sieht.
+  - **Episoden werden fortgeschrieben statt zerstückelt.** Bisher entstand
+    pro `agent_end` eine eigene Zwei-Turn-Episode, weil die 30-Minuten-
+    Gruppierung nur die neuen Turns sah. Jetzt hängen neue Turns an der
+    zuletzt geschriebenen Episode, solange die Pause zu ihr unter 30 Minuten
+    liegt und sie nicht voll ist (50 Turns): dieselbe Karte (gleiche
+    `episode_id`) wird mit allen Turns neu gebaut, Titel/Zusammenfassung/Themen
+    neu erzeugt (die neuesten Turns bekommen das Prompt-Budget), die alte
+    Kartendatei ersetzt (bei Titelwechsel umbenannt; Sammeldateien älterer
+    Versionen bleiben unangetastet, dort wird angehängt), der Datensatz mit
+    derselben id erneut angehängt (`readEpisodes` liefert die jüngste
+    Fassung). Zustand im Hook-Record `agent_end.openEpisode` (Turn-Snapshots
+    bis 600 Zeichen). Karten erscheinen weiterhin sofort nach dem Turn.
 
 ## [7.12.39] — 2026-09-10
 
