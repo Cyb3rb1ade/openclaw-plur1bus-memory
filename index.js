@@ -10576,8 +10576,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   // Watermark.
                   const episodedTurnIds = new Set(hooks?.agent_end?.episodedTurnIds || []);
                   // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+                  // 7.12.40: Namen aus USER.md/IDENTITY.md, Stimmung der
+                  // EmotionEngine und Session-Art fuer brauchbare Karten-Metadaten.
                   postProcessing.push(extractEpisodesFromTurns(normalizedTurns, {
                     workspaceKey: ctx?.workspaceKey,
+                    workspaceDir: ctx?.workspaceDir,
+                    sessionKey: event?.sessionKey || ctx?.sessionKey || "",
+                    mood: (() => { try { return emotionalPool.describe(agentId); } catch (_) { return null; } })(),
                     agentId,
                     llmCfg: mergingEnabled ? withLlmCallContext(
                       episodeExtractionLlmCfg,
@@ -10587,7 +10592,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     ) : null,
                     callLlm,
                     signal,
-                  }).then((episodes) => {
+                  }).then(async (episodes) => {
                     throwIfAborted(signal, "episode commit aborted");
                     // Nur vollstaendig bereits episodierte Spannen verwerfen.
                     // Teilueberlappung bleibt erhalten — sie enthaelt neue Turns.
@@ -10597,7 +10602,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     }
                     if (fresh.length > 0) {
                       throwIfAborted(signal, "episode commit aborted");
-                      neoStore.appendEpisodes(fresh);
+                      // 7.12.40: async mit langer Lock-Frist statt 5-s-Sync-Lock
+                      // (Backpressure gegen den Embedding-Drain, s. neo-arch.js).
+                      if (typeof neoStore.appendEpisodesAsync === "function") await neoStore.appendEpisodesAsync(fresh);
+                      else neoStore.appendEpisodes(fresh);
                       api.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId}`);
                       if (ctx?.workspaceDir) {
                         for (const ep of fresh) {
