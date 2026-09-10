@@ -270,6 +270,7 @@ import {
   dedupeNeoLanesAgainstTexts,
   transitionRecordStatus,
   workspaceKeyFromContext,
+  turnIdentityParams,
   turnEventsFromMessages,
 } from "./lib/neo-arch.js";
 import { createNeoWorkerRuntime, getSharedNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
@@ -7712,8 +7713,21 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const hooksBefore = neoStore.readHooks();
                 const openEpisodeState = hooksBefore?.agent_end?.openEpisode || null;
                 const result = { job: "episodes-rebuild", days: rebuildDays, dryRun: rebuildDryRun, candidates: episodes.length, rebuilt: 0, cardsReplaced: 0, cardsAppended: 0, skippedNoTurns: 0, errors: [] };
+                const allTurns = [...turnsById.values()].filter((t) => t?.role === "user" || t?.role === "assistant");
+                result.byWindow = 0;
                 for (const ep of episodes) {
-                  const turns = (Array.isArray(ep.memoryIds) ? ep.memoryIds : []).map((id) => turnsById.get(String(id))).filter(Boolean);
+                  let turns = (Array.isArray(ep.memoryIds) ? ep.memoryIds : []).map((id) => turnsById.get(String(id))).filter(Boolean);
+                  if (turns.length === 0) {
+                    // Karten vor 7.12.44 tragen Turn-IDs, die es im Journal nie gab
+                    // (andere Identitaetsbasis) — ueber das Zeitfenster der Episode
+                    // finden sich dieselben Turns trotzdem.
+                    const from = new Date(ep.startTime || 0).getTime() - 2000;
+                    const to = new Date(ep.endTime || 0).getTime() + 2000;
+                    if (Number.isFinite(from) && Number.isFinite(to) && to > from) {
+                      turns = allTurns.filter((t) => { const ts = new Date(t.createdAt || 0).getTime(); return ts >= from && ts <= to; });
+                      if (turns.length > 0) result.byWindow += 1;
+                    }
+                  }
                   if (turns.length === 0) { result.skippedNoTurns += 1; continue; }
                   try {
                     const rebuilt = await rebuildEpisode(ep, turns, {
@@ -10502,10 +10516,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             } else {
               // Nur die neuen Messages normalisieren
               const newMessages = event.messages.slice(lastCount);
+              // 7.12.44: gleiche Turn-Identitaet wie das Journal des Workers
+              // (normierter Workspace-Schluessel + stabiler Sitzungsschluessel),
+              // sonst zeigen Episoden auf Turn-IDs, die es nirgends gibt.
               const normalizedTurns = turnEventsFromMessages(newMessages, {
-                workspaceKey: ctx?.workspaceKey,
-                agentId,
-                sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                ...turnIdentityParams(event, ctx, rememberNeoWorkspace(ctx, event)),
                 createdAt: new Date().toISOString(),
               });
 
