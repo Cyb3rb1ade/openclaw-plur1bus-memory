@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.37",
+  "version": "7.12.38",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-command", "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session", "hasSubcommands": false },
@@ -2069,7 +2069,12 @@
             "type": "boolean",
             "default": true
           },
-          "maxDirectiveChars": { "type": "number", "minimum": 200 }
+          "maxDirectiveChars": { "type": "number", "minimum": 200 },
+          "maxBullets": { "type": "number", "minimum": 6 },
+          "minDaysBetween": { "type": "number", "minimum": 0 },
+          "minOutcomes": { "type": "number", "minimum": 1 },
+          "cron": { "type": "string" },
+          "timezone": { "type": ["string", "null"] }
         }
       },
       "afterthought": {

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,10 @@ import {
   evolvePersonaVoice, proposePersonaEvolution, acceptPersonaProposal,
   loadPersonaEmojiPalette, ensurePersonaVoiceSeed,
   scheduleEnsurePersonaVoiceSeed, PROPOSAL_HEADER,
+  replaceLearnedMarkerInManagedBlock, splitManagedBullets, parseEvolutionReply,
+  isHeartbeatOutcome, readPersonaEvolutionState, selectEvolutionEvidence,
+  directiveCharsForBullets, resolvePersonaMaxBullets,
+  DEFAULT_PERSONA_MAX_BULLETS, DEFAULT_MAX_DIRECTIVE_CHARS, PERSONA_EVOLUTION_STATE_FILE,
 } from "../lib/persona-voice.js";
 
 const SEED = "- Kurze, direkte Sätze.\n- Lieblingswendung: „passt schon“.\n- Emojis sparsam: 🙂 gelegentlich.";
@@ -37,7 +41,7 @@ describe("persona-voice", () => {
     assert.strictEqual(writePersonaVoice(dir, "- anders"), false); // existiert schon → no-op
   });
 
-  it("loadPersonaDirective: kompakt, ≤1600 Zeichen, nur Managed-Block", () => {
+  it("loadPersonaDirective: kompakt, ≤ Default-Deckel, nur Managed-Block", () => {
     const dir = mkdtempSync(join(tmpdir(), "pv-"));
     writePersonaVoice(dir, SEED);
     // User-Text außerhalb der Marker darf nicht in die Direktive
@@ -46,24 +50,30 @@ describe("persona-voice", () => {
     const directive = loadPersonaDirective(dir);
     assert.ok(directive.includes("passt schon"));
     assert.ok(!directive.includes("GEHEIM"));
-    assert.ok(directive.length <= 1600);
+    assert.ok(directive.length <= DEFAULT_MAX_DIRECTIVE_CHARS);
     assert.match(directive, /Grundstimme/);
   });
 
-  it("loadPersonaDirective (7.12.37): zwölf Zeilen passen ohne Kappung, Grenze konfigurierbar, Cache kennt die Grenze", () => {
+  it("loadPersonaDirective (7.12.38): 24 Zeilen passen ohne Kappung, Grenze konfigurierbar, Cache kennt die Grenze", () => {
     const dir = mkdtempSync(join(tmpdir(), "pv-"));
-    const bullets = Array.from({ length: 12 }, (_, i) => `- Marker ${i + 1}: ${"x".repeat(110)} Ende${i + 1}.`);
+    const n = DEFAULT_PERSONA_MAX_BULLETS;
+    const bullets = Array.from({ length: n }, (_, i) => `- Marker ${i + 1}: ${"x".repeat(110)} Ende${i + 1}.`);
     writePersonaVoice(dir, bullets.join("\n"));
     const full = loadPersonaDirective(dir);
-    assert.ok(full.includes("Ende12"), "the last bullet survives the default cap");
-    assert.ok(full.length <= 1600);
+    assert.ok(full.includes(`Ende${n}`), "the last bullet survives the default cap");
+    assert.ok(full.length <= DEFAULT_MAX_DIRECTIVE_CHARS);
+    assert.strictEqual(DEFAULT_MAX_DIRECTIVE_CHARS, directiveCharsForBullets(n));
+    assert.strictEqual(directiveCharsForBullets(12), 12 * 130 + 80);
+    assert.strictEqual(resolvePersonaMaxBullets("abc"), n);
+    assert.strictEqual(resolvePersonaMaxBullets(3), n, "below the minimum falls back");
+    assert.strictEqual(resolvePersonaMaxBullets(30.7), 30);
     const small = loadPersonaDirective(dir, { maxChars: 400 });
     assert.ok(small.length <= 400 && small.endsWith("…"), "an explicit smaller cap truncates");
-    assert.ok(!small.includes("Ende12"));
+    assert.ok(!small.includes(`Ende${n}`));
     const again = loadPersonaDirective(dir);
-    assert.ok(again.includes("Ende12"), "the cache does not serve the truncated text for the default cap");
+    assert.ok(again.includes(`Ende${n}`), "the cache does not serve the truncated text for the default cap");
     const tiny = loadPersonaDirective(dir, { maxChars: 50 });
-    assert.ok(tiny.length <= 1600 && tiny.includes("Ende12"), "caps below the minimum fall back to the default");
+    assert.ok(tiny.length <= DEFAULT_MAX_DIRECTIVE_CHARS && tiny.includes(`Ende${n}`), "caps below the minimum fall back to the default");
   });
 
   it("loadPersonaDirective: null ohne Datei, fail-open bei kaputtem Inhalt", () => {
@@ -312,7 +322,7 @@ describe("persona evolution", () => {
   });
 });
 
-describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
+describe("appendMarkerToManagedBlock: Kappung (explizit 12; Default seit 7.12.38: 24)", () => {
   function seededDir() {
     const dir = mkdtempSync(join(tmpdir(), "pv-"));
     writePersonaVoice(dir, SEED); // 3 Seed-Bullets
@@ -322,7 +332,7 @@ describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
   it("(a) unter der Kappe wird nur angehängt", () => {
     const dir = seededDir();
     for (let i = 1; i <= 5; i++) {
-      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`, { maxBullets: 12 }), true);
     }
     const { managedBlock } = readPersonaFile(dir);
     const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
@@ -334,14 +344,14 @@ describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
     const dir = seededDir();
     // 3 Seed-Bullets + 9 gelernte = 12 (an der Kappe)
     for (let i = 1; i <= 9; i++) {
-      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`, { maxBullets: 12 }), true);
     }
     let bullets = readPersonaFile(dir).managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
     assert.strictEqual(bullets.length, 12);
     assert.ok(bullets[3].includes("Gelernt 1."));
 
     // 13. Bullet (10. gelernte) überschreitet die Kappe → Gelernt 1 (Bullet-Zeile 4) fliegt raus.
-    assert.strictEqual(appendMarkerToManagedBlock(dir, "- Gelernt 10."), true);
+    assert.strictEqual(appendMarkerToManagedBlock(dir, "- Gelernt 10.", { maxBullets: 12 }), true);
     const { managedBlock } = readPersonaFile(dir);
     bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
     assert.strictEqual(bullets.length, 12);
@@ -363,7 +373,7 @@ describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
     writePersonaVoice(dir, seed6);
     // 6 Seed + 7 gelernte = 13 → über der Kappe: Gelernt 1 fliegt, Seed bleibt komplett.
     for (let i = 1; i <= 7; i++) {
-      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`, { maxBullets: 12 }), true);
     }
     const { managedBlock } = readPersonaFile(dir);
     const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
@@ -386,7 +396,7 @@ describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
     ].join("\n");
     writeFileSync(join(dir, "persona-voice.md"), legacy, "utf8");
     for (let i = 1; i <= 10; i++) {
-      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`, { maxBullets: 12 }), true);
     }
     const { managedBlock } = readPersonaFile(dir);
     const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
@@ -430,11 +440,225 @@ describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
     writeFileSync(path, withNote, "utf8");
 
     for (let i = 1; i <= 10; i++) {
-      appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`);
+      appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`, { maxBullets: 12 });
     }
     const { managedBlock } = readPersonaFile(dir);
     assert.ok(managedBlock.includes("Hinweis: Diese Zeile ist kein Bullet."));
     const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
     assert.strictEqual(bullets.length, 12);
+  });
+
+  it("(f) Default-Kappe 24: 3 Seed + 21 gelernte passen, die 22. gelernte verdrängt die älteste", () => {
+    const dir = seededDir();
+    for (let i = 1; i <= 21; i++) assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+    let bullets = readPersonaFile(dir).managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, DEFAULT_PERSONA_MAX_BULLETS);
+    assert.ok(readPersonaFile(dir).managedBlock.includes("Gelernt 1."));
+    assert.strictEqual(appendMarkerToManagedBlock(dir, "- Gelernt 22."), true);
+    const { managedBlock } = readPersonaFile(dir);
+    bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, DEFAULT_PERSONA_MAX_BULLETS);
+    assert.ok(!managedBlock.includes("Gelernt 1."));
+    assert.ok(managedBlock.includes("Gelernt 22."));
+    assert.ok(bullets[0].includes("Kurze, direkte Sätze."));
+    const split = splitManagedBullets(managedBlock);
+    assert.strictEqual(split.seed.length, 3);
+    assert.strictEqual(split.learned.length, 21);
+    assert.ok(split.learned[0].includes("Gelernt 2."));
+  });
+
+  it("(g) replaceLearnedMarkerInManagedBlock ersetzt nur gelernte Zeilen, nie den Seed", () => {
+    const dir = seededDir();
+    for (let i = 1; i <= 3; i++) assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+    assert.strictEqual(replaceLearnedMarkerInManagedBlock(dir, 2, "- Ersetzt 2."), true);
+    let { managedBlock } = readPersonaFile(dir);
+    let split = splitManagedBullets(managedBlock);
+    assert.deepStrictEqual(split.learned, ["- Gelernt 1.", "- Ersetzt 2.", "- Gelernt 3."]);
+    assert.deepStrictEqual(split.seed, SEED.split("\n"));
+    assert.ok(managedBlock.includes("<!-- persona:seed-end -->"), "boundary survives");
+    // Ausserhalb des gelernten Bereichs: nichts passiert.
+    assert.strictEqual(replaceLearnedMarkerInManagedBlock(dir, 0, "- Nope."), false);
+    assert.strictEqual(replaceLearnedMarkerInManagedBlock(dir, 4, "- Nope."), false);
+    assert.strictEqual(replaceLearnedMarkerInManagedBlock(dir, 1, "kein Bullet"), false);
+    // Duplikat einer bestehenden Zeile wird nicht eingesetzt.
+    assert.strictEqual(replaceLearnedMarkerInManagedBlock(dir, 1, "- Gelernt 3."), false);
+    ({ managedBlock } = readPersonaFile(dir));
+    split = splitManagedBullets(managedBlock);
+    assert.deepStrictEqual(split.learned, ["- Gelernt 1.", "- Ersetzt 2.", "- Gelernt 3."]);
+    assert.ok(!managedBlock.includes("Nope."));
+    assert.ok(loadPersonaDirective(dir).includes("Ersetzt 2"));
+  });
+});
+
+describe("evolvePersonaVoice (7.12.38): Belege, ADD/REPLACE/NONE, Bremsen, Heartbeat-Filter", () => {
+  function seededDir() {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, SEED);
+    return dir;
+  }
+  function rich(ts, kind, i) {
+    return {
+      timestamp: ts,
+      outcome: kind,
+      sessionKey: "agent:main:telegram:default:direct:1",
+      userPrompt: `Frage ${i}`,
+      assistantText: `Antwort ${i} des Agenten`,
+      replyText: `Reaktion ${i}`,
+    };
+  }
+  const positives = (n, offset = 0) => Array.from({ length: n }, (_, i) => rich(T1 - (i + offset) * 1000, "confirmed_or_continued", i + offset));
+
+  it("isHeartbeatOutcome erkennt Heartbeat-Turns über sessionKey und Prompt", () => {
+    assert.strictEqual(isHeartbeatOutcome({ sessionKey: "agent:main:main:heartbeat" }), true);
+    assert.strictEqual(isHeartbeatOutcome({ userPrompt: "Read HEARTBEAT.md if it exists. If nothing…" }), true);
+    assert.strictEqual(isHeartbeatOutcome({ sessionKey: "agent:main:telegram:default:direct:1", userPrompt: "Hallo" }), false);
+    assert.strictEqual(isHeartbeatOutcome({}), false);
+  });
+
+  it("parseEvolutionReply versteht ADD, REPLACE n, NONE und nackte Bullet-Zeilen", () => {
+    assert.deepStrictEqual(parseEvolutionReply("ADD: - Neue Wendung."), { action: "add", marker: "- Neue Wendung." });
+    assert.deepStrictEqual(parseEvolutionReply("replace 3: - Ersatz."), { action: "replace", index: 3, marker: "- Ersatz." });
+    assert.deepStrictEqual(parseEvolutionReply("Hier mein Vorschlag:\nNONE"), { action: "none" });
+    assert.deepStrictEqual(parseEvolutionReply("- Alt-Format."), { action: "add", marker: "- Alt-Format." });
+    assert.strictEqual(parseEvolutionReply("nichts brauchbares"), null);
+    assert.strictEqual(parseEvolutionReply(null), null);
+  });
+
+  it("Heartbeat-Outcomes öffnen das Tor nicht und tauchen nicht als Beleg auf", async () => {
+    const dir = seededDir();
+    const heartbeats = Array.from({ length: 12 }, (_, i) => ({
+      timestamp: T1 - i * 1000, outcome: "continued_topic", sessionKey: "agent:main:main:heartbeat",
+      userPrompt: "Read HEARTBEAT.md if it exists.", replyText: "Read HEARTBEAT.md if it exists.",
+    }));
+    let calls = 0;
+    const res = await evolvePersonaVoice({ workspaceDir: dir, outcomes: [...heartbeats, ...positives(3)], llmCfg: { model: "x" }, callLlm: async () => { calls++; return "- x"; }, now: T1 });
+    assert.strictEqual(res.evolved, false);
+    assert.strictEqual(res.reason, "too_few_outcomes");
+    assert.strictEqual(res.outcomes, 3);
+    assert.strictEqual(calls, 0);
+  });
+
+  it("das Modell sieht Seed, nummerierte gelernte Zeilen und Belege beider Seiten", async () => {
+    const dir = seededDir();
+    appendMarkerToManagedBlock(dir, "- Gelernt A.");
+    const outcomes = [
+      ...positives(9),
+      { ...rich(T1 - 20000, "corrected", 99), assistantText: "Antwort mit Stolperstein", replyText: "Nein, das stimmt nicht" },
+    ];
+    let seen = null;
+    const callLlm = async (messages) => { seen = messages; return "ADD: - Neue Wendung: „alles klar soweit\"."; };
+    const res = await evolvePersonaVoice({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm, now: T1 });
+    assert.strictEqual(res.evolved, true);
+    assert.strictEqual(res.action, "add");
+    assert.strictEqual(res.positive, 9);
+    assert.strictEqual(res.negative, 1);
+    const user = seen[1].content;
+    assert.ok(user.includes("Geschuetzter Kern"));
+    assert.ok(user.includes("passt schon"));
+    assert.ok(user.includes("1. - Gelernt A."));
+    assert.ok(user.includes("Positive Belege (9 von 10"));
+    assert.ok(user.includes("Antwort 0 des Agenten"));
+    assert.ok(user.includes("Negative Belege (1 von 10"));
+    assert.ok(user.includes("Antwort mit Stolperstein"));
+    assert.ok(user.includes("Nein, das stimmt nicht"));
+    assert.match(seen[0].content, /REPLACE <n>/);
+    assert.ok(readPersonaFile(dir).managedBlock.includes("alles klar soweit"));
+    const state = readPersonaEvolutionState(dir);
+    assert.strictEqual(state.lastEvolvedAt, T1);
+    assert.strictEqual(state.lastAction, "add");
+    assert.strictEqual(state.runs, 1);
+    assert.ok(existsSync(join(dir, PERSONA_EVOLUTION_STATE_FILE)));
+  });
+
+  it("selectEvolutionEvidence bevorzugt Einträge mit Antworttext, neueste zuerst, je Seite gedeckelt", () => {
+    const outcomes = [
+      ...positives(8),
+      { timestamp: T1 + 5000, outcome: "acknowledged", userPrompt: "ohne Antwort", assistantText: "" },
+    ];
+    const ev = selectEvolutionEvidence(outcomes);
+    assert.strictEqual(ev.positive.length, 6);
+    assert.strictEqual(ev.positive[0].userPrompt, "Frage 0", "the newest entry WITH an answer leads");
+    assert.ok(!ev.positive.some((o) => o.userPrompt === "ohne Antwort"));
+    assert.strictEqual(ev.negative.length, 0);
+  });
+
+  it("REPLACE ersetzt die gelernte Zeile, eine ungültige Nummer wird zu ADD", async () => {
+    const dir = seededDir();
+    appendMarkerToManagedBlock(dir, "- Gelernt A.");
+    appendMarkerToManagedBlock(dir, "- Gelernt B.");
+    let res = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => "REPLACE 1: - Besser als A.", now: T1 });
+    assert.strictEqual(res.evolved, true);
+    assert.strictEqual(res.action, "replace");
+    assert.strictEqual(res.replacedIndex, 1);
+    assert.deepStrictEqual(splitManagedBullets(readPersonaFile(dir).managedBlock).learned, ["- Besser als A.", "- Gelernt B."]);
+    assert.strictEqual(readPersonaEvolutionState(dir).lastAction, "replace:1");
+
+    // Nummer zeigt in den Seed/ins Leere → ADD, Seed unangetastet. Bremse
+    // umgehen: minDaysBetween 0 und neue Outcomes.
+    res = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12, 0).map((o) => ({ ...o, timestamp: o.timestamp + 60000 })), llmCfg: { model: "x" }, callLlm: async () => "REPLACE 7: - Hinten dran.", now: T1 + 60000, minDaysBetween: 0 });
+    assert.strictEqual(res.evolved, true);
+    assert.strictEqual(res.action, "add");
+    const split = splitManagedBullets(readPersonaFile(dir).managedBlock);
+    assert.deepStrictEqual(split.seed, SEED.split("\n"));
+    assert.deepStrictEqual(split.learned, ["- Besser als A.", "- Gelernt B.", "- Hinten dran."]);
+  });
+
+  it("ein bereits vorhandener Marker (ADD oder REPLACE) zählt nicht als Evolution und setzt keine Zeit-Bremse", async () => {
+    const dir = seededDir();
+    appendMarkerToManagedBlock(dir, "- Gelernt A.");
+    const before = readFileSync(join(dir, "persona-voice.md"), "utf8");
+    for (const reply of ["ADD: - Gelernt A.", "REPLACE 1: - Kurze, direkte Sätze."]) {
+      const res = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => reply, now: T1 });
+      assert.strictEqual(res.evolved, false, reply);
+      assert.strictEqual(res.reason, "duplicate_marker", reply);
+      assert.strictEqual(readFileSync(join(dir, "persona-voice.md"), "utf8"), before);
+      const state = readPersonaEvolutionState(dir);
+      assert.strictEqual(state.lastEvolvedAt, null);
+      assert.strictEqual(state.lastAction, "duplicate");
+      // Zweiter Durchlauf mit denselben Outcomes: verbraucht → too_few, daher frische Zeitstempel für die Schleife.
+      writeFileSync(join(dir, PERSONA_EVOLUTION_STATE_FILE), "{}", "utf8");
+    }
+  });
+
+  it("NONE verbraucht die Belege, ändert nichts und setzt keine Zeit-Bremse", async () => {
+    const dir = seededDir();
+    const before = readFileSync(join(dir, "persona-voice.md"), "utf8");
+    const res = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => "NONE", now: T1 });
+    assert.strictEqual(res.evolved, false);
+    assert.strictEqual(res.reason, "llm_none");
+    assert.strictEqual(readFileSync(join(dir, "persona-voice.md"), "utf8"), before);
+    const state = readPersonaEvolutionState(dir);
+    assert.strictEqual(state.lastEvolvedAt, null);
+    assert.strictEqual(state.lastOutcomeTimestamp, T1);
+    // Dieselben Outcomes noch einmal: verbraucht → too_few_outcomes, kein LLM-Aufruf.
+    let calls = 0;
+    const again = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => { calls++; return "- x"; }, now: T1 + 1000 });
+    assert.strictEqual(again.reason, "too_few_outcomes");
+    assert.strictEqual(calls, 0);
+  });
+
+  it("Bremsen: minDaysBetween sperrt nach einer Änderung, danach zählen nur NEUE Outcomes", async () => {
+    const dir = seededDir();
+    const first = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => "- Erste.", now: T1 });
+    assert.strictEqual(first.evolved, true);
+    const day = 86400000;
+    const tooSoon = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => "- Zweite.", now: T1 + day });
+    assert.strictEqual(tooSoon.evolved, false);
+    assert.strictEqual(tooSoon.reason, "too_soon");
+    assert.strictEqual(tooSoon.nextEligibleAt, T1 + 2 * day);
+    // Zeit-Bremse vorbei, aber dieselben (verbrauchten) Outcomes → too_few.
+    const stale = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => "- Zweite.", now: T1 + 2 * day });
+    assert.strictEqual(stale.reason, "too_few_outcomes");
+    // Neun neue reichen bei minOutcomes 10 nicht, zehn schon.
+    const fresh = (n) => positives(n).map((o) => ({ ...o, timestamp: o.timestamp + 2 * day }));
+    const nine = await evolvePersonaVoice({ workspaceDir: dir, outcomes: [...fresh(9), ...positives(12)], llmCfg: { model: "x" }, callLlm: async () => "- Zweite.", now: T1 + 2 * day });
+    assert.strictEqual(nine.reason, "too_few_outcomes");
+    assert.strictEqual(nine.outcomes, 9);
+    const ten = await evolvePersonaVoice({ workspaceDir: dir, outcomes: [...fresh(10), ...positives(12)], llmCfg: { model: "x" }, callLlm: async () => "- Zweite.", now: T1 + 2 * day });
+    assert.strictEqual(ten.evolved, true);
+    assert.deepStrictEqual(splitManagedBullets(readPersonaFile(dir).managedBlock).learned, ["- Erste.", "- Zweite."]);
+    // Eigene Schwelle: minOutcomes 3 lässt drei neue durch.
+    const three = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(3).map((o) => ({ ...o, timestamp: o.timestamp + 5 * day })), llmCfg: { model: "x" }, callLlm: async () => "- Dritte.", now: T1 + 5 * day, minOutcomes: 3 });
+    assert.strictEqual(three.evolved, true);
   });
 });

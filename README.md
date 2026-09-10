@@ -26,7 +26,22 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
-### New in v7.12.9 – v7.12.33 — faster turns, honest identity, self-maintaining stores
+### New in v7.12.38 — the persona voice learns daily, from evidence
+
+Persona evolution used to run once a week, hand the model only the current
+profile and ask for "one small change"; the reply outcomes were merely a gate.
+Now it runs daily (04:15, staggered per agent, `personaVoice.cron`/`timezone`
+to override) with two brakes kept in `.adaptive-learning/persona-evolution-state.json`:
+at least `minDaysBetween` days (default 2) since the last change, and at
+least `minOutcomes` (default 10) new real reply outcomes since then, more than
+half of them positive. Heartbeat turns no longer count. The model sees the
+protected seed, the numbered learned lines, and up to six positive and six
+negative excerpts (question, answer, the user's reaction) and answers with
+`ADD: - …`, `REPLACE <n>: - …` or `NONE`. The managed block may hold 24 lines
+(`personaVoice.maxBullets`, was 12 including the seed) and the injected
+directive cap follows from that (lines × 130 + 80, default 3200 characters).
+Existing weekly jobs are migrated to the daily slot on the next setup run.
+
 
 Twenty-five releases in three days, all live-tested on a three-agent
 installation. The [changelog](CHANGELOG.md) has the details per version; the
@@ -804,7 +819,7 @@ The capability probe allows the host CLI 30 seconds per help call (7.8.0); a boo
 
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 
-- `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; Sunday 04:15 local time, staggered five minutes per agent; no delivery.
+- `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; daily 04:15 local time (7.12.38; before: Sunday), staggered five minutes per agent, overridable via `personaVoice.cron`/`personaVoice.timezone`; no delivery. The shipped weekly slots are migrated to daily on the next setup run; operator schedules stay.
 - `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 3 hours; exact-command announce delivery with a direct text/`NO_REPLY` result.
 - `consolidate-daily`: `dailyConsolidation.enabled`; daily 04:00 in `Europe/Berlin`; no delivery.
 - `classify-recent`: `criticalPush.enabled`; every 3 hours; safe announce delivery of approved pushes or `NO_REPLY`.

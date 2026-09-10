@@ -822,7 +822,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       const args = byName.get(name);
       return args[args.indexOf(flag) + 1];
     };
-    assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * 0");
+    assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * *");
     assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "10800s");
     assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 4 * * *");
     // Erster Agent auf der Basisminute, klar getrennt von gc-run um 04:45.

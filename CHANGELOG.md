@@ -7,6 +7,45 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.38] — 2026-09-10
+
+### Geändert
+
+- **Persona-Evolution täglich statt wöchentlich, mit Bremsen und Belegen.**
+  Bis 7.12.37 lief `persona-evolve` sonntags, bekam nur den aktuellen Block
+  („schlage GENAU EINE kleine Änderung vor") und nutzte die Antwort-Ergebnisse
+  ausschließlich als Tor — das Modell sah nie, was beim Nutzer ankam. Jetzt:
+  Cron täglich 04:15 (je Agent um fünf Minuten versetzt; Override über
+  `personaVoice.cron`/`personaVoice.timezone` wie beim Skill-Miner), zwei
+  Bremsen mit Zustand in `.adaptive-learning/persona-evolution-state.json`:
+  frühestens `personaVoice.minDaysBetween` Tage (Default 2) nach der letzten
+  Änderung und nur mit mindestens `personaVoice.minOutcomes` (Default 10)
+  NEUEN echten Outcomes seit der letzten Änderung, davon > 50 % positiv.
+  Heartbeat-Turns („Read HEARTBEAT.md …", immer `continued_topic`) zählen
+  nicht mehr — sie waren 12 von 49 Wochen-Outcomes bei main und alle 50 bei
+  heisenberg. Das Modell sieht den geschützten Seed, die nummerierten
+  gelernten Zeilen und je bis zu sechs positive und negative Gesprächsbelege
+  (Frage, Antwort, Reaktion des Nutzers) und antwortet mit `ADD: - …`,
+  `REPLACE <n>: - …` oder `NONE`; eine nackte `- …`-Zeile gilt weiter als
+  ADD, ein REPLACE auf eine ungültige Nummer wird zu ADD, der Seed ist
+  unerreichbar. `NONE` verbraucht die Belege, setzt aber keine Zeit-Bremse;
+  ein Marker, der schon im Block steht, ebenso (`duplicate_marker`).
+  Ergebnisobjekt nennt `action`, `outcomes`, `positive`, `negative`,
+  `replacedIndex`, bei `too_soon` `nextEligibleAt`.
+- **Verwalteter Block darf 24 statt 12 Zeilen halten** (`personaVoice.maxBullets`,
+  min. 6). Zwölf zählte den Seed mit (7–8 Zeilen), es blieben vier bis fünf
+  gelernte Zeilen, die bei täglicher Evolution binnen zwei Wochen rotiert
+  wären. Der Deckel der injizierten Direktive folgt daraus (Zeilen × 130 + 80,
+  Default 3200; `personaVoice.maxDirectiveChars` überschreibt weiterhin).
+- **Cron-Migration:** bestehende Jobs mit genau der ausgelieferten
+  Wochen-Kadenz (`15 4 * * 0`, `20 4 * * 0`, `25 4 * * 0`, …) werden beim
+  nächsten Setup-Lauf (Gateway-Start nach dem Update bzw.
+  `scripts/setup-feature-crons.mjs`) auf die tägliche Kadenz gesetzt;
+  Operator-Ausdrücke bleiben unangetastet. Der Persona-Cron trägt weiterhin
+  keine Zeitzone (lokale Zeit), ein ungültiger Override lässt den Job aus.
+- `persona-evolve` liest 300 statt 200 Log-Einträge (Heartbeats werden erst
+  im Job gefiltert).
+
 ## [7.12.37] — 2026-09-10
 
 ### Behoben
