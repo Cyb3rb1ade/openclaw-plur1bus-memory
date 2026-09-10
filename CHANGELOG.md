@@ -7,6 +7,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.44-hermes.0 — unpublished integration candidate
+
+- Integrates the pinned OpenClaw `a3f48f28ac647e81c5260e8a1dbab7977bf9fb51`
+  source while retaining Hermes-native payload and distribution paths.
+- This is a candidate only: native-port parity, artifacts, signing, and publication
+  remain separately audited gates.
+
+## Hermes distribution history
+
 ### Hermes 7.12.7-hermes.4 — clear profile installation
 
 - Add a native macOS Apple Silicon setup app with graphical all/default/individual
@@ -167,6 +176,1041 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
+## [7.12.44] — 2026-09-11
+
+### Behoben
+
+- **Episoden zeigten auf Turn-IDs, die es im Journal nie gab.** `agent_end`
+  in index.js baute die Turn-Events (Episoden, Träume, Watermark) mit rohem
+  `ctx.workspaceKey` und der Host-`sessionId`, der Neo-Worker sein Journal mit
+  normiertem Workspace-Schlüssel und stabilem Sitzungsschlüssel — dieselbe
+  Nachricht hatte zwei IDs. Folge: `memoryIds` der Karten („Enthaltene
+  Erinnerungen") verwiesen ins Leere (Bernd 10.09.2026: 0 von 112 IDs der
+  letzten zehn Episoden im Journal), und `episodes-rebuild` fand keine Turns.
+  Jetzt liefert `turnIdentityParams` (neo-arch.js) beiden Seiten dieselbe
+  Basis; neue Karten verlinken auf echte Journal-Turns.
+- `episodes-rebuild` findet Turns älterer Karten über das Zeitfenster der
+  Episode (±2 s um Start/Ende), wenn die IDs nicht passen; Ergebnis nennt
+  `byWindow`. Beim Neubau bekommen die Karten die Journal-IDs.
+
+## [7.12.43] — 2026-09-10
+
+### Geändert
+
+- **Episoden-Karten: per Stimme erkannte Mitsprecher sind Teilnehmer.**
+  Bernds Fußnote vom 10.09.2026 23:3x: Eva und Erik hatten über Christians
+  Telegram-Konto gesprochen, standen aber unter `mentioned`. Die STT-Brücke
+  stellt per Stimmprofil erkannte Sprecher als `Name: …` vor den Transkript-
+  Text; diese Namen landen jetzt in `participants` und im neuen Feld
+  `voice_speakers`, das Modell bekommt sie als Mitsprecher genannt und
+  führt sie nicht mehr unter `people`. Unerkannte Stimmen (`Sprecher 1`)
+  und Überschriften vor Doppelpunkten („Stimmung:", „Hinweis:") zählen nicht.
+  Wer sich nur mit Namen vorstellt, ohne Stimmprofil, bleibt „erwähnt".
+- **Nachmigration älterer Karten:** `/plur1bus internal episodes-rebuild
+  [--days N] [--dry-run]` (Operator-Pfad `openclaw plur1bus-command`) baut
+  jede Episode der letzten N Tage (Default 1) aus ihren Turns im Journal neu
+  (gleiche `episode_id`, Fassung +1, Modell-Anreicherung), ersetzt die Karte
+  (nur Dateien mit genau dieser einen Episode, sonst Anhang) und hängt den
+  Datensatz mit derselben id an; die offene Episode behält ihren Zustand.
+
+## [7.12.42] — 2026-09-10
+
+### Geändert
+
+- **Episoden-Karten: Erwähnte Personen getrennt von Sprechern, Emotion aus
+  dem Gespräch.** Bernds Feintuning-Befund vom 10.09.2026 22:1x:
+  - `participants` sind nur noch die, die gesprochen haben; Personen, ÜBER die
+    gesprochen wurde, stehen im neuen Feld `mentioned` (Karte und
+    Neo-Datensatz). Der episodische Recall wertet `mentioned` schwächer als
+    `participants`, damit „wann war X dabei?" keine Karten trifft, in denen X
+    nur Thema war.
+  - Die Emotion der Karte kommt jetzt vom Modell, das das Gespräch gelesen
+    hat (`emotion` + neue Stärke `emotionIntensity` niedrig/mittel/hoch →
+    0,3/0,55/0,8). Der Prompt fragt nach der Stimmung, „wie sie im Gespräch
+    spürbar ist — auch bei sachlichem Thema, wenn es jemanden berührt";
+    `neutral` nur, wenn keine Gefühlsregung erkennbar ist. Die EmotionEngine
+    beschreibt den inneren Zustand des Agenten und lieferte „sadness 0,76"
+    für einen sachlichen Testabend; sie bleibt nur Rückfall ohne Modell.
+  - Unverändert: Episoden fassen bis zu 50 Turns binnen 30-Minuten-Pausen;
+    Bernds 50-Turn-Karte entstand aus dem Testschub mit Dutzenden kurzen
+    Nachrichten.
+
+## [7.12.41] — 2026-09-10
+
+### Behoben
+
+- **Zeitfilter des Recalls leerte die Erinnerungen bei „bis heute".** Bernd,
+  10.09.2026 21:42: „…ich habe bis heute keine Antwort erhalten" — der
+  Zeitparser erkannte „heute", filterte auf den heutigen Tag und warf alle
+  39 Treffer weg (`temporal filter applied (39 → 0)`, null injizierte
+  Erinnerungen für eine Frage nach einer alten E-Mail). Zwei Änderungen:
+  - Dauer-Angaben „bis heute", „bis jetzt", „bis dato", „until today/now",
+    „so far", „to date" gelten nicht mehr als Tagesfenster; echte Fristen
+    mit Tageszeit oder Uhrzeit („bis heute Abend", „bis heute 18 Uhr") und
+    „heute"/„gestern" allein bleiben erhalten (`lib/temporal-parser.js`,
+    `stripDurationPhrases`).
+  - Sicherheitsnetz: Entfernt ein Zeitfenster (auch ein aufgelöster Anker)
+    ALLE Treffer, bleiben die ungefilterten stehen; Logzeile
+    `temporal filter would remove all N results — kept unfiltered`
+    (`applyTemporalFilterSafe` in `lib/temporal-filter.js`). Teilfilterung
+    verhält sich wie bisher, inklusive Trace-Ablehnungen.
+
+## [7.12.40] — 2026-09-10
+
+### Behoben
+
+- **Episoden-Karten mit brauchbaren Metadaten.** Bernds Befund vom
+  10.09.2026 21:07: `participants` waren Wortfragmente („Endlich, Aber,
+  Test, Kumpel"), `topics` Rauschwörter („nicht, visible, thinking",
+  Zahlen-IDs), die Emotion wirkte willkürlich, Titel und Zusammenfassung
+  hießen immer „Gespräch vom …" / „2 Turns, 0 Min". Ursachen und Fixes:
+  - Teilnehmer kamen aus einem Regex auf großgeschriebene Wörter. Jetzt aus
+    den Sprecherrollen mit Namen aus `USER.md` (`**Name:**`) und
+    `IDENTITY.md` (`**Name:**`), gecacht nach mtime, Rückfall „Nutzer"/Agent-ID;
+    dazu Personen, die das Modell im Gespräch erkennt (`people`, max. 5).
+  - Themen: Platzhalter (`[Audio transcript …]`, `[media attached …]`), URLs,
+    Markup, Zahlen und Rauschwörter werden gestrichen; im Original
+    großgeschriebene, nicht satzinitiale Wörter (deutsche Nomen) zählen
+    dreifach. Mit Modell ersetzen dessen `topics` (3–5 Nomen/Phrasen) die
+    Heuristik.
+  - Emotion: Turn-Events tragen keine Valenz, die Mittelung lieferte immer
+    Null bzw. Restwerte. Quelle ist jetzt der Stimmungs-Snapshot der
+    EmotionEngine beim `agent_end`; dominant nur bei Intensität mittel/hoch,
+    sonst `neutral`; Intensität = stärkste Dimension. Meldet die Engine
+    nichts Nennenswertes, gilt die vom Modell benannte Gesprächs-Emotion.
+  - Die LLM-Anreicherung feuerte nie: Schwelle 5 Turns, aber jeder
+    `agent_end` liefert nur die 2–4 neuen Turns; zudem scheiterte
+    `JSON.parse` still an Code-Zäunen. Jetzt ab 2 Turns, 600 Zeichen je
+    Turn (Deckel 6000), Sprecher namentlich im Prompt, Antwort auch mit
+    ```` ```json ```` oder Vorspann geparst, Felder validiert (Arc, Längen,
+    Duplikate, keine Zahlen als Personen). Eine Modellantwort je `agent_end`
+    auf der Route `episode-extraction`, gedeckelt durch das LLM-Timeout.
+  - Karte: Zusammenfassung ersetzt den Platzhalter „Exploratives Gespräch
+    ohne klaren Arc"; `location` folgt dem Session-Key (`dm`, `group`, …)
+    statt dem ACL-Scope. Dateiname folgt dem Titel, also eine Datei je
+    Episode statt einer Sammeldatei je Tag.
+  - Der Episoden-Commit lief zweimal (19:32, 21:07) in
+    `Neo workspace writer backpressure: lock deadline exceeded`, weil der
+    5-s-Sync-Lock gegen den Embedding-Drain des Workers verlor — die Karte
+    kam erst beim nächsten Turn über den Watermark-Retry (Bernds „Folge-Turns
+    fehlen"). Jetzt `appendEpisodesAsync` mit langer Frist (60 s, Event-Loop
+    bleibt frei).
+  - **Episoden werden fortgeschrieben statt zerstückelt.** Bisher entstand
+    pro `agent_end` eine eigene Zwei-Turn-Episode, weil die 30-Minuten-
+    Gruppierung nur die neuen Turns sah. Jetzt hängen neue Turns an der
+    zuletzt geschriebenen Episode, solange die Pause zu ihr unter 30 Minuten
+    liegt und sie nicht voll ist (50 Turns): dieselbe Karte (gleiche
+    `episode_id`) wird mit allen Turns neu gebaut, Titel/Zusammenfassung/Themen
+    neu erzeugt (die neuesten Turns bekommen das Prompt-Budget), die alte
+    Kartendatei ersetzt (bei Titelwechsel umbenannt; Sammeldateien älterer
+    Versionen bleiben unangetastet, dort wird angehängt), der Datensatz mit
+    derselben id erneut angehängt (`readEpisodes` liefert die jüngste
+    Fassung). Zustand im Hook-Record `agent_end.openEpisode` (Turn-Snapshots
+    bis 600 Zeichen). Karten erscheinen weiterhin sofort nach dem Turn.
+
+## [7.12.39] — 2026-09-10
+
+### Behoben
+
+- **Hook-Identität: eine zweite Nachricht während eines laufenden Turns
+  sperrte die Session für die nächsten Turns.** Der Host baut für eine
+  Nachricht, die während eines Turns eintrifft, keinen eigenen Prompt; das
+  beim Dispatch registrierte Ticket blieb liegen, lief nach 60 s ab, und die
+  Bereinigung des Ticket-Registers markierte die Session daraufhin für
+  weitere 60 s als „tainted". Die folgenden Turns liefen dann mit
+  `observe:session_tainted|claim:session_tainted` ohne user-Scope (keine
+  Träume, keine Outcome-Identität) — Bernd 10.09.2026 19:31 (zweite
+  Nachricht), 19:32 und 19:33 (gesperrt). Ein abgelaufenes Ticket ist ohnehin
+  nie beanspruchbar (`ticket_expired`), der Taint schützte also nichts.
+  Jetzt wird ein abgelaufenes, nie beanspruchtes Ticket still verworfen
+  (`explain()` zeigt `observe:expired_unclaimed`); Reihenfolge- und
+  Identitätskonflikte (`ticket_not_head`, `ticket_session_mismatch`,
+  `prior_claim_mismatch`) und Überläufe sperren weiterhin.
+
+### Begleitend (außerhalb des Plugin-Pakets): `emotional-state-injector` 1.1.0
+
+- **Keine sichtbare Stimmungszeile mehr in den Antworten.** Der Injector
+  verlangte bisher `<i>Stimmung: 😊 fröhlich · hoch · ↗</i>` als erste Zeile
+  jeder Antwort. Jetzt färbt die Stimmung nur Ton, Duktus und Wortwahl, wird
+  nicht unaufgefordert erwähnt und ist auf Nachfrage („wie ist deine
+  Stimmung?") ehrlich benennbar (Label, Nuancen, Intensität, Tendenz stehen
+  als Grundlage im Hintergrundblock). Deckt sich mit der PLUR1BUS-Ton-Direktive
+  (`lib/mood-style-directive.js`), die die Stimmung schon vorher nicht als
+  Label nennen ließ. Die Dateien liegen unter
+  `.openclaw/extensions/emotional-state-injector/`; die aktive Kopie unter
+  `~/.openclaw/extensions/emotional-state-injector/` muss von Hand nachgezogen
+  werden, wirksam nach Gateway-Neustart.
+
+## [7.12.38] — 2026-09-10
+
+### Geändert
+
+- **Persona-Evolution täglich statt wöchentlich, mit Bremsen und Belegen.**
+  Bis 7.12.37 lief `persona-evolve` sonntags, bekam nur den aktuellen Block
+  („schlage GENAU EINE kleine Änderung vor") und nutzte die Antwort-Ergebnisse
+  ausschließlich als Tor — das Modell sah nie, was beim Nutzer ankam. Jetzt:
+  Cron täglich 04:15 (je Agent um fünf Minuten versetzt; Override über
+  `personaVoice.cron`/`personaVoice.timezone` wie beim Skill-Miner), zwei
+  Bremsen mit Zustand in `.adaptive-learning/persona-evolution-state.json`:
+  frühestens `personaVoice.minDaysBetween` Tage (Default 2) nach der letzten
+  Änderung und nur mit mindestens `personaVoice.minOutcomes` (Default 10)
+  NEUEN echten Outcomes seit der letzten Änderung, davon > 50 % positiv.
+  Heartbeat-Turns („Read HEARTBEAT.md …", immer `continued_topic`) zählen
+  nicht mehr — sie waren 12 von 49 Wochen-Outcomes bei main und alle 50 bei
+  heisenberg. Das Modell sieht den geschützten Seed, die nummerierten
+  gelernten Zeilen und je bis zu sechs positive und negative Gesprächsbelege
+  (Frage, Antwort, Reaktion des Nutzers) und antwortet mit `ADD: - …`,
+  `REPLACE <n>: - …` oder `NONE`; eine nackte `- …`-Zeile gilt weiter als
+  ADD, ein REPLACE auf eine ungültige Nummer wird zu ADD, der Seed ist
+  unerreichbar. `NONE` verbraucht die Belege, setzt aber keine Zeit-Bremse;
+  ein Marker, der schon im Block steht, ebenso (`duplicate_marker`).
+  Ergebnisobjekt nennt `action`, `outcomes`, `positive`, `negative`,
+  `replacedIndex`, bei `too_soon` `nextEligibleAt`.
+- **Verwalteter Block darf 24 statt 12 Zeilen halten** (`personaVoice.maxBullets`,
+  min. 6). Zwölf zählte den Seed mit (7–8 Zeilen), es blieben vier bis fünf
+  gelernte Zeilen, die bei täglicher Evolution binnen zwei Wochen rotiert
+  wären. Der Deckel der injizierten Direktive folgt daraus (Zeilen × 130 + 80,
+  Default 3200; `personaVoice.maxDirectiveChars` überschreibt weiterhin).
+- **Cron-Migration:** bestehende Jobs mit genau der ausgelieferten
+  Wochen-Kadenz (`15 4 * * 0`, `20 4 * * 0`, `25 4 * * 0`, …) werden beim
+  nächsten Setup-Lauf (Gateway-Start nach dem Update bzw.
+  `scripts/setup-feature-crons.mjs`) auf die tägliche Kadenz gesetzt;
+  Operator-Ausdrücke bleiben unangetastet. Der Persona-Cron trägt weiterhin
+  keine Zeitzone (lokale Zeit), ein ungültiger Override lässt den Job aus.
+- `persona-evolve` liest 300 statt 200 Log-Einträge (Heartbeats werden erst
+  im Job gefiltert).
+
+## [7.12.37] — 2026-09-10
+
+### Behoben
+
+- **Persona-Voice: die injizierte Stimm-Direktive wurde bei 400 Zeichen
+  abgeschnitten.** Der Deckel stammte aus der Zeit mit drei Seed-Bullets;
+  seit der verwaltete Block bis zwölf Zeilen wachsen darf, sah das Modell bei
+  allen drei Agenten nur die ersten drei bis vier Zeilen (Bernhardine 686
+  Zeichen, 7 Bullets, 3 sichtbar: Anrede, „Wahrheit zuerst", Ironie und die
+  Kaffee-Marotte fehlten; Bernd 643/6/4; Heisenberg 801/7/3). Jede
+  Weiterentwicklung hängt als neue Zeile am Ende — also immer im
+  abgeschnittenen Teil. Deckel jetzt 1600 Zeichen (zwölf Zeilen zu ~130),
+  konfigurierbar über `personaVoice.maxDirectiveChars` (min. 200); der
+  Direktiven-Cache berücksichtigt die Grenze (bisher prägte der erste Aufruf
+  den Text für alle folgenden).
+- Hintergrund zur Wochen-Evolution: die Cron-Läufe vom 06.09.2026 scheiterten
+  noch am fehlenden Workspace im Cron-Pfad (behoben in 7.12.9); der nächste
+  Lauf ist Sonntag 04:15/04:20/04:25, die Hürde (≥ 10 Antwort-Ergebnisse in
+  7 Tagen, > 50 % positiv) nehmen Bernd (89 %) und Bernhardine (65 %).
+
+## [7.12.36] — 2026-09-10
+
+### Behoben
+
+- **Dispatch-Ticket erreicht den Prompt-Hook: Register prozessweit statt je
+  Plugin-Instanz.** OpenClaw 2026.9 legt je Agenten-Lauf eine neue
+  Plugin-Instanz an (`register()` lief am 10.09.2026 60-mal, zweimal je
+  Turn; 15:28:57 mitten in Bernds Turn). Die Dispatch-Beobachtung lief in der
+  Gateway-Instanz, der Prompt-Hook des Laufs fragte das leere Register der
+  neuen Instanz (`claim:no_ticket … pending=0`); das liegen gebliebene Ticket
+  lief ab und markierte die Session (`observe:session_tainted`). Ticket-
+  Register, Reply-Outcome-Warteschlange und Neo-Worker-Laufzeit sind jetzt
+  Einzelstücke je Prozess (`lib/process-singleton.js`, versionierte
+  `Symbol.for`-Schlüssel). Nebeneffekte: der Kick nach dem Recall erreicht
+  die Warteschlange (bisher immer erst die Rückfallfrist, `waitMs=10003`),
+  und es gibt einen Worker-Thread je Prozess statt je Instanz (5
+  WorkerThreads bei 4 Instanzen).
+
+## [7.12.35] — 2026-09-10
+
+### Diagnose
+
+- **reply_dispatch: Registrierung und Aufrufe im Log.** Auf 7.12.34 erschien
+  für vier Text-Turns keine Handler-Zeile und der Anspruch meldete
+  `pending=0`; im Host-Code war kein Gate zu finden (Hook-Name gültig, keine
+  Konversations-/Prompt-Sperre, Dispatch-Art berechtigt, keine
+  Permission-Einschränkung in Session oder Config). Der Handler loggt jetzt
+  jeden Aufruf (`memory-turn-routes: reply_dispatch handler invoked #n
+  dispatchKind=…`), die Registrierung ihr Ergebnis, und er wird explizit für
+  die Dispatch-Arten `agent` und `acp` angemeldet.
+
+## [7.12.34] — 2026-09-10
+
+### Behoben
+
+- **Ticket-Diagnose zeigt Beobachtung und Anspruch getrennt.** 7.12.33 nannte
+  nur den letzten Ausgang; der Anspruch überschrieb den der Beobachtung
+  (Bernd, 10.09.2026 14:27: `claim:no_ticket … pending=0`, ohne dass sichtbar
+  war, warum kein Ticket entstand). `ticket=` trägt jetzt beide Stufen
+  (`observe:…|claim:…`); der `reply_dispatch`-Handler loggt jeden
+  Nicht-Kommando-Ausstieg auf Info mit Ereignis- und Kontextfeldnamen.
+
+## [7.12.33] — 2026-09-10
+
+### Behoben
+
+- **Dispatch-Ticket: der Fallback nennt jetzt den Grund.** Auch nach 7.12.32
+  fiel ein einfacher Text-Turn (Bernd, 10.09.2026 13:30) mit `reason=ticket`
+  zurück, ohne Warnung aus der Beobachtung. Beobachtung und Anspruch merken
+  sich jetzt je Session ihren letzten Ausgang (`tail_dispatch`,
+  `command_turn:<kind>/<source>`, `command_source_present`, `empty_body`,
+  `slash_command`, `incomplete_identity`, `run_already_pending`,
+  `session_tainted`, `registered:run|session`; beim Anspruch `no_ticket`,
+  `ticket_expired`, `ticket_not_head`, `ticket_verify_failed`, …). Die
+  Fallback-Warnung `memory-request-context.hook` trägt ihn als `ticket=`,
+  der `reply_dispatch`-Handler loggt ihn auf Debug samt den vorhandenen
+  Kontextfeldern (nur Namen).
+- **LanceDB-Optimize-Budget 240 s statt 600 s.** Der Feature-Cron-RPC bricht
+  nach 540 s ab; `consolidate-daily` trägt davor noch Kompaktierung, Decay
+  und Graph-Prune. Ein längerer Lauf hätte den Cron als fehlgeschlagen
+  gemeldet, obwohl er weiterlief. Per `dailyConsolidation.lancedbOptimize.timeoutMs`
+  weiter einstellbar.
+
+## [7.12.32] — 2026-09-10
+
+### Behoben
+
+- **Dispatch-Ticket auch für Sprach- und Bildnachrichten.** Die Beobachtung
+  von `reply_dispatch` verlangte einen vorhandenen `CommandBody` unter 4000
+  Zeichen; Fotos ohne Bildunterschrift (leerer Text) und lange Sprachnachrichten
+  (Transkript) erzeugten kein Ticket (`[memory-turn-routes.command-body]
+  failed: invalid_command_body`), und der Prompt-Hook fiel mit `reason=ticket`
+  auf den unauthentifizierten Kontext zurück — erster Live-Nachweis nach
+  7.12.30 (Eva, 10.09.2026 12:47: Provider und Konto passten, Ticket fehlte).
+  Der Text dient nur der Frage, ob ein `/`-Kommando vorliegt: es gilt jetzt
+  der erste vorhandene Text aus `CommandBody`, `BodyForCommands`,
+  `BodyForAgent`, `Body`, `RawBody`, `Transcript`, ohne Längenpflicht; fehlt
+  jeder Text, ist es kein Kommando.
+
+## [7.12.31] — 2026-09-10
+
+### Hinzugefügt
+
+- **Nächtliche LanceDB-Kompaktierung in `consolidate-daily`.** Jede
+  Zeilenänderung (Memory-Dynamik, Abrufzähler, Emotion) legt in LanceDB ein
+  neues Fragment und eine neue Version an; `optimize()` war nur über den
+  Dashboard-Schalter erreichbar und lief nie automatisch. Stand 10.09.2026:
+  main 352 Fragmente (Median 1 Zeile, 1350 Versionen), Bernhardine 845
+  Fragmente (2519 Versionen). Auf einer Kopie von main: Vektorsuche 191 → 23
+  ms, Update 734 → 74 ms nach einem `optimize()` (352 → 12 Fragmente, 8 s);
+  live auf main am 10.09. 12:35 identisch (66 MB Versionen freigegeben,
+  Zeilenzahl unverändert). `consolidate-daily` ruft jetzt je Agent
+  `optimizeTable` mit `cleanupOlderThan = jetzt − keepVersionsHours` auf und
+  loggt `lancedbOptimize` mit Fragmenten vor/nach, entfernten Versionen,
+  Bytes und Dauer. Konfiguration `dailyConsolidation.lancedbOptimize`:
+  `enabled` (Default an), `keepVersionsHours` (24), `timeoutMs` (600000;
+  seit 7.12.33 240000, siehe dort).
+- `db-adapter.optimizeTable` liefert Fragment-Statistik vor/nach dem Lauf
+  (`table.stats()`) und die Dauer; das Timeout ist per Option setzbar.
+
+## [7.12.30] — 2026-09-10
+
+### Behoben
+
+- **Hook-Identität gegen OpenClaw 2026.9 (kein User-Principal in DM-Turns).**
+  Seit 2026.9 trägt ein Session-Eintrag Kanal, Konto, Ziel und Thread unter
+  `entry.delivery` (`route`, `context`, `origin`); die Felder
+  `deliveryContext`/`origin`/`lastChannel`/`lastAccountId`/`lastTo`/
+  `lastThreadId` fehlen. Der Prompt-Hook prüfte nur die alten Felder, fand
+  keinen Kanal und fiel in **jedem** DM-Turn mit `reason=provider` auf den
+  unauthentifizierten Basis-Kontext zurück (Log 10.09.2026: 12 Warnungen, alle
+  DM-Turns). Folge: Erinnerungen im user-Scope (Träume, `ownerUserId`) wurden
+  nie erinnert (`acl.user.missing_principal`). Beide Formen werden jetzt
+  gleichwertig gelesen, Widersprüche bleiben ein Fehler. Liefert der Host kein
+  `messageProvider`, gilt der Provider des kanonischen Session-Keys.
+- **Fallback-Warnung mit Diagnose.** `memory-request-context.hook` nennt jetzt
+  Schritt, Hook-Provider, Entry-Provider, Entry-Konto, Dauer des
+  Session-Eintrag-Lesens und Gesamtdauer. Dauert das Lesen des Eintrags (Host,
+  synchron aus der Agenten-SQLite) über 1 s, kommt eine eigene Warnung.
+- **Reply-Outcome-Tracking blockierte den Prompt-Hook bis zum Host-Timeout.**
+  Der Host führt die `before_prompt_build`-Handler eines Plugins nacheinander
+  aus, jeder mit eigenem 15-s-Timeout. Das Reply-Outcome-Tracking lief als
+  erster Handler und wartete auf bis zu zwölf sequenzielle LanceDB-Updates
+  (`getById` + `update` je erinnerter Erinnerung, gemessen ~1,2 s je Update
+  auf den fragmentierten Tabellen). Der Recall-Handler startete erst nach
+  dessen Timeout: jeder DM-Turn mit positivem oder negativem Feedback kostete
+  15 s extra (Log 09./10.09.2026: zehn Timeouts, jeder mit einem Outcome mit
+  10–12 Memory-IDs zur selben Sekunde; der neutrale Fall blieb ohne Timeout).
+  Jetzt bleiben Klassifikation und Log-Dateien im Hook; die DB-Arbeit geht in
+  eine serielle Warteschlange je Agent (`lib/deferred-dynamics-queue.js`),
+  die nach dem Recall des Turns anläuft, spätestens nach
+  `replyOutcomeTracking.dynamicsFallbackDelayMs` (10 s); Rückstau-Deckel
+  `dynamicsMaxBacklog` (20). Logzeilen: `reply-outcome: completed outcomes=…
+  memoryIds=… syncMs=… queued=…` und `reply-outcome: dynamics applied
+  entries=… waitMs=… ms=…` (Info ab 2 s).
+- **Prompt-Recall: Phasenzeiten und Budget.** Neue Logzeile
+  `plur1bus-neo: recall prelude total=… identity=… hookRecord=… window=…
+  embed=… global=… lanes=… authenticated=yes|no` (Info ab 2 s, sonst Debug).
+  Die Anfrage-Einbettung läuft unter Budget `neo.recall.global.embedTimeoutMs`
+  (Default 4000 ms); danach geht es ohne Vektor weiter. Der Hook-Zähler im
+  Neo-Store wird asynchron geschrieben (`recordHookAsync`), statt mit
+  `Atomics.wait` bis zu 5 s im Main-Thread auf den Workspace-Lock zu warten.
+  Das Lesen des Session-Eintrags (Host, synchron aus der Agenten-SQLite) ist
+  mit 10–90 ms gemessen unverdächtig; es wird trotzdem gemessen und ab 1 s
+  gemeldet.
+
+### Bekannt, nicht Teil dieses Releases
+
+- Die LanceDB-Tabellen sind stark fragmentiert (main 1577 Fragmente / 1349
+  Versionen, Bernhardine 3109 / 2518); `optimize()` ist nur über den
+  Dashboard-Schalter erreichbar und lief nie automatisch. Das treibt die
+  ~1,2 s je Update und den 5–8-s-Recall. Vorschlag: nächtlicher `optimize`
+  je Partition in `consolidate-daily` (7.12.31).
+- `feedback-log.jsonl` (main 5,4 MB, Bernhardine 4,3 MB) wird je Turn im
+  Main-Thread komplett gelesen und neu geschrieben: gemessen 0,2–0,3 s.
+
+## [7.12.29] — 2026-09-10
+
+### Behoben
+
+- **Memory-Decay lief für keine Agenten-Partition.** Der tägliche Decay-Scan
+  (`applyDailyDecayToAll`) las die ganze Tabelle ohne Scope-Filter. Hinter
+  dem partitionsgebundenen ACL-Guard brach er bei der ersten Fremd-Scope-Zeile
+  (Träume im user-Scope, alte workspace-Zeilen) mit `ACL denied for query` ab —
+  bei allen drei Agenten, täglich (`[dynamics] failed to fetch rows for decay`).
+  Der Scan pusht jetzt die Partition als Where-Klausel (Scope plus Besitzer-
+  Prädikat, wie die Kompaktierung) und prüft jede Zeile zusätzlich in JS; ein
+  Where, das die Tabelle nicht versteht, fällt auf den JS-Filter zurück, eine
+  ACL-Ablehnung nicht. consolidate-daily übergibt die freigegebene Partition.
+- **Kompaktierung: kein Where-Fallback bei ACL-Ablehnung.** `readPagedRows`
+  deutete jeden Wurf der gefilterten Abfrage als „Where nicht unterstützt" und
+  las die Tabelle ungefiltert neu — nach einer ACL-Ablehnung scheiterte das
+  garantiert an alten Fremd-Scope-Zeilen und riss die ganze Partition mit
+  (`consolidate-daily[bernhardine]: compaction agent-private threw: ACL denied
+  for query`, 10.09.2026 04:15). ACL-Fehler werden jetzt durchgereicht.
+- **ACL-Guard mit Diagnose.** Ablehnungen des partitionsgebundenen Guards
+  tragen `code: "PLUR1BUS_ACL_DENIED"`, `aclReason` und `rowId`, und der
+  Guard loggt Zeilen-ID, Scope, Besitzer, Grund, Operation und Partition
+  (`memory-lancedb-namespaced: ACL denied for query: id=… scope=… reason=…`).
+  Bisher stand im Log nur die Meldung ohne Zeile, was die Ursache der
+  Bernhardine-Kompaktierung offline nicht reproduzierbar machte.
+
+## [7.12.28] — 2026-09-10
+
+### Hinzugefügt
+
+- **Kandidaten-Metadatenindex `candidate-index.jsonl`.** Die globale Suche
+  (7.12.27) parste je Recall die komplette Kandidaten-JSONL (Bernhardine: 5000
+  Zeilen, 10 MB, rund 0,3 s auf dem Main-Thread) und sah nur, was der
+  5000-Zeilen-Cap noch enthielt — ein rollierendes Fenster von rund 2500
+  eindeutigen Kandidaten. Der Index hält je Kandidat eine schlanke Projektion
+  (Statement, Status, Sichtbarkeit, Herkunft, Zeiten; kein
+  `normalizedStatement`, kein Vektor; Bernhardine: 3,1 MB für 2845 Einträge),
+  wird bei jedem Kandidaten-Append im selben Write-Lock mitgeschrieben
+  (append-only, kein Zeilen-Cap) und beim Lesen inkrementell nachgeladen:
+  Prozess-Cache je Datei mit (Inode, Größe, mtime), unter gleicher Inode wird
+  nur der neue Tail geparst, angeschnittene Zeilen werden zurückgehalten.
+  Gemessen auf Bernhardines Store: erster Recall 0,35 s (Vollparse), danach
+  0,06–0,14 s je Recall, davon der Großteil das Laden der rund 1800 Vektoren
+  aus dem Sidecar.
+- **Horizont unabhängig vom Cap.** Der Index behält bis zu
+  `neo.recall.global.maxCandidates` (20 000) Kandidaten nach Revisionszeit;
+  die Kompaktierung des Vektor-Sidecars zählt Index-IDs als lebend. Kandidaten,
+  die aus dem 5000-Zeilen-Fenster der JSONL fallen, bleiben damit suchbar —
+  mit Text und Vektor.
+- **Kompaktierung** (jüngste Revision je ID, nur `candidate`/`active`/
+  `promoted`, kein injizierter Kontext, Cap nach Revisionszeit) läuft in
+  `consolidate-daily` vor der Sidecar-Kompaktierung (`candidateIndex` im
+  Log), in `pruneAll`, und automatisch, sobald die Datei doppelt so viele
+  Zeilen wie IDs trägt.
+- **Bootstrap und Self-Heal.** Fehlt der Index, entsteht er beim nächsten
+  Kandidaten-Append aus dem Journal; bis dahin läuft die Suche über das
+  Journal-Fenster (`index=missing` im Log). Je Append werden die letzten 50
+  Journalzeilen gegen den Index geprüft, damit Zeilen eines älteren
+  Plugin-Stands nachgetragen werden.
+- **Skript** `scripts/build-neo-candidate-index.mjs [--root] [--workspace]
+  [--rebuild] [--max-entries] [--dry-run] [--json]` legt die Indizes beim
+  Deploy an (mit gestopptem Gateway ausführen).
+- **Log:** `global candidate search … index=cached|tail:N|full|missing/<Zeilen>
+  ms=…`. Store-Methoden `readCandidateIndex`, `ensureCandidateIndex`,
+  `rebuildCandidateIndex`, `compactCandidateIndex`, `candidateIndexStats`.
+
+### Geändert
+
+- Treffer der globalen Suche sind Kopien der Index-Einträge (der Vektor wird
+  nur der Kopie angehängt); die Prozess-Cache-Einträge bleiben vektorfrei.
+- `scanned` in der Log-Zeile zählt jetzt Index-Einträge (IDs), nicht
+  Journalzeilen.
+
+## [7.12.27] — 2026-09-10
+
+### Hinzugefügt
+
+- **Suche über alle Neo-Kandidaten.** Der Neo-Recall bewertete bisher nur die
+  letzten 500 Kandidaten und 200 Verhaltenskarten. Jetzt läuft zusätzlich eine
+  Cosinus-Suche über den gesamten Bestand des Workspaces auf dem Vektor-Sidecar
+  (Brute-Force, ein Deskriptor; bei Bernhardine rund 2400 × 3072 float32,
+  gemessen 0,4–0,6 s je Recall, davon etwa 0,3 s für das Parsen der bis zu
+  5000 Kandidatenzeilen — der Bestand ist durch den 5000-Zeilen-Cap ein
+  rollierendes Fenster von rund 2500 eindeutigen Kandidaten). Vorfilter: Status `candidate`, `active` oder
+  `promoted`, nicht `stale`, ACL des Anfragenden; Mindest-Cosinus 0,35; Top-30;
+  Rezenz-Abschlag `sim × (0,85 + 0,15 × 0,5^(Alter/30 Tage))`. Die Treffer
+  konkurrieren danach mit dem Fenster in den bestehenden Lanes. Treffer, die
+  als LanceDB-Erinnerung im selben Prompt schon stehen (Token-Jaccard ≥ 0,8),
+  werden aus dem Neo-Block entfernt. Gilt für den Prompt-Recall und die
+  Korpus-Suche (`plur1bus.corpus`).
+- **Konfiguration** `neo.recall.global`: `enabled`, `topK`, `minSimilarity`,
+  `halfLifeDays`, `maxCandidates`, `dedupeThreshold` (Defaults im Normalizer).
+- **Log:** `plur1bus-neo: global candidate search scanned=… eligible=…
+  withVector=… hits=… topSim=… ms=…` je Recall, plus `dropped N hit(s)` bei
+  Dedupe. Nachweis über den Recall-Trace, nicht über Gefühl: der Mehrwert liegt
+  bei Aussagen, die nie zu Erinnerungen wurden — das Langzeitgedächtnis in
+  LanceDB sucht schon über alles.
+- `store.readVectors(ids)` liest viele Sidecar-Vektoren mit einem Deskriptor.
+
+### Behoben
+
+- **Neo-Worker-Warm-up greift jetzt für jede Plugin-Instanz.** Der Warm-up bei
+  `gateway_start` (7.12.24) erreichte nur die erste Instanz; Instanzen, die der
+  Host später je Agent anlegt, trafen agent_end mit kaltem Worker (`spawnMs`
+  592 trotz Warm-up). Der Worker wird jetzt zusätzlich zu Beginn des
+  Prompt-Recalls angeworfen, der vor agent_end läuft.
+
+## [7.12.26] — 2026-09-10
+
+### Geändert
+
+- **Vektor-Sidecar für den Neo-Store.** Vektoren aus Journal, Kandidaten und
+  Verhaltenskarten liegen nicht mehr als JSON-Zahlenliste in der Zeile (rund
+  64 kB je Vektor bei 3072 Dimensionen), sondern als rohes Float32 in
+  `vectors.<gen>.f32` mit Byte-Offsets in `vector-index.json` je Workspace.
+  Verlustfrei: die bisherigen Werte sind bitgenau float32. Bei Bernhardine
+  schrumpfen 200 MB JSONL auf wenige MB Metadaten plus rund 37 MB Sidecar;
+  der Recall liest die benötigten Vektoren per Offset statt 32 MB Ziffern zu
+  parsen, und Cap-Prüfungen der JSONL-Dateien werden trivial.
+- **Lesen bleibt kompatibel:** Zeilen mit eingebettetem Vektor werden weiter
+  gelesen; Datensätze ohne Inline-Vektor bekommen einen memoisierten, nicht
+  enumerierbaren Getter `embedding`, der den Vektor bei Bedarf aus dem Sidecar
+  holt. `JSON.stringify` und Spreads tragen den Vektor nie mit.
+- **Drain** schreibt erst den Vektor (Datei, dann Index atomar), dann die
+  Statuszeile mit `embeddingStore: "sidecar"` und `embeddingDims`; ein
+  Inline-Vektor alter Zeilen wird dabei abgestreift.
+- **Kompaktierung:** `consolidate-daily` ruft `compactVectors()` und meldet
+  `vectorCompaction`; verwaiste Slots (Re-Embeddings, gecappte Zeilen) landen
+  in einer neuen Generation, der direkte Vorgänger bleibt bis zur nächsten
+  Kompaktierung für Leser mit altem Index liegen. `pruneAll` kompaktiert mit.
+- **Migration:** `node scripts/migrate-neo-vectors-sidecar.mjs [--root …]
+  [--workspace …] [--dry-run] [--json]` verschiebt Inline-Vektoren je Workspace
+  ins Sidecar (letzte Zeile je ID gewinnt), liest jeden zurück und prüft ihn
+  bitgenau, erst dann werden die JSONL-Dateien ohne `embedding` neu
+  geschrieben. Legacy-Workspace-Migration (`neo workspaces migrate`) kopiert
+  keine Sidecars; solche Datensätze bleiben ohne Vektor, bis sie neu
+  eingebettet werden.
+
+## [7.12.25] — 2026-09-09
+
+### Behoben
+
+- **Erster agent_end nach jedem Gateway-Neustart brauchte 10–17 s im
+  Neo-Worker.** Die `timings` aus 7.12.24 zeigten es (`captureMs 16798`, alles
+  andere im Millisekundenbereich), offline reproduziert mit Bernhardines Store:
+  Der Cap-Schutz in `appendJsonl` merkt sich die nächste Prüfschwelle nur im
+  Prozess. Nach einem Neustart lief der erste Append deshalb wieder in den
+  Tail-Read über die 154-MB-Kandidatendatei und den anschließenden Vollrewrite
+  auf 5000 Zeilen. Der Stand liegt jetzt in einem Sidecar `<datei>.cap.json`
+  (Schwelle plus Dateigröße); schrumpft die Datei unter die notierte Größe
+  (Prune, Merge), wird neu geprüft. Der erste Turn nach dem Deploy von 7.12.25
+  zahlt die Prüfung ein letztes Mal, danach ist der Neustart-Effekt weg.
+
+## [7.12.24] — 2026-09-09
+
+### Behoben
+
+- **Reminder-Schleife aus der eigenen Nudge.** Die `<reminder-nudge>` zitiert
+  den Reminder-Text samt Zeitfloskel; landete sie im Capture, wurde daraus
+  jede Runde ein neuer Reminder („in 1 minute“, 23 Stück an einem Tag bei
+  Bernhardine). Der Nudge-Block ist jetzt injizierter Kontext (wird vor dem
+  Capture gefiltert), `planReminderExtraction` entfernt ihn zusätzlich aus dem
+  Text und verwirft Reminder, die nur aus der Zeitfloskel bestehen
+  (`reason: no_topic`).
+- **agent_end-Watermark nach Kompaktierung.** Sinkt die Nachrichtenzahl unter
+  die gespeicherte Marke (z. B. 274 → 221), wird die Marke zurückgesetzt statt
+  den Nachbearbeitungsblock (Session-Digest, Light-Dream, Insights) bis zum
+  Wiedererreichen der alten Länge zu überspringen.
+- **Graph-Kanten auf verschwundene Erinnerungen.** `consolidate-daily` entfernt
+  jetzt Kanten, deren Endpunkte in der Agententabelle nicht mehr aktiv sind
+  (main: 800 von 5004, bernhardine: 73 von 5026), sowie die schwachen Altkanten
+  aus `shouldPrune`. Episode-Anker werden gegen `episodes.jsonl` aufgelöst,
+  Kanten in fremde Scopes bleiben unangetastet, Datensätze werden wörtlich
+  zurückgeschrieben (`rewriteGraphEdges`). Ergebnis in der Log-Zeile als
+  `graphPrune`.
+- **Operator-Pfad antwortete auf Englisch.** `openclaw plur1bus-command` setzt
+  jetzt `ctx.lang` aus `--locale <code>` oder der Plugin-Option `language`;
+  der RPC akzeptiert das optionale Feld `locale` (streng validiert).
+
+### Geändert
+
+- **Neo-Worker: Warm-up und Zeitmessung.** Der erste agent_end nach einem
+  Gateway-Neustart brauchte 8–18 s bis „worker captured“ (sonst 0,4–1 s);
+  offline lief derselbe Lauf in 0,2 s. Der Worker-Thread wird jetzt 20 s nach
+  `gateway_start` vorab gestartet, und die Log-Zeile trägt `timings`
+  (`storeMs`, `captureMs`, `drainMs`, `workerMs`, `queueWaitMs`, `spawnMs`,
+  `roundTripMs`), damit der nächste Kaltstart die Ursache zeigt statt einer
+  Vermutung.
+- **Neo-Store räumt Rewrite-Leichen weg.** `<datei>.<pid>.<ts>.tmp` älter als
+  15 Minuten (abgebrochene capJsonl/pruneAll-Rewrites; bernhardine hatte zwei
+  mit 388 MB) werden beim Öffnen des Stores gelöscht.
+
+## [7.12.23] — 2026-09-09
+
+### Geändert
+
+- **Kern-Erinnerungen bekommen im Cron `emotion-refine` immer Tier 3.** Neue
+  Option `emotion.t3.refineImportanceMin` (Default 0,9, Werte über 1 schalten
+  die Regel ab): Im Modus `deferred` werden Erinnerungen ab dieser Wichtigkeit
+  auch dann auf `emotionStatus = pending_t3` gesetzt, wenn Tier 1/2 sicher ist.
+  Hintergrund: Bei Bernhardine standen 26 von 29 hochwichtigen Erinnerungen
+  der letzten Woche auf „neutral“; die emotionale Intensität wirkt aber auf
+  Recall-Gewicht und Zerfall, und das Lexikon übersieht Ironie oder Sorge im
+  Sachton. Kosten: wenige zusätzliche LLM-Aufrufe am Tag, ausschließlich im
+  Cron. Gilt für Auto-Capture, Merge-Pfad und `memory_store`-Tool.
+
+## [7.12.22] — 2026-09-09
+
+### Geändert
+
+- **Emotions-Tier-3 aus dem Turn in den Cron `emotion-refine` verlegt.** Der
+  Capture-Pfad rief bisher je neu gespeicherter Erinnerung den LLM-Klassifizierer
+  (Tier 3) auf, sobald Tier 1/2 unter der Eskalationsschwelle lagen — 4–16 s je
+  Erinnerung, mehrere je Turn, und damit der größte Posten im agent_end-Budget.
+  Seit 7.12.22 bewertet der Capture-Pfad (Auto-Capture, Merge-Pfad und das
+  `memory_store`-Tool) neue Erinnerungen nur noch lexikalisch (Tier 1/2),
+  speichert das Ergebnis vorläufig und setzt Zeilen unter der Schwelle auf die
+  neue Spalte `emotionStatus = pending_t3`. Der Feature-Cron
+  `plur1bus emotion-refine` (stündlich, ohne Zustellung, je Agent) bessert diese
+  Zeilen mit Tier 3 nach (`/plur1bus internal emotion-refine`; max. 100 Zeilen
+  und 240 s je Lauf; bei drei Provider-Fehlern am Stück bricht der Lauf ab und
+  die Zeilen bleiben `pending_t3`). Welche Erinnerungen Tier 3 bekommen, ändert
+  sich nicht — nur der Zeitpunkt. Die Stimmungszeile der Antwort ist nicht
+  betroffen, sie entsteht im Recall aus der aktuellen Nachricht.
+- **Neue Option `emotion.t3.captureMode`** (`deferred` = Default, `inline` =
+  altes Verhalten). Ein fest verdrahteter Tier (`emotion.tier != auto`) oder ein
+  abgeschaltetes Tier 3 lassen den Capture-Pfad ebenfalls unverändert.
+- **Installer:** `scripts/setup-feature-crons.mjs` (und der automatische Lauf
+  beim Gateway-Start) plant `plur1bus emotion-refine <agent>` für jeden
+  gebundenen Agenten, solange `emotion.t3.enabled` nicht `false` und
+  `captureMode` nicht `inline` ist — jetzt bis zu zehn Jobs je Agent.
+- **Schema:** neue Spalte `emotionStatus` (`final` | `pending_t3`); Bestand
+  wird bei der Lazy-Migration als `final` angelegt, kein Backfill.
+- `emotionScoreToLegacy` liefert zusätzlich `confidence` und `tierUsed`.
+
+## [7.12.21] — 2026-09-09
+
+### Behoben
+
+- **Die Log-Zeile `plur1bus-neo: worker captured turns=N` zählte den ganzen
+  hereingereichten Verlauf, nicht das Neue.** Nach dem Turn-ID-Fix in 7.12.20
+  stand dort weiter `turns=183`, obwohl der Lauf zwei Turns geschrieben hatte —
+  genau die Zahl, an der man den alten Fehler erkannt hätte. `captureNeoFromAgentEnd`
+  liefert jetzt zusätzlich `appended` (was der Lauf wirklich neu geschrieben
+  hat), der Worker zählt das als `turns/candidates/reactions/behaviorCards` und
+  führt den Verlauf getrennt als `transcript`. Die Zeile lautet jetzt
+  `worker captured new turns=2, candidates=4, reactions=1, behaviorCards=0
+  (transcript turns=183)`.
+
+## [7.12.20] — 2026-09-09
+
+### Behoben
+
+- **Auto-Capture journalisierte bei jedem `agent_end` den ganzen Verlauf neu
+  und stellte ihn neu in die Embedding-Warteschlange.** Die Turn-Identität
+  enthielt `sessionId` (wechselt beim Host pro Lauf/Kompaktierung) und
+  `turnIndex` (verschiebt sich bei jeder Kompaktierung). Bernhardines Journal:
+  5273 Einträge, 258 verschiedene Inhalte, 8 Session-IDs in den letzten 800
+  Zeilen; pro Turn ~240 neue Queue-Einträge (Turns, Kandidaten,
+  Verhaltenskarten), Rückstau 610 → 1494 an einem Nachmittag. Die
+  Turn-ID bildet sich jetzt aus Sitzungsschlüssel, Rolle, normiertem Inhalt,
+  Tool-Call-IDs und der Ordnungszahl gleicher Nachrichten im Verlauf —
+  stabil über Läufe und Kompaktierungen; `sessionId`/`turnIndex` bleiben als
+  Felder erhalten.
+- **Der Hook kehrte bei Rückstau erst nach ~62 s zurück** (Host-Grenze 60 s):
+  der Embedding-Drain im `finally` lief bis zum Worker-Abbruch (55 s) und
+  brauchte danach noch den laufenden Embed-Aufruf. Bei Bernhardine 26
+  Worker-Timeouts und 22 Host-Timeouts an einem Tag, Bernd (leere Queue) keine.
+  Der Drain bekommt jetzt `deadlineMs` = Rest des Capture-Budgets minus 10 s
+  Marge und startet unter 3 s Rest gar nicht.
+- **Neuer Feature-Cron `embedding-drain`** (03:20 Europe/Berlin, 3 min je
+  Agent gestaffelt, model-frei, nur mit Neo) als geplanter Abnehmer für das,
+  was der knappe Hook-Drain liegen lässt. Installer und Feature-Cron-RPC
+  kennen ihn.
+- **`tests/auto-capture-batch.test.js` scheiterte in zwei Fällen und hing.**
+  Seit dem Fail-closed für den Incognito-Klassifizierer braucht jede
+  Capture-Fixture den Klassifizierer-Stub; fünf `register(api)`-Aufrufe
+  hatten keinen, die Turns wurden vor dem Embedding übersprungen, und der
+  Abbruch-Test wartete auf einen Embed, der nie begann. Jetzt 9/9 in 4 s.
+
+### Migration
+
+- **Alt-Generationen der Neo-Verzeichnisse zusammengeführt** (`main`,
+  `workspace`, `workspace--dc57…` → `main--1802…`; `bernhardine`,
+  `workspace-bernhardine`, `workspace-bernhardine--7722…` → `bernhardine--0279…`;
+  `heisenberg`, `workspace-heisenberg`, `workspace-heisenberg--3be0…` →
+  `heisenberg--0da4…`; `faxpert`, `workspace-faxpert` → `workspace-faxpert--983d…`)
+  über `migrateNeoWorkspaces`, danach Inhalts-Dedupe der Turn-Journale (die
+  Alt-Generationen waren mit demselben Bug entstanden: 4–10 % verschiedene
+  Inhalte), Bereinigung der Embedding-Warteschlange auf verschwundene Ziele
+  und Neuaufbau des Record-Index. Alt-Verzeichnisse ins Backup verschoben.
+  Zweiter Schritt: `reaction-ledger` und `behavior-cards` per Inhalt
+  dedupliziert (Bernd 6680 → 1198 / 3860 → 685, Bernhardine 5000 → 281 /
+  5051 → 203), `sourceSignals` auf behaltene Reaktions-IDs umgebogen,
+  Queue-Einträge entfernter Ziele entfernt.
+- **Live-Nachweis (Bernhardine, erster und zweiter Turn nach dem Deploy):**
+  einmalige Welle von 184 Turns durch das neue ID-Schema, danach +2 Turns
+  pro Turn statt +184; Hook nach ~53 s zurück statt ~62 s, kein Timeout;
+  Hook-Drain stoppt planmäßig an seiner Frist. Bekannt: die Log-Zeile
+  `plur1bus-neo: worker captured turns=N` zählt weiterhin den ganzen
+  hereingereichten Verlauf, nicht das Neue — als Indikator irreführend.
+
+## [7.12.19] — 2026-09-09
+
+### Behoben
+
+- **Chat-`status`/`doctor`/`curation` lasen einen anderen Neo-Store als die
+  Hooks — jetzt denselben, ohne Datenumzug.** Der Kommando-Pfad
+  (`runPlur1busCommand`) schlüsselte den Neo-Store seit Juli über den
+  ACL-Workspace-Principal (`workspace:v1:main`), die Hooks
+  `before_prompt_build`/`agent_end` über Pfad-Map → Alias → Basename
+  (`main`). Die Principal-Verzeichnisse waren leer, die Hook-Verzeichnisse
+  hielten alles (201 MB bei Bernd), und jeder Record trägt ohnehin
+  `workspaceKey: "main"`. Im Chat hieß das: `status` mit `turns: 0, hooks: {}`,
+  `doctor` mit „agent_end has not fired in this workspace yet", `curation`
+  ohne Kandidaten — obwohl alles lief. Neu: der Kommando-Pfad gibt nur noch
+  den vom Host aufgelösten Workspace-Pfad in die Auflösung, keinen Schlüssel;
+  damit landet er exakt im Hook-Store. Der rohe Chat-`workspaceKey` bleibt
+  draußen — die Tests `b13-sensitive-read-auth` und `plur1bus-internal-auth`
+  prüfen jetzt genau diese Invariante („Kommando und Hook landen im selben
+  Store, nie im vom Chat benannten"). Die leeren Principal-Verzeichnisse
+  (`workspace_v1_*`, `workspace-dir_v1_*`) sind Artefakte und können weg;
+  `acl-owner-v1_*` (Träume, Musteranalyse, Run-State) ist eine eigene
+  Owner-Partition und bleibt.
+
+## [7.12.18] — 2026-09-09
+
+### Hinzugefügt
+
+- **`plur1bus-command`: Chat-Kommandos als Operator ausführen.** Die 26
+  Chat-Kommandos waren nur über einen angebundenen Kanal erreichbar — ein Cron
+  mit `--message "/…"` geht ans Modell, `openclaw message` sendet nur als Bot.
+  Sie ließen sich damit weder automatisiert ausführen noch prüfen; am
+  09.09.2026 musste ein Mensch jeden Befehl per Telegram tippen. Neu: der
+  Gateway-RPC `plur1bus.command.run` (Scope `operator.write`, wie der
+  Feature-Cron-RPC) und das CLI `openclaw plur1bus-command --agent <id>
+  --session <key> "/…"`. Die Identität kommt aus der benannten
+  Direktchat-Sitzung — derselbe Kontext, den der Chat-Pfad baut (Nutzer,
+  Kanal, Konto, Gesprächsprinzipal). Besitzer-ACL und die zweistufige
+  Token-Bestätigung von `/correct` und `/forget` greifen exakt wie im Telegram;
+  nur Direktsitzungen des angegebenen Agenten werden akzeptiert.
+
+### Behoben
+
+- **`/correct` und `/forget` fanden ihr Ziel auch bei wörtlichem Zitat nicht.**
+  Die Zielsuche gilt nur als eindeutig, wenn der beste Treffer den zweiten um
+  mehr als 0,15 übertrifft. Die Vektorsuche bettet die Suchphrase aber als
+  kurzes Fragment ein; gegen ihren 1600-Zeichen-Ursprung erreicht das nur
+  einen mäßigen Score, und kurze generische Zeilen („Huhu, Diggi!",
+  Stimmungseinträge) liegen dann binnen 0,15. Am 09.09.2026 lieferte ein
+  Zitat, das in genau **einer** Erinnerung vorkommt, zweimal hintereinander die
+  Auswahlliste — und die Liste selbst ist nicht bedienbar, weil ihre Buttons
+  bewusst verworfen werden und der Hinweis nur „Suche schärfen" lautet. Damit
+  war die Zweistufigkeit beider Kommandos in einem gewachsenen Speicher
+  praktisch unerreichbar. Neu: enthält genau eine Kandidatin die Suchphrase
+  wörtlich (ab 12 Zeichen, unempfindlich gegen Groß-/Kleinschreibung,
+  Anführungszeichen und Leerraum), gilt sie als eindeutig. Wer eine Erinnerung
+  zitiert, meint sie. Und weil Menschen selten wörtlich zitieren, sondern
+  zusammenfassen („mein Mund ist voller Kreidestaub und Diggi hält einen Kuchen
+  mit 78,1 Kerzen" — über drei Sätze eines Traums hinweg, nach dem wörtlichen
+  Fix immer noch die Liste), greift ein zweiter Tie-Breaker über Wortabdeckung:
+  tragen mindestens 80 % der markanten Suchwörter (ab vier Zeichen, mindestens
+  drei) in genau einer Kandidatin und in jeder anderen mindestens 30 Punkte
+  weniger, ist auch das eindeutig. Zwei ähnlich gut abdeckende Kandidatinnen
+  bleiben eine Auswahlliste.
+- **`/correct confirm` scheiterte weiter an BigInt — der Fix aus 7.12.17 saß
+  auf dem falschen Pfad.** 7.12.17 machte `db-adapter.updateCard` BigInt-fest;
+  der Chat-Pfad läuft aber über `safe-update.js` (`buildUpdateEntry`), und dort
+  rechnete `(oldRow.versionNumber ?? 1) + 1` ebenfalls mit dem BigInt aus
+  LanceDB. Beim ersten `/correct confirm` über den neuen Operator-Pfad am
+  09.09.2026 stand dieselbe Meldung im Log. Jetzt werden alle Int64-Felder der
+  alten Zeile (Versionsnummer, Zähler, Zeitstempel, Gültigkeitsfenster) vor
+  dem Kopieren zu Number; ein Test füttert `buildUpdateEntry` mit einer
+  BigInt-Zeile und prüft, dass kein BigInt übrig bleibt.
+- **`/plur1bus reminder list` brach mit „Cannot convert a BigInt value to a
+  number" ab**, sobald es eine aktive Erinnerung gab: `remindAt` kommt aus
+  LanceDB als BigInt, und `new Date(1n)` wirft. Bei Bernhardine (fünf
+  präsentierte Erinnerungen) kam nur die Fehlermeldung, bei Bernd (keine
+  Erinnerungen) fiel es nicht auf. Sortierung und Anzeige rechnen jetzt mit
+  `Number(remindAt)`.
+- **`/mf` nahm jede wohlgeformte UUID an** und schrieb sie ins Feedback-Log —
+  `/mf 00000000-…-000000000000 +` wurde „gespeichert", und der Feedback-Bericht
+  zählte solche Einträge als Treffer. Jetzt muss die Erinnerung im Speicher des
+  Agenten existieren und für den Aufrufer sichtbar sein; gelöschte Karten
+  bekommen dieselbe Meldung wie unbekannte (kein Existenz-Orakel für
+  Tombstones). Geprüft wird — wie bei `/correct` und `/forget` — die private
+  Tabelle des Agenten; Karten aus Workspace-/User-Pools (`/share`) sind für
+  `/mf` damit nicht adressierbar (heute leer, dieselbe Grenze wie zuvor bei
+  `/correct`).
+- **`/state` zeigte „Memories: unknown cards"**, wenn der Store des Agenten in
+  diesem Prozess noch nicht geöffnet war (Bernhardine, 09.09.2026): die
+  Zählung fragte `db.table` ab, ohne vorher `init()` zu rufen. Jetzt wird der
+  Store bei Bedarf initialisiert; die Karte zeigt die echte Zahl.
+
+### Bekannt
+
+- **Chat-`status`/`doctor`/`curation` lesen einen anderen Neo-Store als die
+  Hooks.** Der Kommando-Pfad schlüsselt den Neo-Store über den kanonischen
+  Workspace-Principal (`workspace-dir:v1:…`), `before_prompt_build`/`agent_end`
+  schreiben dagegen nach `<alias>--<hash>` (z. B. `main--1802…`). Im Chat
+  meldet `doctor` deshalb „agent_end has not fired in this workspace yet" und
+  `status` `hooks: {}`, obwohl beide Hooks laufen. Der rohe Chat-`workspaceKey`
+  darf aus Sicherheitsgründen nicht als Schlüssel dienen (Tests
+  `b13-sensitive-read-auth`, `plur1bus-internal-auth`); die Angleichung
+  braucht eine Migration der bestehenden Verzeichnisse und ist ein eigener
+  Schritt.
+
+## [7.12.17] — 2026-09-09
+
+### Behoben
+
+- **`/correct` legte nie eine neue Version an.** LanceDB liefert int64-Spalten
+  als BigInt, und `updateCard` rechnete `(existing.versionNumber ?? 1) + 1` —
+  `1n + 1` wirft „Cannot mix BigInt and other types". Jedes `/correct` endete
+  darin, bevor die neue Version geschrieben wurde; in 21 000 Zeilen von Bernd
+  und Bernhardine existierte deshalb keine einzige zweite Version, kein
+  `previousVersion`, kein `supersededBy`. Sichtbar wurde es am 09.09.2026
+  durch ein getipptes `/correct` (`[memory-edit.correct.update] failed`). Der
+  Zähler wird jetzt vor dem Rechnen in eine Number gewandelt. Die bestehende
+  Test-Fixture nutzte `versionNumber: 1` als Number und konnte den Fehler
+  darum nie zeigen; ein Fall mit BigInt kommt hinzu.
+
+## [7.12.16] — 2026-09-09
+
+### Behoben
+
+- **Die Beförderung nach KNOWLEDGE.md lief seit dem 01.07.2026 in einen
+  Timeout.** Sichtbar wurde das erst, nachdem 7.12.15 die Fehlerklasse ins Log
+  brachte: `TimeoutError`, nicht der Provider und nicht die Datei. Der Aufruf
+  erzeugt den **ganzen** Textkörper und hatte dafür die Standardgrenze von 30
+  Sekunden. Für faxperts 1841 Bytes (~460 Token Ausgabe) reicht das; für Bernds
+  11 011 (~2752) und Bernhardines 12 487 (~3121) nicht mehr. Wieder ein Fehler,
+  der mit dem Wissensbestand mitwächst — die Beförderung starb genau in dem
+  Moment, in dem KNOWLEDGE.md nützlich geworden war, und niemand konnte es
+  sehen, weil die Meldung „provider or file operation unavailable" lautete. Die
+  Zeitgrenze richtet sich jetzt nach dem Ausgabebudget (25 ms je Token,
+  Untergrenze 30 s, Deckel 180 s): Bernd bekommt 122 s, Bernhardine 134 s.
+
+## [7.12.15] — 2026-09-09
+
+### Behoben
+
+- **`knowledge_update` verschluckte die Fehlerursache.** Der Fehler landete nur
+  im strukturierten Teil des Log-Aufrufs, der nicht serialisiert wird; übrig
+  blieben die Zeile „knowledge_update failed" ohne Angabe und die Antwort
+  „provider or file operation unavailable" — die der Agent so an den Nutzer
+  weitergab, obwohl sie zwei ganz verschiedene Ursachen zusammenwirft. Am
+  09.09.2026 hat das die Suche nach dem eigentlichen Fehler mehrfach in die
+  Irre geführt: erst die Vermutung Dateizugriff, dann das Token-Budget, beides
+  nicht belegbar, weil die Ursache nirgends stand. Die **Fehlerklasse** steht
+  jetzt in der Log-Zeile und in der Antwort an den Agenten, statt einer
+  Sammelformel, die zwei ganz verschiedene Ursachen zusammenwirft. Die
+  Provider-Meldung selbst bleibt bewusst draußen — sie trägt Prompt-Fragmente
+  und Zugangsdaten, und der Test „Schicht 1.5 sanitizes provider failures in
+  responses and logs" sichert das zu.
+
+## [7.12.14] — 2026-09-09
+
+### Behoben
+
+- **`knowledge_update` scheiterte, sobald KNOWLEDGE.md eine gewisse Größe
+  überschritt.** Der Aufruf gibt den **ganzen** Textkörper zurück, nicht nur die
+  Ergänzung, lief aber mit einem festen Ausgabebudget von 3000 Token. Solange
+  die Datei klein war, ging das gut; am 09.09.2026 brauchte allein der Bestand
+  2752 Token (Bernd, 11 011 Bytes) bzw. 3121 (Bernhardine, 12 487) — beide
+  Läufe endeten in `provider or file operation unavailable`, während derselbe
+  Aufruf für eine 1841 Bytes große Datei durchlief. Ein Fehler, der mit dem
+  Wissensbestand mitwächst und deshalb erst spät auffällt. Das Budget richtet
+  sich jetzt nach dem Bestand (Untergrenze 3000, Deckel 16 000).
+
+- **Eine abgeschnittene Antwort hätte den Bestand überschrieben.** Geprüft wurde
+  nur auf leeres Ergebnis. Kam der Textkörper gekürzt zurück, wurde er ungeprüft
+  über KNOWLEDGE.md geschrieben — der Aufruf soll integrieren, nicht kürzen.
+  Antworten, die den Bestand deutlich unterschreiten, werden jetzt verworfen und
+  die Datei bleibt unverändert; die Erstanlage ist davon ausgenommen.
+
+## [7.12.13] — 2026-09-09
+
+### Behoben
+
+- **Die Größenmessung der Health-Karte blockierte die Ereignisschleife.** Sie
+  lief synchron über den ganzen Store; gemessen 1201 ms Blockade schon im
+  Leerlauf, in Produktion bis zu 16 Sekunden bei 12 646 Einträgen. In dieser
+  Zeit kam kein anderer Handler dran — 11 der 25 `before_prompt_build`-Timeouts
+  des 09.09.2026 lagen binnen 30 Sekunden eines Laufs von mindestens vier
+  Sekunden. Der Recall wurde also nicht zu langsam, ihm wurde die Laufzeit
+  entzogen. Die Messung ist jetzt asynchron und gibt alle 200 Einträge ab:
+  1201 ms Blockade werden zu 23 ms, bei identischem Ergebnis. Die
+  Gesamtlaufzeit steigt dabei von 1,2 auf 4,5 Sekunden — der richtige Tausch
+  für eine Hintergrundmessung. Der teuerste Posten war nicht `readdir`, sondern
+  `resolveInside` je Eintrag: drei Dateisystem-Aufrufe, bei vollem Deckel bis zu
+  30 000. Dieselbe Zusicherung — keinem Link folgen, den Baum nicht verlassen —
+  liefert das ohnehin gemachte `lstat`. Die Messung liegt jetzt in
+  `lib/control-plane-storage.js` und ist damit erstmals testbar.
+
+## [7.12.12] — 2026-09-09
+
+### Hinzugefügt
+
+- **Vier interne Features sind wieder erreichbar.** `reminder-dispatch`,
+  `feedback-report`, `proactive-check` und `meta-reflect` liessen sich
+  ausschliesslich über ein Chat-Kommando auslösen, und das setzt einen
+  angebundenen Kanal voraus — über Cron oder Kommandozeile gab es keinen Weg
+  zu ihnen. Sie waren damit weder zu betreiben noch zu prüfen. Ein Cron mit
+  `--message "/plur1bus_status"` hilft nicht: der Turn geht an das Modell,
+  nicht in den nativen Dispatch (am 09.09.2026 gemessen). Alle vier brauchen
+  `workspaceDir`, das der Feature-Cron-Pfad seit 7.12.9 auflöst; sie stehen
+  jetzt in `FEATURE_CRON_NAMES` und laufen über
+  `openclaw plur1bus-feature-cron --agent <id> --feature <name>`.
+
+## [7.12.11] — 2026-09-09
+
+### Behoben
+
+- **Der Recall-Hook wurde vom Host getötet, bevor der eigene Rückfall greifen
+  konnte.** `runtime.recallTimeoutMs` stand auf 20 s, das Hook-Fenster des
+  Hosts für `before_prompt_build` liegt per Vorgabe bei 15 s
+  (`plugins.entries.*.hooks.timeoutMs`). Jeder langsame Recall lief also in
+  `[hooks] before_prompt_build handler … failed: timed out after 15000ms` —
+  am 08.09.2026 17-mal, am 09.09. 24-mal — und der Turn bekam **gar nichts**
+  statt eines Teilergebnisses. Das harte Budget gehört unter das Fenster des
+  Hosts. Dazu wird das weiche Budget nicht mehr als feste Differenz von 10 s
+  darunter gebildet, sondern anteilig: die feste Differenz setzte ein grosses
+  hartes Budget voraus und wäre bei 12 s auf Millisekunden zusammengefallen.
+  Beim bisherigen Wert von 20 s ergibt die neue Formel unverändert 10 s.
+
+- **Ein erschöpftes Capture-Budget sah aus wie Datenverlust.** Lief die
+  Erfassung in ihr Zeitlimit, scheiterte jeder verbleibende Eintrag am selben
+  Abbruch und schrieb eine eigene Fehlerzeile — am 09.09.2026 vier Stück für
+  bernhardine, gefolgt von `capture failed for agent=…`. Tatsächlich stand das
+  bereits Gespeicherte, und der Rest kam beim nächsten Turn dran. Der Abbruch
+  wird jetzt einmal sauber gemeldet (`capture budget exhausted … der Rest folgt
+  beim naechsten Turn`, auf Info-Ebene) und von einem echten Speicherfehler
+  unterschieden, der weiterhin als Warnung erscheint.
+
+## [7.12.10] — 2026-09-09
+
+### Behoben
+
+- **Die Health-Karte stand auch nach dem Verzeichnis-Fix auf „degraded".** Es
+  waren zwei Ursachen gleichzeitig aktiv; 7.12.9 behob nur die erste. Die
+  zweite ist der Deckel der Größenmessung: `measureControlHealthStorage`
+  steigt nach 10 000 Verzeichniseinträgen aus, damit der Scan beschränkt
+  bleibt, und der Store hatte am 09.09.2026 bereits 12 646. Das setzte
+  `storage_scan_incomplete` und damit den Gesamtzustand herab, obwohl jede
+  einzelne Partition sauber war. Eine abgeschnittene Messung ist aber eine
+  Messgrenze, kein Gesundheitsproblem — der Snapshot trägt `storage.complete:
+  false` bereits selbst bis in die Oberfläche. Der Gesamtzustand wird deshalb
+  nicht mehr daraus herabgestuft; ein echter Fehler beim Messen
+  (`storage_measure_failed`) bleibt degradierend.
+
+- **Der Installer kannte `auto-accept-stale` nicht** (nachgezogen aus 7.12.9,
+  siehe dort): der Job steht jetzt in `NATIVE_FEATURES` und in
+  `REQUIRED_FEATURE_CRONS`, wird über sein Kommando erkannt und pro Agent um
+  zwei Minuten gestaffelt, mit Basis 04:50 statt der von `gc-run` belegten
+  04:45.
+
+## [7.12.9] — 2026-09-09
+
+### Hinzugefügt
+
+- **`/plur1bus internal embedding-drain` als Wartungslauf.** Die
+  Neo-Embedding-Warteschlange wurde bisher ausschliesslich als Nebenjob nach
+  jeder Erfassung abgearbeitet — gedeckelt auf `maxItems` und auf das, was vom
+  Capture-Budget übrig blieb. Kommt mehr herein als abfliesst, holt sie nie auf:
+  am 09.09.2026 standen für bernhardine knapp 3000 Einträge offen, seit Wochen
+  zwischen 3000 und 4200 pendelnd, und es gab keinen Griff, das gezielt
+  abzubauen. Ohne Vektor fällt der mit 0,75 gewichtete Anteil der
+  Neo-Bewertung auf null, der Datensatz rankt nur noch über
+  Token-Überlappung. Der neue Lauf ist model-frei wie die übrigen
+  Feature-Crons (`openclaw plur1bus-feature-cron --agent <id> --feature
+  embedding-drain`), nimmt sich die Warteschlange am Stück vor, bleibt mit einer
+  Frist von 480 s unter dem RPC-Timeout und meldet den Rest, damit man ihn bis
+  `pending=0` wiederholen kann.
+
+### Behoben
+
+- **Der erste `agent_end` nach einer Ruhephase speicherte nichts.** Der
+  Neo-`agent_end`-Worker lief auf dem vollen Capture-Signal. Ist der Neo-Store
+  kalt — nach einem Gateway-Neustart oder einer langen Gesprächspause —, braucht
+  er den Grossteil des 60-Sekunden-Budgets: am 09.09.2026 um 11:27:20 für
+  bernhardine 56 Sekunden (`worker captured turns=221`). Die Erfassung danach
+  fand 203 Texte, bekam noch vier Sekunden und brach ab
+  (`capture worker timed out`, `failed to store capture: AbortError`, nichts
+  gespeichert). Zwei Minuten später, warm, dauerte dieselbe Arbeit eine Sekunde
+  und die Erfassung lief durch (`stored=4`). Der Worker bekommt jetzt ein
+  eigenes Teilbudget (`neo.agentEndBudgetMs`, Vorgabe 20 000 ms). Überzieht er
+  es, bricht nur er ab, die Erfassung behält den Rest, und Neo holt beim
+  nächsten Turn warm auf. Ein Abbruch durch das Teilbudget wird getrennt von
+  einem echten Worker-Fehler protokolliert.
+
+- **Feature-Crons liefen ohne Workspace-Verzeichnis.** Der Gateway-Handler hinter
+  `plur1bus-feature-cron` baute den Kommandokontext nur aus `agentId`, Kanal und
+  Konfiguration. Der Chat-Pfad liefert `workspaceDir` mit, dieser RPC-Pfad nicht
+  — und die Features, die es lesen, standen still: `afterthought` übersprang sich
+  bei **jedem** Lauf für alle drei Agenten mit `{"skipped":true,"reason":
+  "missing_workspace"}` (seit dem 07.09.2026, der Cron meldete dabei „ok", was
+  es unsichtbar machte), `persona-evolve` warf seit dem 06.09.2026
+  `The "path" argument must be of type string. Received undefined`. Der Handler
+  löst das Verzeichnis jetzt selbst über `resolveAgentWorkspaceDir` auf; gelingt
+  das nicht, sagt eine Warnung im Log, dass workspace-gebundene Features
+  übersprungen werden, statt sie still ins Leere laufen zu lassen.
+
+- **`auto-accept-stale` lief über das Modell und wurde vom Installer nicht
+  verwaltet.** Der Job ist model-frei — er liest unbestätigte Critical-Karten
+  und markiert sie —, fehlte aber in `FEATURE_CRON_NAMES` und in
+  `NATIVE_FEATURES`. Damit blieb als einzige Cron-Form der `agentTurn`, der
+  `/plur1bus internal auto-accept-stale` an das Modell schickte statt in den
+  nativen Dispatch: `cron: job execution timed out (last phase:
+  model-call-started)`, neun Läufe in Folge für alle drei Agenten. Der Job ist
+  jetzt zusätzlich Teil von `REQUIRED_FEATURE_CRONS`, wird also vom Installer
+  angelegt und — wie bei `consolidate-daily` — über sein Kommando erkannt:
+  gewachsene Namen wie `auto-accept-stale-criticals-<agent>` werden auf die
+  native Form umgezogen, statt dass daneben ein kanonischer Zwilling entsteht.
+  Die Basisminute liegt bewusst auf 04:50 statt 04:45, weil dort schon
+  `gc-run` läuft und beide Jobs am 09.09.2026 gleichzeitig starteten; per Agent
+  wird um zwei Minuten gestaffelt, damit nicht drei Starts auf dieselbe Minute
+  fallen und den 60-Sekunden-Watchdog auslösen.
+
+- **Die Health-Karte stand dauerhaft auf „degraded".** Der Partitions-Scan
+  überging nur reservierte Namen mit führendem Unterstrich (der `_neo`-Fix).
+  Die beiden eigenen Punkt-Verzeichnisse des Stores, `.plur1bus-authority` und
+  `.plur1bus-shared`, fielen weiter durch `PUBLIC_ID_RE` und setzten
+  `partition_id_unsupported` — in jedem einzelnen Durchlauf. Reservierte
+  Verzeichnisse werden jetzt an beiden Präfixen erkannt; ein Name, der wirklich
+  nicht zum Kontrakt passt, meldet weiterhin.
+
+## [7.12.8] — 2026-09-09
+
+### Behoben
+
+- **Die KNOWLEDGE.md-Warteschlange wurde nie um tote Einträge bereinigt.**
+  `knowledge_update` schließt entwertete Erinnerungen von der Promotion aus
+  (kanonisches KNOWLEDGE.md kennt keinen Status je Kapitel), entfernte
+  anschließend aber nur die tatsächlich übernommenen Schlüssel. Alles, was nie
+  promotbar werden kann — entwertet (ein Soft-Delete setzt `status="deleted"`
+  **und** `epistemicStatus="invalidated"`) oder gar nicht mehr in der Tabelle —
+  blieb dauerhaft in `.adaptive-learning/knowledge-pending.json` stehen und
+  zählte weiter in `pendingCount`. Der Wartungs-Hinweis meldete dem Agenten
+  damit Erkenntnisse, die es nicht mehr gab. Solche Einträge fliegen jetzt beim
+  nächsten Lauf raus, und zwar vor dem frühen Ausstieg „nichts zu übernehmen",
+  damit sich eine Warteschlange aus lauter Leichen überhaupt bereinigen kann.
+  Bereinigt wird ausschließlich, was die Abfrage wirklich erfragt hat: IDs
+  jenseits der 100er-Kappung und eine fehlgeschlagene Abfrage lassen die
+  Warteschlange unangetastet, damit offene Arbeit nie stillschweigend verloren
+  geht.
+
+### Verifikation
+
+- Neue Tests für die Auswahl der toten Schlüssel (entwertete Zeile, fehlende
+  Zeile, promotbare Zeile, fehlender Status als Altbestand, ID jenseits der
+  Kappung, nie gelaufene Abfrage, Reihenfolge und Dedupe, unbrauchbare
+  Einträge) und für `selectSafeUuids` als geteilte Quelle der abgefragten IDs.
+  Volle Suite mit den drei bekannten absichtlichen Baseline-Fehlschlägen.
+
 ## [7.12.7] — 2026-09-07
 
 ### Behoben

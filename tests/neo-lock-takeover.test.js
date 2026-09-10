@@ -124,4 +124,26 @@ describe("neo workspace write lock", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("7.12.40: appendEpisodesAsync wartet ein fremdes, lebendes Lock ab statt sofort in Backpressure zu laufen", async () => {
+    const { root, store, lockPath } = freshStore();
+    try {
+      mkdirSync(lockPath, { recursive: true });
+      writeFileSync(join(lockPath, "owner.json"), JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }), "utf8");
+      // Halter gibt nach 150 ms frei; die Sync-Variante mit kurzer Frist wuerde scheitern.
+      setTimeout(() => rmSync(lockPath, { recursive: true, force: true }), 150);
+      await store.appendEpisodesAsync([{ id: "ep_async", agentId: "main", title: "wartet" }], undefined, { timeoutMs: 2000 });
+      assert.equal(existsSync(store.paths.episodes), true, "Episode muss nach Freigabe geschrieben sein");
+      assert.match(readFileSync(store.paths.episodes, "utf8"), /ep_async/);
+      // Mit abgelaufener Frist bleibt der Fehler derselbe wie bisher.
+      mkdirSync(lockPath, { recursive: true });
+      writeFileSync(join(lockPath, "owner.json"), JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }), "utf8");
+      await assert.rejects(
+        () => store.appendEpisodesAsync([{ id: "ep_async2", agentId: "main" }], undefined, { timeoutMs: 100 }),
+        (error) => error?.code === "NEO_WRITE_BACKPRESSURE",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.7 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
+**PLUR1BUS 7.12.8 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
 
-Current source version: **7.12.7**. PLUR1BUS 7.12.7 supports OpenClaw `2026.8.1`
+Current source version: **7.12.8**. PLUR1BUS 7.12.8 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,85 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.38 — the persona voice learns daily, from evidence
+
+Persona evolution used to run once a week, hand the model only the current
+profile and ask for "one small change"; the reply outcomes were merely a gate.
+Now it runs daily (04:15, staggered per agent, `personaVoice.cron`/`timezone`
+to override) with two brakes kept in `.adaptive-learning/persona-evolution-state.json`:
+at least `minDaysBetween` days (default 2) since the last change, and at
+least `minOutcomes` (default 10) new real reply outcomes since then, more than
+half of them positive. Heartbeat turns no longer count. The model sees the
+protected seed, the numbered learned lines, and up to six positive and six
+negative excerpts (question, answer, the user's reaction) and answers with
+`ADD: - …`, `REPLACE <n>: - …` or `NONE`. The managed block may hold 24 lines
+(`personaVoice.maxBullets`, was 12 including the seed) and the injected
+directive cap follows from that (lines × 130 + 80, default 3200 characters).
+Existing weekly jobs are migrated to the daily slot on the next setup run.
+
+
+Twenty-five releases in three days, all live-tested on a three-agent
+installation. The [changelog](CHANGELOG.md) has the details per version; the
+highlights:
+
+- **Prompt hook no longer waits on the database.** OpenClaw runs a plugin's
+  `before_prompt_build` handlers one after another, each with its own 15 s
+  timeout. Reply-outcome tracking ran first and waited for up to twelve
+  sequential LanceDB updates, so recall started only after that timeout. The
+  DB work now runs in a serial per-agent queue after the turn's recall
+  (7.12.30). A new `recall prelude` log line reports where the pre-recall
+  time goes; the query embedding runs under a budget (`neo.recall.global.embedTimeoutMs`).
+- **Hook identity works with OpenClaw 2026.9 session entries** (7.12.30,
+  7.12.32, 7.12.33). Session entries moved channel, account and target under
+  `entry.delivery`; the resolver reads both the old and the new shape. Voice
+  notes and photos without a caption now produce a dispatch ticket, and the
+  fallback warning names the exact step and reason.
+- **Neo store on a vector sidecar** (7.12.26). Embeddings live as raw
+  float32 in `vectors.<gen>.f32` with byte offsets in `vector-index.json`
+  instead of JSON number lists; a 200 MB candidate journal shrank to about
+  13 MB plus a 38 MB sidecar. Lossless; inline vectors keep being read.
+  `scripts/migrate-neo-vectors-sidecar.mjs` migrates existing stores.
+- **Global candidate search** (7.12.27, 7.12.28). Recall searches every
+  candidate of the workspace by cosine on the sidecar, with a recency
+  discount and de-duplication against injected LanceDB memories
+  (`neo.recall.global`). A metadata index (`candidate-index.jsonl`) keeps
+  the horizon independent of the journal cap and makes the search cost
+  60–140 ms after the first read.
+- **Nightly LanceDB compaction** (7.12.31, 7.12.33). Every row update creates
+  a fragment and a version; tables reached hundreds of one-row fragments and
+  thousands of versions, which made vector search and updates ten times
+  slower. `consolidate-daily` now runs `optimize()` per agent
+  (`dailyConsolidation.lancedbOptimize`, versions older than 24 h are pruned).
+- **Daily consolidation repaired** (7.12.24, 7.12.29). Graph edges whose
+  memories are gone are pruned; the memory-dynamics decay scans only the
+  agent's own partition instead of failing on the first foreign-scope row;
+  ACL denials carry a code, a reason and the row id.
+- **Emotion tier 3 moved to a cron** (7.12.22, 7.12.23). Capture runs tiers
+  1/2 only; the hourly `emotion-refine` job refines rows the fast tiers were
+  unsure about, and always rows with importance ≥ 0.9.
+- **Cold-start and worker fixes** (7.12.20, 7.12.21, 7.12.24, 7.12.25).
+  Stable turn identity for capture, a persisted cap-check watermark for the
+  journals (first append after a restart dropped from 17 s to under 1 s),
+  worker warm-up per plugin instance, worker timings in the capture log.
+- **Operator path for chat commands** (7.12.18, 7.12.19, 7.12.24).
+  `openclaw plur1bus-command --agent <id> --session <key> [--locale xx] "/…"`
+  runs any chat command as operator against the same Neo store the hooks use.
+- **Reminder nudge loop closed** (7.12.24): a presented reminder can no longer
+  be captured as a new reminder.
+
+### New in v7.12.8 — the KNOWLEDGE.md queue drops entries it can never promote
+
+- `knowledge_update` refuses to promote an invalidated memory into canonical
+  KNOWLEDGE.md, but afterwards removed only the keys it had actually
+  integrated. Anything unpromotable — invalidated (a soft delete sets both
+  `status="deleted"` and `epistemicStatus="invalidated"`) or gone from the
+  table — stayed queued forever in `.adaptive-learning/knowledge-pending.json`
+  and kept inflating `pendingCount`, so the maintenance nudge told the agent
+  that N insights were waiting when some of them no longer existed. The queue
+  now drops those entries on the next run, before the "nothing to integrate"
+  exit. Pruning is restricted to the ids the query actually asked for, so a
+  capped query or a failed fetch never drops pending work.
 
 ### New in v7.12.7 — MEMORY.md and USER.md reach the session again, embedding calls time out
 
@@ -734,13 +813,13 @@ Setting this cron up is automatic when its raw feature gates are explicitly enab
 
 #### Multi-agent feature-cron automation
 
-`node scripts/setup-feature-crons.mjs` verifies the public native command-dispatch capability first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent plus one install-wide GC job. It fails closed without normal cron planning when the capability is absent, the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. Custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
+`node scripts/setup-feature-crons.mjs` verifies the public native command-dispatch capability first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to ten jobs per agent plus one install-wide GC job. It fails closed without normal cron planning when the capability is absent, the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. Custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
 
 The capability probe allows the host CLI 30 seconds per help call (7.8.0); a booting host with many plugins needs more than the former five. Ownership is by exact command: an operator-named job that runs `/plur1bus internal <feature>` for an agent is that agent's job, and only PLUR1BUS-named jobs are eligible for schedule migration. A non-delivery feature whose only owned jobs are disabled gets its best candidate re-enabled; the singleton collector is satisfied by a job on any agent; when `openclaw agents list` flags no default agent, `main` is treated as the default.
 
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 
-- `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; Sunday 04:15 local time, staggered five minutes per agent; no delivery.
+- `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; daily 04:15 local time (7.12.38; before: Sunday), staggered five minutes per agent, overridable via `personaVoice.cron`/`personaVoice.timezone`; no delivery. The shipped weekly slots are migrated to daily on the next setup run; operator schedules stay.
 - `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 3 hours; exact-command announce delivery with a direct text/`NO_REPLY` result.
 - `consolidate-daily`: `dailyConsolidation.enabled`; daily 04:00 in `Europe/Berlin`; no delivery.
 - `classify-recent`: `criticalPush.enabled`; every 3 hours; safe announce delivery of approved pushes or `NO_REPLY`.

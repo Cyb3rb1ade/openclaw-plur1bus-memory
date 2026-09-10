@@ -12,6 +12,10 @@ import {
   loadOpenClawGatewayRuntime,
   parseFeatureCronRunnerArgs,
   registerFeatureCronNativeDispatch,
+  PLUGIN_COMMAND_GATEWAY_METHOD,
+  PLUGIN_COMMAND_CLI_COMMAND,
+  validatePluginCommandRequest,
+  executePluginCommandCli,
   validateFeatureCronRequest,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import { runFeatureCronRunner } from "../scripts/run-feature-cron.mjs";
@@ -69,6 +73,62 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     }
   });
 
+  // Operator-Pfad: die Chat-Kommandos waren nur ueber einen angebundenen Kanal
+  // erreichbar. Mit runOperatorCommand registriert das Modul zusaetzlich den
+  // RPC plur1bus.command.run und das CLI plur1bus-command — ohne bleibt alles
+  // wie bisher (der Test darunter zaehlt dann weiterhin genau einen RPC).
+  it("registers the operator command RPC and CLI only when a runner is supplied", () => {
+    const gateway = [];
+    const clis = [];
+    registerFeatureCronNativeDispatch({
+      api: {
+        registerGatewayMethod(method, handler, options) { gateway.push({ method, handler, options }); },
+        registerCli(registrar, options) { clis.push({ registrar, options }); },
+      },
+      runFeatureCommand: async () => ({ text: "NO_REPLY" }),
+      runOperatorCommand: async () => ({ text: "ok" }),
+    });
+    const methods = gateway.map((g) => g.method);
+    assert.ok(methods.includes(PLUGIN_COMMAND_GATEWAY_METHOD));
+    assert.equal(gateway.find((g) => g.method === PLUGIN_COMMAND_GATEWAY_METHOD).options.scope, "operator.write");
+    assert.ok(clis.some((c) => c.options.descriptors[0].name === PLUGIN_COMMAND_CLI_COMMAND));
+  });
+
+  it("validates the operator command request strictly", () => {
+    const ok = validatePluginCommandRequest({ agentId: "main", sessionKey: "agent:main:telegram:default:direct:1", command: " /memory heute " });
+    assert.deepStrictEqual(ok, { agentId: "main", sessionKey: "agent:main:telegram:default:direct:1", command: "/memory heute" });
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "memory" }), /invalid PLUR1BUS command/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", command: "/x" }), /fields/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", extra: 1 }), /fields/);
+    // 7.12.24: optionales locale, streng validiert
+    assert.deepStrictEqual(
+      validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", locale: " de " }),
+      { agentId: "main", sessionKey: "s", command: "/x", locale: "de" },
+    );
+    assert.equal(Object.hasOwn(validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x" }), "locale"), false);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", locale: "deutsch" }), /locale/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "s", command: "/x", locale: "" }), /locale/);
+    assert.throws(() => validatePluginCommandRequest({ agentId: "main", sessionKey: "", command: "/x" }), /session/);
+  });
+
+  it("runs the operator command through exactly one RPC call and prints only the text", async () => {
+    const calls = [];
+    let output = "";
+    const reply = await executePluginCommandCli({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:default:direct:55736530",
+      command: "/plur1bus_status",
+      callGateway: async (...args) => { calls.push(args); return { reply: { text: "Status: ok" } }; },
+      write: (chunk) => { output += chunk; },
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], PLUGIN_COMMAND_GATEWAY_METHOD);
+    assert.deepStrictEqual(calls[0][2], { agentId: "main", sessionKey: "agent:main:telegram:default:direct:55736530", command: "/plur1bus_status" });
+    assert.deepStrictEqual(calls[0][3], { progress: false, scopes: ["operator.write"] });
+    assert.deepStrictEqual(reply, { text: "Status: ok" });
+    assert.equal(output, "Status: ok\n");
+  });
+
   it("registers one write-scoped RPC and one lazy root CLI capability", () => {
     const gateway = [];
     const clis = [];
@@ -110,6 +170,73 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
       config: { lab: true },
     });
     assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+  });
+
+  // Ohne workspaceDir uebersprang afterthought sich bei jedem Cron-Lauf still
+  // ("missing_workspace", Cron meldete ok) und persona-evolve warf
+  // "The path argument must be of type string. Received undefined".
+  it("accepts the model-free auto-accept-stale job and still rejects unknown names", async () => {
+    const seen = [];
+    const capture = responseCapture();
+    const handler = createFeatureCronGatewayHandler({
+      runFeatureCommand: async (ctx) => { seen.push(ctx); return { text: "done" }; },
+      config: {},
+    });
+    await handler({ params: { agentId: "main", feature: "auto-accept-stale" }, respond: capture.respond });
+    assert.equal(seen[0].args, "internal auto-accept-stale");
+    const drain = responseCapture();
+    await handler({ params: { agentId: "main", feature: "embedding-drain" }, respond: drain.respond });
+    assert.equal(seen[1].args, "internal embedding-drain");
+    assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+
+    for (const feature of ["reminder-dispatch", "feedback-report", "proactive-check", "meta-reflect"]) {
+      const extra = responseCapture();
+      const before = seen.length;
+      await handler({ params: { agentId: "main", feature }, respond: extra.respond });
+      assert.equal(seen[before].args, `internal ${feature}`, feature);
+      assert.equal(extra.calls[0][0], true, feature);
+    }
+
+    const rejected = responseCapture();
+    await handler({ params: { agentId: "main", feature: "definitely-not-a-feature" }, respond: rejected.respond });
+    assert.equal(rejected.calls[0][0], false);
+  });
+
+  it("resolves the agent workspace and hands it to the command", async () => {
+    const seen = [];
+    const capture = responseCapture();
+    const asked = [];
+    const handler = createFeatureCronGatewayHandler({
+      runFeatureCommand: async (ctx) => { seen.push(ctx); return { text: "done" }; },
+      config: { lab: true },
+      resolveWorkspaceDir: async (cfg, agentId) => { asked.push([cfg, agentId]); return "/root/.openclaw/workspace-bernhardine"; },
+    });
+    await handler({ params: { agentId: "bernhardine", feature: "afterthought" }, respond: capture.respond });
+    assert.deepStrictEqual(asked, [[{ lab: true }, "bernhardine"]]);
+    assert.equal(seen[0].workspaceDir, "/root/.openclaw/workspace-bernhardine");
+    assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+  });
+
+  it("runs on and says so when the workspace cannot be resolved", async () => {
+    for (const resolver of [
+      async () => { throw new Error("runtime unavailable"); },
+      async () => undefined,
+      async () => "",
+    ]) {
+      const seen = [];
+      const warnings = [];
+      const capture = responseCapture();
+      const handler = createFeatureCronGatewayHandler({
+        runFeatureCommand: async (ctx) => { seen.push(ctx); return { text: "done" }; },
+        config: { lab: true },
+        logger: { warn: (message) => warnings.push(message) },
+        resolveWorkspaceDir: resolver,
+      });
+      await handler({ params: { agentId: "agent-a", feature: "gc-run" }, respond: capture.respond });
+      assert.equal("workspaceDir" in seen[0], false, "no empty workspaceDir is passed on");
+      assert.ok(warnings.some((message) => message.includes("without a workspace dir")), "the skip must be visible in the log");
+      assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+    }
   });
 
   it("preserves ReplyPayload and literal NO_REPLY through exactly one RPC call", async () => {

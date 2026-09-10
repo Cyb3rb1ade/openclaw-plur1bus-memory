@@ -1,6 +1,6 @@
 {
   "name": "emotional-state-injector",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "OpenClaw plugin: injects current emotional state into agent context before each prompt build",
   "main": "index.js",
   "type": "commonjs",

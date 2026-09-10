@@ -374,6 +374,10 @@ const ALL_FEATURES_DISABLED = Object.freeze({
   skillMiner: { enabled: false },
   obsidianBridge: { enabled: false },
   gc: { enabled: false },
+  // embedding-drain haengt am Neo-Schalter (7.12.20).
+  neo: { enabled: false },
+  // emotion-refine haengt an Tier 3 (7.12.22).
+  emotion: { t3: { enabled: false } },
 });
 
 function validCronConfigSnapshot({ pluginConfig = {}, runtimeConfig = {} } = {}) {
@@ -603,7 +607,37 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     });
 
     assert.equal(result.exitCode, 0);
+    // criticalPush schaltet zwei Jobs frei: die markierte classify-Altlast wird
+    // migriert, und der auto-accept-Job fehlt in diesem Bestand noch, wird also
+    // angelegt. Beides gehoert zum selben Lauf.
     assert.deepStrictEqual(mutations, [[
+      "cron",
+      "add",
+      "--name",
+      "plur1bus auto-accept-stale main",
+      "--command-argv",
+      JSON.stringify(buildNativeFeatureCommandArgv({
+        agentId: "main",
+        feature: "auto-accept-stale",
+        command: "/plur1bus internal auto-accept-stale",
+      })),
+      "--timeout-seconds",
+      "600",
+      "--output-max-bytes",
+      "65536",
+      "--cron",
+      "50 4 * * *",
+      "--session",
+      "isolated",
+      "--tz",
+      "Europe/Berlin",
+      "--description",
+      "Auto-accept critical cards that stayed unconfirmed.",
+      "--agent",
+      "main",
+      "--no-deliver",
+      "--json",
+    ], [
       "cron",
       "edit",
       "critical-main",
@@ -723,7 +757,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     }
   });
 
-  it("creates the exact eight per-agent jobs without model, auth, token, or API overrides", async () => {
+  it("creates the exact eleven per-agent jobs without model, auth, token, or API overrides", async () => {
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
       pluginConfig: {
@@ -761,12 +795,15 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     });
 
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(cronAdds.length, 8);
+    assert.strictEqual(cronAdds.length, 11);
     const byName = new Map(cronAdds.map((args) => [args[args.indexOf("--name") + 1], args]));
     assert.deepStrictEqual([...byName.keys()], [
       "plur1bus persona-evolve main",
       "plur1bus afterthought main",
       "plur1bus consolidate-daily main",
+      "plur1bus auto-accept-stale main",
+      "plur1bus embedding-drain main",
+      "plur1bus emotion-refine main",
       "plur1bus classify-recent main",
       "plur1bus rem-dream main",
       "plur1bus skill-miner main",
@@ -785,9 +822,11 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       const args = byName.get(name);
       return args[args.indexOf(flag) + 1];
     };
-    assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * 0");
+    assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * *");
     assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "10800s");
     assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 4 * * *");
+    // Erster Agent auf der Basisminute, klar getrennt von gc-run um 04:45.
+    assert.strictEqual(schedule("plur1bus auto-accept-stale main", "--cron"), "50 4 * * *");
     assert.strictEqual(schedule("plur1bus consolidate-daily main", "--tz"), "Europe/Berlin");
     assert.strictEqual(schedule("plur1bus classify-recent main", "--every"), "10800s");
     assert.strictEqual(schedule("plur1bus rem-dream main", "--cron"), "15 1 * * *");
