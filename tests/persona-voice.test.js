@@ -37,7 +37,7 @@ describe("persona-voice", () => {
     assert.strictEqual(writePersonaVoice(dir, "- anders"), false); // existiert schon → no-op
   });
 
-  it("loadPersonaDirective: kompakt, ≤400 Zeichen, nur Managed-Block", () => {
+  it("loadPersonaDirective: kompakt, ≤1600 Zeichen, nur Managed-Block", () => {
     const dir = mkdtempSync(join(tmpdir(), "pv-"));
     writePersonaVoice(dir, SEED);
     // User-Text außerhalb der Marker darf nicht in die Direktive
@@ -46,8 +46,24 @@ describe("persona-voice", () => {
     const directive = loadPersonaDirective(dir);
     assert.ok(directive.includes("passt schon"));
     assert.ok(!directive.includes("GEHEIM"));
-    assert.ok(directive.length <= 400);
+    assert.ok(directive.length <= 1600);
     assert.match(directive, /Grundstimme/);
+  });
+
+  it("loadPersonaDirective (7.12.37): zwölf Zeilen passen ohne Kappung, Grenze konfigurierbar, Cache kennt die Grenze", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const bullets = Array.from({ length: 12 }, (_, i) => `- Marker ${i + 1}: ${"x".repeat(110)} Ende${i + 1}.`);
+    writePersonaVoice(dir, bullets.join("\n"));
+    const full = loadPersonaDirective(dir);
+    assert.ok(full.includes("Ende12"), "the last bullet survives the default cap");
+    assert.ok(full.length <= 1600);
+    const small = loadPersonaDirective(dir, { maxChars: 400 });
+    assert.ok(small.length <= 400 && small.endsWith("…"), "an explicit smaller cap truncates");
+    assert.ok(!small.includes("Ende12"));
+    const again = loadPersonaDirective(dir);
+    assert.ok(again.includes("Ende12"), "the cache does not serve the truncated text for the default cap");
+    const tiny = loadPersonaDirective(dir, { maxChars: 50 });
+    assert.ok(tiny.length <= 1600 && tiny.includes("Ende12"), "caps below the minimum fall back to the default");
   });
 
   it("loadPersonaDirective: null ohne Datei, fail-open bei kaputtem Inhalt", () => {

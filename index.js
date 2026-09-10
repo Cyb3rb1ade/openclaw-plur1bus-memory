@@ -4773,6 +4773,11 @@ const plugin = {
     const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
     const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
     const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
+    // 7.12.37: Deckel der injizierten Stimm-Direktive (Default 1600 wie
+    // DEFAULT_MAX_DIRECTIVE_CHARS in lib/persona-voice.js, das lazy geladen wird).
+    const personaDirectiveMaxChars = Number.isFinite(Number(cfg.personaVoice?.maxDirectiveChars)) && Number(cfg.personaVoice.maxDirectiveChars) >= 200
+      ? Math.floor(Number(cfg.personaVoice.maxDirectiveChars))
+      : 1600;
     const wikiLlmCfg = createFeatureRoute("wiki", {});
     const overlayLlmCfg = createFeatureRoute("continuity-overlay", cfg.continuityEngine?.overlays || {});
     const overlayAuditLlmCfg = createFeatureRoute("overlay-audit-contradiction", {});
@@ -12555,7 +12560,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               })?.catch((err) => {
                 api.logger?.debug?.(`persona-voice: scheduled seed failed (fail-open): ${normalizedLlmErrorClass(err)}`);
               });
-              personaDirective = loadPersonaDirective(ctx.workspaceDir);
+              personaDirective = loadPersonaDirective(ctx.workspaceDir, { maxChars: personaDirectiveMaxChars });
               personaEmojiPalette = loadPersonaEmojiPalette(ctx.workspaceDir);
             } catch (err) {
               api.logger?.debug?.(`persona-voice: scheduled seed setup failed (fail-open): ${normalizedLlmErrorClass(err)}`);
