@@ -38,6 +38,11 @@ class Upstream71244InventoryTests(unittest.TestCase):
             all(row["nativeStatus"] in ALLOWED_NATIVE_STATUSES for row in self.data["commits"])
         )
         for row in self.data["commits"]:
+            self.assertIsInstance(row["sha"], str)
+            self.assertIsInstance(row["subject"], str)
+            self.assertEqual(
+                row["subject"], git_output("show", "-s", "--format=%s", row["sha"]).rstrip("\n")
+            )
             self.assertIsInstance(row["files"], list)
             self.assertIsInstance(row["nativeEvidence"], list)
             self.assertIsInstance(row["tests"], list)
@@ -84,16 +89,22 @@ class Upstream71244InventoryTests(unittest.TestCase):
         for prefix in required_prefixes:
             self.assertTrue(any(path.startswith(prefix) for path in paths), prefix)
         self.assertIn("scripts/.npmignore", paths)
-        for path in preservation["modifiedHermesHostInstallerScripts"]:
-            self.assertIn(path, paths)
+        expected_host_installer_scripts = {
+            path
+            for path in git_output(
+                "diff", "--name-only", UPSTREAM_BASE, HERMES_BASE, "--", "scripts"
+            ).splitlines()
+            if path != "scripts/.npmignore"
+        }
+        self.assertEqual(
+            set(preservation["modifiedHermesHostInstallerScripts"]), expected_host_installer_scripts
+        )
         expected_paths = {
             path
             for path in git_output("ls-tree", "-r", "--name-only", HERMES_BASE).splitlines()
             if path.startswith(required_prefixes)
         }
-        expected_paths.update(
-            {"scripts/.npmignore", *preservation["modifiedHermesHostInstallerScripts"]}
-        )
+        expected_paths.update({"scripts/.npmignore", *expected_host_installer_scripts})
         self.assertEqual(paths, expected_paths)
         for record in records:
             baseline_bytes = subprocess.check_output(
