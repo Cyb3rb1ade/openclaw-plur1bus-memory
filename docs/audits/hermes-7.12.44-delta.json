@@ -2302,7 +2302,17 @@
       ],
       "tests": [
         "plur1bus-hermes/tests/test_persona_voice.py"
-      ]
+      ],
+      "resolution": {
+        "status": "verified",
+        "nativeEvidence": [
+          "load_directive() now screens up to the resolved maxBullets and uses maxDirectiveChars or the derived maxBullets * 130 + 80 budget through Plur1busDomain.cognitive_prompt_blocks()"
+        ],
+        "defensiveLimits": "Native projection accepts 6-64 bullets and explicit 200-16384 character budgets; booleans, non-numeric, non-finite, fractional, and out-of-range values fall back to the resolved default.",
+        "tests": [
+          "plur1bus-hermes/tests/test_persona_voice.py"
+        ]
+      }
     },
     {
       "id": "episode-five-turn-minimum",

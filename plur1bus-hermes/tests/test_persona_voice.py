@@ -19,6 +19,111 @@ class _Backend:
 
 
 class PersonaVoiceTests(unittest.TestCase):
+    def test_long_directive_reaches_live_prompt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            domain = Plur1busDomain(
+                Path(temporary), "main", {"personaVoice": {"enabled": True}}
+            )
+            path = domain.workspace_dir / "persona-voice.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [f"Warm concise sentence style number {index}" for index in range(24)]
+            path.write_text(
+                persona_voice.BEGIN + "\n" + "\n".join(f"- {line}" for line in lines)
+                + "\n" + persona_voice.END,
+                encoding="utf-8",
+            )
+            rendered = "\n".join(domain.cognitive_prompt_blocks())
+            self.assertIn(lines[-1], rendered)
+
+    def test_directive_capacity_honors_explicit_character_and_bullet_limits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            workspace.mkdir()
+            lines = [f"Calm style {index} " + "x" * 125 for index in range(24)]
+            (workspace / "persona-voice.md").write_text(
+                persona_voice.BEGIN + "\n" + "\n".join(f"- {line}" for line in lines)
+                + "\n" + persona_voice.END,
+                encoding="utf-8",
+            )
+
+            limited = persona_voice.load_directive(workspace, max_chars=200)
+            expanded = persona_voice.load_directive(workspace, max_chars=600)
+            bullet_limited = persona_voice.load_directive(
+                workspace, max_chars=16_384, max_bullets=6
+            )
+
+            self.assertEqual(len(limited or ""), 200)
+            self.assertEqual(len(expanded or ""), 600)
+            self.assertIn(lines[5], bullet_limited or "")
+            self.assertNotIn(lines[6], bullet_limited or "")
+
+    def test_invalid_directive_limits_fall_back_to_default_capacity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            workspace.mkdir()
+            lines = [f"Calm style {index} " + "x" * 125 for index in range(24)]
+            (workspace / "persona-voice.md").write_text(
+                persona_voice.BEGIN + "\n" + "\n".join(f"- {line}" for line in lines)
+                + "\n" + persona_voice.END,
+                encoding="utf-8",
+            )
+
+            expected = persona_voice.load_directive(workspace)
+            self.assertEqual(len(expected or ""), 3200)
+            for invalid in (True, "600", float("inf"), 10**100, 199, 16385):
+                self.assertEqual(
+                    persona_voice.load_directive(workspace, max_chars=invalid), expected
+                )
+            for invalid in (True, "6", float("nan"), 5, 65):
+                self.assertEqual(
+                    persona_voice.load_directive(workspace, max_bullets=invalid), expected
+                )
+
+    def test_domain_forwards_directive_limits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            domain = Plur1busDomain(
+                Path(temporary),
+                "main",
+                {
+                    "personaVoice": {
+                        "enabled": True,
+                        "maxDirectiveChars": 16_384,
+                        "maxBullets": 6,
+                    }
+                },
+            )
+            lines = [f"Warm concise sentence style number {index}" for index in range(24)]
+            path = domain.workspace_dir / "persona-voice.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                persona_voice.BEGIN + "\n" + "\n".join(f"- {line}" for line in lines)
+                + "\n" + persona_voice.END,
+                encoding="utf-8",
+            )
+
+            rendered = "\n".join(domain.cognitive_prompt_blocks())
+            self.assertIn(lines[5], rendered)
+            self.assertNotIn(lines[6], rendered)
+
+    def test_persona_projection_stays_disabled_and_private_scope_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            disabled = Plur1busDomain(root, "main")
+            enabled = Plur1busDomain(root, "main", {"personaVoice": {"enabled": True}})
+            path = enabled.workspace_dir / "persona-voice.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                persona_voice.BEGIN + "\n- concise warm style\n" + persona_voice.END,
+                encoding="utf-8",
+            )
+
+            self.assertNotIn("concise warm style", "\n".join(disabled.cognitive_prompt_blocks()))
+            self.assertIn("concise warm style", "\n".join(enabled.cognitive_prompt_blocks()))
+            self.assertNotIn(
+                "concise warm style",
+                "\n".join(enabled.cognitive_prompt_blocks(scope_key="shared-scope")),
+            )
+
     def test_seed_and_prompt_projection_are_explicit_and_bounded(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

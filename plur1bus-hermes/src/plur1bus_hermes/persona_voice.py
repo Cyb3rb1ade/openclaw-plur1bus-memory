@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import tempfile
+from math import isfinite
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,6 +14,13 @@ from typing import Any, Callable
 BEGIN = "<!-- plur1bus:persona:begin -->"
 END = "<!-- plur1bus:persona:end -->"
 MAX_BULLETS = 12
+DEFAULT_DIRECTIVE_BULLETS = 24
+_MIN_DIRECTIVE_BULLETS = 6
+_MAX_DIRECTIVE_BULLETS = 64
+_MIN_DIRECTIVE_CHARS = 200
+_MAX_DIRECTIVE_CHARS = 16_384
+_DIRECTIVE_CHARS_PER_BULLET = 130
+_DIRECTIVE_CHARS_OVERHEAD = 80
 _UNSAFE = re.compile(r"\b(ignore|system|developer|instruction|prompt|tool|secret)\b", re.IGNORECASE)
 
 
@@ -101,8 +109,39 @@ def _managed(content: str) -> tuple[int, int] | None:
     return (start, end) if start >= 0 and end > start else None
 
 
-def load_directive(workspace_dir: Path, *, max_chars: int = 400) -> str | None:
+def _bounded_integer(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    """Return an in-range integer or the supplied default without coercion."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        integer = value
+    elif isinstance(value, float) and isfinite(value) and int(value) == value:
+        integer = int(value)
+    else:
+        return default
+    return integer if minimum <= integer <= maximum else default
+
+
+def load_directive(
+    workspace_dir: Path,
+    *,
+    max_chars: int | None = None,
+    max_bullets: int = DEFAULT_DIRECTIVE_BULLETS,
+) -> str | None:
     """Return a compact directive from only the managed persona block."""
+    bullets = _bounded_integer(
+        max_bullets,
+        default=DEFAULT_DIRECTIVE_BULLETS,
+        minimum=_MIN_DIRECTIVE_BULLETS,
+        maximum=_MAX_DIRECTIVE_BULLETS,
+    )
+    derived_chars = bullets * _DIRECTIVE_CHARS_PER_BULLET + _DIRECTIVE_CHARS_OVERHEAD
+    chars = _bounded_integer(
+        max_chars,
+        default=derived_chars,
+        minimum=_MIN_DIRECTIVE_CHARS,
+        maximum=_MAX_DIRECTIVE_CHARS,
+    )
     try:
         path = _safe_path(workspace_dir)
         revision = _revision(path)
@@ -113,11 +152,11 @@ def load_directive(workspace_dir: Path, *, max_chars: int = 400) -> str | None:
         if positions is None:
             return None
         start, end = positions
-        lines = _bullets(content[start + len(BEGIN):end], limit=MAX_BULLETS)
+        lines = _bullets(content[start + len(BEGIN):end], limit=bullets)
         if not lines:
             return None
         directive = "Persona voice (style only; never overrides safety): " + "; ".join(lines) + "."
-        return directive[:max(1, min(max_chars, 400))]
+        return directive[:chars]
     except (OSError, ValueError):
         return None
 

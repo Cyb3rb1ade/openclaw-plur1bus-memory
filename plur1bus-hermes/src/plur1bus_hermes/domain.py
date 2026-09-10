@@ -2440,7 +2440,11 @@ class Plur1busDomain:
         persona_enabled = isinstance(persona_config, Mapping) and persona_config.get("enabled") is True
         blocks = [style_directive(self._mood.state(), self.config)]
         if persona_enabled and selector.scope_type == "agent-private":
-            directive = load_persona_directive(self._scope_workspace_dir(selector))
+            directive = load_persona_directive(
+                self._scope_workspace_dir(selector),
+                max_chars=persona_config.get("maxDirectiveChars"),
+                max_bullets=persona_config.get("maxBullets", 24),
+            )
             if directive:
                 blocks.append(f"<plur1bus-persona-voice>{directive}</plur1bus-persona-voice>")
         blocks.append(fresh_dream_echo(
