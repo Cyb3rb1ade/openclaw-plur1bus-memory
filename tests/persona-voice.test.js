@@ -603,6 +603,23 @@ describe("evolvePersonaVoice (7.12.38): Belege, ADD/REPLACE/NONE, Bremsen, Heart
     assert.deepStrictEqual(split.learned, ["- Besser als A.", "- Gelernt B.", "- Hinten dran."]);
   });
 
+  it("ein bereits vorhandener Marker (ADD oder REPLACE) zählt nicht als Evolution und setzt keine Zeit-Bremse", async () => {
+    const dir = seededDir();
+    appendMarkerToManagedBlock(dir, "- Gelernt A.");
+    const before = readFileSync(join(dir, "persona-voice.md"), "utf8");
+    for (const reply of ["ADD: - Gelernt A.", "REPLACE 1: - Kurze, direkte Sätze."]) {
+      const res = await evolvePersonaVoice({ workspaceDir: dir, outcomes: positives(12), llmCfg: { model: "x" }, callLlm: async () => reply, now: T1 });
+      assert.strictEqual(res.evolved, false, reply);
+      assert.strictEqual(res.reason, "duplicate_marker", reply);
+      assert.strictEqual(readFileSync(join(dir, "persona-voice.md"), "utf8"), before);
+      const state = readPersonaEvolutionState(dir);
+      assert.strictEqual(state.lastEvolvedAt, null);
+      assert.strictEqual(state.lastAction, "duplicate");
+      // Zweiter Durchlauf mit denselben Outcomes: verbraucht → too_few, daher frische Zeitstempel für die Schleife.
+      writeFileSync(join(dir, PERSONA_EVOLUTION_STATE_FILE), "{}", "utf8");
+    }
+  });
+
   it("NONE verbraucht die Belege, ändert nichts und setzt keine Zeit-Bremse", async () => {
     const dir = seededDir();
     const before = readFileSync(join(dir, "persona-voice.md"), "utf8");

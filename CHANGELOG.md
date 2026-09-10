@@ -28,7 +28,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   (Frage, Antwort, Reaktion des Nutzers) und antwortet mit `ADD: - …`,
   `REPLACE <n>: - …` oder `NONE`; eine nackte `- …`-Zeile gilt weiter als
   ADD, ein REPLACE auf eine ungültige Nummer wird zu ADD, der Seed ist
-  unerreichbar. `NONE` verbraucht die Belege, setzt aber keine Zeit-Bremse.
+  unerreichbar. `NONE` verbraucht die Belege, setzt aber keine Zeit-Bremse;
+  ein Marker, der schon im Block steht, ebenso (`duplicate_marker`).
   Ergebnisobjekt nennt `action`, `outcomes`, `positive`, `negative`,
   `replacedIndex`, bei `too_soon` `nextEligibleAt`.
 - **Verwalteter Block darf 24 statt 12 Zeilen halten** (`personaVoice.maxBullets`,
