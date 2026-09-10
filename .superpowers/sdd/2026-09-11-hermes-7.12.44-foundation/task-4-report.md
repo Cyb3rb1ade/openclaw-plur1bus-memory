@@ -18,16 +18,20 @@ The reviewed source pins are:
 - Narrow persona fix reviewed: `02d9f9f`
 
 The original Task 4 implementation range is `4c3194f..9e255f4`.
-The first review fix implementation range is `9e255f4..203fa1c`; root-only
-plan commits through `ebc5164` are intentionally not part of either range.
+The first review fix implementation is the single source commit `203fa1c`;
+its documentation evidence is the separate commit `1fd2be8`. Root-only plan
+commit `ebc5164` is an ancestor of `203fa1c`, but is excluded from the review
+by the owned test/report paths rather than being claimed out of Git history.
 
 Both pinned parents are ancestors of the candidate. At review time the
 candidate differed by 111 paths from the Hermes baseline and 317 paths from
 the upstream candidate. The committed focused range
 `git diff --check 4c3194f..9e255f4` passed. After the review fix committed,
-`git diff --check 9e255f4..203fa1c` also passed. The broader parent diffs
-still contain inherited whitespace findings in dashboard patch files and legacy
-bridge files; those are outside Task 4 and are not waived by this report.
+`git diff --check 9e255f4..203fa1c -- plur1bus-hermes/tests/test_upstream_71244_inventory.py`
+passed for its owned source path; `git diff --check 203fa1c..1fd2be8` passed
+for its documentation commit. The broader parent diffs still contain inherited
+whitespace findings in dashboard patch files and legacy bridge files; those
+are outside Task 4 and are not waived by this report.
 
 ## Immutable history gate: RED then GREEN
 
