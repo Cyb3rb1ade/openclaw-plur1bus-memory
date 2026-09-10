@@ -20,7 +20,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
     nur Thema war.
   - Die Emotion der Karte kommt jetzt vom Modell, das das Gespräch gelesen
     hat (`emotion` + neue Stärke `emotionIntensity` niedrig/mittel/hoch →
-    0,3/0,55/0,8); sachliche Gespräche bleiben `neutral`. Die EmotionEngine
+    0,3/0,55/0,8). Der Prompt fragt nach der Stimmung, „wie sie im Gespräch
+    spürbar ist — auch bei sachlichem Thema, wenn es jemanden berührt";
+    `neutral` nur, wenn keine Gefühlsregung erkennbar ist. Die EmotionEngine
     beschreibt den inneren Zustand des Agenten und lieferte „sadness 0,76"
     für einen sachlichen Testabend; sie bleibt nur Rückfall ohne Modell.
   - Unverändert: Episoden fassen bis zu 50 Turns binnen 30-Minuten-Pausen;

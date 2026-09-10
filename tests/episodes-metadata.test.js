@@ -107,6 +107,9 @@ describe("episodes (7.12.40): Metadaten", () => {
     const ep = await enrichEpisodeNarratively(base, turns, { model: "x" }, callLlm, { agentId: "main", participantNames: names });
     assert.match(seenPrompt, /\[Christian\] Meine Schulter/);
     assert.match(seenPrompt, /\[Bernd dasBot\] Probier/);
+    assert.match(seenPrompt, /auch bei sachlichem Thema, wenn es jemanden berührt/);
+    assert.match(seenPrompt, /neutral nur, wenn keine Gefühlsregung erkennbar ist/);
+    assert.match(seenPrompt, /hoch = bestimmt das Gespräch/);
     assert.equal(ep.title, "Schulterschmerzen in der Nacht");
     assert.match(ep.summary, /Kissen/);
     assert.equal(ep.narrativeArc, "exploration", "invalid arc falls back");
