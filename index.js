@@ -358,7 +358,7 @@ import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
-import { extractEpisodesWithState, writeEpisodeToVault } from "./lib/episodes.js";
+import { extractEpisodesWithState, writeEpisodeToVault, rebuildEpisode, findEpisodeCardPath } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
   buildEdgesForSession,
@@ -7684,6 +7684,65 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 api.logger?.info?.(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
               }
+              // 7.12.43: Nachmigration aelterer Episoden-Karten auf das aktuelle
+              // Schema (mentioned, voice_speakers, Modell-Emotion). Baut jede
+              // Episode der letzten N Tage aus ihren Turns neu, ersetzt die Karte
+              // (nur Dateien mit genau dieser einen Episode) und haengt den
+              // Datensatz mit derselben id an. `--days N` (Default 1), `--dry-run`.
+              if (subKey === "episodes-rebuild") {
+                if (!neoEnabled) {
+                  return formatJsonCommandResult({ job: "episodes-rebuild", skipped: true, reason: "neo_disabled" });
+                }
+                const rebuildArgs = tokens.slice(2);
+                const daysIdx = rebuildArgs.indexOf("--days");
+                const rebuildDays = daysIdx >= 0 && Number.isFinite(Number(rebuildArgs[daysIdx + 1])) ? Math.max(0.05, Number(rebuildArgs[daysIdx + 1])) : 1;
+                const rebuildDryRun = rebuildArgs.includes("--dry-run");
+                const neoStore = getNeoStore(commandCtx, {}, "episodes-rebuild");
+                const since = Date.now() - rebuildDays * 86400000;
+                const episodes = neoStore.readEpisodes(2000).filter((ep) => new Date(ep.createdAt || ep.startTime || 0).getTime() >= since);
+                const turnsById = new Map();
+                for (const turn of neoStore.readTurns(5000)) if (turn?.id) turnsById.set(String(turn.id), turn);
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const rebuildLlmCfg = mergingEnabled ? withLlmCallContext(
+                  episodeExtractionLlmCfg,
+                  typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                  "episode-extraction",
+                  { runtimeLlm: sessionRuntime },
+                ) : null;
+                const hooksBefore = neoStore.readHooks();
+                const openEpisodeState = hooksBefore?.agent_end?.openEpisode || null;
+                const result = { job: "episodes-rebuild", days: rebuildDays, dryRun: rebuildDryRun, candidates: episodes.length, rebuilt: 0, cardsReplaced: 0, cardsAppended: 0, skippedNoTurns: 0, errors: [] };
+                for (const ep of episodes) {
+                  const turns = (Array.isArray(ep.memoryIds) ? ep.memoryIds : []).map((id) => turnsById.get(String(id))).filter(Boolean);
+                  if (turns.length === 0) { result.skippedNoTurns += 1; continue; }
+                  try {
+                    const rebuilt = await rebuildEpisode(ep, turns, {
+                      workspaceDir: commandCtx.workspaceDir,
+                      agentId: internalAgent,
+                      llmCfg: rebuildLlmCfg,
+                      callLlm,
+                    });
+                    if (!rebuilt) { result.skippedNoTurns += 1; continue; }
+                    result.rebuilt += 1;
+                    if (rebuildDryRun) continue;
+                    if (typeof neoStore.appendEpisodesAsync === "function") await neoStore.appendEpisodesAsync([rebuilt]);
+                    else neoStore.appendEpisodes([rebuilt]);
+                    if (commandCtx.workspaceDir) {
+                      const replacePath = findEpisodeCardPath(ep, commandCtx.workspaceDir);
+                      const written = writeEpisodeToVault(rebuilt, commandCtx.workspaceDir, { replacePath });
+                      if (written?.replaced) result.cardsReplaced += 1;
+                      else if (written?.written) result.cardsAppended += 1;
+                      if (written?.written && openEpisodeState && openEpisodeState.id === rebuilt.id) {
+                        neoStore.recordHook("agent_end", { openEpisode: { ...openEpisodeState, vaultPath: written.path, revision: rebuilt.revision } });
+                      }
+                    }
+                  } catch (rebuildErr) {
+                    result.errors.push(`${ep.id}: ${String(rebuildErr?.message || rebuildErr).slice(0, 120)}`);
+                  }
+                }
+                api.logger?.info?.(`plur1bus internal episodes-rebuild[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult(result);
+              }
               if (subKey === "gc-run") {
                 const gcPolicy = cfg.gc || {};
                 if (gcPolicy.enabled === false) {
@@ -7869,7 +7928,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild"] });
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");

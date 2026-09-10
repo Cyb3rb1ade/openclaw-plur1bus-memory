@@ -13,6 +13,9 @@ import {
   applyEnrichment,
   locationFromSessionKey,
   writeEpisodeToVault,
+  extractVoiceSpeakers,
+  rebuildEpisode,
+  findEpisodeCardPath,
 } from "../lib/episodes.js";
 
 const T0 = new Date("2026-09-10T19:03:45.000Z").getTime();
@@ -234,5 +237,60 @@ describe("episodes (7.12.40): Metadaten", () => {
     const hits = await recallEpisodically("wann war bernhardine dabei", null, [ep], { minScore: 0 });
     assert.equal(hits.length, 1);
     assert.ok(hits[0].score < 0.5, `mention alone scores low: ${hits[0].score}`);
+  });
+
+  it("7.12.43: per Stimme erkannte Mitsprecher sind Teilnehmer, nicht Erwaehnte; unerkannte Stimmen und Ueberschriften nicht", async () => {
+    const names = { user: "Christian", assistant: "Bernd dasBot" };
+    const turns = [
+      turn("user", "[Audio transcript (machine-generated, untrusted)]: \"Christian: Ich geb das Handy an Eva weiter. Eva: Hallo Bernd, hier ist Eva, ich teste mal die Stimmerkennung.\"", 0),
+      turn("assistant", "Stimmung: bestens. Hallo Eva! Erik kommt später auch noch dran.", 1),
+      turn("user", "[Audio transcript (machine-generated, untrusted)]: \"Sprecher 0: Okay Bernd, hier ist Erik. Sprecher 1: Und ich bin auch noch da.\"", 2),
+      turn("user", "Hinweis: Das war Erik ohne Stimmprofil.", 3),
+    ];
+    assert.deepEqual(extractVoiceSpeakers(turns, { names }), ["Eva"]);
+    const base = createEpisode(turns, { participantNames: names, agentId: "main" });
+    assert.deepEqual(base.participants, ["Christian", "Bernd dasBot", "Eva"]);
+    assert.deepEqual(base.voiceSpeakers, ["Eva"]);
+    let seenPrompt = "";
+    const ep = await enrichEpisodeNarratively(base, turns, { model: "x" }, async (m) => { seenPrompt = m[0].content; return JSON.stringify({ title: "Stimmtest", summary: "Eva und Erik testen.", narrativeArc: "exploration", topics: ["Stimmerkennung"], people: ["Eva", "Erik"], emotion: "joy", emotionIntensity: "niedrig" }); }, { participantNames: names });
+    assert.match(seenPrompt, /Per Stimme erkannte Mitsprecher .*: Eva\./);
+    assert.deepEqual(ep.participants, ["Christian", "Bernd dasBot", "Eva"]);
+    assert.deepEqual(ep.mentioned, ["Erik"], "Eva spoke, Erik was only named");
+    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const card = readFileSync(writeEpisodeToVault(ep, dir).path, "utf8");
+    assert.match(card, /participants: \[Christian, Bernd dasBot, Eva\]/);
+    assert.match(card, /voice_speakers: \[Eva\]/);
+    assert.match(card, /mentioned: \[Erik\]/);
+  });
+
+  it("7.12.43: rebuildEpisode baut eine alte Karte mit gleicher id neu, findEpisodeCardPath findet nur Einzeldateien", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    writeFileSync(join(dir, "USER.md"), "- **Name:** Christian\n", "utf8");
+    writeFileSync(join(dir, "IDENTITY.md"), "> **Name:** Bernd dasBot\n", "utf8");
+    const turns = [turn("user", "Bernhardine war heute witzig, und Audrey Hepburn hat das mal gesagt.", 0), turn("assistant", "Stimmt, Diggi.", 1)];
+    // Alte Karte (Schema vor 7.12.42): Erwaehnte unter participants, keine mentioned-Zeile.
+    const old = { ...createEpisode(turns, { participantNames: { user: "Christian", assistant: "Bernd dasBot" }, title: "Alte Karte" }), participants: ["Christian", "Bernd dasBot", "Bernhardine", "Audrey Hepburn"], revision: 4 };
+    delete old.mentioned;
+    const w = writeEpisodeToVault(old, dir);
+    assert.equal(findEpisodeCardPath(old, dir), w.path);
+    assert.equal(findEpisodeCardPath({ ...old, id: "nope" }, dir), null);
+    const rebuilt = await rebuildEpisode(old, turns, {
+      workspaceDir: dir, agentId: "main", llmCfg: { model: "x" },
+      callLlm: async () => JSON.stringify({ title: "Über Bernhardine", summary: "Christian erzählt von Bernhardine.", narrativeArc: "exploration", topics: ["Bernhardine"], people: ["Bernhardine", "Audrey Hepburn"], emotion: "joy", emotionIntensity: "mittel" }),
+    });
+    assert.equal(rebuilt.id, old.id);
+    assert.equal(rebuilt.createdAt, old.createdAt);
+    assert.equal(rebuilt.revision, 5);
+    assert.equal(rebuilt.rebuilt, true);
+    assert.deepEqual(rebuilt.participants, ["Christian", "Bernd dasBot"]);
+    assert.deepEqual(rebuilt.mentioned, ["Bernhardine", "Audrey Hepburn"]);
+    assert.equal(rebuilt.emotionalDominant, "joy");
+    const w2 = writeEpisodeToVault(rebuilt, dir, { replacePath: w.path });
+    assert.equal(w2.replaced, true);
+    const card = readFileSync(w2.path, "utf8");
+    assert.match(card, /# Über Bernhardine/);
+    assert.match(card, /mentioned: \[Bernhardine, Audrey Hepburn\]/);
+    assert.match(card, /Fassung 6/);
+    assert.equal(readdirSync(join(dir, "memory", "episodes", "2026", "09")).length, 1);
   });
 });

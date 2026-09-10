@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.43] — 2026-09-10
+
+### Geändert
+
+- **Episoden-Karten: per Stimme erkannte Mitsprecher sind Teilnehmer.**
+  Bernds Fußnote vom 10.09.2026 23:3x: Eva und Erik hatten über Christians
+  Telegram-Konto gesprochen, standen aber unter `mentioned`. Die STT-Brücke
+  stellt per Stimmprofil erkannte Sprecher als `Name: …` vor den Transkript-
+  Text; diese Namen landen jetzt in `participants` und im neuen Feld
+  `voice_speakers`, das Modell bekommt sie als Mitsprecher genannt und
+  führt sie nicht mehr unter `people`. Unerkannte Stimmen (`Sprecher 1`)
+  und Überschriften vor Doppelpunkten („Stimmung:", „Hinweis:") zählen nicht.
+  Wer sich nur mit Namen vorstellt, ohne Stimmprofil, bleibt „erwähnt".
+- **Nachmigration älterer Karten:** `/plur1bus internal episodes-rebuild
+  [--days N] [--dry-run]` (Operator-Pfad `openclaw plur1bus-command`) baut
+  jede Episode der letzten N Tage (Default 1) aus ihren Turns im Journal neu
+  (gleiche `episode_id`, Fassung +1, Modell-Anreicherung), ersetzt die Karte
+  (nur Dateien mit genau dieser einen Episode, sonst Anhang) und hängt den
+  Datensatz mit derselben id an; die offene Episode behält ihren Zustand.
+
 ## [7.12.42] — 2026-09-10
 
 ### Geändert
