@@ -59,6 +59,43 @@ describe("reminder-extraction gates", () => {
 
 // Regression: gespeichert wurde nur parsed.evidence ("in 10 minuten"), also die
 // Zeitfloskel ohne Thema. Beim faelligen Nudge fehlte dem Agenten der Gegenstand.
+describe("reminder-extraction loop guards (7.12.24)", () => {
+  const now = 1_700_000_000_000;
+
+  // Regression 09.09.2026: die Reminder-Nudge zitiert den Reminder-Text samt
+  // Zeitfloskel; im naechsten Capture wurde daraus wieder ein Reminder
+  // ("in 1 minute" alle paar Minuten, 23 Stueck an einem Tag).
+  it("ignores time phrases inside an embedded reminder nudge", () => {
+    const text = "<reminder-nudge>\n⏰ Fällige Erinnerungen:\n  • \"in 1 minute\" (fällig seit 3m)\n</reminder-nudge>\n\nDanke, alles klar!";
+    const r = planReminderExtraction({ role: "user", text }, { now });
+    assert.strictEqual(r.skip, true);
+    assert.strictEqual(r.reason, "no_time");
+  });
+
+  it("skips reminders that carry nothing but the time phrase", () => {
+    for (const text of ["in 1 minute", "In 10 Minuten.", "  in 2 hours "]) {
+      const r = planReminderExtraction({ role: "user", text }, { now });
+      assert.strictEqual(r.skip, true, text);
+      assert.strictEqual(r.reason, "no_topic", text);
+    }
+  });
+
+  it("still extracts a reminder with a topic next to the phrase", () => {
+    const r = planReminderExtraction({ role: "user", text: "Erinnere mich in 10 Minuten an den Tee" }, { now });
+    assert.strictEqual(r.skip, false);
+    assert.match(r.reminderText, /Tee/);
+  });
+
+  it("keeps the user's own request when a nudge precedes it", () => {
+    const text = "<reminder-nudge>\n  • \"in 1 minute\" (due 3m ago)\n</reminder-nudge>\nErinnere mich in 5 Minuten an die Waschmaschine";
+    const r = planReminderExtraction({ role: "user", text }, { now });
+    assert.strictEqual(r.skip, false);
+    assert.strictEqual(r.parsed.remindAt, now + 5 * 60_000);
+    assert.match(r.reminderText, /Waschmaschine/);
+    assert.doesNotMatch(r.reminderText, /reminder-nudge/);
+  });
+});
+
 describe("buildReminderText", () => {
   it("keeps the sentence that carries the time phrase", () => {
     const t = buildReminderText("Erinnere mich in 10 Minuten an den Kuchen im Ofen", "in 10 minuten");

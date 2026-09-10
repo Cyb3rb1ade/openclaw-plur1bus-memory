@@ -22,7 +22,7 @@
 
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,6 +80,54 @@ describe("appendJsonl Cap — kein Vollrewrite bei jedem Append", () => {
         inodeBefore,
         "Ein Append auf eine Datei am Cap hat einen Vollrewrite (rename) ausgeloest",
       );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // 7.12.25: Der Recheck-Stand lebte nur im Prozess; jeder Gateway-Neustart
+  // zahlte beim ersten Append den vollen Tail-Read plus Rewrite (10–17 s bei
+  // 154 MB). Ein frisch geladenes Modul muss den Stand aus dem Sidecar lesen.
+  it("ueberspringt die teure Pruefung nach einem Modul-Neustart dank Sidecar", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neo-cap-sidecar-"));
+    try {
+      const store = createNeoStore(root, "testws");
+      const turns = Array.from({ length: MAX_RECORDS + 5 }, (_, i) => makeTurn(i));
+      store.appendTurns(turns);
+      store.appendTurns([makeTurn(MAX_RECORDS + 5)]);
+      const path = store.paths.turns;
+      const sidecar = JSON.parse(readFileSync(`${path}.cap.json`, "utf8"));
+      assert.ok(Number.isFinite(sidecar.recheckAt) && sidecar.recheckAt > statSync(path).size, "sidecar carries a future recheck size");
+      assert.ok(Number.isFinite(sidecar.size), "sidecar records the size at the last check");
+
+      // Frische Modulinstanz = neuer Prozess: In-Memory-Map ist leer.
+      const fresh = await import(`../lib/neo-arch.js?cap-sidecar=${Date.now()}`);
+      const freshStore = fresh.createNeoStore(root, "testws");
+      const inodeBefore = statSync(path).ino;
+      freshStore.appendTurns([makeTurn(MAX_RECORDS + 6)]);
+      assert.strictEqual(statSync(path).ino, inodeBefore, "no rewrite on the first append after a restart");
+      assert.strictEqual(JSON.parse(readFileSync(`${path}.cap.json`, "utf8")).recheckAt, sidecar.recheckAt, "sidecar untouched while below the threshold");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("verwirft den Sidecar-Stand, wenn die Datei geschrumpft ist", async () => {
+    const root = mkdtempSync(join(tmpdir(), "neo-cap-sidecar-shrink-"));
+    try {
+      const store = createNeoStore(root, "testws");
+      store.appendTurns(Array.from({ length: MAX_RECORDS + 5 }, (_, i) => makeTurn(i)));
+      const path = store.paths.turns;
+      const before = JSON.parse(readFileSync(`${path}.cap.json`, "utf8"));
+      // Offline-Prune: Datei auf drei Viertel kuerzen (bleibt ueber der
+      // 256-KB-Pruefschwelle), Sidecar bleibt alt.
+      const lines = readFileSync(path, "utf8").split("\n").filter(Boolean);
+      writeFileSync(path, lines.slice(-Math.floor(MAX_RECORDS * 0.75)).join("\n") + "\n", "utf8");
+      const fresh = await import(`../lib/neo-arch.js?cap-shrink=${Date.now()}`);
+      fresh.createNeoStore(root, "testws").appendTurns([makeTurn(MAX_RECORDS + 99)]);
+      const after = JSON.parse(readFileSync(`${path}.cap.json`, "utf8"));
+      assert.ok(after.size < before.size, "check ran again and recorded the smaller size");
+      assert.ok(after.recheckAt < before.recheckAt, "threshold follows the smaller file");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

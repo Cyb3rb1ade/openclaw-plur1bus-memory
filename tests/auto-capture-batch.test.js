@@ -7,6 +7,11 @@ import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-l
 import { withTimeout } from "../lib/with-timeout.js";
 
 const VECTOR_DIM = 384;
+// Capture fails closed without the host incognito classifier (since the
+// incognito fix); every ordinary-capture fixture needs a classifier stub,
+// or the turn is skipped before embedding and the batch/abort tests wait
+// on an embed that never starts.
+const CLASSIFIED_HOST = Object.freeze({ importRouting: async () => ({ isIncognitoSessionKey: () => false }) });
 
 function makeVector(offset = 0) {
   const vec = Array(VECTOR_DIM).fill(0.1);
@@ -140,7 +145,7 @@ describe("auto-capture uses embedBatch when available", () => {
 
     const plugin = await loadFreshPlugin();
     const api = trackApi(t, makeMockApi(basePath));
-    plugin.register(api);
+    plugin.register(api, CLASSIFIED_HOST);
 
     const event = {
       success: true,
@@ -321,7 +326,7 @@ describe("auto-capture uses embedBatch when available", () => {
 
     const plugin = await loadFreshPlugin();
     const api = trackApi(t, makeMockApi(basePath));
-    plugin.register(api);
+    plugin.register(api, CLASSIFIED_HOST);
 
     const event = {
       success: true,
@@ -363,7 +368,7 @@ describe("auto-capture uses embedBatch when available", () => {
     const api = trackApi(t, makeMockApi(basePath, {
       runtime: { captureTimeoutMs: 20, maxConcurrentCapturePerAgent: 1 },
     }));
-    pluginModule.default.register(api);
+    pluginModule.default.register(api, CLASSIFIED_HOST);
     const event = {
       success: true,
       turnId: "turn-b3-abort",
@@ -434,7 +439,7 @@ describe("auto-capture uses embedBatch when available", () => {
     const api = trackApi(t, makeMockApi(basePath, {
       runtime: { captureTimeoutMs: 500, maxConcurrentCapturePerAgent: 1 },
     }));
-    pluginModule.default.register(api);
+    pluginModule.default.register(api, CLASSIFIED_HOST);
     const ctx = { agentId: "capture-settlement-agent", workspaceDir: basePath };
     firstRun = api.emit("agent_end", {
       success: true,
@@ -546,7 +551,7 @@ describe("auto-capture uses embedBatch when available", () => {
     const api = trackApi(t, makeMockApi(basePath, {
       runtime: { captureTimeoutMs: 500, maxConcurrentCapturePerAgent: 1 },
     }));
-    pluginModule.default.register(api);
+    pluginModule.default.register(api, CLASSIFIED_HOST);
     const ctx = { agentId: "reminder-settlement-agent", workspaceDir: basePath };
     firstRun = api.emit("agent_end", {
       success: true,

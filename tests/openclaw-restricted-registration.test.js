@@ -45,6 +45,7 @@ const NOOP_CAPABILITIES = [
 ];
 
 const EXPECTED_CLI_COMMANDS = [
+  "plur1bus-command",
   "plur1bus-feature-cron",
   "plur1bus-obsidian",
   "plur1bus-reembedding",

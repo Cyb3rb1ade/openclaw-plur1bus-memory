@@ -59,3 +59,30 @@ describe("db-adapter updateCard — supersede-after-store ordering", () => {
     );
   });
 });
+
+describe("db-adapter updateCard — BigInt aus LanceDB", () => {
+  // LanceDB liefert int64-Spalten als BigInt. `1n + 1` wirft "Cannot mix
+  // BigInt and other types" — genau daran scheiterte jedes /correct, und in
+  // 21 000 Zeilen entstand nie eine zweite Version. Sichtbar wurde es am
+  // 09.09.2026 durch ein getipptes /correct. Die Fixture oben nutzt Number
+  // und konnte das deshalb nie zeigen.
+  it("legt die neue Version an, wenn versionNumber als BigInt kommt", async () => {
+    const existingBigInt = { ...EXISTING, versionNumber: 1n, updatedAt: 0n, retrievalCount: 0n };
+    let added = null;
+    let superseded = null;
+    const table = {
+      query: () => ({ where: () => ({ limit: () => ({ toArray: async () => [existingBigInt] }) }) }),
+      update: async (arg) => { superseded = arg; },
+      add: async (rows) => { added = rows[0]; },
+      delete: async () => {},
+      close: async () => {},
+    };
+    const adapter = createDbAdapter({ basePath: "/tmp/plur1bus-test", embedder, getTable: async () => table });
+    const result = await adapter.updateCard("main", EXISTING.id, "Corrected fact");
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(added.versionNumber, 2, "Number 2, kein BigInt und kein Wurf");
+    assert.strictEqual(typeof added.versionNumber, "number");
+    assert.strictEqual(added.previousVersion, EXISTING.id);
+    assert.strictEqual(superseded.values.status, "superseded");
+  });
+});

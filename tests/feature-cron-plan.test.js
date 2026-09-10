@@ -27,6 +27,9 @@ describe("REQUIRED_FEATURE_CRONS", () => {
         "persona-evolve",
         "afterthought",
         "consolidate-daily",
+        "auto-accept-stale",
+        "embedding-drain",
+        "emotion-refine",
         "classify-recent",
         "rem-dream",
         "skill-miner",
@@ -40,6 +43,17 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     assert.ok(personaEvolve, "persona-evolve spec present");
     assert.ok(afterthought, "afterthought spec present");
     assert.ok(classifier, "classify-recent spec present");
+
+    // Der Job lief auf dieser Installation als agentTurn ueber das Modell und
+    // damit in den 300s-Timeout. Er gehoert in die native, model-freie Form,
+    // und nicht auf die gc-run-Minute.
+    const autoAccept = REQUIRED_FEATURE_CRONS.find((s) => s.feature === "auto-accept-stale");
+    assert.ok(autoAccept, "auto-accept-stale spec present");
+    assert.strictEqual(autoAccept.needsDelivery, false);
+    assert.strictEqual(autoAccept.command, "/plur1bus internal auto-accept-stale");
+    assert.strictEqual(autoAccept.message, autoAccept.command);
+    const gcRun = REQUIRED_FEATURE_CRONS.find((s) => s.feature === "gc-run");
+    assert.notStrictEqual(autoAccept.schedule.expr, gcRun.schedule.expr, "darf nicht auf die gc-run-Minute fallen");
 
     assert.strictEqual(personaEvolve.needsDelivery, false);
     assert.match(personaEvolve.command, /\/plur1bus internal persona-evolve/);

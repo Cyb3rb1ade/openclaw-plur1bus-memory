@@ -52,16 +52,22 @@ describe("neo worker runtime", () => {
         },
       );
 
-      assert.deepStrictEqual(result, {
+      // 7.12.24: Phasenzeiten haengen am Ergebnis; Werte sind laufzeitabhaengig.
+      const { timings, ...shape } = result;
+      assert.deepStrictEqual(shape, {
         workspaceKey: "workspace-runtime",
         capture: {
           turns: 2,
           candidates: 2,
           reactions: 1,
           behaviorCards: 1,
+          transcript: { turns: 2, candidates: 2, reactions: 1, behaviorCards: 1 },
         },
         drain: null,
       });
+      for (const key of ["storeMs", "captureMs", "drainMs", "workerMs", "queueWaitMs", "spawnMs", "roundTripMs"]) {
+        assert.ok(Number.isFinite(timings?.[key]) && timings[key] >= 0, `timings.${key}`);
+      }
 
       const store = createNeoStore(rootDir, "workspace-runtime");
       assert.equal(readJsonl(store.paths.turns).length, 2);
@@ -109,6 +115,7 @@ describe("neo worker runtime", () => {
         candidates: 2,
         reactions: 1,
         behaviorCards: 1,
+        transcript: { turns: 2, candidates: 2, reactions: 1, behaviorCards: 1 },
       });
       assert.ok(result.drain);
       assert.equal(result.drain.processed, 0);
@@ -162,6 +169,7 @@ describe("neo worker runtime", () => {
         candidates: 0,
         reactions: 0,
         behaviorCards: 0,
+        transcript: { turns: 0, candidates: 0, reactions: 0, behaviorCards: 0 },
       });
       assert.equal(result.drain.processed, 0);
       assert.equal(result.drain.deferred, 1);
@@ -208,6 +216,7 @@ describe("neo worker runtime", () => {
   it("terminates an aborted worker job and recreates the worker for the next job", async () => {
     const rootDir = makeRoot("plur1bus-neo-worker-abort-");
     const runtime = createNeoWorkerRuntime();
+    assert.equal(runtime.warmUp(), true, "warmUp starts a worker thread");
     try {
       const controller = new AbortController();
       const pending = runtime.runNeoAgentEnd(

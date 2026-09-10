@@ -128,6 +128,8 @@ import {
   parseLegacyMigrationArgs,
 } from "./lib/shared-memory-migration.js";
 import { recordFeedback } from "./lib/feedback-log.js";
+import { getSharedDeferredDynamicsQueue } from "./lib/deferred-dynamics-queue.js";
+import { resolveLancedbOptimizePlan, summarizeLancedbOptimize } from "./lib/lancedb-optimize.js";
 import {
   parseCorrection,
   resolveCandidates,
@@ -204,6 +206,7 @@ import {
   createHostIncognitoSessionClassifier,
   createHostRoutingLoader,
   createMemoryTurnRouteRegistry,
+  getSharedMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
   describeUserPoolLabels,
@@ -213,8 +216,11 @@ import {
   resolveToolMemoryRequestContext,
   normalizeWorkspaceTarget,
   workspacePoolKey,
+  describeDirectSessionRoute as describeOperatorDirectSession,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, selectSafeUuids, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
+import { measureControlHealthStorage } from "./lib/control-plane-storage.js";
+import { isTruncatedKnowledgeBody, resolveKnowledgeUpdateMaxTokens, resolveKnowledgeUpdateTimeoutMs } from "./lib/knowledge-update-budget.js";
 import { selectStalePendingKeys } from "./lib/knowledge-pending-prune.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
 import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
@@ -260,11 +266,13 @@ import {
   listNeoWorkspaceKeys,
   neoSessionKeysFromContext,
   routeNeoRecall,
+  searchNeoCandidatesGlobal,
+  dedupeNeoLanesAgainstTexts,
   transitionRecordStatus,
   workspaceKeyFromContext,
   turnEventsFromMessages,
 } from "./lib/neo-arch.js";
-import { createNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
+import { createNeoWorkerRuntime, getSharedNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
 import {
   DISPLAY_SOURCES,
   sanitizeMemoryTextForPrompt,
@@ -315,7 +323,7 @@ import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import { redactError, safeDebug, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
-import { throwIfAborted } from "./lib/abort.js";
+import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
   LLM_ROUTE_KINDS,
@@ -358,6 +366,7 @@ import {
   readBoundGraph,
   createGraphMetrics,
   writeGraphConstellationReport,
+  pruneGraphEdges,
   extractGraphSignals,
 } from "./lib/memory-graph.js";
 import {
@@ -1447,6 +1456,7 @@ class MemoryDB {
     if (normalized.emotionalIntensity == null) normalized.emotionalIntensity = 0.0;
     if (normalized.emotionalDominant == null) normalized.emotionalDominant = "neutral";
     if (normalized.moodContextAtCapture == null) normalized.moodContextAtCapture = "";
+    if (normalized.emotionStatus == null) normalized.emotionStatus = "final";
     if (normalized.replayCount == null) normalized.replayCount = 0;
     if (normalized.lastReplayed == null) normalized.lastReplayed = 0;
     if (normalized.retrievalCount == null) normalized.retrievalCount = 0;
@@ -1582,6 +1592,9 @@ class MemoryDB {
             { name: 'emotionalIntensity', valueSql: '0.0' },
             { name: 'emotionalDominant', valueSql: "'neutral'" },
             { name: 'moodContextAtCapture', valueSql: "''" },
+            // 7.12.22: Bestand gilt als fertig klassifiziert; nur neue Zeilen
+            // aus dem entkoppelten Capture stehen auf pending_t3.
+            { name: 'emotionStatus', valueSql: "'final'" },
             { name: 'replayCount', valueSql: '0' },
             { name: 'lastReplayed', valueSql: '0' },
             { name: 'retrievalCount', valueSql: '0' },
@@ -1686,6 +1699,7 @@ class MemoryDB {
             emotionalIntensity: 0,
             emotionalDominant: "neutral",
             moodContextAtCapture: "",
+            emotionStatus: "final",
             replayCount: 0,
             lastReplayed: 0,
             retrievalCount: 0,
@@ -1943,6 +1957,7 @@ class MemoryDB {
         emotionalIntensity: r.emotionalIntensity ?? 0,
         emotionalDominant: r.emotionalDominant || "neutral",
         moodContextAtCapture: deserializeEmotionalValence(r.moodContextAtCapture),
+        emotionStatus: r.emotionStatus || "final",
         replayCount: r.replayCount ?? 0,
         lastReplayed: r.lastReplayed ?? 0,
         retrievalCount: r.retrievalCount ?? 0,
@@ -2967,7 +2982,6 @@ const CONTROL_HEALTH_MAX_PARTITIONS = 128;
 const CONTROL_HEALTH_CACHE_TTL_MS = 5 * 60_000;
 const CONTROL_HEALTH_REFRESH_INTERVAL_MS = 10 * 60_000;
 const CONTROL_HEALTH_FAILED_RETRY_MS = 30_000;
-const CONTROL_HEALTH_MAX_STORAGE_ENTRIES = 10_000;
 const CONTROL_HEALTH_SAFE_DIRECTORY_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const CONTROL_HEALTH_TABLE_PATH_NAMES = Object.freeze(["memories.lance", "memories"]);
 
@@ -3019,61 +3033,6 @@ function listControlHealthPartitions(basePath) {
   return partitions.toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Measure bytes below a trusted root without following links or reading file contents. */
-function measureControlHealthStorage(basePath, maxEntries = CONTROL_HEALTH_MAX_STORAGE_ENTRIES) {
-  let root;
-  try {
-    root = resolveInside(basePath);
-  } catch (error) {
-    if (isAbsentControlHealthPath(error)) return { bytes: 0, complete: true };
-    throw error;
-  }
-  let bytes = 0;
-  let entriesSeen = 0;
-  let complete = true;
-
-  const visit = (directory) => {
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch (error) {
-      if (isAbsentControlHealthPath(error)) return;
-      throw error;
-    }
-    for (const entry of entries) {
-      if (entriesSeen >= maxEntries) {
-        complete = false;
-        return;
-      }
-      const expected = resolve(directory, entry.name);
-      const canonical = resolveInside(directory, entry.name);
-      if (canonical !== expected) continue;
-      let stat;
-      try {
-        stat = lstatSync(canonical);
-      } catch (error) {
-        if (isAbsentControlHealthPath(error)) continue;
-        throw error;
-      }
-      entriesSeen += 1;
-      if (stat.isDirectory()) {
-        visit(canonical);
-        if (!complete) return;
-      } else if (stat.isFile()) {
-        const size = Number(stat.size);
-        if (!Number.isSafeInteger(size) || size < 0 || size > Number.MAX_SAFE_INTEGER - bytes) {
-          bytes = Number.MAX_SAFE_INTEGER;
-          complete = false;
-          return;
-        }
-        bytes += size;
-      }
-    }
-  };
-
-  visit(root);
-  return { bytes, complete };
-}
 
 /** Create an isolated non-mutating LanceDB row-counter for control-plane health. */
 function createControlHealthRowInspector(vectorDim, logger) {
@@ -4721,6 +4680,15 @@ const plugin = {
     const replyOutcomeMaxAssistantChars = replyOutcomeCfg.maxAssistantChars;
     const replyOutcomeMaxOutcomeLogEntries = replyOutcomeCfg.maxOutcomeLogEntries;
     const replyOutcomeMaxFeedbackLogEntries = replyOutcomeCfg.maxFeedbackLogEntries;
+    // 7.12.30: Die Memory-Dynamik des Reply-Outcome-Trackings (LanceDB-Updates
+    // je erinnerter Erinnerung) laeuft nicht mehr im Prompt-Hook, sondern
+    // seriell je Agent, angestossen nach dem Recall des Turns.
+    const replyOutcomeDynamics = getSharedDeferredDynamicsQueue({
+      logger: api.logger,
+      maxBacklog: Math.max(1, Number(replyOutcomeCfg.dynamicsMaxBacklog) || 20),
+      fallbackDelayMs: Math.max(0, Number(replyOutcomeCfg.dynamicsFallbackDelayMs ?? 10_000)),
+    });
+    const REPLY_OUTCOME_SYNC_LOG_MS = 1000;
 
     // Temporal continuity context config
     const temporalContextCfg = cfg.temporalContext || {};
@@ -4882,6 +4850,50 @@ const plugin = {
     if (emotionTier !== "auto") {
       api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
     }
+    // 7.12.22: Tier 3 fuer neue Erinnerungen laeuft nicht mehr im Turn. Die
+    // LLM-Klassifikation je gespeicherter Erinnerung (4–16 s, mehrere je
+    // Turn) dominierte das agent_end-Budget. Im Modus "deferred" (Default)
+    // bewertet der Capture-Pfad nur lexikalisch (Tier 1/2), speichert das
+    // Ergebnis vorlaeufig und markiert Zeilen unter der Eskalationsschwelle
+    // als emotionStatus=pending_t3; der Feature-Cron `emotion-refine` holt
+    // Tier 3 nach. Die Stimmungszeile der Antwort ist davon unberuehrt, sie
+    // entsteht im Recall aus der aktuellen Nachricht. Ein fest verdrahteter
+    // Tier (emotion.tier != auto) und captureMode "inline" behalten das alte
+    // Verhalten.
+    const emotionT3CaptureMode = emotionCfg.t3?.captureMode === "inline" ? "inline" : "deferred";
+    const emotionDeferredCapture = emotionT3CaptureMode === "deferred" && emotionT3Enabled && emotionTier === "auto";
+    // 7.12.23: Kern-Erinnerungen (importance ab dieser Schwelle) bekommen im
+    // Cron immer Tier 3, auch wenn Tier 1/2 sicher "neutral" sagt — dort
+    // wirkt die emotionale Intensitaet auf Recall-Gewicht und Zerfall, und
+    // das Lexikon uebersieht Ironie oder Sorge im Sachton. Werte > 1 schalten
+    // die Regel ab. Default im Normalizer, nicht im Schema.
+    const emotionT3RefineImportanceMinRaw = Number(emotionCfg.t3?.refineImportanceMin);
+    const emotionT3RefineImportanceMin = Number.isFinite(emotionT3RefineImportanceMinRaw) && emotionT3RefineImportanceMinRaw >= 0
+      ? emotionT3RefineImportanceMinRaw
+      : 0.9;
+    if (emotionT3Enabled) {
+      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 capture mode ${emotionDeferredCapture ? "deferred (emotion-refine cron)" : "inline"}`);
+    }
+    /**
+     * Emotionsbewertung fuer eine neu zu speichernde Erinnerung.
+     * @param {string} text
+     * @param {{agentId?: string, signal?: AbortSignal, importance?: number}} [context]
+     * @returns {Promise<{emotion: object, emotionStatus: "final"|"pending_t3"}>}
+     */
+    const classifyEmotionForStore = async (text, context = {}) => {
+      if (!emotionDeferredCapture) {
+        const emotion = await inferEmotionalValenceAsync(text, "user", null, context);
+        return { emotion, emotionStatus: "final" };
+      }
+      // Gleiche Tier-1/2-Route wie sonst, nur ohne den Tier-3-Sprung; der
+      // Cron greift genau dort, wo der Router eskaliert haette.
+      const { importance, ...engineContext } = context;
+      const emotion = await inferEmotionalValenceAsync(text, "user", null, { ...engineContext, skipTier3: true });
+      // Fehlende Konfidenz (synchroner Tier-1-Fallback) zaehlt als unsicher.
+      const confident = Number.isFinite(emotion?.confidence) && emotion.confidence >= emotionT3EscalationConfidence;
+      const coreMemory = Number.isFinite(Number(importance)) && Number(importance) >= emotionT3RefineImportanceMin;
+      return { emotion, emotionStatus: confident && !coreMemory ? "final" : "pending_t3" };
+    };
 
     // Base DB path — früh auflösen, damit Meta-Cognition-State-Read (und
     // spätere Initialisierung) denselben Pfad verwenden.
@@ -4993,6 +5005,53 @@ const plugin = {
     const neoEmbeddingAutoDrainEnabled = neoEmbeddingDrainCfg.enabled !== false;
     const neoEmbeddingDrainImpact = neoEmbeddingDrainCfg.impact || "low";
     const neoEmbeddingDrainMaxItems = Math.max(1, Number(neoEmbeddingDrainCfg.maxItems || 250));
+    // Teilbudget fuer den agent_end-Worker. Er lief bisher auf dem vollen
+    // Capture-Signal: beim ersten Turn nach einer Ruhephase ist der Neo-Store
+    // kalt (bernhardine: 250-625 MB) und der Worker brauchte am 09.09.2026
+    // 56 der 60 Sekunden — die Erfassung danach lief in den Abbruch und
+    // speicherte nichts. Zwei Minuten spaeter, warm, dauerte dieselbe Arbeit
+    // 1 s. Ueberzieht er das Teilbudget, bricht nur er ab; die Erfassung
+    // behaelt den Rest und Neo holt beim naechsten Turn warm auf.
+    const neoAgentEndBudgetMs = Math.max(1000, Number(neoCfg.agentEndBudgetMs || 20000));
+    // 7.12.27: Suche ueber alle Kandidaten (nicht nur das 500er-Fenster).
+    // Defaults hier, nicht im Schema (Installer-Profile).
+    const neoGlobalRecallCfg = neoCfg.recall?.global || {};
+    const neoGlobalRecall = {
+      enabled: neoGlobalRecallCfg.enabled !== false,
+      topK: Math.max(1, Math.min(200, Number(neoGlobalRecallCfg.topK) || 30)),
+      minSimilarity: Number.isFinite(Number(neoGlobalRecallCfg.minSimilarity)) ? Math.max(0, Math.min(1, Number(neoGlobalRecallCfg.minSimilarity))) : 0.35,
+      halfLifeDays: Number(neoGlobalRecallCfg.halfLifeDays) > 0 ? Number(neoGlobalRecallCfg.halfLifeDays) : 30,
+      maxCandidates: Math.max(100, Number(neoGlobalRecallCfg.maxCandidates) || 20000),
+      dedupeThreshold: Number.isFinite(Number(neoGlobalRecallCfg.dedupeThreshold)) ? Math.max(0, Math.min(1, Number(neoGlobalRecallCfg.dedupeThreshold))) : 0.8,
+      // 7.12.30: Budget fuer die Anfrage-Einbettung im Prompt-Recall; danach
+      // laeuft der Neo-Pfad ohne Vektor weiter (Lanes lexikalisch).
+      embedTimeoutMs: Math.max(500, Number(neoGlobalRecallCfg.embedTimeoutMs) || 4000),
+    };
+    const NEO_RECALL_PRELUDE_LOG_MS = 2000;
+    const runNeoGlobalSearch = (store, neoItems, queryVector, requester) => {
+      if (!neoGlobalRecall.enabled || !Array.isArray(queryVector) || queryVector.length === 0) return null;
+      const excludeIds = new Set(neoItems.map((item) => (item?.id ? String(item.id) : "")).filter(Boolean));
+      const global = searchNeoCandidatesGlobal(store, { queryVector, requester, excludeIds, ...neoGlobalRecall });
+      for (const hit of global.hits) neoItems.push(hit.item);
+      const top = global.hits[0];
+      api.logger?.info?.(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} index=${global.index}${global.indexLines ? `/${global.indexLines}` : ""} ms=${global.ms}`);
+      return new Set(global.hits.map((hit) => String(hit.item.id)));
+    };
+    // Der Wartungslauf nimmt sich die Warteschlange am Stueck vor. Die Frist
+    // liegt bewusst unter dem RPC-Timeout des Feature-Cron-Pfads (540s), damit
+    // der Aufrufer ein Ergebnis mit Restzahl bekommt statt eines Abbruchs.
+    const NEO_MANUAL_DRAIN_MAX_ITEMS = 100000;
+    const NEO_MANUAL_DRAIN_DEADLINE_MS = 480000;
+    // emotion-refine (7.12.22): je Lauf hoechstens so viele pending_t3-Zeilen
+    // mit Tier 3 nachbessern; die Frist bleibt deutlich unter dem RPC-Timeout.
+    const EMOTION_REFINE_MAX_ROWS = 100;
+    const EMOTION_REFINE_DEADLINE_MS = 240000;
+    const EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES = 3;
+    // Hook-Drain: Marge fuer den laufenden Embed-Aufruf (die 7 s zwischen
+    // Worker-Abbruch und Rueckkehr waren genau der) und Mindestrest, unter
+    // dem sich ein Start nicht lohnt.
+    const NEO_HOOK_DRAIN_MARGIN_MS = 10000;
+    const NEO_HOOK_DRAIN_MIN_MS = 3000;
     const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
     const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
     let hostMemoryConfig = {};
@@ -5017,7 +5076,8 @@ const plugin = {
         turnRouteState.initPromise = (async () => {
           try {
             const routingCapability = await hostRoutingLoader();
-            turnRouteState.registry = createMemoryTurnRouteRegistry({ routingCapability, logger: api.logger });
+            // 7.12.36: prozessweit geteilt — siehe lib/process-singleton.js.
+            turnRouteState.registry = getSharedMemoryTurnRouteRegistry({ routingCapability, logger: api.logger });
             return turnRouteState.registry;
           } catch (error) {
             api.logger?.warn?.(`memory-lancedb-namespaced: turn route registry unavailable: ${String(error)}`);
@@ -5065,8 +5125,23 @@ const plugin = {
       }
     };
     const neoWorkerRuntime = neoEnabled
-      ? createNeoWorkerRuntime({ logger: api.logger })
+      ? getSharedNeoWorkerRuntime({ logger: api.logger })
       : null;
+    // 7.12.24: Der erste agent_end nach einem Gateway-Neustart brauchte 8–18 s
+    // bis "worker captured" (sonst 0,4–1 s). Den Worker-Thread deshalb kurz
+    // nach dem Start anwerfen, ausserhalb jedes Turns.
+    const NEO_WORKER_WARMUP_DELAY_MS = 20_000;
+// 7.12.30: Sentinel fuer das Embedding-Budget im Prompt-Recall.
+const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
+    if (neoWorkerRuntime && typeof api.on === "function") {
+      api.on("gateway_start", () => {
+        const timer = setTimeout(() => {
+          const ok = neoWorkerRuntime.warmUp();
+          api.logger?.info?.(`plur1bus-neo: worker warm-up ${ok ? "done" : "skipped"}`);
+        }, NEO_WORKER_WARMUP_DELAY_MS);
+        timer?.unref?.();
+      }, { timeoutMs: 5_000 });
+    }
     if (neoEnabled && neoMode === "slot") {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
@@ -5128,10 +5203,28 @@ const plugin = {
         return { written: true, path: targetPath };
       },
     });
+    // 7.12.29: ACL-Ablehnungen tragen Code und Kontext. Aufrufer koennen sie
+    // damit von Query-Fehlern unterscheiden (memory-compaction fiel bisher bei
+    // einem ACL-Wurf auf eine Suche OHNE Where zurueck und scheiterte dann an
+    // alten Fremd-Scope-Zeilen), und der Grund steht im Log — bis 7.12.28 war
+    // aus "ACL denied for query" nicht ablesbar, welche Zeile gemeint war
+    // (consolidate-daily[bernhardine], 10.09.2026 04:15).
+    const aclDeniedError = (operation, row, reason, partition, kind = "denied") => {
+      const id = row?.id ? String(row.id).slice(0, 64) : "";
+      const scope = row?.scope || "agent-private";
+      const error = new Error(`ACL ${kind === "denied" ? "denied" : "partition mismatch"} for ${operation}`);
+      error.code = "PLUR1BUS_ACL_DENIED";
+      error.aclReason = reason || kind;
+      error.rowId = id;
+      const owner = partition?.agentId || partition?.workspaceIdentity || partition?.ownerUserId || "?";
+      pluginLogger?.warn?.(`memory-lancedb-namespaced: ACL ${kind} for ${operation}: id=${id || "?"} scope=${scope} agent=${row?.agentId || row?.storedBy || "?"} workspace=${row?.workspaceId || row?.workspaceKey || ""} reason=${reason || kind} partition=${partition?.scope || "?"}:${owner}`);
+      return error;
+    };
     const createOwnerBoundMemoryStore = (db, partition, requestContext) => {
       const assertRecord = (record, operation) => {
-        if (!record || !checkAccess(requestContext, record).allowed) {
-          throw new Error(`ACL denied for ${operation}`);
+        const access = record ? checkAccess(requestContext, record) : { allowed: false, reason: "acl.no_memory" };
+        if (!access.allowed) {
+          throw aclDeniedError(operation, record, access.reason, partition);
         }
         const candidate = {
           ...record,
@@ -5193,14 +5286,15 @@ const plugin = {
       const memoryStore = createOwnerBoundMemoryStore(db, partition, requestContext);
       const assertRows = (rows, operation) => {
         for (const row of rows || []) {
-          if (!checkAccess(requestContext, row).allowed) throw new Error(`ACL denied for ${operation}`);
+          const access = checkAccess(requestContext, row);
+          if (!access.allowed) throw aclDeniedError(operation, row, access.reason, partition);
           const workspaceIdentity = row.workspaceId || row.workspaceKey || "";
           if (!sameOwnerPartition({
             scope: row.scope || "agent-private",
             agentId: row.agentId || row.storedBy || "",
             workspaceIdentity,
             ownerUserId: row.ownerUserId || "",
-          }, partition)) throw new Error(`ACL partition mismatch for ${operation}`);
+          }, partition)) throw aclDeniedError(operation, row, "acl.partition_mismatch", partition, "mismatch");
         }
       };
       const guardedBuilder = (builder) => new Proxy(builder, {
@@ -6730,6 +6824,8 @@ const plugin = {
             let queryVector = null;
             try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(params?.query || "", { agentId: requester.requesterAgentId }) : embeddings.embed(params?.query || "", { agentId: requester.requesterAgentId })); }
             catch (error) { api.logger?.debug?.(`plur1bus-neo: corpus query embedding unavailable: ${String(error)}`); }
+            try { runNeoGlobalSearch(store, items, queryVector, requester); }
+            catch (globalErr) { api.logger?.debug?.(`plur1bus-neo: corpus global search failed: ${String(globalErr)}`); }
             const lanes = routeNeoRecall(items, params?.query || "", { ...requester, queryVector, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
             return Object.entries(lanes)
               .flatMap(([lane, rows]) => rows.map(row => ({ lane, row })))
@@ -6787,6 +6883,17 @@ const plugin = {
         const toneHint = commandCtx?.workspaceDir ? readSoulToneCached(commandCtx.workspaceDir) : null;
         const tone = pickTone(toneHint);
         return { lang, tone };
+      };
+
+      // Every chat command is also reachable as operator (`openclaw plur1bus-command`),
+      // bound to a named direct chat session. The registry keeps the same specs
+      // the host receives, so both paths run the identical handler.
+      const pluginCommandHandlers = new Map();
+      const registerPluginCommand = (spec) => {
+        if (spec && typeof spec.name === "string" && typeof spec.handler === "function") {
+          pluginCommandHandlers.set(spec.name.toLowerCase(), spec);
+        }
+        return api.registerCommand(spec);
       };
 
       if (typeof api.registerCommand === "function") {
@@ -7090,13 +7197,22 @@ const plugin = {
               const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
             }
+            // Denselben Neo-Store wie die Hooks: nur der vom Host aufgeloeste
+            // Workspace-Pfad geht hinein, kein Schluessel. workspaceKeyFromContext
+            // loest ihn dann wie bei before_prompt_build/agent_end ueber
+            // Pfad-Map -> Alias -> Basename auf ("main" fuer aliasierte
+            // Workspaces). Bis 7.12.18 stand hier der ACL-Principal
+            // ("workspace:v1:main") als expliziter Schluessel; der zeigte auf ein
+            // leeres Verzeichnis, und status/doctor/curation meldeten im Chat
+            // "hooks: {}", "not fired" und keine Kandidaten. Der rohe
+            // Chat-workspaceKey bleibt draussen (Tests b13-sensitive-read-auth,
+            // plur1bus-internal-auth).
             const commandStore = getNeoStore({
               workspaceDir: memoryCtx?.workspaceDir || "",
-              workspaceKey: memoryCtx?.workspaceIdentity || "",
               agentId: memoryCtx?.agentId || commandCtx.agentId || "command",
             });
             // ── Phase 5+6: silent cron-internal jobs ──────────────────────
-            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream>
+            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream|embedding-drain>
             // Wird ausschliesslich aus den OpenClaw-managed Cron-Jobs gefeuert
             // (delivery.mode=none).
             if (actionKey === "internal") {
@@ -7152,11 +7268,81 @@ const plugin = {
                       : await pool.withDb(internalAgent, runDailyPartition);
                   dailyRuns.push({ scope: dailyPartition.scope, result: partitionResult });
                 }
+                // 7.12.24: Graph-Kanten auf geloeschte oder zusammengefuehrte
+                // Erinnerungen wurden nie entfernt (main: 800 von 5004, bernhardine:
+                // 73 von 5026 am 09.09.2026) und belegten Platz unter dem 5000er-Cap.
+                let graphPrune = null;
+                try {
+                  const graphEdges = commandStore.readGraphEdges(100_000);
+                  if (graphEdges.length > 0) {
+                    const liveRows = await pool.withDb(internalAgent, async (agentDb) => {
+                      if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
+                      if (!agentDb?.table) return null;
+                      return agentDb.table.query().select(["id", "status"]).limit(500_000).toArray();
+                    });
+                    if (Array.isArray(liveRows)) {
+                      const liveMemoryIds = new Set(liveRows
+                        .filter((row) => !row.status || row.status === "active")
+                        .map((row) => String(row.id)));
+                      const episodeIds = new Set(commandStore.readEpisodes(100_000).map((episode) => String(episode.id)));
+                      const pruned = pruneGraphEdges(graphEdges, { liveMemoryIds, episodeIds });
+                      if (pruned.after !== pruned.before) commandStore.rewriteGraphEdges(pruned.kept);
+                      const { kept: _kept, ...graphPruneCounts } = pruned;
+                      graphPrune = graphPruneCounts;
+                    }
+                  }
+                } catch (graphErr) {
+                  graphPrune = { error: String(graphErr?.message || graphErr) };
+                }
+                // 7.12.28: Kandidaten-Metadatenindex auf die juengste Revision je ID
+                // ziehen (Cap = neo.recall.global.maxCandidates), bevor der Sidecar
+                // kompaktiert wird — dessen Live-Menge liest den Index mit.
+                let candidateIndex = null;
+                try {
+                  candidateIndex = typeof commandStore.compactCandidateIndex === "function" ? commandStore.compactCandidateIndex({ maxEntries: neoGlobalRecall.maxCandidates }) : null;
+                } catch (indexErr) {
+                  candidateIndex = { error: String(indexErr?.message || indexErr) };
+                }
+                // 7.12.26: verwaiste Vektor-Slots (Re-Embeddings, gecappte Zeilen)
+                // aus dem Sidecar raeumen; pruneAll hat keinen Aufrufer im Betrieb.
+                let vectorCompaction = null;
+                try {
+                  vectorCompaction = typeof commandStore.compactVectors === "function" ? commandStore.compactVectors() : null;
+                } catch (vectorErr) {
+                  vectorCompaction = { error: String(vectorErr?.message || vectorErr) };
+                }
+                // 7.12.31: LanceDB-Kompaktierung der Agententabelle (Fragmente
+                // zusammenfuehren, Versionen aelter als keepVersionsHours
+                // verwerfen). Lief bisher nur ueber den Dashboard-Schalter; die
+                // Tabellen standen bei 352/845 Fragmenten mit Median 1 Zeile.
+                let lancedbOptimize = null;
+                const optimizePlan = resolveLancedbOptimizePlan(dcCfg.lancedbOptimize);
+                if (!optimizePlan.enabled) {
+                  lancedbOptimize = { skipped: true, reason: "disabled" };
+                } else if (typeof memoryDbAdapter?.optimizeTable !== "function") {
+                  lancedbOptimize = { skipped: true, reason: "optimize_unavailable" };
+                } else {
+                  try {
+                    const outcome = await memoryDbAdapter.optimizeTable(internalAgent, {
+                      cleanupOlderThan: optimizePlan.cleanupOlderThan,
+                      timeoutMs: optimizePlan.timeoutMs,
+                    });
+                    lancedbOptimize = outcome?.ok
+                      ? { ok: true, ms: outcome.ms, keepVersionsHours: optimizePlan.keepVersionsHours, ...summarizeLancedbOptimize(outcome.stats, outcome.before, outcome.after) }
+                      : { ok: false, reason: outcome?.reason || "unknown" };
+                  } catch (optimizeErr) {
+                    lancedbOptimize = { ok: false, error: String(optimizeErr?.message || optimizeErr) };
+                  }
+                }
                 const result = {
                   partitionResults: dailyRuns,
                   compacted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.compacted || 0), 0),
                   deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
                   merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
+                  graphPrune,
+                  candidateIndex,
+                  vectorCompaction,
+                  lancedbOptimize,
                 };
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
@@ -7491,6 +7677,98 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal gc-run[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "gc-run", ...result });
               }
+              // Wartungsgriff fuer die Neo-Embedding-Warteschlange. Bisher lief der
+              // Drain ausschliesslich als Nebenjob nach jeder Erfassung, gedeckelt
+              // auf maxItems und auf das, was vom Capture-Budget uebrig war. Kommt
+              // mehr herein als abfliesst, holt er nie auf: am 09.09.2026 standen
+              // fuer bernhardine knapp 3000 Eintraege offen, seit Wochen zwischen
+              // 3000 und 4200 pendelnd. Ohne Vektor faellt der mit 0,75 gewichtete
+              // Anteil der Neo-Bewertung auf null, der Datensatz rankt nur noch
+              // ueber Token-Ueberlappung. Dieser Lauf nimmt sich die Warteschlange
+              // am Stueck vor, bleibt aber unter dem RPC-Timeout (540s) und meldet
+              // den Rest, damit man ihn bis pending=0 wiederholen kann.
+              if (subKey === "embedding-drain") {
+                if (!neoEnabled) {
+                  return formatJsonCommandResult({ job: "embedding-drain", skipped: true, reason: "neo_disabled" });
+                }
+                const neoStore = getNeoStore(commandCtx, {}, "embedding-drain");
+                const result = await neoStore.drainEmbeddingQueue({
+                  impact: neoEmbeddingDrainImpact,
+                  maxItems: NEO_MANUAL_DRAIN_MAX_ITEMS,
+                  deadlineMs: NEO_MANUAL_DRAIN_DEADLINE_MS,
+                  dimensions: vectorDim,
+                  embedder: (text) => embeddings.embed(text, { agentId: internalAgent }),
+                });
+                api.logger?.info?.(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "embedding-drain", ...result });
+              }
+              if (subKey === "emotion-refine") {
+                if (!emotionT3Enabled) {
+                  return formatJsonCommandResult({ job: "emotion-refine", skipped: true, reason: "emotion_t3_disabled" });
+                }
+                const refineStartedAt = Date.now();
+                const runtimeLlm = commandCtx?.runtimeContext?.llm;
+                const result = await pool.withDb(internalAgent, async (agentDb) => {
+                  if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
+                  const counts = { refined: 0, finalized: 0, failed: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
+                  if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus")) {
+                    return { ...counts, skipped: true, reason: "no_emotion_status_column" };
+                  }
+                  const rows = await agentDb.table.query()
+                    .where("emotionStatus = 'pending_t3'")
+                    .limit(EMOTION_REFINE_MAX_ROWS + 1)
+                    .toArray();
+                  counts.scanned = Math.min(rows.length, EMOTION_REFINE_MAX_ROWS);
+                  let consecutiveFailures = 0;
+                  for (const row of rows.slice(0, EMOTION_REFINE_MAX_ROWS)) {
+                    if (Date.now() - refineStartedAt > EMOTION_REFINE_DEADLINE_MS) {
+                      counts.deadlineHit = true;
+                      break;
+                    }
+                    const status = String(row.status || "active");
+                    if (status !== "active") {
+                      // Ueberholte oder geloeschte Zeilen brauchen keinen LLM-Lauf,
+                      // sollen aber nicht bei jedem Lauf erneut gescannt werden.
+                      await agentDb.update(row.id, { emotionStatus: "final" });
+                      counts.finalized++;
+                      continue;
+                    }
+                    const refined = await inferEmotionalValenceAsync(
+                      String(row.text || "").slice(0, 2000),
+                      "user",
+                      3,
+                      { agentId: internalAgent, runtimeLlm },
+                    );
+                    // Ein Provider-Ausfall kommt als neutraler Tier-3-Fallback
+                    // mit Konfidenz 0 zurueck (lib/tier3-llm.js), nie als Wurf.
+                    const refineFailed = refined?.tierUsed !== 3
+                      || (!(Number(refined.confidence) > 0)
+                        && refined.emotionalDominant === "neutral"
+                        && !(Number(refined.emotionalIntensity) > 0));
+                    if (refineFailed) {
+                      // Provider-Ausfall: Zeile bleibt pending, naechster Lauf
+                      // versucht es erneut. Mehrere Fehlschlaege am Stueck =
+                      // Route tot, Lauf abbrechen statt Zeitbudget verheizen.
+                      counts.failed++;
+                      if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
+                      continue;
+                    }
+                    consecutiveFailures = 0;
+                    await agentDb.update(row.id, {
+                      emotionalValence: serializeEmotionalValence(refined),
+                      emotionalIntensity: Number(refined.emotionalIntensity) || 0,
+                      emotionalDominant: refined.emotionalDominant || "neutral",
+                      emotionStatus: "final",
+                    });
+                    counts.refined++;
+                  }
+                  counts.pending = Math.max(0, rows.length - counts.refined - counts.finalized);
+                  counts.ms = Date.now() - refineStartedAt;
+                  return counts;
+                });
+                api.logger?.info?.(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "emotion-refine", ...result });
+              }
               if (subKey === "feedback-report") {
                 if (!commandCtx.workspaceDir) {
                   return formatJsonCommandResult({ job: "feedback-report", skipped: true, reason: "no_workspace" });
@@ -7569,7 +7847,7 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect"] });
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -8011,10 +8289,14 @@ const plugin = {
                   }
                   const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
                   if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
-                  active.sort((a, b) => (a.remindAt || 0) - (b.remindAt || 0));
+                  // remindAt kommt aus LanceDB als BigInt: `new Date(1n)` wirft
+                  // "Cannot convert a BigInt value to a number" — Bernhardines
+                  // /reminder list fiel am 09.09.2026 genau daran.
+                  const remindAtMs = (r) => Number(r.remindAt || 0);
+                  active.sort((a, b) => remindAtMs(a) - remindAtMs(b));
                   const lines = [t("reminder.list_header", { lang, tone })];
                   for (const r of active) {
-                    const when = r.remindAt ? new Date(r.remindAt).toISOString().replace("T", " ").slice(0, 16) : "?";
+                    const when = remindAtMs(r) ? new Date(remindAtMs(r)).toISOString().replace("T", " ").slice(0, 16) : "?";
                     lines.push(t("reminder.list_item", { lang, tone, vars: {
                       when,
                       text: String(r.text || "").slice(0, 80),
@@ -8324,10 +8606,54 @@ const plugin = {
             }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
+        // Operator path for chat commands: `/name args` runs the registered
+        // handler with the same identity-bound context the channel would build
+        // for that direct chat (channel, account, peer, sender = peer). The
+        // session key must name a direct chat of the requested agent; the
+        // handler's own authorization (allowedUserIds, confirmations) applies
+        // unchanged, so this grants nothing the chat owner could not do.
+        const runOperatorCommand = async ({ agentId, sessionKey, command, locale }) => {
+          const trimmed = String(command || "").trim();
+          const match = /^\/([A-Za-z0-9_-]+)(?:@\S+)?(?:\s+([\s\S]*))?$/.exec(trimmed);
+          if (!match) throw new Error("command must look like /name [args]");
+          const spec = pluginCommandHandlers.get(match[1].toLowerCase());
+          if (!spec) throw new Error(`unknown PLUR1BUS command /${match[1]}`);
+          const direct = describeOperatorDirectSession(sessionKey, await hostRoutingLoader());
+          if (!direct) throw new Error("session key must name a direct chat session (agent:<id>:<channel>:<account>:direct:<peer>)");
+          if (direct.agentId !== safeAgentId(agentId)) throw new Error("session key belongs to a different agent");
+          // The host hands every command its workspaceDir; several handlers
+          // read it straight off the context (tone hint, vault paths).
+          const workspaceDir = await runtimeIfUsable(api)?.agent?.resolveAgentWorkspaceDir?.(api.config, direct.agentId);
+          const commandCtx = {
+            agentId: direct.agentId,
+            sessionKey: direct.sessionKey,
+            channel: direct.channel,
+            accountId: direct.accountId,
+            from: `${direct.channel}:${direct.peerId}`,
+            senderId: direct.peerId,
+            chatType: "private",
+            workspaceDir,
+            config: api.config,
+            args: (match[2] || "").trim(),
+            commandBody: trimmed,
+            origin: "operator",
+            source: "cli",
+          };
+          // 7.12.24: Ohne Chatverlauf fiel die Sprache auf Englisch zurueck.
+          // resolveLocale nimmt ctx.lang vor der Nachrichten-Erkennung.
+          const operatorLang = (typeof locale === "string" && locale.trim())
+            || (typeof cfg.language === "string" && cfg.language.trim())
+            || "";
+          if (operatorLang) commandCtx.lang = operatorLang;
+          const result = await spec.handler(commandCtx);
+          const text = typeof result === "string" ? result : result?.text;
+          return { text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY" };
+        };
         if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
           registerFeatureCronNativeDispatch({
             api,
             runFeatureCommand: (commandCtx) => runPlur1busCommand(commandCtx),
+            runOperatorCommand,
           });
         }
 
@@ -8349,7 +8675,7 @@ const plugin = {
           { name: "plur1bus_conflicts", description: "Build PLUR1BUS conflict reports.", acceptsArgs: true, prefixTokens: ["obsidian", "conflicts", "build"] },
         ];
         for (const command of plur1busCommands) {
-          api.registerCommand({
+          registerPluginCommand({
             name: command.name,
             description: command.description,
             acceptsArgs: command.acceptsArgs ?? false,
@@ -8379,6 +8705,9 @@ const plugin = {
             let cardCount = null;
             try {
               cardCount = await pool.withDb(agentId, async (db) => {
+                // Ein frisch geoeffneter Store hat noch keine Tabelle; ohne
+                // init() stand bei Bernhardine "unknown cards" (09.09.2026).
+                if (!db?.table && typeof db?.init === "function") await db.init();
                 if (!db?.table) return null;
                 return db.table.countRows();
               });
@@ -8461,7 +8790,7 @@ const plugin = {
           }
         };
 
-        api.registerCommand({
+        registerPluginCommand({
           name: "state",
           description: "PLUR1BUS — system state (vault sync, sanity checks, ...). '/status' is reserved by OpenClaw.",
 
@@ -8469,14 +8798,14 @@ const plugin = {
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runStatusCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "enable",
           description: `PLUR1BUS — Feature enable. Known: ${listFeatures().join(", ")}`,
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: (commandCtx) => runFeatureToggle(commandCtx, true),
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "disable",
           description: `PLUR1BUS — Feature disable. Known: ${listFeatures().join(", ")}`,
           acceptsArgs: true,
@@ -8484,7 +8813,7 @@ const plugin = {
           handler: (commandCtx) => runFeatureToggle(commandCtx, false),
         });
 
-        api.registerCommand({
+        registerPluginCommand({
           name: "speaker",
           description: "PLUR1BUS — Speaker naming. /speaker list | name <label> <name> | proposals | confirm <label> | reject <label> | clear <label>",
           acceptsArgs: true,
@@ -9405,6 +9734,15 @@ const plugin = {
             if (!workspaceDir) {
               return { text: t("plur1bus.mf_no_workspace", { lang, tone }) };
             }
+            // Feedback nur fuer eine Erinnerung, die es gibt: bis 09.09.2026
+            // nahm /mf jede wohlgeformte UUID an und schrieb sie ins
+            // Feedback-Log, wo der Bericht sie dann als Top-Treffer zaehlte.
+            // Geloeschte Karten bekommen dieselbe Meldung wie unbekannte —
+            // kein Existenz-Orakel fuer Tombstones.
+            const target = await memoryDbAdapter.getCard(memoryCtx.agentId, parsed.memoryId, { ctx: memoryCtx }).catch(() => null);
+            if (!target || String(target.status || "") === "deleted") {
+              return { text: t("plur1bus.mf_not_found", { lang, tone, vars: { id: parsed.memoryId } }) };
+            }
             recordFeedback(workspaceDir, "", parsed.memoryId, parsed.feedback, {});
             return { text: t("plur1bus.mf_done", { lang, tone, vars: { id: parsed.memoryId, feedback: parsed.feedback } }) };
           } catch (err) {
@@ -9413,28 +9751,28 @@ const plugin = {
           }
         };
 
-        api.registerCommand({
+        registerPluginCommand({
           name: "memory",
           description: "PLUR1BUS — recall memories (e.g. /memory this week, /memory about Eva)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runMemoryCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "mf",
           description: "PLUR1BUS — give feedback on a memory. Syntax: /mf <id> + (or -, ~)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runMemoryFeedbackCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "forget",
           description: "PLUR1BUS — delete a memory (archive-first)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runForgetCommand,
         });
-        api.registerCommand({
+        registerPluginCommand({
           name: "correct",
           description: "PLUR1BUS — edit a memory. Syntax: /correct <old> zu <new>",
           acceptsArgs: true,
@@ -9442,7 +9780,7 @@ const plugin = {
           handler: runCorrectCommand,
         });
         for (const name of ["share", "teile"]) {
-          api.registerCommand({
+          registerPluginCommand({
             name,
             description: "PLUR1BUS — share a memory to the workspace or authenticated user pool",
             acceptsArgs: true,
@@ -9450,7 +9788,7 @@ const plugin = {
             handler: runShareCommand,
           });
         }
-        api.registerCommand({
+        registerPluginCommand({
           name: "wiki",
           description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
           acceptsArgs: true,
@@ -9595,6 +9933,7 @@ const plugin = {
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+          const captureStartedAt = Date.now();
           const throwIfCaptureAborted = () => {
             if (!signal?.aborted) return;
             if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
@@ -9653,10 +9992,14 @@ const plugin = {
                 embeddingDrainEnabled: false,
                 embeddingDrainImpact: neoEmbeddingDrainImpact,
                 embeddingDrainMaxItems: neoEmbeddingDrainMaxItems,
-                signal,
+                signal: deriveBudgetedSignal(signal, neoAgentEndBudgetMs),
               });
               if (neoResult?.capture) {
-                api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
+                const transcriptTurns = neoResult.capture.transcript?.turns;
+                const neoTimings = neoResult.timings && typeof neoResult.timings === "object"
+                  ? ` timings=${JSON.stringify(neoResult.timings)}`
+                  : "";
+                api.logger.info(`plur1bus-neo: worker captured new turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${Number.isFinite(transcriptTurns) ? ` (transcript turns=${transcriptTurns})` : ""}${neoTimings}${background ? " (background)" : ""}`);
               }
               const logDrain = (drain) => {
                 if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
@@ -9664,18 +10007,36 @@ const plugin = {
                 }
               };
               if (neoEmbeddingAutoDrainEnabled) {
-                runNeoEmbeddingDrain = async () => logDrain(await neoStore.drainEmbeddingQueue({
-                  impact: neoEmbeddingDrainImpact,
-                  maxItems: neoEmbeddingDrainMaxItems,
-                  dimensions: vectorDim,
-                  embedder: (text) => embeddings.embed(text, { agentId }),
-                  signal,
-                }));
+                runNeoEmbeddingDrain = async () => {
+                  // Der Drain bekommt nur, was vom Capture-Budget uebrig ist,
+                  // abzueglich einer Marge fuer den laufenden Embed-Aufruf.
+                  // Ohne Frist lief er bis zum Worker-Abbruch (55 s) und der
+                  // Hook kehrte erst nach ~62 s zurueck — jenseits der 60 s
+                  // des Hosts; bei Bernhardine an jedem Turn (09.09.2026).
+                  const remainingMs = runtimeScheduler.config.captureTimeoutMs
+                    - (Date.now() - captureStartedAt) - NEO_HOOK_DRAIN_MARGIN_MS;
+                  if (remainingMs < NEO_HOOK_DRAIN_MIN_MS) {
+                    api.logger.info(`plur1bus-neo: embedding queue drain skipped — ${Math.max(0, remainingMs)}ms left in the capture budget`);
+                    return;
+                  }
+                  logDrain(await neoStore.drainEmbeddingQueue({
+                    impact: neoEmbeddingDrainImpact,
+                    maxItems: neoEmbeddingDrainMaxItems,
+                    dimensions: vectorDim,
+                    embedder: (text) => embeddings.embed(text, { agentId }),
+                    signal,
+                    deadlineMs: remainingMs,
+                  }));
+                };
               } else {
                 logDrain(neoResult?.drain);
               }
             } catch (neoErr) {
-              api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
+              if (isBudgetExhaustion(neoErr, signal)) {
+                api.logger.warn(`plur1bus-neo: worker capture exceeded its ${neoAgentEndBudgetMs}ms budget (kalter Store?) — die Erfassung laeuft weiter, Neo holt beim naechsten Turn auf`);
+              } else {
+                api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
+              }
             }
           }
 
@@ -9893,7 +10254,7 @@ const plugin = {
                 });
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId, signal });
+                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal, importance: captureImportanceResult.importance });
                 throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
@@ -9927,6 +10288,7 @@ const plugin = {
                   emotionalIntensity: captureEmotion.emotionalIntensity,
                   emotionalDominant: captureEmotion.emotionalDominant,
                   moodContextAtCapture: serializeEmotionalValence(captureMoodContext),
+                  emotionStatus: captureEmotionStatus,
                   topics: graphSignals.topics,
                   entities: graphSignals.entities,
                   people: graphSignals.people,
@@ -9941,6 +10303,13 @@ const plugin = {
                 if (settlement.status === "rejected") {
                   api.logger.warn(`memory-lancedb-namespaced: late capture store settlement failed: ${String(settlement.error)}`);
                 }
+                // Ist das Budget alle, scheitert jeder weitere Eintrag am selben
+                // Abbruch. Frueher stand deshalb je Restposten eine eigene
+                // Fehlerzeile im Log (09.09.2026: vier Stueck fuer bernhardine),
+                // was nach Datenverlust aussah, obwohl das Bereits-Gespeicherte
+                // steht und der Rest beim naechsten Turn drankommt. Einmal
+                // abbrechen, der aeussere Block meldet den Zaehlstand.
+                if (isAbortError(err)) throw err;
                 api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
               }
             }
@@ -10036,8 +10405,16 @@ const plugin = {
             // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
             const neoStore = getNeoStore(ctx, event);
             const hooks = neoStore.readHooks();
-            const lastCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
+            const recordedCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
             const currentCount = event.messages?.length || 0;
+            // 7.12.24: Nach einer Kompaktierung ist der Verlauf kuerzer als die
+            // Marke (z. B. 274 → 221); ohne Reset blieb dieser Block stumm, bis
+            // der Verlauf die alte Laenge wieder ueberschritt.
+            let lastCount = recordedCount;
+            if (currentCount < recordedCount) {
+              api.logger.info(`memory-lancedb-namespaced: message count dropped (${recordedCount} → ${currentCount}), resetting the agent_end watermark`);
+              lastCount = 0;
+            }
 
             if (currentCount <= lastCount) {
               api.logger.info(`memory-lancedb-namespaced: no new messages since last processing (${lastCount} → ${currentCount})`);
@@ -10362,7 +10739,14 @@ const plugin = {
               }
             }
           } catch (err) {
-            api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
+            if (isAbortError(err)) {
+              // Ohne Zaehler: `stored`/`skipped` leben im try-Block und sind
+              // hier nicht sichtbar. Was gespeichert wurde, steht ohnehin je
+              // Eintrag im Log ("stored memory ...").
+              api.logger.info(`memory-lancedb-namespaced: capture budget exhausted for agent=${agentId} — das bereits Gespeicherte steht, der Rest folgt beim naechsten Turn`);
+            } else {
+              api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
+            }
           }
           });
           } finally {
@@ -10776,7 +11160,7 @@ const plugin = {
                       }
                       const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
-                      const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
+                      const { emotion: mergedEmotion, emotionStatus: mergedEmotionStatus } = await classifyEmotionForStore(mergeResult.mergedText, { agentId, importance: mergedImportance });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
                       const mergedEntry = applyDynamicsDefaults({
@@ -10788,6 +11172,7 @@ const plugin = {
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
+                        emotionStatus: mergedEmotionStatus,
                         validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
                       }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
                       return { mergedEntry, mergeResult, mergedImportance };
@@ -10816,7 +11201,7 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const emotion = await inferEmotionalValenceAsync(params.text, "user", null, { agentId });
+              const { emotion, emotionStatus } = await classifyEmotionForStore(params.text, { agentId, importance });
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
@@ -10827,6 +11212,7 @@ const plugin = {
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
+                emotionStatus,
                 validFrom: capturedValidFrom, validUntil: capturedValidUntil,
               }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
               await db.store(entry);
@@ -11141,12 +11527,29 @@ const plugin = {
                 LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
                 // No temperature: providers like the Kimi coding endpoint allow exactly
                 // one value per thinking mode and answer HTTP 400 for anything else.
-                { maxTokens: 3000 },
+                // Das Budget waechst mit dem Bestand: der Aufruf gibt den ganzen
+                // Textkoerper zurueck, ein fester Deckel von 3000 lief mit der
+                // Datei aus dem Ruder (09.09.2026: 2752 bzw. 3121 Token allein
+                // fuer den Bestand, beide Laeufe schlugen fehl).
+                // Zeit und Menge gehoeren zusammen: der Standard von 30 s reicht
+                // nur fuer eine kleine Datei. Fuer die gewachsenen lief derselbe
+                // Aufruf seit dem 01.07.2026 in TimeoutError.
+                (() => {
+                  const maxTokens = resolveKnowledgeUpdateMaxTokens(currentBody);
+                  return { maxTokens, timeoutMs: resolveKnowledgeUpdateTimeoutMs(maxTokens) };
+                })(),
                 { agentId },
               ));
 
               if (!updated) {
                 return { content: [{ type: "text", text: "knowledge_update: LLM returned empty result." }] };
+              }
+              // Der Aufruf soll integrieren, nicht kuerzen. Kaeme die Antwort
+              // abgeschnitten zurueck, wuerde sie hier ungeprueft ueber den
+              // Bestand geschrieben und Wissen vernichten.
+              if (isTruncatedKnowledgeBody(currentBody, updated)) {
+                api.logger.warn(`memory-lancedb-namespaced: knowledge_update verworfen — Antwort (${updated.trim().length} Zeichen) deutlich kuerzer als der Bestand (${currentBody.trim().length}); KNOWLEDGE.md bleibt unveraendert`);
+                return { content: [{ type: "text", text: "knowledge_update: the model returned a shortened body; KNOWLEDGE.md was left untouched." }] };
               }
 
               let finalBody = updated;
@@ -11164,7 +11567,12 @@ const plugin = {
                   LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
                   // No temperature: providers like the Kimi coding endpoint allow exactly
                   // one value per thinking mode and answer HTTP 400 for anything else.
-                  { maxTokens: 4000 },
+                  // Die Verdichtung soll kuerzen, braucht aber Luft fuer den
+                  // Zwischenstand; das Ziel von 150 Zeilen deckelt das Ergebnis.
+                  (() => {
+                    const maxTokens = resolveKnowledgeUpdateMaxTokens(finalBody, { floor: 4000 });
+                    return { maxTokens, timeoutMs: resolveKnowledgeUpdateTimeoutMs(maxTokens) };
+                  })(),
                   { agentId },
                 ));
 
@@ -11198,10 +11606,23 @@ const plugin = {
               const lineCount = finalContent.split("\n").length;
               return { content: [{ type: "text", text: `KNOWLEDGE.md updated (${pendingTexts.length} memories integrated, ${lineCount} lines total).` }] };
             } catch (err) {
-              api.logger.warn("memory-lancedb-namespaced: knowledge_update failed", {
-                errorClass: normalizedLlmErrorClass(err),
-              });
-              return { content: [{ type: "text", text: "knowledge_update failed: provider or file operation unavailable." }] };
+              // Die Ursache stand bisher nur im strukturierten Teil, der nicht
+              // serialisiert wird — im Log blieb eine Meldung ohne Aussage, und
+              // der Agent gab sie so an den Nutzer weiter. Am 09.09.2026 hat das
+              // die Suche nach dem eigentlichen Fehler mehrfach in die Irre
+              // gefuehrt. Klasse und Meldung gehoeren in die Zeile.
+              // Nur die Klasse, niemals die Meldung: Provider-Fehler tragen
+              // Prompt-Fragmente und Zugangsdaten, und genau das sichert
+              // "Schicht 1.5 sanitizes provider failures in responses and logs"
+              // zu. Die Klasse stand bisher nur im strukturierten Teil des
+              // Log-Aufrufs, der nicht serialisiert wird — im Log blieb eine
+              // Zeile ohne Aussage, und die Sammelformel "provider or file
+              // operation unavailable" warf zwei verschiedene Ursachen
+              // zusammen. Am 09.09.2026 hat das die Fehlersuche mehrfach in
+              // die Irre gefuehrt.
+              const errorClass = normalizedLlmErrorClass(err);
+              api.logger.warn(`memory-lancedb-namespaced: knowledge_update failed (class=${errorClass})`);
+              return { content: [{ type: "text", text: `knowledge_update failed (${errorClass}).` }] };
             } finally {
               // Release lock
               try { if (existsSync(lockPath)) { const { unlinkSync } = await import("node:fs"); unlinkSync(lockPath); } } catch (_e) { dbg(_e); }
@@ -11263,14 +11684,21 @@ const plugin = {
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
         if (!ctx?.workspaceDir || !event?.prompt || skipInternalRecall) return;
         if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return;
+        const outcomeAgentId = ctx?.agentId || "default";
+        const startedAt = Date.now();
         try {
-          await completePendingReplyOutcomes(ctx.workspaceDir, {
-            agentId: ctx?.agentId || "default",
+          // 7.12.30: Der Host fuehrt die Handler nacheinander aus; dieser lief vor
+          // dem Recall und wartete auf bis zu zwoelf LanceDB-Updates. Jetzt bleiben
+          // nur Klassifikation und Log-Dateien hier, die DB-Arbeit geht in die
+          // Warteschlange und startet nach dem Recall (siehe replyOutcomeDynamics).
+          const completed = await completePendingReplyOutcomes(ctx.workspaceDir, {
+            agentId: outcomeAgentId,
             sessionKey: sessionKeyFrom(event, ctx),
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             replyText: event.prompt,
             dbPool: pool,
             applyDynamics: true,
+            dynamicsScheduler: (run, meta) => replyOutcomeDynamics.enqueue(outcomeAgentId, run, meta),
             logger: api.logger,
             maxAgeMs: replyOutcomeMaxAgeMs,
             maxMemoryIds: replyOutcomeMaxMemoryIds,
@@ -11279,6 +11707,11 @@ const plugin = {
             maxOutcomeLogEntries: replyOutcomeMaxOutcomeLogEntries,
             maxFeedbackLogEntries: replyOutcomeMaxFeedbackLogEntries,
           });
+          const ms = Date.now() - startedAt;
+          if (Array.isArray(completed) && completed.length > 0) {
+            const line = `reply-outcome: completed outcomes=${completed.length} memoryIds=${completed.reduce((sum, entry) => sum + (entry.memoryIds?.length || 0), 0)} syncMs=${ms} queued=${replyOutcomeDynamics.pending(outcomeAgentId)} agent=${outcomeAgentId}`;
+            if (ms >= REPLY_OUTCOME_SYNC_LOG_MS) api.logger?.info?.(line); else api.logger?.debug?.(line);
+          }
         } catch (err) {
           api.logger?.warn?.(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);
         }
@@ -11286,11 +11719,28 @@ const plugin = {
     }
 
     if (autoRecall) {
-      api.on("reply_dispatch", async (event) => {
+      // 7.12.35: Registrierung und jeden Aufruf sichtbar machen — auf 7.12.34
+      // erschien fuer Bernds Turns (10.09.2026 14:27–15:04) keine einzige
+      // Handler-Zeile, `pending=0`; statisch war im Host kein Gate zu finden.
+      let replyDispatchInvocations = 0;
+      const replyDispatchRegistration = api.on("reply_dispatch", async (event, hookCtx) => {
+        replyDispatchInvocations += 1;
+        api.logger?.info?.(`memory-turn-routes: reply_dispatch handler invoked #${replyDispatchInvocations} dispatchKind=${String(hookCtx?.dispatchKind || "")} hasCtx=${Boolean(event?.ctx)} sessionKey=${String(event?.sessionKey || event?.ctx?.SessionKey || "").slice(0, 96)}`);
         const turnRoutes = await getMemoryTurnRoutes();
         turnRoutes?.observeReplyDispatch(event);
+        // 7.12.33: Ausgang der Beobachtung (Debug); die Fallback-Warnung des
+        // Prompt-Hooks traegt denselben Grund als `ticket=`.
+        try {
+          const sessionKey = event?.sessionKey || event?.ctx?.SessionKey || "";
+          const observed = turnRoutes?.lastObserve?.(sessionKey) || "none";
+          const line = `memory-turn-routes: dispatch observe:${observed} session=${String(sessionKey).slice(0, 96)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} eventKeys=${Object.keys(event || {}).filter((k) => k !== "ctx").slice(0, 24).join(",")} ctxKeys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|BodyForAgent|RawBody|SenderId|ChatId|Provider|Surface|AccountId|OriginatingTo|OriginatingChannel|OriginatingAccountId|SessionKey|RunId|isTailDispatch|MessageThreadId)$/.test(k)).join(",")}`;
+          // 7.12.34: Nicht-Kommando-Ausstiege sichtbar machen (Info), Rest Debug.
+          if (/^(registered|slash_command|command_turn:|command_source|is_command|tail_dispatch)/.test(observed)) api.logger?.debug?.(line);
+          else api.logger?.info?.(line);
+        } catch (_) { /* best-effort */ }
         return undefined;
-      }, { priority: Number.MIN_SAFE_INTEGER });
+      }, { priority: Number.MIN_SAFE_INTEGER, eligibleDispatchKinds: ["agent", "acp"] });
+      api.logger?.info?.(`memory-turn-routes: reply_dispatch hook registered result=${replyDispatchRegistration === undefined ? "undefined" : typeof replyDispatchRegistration} autoRecall=${autoRecall}`);
 
       api.on("agent_end", async (event, ctx) => {
         if (!turnRouteState.initPromise) return;
@@ -11324,6 +11774,11 @@ const plugin = {
         }
         const routingCapability = await hostRoutingLoader();
         const turnRoutes = await getMemoryTurnRoutes();
+        // 7.12.30: Phasenzeiten des Vorlaufs (Identitaet, Neo-Fenster, Embedding,
+        // globale Suche, Lanes). Der Host bricht den Hook nach 15 s ab; am
+        // 09./10.09.2026 passierte das dutzendfach, ohne dass eine Logzeile den
+        // Verbleib der Zeit zeigte.
+        const recallPrelude = { startedAt: Date.now(), identityMs: 0, hookRecordMs: 0, windowMs: 0, embedMs: 0, embedTimedOut: false, globalMs: 0, lanesMs: 0 };
         const memoryCtx = turnRoutes
           ? await resolveHostHookMemoryContext({
               ...ctx,
@@ -11348,29 +11803,82 @@ const plugin = {
             }, { workspaceAliases: memoryWorkspaceAliases });
         if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
         let neoContext = "";
+        let neoLanes = null;
+        let neoGlobalIds = null;
+        let neoInjectionKey = null;
         if (neoEnabled) {
+          // 7.12.27: Der Warm-up bei gateway_start erreicht nur die erste
+          // Plugin-Instanz; Instanzen, die der Host spaeter je Agent anlegt,
+          // trafen agent_end mit kaltem Worker (spawnMs 592 trotz Warm-up,
+          // 10.09.2026 00:20). Der Recall laeuft vor agent_end — hier
+          // anwerfen, ensureWorker ist idempotent.
+          try { neoWorkerRuntime?.warmUp?.(); } catch (_) { /* best-effort */ }
+          recallPrelude.identityMs = Date.now() - recallPrelude.startedAt;
           try {
             const injectionKey = markNeoRecallInjection(event, ctx);
+            neoInjectionKey = injectionKey;
             const neoStore = getNeoStore(ctx, event);
             const requester = neoRequester(ctx, event);
-            neoStore.recordHook("before_prompt_build", {
+            // 7.12.30: Hook-Zaehler ohne synchronen Lock (Atomics.wait bis 5 s
+            // im Main-Thread); fire-and-forget, asynchron gewartet.
+            const hookRecordStartedAt = Date.now();
+            const hookMeta = {
               agentId: ctx?.agentId || "default",
               promptLength: event?.prompt?.length || 0,
               runner: event?.runner || event?.provider || "",
-            });
+            };
+            if (typeof neoStore.recordHookAsync === "function") {
+              neoStore.recordHookAsync("before_prompt_build", hookMeta)
+                .catch((hookErr) => api.logger?.debug?.(`plur1bus-neo: before_prompt_build hook record skipped: ${String(hookErr?.message || hookErr)}`));
+            } else {
+              neoStore.recordHook("before_prompt_build", hookMeta);
+            }
+            recallPrelude.hookRecordMs = Date.now() - hookRecordStartedAt;
             if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
+              const windowStartedAt = Date.now();
               const neoItems = [...neoStore.readCandidates(500, requester), ...neoStore.readBehaviorCards(200, requester)];
+              recallPrelude.windowMs = Date.now() - windowStartedAt;
               let queryVector = null;
-              try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId })); }
-              catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
-              neoContext = formatNeoRecallContext(
-                routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 }),
-                { idempotencyKey: injectionKey || undefined },
-              );
+              const embedStartedAt = Date.now();
+              try {
+                const embedPromise = Promise.resolve(typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId }));
+                let embedTimer = null;
+                const embedTimeout = new Promise((resolve) => { embedTimer = setTimeout(() => resolve(NEO_EMBED_TIMEOUT), neoGlobalRecall.embedTimeoutMs); });
+                try {
+                  const outcome = await Promise.race([embedPromise, embedTimeout]);
+                  if (outcome === NEO_EMBED_TIMEOUT) {
+                    recallPrelude.embedTimedOut = true;
+                    embedPromise.catch(() => {});
+                    api.logger?.warn?.(`plur1bus-neo: prompt query embedding exceeded ${neoGlobalRecall.embedTimeoutMs} ms, continuing without vector`);
+                  } else {
+                    queryVector = outcome;
+                  }
+                } finally {
+                  if (embedTimer) clearTimeout(embedTimer);
+                }
+              } catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
+              recallPrelude.embedMs = Date.now() - embedStartedAt;
+              const globalStartedAt = Date.now();
+              try {
+                neoGlobalIds = runNeoGlobalSearch(neoStore, neoItems, queryVector, requester);
+              } catch (globalErr) {
+                api.logger?.warn?.(`plur1bus-neo: global candidate search failed: ${String(globalErr)}`);
+              }
+              recallPrelude.globalMs = Date.now() - globalStartedAt;
+              const lanesStartedAt = Date.now();
+              neoLanes = routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 });
+              neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
+              recallPrelude.lanesMs = Date.now() - lanesStartedAt;
             }
           } catch (neoErr) {
             api.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
           }
+        }
+        {
+          const preludeMs = Date.now() - recallPrelude.startedAt;
+          const preludeLine = `plur1bus-neo: recall prelude total=${preludeMs}ms identity=${recallPrelude.identityMs}ms hookRecord=${recallPrelude.hookRecordMs}ms window=${recallPrelude.windowMs}ms embed=${recallPrelude.embedMs}ms${recallPrelude.embedTimedOut ? "(timeout)" : ""} global=${recallPrelude.globalMs}ms lanes=${recallPrelude.lanesMs}ms authenticated=${memoryCtx?.userPrincipal ? "yes" : "no"} agent=${ctx?.agentId || "default"}`;
+          if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) api.logger?.info?.(preludeLine);
+          else api.logger?.debug?.(preludeLine);
         }
         if (!event.prompt || event.prompt.length < 5) return neoContext ? { prependContext: neoContext } : undefined;
         // Skip heavy LanceDB recall for internal dreaming/sleep magic messages —
@@ -12250,6 +12758,20 @@ const plugin = {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
           throwIfAborted(signal, "recall aborted");
+          // 7.12.27: Globale Neo-Treffer, die als LanceDB-Erinnerung schon im
+          // selben Prompt stehen, nicht doppelt injizieren.
+          if (neoLanes && neoGlobalIds?.size > 0 && Array.isArray(ordered) && ordered.length > 0) {
+            try {
+              const memoryTexts = ordered.map((row) => row?.entry?.text || row?.text || "").filter(Boolean);
+              const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold });
+              if (deduped.dropped > 0) {
+                neoContext = formatNeoRecallContext(deduped.lanes, { idempotencyKey: neoInjectionKey || undefined });
+                api.logger?.info?.(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories`);
+              }
+            } catch (dedupeErr) {
+              api.logger?.debug?.(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
+            }
+          }
           return { prependContext: applyGlobalInjectBudget({
             blocks: [
               { name: "neo", text: neoContext, droppable: true },
@@ -12269,6 +12791,9 @@ const plugin = {
         }
         }));
         });
+        // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
+        // Reply-Outcome-Dynamik die Tabelle anfassen.
+        if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
         if (scheduledRecall.ok) {
           if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
             api.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
