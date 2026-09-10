@@ -71,11 +71,29 @@ test("valid state → prependContext with tags and label", async () => {
     assert.ok(result?.prependContext?.includes("kein Event"), "ambient disclaimer missing");
     assert.ok(!result?.prependContext?.includes("[Stimmungs-Update]"), "old event framing must be gone");
     assert.ok(result?.prependContext?.includes("fröhlich"), "label missing");
-    assert.ok(result?.prependContext?.includes("Füge am Beginn"), "display instruction missing");
+    assert.ok(!result?.prependContext?.includes("Füge am Beginn"), "1.1.0: no display instruction any more");
+    assert.ok(!result?.prependContext?.includes("<i>Stimmung:"), "1.1.0: no visible mood line any more");
+    assert.ok(result?.prependContext?.includes("nicht unaufgefordert"), "tone-only instruction missing");
+    assert.ok(result?.prependContext?.includes("Fragt dich jemand nach deiner Stimmung"), "answer-when-asked instruction missing");
   } finally { cleanup(dir); }
 });
 
-test("joy dominant → 😊 emoji in display line", async () => {
+test("1.1.0: the block names label, nuances, intensity and trend word for the answer-when-asked case", async () => {
+  const { api, handler } = makeApi();
+  register(api);
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
+      label: "fröhlich", dominant: "joy", intensity: "hoch", nuances: ["gespannt"], details: {}, trend: "steigend"
+    }));
+    const result = await handler()({}, { workspaceDir: dir });
+    assert.ok(result?.prependContext?.includes("Grundlage: fröhlich, gespannt, hoch, Tendenz steigend"), `answer basis missing: ${result?.prependContext}`);
+    assert.ok(result?.prependContext?.includes("Aktuelle Stimmung: fröhlich, gespannt, Intensität hoch. Trend: ↗ (steigend)."));
+    assert.ok(!/😊|🤝|😌/u.test(result?.prependContext || ""), "no display emoji in the block");
+  } finally { cleanup(dir); }
+});
+
+test("block contains intensity", async () => {
   const { api, handler } = makeApi();
   register(api);
   const dir = tmp();
@@ -84,60 +102,7 @@ test("joy dominant → 😊 emoji in display line", async () => {
       label: "fröhlich", dominant: "joy", intensity: "hoch", nuances: [], details: {}
     }));
     const result = await handler()({}, { workspaceDir: dir });
-    assert.ok(result?.prependContext?.includes("😊"), "joy emoji missing");
-    assert.ok(result?.prependContext?.includes("<i>Stimmung:"), "display line missing");
-  } finally { cleanup(dir); }
-});
-
-test("trust dominant → 🤝 emoji in display line", async () => {
-  const { api, handler } = makeApi();
-  register(api);
-  const dir = tmp();
-  try {
-    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
-      label: "vertrauensvoll", dominant: "trust", intensity: "mittel", nuances: [], details: {}
-    }));
-    const result = await handler()({}, { workspaceDir: dir });
-    assert.ok(result?.prependContext?.includes("🤝"), "trust emoji missing");
-  } finally { cleanup(dir); }
-});
-
-test("unknown dominant → 😌 fallback emoji", async () => {
-  const { api, handler } = makeApi();
-  register(api);
-  const dir = tmp();
-  try {
-    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
-      label: "eigenartig", dominant: "unknown_emotion", intensity: "niedrig", nuances: [], details: {}
-    }));
-    const result = await handler()({}, { workspaceDir: dir });
-    assert.ok(result?.prependContext?.includes("😌"), "fallback emoji missing");
-  } finally { cleanup(dir); }
-});
-
-test("null dominant → 😌 fallback emoji", async () => {
-  const { api, handler } = makeApi();
-  register(api);
-  const dir = tmp();
-  try {
-    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
-      label: "ausgeglichen", intensity: "niedrig", nuances: [], details: {}
-    }));
-    const result = await handler()({}, { workspaceDir: dir });
-    assert.ok(result?.prependContext?.includes("😌"), "null dominant fallback emoji missing");
-  } finally { cleanup(dir); }
-});
-
-test("display line contains intensity", async () => {
-  const { api, handler } = makeApi();
-  register(api);
-  const dir = tmp();
-  try {
-    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
-      label: "fröhlich", dominant: "joy", intensity: "hoch", nuances: [], details: {}
-    }));
-    const result = await handler()({}, { workspaceDir: dir });
-    assert.ok(result?.prependContext?.includes("hoch"), "intensity missing from display line");
+    assert.ok(result?.prependContext?.includes("hoch"), "intensity missing from block");
   } finally { cleanup(dir); }
 });
 
