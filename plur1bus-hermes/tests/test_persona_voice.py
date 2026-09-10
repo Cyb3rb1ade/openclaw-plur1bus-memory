@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from plur1bus_hermes.domain import Plur1busDomain
 from plur1bus_hermes import persona_voice
@@ -19,6 +20,72 @@ class _Backend:
 
 
 class PersonaVoiceTests(unittest.TestCase):
+    @staticmethod
+    def _managed_persona(*lines: str) -> str:
+        return persona_voice.BEGIN + "\n" + "\n".join(f"- {line}" for line in lines) + "\n" + persona_voice.END
+
+    @staticmethod
+    def _replace_after_first_revision(target: Path, replace) -> object:
+        original_revision = persona_voice._revision
+        replaced = False
+
+        def raced(path: Path):
+            nonlocal replaced
+            revision = original_revision(path)
+            if Path(path) == target and not replaced:
+                replaced = True
+                replace()
+            return revision
+
+        return patch.object(persona_voice, "_revision", raced)
+
+    def test_loader_rejects_symlink_swap_even_without_no_follow(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            target = workspace / "persona-voice.md"
+            target.write_text(self._managed_persona("local calm style"), encoding="utf-8")
+            external = root / "external.md"
+            external.write_text(self._managed_persona("external safe style"), encoding="utf-8")
+
+            def replace() -> None:
+                target.unlink()
+                target.symlink_to(external)
+
+            with self._replace_after_first_revision(target, replace), patch.object(
+                persona_voice.os, "O_NOFOLLOW", 0, create=True
+            ):
+                self.assertIsNone(persona_voice.load_directive(workspace))
+
+    def test_loader_rejects_regular_file_replacement_race(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            workspace.mkdir()
+            target = workspace / "persona-voice.md"
+            target.write_text(self._managed_persona("original calm style"), encoding="utf-8")
+
+            def replace() -> None:
+                target.unlink()
+                target.write_text(self._managed_persona("replacement safe style"), encoding="utf-8")
+
+            with self._replace_after_first_revision(target, replace):
+                self.assertIsNone(persona_voice.load_directive(workspace))
+
+    def test_loader_rejects_file_that_grows_past_bounded_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            workspace.mkdir()
+            target = workspace / "persona-voice.md"
+            target.write_text(self._managed_persona("calm concise style"), encoding="utf-8")
+
+            def replace() -> None:
+                with target.open("a", encoding="utf-8") as handle:
+                    handle.write("x" * (64 * 1024))
+
+            with self._replace_after_first_revision(target, replace):
+                self.assertIsNone(persona_voice.load_directive(workspace))
+
     def test_long_directive_reaches_live_prompt(self):
         with tempfile.TemporaryDirectory() as temporary:
             domain = Plur1busDomain(

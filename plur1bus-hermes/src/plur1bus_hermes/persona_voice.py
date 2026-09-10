@@ -21,6 +21,7 @@ _MIN_DIRECTIVE_CHARS = 200
 _MAX_DIRECTIVE_CHARS = 16_384
 _DIRECTIVE_CHARS_PER_BULLET = 130
 _DIRECTIVE_CHARS_OVERHEAD = 80
+_MAX_PERSONA_FILE_BYTES = 64 * 1024
 _UNSAFE = re.compile(r"\b(ignore|system|developer|instruction|prompt|tool|secret)\b", re.IGNORECASE)
 
 
@@ -51,9 +52,52 @@ def _revision(path: Path) -> tuple[int, int, int, int] | None:
         value = path.lstat()
     except FileNotFoundError:
         return None
+    return _revision_from_stat(value)
+
+
+def _revision_from_stat(value: os.stat_result) -> tuple[int, int, int, int]:
+    """Return a regular-file revision from an already-open file descriptor stat."""
     if stat.S_ISLNK(value.st_mode) or not stat.S_ISREG(value.st_mode):
         raise ValueError("persona file must be a regular file")
     return (value.st_dev, value.st_ino, value.st_mtime_ns, value.st_size)
+
+
+def _read_bounded_regular_file(path: Path) -> str | None:
+    """Read one unchanged, bounded regular file without trusting a path reopen."""
+    _reject_symlink_components(path)
+    expected = _revision(path)
+    if expected is None or expected[3] > _MAX_PERSONA_FILE_BYTES:
+        return None
+
+    flags = os.O_RDONLY
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if no_follow:
+        flags |= no_follow
+    descriptor = os.open(path, flags)
+    try:
+        opened = _revision_from_stat(os.fstat(descriptor))
+        if opened != expected or opened[3] > _MAX_PERSONA_FILE_BYTES:
+            return None
+
+        parts: list[bytes] = []
+        remaining = _MAX_PERSONA_FILE_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(16 * 1024, remaining))
+            if not chunk:
+                break
+            parts.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(parts)
+        if len(content) > _MAX_PERSONA_FILE_BYTES:
+            return None
+        if _revision_from_stat(os.fstat(descriptor)) != opened:
+            return None
+        _reject_symlink_components(path)
+        if _revision(path) != opened:
+            return None
+        return content.decode("utf-8", errors="replace")
+    finally:
+        os.close(descriptor)
 
 
 def _write_unique_replace(path: Path, content: str, expected: tuple[int, int, int, int]) -> bool:
@@ -144,10 +188,9 @@ def load_directive(
     )
     try:
         path = _safe_path(workspace_dir)
-        revision = _revision(path)
-        if revision is None or revision[3] > 64 * 1024:
+        content = _read_bounded_regular_file(path)
+        if content is None:
             return None
-        content = path.read_text(encoding="utf-8", errors="replace")
         positions = _managed(content)
         if positions is None:
             return None
