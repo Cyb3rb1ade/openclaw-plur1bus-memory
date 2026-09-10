@@ -11724,7 +11724,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         // Prompt-Hooks traegt denselben Grund als `ticket=`.
         try {
           const sessionKey = event?.sessionKey || event?.ctx?.SessionKey || "";
-          api.logger?.debug?.(`memory-turn-routes: dispatch ${turnRoutes?.explain?.(sessionKey) || "none"} session=${String(sessionKey).slice(0, 96)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} keys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|SenderId|ChatId|Provider|AccountId|OriginatingTo|SessionKey|RunId|isTailDispatch)$/.test(k)).join(",")}`);
+          const observed = turnRoutes?.lastObserve?.(sessionKey) || "none";
+          const line = `memory-turn-routes: dispatch observe:${observed} session=${String(sessionKey).slice(0, 96)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} eventKeys=${Object.keys(event || {}).filter((k) => k !== "ctx").slice(0, 24).join(",")} ctxKeys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|BodyForAgent|RawBody|SenderId|ChatId|Provider|Surface|AccountId|OriginatingTo|OriginatingChannel|OriginatingAccountId|SessionKey|RunId|isTailDispatch|MessageThreadId)$/.test(k)).join(",")}`;
+          // 7.12.34: Nicht-Kommando-Ausstiege sichtbar machen (Info), Rest Debug.
+          if (/^(registered|slash_command|command_turn:|command_source|is_command|tail_dispatch)/.test(observed)) api.logger?.debug?.(line);
+          else api.logger?.info?.(line);
         } catch (_) { /* best-effort */ }
         return undefined;
       }, { priority: Number.MIN_SAFE_INTEGER });

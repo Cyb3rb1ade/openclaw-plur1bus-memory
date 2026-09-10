@@ -7,6 +7,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.34] — 2026-09-10
+
+### Behoben
+
+- **Ticket-Diagnose zeigt Beobachtung und Anspruch getrennt.** 7.12.33 nannte
+  nur den letzten Ausgang; der Anspruch überschrieb den der Beobachtung
+  (Bernd, 10.09.2026 14:27: `claim:no_ticket … pending=0`, ohne dass sichtbar
+  war, warum kein Ticket entstand). `ticket=` trägt jetzt beide Stufen
+  (`observe:…|claim:…`); der `reply_dispatch`-Handler loggt jeden
+  Nicht-Kommando-Ausstieg auf Info mit Ereignis- und Kontextfeldnamen.
+
 ## [7.12.33] — 2026-09-10
 
 ### Behoben

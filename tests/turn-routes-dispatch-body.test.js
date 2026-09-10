@@ -61,11 +61,11 @@ describe("turn route explain() (7.12.33)", () => {
     registry.observeReplyDispatch(dispatch({ CommandBody: "hallo", CommandTurn: { kind: "native", source: "native", body: "hallo" } }, "run-b"));
     assert.equal(registry.explain(SESSION_KEY), "observe:command_turn:native/native");
     assert.equal(registry.claimForPrompt({ runId: "run-b", sessionKey: SESSION_KEY, sessionId: "s" }, "account-session", () => true), null);
-    assert.match(registry.explain(SESSION_KEY), /^claim:no_ticket:account-session/);
+    assert.match(registry.explain(SESSION_KEY), /^observe:command_turn:native\/native\|claim:no_ticket:account-session/);
     registry.observeReplyDispatch(dispatch({ CommandBody: "hallo" }, "run-c"));
-    assert.equal(registry.explain(SESSION_KEY), "observe:registered:run");
+    assert.equal(registry.lastObserve(SESSION_KEY), "registered:run");
     assert.equal(registry.claimForPrompt({ runId: "run-c", sessionKey: SESSION_KEY, sessionId: "s" }, "account-session", () => false), null);
-    assert.equal(registry.explain(SESSION_KEY), "claim:ticket_verify_failed");
+    assert.equal(registry.explain(SESSION_KEY), "observe:registered:run|claim:ticket_verify_failed");
     assert.equal(registry.explain("agent:x:telegram:default:direct:1"), "none");
   });
 });
