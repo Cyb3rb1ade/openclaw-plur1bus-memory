@@ -110,6 +110,20 @@ dashboard behavior, model behavior, or guest acceptance have been reviewed.
 
 ## Regression evidence
 
+Capture Task1 independent scoped review: PASS at `4c092b5` after all identified
+receipt/retry findings were addressed. Root validation of that exact source:
+
+```text
+PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src:/Users/cyberblade/.hermes/hermes-agent:/Users/cyberblade/.hermes/hermes-agent/venv/lib/python3.11/site-packages /var/folders/gs/kv4mqlgn0y3ftxtypfxm_5xw0000gn/T/tmp.MqkPRIqgFh/venv/bin/python -B -m pytest -q plur1bus-hermes/tests plur1bus-controls/tests distribution/tests hermes-dashboard/tests
+```
+
+Result: **867 passed, 73 subtests passed, 172 warnings, 24.90s, exit0**.
+The disposable QA venv adds pytest/PyYAML/FastAPI; the production interpreter
+packages are read-only on PYTHONPATH. Warnings include known fixture/fallback
+messages and LanceDB table_names deprecations; they are not hidden failures or
+evidence of guest/model acceptance. No platform/release/production claim follows
+from these source tests. Capture identity remains partial lifecycle parity.
+
 `PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m unittest discover -s plur1bus-hermes/tests -p test_upstream_71244_inventory.py -v`
 
 Result: 5 tests passed. The same suite was first run RED with the expected
