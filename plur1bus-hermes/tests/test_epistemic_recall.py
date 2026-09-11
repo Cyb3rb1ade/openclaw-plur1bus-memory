@@ -92,12 +92,18 @@ class EpistemicRuntimeRecallTests(unittest.TestCase):
                      "vector": [1.0, 0.0]},
                 ]
                 invalidated = []
+                wrapped_statuses = (
+                    "\tINVALIDATED\n",
+                    "\ninvalidated\t",
+                    "\u00a0InVaLiDaTeD\u00a0",
+                    "\u2003invalidated\u2003",
+                )
                 for number in range(20):
                     invalidated.append({
                         **observed,
                         "id": str(uuid.uuid4()),
                         "content": f"invalidated nearest memory {number}",
-                        "epistemicStatus": "invalidated",
+                        "epistemicStatus": wrapped_statuses[number % len(wrapped_statuses)],
                         "vector": [0.0, 0.0],
                     })
                 nullable_rows.extend(invalidated)
@@ -143,7 +149,7 @@ class EpistemicRuntimeRecallTests(unittest.TestCase):
         self.assertIn("observed weak", recalled)
         self.assertNotIn("invalidated refined", recalled)
         self.assertEqual(len(table.where_calls), 2)
-        self.assertTrue(all("lower(btrim(epistemicStatus)) != 'invalidated'" in clause
+        self.assertTrue(all("regexp_replace" in clause
                             for clause in table.where_calls))
 
     def test_booster_rows_are_epistemically_rechecked_after_aggregation(self) -> None:

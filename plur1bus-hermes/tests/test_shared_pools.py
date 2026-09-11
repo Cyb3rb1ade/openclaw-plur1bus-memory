@@ -118,8 +118,12 @@ class SharedPoolTests(unittest.TestCase):
                 "agentId": "main", "scopeKey": "scope", "status": "active",
                 "type": "observation", "sourceRole": "user",
             }
-            store.copy({**base, "id": "invalid", "content": "invalidated", "vector": [0.0, 0.0],
-                        "epistemicStatus": " INVALIDATED "}, source_agent="main")
+            for index, status in enumerate((
+                "\tINVALIDATED\n", "\ninvalidated\t", "\u00a0InVaLiDaTeD\u00a0",
+                "\u2003invalidated\u2003",
+            )):
+                store.copy({**base, "id": f"invalid-{index}", "content": f"invalidated-{index}",
+                            "vector": [0.0, 0.0], "epistemicStatus": status}, source_agent="main")
             store.copy({**base, "id": "observed", "content": "observed", "vector": [1.0, 0.0],
                         "epistemicStatus": "observed"}, source_agent="main")
             recalled = store.recall_rows([0.0, 0.0], 1)

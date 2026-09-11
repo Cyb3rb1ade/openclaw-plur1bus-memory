@@ -311,6 +311,95 @@ class TurnIdentityTests(unittest.TestCase):
 
                 self.assertEqual(self._file_snapshot(root), before)
 
+    def test_replay_preserves_admission_cognition_and_speaker_mapping(self) -> None:
+        root = self.root / "derived-metadata"
+        domain = Plur1busDomain(root, "main")
+        domain._speakers.set_mapping("Bernd", "original-person")
+        capture_id = str(uuid.uuid4())
+        captured_at = "2020-01-02T23:59:59+00:00"
+        original_append = domain._append_capture_journal_record
+
+        def interrupt_before_first_journal_append(path, record):
+            if record.get("role") == "user":
+                raise RuntimeError("injected interruption after admission metadata")
+            return original_append(path, record)
+
+        domain._append_capture_journal_record = interrupt_before_first_journal_append
+        with self.assertRaisesRegex(RuntimeError, "after admission metadata"):
+            domain.on_turn(
+                "Bernd: Heute ist wichtig.", "assistant", "session",
+                capture_id=capture_id, captured_at=captured_at,
+            )
+        domain._append_capture_journal_record = original_append
+        domain._speakers.set_mapping("Bernd", "changed-person")
+
+        domain.on_turn(
+            "Bernd: Heute ist wichtig.", "assistant", "session",
+            capture_id=capture_id, captured_at=captured_at,
+        )
+
+        user_turn = domain._read_jsonl(domain.neo_dir / "turn-journal.jsonl")[0]
+        self.assertEqual(
+            user_turn["cognition"]["temporal"][0]["resolvedDate"], "2020-01-02"
+        )
+        self.assertEqual(user_turn["speakerSegments"][0]["speakerId"], "original-person")
+        self.assertTrue(user_turn["speakerSegments"][0]["mapped"])
+
+    def test_all_journal_descriptors_are_validated_before_any_append(self) -> None:
+        root = self.root / "journal-preflight"
+        capture_id = str(uuid.uuid4())
+        domain, path = self._interrupt_after_episode_preparation(root, capture_id)
+        receipt = read_receipt(path)
+        assert receipt is not None
+        receipt["journalPlans"][1]["length"] = True
+        write_receipt(path, receipt)
+        before = self._file_snapshot(root)
+
+        with self.assertRaisesRegex(ValueError, "journal length"):
+            domain.on_turn(
+                "user", "assistant", "session", capture_id=capture_id,
+                captured_at=self.captured_at,
+            )
+
+        self.assertEqual(self._file_snapshot(root), before)
+        self.assertFalse((domain.neo_dir / "turn-journal.jsonl").exists())
+
+    def test_legacy_receipt_is_not_refingerprinted_after_mapping_drift(self) -> None:
+        root = self.root / "legacy-derived-metadata"
+        domain = Plur1busDomain(root, "main")
+        domain._speakers.set_mapping("Bernd", "original-person")
+        capture_id = str(uuid.uuid4())
+        original_append = domain._append_capture_journal_record
+
+        def interrupt_before_first_journal_append(path, record):
+            if record.get("role") == "user":
+                raise RuntimeError("injected legacy interruption")
+            return original_append(path, record)
+
+        domain._append_capture_journal_record = interrupt_before_first_journal_append
+        with self.assertRaisesRegex(RuntimeError, "legacy interruption"):
+            domain.on_turn(
+                "Bernd: Heute ist wichtig.", "assistant", "session",
+                capture_id=capture_id, captured_at=self.captured_at,
+            )
+        domain._append_capture_journal_record = original_append
+        path = receipt_path(root, "main", capture_id)
+        receipt = read_receipt(path)
+        assert receipt is not None
+        for plan in receipt["journalPlans"]:
+            plan.pop("derived")
+        write_receipt(path, receipt)
+        domain._speakers.set_mapping("Bernd", "changed-person")
+        before = self._file_snapshot(root)
+
+        with self.assertRaisesRegex(ValueError, "journal plan"):
+            domain.on_turn(
+                "Bernd: Heute ist wichtig.", "assistant", "session",
+                capture_id=capture_id, captured_at=self.captured_at,
+            )
+
+        self.assertEqual(self._file_snapshot(root), before)
+
     def test_committed_episode_snapshot_drift_is_rejected_without_mutation(self) -> None:
         self.domain.on_turn(
             "user", "assistant", "session", capture_id=self.capture_id,
