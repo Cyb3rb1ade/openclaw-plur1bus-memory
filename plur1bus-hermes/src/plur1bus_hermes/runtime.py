@@ -1112,42 +1112,96 @@ class Plur1busRuntime:
         adaptive_limit = min(12, max(limit, 8 if len(semantic_query) > 1200 else limit))
         vector = self._embedding.embed(semantic_query, purpose="query")
         recall_tables = self._recall_tables()
-        if not recall_tables:
-            return ""
-        rows = []
         temporal_range = parse_temporal_range(semantic_query)
-        where_clause = f"{scope_where_clause(self.scope_binding)} AND status = 'active'"
-        if temporal_range:
-            where_clause += (
+        base_legacy_where = f"{scope_where_clause(self.scope_binding)} AND status = 'active'"
+        heuristic_legacy_where = base_legacy_where
+        if temporal_range is not None:
+            heuristic_legacy_where += (
                 f" AND createdAt >= '{temporal_range['start']}'"
                 f" AND createdAt < '{temporal_range['end']}'"
             )
-        temporal_where = where_clause
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        expiry_where = (
-            f"{temporal_where} AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
-        )
-        where_clause = expiry_where
-        if parsed_valid_at is not None:
-            where_clause += f" AND {validity_where_clause(parsed_valid_at)}"
-        for namespace, recall_table in recall_tables:
-            namespace_rows = self._search_recall_rows(
-                recall_table, vector, where_clause, expiry_where, temporal_where,
-                adaptive_limit * 3, parsed_valid_at,
+        def predicate_set(legacy_where: str) -> tuple[str, str, str]:
+            expiry_where = (
+                f"{legacy_where} AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
             )
-            for row in namespace_rows:
-                row["_namespace"] = namespace
-            rows.extend(namespace_rows)
+            where = expiry_where
+            if parsed_valid_at is not None:
+                where += f" AND {validity_where_clause(parsed_valid_at)}"
+            return where, expiry_where, legacy_where
+
+        base_predicates = predicate_set(base_legacy_where)
+        heuristic_predicates = predicate_set(heuristic_legacy_where)
+
+        def search_namespaces(
+            search_vector: list[float],
+            predicates: tuple[str, str, str],
+            candidate_limit: int,
+            *,
+            query_variant: str = "",
+        ) -> list[dict[str, Any]]:
+            found_rows: list[dict[str, Any]] = []
+            where, expiry_where, legacy_where = predicates
+            for namespace, recall_table in recall_tables:
+                namespace_rows = self._search_recall_rows(
+                    recall_table, search_vector, where, expiry_where, legacy_where,
+                    candidate_limit, parsed_valid_at,
+                )
+                for row in namespace_rows:
+                    row["_namespace"] = namespace
+                    if query_variant:
+                        row["_queryVariant"] = query_variant
+                found_rows.extend(namespace_rows)
+            return found_rows
+
+        def lifecycle_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                row for row in candidates
+                if row.get("status", "active") == "active"
+                and is_entry_live(row, now_ms)
+                and is_entry_valid_at(row, parsed_valid_at)
+            ]
+
+        def heuristic_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            if temporal_range is None:
+                return list(candidates)
+            range_start = normalize_timestamp(temporal_range["start"])
+            range_end = normalize_timestamp(temporal_range["end"])
+            return [
+                row for row in candidates
+                if (
+                    (created_at := normalize_timestamp(row.get("createdAt")))
+                    and range_start <= created_at < range_end
+                )
+            ]
+
+        private_rows = search_namespaces(vector, heuristic_predicates, adaptive_limit * 3)
+        shared_rows: list[dict[str, Any]] = []
         try:
-            rows.extend(self._shared_pools.recall_rows(
+            shared_rows = self._shared_pools.recall_rows(
                 vector, adaptive_limit * 2, valid_at=parsed_valid_at, now_ms=now_ms,
-            ))
+            )
         except TypeError as error:
             # Compatibility for externally injected pre-7.10 pool adapters;
             # native SharedPoolStore always receives the lifecycle predicates.
             if "valid_at" not in str(error) and "now_ms" not in str(error):
                 raise
-            rows.extend(self._shared_pools.recall_rows(vector, adaptive_limit * 2))
+            shared_rows = self._shared_pools.recall_rows(vector, adaptive_limit * 2)
+
+        selected_predicates = heuristic_predicates
+        using_heuristic = temporal_range is not None
+        rows = lifecycle_rows(private_rows + heuristic_rows(shared_rows))
+        if temporal_range is not None and not rows:
+            LOGGER.debug(
+                "temporal recall fallback selected: no lifecycle-eligible heuristic rows across %d private namespaces",
+                len(recall_tables),
+            )
+            selected_predicates = base_predicates
+            using_heuristic = False
+            private_rows = search_namespaces(vector, base_predicates, adaptive_limit * 3)
+            rows = lifecycle_rows(private_rows + shared_rows)
+        if not rows and not recall_tables:
+            return ""
         poor_first_pass = not rows or all(
             row.get("_distance") is not None
             and float(row["_distance"]) > 0.65
@@ -1161,19 +1215,13 @@ class Plur1busRuntime:
         refined_query = self._refine_query(semantic_query, refinement) if refinement_enabled else ""
         if poor_first_pass and refined_query and refined_query != semantic_query.lower():
             refined_vector = self._embedding.embed(refined_query, purpose="query")
-            for namespace, recall_table in recall_tables:
-                refined_rows = self._search_recall_rows(
-                    recall_table, refined_vector, where_clause, expiry_where, temporal_where,
-                    adaptive_limit * 2, parsed_valid_at,
-                )
-                for row in refined_rows:
-                    row["_namespace"] = namespace
-                    row["_queryVariant"] = "refined"
-                rows.extend(refined_rows)
-        rows = [
-            row for row in rows
-            if is_entry_live(row, now_ms) and is_entry_valid_at(row, parsed_valid_at)
-        ]
+            refined_rows = search_namespaces(
+                refined_vector, selected_predicates, adaptive_limit * 2,
+                query_variant="refined",
+            )
+            if using_heuristic:
+                refined_rows = heuristic_rows(refined_rows)
+            rows.extend(lifecycle_rows(refined_rows))
         rows = self._reranker.rerank(semantic_query, rows)[:adaptive_limit]
         deduplicated = []
         seen_content: dict[str, list[dict[str, Any]]] = {}
@@ -1189,7 +1237,13 @@ class Plur1busRuntime:
             seen_content.setdefault(canonical, []).append(row)
             deduplicated.append(row)
         session_options = {"session_id": session_id, "reactivation_query": semantic_query} if session_id else {}
-        boosted = self._boost_recall_with_deadline(deduplicated, recall_tables[0][1], adaptive_limit + 3, session_options)
+        boosted = (
+            self._boost_recall_with_deadline(
+                deduplicated, recall_tables[0][1], adaptive_limit + 3, session_options,
+            )
+            if recall_tables
+            else []
+        )
         # SQL and shared-pool recall already authorized the primary rows.
         # A scope-specific additive booster must never replace/drop them,
         # including legacy private rows and separately authorized pool rows.

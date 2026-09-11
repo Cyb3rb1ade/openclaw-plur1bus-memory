@@ -51,7 +51,7 @@ class _Query:
     def where(self, clause: str) -> "_Query":
         self.table.where_calls.append(clause)
         if self.table.fail_first and len(self.table.where_calls) == 1:
-            raise RuntimeError("column validFrom does not exist")
+            raise RuntimeError(self.table.first_error)
         return self
 
     def limit(self, _limit: int) -> "_Query":
@@ -62,9 +62,11 @@ class _Query:
 
 
 class _Table:
-    def __init__(self, rows: list[dict[str, Any]], *, fail_first: bool = False) -> None:
+    def __init__(self, rows: list[dict[str, Any]], *, fail_first: bool = False,
+                 first_error: str = "column validFrom does not exist") -> None:
         self.rows = rows
         self.fail_first = fail_first
+        self.first_error = first_error
         self.where_calls: list[str] = []
 
     def search(self, _vector: list[float]) -> _Query:
@@ -128,6 +130,22 @@ class RuntimeValidTimeRecallTests(unittest.TestCase):
         self.assertEqual(len(table.where_calls), 2)
         self.assertIn("validFrom", table.where_calls[0])
         self.assertNotIn("validFrom", table.where_calls[1])
+
+    def test_legacy_missing_expiry_column_keeps_explicit_validity_predicate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+            runtime = self._runtime(directory)
+            resources.callback(runtime.shutdown)
+            table = _Table(
+                [{"id": "a", "content": "legacy", "validFrom": 100, "validUntil": 200}],
+                fail_first=True,
+                first_error="column expiresAt does not exist",
+            )
+            runtime._recall_tables = lambda: [("main", table)]  # type: ignore[method-assign]
+            self.assertIn("legacy", runtime.recall("where", valid_at=150))
+        self.assertEqual(len(table.where_calls), 2)
+        self.assertIn("expiresAt", table.where_calls[0])
+        self.assertNotIn("expiresAt", table.where_calls[1])
+        self.assertIn("validFrom <= 150", table.where_calls[1])
 
     def test_full_text_removes_per_memory_cap_but_not_global_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:

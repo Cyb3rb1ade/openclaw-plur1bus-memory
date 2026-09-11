@@ -104,6 +104,44 @@ command passed 33 tests. First-admission preparation and append-then-crash
 recovery remain covered, while the existing non-transactional side-effect and
 receipt-loss boundaries are unchanged.
 
+## Native ACL-safe temporal fallback (Storage Task 2)
+
+Native recall now treats an inferred `createdAt` range as optional policy and
+keeps agent/scope ACL, active status, TTL and explicit `validAt` in a separate
+mandatory predicate set. All configured private namespaces and authorized
+shared-pool candidates participate in one aggregate heuristic decision. Only
+when no lifecycle-eligible candidate survives does each private namespace get
+one bounded retry without the inferred range; the already bounded shared result
+is reused. A partial match prevents fallback, and refined private searches use
+the selected heuristic or mandatory policy consistently.
+
+The real-LanceDB regression was first run RED against the reviewed Task 1 base:
+
+```text
+PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src:/Users/cyberblade/.hermes/hermes-agent /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m pytest -q plur1bus-hermes/tests/test_temporal_fallback.py
+```
+
+Result before implementation: **1 failed** because `eligible historical
+project` remained absent. A second focused RED exposed the shared-only path's
+`IndexError` at `recall_tables[0]`; both failures are now covered.
+
+Focused verification:
+
+```text
+PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src:/Users/cyberblade/.hermes/hermes-agent /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m pytest -q plur1bus-hermes/tests/test_temporal_fallback.py plur1bus-hermes/tests/test_valid_time_runtime.py plur1bus-hermes/tests/test_temporal_refinement.py plur1bus-hermes/tests/test_scope_isolation.py plur1bus-hermes/tests/test_runtime_recall_additive_scopes.py plur1bus-hermes/tests/test_shared_pools.py plur1bus-hermes/tests/test_namespaces.py
+```
+
+Result: **40 passed in 1.17s**. Native-suite verification with the same
+read-only interpreter and `PYTHONPATH`, running `-m pytest -q
+plur1bus-hermes/tests`, passed **675 tests and 73 subtests** with 172 known
+LanceDB deprecation warnings in 7.80s. No warning was suppressed.
+
+The shared-pool API does not accept a `createdAt` predicate, so recall filters
+its bounded authorized result in memory and reuses it on fallback; it does not
+perform an unbounded pool scan. This verifies the native source/runtime policy,
+not Task 3 parser expansion, Task 5 epistemic invalidation, live Hermes host
+behavior, a production migration, or overall recall parity.
+
 The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.
