@@ -54,7 +54,11 @@ def verify(bundle, executable=None):
         (child_site / "qa-dependencies.pth").write_text("\n".join(site.getsitepackages()) + "\n", encoding="utf-8")
         native_target = f"{sys.platform}/{platform.machine()}"
         native_install = native_target in manifest.get("nativeDependencies", {})
-        plan = plan_install(bundle, home, python=python, activate=True, dependencies=native_install)
+        # Exercise the same dependency-resolving install path as a real first
+        # install on every target.  Native wheels are an additional concern;
+        # they must not disable normal Python dependency verification on
+        # targets such as macOS ARM that use the platform resolver.
+        plan = plan_install(bundle, home, python=python, activate=True, dependencies=True)
         if native_install:
             assert plan["nativeWheels"], "Native package test must install its bundled storage wheels"
         transaction = apply_install(plan, plan["confirmation"], True)
