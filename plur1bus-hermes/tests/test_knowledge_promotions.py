@@ -107,6 +107,32 @@ class KnowledgePromotionTests(unittest.TestCase):
         self.assertEqual(own[-1]["reason"], "invalidated")
         self.assertEqual(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["reason"], "proposal-not-found")
 
+    def test_inactive_or_expired_metadata_cannot_repropose(self) -> None:
+        for change in ({"status": "archived"}, {"expiresAt": 1}):
+            with self.subTest(change=change):
+                proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+                table = self.domain._metadata_table()
+                metadata = self.domain._metadata_json(table.to_arrow().to_pylist()[0])
+                metadata.update(change)
+                table.update(
+                    where=f"id = '{MEMORY_ID}'",
+                    values={"metadataJson": json.dumps(metadata)},
+                )
+                self.domain.propose_knowledge_promotions()
+                events = [json.loads(line) for line in (self.domain.state_dir / "knowledge-promotions.jsonl").read_text().splitlines()]
+                own = [row for row in events if row.get("proposalId") == proposal["proposalId"]]
+                self.assertEqual(own[-1]["status"], "stale")
+                table.update(
+                    where=f"id = '{MEMORY_ID}'",
+                    values={"metadataJson": json.dumps({
+                        "scopeKey": self.binding.scope_key,
+                        "aclBindings": self.binding.as_dict(),
+                        "text": "The deploy process requires a preflight backup before migration.",
+                        "type": "fact",
+                        "importance": 0.9,
+                    })},
+                )
+
     def test_incomplete_retirement_lookup_preserves_pending_evidence(self) -> None:
         proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
         ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
@@ -121,6 +147,41 @@ class KnowledgePromotionTests(unittest.TestCase):
             self.domain._metadata_rows_by_ids = original
         self.assertEqual(ledger.read_bytes(), before)
         self.assertEqual(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["confirmed"], True)
+
+    def test_foreign_lookup_row_cannot_retire_pending_evidence(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+        before = ledger.read_bytes()
+        foreign = binding_from_scope("main", {"scopeType": "workspace", "workspace": "foreign"})
+        original = self.domain._metadata_table
+        source_table = original()
+        row = source_table.to_arrow().to_pylist()[0]
+        metadata = self.domain._metadata_json(row)
+        metadata.update({"scopeKey": foreign.scope_key, "aclBindings": foreign.as_dict()})
+
+        class Query:
+            def where(self, predicate):
+                return self
+
+            def limit(self, count):
+                return self
+
+            def to_list(self):
+                return [{**row, "metadataJson": json.dumps(metadata)}]
+
+        class Table:
+            def search(self):
+                return Query()
+
+            def to_arrow(self):
+                return source_table.to_arrow()
+
+        self.domain._metadata_table = lambda: Table()
+        try:
+            self.domain.propose_knowledge_promotions()
+        finally:
+            self.domain._metadata_table = original
+        self.assertEqual(ledger.read_bytes(), before)
 
     def test_confirmation_is_idempotent(self) -> None:
         proposal = self.domain.propose_knowledge_promotions()["proposed"][0]

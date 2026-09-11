@@ -186,6 +186,45 @@ the existing **172 LanceDB deprecation warnings**; this is source evidence,
 not a claim about Hermes host lifecycle, production data, models, publication,
 or guest-platform acceptance.
 
+## Native scoped pending-knowledge retirement (Storage Task 4)
+
+The private promotion job now treats `knowledge-promotions.jsonl` as an
+append-only event ledger. It selects the latest same-scope event per
+`proposalId`, examines at most 100 unique UUID-validated pending memory IDs,
+and issues one exact owned-metadata predicate for those IDs and the existing
+canonical scope binding. A successful empty exact query certifies a scoped
+missing source; an explicitly inactive, epistemically `invalidated`, or
+TTL-expired metadata projection certifies `invalidated`. Both append a
+`status: stale` event with a reason, rather than deleting the original pending
+evidence. A later proposal or confirmation consumes that latest event, so old
+pending events cannot resurrect. Confirmed latest events retain the existing
+lifetime fingerprint deduplication and 24-hour counting behavior.
+
+An unavailable table, query failure, result overrun/duplicate, or any returned
+row outside the issued scope predicate makes the lookup incomplete. In that
+case it appends nothing and leaves pending evidence intact; it does not scan a
+foreign namespace to interpret the result. The job remains under the existing
+writer lock and performs no `KNOWLEDGE.md` write while pruning.
+
+This is intentionally a **metadata-projection** conclusion, not a canonical
+memory-state claim. `_metadata_for()` projects `status`, but not
+`epistemicStatus`, `expiresAt`, `validFrom`, or `validUntil`, while canonical
+runtime cards carry `epistemicStatus`. Thus a canonical card that was
+invalidated after an unchanged metadata projection cannot be certified or
+retired by this path; it also cannot be represented as a metadata-only success
+claim. A future scoped bridge must either query the canonical card source or
+atomically project lifecycle/trust/TTL fields into metadata, with an explicit
+projection-drift regression. `validAt` remains a query-time semantic-validity
+filter and is not inferred as a current lifecycle retirement condition.
+
+The mandated discovery command first ran RED with the missing-source ledger's
+last event still `pending`; after the implementation it passed 13 tests.
+Additional regressions cover explicit invalidation, inactive/expired metadata,
+incomplete and foreign returned lookup rows, idempotent stale retirement, and
+confirmation rejection. The controls and scope-consumer command passed 17
+tests. These are source-level results only: they do not assert a live Hermes
+activation, migration, model, or release state.
+
 ## Regression evidence
 
 Capture Task1 independent scoped review: PASS at `4c092b5` after all identified

@@ -8,8 +8,11 @@ import os
 import re
 import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+
+from .valid_time import is_entry_live
 
 
 def content_fingerprint(text: str, category: str, scope_key: str) -> str:
@@ -22,6 +25,8 @@ def content_fingerprint(text: str, category: str, scope_key: str) -> str:
 
 def is_eligible(metadata: dict[str, Any], cognition: dict[str, Any], minimum: float) -> bool:
     """Apply the conservative fact/decision gate before a human proposal exists."""
+    if is_invalidated(metadata):
+        return False
     category = str(metadata.get("type") or metadata.get("category") or "").lower()
     if category not in {"fact", "decision"}:
         return False
@@ -35,6 +40,21 @@ def is_eligible(metadata: dict[str, Any], cognition: dict[str, Any], minimum: fl
     if len(text) < 20 or any(marker in lowered for marker in ("temporary", "one-off", "nur heute", "ignore previous")):
         return False
     return importance >= minimum and quality >= 0.6
+
+
+def is_invalidated(metadata: dict[str, Any], *, now_ms: int | None = None) -> bool:
+    """Return whether a metadata projection explicitly disqualifies promotion.
+
+    This deliberately evaluates only fields present in the scoped metadata
+    projection.  It does not assert canonical-card state when that projection
+    lacks it.
+    """
+    if str(metadata.get("status") or "active").strip().lower() != "active":
+        return True
+    if str(metadata.get("epistemicStatus") or "").strip().lower() == "invalidated":
+        return True
+    current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    return not is_entry_live(metadata, current_ms)
 
 
 _MEMORY_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)

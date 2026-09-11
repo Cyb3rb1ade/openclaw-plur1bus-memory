@@ -34,7 +34,7 @@ from .critical_review import (
 from .dreaming import build_rem_dream
 from .dream_diary import append_dream_diary_entry
 from .writer_lock import serialized_memory_write
-from .knowledge import content_fingerprint, is_eligible, write_confirmed_knowledge
+from .knowledge import content_fingerprint, is_eligible, is_invalidated, write_confirmed_knowledge
 from .obsidian_maintenance import generate_obsidian_control_room
 from .persona_voice import evolve as evolve_persona_voice_file
 from .persona_voice import load_directive as load_persona_directive
@@ -452,6 +452,55 @@ class Plur1busDomain:
             if _row_matches_scope(candidate, selector):
                 selected.append(row)
         return selected
+
+    def _metadata_rows_by_ids(
+        self,
+        selector: _ScopeSelector,
+        memory_ids: list[str],
+    ) -> dict[str, Any]:
+        """Read only exact, scope-validated metadata IDs for conservative consumers."""
+        queried_ids: list[str] = []
+        seen: set[str] = set()
+        for memory_id in memory_ids:
+            try:
+                safe_id = safe_memory_id(memory_id)
+            except (TypeError, ValueError):
+                continue
+            if safe_id not in seen:
+                seen.add(safe_id)
+                queried_ids.append(safe_id)
+        if not queried_ids:
+            return {"queriedIds": queried_ids, "rows": [], "complete": True}
+        table = self._metadata_table()
+        if table is None:
+            return {"queriedIds": queried_ids, "rows": [], "complete": False}
+        id_predicate = " OR ".join(f"id = '{memory_id}'" for memory_id in queried_ids)
+        try:
+            raw_rows = [
+                dict(row)
+                for row in table.search().where(
+                    f"({id_predicate}) AND {selector.where()}"
+                ).limit(len(queried_ids) + 1).to_list()
+            ]
+        except Exception:
+            return {"queriedIds": queried_ids, "rows": [], "complete": False}
+        complete = len(raw_rows) <= len(queried_ids)
+        rows: list[dict[str, Any]] = []
+        requested = set(queried_ids)
+        returned_ids: set[str] = set()
+        for row in raw_rows:
+            row_id = str(row.get("id") or "")
+            if row_id not in requested or row_id in returned_ids:
+                complete = False
+                continue
+            returned_ids.add(row_id)
+            metadata = self._metadata_json(row)
+            candidate = metadata if _row_scope_key(metadata) else row
+            if not _row_matches_scope(candidate, selector):
+                complete = False
+                continue
+            rows.append(row)
+        return {"queriedIds": queried_ids, "rows": rows, "complete": complete}
 
     @serialized_memory_write
     def on_turn(
@@ -948,17 +997,19 @@ class Plur1busDomain:
         except (TypeError, ValueError):
             minimum = 0.7
         minimum = max(0.0, min(1.0, minimum))
-        maximum = self._bounded_int(config.get("maxPromotionsPerRun"), 3, 0, 3)
-        if maximum == 0:
-            return {"proposed": [], "skipped": True, "reason": "promotion-limit-disabled"}
         state_dir = self._scope_state_dir(selector)
         ledger_path = state_dir / "knowledge-promotions.jsonl"
         ledger = self._read_jsonl(ledger_path)
+        ledger = self._retire_stale_knowledge_proposals(ledger_path, ledger, selector)
+        maximum = self._bounded_int(config.get("maxPromotionsPerRun"), 3, 0, 3)
+        if maximum == 0:
+            return {"proposed": [], "skipped": True, "reason": "promotion-limit-disabled"}
         if self._recent_knowledge_promotions(ledger, selector) >= maximum:
             return {"proposed": [], "skipped": True, "reason": "promotion-window-limit"}
+        latest = self._latest_knowledge_events(ledger, selector)
         known = {
             (str(item.get("memoryId") or ""), str(item.get("fingerprint") or ""))
-            for item in ledger
+            for item in latest.values()
             if str(item.get("status") or "") in {"pending", "confirmed"}
         }
         cognition = {
@@ -1028,24 +1079,22 @@ class Plur1busDomain:
             return {"confirmed": False, "reason": "disabled"}
         ledger_path = self._scope_state_dir(selector) / "knowledge-promotions.jsonl"
         ledger = self._read_jsonl(ledger_path)
-        if any(item.get("proposalId") == proposal_id and item.get("status") == "confirmed"
-               and _row_matches_scope(item, selector) for item in ledger):
+        latest = self._latest_knowledge_events(ledger, selector)
+        proposal = latest.get(proposal_id)
+        if proposal is not None and proposal.get("status") == "confirmed":
             return {"confirmed": True, "reason": "already-confirmed", "proposalId": proposal_id}
-        candidates = [
-            item for item in self._read_jsonl(ledger_path)
-            if str(item.get("proposalId") or "") == proposal_id
-            and str(item.get("status") or "") == "pending"
-            and _row_matches_scope(item, selector)
-        ]
-        if len(candidates) != 1:
+        if proposal is None or proposal.get("status") != "pending":
             return {"confirmed": False, "reason": "proposal-not-found"}
         maximum = self._bounded_int(config.get("maxPromotionsPerRun"), 3, 0, 3)
         if maximum == 0 or self._recent_knowledge_promotions(ledger, selector) >= maximum:
             return {"confirmed": False, "reason": "promotion-window-limit"}
-        proposal = candidates[0]
-        memory_id = safe_memory_id(str(proposal.get("memoryId") or ""))
-        rows = [row for row in self._metadata_rows_for_scope(selector) if str(row.get("id") or "") == memory_id]
-        if len(rows) != 1:
+        try:
+            memory_id = safe_memory_id(str(proposal.get("memoryId") or ""))
+        except ValueError:
+            return {"confirmed": False, "reason": "memory-not-found"}
+        lookup = self._metadata_rows_by_ids(selector, [memory_id])
+        rows = lookup["rows"]
+        if not lookup["complete"] or len(rows) != 1:
             return {"confirmed": False, "reason": "memory-not-found"}
         metadata = self._metadata_json(rows[0])
         cognition = {
@@ -1063,16 +1112,60 @@ class Plur1busDomain:
         fingerprint = content_fingerprint(text, category, selector.scope_key)
         if not is_eligible(metadata, cognition.get(memory_id, {}), minimum) or fingerprint != proposal.get("fingerprint"):
             return {"confirmed": False, "reason": "proposal-stale"}
-        confirmed = [
-            item for item in self._read_jsonl(ledger_path)
-            if str(item.get("status") or "") == "confirmed" and _row_matches_scope(item, selector)
-        ]
+        confirmed = [item for item in latest.values() if item.get("status") == "confirmed"]
         entries = [{"id": str(item["memoryId"]), "text": str(item["text"])} for item in confirmed]
         entries.append({"id": memory_id, "text": text[:2000]})
         write_confirmed_knowledge(self._scope_workspace_dir(selector) / "KNOWLEDGE.md", entries)
         event = {**proposal, "status": "confirmed", "confirmedAt": _utcnow()}
         self._append_jsonl(ledger_path, event)
         return {"confirmed": True, "proposalId": proposal_id, "memoryId": memory_id}
+
+    @staticmethod
+    def _latest_knowledge_events(
+        ledger: list[dict[str, Any]], selector: _ScopeSelector
+    ) -> dict[str, dict[str, Any]]:
+        """Select one latest, exact-scope event per proposal without rewriting history."""
+        latest: dict[str, dict[str, Any]] = {}
+        for item in ledger:
+            proposal_id = str(item.get("proposalId") or "")
+            if proposal_id and _row_matches_scope(item, selector):
+                latest[proposal_id] = item
+        return latest
+
+    def _retire_stale_knowledge_proposals(
+        self,
+        ledger_path: Path,
+        ledger: list[dict[str, Any]],
+        selector: _ScopeSelector,
+    ) -> list[dict[str, Any]]:
+        """Append stale events only after one complete bounded owned-table lookup."""
+        pending_by_memory: dict[str, list[dict[str, Any]]] = {}
+        for proposal in self._latest_knowledge_events(ledger, selector).values():
+            if proposal.get("status") != "pending":
+                continue
+            try:
+                memory_id = safe_memory_id(str(proposal.get("memoryId") or ""))
+            except ValueError:
+                continue
+            pending_by_memory.setdefault(memory_id, []).append(proposal)
+        memory_ids = list(pending_by_memory)[:100]
+        if not memory_ids:
+            return ledger
+        lookup = self._metadata_rows_by_ids(selector, memory_ids)
+        if not lookup["complete"] or lookup["queriedIds"] != memory_ids:
+            return ledger
+        rows_by_id = {str(row.get("id") or ""): row for row in lookup["rows"]}
+        appended: list[dict[str, Any]] = []
+        for memory_id in memory_ids:
+            row = rows_by_id.get(memory_id)
+            reason = "missing" if row is None else "invalidated" if is_invalidated(self._metadata_json(row)) else ""
+            if not reason:
+                continue
+            for proposal in pending_by_memory[memory_id]:
+                event = {**proposal, "status": "stale", "reason": reason, "staleAt": _utcnow()}
+                self._append_jsonl(ledger_path, event)
+                appended.append(event)
+        return [*ledger, *appended]
 
     @staticmethod
     def _recent_knowledge_promotions(ledger, selector) -> int:
