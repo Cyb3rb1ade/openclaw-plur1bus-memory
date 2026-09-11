@@ -155,8 +155,9 @@ import {
 } from "./lib/directory-capability.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
-import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposalWithWorkshop, buildSkillReviewPayload, createSkillWorkshopLifecycleSynchronizer } from "./lib/telegram-commands/skill-commands.js";
-import { getPendingProposals, recordPresentation, lastPresentationAgeMs, markProposalStatus, patchProposal } from "./lib/jobs/skill-miner/proposal-writer.js";
+import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposal, rejectSkillProposalWithWorkshop, retireActiveSkill, findProposalWorkspace, buildSkillReviewPayload, createSkillWorkshopLifecycleSynchronizer } from "./lib/telegram-commands/skill-commands.js";
+import { getPendingProposals, recordPresentation, lastPresentationAgeMs, markProposalStatus, patchProposal, readProposals as readSkillProposals } from "./lib/jobs/skill-miner/proposal-writer.js";
+import { collectSkillWorkshopProposals } from "./lib/setup/skill-workshop-dashboard.js";
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import {
   runSpeakerListCommand,
@@ -4760,6 +4761,19 @@ const plugin = {
     if (skillMinerLlmCfg) {
       api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (route: ${skillMinerLlmCfg.kind})`);
     }
+    // 7.12.48: Auto-Apply geminter Skills. "host" folgt dem Selbstlern-Modus
+    // des Hosts (skills.workshop.autonomous.mode, ungesetzt = auto), damit
+    // eine Installation, die dem Host nur Vorschlaege erlaubt, auch vom Miner
+    // nur Vorschlaege bekommt.
+    const hostSkillWorkshopMode = () => {
+      const mode = (runtimeIfUsable(api)?.config?.current?.() || api.config || {})?.skills?.workshop?.autonomous?.mode;
+      return mode === "off" || mode === "propose" ? mode : "auto";
+    };
+    const skillMinerAutoApplyMode = skillMinerCfg.autoApply === "on" || skillMinerCfg.autoApply === "off"
+      ? skillMinerCfg.autoApply
+      : "host";
+    const skillMinerAutoApplyEffective = () => skillMinerAutoApplyMode === "on"
+      || (skillMinerAutoApplyMode === "host" && hostSkillWorkshopMode() === "auto");
 
     // Generic enhancement routes remain behind their existing feature gates,
     // but each prompt owns its model-selection descriptor.
@@ -5647,6 +5661,82 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       },
       logger: api.logger,
     });
+
+    // 7.12.48: Das Skill-Ledger liegt je ACL-Partition unter dem Neo-Store.
+    // Chat-Befehle und Nudge lasen bis 7.12.47 den Agenten-Workspace, wo nie
+    // ein Ledger lag — kein Vorschlag wurde je angezeigt. Diese Helfer leiten
+    // die Verzeichnisse genauso ab wie der Miner selbst.
+    const skillLedgerDirsFor = (memoryCtx) => {
+      const dirs = [];
+      for (const partition of buildRemPartitions(memoryCtx)) {
+        try { dirs.push(createOwnerBoundNeoStore(partition).paths.workspaceDir); } catch { /* Partition nicht baubar */ }
+      }
+      return [...new Set(dirs)];
+    };
+    const skillLedgerDirForAgent = (agentId) => {
+      try {
+        return skillLedgerDirsFor(resolveMemoryRequestContext({ agentId }, { workspaceAliases: memoryWorkspaceAliases }))[0] || null;
+      } catch {
+        return null;
+      }
+    };
+    // Gemeinsame Aktivierungs-Abhaengigkeiten fuer Miner-Auto-Apply,
+    // Dashboard und Chat: inspect → hash-gebundenes apply → Evidenz-Promotion.
+    const skillActivationDeps = (agentId, { actor, actorTier, reason, memoryCtx, lang, tone } = {}) => ({
+      agentId,
+      lang,
+      tone,
+      logger: api.logger,
+      skillWorkshop: openClawSkillWorkshop,
+      memoryCtx,
+      loadEvidenceRecord: async (memoryId) => {
+        try {
+          return await pool.withDb(agentId, (db) => db.getById(memoryId));
+        } catch (error) {
+          // null is indistinguishable from "no evidence exists", so record
+          // that this was a failed read instead.
+          api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
+          return null;
+        }
+      },
+      applyEpistemicStatus: async (memoryId, nextStatus) => pool.withWriteDb(agentId, (db) => applyEpistemicStatusToLanceDb(db, memoryId, nextStatus, {
+        ctx: memoryCtx,
+        actor,
+        actorTier,
+        authorized: false,
+        workspaceDir: memoryCtx?.workspaceDir,
+        reason,
+      })),
+    });
+    const dashboardSkillAction = async (agentId, proposalId, run) => {
+      let memoryCtx;
+      try {
+        memoryCtx = resolveMemoryRequestContext({ agentId }, { workspaceAliases: memoryWorkspaceAliases });
+      } catch {
+        return { ok: false, reason: "not_found" };
+      }
+      const dirs = skillLedgerDirsFor(memoryCtx);
+      const ledgerDir = findProposalWorkspace(dirs, proposalId);
+      if (!ledgerDir) return { ok: false, reason: "not_found" };
+      const proposal = readSkillProposals(ledgerDir).find((entry) => entry.id === proposalId);
+      return run({ ledgerDir, memoryCtx, proposal });
+    };
+    const collectSkillWorkshopDashboard = () => {
+      const entries = (runtimeIfUsable(api)?.config?.current?.() || api.config || {})?.agents?.entries;
+      const agents = [];
+      for (const [agentId, entry] of Object.entries(entries && typeof entries === "object" ? entries : {})) {
+        const ledgerDir = skillLedgerDirForAgent(agentId);
+        if (!ledgerDir) continue;
+        agents.push({ agentId, workspace: entry?.workspace, ledgerDirs: [ledgerDir] });
+      }
+      return {
+        ...collectSkillWorkshopProposals({ agents }),
+        available: Boolean(openClawSkillWorkshop),
+        mode: skillMinerAutoApplyMode,
+        hostMode: hostSkillWorkshopMode(),
+        autoApply: skillMinerAutoApplyEffective(),
+      };
+    };
 
     if (typeof api.on === "function") {
       const synchronizeSkillWorkshopLifecycle = createSkillWorkshopLifecycleSynchronizer({
@@ -7586,6 +7676,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         workspaceKey: skillAclPartition.workspaceIdentity,
                         skillWorkshop: openClawSkillWorkshop,
                         requireSkillWorkshop: openClawSkillWorkshop !== null,
+                        autoApply: openClawSkillWorkshop !== null && skillMinerAutoApplyEffective(),
+                        activateProposal: (proposal) => activateSkillProposal(skillWorkspaceDir, proposal.id, skillActivationDeps(internalAgent, {
+                          actor: "plur1bus-skill-miner",
+                          actorTier: "system:skill-workshop",
+                          reason: "skill-miner-auto-apply",
+                          memoryCtx,
+                        })),
                         llmCfg: withLlmCallContext(
                           skillMinerLlmCfg,
                           skillMinerCallContext.agentId,
@@ -8237,10 +8334,20 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             if (actionKey === "skills") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
               const subKey = sub?.toLowerCase() || "";
-              const workspaceDir = commandCtx.workspaceDir;
+              // 7.12.48: Ledger je ACL-Partition; der Agenten-Workspace bleibt
+              // als letzter Suchort fuer Altbestaende. Die Uebersicht zeigt das
+              // erste Ledger mit offenen Vorschlaegen.
+              const skillLedgerDirs = [...new Set([
+                ...skillLedgerDirsFor(memoryCtx),
+                ...(commandCtx.workspaceDir ? [commandCtx.workspaceDir] : []),
+              ])];
+              const workspaceDir = skillLedgerDirs.find((dir) => {
+                try { return getPendingProposals(dir).length > 0; } catch { return false; }
+              }) || skillLedgerDirs[0];
               if (!workspaceDir) {
                 return { text: t("plur1bus.no_workspace", { lang, tone }) };
               }
+              const ledgerDirFor = (proposalId) => findProposalWorkspace(skillLedgerDirs, proposalId) || workspaceDir;
               if (!subKey || subKey === "help") {
                 return { text: t("plur1bus.skills_help", { lang, tone }) };
               }
@@ -8284,7 +8391,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 }
                 if (reject || completed.pending.command === "skills-reject") {
                   const rejected = await rejectSkillProposalWithWorkshop(
-                    workspaceDir,
+                    ledgerDirFor(completed.pending.targetId),
                     completed.pending.targetId,
                     {
                       lang,
@@ -8296,7 +8403,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   );
                   return { text: rejected.text };
                 }
-                const result = await activateSkillProposal(workspaceDir, completed.pending.targetId, {
+                const result = await activateSkillProposal(ledgerDirFor(completed.pending.targetId), completed.pending.targetId, {
                   lang,
                   tone,
                   agentId: commandCtx.agentId || "default",
@@ -8329,13 +8436,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
               if (subKey === "show") {
                 if (!id) return { text: t("plur1bus.skills_show_usage", { lang, tone }) };
-                return { text: showProposal(workspaceDir, id, { lang, tone }).text };
+                return { text: showProposal(ledgerDirFor(id), id, { lang, tone }).text };
               }
               if (subKey === "approve") {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_approve_usage", { lang, tone }) };
-                const result = await activateSkillProposal(workspaceDir, id, {
+                const result = await activateSkillProposal(ledgerDirFor(id), id, {
                   lang,
                   tone,
                   agentId: commandCtx.agentId || "default",
@@ -8367,7 +8474,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
-                const result = await rejectSkillProposalWithWorkshop(workspaceDir, id, {
+                const result = await rejectSkillProposalWithWorkshop(ledgerDirFor(id), id, {
                   lang,
                   tone,
                   agentId: commandCtx.agentId || "default",
@@ -9118,6 +9225,28 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 applyReembedding: (request) => reembeddingCoordinator.apply(request),
                 switchReembedding: (request) => reembeddingSwitchRuntime.switchGeneration(request),
                 startCompaction: (request) => compaction.start(request),
+                // 7.12.48: geminte Skills aus dem Dashboard freigeben,
+                // ablehnen oder zurueckziehen.
+                approveSkill: ({ agentId, proposalId }) => dashboardSkillAction(agentId, proposalId, ({ ledgerDir, memoryCtx, proposal }) => {
+                  if (!proposal) return { ok: false, reason: "not_found" };
+                  if (proposal.status === "pending_review" && !proposal.openClawWorkshop?.proposalId) return { ok: false, reason: "unbound" };
+                  return activateSkillProposal(ledgerDir, proposalId, skillActivationDeps(agentId, {
+                    actor: "operator-dashboard",
+                    actorTier: "human",
+                    reason: "skill-approve",
+                    memoryCtx,
+                  }));
+                }),
+                rejectSkill: ({ agentId, proposalId }) => dashboardSkillAction(agentId, proposalId, ({ ledgerDir, proposal }) => {
+                  if (!proposal) return { ok: false, reason: "not_found" };
+                  if (proposal.status !== "pending_review") return { ok: false, reason: "not_pending" };
+                  return proposal.openClawWorkshop?.proposalId
+                    ? rejectSkillProposalWithWorkshop(ledgerDir, proposalId, { agentId, logger: api.logger, skillWorkshop: openClawSkillWorkshop })
+                    : rejectSkillProposal(ledgerDir, proposalId);
+                }),
+                retireSkill: ({ agentId, proposalId }) => dashboardSkillAction(agentId, proposalId, ({ ledgerDir }) => (
+                  retireActiveSkill(ledgerDir, proposalId, { logger: api.logger })
+                )),
               },
             }),
           };
@@ -9215,6 +9344,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     }
                   : null,
                 workspacePolicies,
+                skillWorkshop: collectSkillWorkshopDashboard(),
                 health: await controlHealth.snapshot(),
                 env: process.env,
               });
@@ -12835,17 +12965,25 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
           // Skill-proposal nudge: weekly proactive presentation of new skill proposals
           let skillProposalNudge = "";
-          if (ctx?.workspaceDir) {
+          // 7.12.48: Ledger je ACL-Partition (bis 7.12.47 wurde der Workspace
+          // gelesen, wo nie ein Vorschlag lag).
+          const skillNudgeLedgerDir = ctx?.workspaceDir
+            ? [skillLedgerDirForAgent(agentId), ctx.workspaceDir].find((dir) => {
+              if (!dir) return false;
+              try { return getPendingProposals(dir).length > 0; } catch { return false; }
+            }) || null
+            : null;
+          if (skillNudgeLedgerDir) {
             try {
-              const pending = getPendingProposals(ctx.workspaceDir);
-              if (pending.length > 0 && lastPresentationAgeMs(ctx.workspaceDir) > 6 * 86400000) {
+              const pending = getPendingProposals(skillNudgeLedgerDir);
+              if (pending.length > 0 && lastPresentationAgeMs(skillNudgeLedgerDir) > 6 * 86400000) {
                 const proposal = pending[0];
                 const nudgeText = renderSkillProposalNudge(proposal, pending.length, {
                   workspaceDir: ctx.workspaceDir,
                   messages: event?.messages || [],
                 });
                 skillProposalNudge = `\n<skill-proposal-reminder>\n${nudgeText}\n</skill-proposal-reminder>`;
-                recordPresentation(ctx.workspaceDir, pending.map(p => p.id));
+                recordPresentation(skillNudgeLedgerDir, pending.map(p => p.id));
               }
             } catch (_e) { dbg(_e); }
           }

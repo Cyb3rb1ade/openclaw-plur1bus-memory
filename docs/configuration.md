@@ -378,6 +378,38 @@ Adapters, die Zeile zeigt „compacting…" und danach das Ergebnis. Angenommen
 werden nur Partitionen, die der Health-Scan selbst gelistet hat. Der naechste
 Health-Scan zeigt den neuen Speicherstand.
 
+## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
+
+Der Skill Miner läuft wöchentlich je Agent, bündelt belastbare Erinnerungen
+der letzten 30 Tage nach gemeinsamen Stichworten und lässt das Modell daraus
+wiederkehrende Abläufe als Skill formulieren (Titel, Beschreibung, Nutzen,
+Anleitung, Beispiele). Jeder Fund landet als Entwurf im OpenClaw Skill
+Workshop.
+
+| Schlüssel | Typ | Default | Wirkung |
+| --- | --- | --- | --- |
+| `skillMiner.autoApply` | `"host" \| "on" \| "off"` | `"host"` | `host` folgt `skills.workshop.autonomous.mode` des Hosts (ungesetzt = `auto` → sofort anwenden; `propose`/`off` → Entwurf bleibt offen). `on` wendet immer an, `off` nie. |
+
+Angewandt wird über denselben Weg wie eine manuelle Freigabe: Workshop-Entwurf
+prüfen, hash-gebunden anwenden, Belegerinnerungen auf `corroborated` heben.
+Schlägt das fehl, bleibt der Vorschlag offen; der Lauf zählt `autoApplied` und
+`autoApplyFailed` in `skill-miner-report.jsonl`.
+
+Im PLUR1BUS-Reiter zeigt der Abschnitt **Mined Skills** alle offenen und
+aktiven geminten Skills, gruppiert nach Workspace und Agent, mit Beleglage,
+Konfidenz, Nutzen und der Anleitung, der der Agent folgen würde. Mit
+`controlUi.writeActions: "all"` gibt es je Karte:
+
+- **Approve**: Entwurf im Workshop anwenden, Belege bestätigen.
+- **Decline**: Entwurf ablehnen, Name für künftiges Mining sperren.
+- **Withdraw**: bereits angewandten Skill entfernen (Workshop-Verzeichnis des
+  Skills wird gelöscht), Name sperren.
+
+Vorschläge aus der Zeit vor der Workshop-Anbindung haben keine Bindung und
+lassen sich nur ablehnen. Das Vorschlags-Ledger liegt je ACL-Partition unter
+`_neo/workspaces/acl-owner-v1_…/.adaptive-learning/skill-proposals.jsonl`;
+auch `/plur1bus skills …` liest seit 7.12.48 dort.
+
 ## B13 Shared-Memory-Routen und Hook-Grenze
 
 Shared-Memory ist keine Konfigurations-Abkürzung für Namespace-Reads.

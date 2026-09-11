@@ -7,6 +7,41 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.48] — 2026-09-12
+
+### Hinzugefügt
+
+- **Auto-Apply geminter Skills.** `skillMiner.autoApply` (`host` | `on` |
+  `off`, Default `host`). `host` folgt dem Selbstlern-Modus des Hosts
+  (`skills.workshop.autonomous.mode`, ungesetzt = `auto`). Ein frisch
+  geminter Entwurf wird dann sofort über denselben Weg angewandt wie eine
+  manuelle Freigabe: Workshop-Entwurf prüfen, hash-gebunden anwenden,
+  Belegerinnerungen auf `corroborated` heben (Akteur
+  `plur1bus-skill-miner`, Stufe `system:skill-workshop`). Scheitert das,
+  bleibt der Vorschlag offen. Neue Zähler `autoApplied`/`autoApplyFailed`
+  im Bericht. Wie bei der Persona-Evolution sichern Schranken statt eines
+  Freigabe-Tors: Evidenz-Score, Konfidenz, höchstens fünf je Lauf.
+- **„Mined Skills" im PLUR1BUS-Reiter.** Offene und aktive geminte Skills je
+  Workspace und Agent, mit Kategorie, Beleglage, Konfidenz, Fundtag,
+  Beschreibung, Nutzen und der vollständigen Anleitung. Mit
+  `controlUi.writeActions: "all"`: Approve, Decline und Withdraw. Withdraw
+  entfernt das Workshop-Verzeichnis eines angewandten Skills (der Workshop
+  bietet dafür keinen RPC) und sperrt den Namen. Alle Kartentexte sind
+  Modellausgabe und werden gekürzt und escaped.
+- **Nutzen je Skill.** Der Extraktor liefert ein Feld `benefit` (ein Satz),
+  das in Dashboard und SKILL.md erscheint. Ältere Vorschläge ohne das Feld
+  bleiben gültig.
+
+### Behoben
+
+- **Skill-Vorschläge waren im Chat unsichtbar.** Das Ledger liegt je
+  ACL-Partition unter dem Neo-Store; `/plur1bus skills review|approve|
+  reject|show` und der wöchentliche Hinweis lasen den Agenten-Workspace, wo
+  nie ein Ledger lag. Live lagen 22 offene Vorschläge (main 10,
+  bernhardine 10, heisenberg 2), die keiner je gesehen hat. Chat, Hinweis
+  und Dashboard lesen jetzt dieselben Partitionsverzeichnisse wie der Miner.
+
+
 ## [7.12.47] — 2026-09-11
 
 ### Geändert

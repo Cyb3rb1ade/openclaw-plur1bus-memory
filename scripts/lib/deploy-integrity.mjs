@@ -102,6 +102,7 @@ export const DEPLOY_FILES = [
   "lib/setup/feature-cron-native.js",
   "lib/setup/feature-cron-plugin-runtime.js",
   "lib/setup/skill-workshop-plugin-runtime.js",
+  "lib/setup/skill-workshop-dashboard.js",
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/setup/control-ui-plugin-runtime.js",
