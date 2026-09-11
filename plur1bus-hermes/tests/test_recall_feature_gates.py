@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,12 +10,17 @@ from plur1bus_hermes.domain import Plur1busDomain
 
 
 class RecallFeatureGateTests(unittest.TestCase):
+    def _domain(self, config=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        return Plur1busDomain(Path(temporary.name), "main", config)
+
     @staticmethod
     def _base() -> list[dict[str, str]]:
         return [{"id": "base", "agentId": "main", "content": "base recall"}]
 
     def _boost_domain(self, config=None):
-        domain = Plur1busDomain(Path("/private/tmp"), "main", config)
+        domain = self._domain(config)
         calls: list[str] = []
         domain._graph_neighbor_ids = lambda *_args, **_kwargs: calls.append("graph") or {"graph"}  # type: ignore[method-assign]
         domain._semantic_lens_ids = lambda *_args, **_kwargs: calls.append("lens") or {"lens"}  # type: ignore[method-assign]
@@ -39,20 +45,20 @@ class RecallFeatureGateTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in result], ["base", "graph"])
 
     def test_semantic_lens_direct_helper_honors_enabled_false_without_reading_an_index(self) -> None:
-        domain = Plur1busDomain(Path("/private/tmp"), "main", {"semanticLens": {"enabled": False}})
+        domain = self._domain({"semanticLens": {"enabled": False}})
         domain._read_json = lambda _path: self.fail("disabled lens must not read its index")  # type: ignore[method-assign]
         self.assertEqual(domain._semantic_lens_ids({"base"}), set())
 
     def test_continuity_overlay_defaults_on_and_explicit_false_suppresses_it(self) -> None:
         rows = [{"id": "base", "agentId": "main", "content": "base", "_distance": 0.1}]
-        self.assertTrue(Plur1busDomain(Path("/private/tmp"), "main").recall_overlay("continue?", rows))
+        self.assertTrue(self._domain().recall_overlay("continue?", rows))
         self.assertEqual(
-            Plur1busDomain(Path("/private/tmp"), "main", {"continuityEngine": False}).recall_overlay("continue?", rows),
+            self._domain({"continuityEngine": False}).recall_overlay("continue?", rows),
             "",
         )
 
     def test_explain_recall_remains_a_scope_filtered_base_recall_explanation(self) -> None:
-        domain = Plur1busDomain(Path("/private/tmp"), "main", {"semanticLens": False, "continuityEngine": False})
+        domain = self._domain({"semanticLens": False, "continuityEngine": False})
         explanation = domain.explain_recall([
             {"id": "own", "agentId": "main", "content": "own", "_distance": 0.1},
             {"id": "foreign", "agentId": "other", "content": "foreign", "_distance": 0.1},

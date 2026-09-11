@@ -20,7 +20,9 @@ MEMORY_ID = "619c3d51-1d9d-4736-8bf9-91b38aff8246"
 
 class CognitiveOptInTests(unittest.TestCase):
     def _domain(self, config=None):
-        domain = Plur1busDomain(Path("/private/tmp"), "main", config)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        domain = Plur1busDomain(Path(temporary.name), "main", config)
         calls: list[str] = []
         domain._graph_neighbor_ids = lambda *_args, **_kwargs: calls.append("graph") or {"graph"}  # type: ignore[method-assign]
         domain._semantic_lens_ids = lambda *_args, **_kwargs: calls.append("lens") or {"lens"}  # type: ignore[method-assign]
