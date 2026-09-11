@@ -7,12 +7,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-### Hermes 7.12.47-hermes.0 — unpublished integration candidate
+### Hermes 7.12.47-hermes.0 — release
 
 - Integrates the pinned OpenClaw `8a148c991123be31bc4f99376c8198447d9bb717`
   source while retaining Hermes-native payload and distribution paths.
-- This is a candidate only: native-port parity, artifacts, signing, and publication
-  remain separately audited gates.
+- Native-port parity and distribution gates are recorded separately in the release
+  verification artifacts; the macOS ARM installer is Developer ID signed and
+  notarized, while Windows installers remain unsigned executables by design.
 
 ## Hermes distribution history
 
