@@ -79,6 +79,49 @@ class KnowledgePromotionTests(unittest.TestCase):
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["reason"], "proposal-stale")
 
+    def test_missing_source_retires_pending_without_erasing_history(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        self.domain._metadata_table().delete(f"id = '{MEMORY_ID}'")
+        self.domain.propose_knowledge_promotions()
+        ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+        events = [json.loads(line) for line in ledger.read_text().splitlines()]
+        own = [row for row in events if row.get("proposalId") == proposal["proposalId"]]
+        self.assertGreaterEqual(len(own), 2)
+        self.assertEqual(own[-1]["status"], "stale")
+        before = ledger.read_bytes()
+        self.domain.propose_knowledge_promotions()
+        self.assertEqual(ledger.read_bytes(), before)
+        self.assertFalse((self.domain.workspace_dir / "KNOWLEDGE.md").exists())
+
+    def test_invalidated_metadata_retires_and_cannot_confirm(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        table = self.domain._metadata_table()
+        metadata = self.domain._metadata_json(table.to_arrow().to_pylist()[0])
+        metadata["epistemicStatus"] = "invalidated"
+        table.update(where=f"id = '{MEMORY_ID}'", values={"metadataJson": json.dumps(metadata)})
+
+        self.domain.propose_knowledge_promotions()
+        events = [json.loads(line) for line in (self.domain.state_dir / "knowledge-promotions.jsonl").read_text().splitlines()]
+        own = [row for row in events if row.get("proposalId") == proposal["proposalId"]]
+        self.assertEqual(own[-1]["status"], "stale")
+        self.assertEqual(own[-1]["reason"], "invalidated")
+        self.assertEqual(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["reason"], "proposal-not-found")
+
+    def test_incomplete_retirement_lookup_preserves_pending_evidence(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+        before = ledger.read_bytes()
+        original = self.domain._metadata_rows_by_ids
+        self.domain._metadata_rows_by_ids = lambda selector, ids: {
+            "queriedIds": [MEMORY_ID], "rows": [], "complete": False,
+        }
+        try:
+            self.domain.propose_knowledge_promotions()
+        finally:
+            self.domain._metadata_rows_by_ids = original
+        self.assertEqual(ledger.read_bytes(), before)
+        self.assertEqual(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["confirmed"], True)
+
     def test_confirmation_is_idempotent(self) -> None:
         proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
         self.assertTrue(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["confirmed"])
