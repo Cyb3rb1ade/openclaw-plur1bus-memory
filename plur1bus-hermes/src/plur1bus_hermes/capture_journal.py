@@ -23,6 +23,13 @@ def text_hash(value: str) -> str:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
+def receipt_integer(value: Any, *, name: str, minimum: int = 0) -> int:
+    """Accept only JSON integer fields; bools and numeric strings are invalid."""
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"capture receipt {name} is invalid")
+    return value
+
+
 def record_fingerprint(record: Mapping[str, Any]) -> str:
     """Fingerprint the complete durable journal/episode record for drift checks."""
     encoded = json.dumps(dict(record), sort_keys=True, separators=(",", ":"),
@@ -101,7 +108,9 @@ def append_record(path: Path, value: Mapping[str, Any]) -> tuple[int, int]:
 
 def probe_record(path: Path, offset: int, length: int, fingerprint: str) -> bool:
     """Validate exactly one receipt-indexed journal record without history scans."""
-    if offset < 0 or length <= 0 or length > MAX_JOURNAL_LINE_BYTES:
+    offset = receipt_integer(offset, name="offset")
+    length = receipt_integer(length, name="length", minimum=1)
+    if length > MAX_JOURNAL_LINE_BYTES:
         raise ValueError("capture receipt offset is invalid")
     if not path.is_file() or path.is_symlink() or path.stat().st_size < offset + length:
         return False

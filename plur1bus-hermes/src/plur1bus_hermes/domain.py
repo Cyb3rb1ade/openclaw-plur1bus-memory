@@ -67,6 +67,7 @@ from .capture_journal import (
     receipt_path,
     record_fingerprint,
     read_receipt,
+    receipt_integer,
     text_hash,
     write_receipt,
 )
@@ -544,33 +545,24 @@ class Plur1busDomain:
             analysis = self._analyze_text(combined)
             episode_id = episode_record_id(capture_id, self.agent_id, selector.scope_key, session_id)
             episodes_path = neo_dir / "episodes.jsonl"
-            mood = self._mood.update(analysis["emotion"])
-            episode_record = {
-                "id": episode_id,
-                "captureId": capture_id,
-                "workspaceKey": self.agent_id,
-                "agentId": self.agent_id,
-                "scopeKey": selector.scope_key,
-                "aclBindings": selector.acl_bindings,
-                "title": f"Conversation {captured_at[:10]}",
-                "summary": combined[:1000],
-                "sessionId": session_id,
-                "startTime": captured_at,
-                "endTime": captured_at,
-                "memoryIds": [],
-                "turnIds": turn_ids,
-                "importance": self._importance(combined, "user"),
-                "emotionalDominant": self._emotion(combined)[0],
-                "emotionalIntensity": self._emotion(combined)[1],
-                "emotionalValence": analysis["emotion"]["valence"],
-                "factQuality": analysis["factQuality"],
-                "temporal": analysis["temporal"],
-                "moodContext": mood,
-                "turnCount": len(turn_ids),
-                "capturedAt": captured_at,
-                "createdAt": captured_at,
-            }
+            def make_episode_record(mood: Mapping[str, Any]) -> dict[str, Any]:
+                return {
+                    "id": episode_id, "captureId": capture_id, "workspaceKey": self.agent_id,
+                    "agentId": self.agent_id, "scopeKey": selector.scope_key,
+                    "aclBindings": selector.acl_bindings, "title": f"Conversation {captured_at[:10]}",
+                    "summary": combined[:1000], "sessionId": session_id, "startTime": captured_at,
+                    "endTime": captured_at, "memoryIds": [], "turnIds": turn_ids,
+                    "importance": self._importance(combined, "user"),
+                    "emotionalDominant": self._emotion(combined)[0],
+                    "emotionalIntensity": self._emotion(combined)[1],
+                    "emotionalValence": analysis["emotion"]["valence"],
+                    "factQuality": analysis["factQuality"], "temporal": analysis["temporal"],
+                    "moodContext": dict(mood), "turnCount": len(turn_ids),
+                    "capturedAt": captured_at, "createdAt": captured_at,
+                }
+            episode_record: dict[str, Any] | None = None
             if receipt is None:
+                episode_record = make_episode_record(self._mood.update(analysis["emotion"]))
                 journal_offset = journal_path.stat().st_size if journal_path.is_file() else 0
                 plans = []
                 for record in turn_records:
@@ -586,7 +578,11 @@ class Plur1busDomain:
                            "episodePlan": {"id": episode_id,
                                            "offset": (episodes_path.stat().st_size if episodes_path.is_file() else 0),
                                            "length": len(episode_line),
-                                           "fingerprint": record_fingerprint(episode_record)},
+                                           "fingerprint": record_fingerprint(episode_record),
+                                           # A prepared episode preserves its exact derived
+                                           # mood snapshot without duplicating either turn's
+                                           # full source body in each journal row.
+                                           "record": episode_record},
                            "episode": None}
                 write_receipt(path, receipt)
             plans = receipt.get("journalPlans")
@@ -603,28 +599,34 @@ class Plur1busDomain:
             # next planned byte range also detects a full line appended just
             # before a crash but before its receipt state was published.
             for item in materialized:
+                item_offset = receipt_integer(item.get("offset"), name="journal offset") if isinstance(item, Mapping) else -1
+                item_length = receipt_integer(item.get("length"), name="journal length", minimum=1) if isinstance(item, Mapping) else 0
                 if not isinstance(item, Mapping) or not probe_record(
-                        journal_path, int(item.get("offset", -1)), int(item.get("length", 0)),
+                        journal_path, item_offset, item_length,
                         str(item.get("fingerprint") or "")):
                     raise ValueError("capture receipt journal target drifted")
             episode_plan = receipt.get("episodePlan")
             if not isinstance(episode_plan, Mapping) or episode_plan.get("id") != episode_id:
                 raise ValueError("capture receipt episode plan is invalid")
+            episode_offset = receipt_integer(episode_plan.get("offset"), name="episode offset")
+            episode_length = receipt_integer(episode_plan.get("length"), name="episode length", minimum=1)
             episode_present = probe_record(
-                episodes_path, int(episode_plan["offset"]), int(episode_plan["length"]),
+                episodes_path, episode_offset, episode_length,
                 str(episode_plan["fingerprint"]),
             )
             episode_size = episodes_path.stat().st_size if episodes_path.is_file() else 0
             if ((receipt.get("episode") is not None and not episode_present)
-                    or (not episode_present and episode_size != int(episode_plan["offset"]))):
+                    or (not episode_present and episode_size != episode_offset)):
                 raise ValueError("capture receipt episode target drifted")
             for index in range(len(materialized), len(plans)):
                 plan = dict(plans[index])
-                if probe_record(journal_path, int(plan["offset"]), int(plan["length"]), str(plan["fingerprint"])):
+                plan_offset = receipt_integer(plan.get("offset"), name="journal offset")
+                plan_length = receipt_integer(plan.get("length"), name="journal length", minimum=1)
+                if probe_record(journal_path, plan_offset, plan_length, str(plan["fingerprint"])):
                     pass
-                elif (journal_path.stat().st_size if journal_path.is_file() else 0) == int(plan["offset"]):
+                elif (journal_path.stat().st_size if journal_path.is_file() else 0) == plan_offset:
                     offset, length = self._append_capture_journal_record(journal_path, turn_records[index])
-                    if offset != int(plan["offset"]) or length != int(plan["length"]):
+                    if offset != plan_offset or length != plan_length:
                         raise RuntimeError("capture journal append did not match prepared receipt")
                 else:
                     raise ValueError("capture journal prepared range drifted")
@@ -635,9 +637,18 @@ class Plur1busDomain:
                 receipt["state"] = "committed"
                 write_receipt(path, receipt)
                 return
-            if episode_size == int(episode_plan["offset"]):
+            if episode_size == episode_offset:
+                if episode_record is None:
+                    stored_episode = episode_plan.get("record")
+                    if not isinstance(stored_episode, Mapping):
+                        raise ValueError("capture receipt episode record is invalid")
+                    episode_record = dict(stored_episode)
+                if (record_fingerprint(episode_record) != str(episode_plan["fingerprint"])
+                        or len(json.dumps(episode_record, ensure_ascii=False, sort_keys=True,
+                                          default=str).encode("utf-8")) + 1 != episode_length):
+                    raise ValueError("capture receipt episode plan drifted")
                 offset, length = self._append_capture_journal_record(episodes_path, episode_record)
-                if offset != int(episode_plan["offset"]) or length != int(episode_plan["length"]):
+                if offset != episode_offset or length != episode_length:
                     raise RuntimeError("capture episode append did not match prepared receipt")
             else:
                 raise ValueError("capture episode prepared range drifted")

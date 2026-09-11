@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from plur1bus_hermes.domain import Plur1busDomain
+from plur1bus_hermes.capture_journal import receipt_path
 from plur1bus_hermes.turn_identity import turn_record_id
 
 
@@ -139,6 +140,35 @@ class TurnIdentityTests(unittest.TestCase):
             self.domain.on_turn("first", "first reply", "session", capture_id=self.capture_id,
                                 captured_at=self.captured_at)
         self.assertEqual((self.domain.neo_dir / "turn-journal.jsonl").read_bytes(), before)
+
+    def test_episode_drift_is_rejected_before_journal_mutation(self) -> None:
+        self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                            captured_at=self.captured_at)
+        journal_path = self.domain.neo_dir / "turn-journal.jsonl"
+        episode_path = self.domain.neo_dir / "episodes.jsonl"
+        before_journal = journal_path.read_bytes()
+        damaged = episode_path.read_bytes()
+        episode_path.write_bytes(b"X" + damaged[1:])
+
+        with self.assertRaisesRegex(ValueError, "episode target drifted"):
+            self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                                captured_at=self.captured_at)
+        self.assertEqual(journal_path.read_bytes(), before_journal)
+
+    def test_bool_receipt_offset_is_rejected_before_arithmetic(self) -> None:
+        self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                            captured_at=self.captured_at)
+        journal_path = self.domain.neo_dir / "turn-journal.jsonl"
+        before = journal_path.read_bytes()
+        path = receipt_path(self.root, "main", self.capture_id)
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt["episodePlan"]["offset"] = True
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "episode offset"):
+            self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                                captured_at=self.captured_at)
+        self.assertEqual(journal_path.read_bytes(), before)
 
 
 if __name__ == "__main__":
