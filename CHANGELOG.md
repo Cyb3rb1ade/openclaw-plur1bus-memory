@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.46] — 2026-09-11
+
+### Behoben
+
+- **Der nächtliche Decay verarbeitete jede Nacht dieselben ersten 50
+  Zeilen.** Der Cursor lag nur in `<workspace>/run-state.json`, und die
+  gibt es für partitionsgebundene Läufe nicht (`statePath` null bei
+  geschützter Partition seit der Ownership-Erkennung): heisenberg meldete am
+  10. und 11.09. denselben `nextCursorId`, die Datei-Cursor stammten vom
+  14.08. Der Cursor wohnt jetzt im Hook-Record des partitionseigenen
+  Neo-Stores (`daily-consolidation.dynamicsDecay[<agent>:<workspace>]`), die
+  Datei bleibt Rückfall und wird mitgeschrieben.
+- **Decay-Deckel 300 statt 50 Zeilen, mit Zeitbudget von zwei Minuten**
+  (`dynamicsDecayDeadlineMs`); nach Ablauf bleibt der Cursor auf der letzten
+  Zeile, Ergebnis nennt `deadlineHit`. Bei 9385 Zeilen (main) hätte der alte
+  Deckel 188 Nächte für einen Durchgang gebraucht.
+- Optimize-Zusammenfassung nennt jetzt `attempts` (Anläufe bei
+  Commit-Konflikt, 7.12.45).
+
 ## [7.12.45] — 2026-09-11
 
 ### Behoben
