@@ -79,6 +79,18 @@ receipt boundary, and replay fails closed without new journal/episode rows.
 Conversely, a first receipt-prepare failure sets no requirement and has no
 journal evidence, so its retry remains a first materialization.
 
+Round 4 validates the receipt state/completion shape before accepting an
+existing receipt, invoking its materialization callback, updating mood, or
+rewriting the episode plan. Only an exact `preparing` descriptor with an empty
+materialized journal and null episode plan/completion may advance to
+`prepared`; `prepared` and `committed` receipts with a missing episode plan now
+fail closed. The regression snapshots every fixture file and verifies that
+both corrupt states leave the receipt, journal, episode, and mood files
+byte-identical and do not signal the callback. The focused turn-identity,
+capture-retry, and domain command passed 31 tests. This remains bounded receipt
+recovery, not cross-file transactional capture or a claim about live Hermes
+lifecycle behavior.
+
 The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.

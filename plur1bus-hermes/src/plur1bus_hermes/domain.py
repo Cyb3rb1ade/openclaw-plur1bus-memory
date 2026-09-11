@@ -577,21 +577,6 @@ class Plur1busDomain:
                            "episodePlan": None,
                            "episode": None}
                 write_receipt(path, receipt)
-            if receipt_materialized is not None:
-                receipt_materialized()
-            if receipt.get("episodePlan") is None:
-                episode_record = make_episode_record(self._mood.update(analysis["emotion"]))
-                episode_line = json.dumps(episode_record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8") + b"\n"
-                receipt["episodePlan"] = {"id": episode_id,
-                                           "offset": (episodes_path.stat().st_size if episodes_path.is_file() else 0),
-                                           "length": len(episode_line),
-                                           "fingerprint": record_fingerprint(episode_record),
-                                           # A prepared episode preserves its exact derived
-                                           # mood snapshot without retaining its source summary.
-                                           "record": {key: value for key, value in episode_record.items()
-                                                      if key != "summary"}}
-                receipt["state"] = "prepared"
-                write_receipt(path, receipt)
             plans = receipt.get("journalPlans")
             if not isinstance(plans, list) or len(plans) != len(turn_records):
                 raise ValueError("capture receipt journal plan is invalid")
@@ -604,6 +589,42 @@ class Plur1busDomain:
                 raise ValueError("capture receipt journal state is invalid")
             if materialized != plans[:len(materialized)]:
                 raise ValueError("capture receipt journal prefix is invalid")
+            state = receipt.get("state")
+            episode_plan = receipt.get("episodePlan")
+            if isinstance(episode_plan, Mapping):
+                receipt_integer(episode_plan.get("offset"), name="episode offset")
+                receipt_integer(episode_plan.get("length"), name="episode length", minimum=1)
+            if state == "preparing":
+                if ("episodePlan" not in receipt or "episode" not in receipt
+                        or episode_plan is not None or receipt.get("episode") is not None
+                        or materialized):
+                    raise ValueError("capture receipt completion is invalid")
+            elif state == "prepared":
+                if not isinstance(episode_plan, Mapping) or receipt.get("episode") is not None:
+                    raise ValueError("capture receipt completion is invalid")
+            elif state == "committed":
+                if (not isinstance(episode_plan, Mapping)
+                        or len(materialized) != len(plans)
+                        or receipt.get("episode") != dict(episode_plan)):
+                    raise ValueError("capture receipt completion is invalid")
+            else:
+                raise ValueError("capture receipt state is invalid")
+            if receipt_materialized is not None:
+                receipt_materialized()
+            if state == "preparing":
+                episode_record = make_episode_record(self._mood.update(analysis["emotion"]))
+                episode_line = json.dumps(episode_record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8") + b"\n"
+                receipt["episodePlan"] = {"id": episode_id,
+                                           "offset": (episodes_path.stat().st_size if episodes_path.is_file() else 0),
+                                           "length": len(episode_line),
+                                           "fingerprint": record_fingerprint(episode_record),
+                                           # A prepared episode preserves its exact derived
+                                           # mood snapshot without retaining its source summary.
+                                           "record": {key: value for key, value in episode_record.items()
+                                                      if key != "summary"}}
+                receipt["state"] = "prepared"
+                write_receipt(path, receipt)
+                episode_plan = receipt["episodePlan"]
             # Validate every already-indexed target before any append.  The
             # next planned byte range also detects a full line appended just
             # before a crash but before its receipt state was published.
@@ -614,19 +635,10 @@ class Plur1busDomain:
                         journal_path, item_offset, item_length,
                         str(item.get("fingerprint") or "")):
                     raise ValueError("capture receipt journal target drifted")
-            episode_plan = receipt.get("episodePlan")
             if not isinstance(episode_plan, Mapping) or episode_plan.get("id") != episode_id:
                 raise ValueError("capture receipt episode plan is invalid")
             episode_offset = receipt_integer(episode_plan.get("offset"), name="episode offset")
             episode_length = receipt_integer(episode_plan.get("length"), name="episode length", minimum=1)
-            state = receipt.get("state")
-            if state not in {"prepared", "committed"}:
-                raise ValueError("capture receipt state is invalid")
-            if state == "prepared" and receipt.get("episode") is not None:
-                raise ValueError("capture receipt completion is invalid")
-            if state == "committed" and (len(materialized) != len(plans)
-                                       or receipt.get("episode") != dict(episode_plan)):
-                raise ValueError("capture receipt completion is invalid")
             episode_present = probe_record(
                 episodes_path, episode_offset, episode_length,
                 str(episode_plan["fingerprint"]),

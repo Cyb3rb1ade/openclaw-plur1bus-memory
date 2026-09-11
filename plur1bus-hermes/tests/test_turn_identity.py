@@ -194,6 +194,43 @@ class TurnIdentityTests(unittest.TestCase):
         self.assertEqual(journal_path.read_bytes(), before_journal)
         self.assertEqual(episode_path.read_bytes(), before_episode)
 
+    def test_missing_episode_plan_cannot_reprepare_completed_receipt(self) -> None:
+        for state in ("prepared", "committed"):
+            with self.subTest(state=state):
+                root = self.root / state
+                domain = Plur1busDomain(root, "main")
+                capture_id = str(uuid.uuid4())
+                domain.on_turn("user", "assistant", "session", capture_id=capture_id,
+                               captured_at=self.captured_at)
+                path = receipt_path(root, "main", capture_id)
+                receipt = read_receipt(path)
+                assert receipt is not None
+                receipt["state"] = state
+                receipt["episodePlan"] = None
+                receipt["episode"] = None
+                write_receipt(path, receipt)
+                before = {
+                    item.relative_to(root): item.read_bytes()
+                    for item in root.rglob("*")
+                    if item.is_file()
+                }
+                callbacks: list[bool] = []
+
+                with self.assertRaisesRegex(ValueError, "receipt (state|completion)"):
+                    domain.on_turn(
+                        "user", "assistant", "session", capture_id=capture_id,
+                        captured_at=self.captured_at,
+                        receipt_materialized=lambda: callbacks.append(True),
+                    )
+
+                after = {
+                    item.relative_to(root): item.read_bytes()
+                    for item in root.rglob("*")
+                    if item.is_file()
+                }
+                self.assertEqual(after, before)
+                self.assertEqual(callbacks, [])
+
     def test_receipt_omits_episode_summary_and_rejects_oversize_read(self) -> None:
         self.domain.on_turn("user body", "assistant body", "session", capture_id=self.capture_id,
                             captured_at=self.captured_at)
