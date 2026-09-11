@@ -62,6 +62,7 @@ from .turn_identity import (
     canonical_captured_at,
     mint_capture_identity,
 )
+from .capture_journal import receipt_path
 
 from . import file_lock as fcntl
 
@@ -692,6 +693,7 @@ class Plur1busRuntime:
                 payload.get("importance"),
                 payload.get("validFrom"), payload.get("validUntil"), payload.get("expiresAt"), payload.get("ttl"),
                 capture_id=payload.get("captureId"), captured_at=payload.get("capturedAt"),
+                receipt_required=payload.get("receiptRequired") is True,
             )
         except AdmissionRejected as error:
             # Queue pressure did not execute the capture, so preserve the
@@ -950,7 +952,9 @@ class Plur1busRuntime:
                 self._append_capture_dead_letters_locked(dead_letters)
                 dead_keys = {self._retry_key(entry) for entry in dead_letters}
                 self._write_capture_retries_locked([
-                    entry for entry in entries if self._retry_key(entry) not in dead_keys
+                    entry for entry in entries
+                    if (not self._retry_entry_is_owned(entry)
+                        or self._retry_key(entry) not in dead_keys)
                 ])
         for entry, attempts in pending:
             self._submit_capture(entry, attempts, from_retry=True)
@@ -987,11 +991,24 @@ class Plur1busRuntime:
 
     def _record_capture_retry(self, payload: dict[str, Any], attempts: int) -> None:
         """Requeue a failed capture payload, or give up once attempts hit the cap."""
+        receipt_required = payload.get("receiptRequired") is True
+        if not receipt_required and payload.get("captureId"):
+            try:
+                receipt_required = receipt_path(
+                    self.data_dir, self.agent_id, str(payload["captureId"])
+                ).is_file()
+            except (ValueError, TypeError):
+                # This is an admission/storage failure before a certified
+                # receipt exists; preserve the retry as a first materialize.
+                receipt_required = False
         stamped = {
             **payload,
             "agentId": self.agent_id,
             "scopeKey": self.scope_key,
             "aclBinding": self.scope_binding.acl_binding,
+            # Once a capture has materialized its prepared receipt, its loss
+            # must not turn a retry into a fresh text-derived admission.
+            "receiptRequired": receipt_required,
         }
         key = self._retry_key(stamped)
         with self._locked_capture_retry_queue():
@@ -1711,7 +1728,8 @@ class Plur1busRuntime:
                       importance: float | None = None, valid_from: Any = None,
                       valid_until: Any = None, expires_at: Any = None,
                       ttl: Any = None, *, capture_id: str | None = None,
-                      captured_at: str | None = None) -> None:
+                      captured_at: str | None = None,
+                      receipt_required: bool = False) -> None:
         self._domain.on_turn(
             user,
             assistant,
@@ -1719,6 +1737,7 @@ class Plur1busRuntime:
             acl_bindings=self.scope_binding.as_dict(),
             capture_id=capture_id,
             captured_at=captured_at,
+            receipt_required=receipt_required,
         )
         temporal = any(value is not None for value in (valid_from, valid_until, expires_at, ttl))
         if importance is None and not temporal:

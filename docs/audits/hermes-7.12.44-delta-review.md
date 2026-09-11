@@ -32,6 +32,30 @@ These are verified gaps, not verified implementations:
 | 7.12.37 persona directive projection is not capped at 400 characters | `persona_voice.load_directive()` defaults to 400 and caps `max_chars` at 400 in `plur1bus-hermes/src/plur1bus_hermes/persona_voice.py`. | verified gap |
 | 7.12.40/7.12.44 episode continuity and canonical identity work must accommodate shorter applicable episodes | `episode_narrative.MIN_TURNS = 5` and `enrich()` returns `None` below that threshold in `plur1bus-hermes/src/plur1bus_hermes/episode_narrative.py`. | verified gap |
 
+## Native capture identity receipt (Task 1 follow-up)
+
+Native automatic capture now mints a non-authorizing admission UUID and UTC
+timestamp before executor submission.  A per-agent, UUID-addressed prepared
+receipt binds the exact scope, session, source hashes, deterministic journal
+and episode IDs, and bounded byte offsets/fingerprints.  Under the existing
+writer lock, replay validates every already-indexed journal and episode target
+before an append; a full append interrupted before its receipt update is
+recognized at the recorded offset and completed without a history scan.
+
+This is deliberately **partial** lifecycle parity.  A retry whose required
+receipt is missing, truncated, or manually drifted fails closed and preserves
+the evidence rather than claiming exactly-once recovery.  If another capture appends after an
+interrupted prepared range, the original capture also fails closed; it never
+scans or overwrites an unbounded JSONL tail.  The receipt stores source hashes,
+not duplicate full user/assistant bodies.  Canonical memory, mood, reminder,
+and other independent side effects remain outside this journal/episode claim.
+
+Evidence: `test_turn_identity.py` injects append-then-interrupt recovery,
+foreign-append fail-closed behavior, receipt timestamp reuse, and immutable
+scope/session/source conflicts. `test_capture_retry.py` covers durable retry
+identity, restart replay, malformed/foreign preservation, exhaustion, and a
+numeric foreign retry-key collision during dead-lettering.
+
 The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.

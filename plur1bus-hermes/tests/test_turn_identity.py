@@ -36,13 +36,21 @@ class TurnIdentityTests(unittest.TestCase):
             turn_record_id(self.capture_id, "main", "scope", "session", "system")
 
     def test_replay_resumes_partial_pair_without_duplicate_episode(self) -> None:
-        self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
-                            captured_at=self.captured_at)
-        journal_path = self.domain.neo_dir / "turn-journal.jsonl"
-        rows = self._journal()
-        journal_path.write_text(json.dumps(rows[0]) + "\n", encoding="utf-8")
-        (self.domain.neo_dir / "episodes.jsonl").unlink()
+        original_append = self.domain._append_capture_journal_record
+        interrupted = {"done": False}
 
+        def append_then_interrupt(path, record):
+            result = original_append(path, record)
+            if record.get("role") == "user" and not interrupted["done"]:
+                interrupted["done"] = True
+                raise RuntimeError("injected interruption after durable append")
+            return result
+
+        self.domain._append_capture_journal_record = append_then_interrupt
+        with self.assertRaisesRegex(RuntimeError, "injected interruption"):
+            self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                                captured_at=self.captured_at)
+        self.domain._append_capture_journal_record = original_append
         self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
                             captured_at=self.captured_at)
 
@@ -61,17 +69,18 @@ class TurnIdentityTests(unittest.TestCase):
             self.domain.on_turn("user", "assistant", "session-two", capture_id=self.capture_id,
                                 captured_at=self.captured_at)
 
-    def test_partial_pair_rejects_changed_missing_role_content(self) -> None:
+    def test_conflicting_replay_fails_before_mutating_durable_targets(self) -> None:
         self.domain.on_turn("user", "assistant-one", "session", capture_id=self.capture_id,
                             captured_at=self.captured_at)
-        rows = self._journal()
-        (self.domain.neo_dir / "turn-journal.jsonl").write_text(
-            json.dumps(rows[0]) + "\n", encoding="utf-8")
-        (self.domain.neo_dir / "episodes.jsonl").unlink()
-
+        journal_path = self.domain.neo_dir / "turn-journal.jsonl"
+        episode_path = self.domain.neo_dir / "episodes.jsonl"
+        before_journal = journal_path.read_bytes()
+        before_episodes = episode_path.read_bytes()
         with self.assertRaisesRegex(ValueError, "capture identity"):
             self.domain.on_turn("user", "assistant-two", "session", capture_id=self.capture_id,
                                 captured_at=self.captured_at)
+        self.assertEqual(journal_path.read_bytes(), before_journal)
+        self.assertEqual(episode_path.read_bytes(), before_episodes)
 
     def test_same_capture_identity_with_changed_scope_fails_closed(self) -> None:
         self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
@@ -99,6 +108,37 @@ class TurnIdentityTests(unittest.TestCase):
         rows = self.domain._read_jsonl(self.domain.neo_dir / "open-threads.jsonl")
         self.assertTrue(rows)
         self.assertEqual(rows[0]["createdAt"], self.captured_at)
+
+    def test_capture_id_without_timestamp_reuses_receipt_timestamp(self) -> None:
+        self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                            captured_at=self.captured_at)
+        before = self._journal()
+        self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id)
+        self.assertEqual(self._journal(), before)
+
+    def test_interrupted_receipt_fails_closed_after_another_capture_appends(self) -> None:
+        original_append = self.domain._append_capture_journal_record
+        interrupted = {"done": False}
+
+        def append_then_interrupt(path, record):
+            result = original_append(path, record)
+            if record.get("role") == "user" and not interrupted["done"]:
+                interrupted["done"] = True
+                raise RuntimeError("injected interruption after durable append")
+            return result
+
+        self.domain._append_capture_journal_record = append_then_interrupt
+        with self.assertRaisesRegex(RuntimeError, "injected interruption"):
+            self.domain.on_turn("first", "first reply", "session", capture_id=self.capture_id,
+                                captured_at=self.captured_at)
+        self.domain._append_capture_journal_record = original_append
+        self.domain.on_turn("second", "second reply", "session")
+        before = (self.domain.neo_dir / "turn-journal.jsonl").read_bytes()
+
+        with self.assertRaisesRegex(ValueError, "(prepared range|episode target) drifted"):
+            self.domain.on_turn("first", "first reply", "session", capture_id=self.capture_id,
+                                captured_at=self.captured_at)
+        self.assertEqual((self.domain.neo_dir / "turn-journal.jsonl").read_bytes(), before)
 
 
 if __name__ == "__main__":

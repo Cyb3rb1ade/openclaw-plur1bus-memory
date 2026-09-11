@@ -60,6 +60,16 @@ from .turn_identity import (
     mint_capture_identity,
     turn_record_id,
 )
+from .capture_journal import (
+    RECEIPT_VERSION,
+    append_record,
+    probe_record,
+    receipt_path,
+    record_fingerprint,
+    read_receipt,
+    text_hash,
+    write_receipt,
+)
 
 
 def _utcnow() -> str:
@@ -455,8 +465,9 @@ class Plur1busDomain:
         scopeKey: str | None = None,
         capture_id: str | None = None,
         captured_at: str | None = None,
+        receipt_required: bool = False,
     ) -> None:
-        """Persist one idempotent journal pair and per-capture episode.
+        """Persist one receipt-indexed journal pair and per-capture episode.
 
         Journal rows and the episode are exactly-once for a durable capture
         identity under this writer lock.  Mood, open-thread and reminder files
@@ -467,51 +478,37 @@ class Plur1busDomain:
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         neo_dir = self._scope_neo_dir(selector)
-        if capture_id is None:
-            capture_id, default_captured_at = mint_capture_identity()
-            captured_at = captured_at or default_captured_at
-        capture_id = canonical_capture_id(capture_id)
-        if captured_at is None:
-            _unused, captured_at = mint_capture_identity()
-        captured_at = canonical_captured_at(captured_at)
         expected_content = {
             role: str(content or "").strip()
             for role, content in (("user", user), ("assistant", assistant))
         }
+        if capture_id is None:
+            capture_id, default_captured_at = mint_capture_identity()
+            captured_at = captured_at or default_captured_at
+        capture_id = canonical_capture_id(capture_id)
+        path = receipt_path(self.data_dir, self.agent_id, capture_id)
+        receipt = read_receipt(path)
+        source_hashes = {role: text_hash(text) for role, text in expected_content.items()}
+        if receipt is None and receipt_required:
+            raise ValueError("capture receipt is missing; refusing replay")
+        if receipt is not None:
+            if (receipt.get("captureId") != capture_id
+                    or receipt.get("agentId") != self.agent_id
+                    or receipt.get("scopeKey") != selector.scope_key
+                    or receipt.get("sessionId") != str(session_id)
+                    or receipt.get("sourceHashes") != source_hashes):
+                raise ValueError("capture identity conflicts with durable receipt")
+            durable_captured_at = canonical_captured_at(str(receipt.get("capturedAt") or ""))
+            if captured_at is None:
+                captured_at = durable_captured_at
+            elif canonical_captured_at(captured_at) != durable_captured_at:
+                raise ValueError("capture identity conflicts with durable receipt")
+        if captured_at is None:
+            _unused, captured_at = mint_capture_identity()
+        captured_at = canonical_captured_at(captured_at)
         journal_path = neo_dir / "turn-journal.jsonl"
-        existing_journal = self._read_jsonl(journal_path)
-        existing_by_id = {str(row.get("id") or ""): row for row in existing_journal}
-        # The canonical capture UUID is an admission identity, never a host
-        # message identity or an ACL credential.  It may not be reused in a
-        # second physical scope, even though the derived UUID5 would differ.
-        all_capture_rows = list(existing_journal)
-        private_journal_path = self.neo_dir / "turn-journal.jsonl"
-        if private_journal_path != journal_path:
-            all_capture_rows.extend(self._read_jsonl(private_journal_path))
-        scopes_root = self.neo_dir / "scopes"
-        if scopes_root.is_dir():
-            for path in scopes_root.glob("*/turn-journal.jsonl"):
-                if path != journal_path:
-                    all_capture_rows.extend(self._read_jsonl(path))
-        # A record ID includes session and scope, so scan the persisted capture
-        # source identity too; otherwise a changed session could evade a row-ID
-        # comparison and create a second logical capture.
-        for row in all_capture_rows:
-            if row.get("captureId") != capture_id:
-                continue
-            if (str(row.get("agentId") or "") != self.agent_id
-                    or str(row.get("scopeKey") or "") != selector.scope_key
-                    or str(row.get("sessionId") or "") != str(session_id)
-                    or str(row.get("capturedAt") or "") != captured_at):
-                raise ValueError("capture identity conflicts with durable journal source")
-            if (("sourceUser" in row and row.get("sourceUser") != expected_content["user"])
-                    or ("sourceAssistant" in row
-                        and row.get("sourceAssistant") != expected_content["assistant"])):
-                raise ValueError("capture identity conflicts with durable journal source")
-            role = str(row.get("role") or "")
-            if role not in expected_content or str(row.get("content") or "") != expected_content[role]:
-                raise ValueError("capture identity conflicts with durable journal source")
-        turn_ids = []
+        turn_ids: list[str] = []
+        turn_records: list[dict[str, Any]] = []
         for index, (role, content) in enumerate((("user", user), ("assistant", assistant))):
             text = str(content or "").strip()
             if not text:
@@ -519,16 +516,7 @@ class Plur1busDomain:
             analysis = analyze_text(text)
             turn_id = turn_record_id(capture_id, self.agent_id, selector.scope_key, session_id, role)
             turn_ids.append(turn_id)
-            existing = existing_by_id.get(turn_id)
-            if existing is not None:
-                if (existing.get("captureId") != capture_id
-                        or str(existing.get("content") or "") != text
-                        or str(existing.get("sessionId") or "") != str(session_id)
-                        or str(existing.get("role") or "") != role
-                        or str(existing.get("capturedAt") or "") != captured_at):
-                    raise ValueError("capture identity conflicts with durable journal row")
-                continue
-            self._append_jsonl(journal_path, {
+            turn_records.append({
                 "id": turn_id,
                 "captureId": capture_id,
                 "workspaceKey": self.agent_id,
@@ -539,8 +527,6 @@ class Plur1busDomain:
                 "turnIndex": index,
                 "role": role,
                 "content": text,
-                "sourceUser": expected_content["user"],
-                "sourceAssistant": expected_content["assistant"],
                 "categories": ["user_explicit" if role == "user" else "assistant_claim"],
                 "cognition": analysis,
                 "speakerSegments": self._speakers.segment(text),
@@ -558,18 +544,8 @@ class Plur1busDomain:
             analysis = self._analyze_text(combined)
             episode_id = episode_record_id(capture_id, self.agent_id, selector.scope_key, session_id)
             episodes_path = neo_dir / "episodes.jsonl"
-            existing_episodes = self._read_jsonl(episodes_path)
-            episode = next((row for row in existing_episodes if row.get("id") == episode_id), None)
-            if episode is not None:
-                if (episode.get("captureId") != capture_id
-                        or str(episode.get("sessionId") or "") != str(session_id)
-                        or episode.get("turnIds") != turn_ids):
-                    raise ValueError("capture identity conflicts with durable episode")
-                return
-            # No journal duplicate is emitted above.  Materializing the
-            # episode after a partial journal replay is deliberate.
             mood = self._mood.update(analysis["emotion"])
-            self._append_jsonl(episodes_path, {
+            episode_record = {
                 "id": episode_id,
                 "captureId": capture_id,
                 "workspaceKey": self.agent_id,
@@ -593,7 +569,81 @@ class Plur1busDomain:
                 "turnCount": len(turn_ids),
                 "capturedAt": captured_at,
                 "createdAt": captured_at,
-            })
+            }
+            if receipt is None:
+                journal_offset = journal_path.stat().st_size if journal_path.is_file() else 0
+                plans = []
+                for record in turn_records:
+                    line = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8") + b"\n"
+                    plans.append({"id": record["id"], "offset": journal_offset,
+                                  "length": len(line), "fingerprint": record_fingerprint(record)})
+                    journal_offset += len(line)
+                episode_line = json.dumps(episode_record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8") + b"\n"
+                receipt = {"version": RECEIPT_VERSION, "state": "prepared", "captureId": capture_id,
+                           "agentId": self.agent_id, "scopeKey": selector.scope_key,
+                           "sessionId": str(session_id), "capturedAt": captured_at,
+                           "sourceHashes": source_hashes, "journal": [], "journalPlans": plans,
+                           "episodePlan": {"id": episode_id,
+                                           "offset": (episodes_path.stat().st_size if episodes_path.is_file() else 0),
+                                           "length": len(episode_line),
+                                           "fingerprint": record_fingerprint(episode_record)},
+                           "episode": None}
+                write_receipt(path, receipt)
+            plans = receipt.get("journalPlans")
+            if not isinstance(plans, list) or len(plans) != len(turn_records):
+                raise ValueError("capture receipt journal plan is invalid")
+            for plan, record in zip(plans, turn_records, strict=True):
+                if (not isinstance(plan, Mapping) or plan.get("id") != record["id"]
+                        or plan.get("fingerprint") != record_fingerprint(record)):
+                    raise ValueError("capture receipt conflicts with journal plan")
+            materialized = receipt.get("journal")
+            if not isinstance(materialized, list) or len(materialized) > len(plans):
+                raise ValueError("capture receipt journal state is invalid")
+            # Validate every already-indexed target before any append.  The
+            # next planned byte range also detects a full line appended just
+            # before a crash but before its receipt state was published.
+            for item in materialized:
+                if not isinstance(item, Mapping) or not probe_record(
+                        journal_path, int(item.get("offset", -1)), int(item.get("length", 0)),
+                        str(item.get("fingerprint") or "")):
+                    raise ValueError("capture receipt journal target drifted")
+            episode_plan = receipt.get("episodePlan")
+            if not isinstance(episode_plan, Mapping) or episode_plan.get("id") != episode_id:
+                raise ValueError("capture receipt episode plan is invalid")
+            episode_present = probe_record(
+                episodes_path, int(episode_plan["offset"]), int(episode_plan["length"]),
+                str(episode_plan["fingerprint"]),
+            )
+            episode_size = episodes_path.stat().st_size if episodes_path.is_file() else 0
+            if ((receipt.get("episode") is not None and not episode_present)
+                    or (not episode_present and episode_size != int(episode_plan["offset"]))):
+                raise ValueError("capture receipt episode target drifted")
+            for index in range(len(materialized), len(plans)):
+                plan = dict(plans[index])
+                if probe_record(journal_path, int(plan["offset"]), int(plan["length"]), str(plan["fingerprint"])):
+                    pass
+                elif (journal_path.stat().st_size if journal_path.is_file() else 0) == int(plan["offset"]):
+                    offset, length = self._append_capture_journal_record(journal_path, turn_records[index])
+                    if offset != int(plan["offset"]) or length != int(plan["length"]):
+                        raise RuntimeError("capture journal append did not match prepared receipt")
+                else:
+                    raise ValueError("capture journal prepared range drifted")
+                receipt["journal"].append(plan)
+                write_receipt(path, receipt)
+            if episode_present:
+                receipt["episode"] = dict(episode_plan)
+                receipt["state"] = "committed"
+                write_receipt(path, receipt)
+                return
+            if episode_size == int(episode_plan["offset"]):
+                offset, length = self._append_capture_journal_record(episodes_path, episode_record)
+                if offset != int(episode_plan["offset"]) or length != int(episode_plan["length"]):
+                    raise RuntimeError("capture episode append did not match prepared receipt")
+            else:
+                raise ValueError("capture episode prepared range drifted")
+            receipt["episode"] = dict(episode_plan)
+            receipt["state"] = "committed"
+            write_receipt(path, receipt)
             self._append_jsonl(neo_dir / "emotional-state.jsonl", {
                 "agentId": self.agent_id,
                 "scopeKey": selector.scope_key,
@@ -623,6 +673,11 @@ class Plur1busDomain:
                     )
                 except Exception as error:
                     logging.getLogger(__name__).warning("reminder extraction skipped: %s", type(error).__name__)
+
+    @staticmethod
+    def _append_capture_journal_record(path: Path, record: Mapping[str, Any]) -> tuple[int, int]:
+        """Append one receipt-planned durable record; tests inject crash gaps here."""
+        return append_record(path, record)
 
     def run_episode_narratives(self, *, acl_bindings: Any = None,
                               scope_key: str | None = None) -> dict[str, Any]:

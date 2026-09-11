@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from plur1bus_hermes.runtime import MAX_CAPTURE_RETRIES, Plur1busRuntime
+from plur1bus_hermes.capture_journal import receipt_path
 
 
 class StubEmbedding:
@@ -126,6 +127,22 @@ class CaptureRetryTests(unittest.TestCase):
         self.assertEqual(len(before), 2)
         self.assertEqual(after, before)
 
+    def test_retry_with_missing_receipt_fails_closed_without_journal_duplicate(self) -> None:
+        self.runtime.capture_async("receipt user", "receipt assistant", "receipt-session")
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: len(self._retry_entries()) == 1))
+        entry = self._retry_entries()[0]
+        before = self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl")
+        receipt_path(self.runtime.data_dir, self.runtime.agent_id, entry["captureId"]).unlink()
+        self.embedding.fail = False
+        self.runtime._resubmit_capture_retries()
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: self._retry_attempts("receipt user") == 2))
+        after = self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl")
+        self.assertEqual(after, before)
+
     def test_legacy_owned_retry_receives_identity_before_restart_replay(self) -> None:
         payload = {
             "user": "legacy user", "assistant": "legacy assistant", "sessionId": "legacy-session",
@@ -171,6 +188,30 @@ class CaptureRetryTests(unittest.TestCase):
         entries = self._retry_entries()
         self.assertEqual(entries, [foreign])
         self.assertNotIn("captureId", entries[0])
+
+    def test_dead_letter_does_not_remove_numeric_foreign_retry_key_twin(self) -> None:
+        config = {
+            "dataDir": "numeric", "agentId": "1",
+            "embedding": {"provider": "omlx", "model": "embed", "dimensions": 4},
+            "reranker": {"provider": "disabled"},
+        }
+        runtime = Plur1busRuntime(self.root, config, "1")
+        try:
+            shared = {
+                "user": "same", "assistant": "same", "sessionId": "same", "captureId": str(uuid.uuid4()),
+                "capturedAt": "2026-09-11T12:00:00+00:00", "scopeKey": runtime.scope_key,
+                "aclBinding": runtime.scope_binding.acl_binding,
+            }
+            runtime._write_capture_retries([
+                {**shared, "agentId": "1", "attempts": MAX_CAPTURE_RETRIES},
+                {**shared, "agentId": 1, "attempts": 1},
+            ])
+            runtime._resubmit_capture_retries()
+            entries = runtime._read_capture_retries()
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["agentId"], 1)
+        finally:
+            runtime.shutdown()
 
     def test_gives_up_after_max_capture_retries(self) -> None:
         self.assertEqual(MAX_CAPTURE_RETRIES, 5)
