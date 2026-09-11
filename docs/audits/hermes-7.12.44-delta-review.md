@@ -165,9 +165,11 @@ deadlines (`bis heute Abend`, `bis heute 18 Uhr`) still resolve as today. For a
 future contextual month, native deliberately returns `None`:
 with the fixed 2026-09-11 UTC reference, `im Dezember` does not return the
 upstream parser's inverted December-to-September range and does not guess a
-previous year. Semantic anchors such as `nach dem X` remain a separate,
-unimplemented recall contract rather than leaking an anchor object to this
-range-only consumer.
+previous year. Semantic anchors such as `nach dem X` / `after the X` are
+detected before every calendar matcher and return `None`, including when their
+event name contains a year, a month-year, or today. They remain a separate,
+unimplemented recall contract rather than leaking an anchor object or inferring
+a date in this range-only consumer.
 
 The focused RED command was:
 

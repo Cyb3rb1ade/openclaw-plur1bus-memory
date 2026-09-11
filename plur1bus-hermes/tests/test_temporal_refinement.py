@@ -34,6 +34,22 @@ class TemporalRefinementTests(unittest.TestCase):
         self.assertEqual(timed_deadline["start"], "2026-09-11T00:00:00+00:00")
         self.assertEqual(timed_deadline["end"], "2026-09-11T12:00:00+00:00")
 
+    def test_semantic_event_anchors_never_return_calendar_ranges(self):
+        for query in (
+            "after the migration 2025",
+            "nach dem Release 2025",
+            "after the migration in May 2025",
+            "nach dem Release im Mai 2025",
+            "after the migration today",
+            "nach dem Release heute",
+        ):
+            with self.subTest(query=query):
+                self.assertIsNone(parse_temporal_range(query, now=self.now))
+
+        self.assertIsNotNone(parse_temporal_range("Was war 2025?", now=self.now))
+        self.assertIsNotNone(parse_temporal_range("in May 2025", now=self.now))
+        self.assertIsNotNone(parse_temporal_range("Was war heute?", now=self.now))
+
     def test_today_yesterday_hours_ago_and_last_week(self):
         today = parse_temporal_range("Was war heute?", now=self.now)
         yesterday = parse_temporal_range("What happened yesterday?", now=self.now)

@@ -316,6 +316,12 @@ def parse_temporal_range(
         reference = reference.astimezone(timezone.utc)
     value = str(text or "")
 
+    # Event-reference anchors need a second recall to resolve their event.
+    # This range-only helper must not mistake date words inside the event name
+    # for a calendar constraint or return an anchor-shaped compatibility value.
+    if re.search(r"\b(?:nach\s+dem|after\s+the)\s+.+$", value, re.I):
+        return None
+
     # Duration phrases describe elapsed time, not a request to narrow recall
     # to a day. Strip only the phrase so a separate remaining anchor can still
     # resolve. Explicit same-day deadlines intentionally remain untouched.
