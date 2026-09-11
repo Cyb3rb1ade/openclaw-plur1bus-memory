@@ -1740,13 +1740,11 @@ class Plur1busRuntime:
             capture_id=capture_id,
             captured_at=captured_at,
             receipt_required=receipt_required,
+            receipt_materialized=(
+                (lambda: capture_payload.__setitem__("receiptRequired", True))
+                if capture_payload is not None else None
+            ),
         )
-        # This mutable admission payload reaches the done callback.  Once the
-        # journal/episode receipt has returned successfully, later embedding
-        # failures must retain that fact even if an external restore deletes
-        # the receipt before retry persistence.
-        if capture_payload is not None:
-            capture_payload["receiptRequired"] = True
         temporal = any(value is not None for value in (valid_from, valid_until, expires_at, ttl))
         if importance is None and not temporal:
             self._remember(user, session_id, "user")

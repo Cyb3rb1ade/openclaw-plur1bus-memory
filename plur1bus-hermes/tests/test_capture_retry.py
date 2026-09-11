@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from plur1bus_hermes.runtime import MAX_CAPTURE_RETRIES, Plur1busRuntime
 from plur1bus_hermes.capture_journal import receipt_path
+import plur1bus_hermes.domain as domain_module
 
 
 class StubEmbedding:
@@ -169,6 +170,60 @@ class CaptureRetryTests(unittest.TestCase):
         self.assertTrue(self._wait_until(lambda: self._retry_attempts("sticky user") == 2))
         self.assertEqual(self.runtime._domain._read_jsonl(
             self.runtime._domain.neo_dir / "turn-journal.jsonl"), before)
+
+    def test_post_journal_side_effect_failure_keeps_sticky_receipt_requirement(self) -> None:
+        original_append = self.runtime._domain._append_jsonl
+
+        def remove_receipt_then_fail(path, value):
+            if path.name == "emotional-state.jsonl":
+                journal = self.runtime._domain._read_jsonl(
+                    self.runtime._domain.neo_dir / "turn-journal.jsonl")
+                receipt_path(self.runtime.data_dir, self.runtime.agent_id, journal[0]["captureId"]).unlink()
+                raise RuntimeError("emotional side effect failed after receipt")
+            return original_append(path, value)
+
+        self.runtime._domain._append_jsonl = remove_receipt_then_fail
+        self.runtime.capture_async("side user", "side assistant", "side-session")
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: len(self._retry_entries()) == 1))
+        entry = self._retry_entries()[0]
+        self.assertTrue(entry["receiptRequired"])
+        journal = self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl")
+        episodes = self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "episodes.jsonl")
+        self.assertEqual((len(journal), len(episodes)), (2, 1))
+        self.runtime._domain._append_jsonl = original_append
+        self.embedding.fail = False
+        self.runtime._resubmit_capture_retries()
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: self._retry_attempts("side user") == 2))
+        self.assertEqual(self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl"), journal)
+        self.assertEqual(self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "episodes.jsonl"), episodes)
+
+    def test_first_prepare_failure_remains_first_materialization(self) -> None:
+        original_write = domain_module.write_receipt
+
+        def fail_prepare(*_args, **_kwargs):
+            raise RuntimeError("injected receipt prepare failure")
+
+        domain_module.write_receipt = fail_prepare
+        self.runtime.capture_async("prepare user", "prepare assistant", "prepare-session")
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: len(self._retry_entries()) == 1))
+        entry = self._retry_entries()[0]
+        self.assertFalse(entry["receiptRequired"])
+        self.assertEqual(self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl"), [])
+        domain_module.write_receipt = original_write
+        self.embedding.fail = False
+        self.runtime._resubmit_capture_retries()
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: not self._retry_entries()))
+        self.assertEqual(len(self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl")), 2)
 
     def test_legacy_owned_retry_receives_identity_before_restart_replay(self) -> None:
         payload = {

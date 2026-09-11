@@ -71,6 +71,14 @@ Result: 59 tests passed. The corresponding native discovery command with
 tests. The latter is a native unit/integration gate only; it is not a host
 lifecycle, guest-runtime, or universal crash-transaction claim.
 
+Round 3 repeated the same focused command: 61 tests passed. Native discovery
+repeated the same command with 567 tests passed. Its post-journal
+`emotional-state.jsonl` failure regression deletes the receipt before throwing;
+the runtime still persists the monotonic retry requirement set at the internal
+receipt boundary, and replay fails closed without new journal/episode rows.
+Conversely, a first receipt-prepare failure sets no requirement and has no
+journal evidence, so its retry remains a first materialization.
+
 The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.

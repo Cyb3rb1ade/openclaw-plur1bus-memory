@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .cognition import (
     analyze_text,
@@ -467,6 +467,7 @@ class Plur1busDomain:
         capture_id: str | None = None,
         captured_at: str | None = None,
         receipt_required: bool = False,
+        receipt_materialized: Callable[[], None] | None = None,
     ) -> None:
         """Persist one receipt-indexed journal pair and per-capture episode.
 
@@ -562,7 +563,6 @@ class Plur1busDomain:
                 }
             episode_record: dict[str, Any] | None = None
             if receipt is None:
-                episode_record = make_episode_record(self._mood.update(analysis["emotion"]))
                 journal_offset = journal_path.stat().st_size if journal_path.is_file() else 0
                 plans = []
                 for record in turn_records:
@@ -570,21 +570,27 @@ class Plur1busDomain:
                     plans.append({"id": record["id"], "offset": journal_offset,
                                   "length": len(line), "fingerprint": record_fingerprint(record)})
                     journal_offset += len(line)
-                episode_line = json.dumps(episode_record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8") + b"\n"
-                receipt = {"version": RECEIPT_VERSION, "state": "prepared", "captureId": capture_id,
+                receipt = {"version": RECEIPT_VERSION, "state": "preparing", "captureId": capture_id,
                            "agentId": self.agent_id, "scopeKey": selector.scope_key,
                            "sessionId": str(session_id), "capturedAt": captured_at,
                            "sourceHashes": source_hashes, "journal": [], "journalPlans": plans,
-                           "episodePlan": {"id": episode_id,
+                           "episodePlan": None,
+                           "episode": None}
+                write_receipt(path, receipt)
+            if receipt_materialized is not None:
+                receipt_materialized()
+            if receipt.get("episodePlan") is None:
+                episode_record = make_episode_record(self._mood.update(analysis["emotion"]))
+                episode_line = json.dumps(episode_record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8") + b"\n"
+                receipt["episodePlan"] = {"id": episode_id,
                                            "offset": (episodes_path.stat().st_size if episodes_path.is_file() else 0),
                                            "length": len(episode_line),
                                            "fingerprint": record_fingerprint(episode_record),
                                            # A prepared episode preserves its exact derived
-                                           # mood snapshot without duplicating either turn's
-                                           # full source body in each journal row.
+                                           # mood snapshot without retaining its source summary.
                                            "record": {key: value for key, value in episode_record.items()
-                                                      if key != "summary"}},
-                           "episode": None}
+                                                      if key != "summary"}}
+                receipt["state"] = "prepared"
                 write_receipt(path, receipt)
             plans = receipt.get("journalPlans")
             if not isinstance(plans, list) or len(plans) != len(turn_records):
