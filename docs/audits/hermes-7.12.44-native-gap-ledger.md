@@ -7,6 +7,12 @@ before candidate completion; candidate-verification Task1 owns reconciliation.
 
 ## Recall and consolidation
 
+- **Canonical knowledge-source safety:** storage Task4 only checks explicit
+  metadata lifecycle state. Canonical invalidation/deletion/content drift can
+  leave that projection stale. Required storage Task6 binds both proposal and
+  confirmation to exact current canonical sources; incomplete reads deny new
+  confirmation without erasing pending evidence. Planned, not implemented.
+
 - **Event-relative temporal anchors:** pinned temporal-parser supports
   `nach dem <event>` / `after the <event>` separately from pure date ranges.
   Native parser currently returns ranges only. Storage Task3 ports pure ranges;
@@ -67,6 +73,9 @@ retrieval_settings.py or retrieval_migrate.py exist in this candidate.
    credential/header partition removal is not authorized by this refactor.
    Clean public endpoints can be normalized; endpoints with userinfo/query or
    fragment cannot be silently stripped and then certified as equal routes.
+   Owning plan: `2026-09-11-hermes-7.12.44-embedding-identity.md`, three tasks
+   for runtime/adoption, staged generations and effective-auth cache isolation.
+   These tasks are planned, not implemented.
 2. **Reranker settings/validation.** Admin lacks candidates/timeoutMs/
    fallbackOnError; Cohere and oMLX use divergent timeout defaults. Manual unknown
    reranker config currently degrades silently. Implement shared startup/admin
