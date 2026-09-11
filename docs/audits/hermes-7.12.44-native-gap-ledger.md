@@ -26,6 +26,8 @@ before candidate completion; candidate-verification Task1 owns reconciliation.
   suppress otherwise historically valid older-captured rows without triggering
   the empty-result fallback. Regression needs two validAt-eligible rows with
   differing captured years and an explicit year phrase; both remain eligible.
+  Owning plan: `2026-09-11-hermes-7.12.44-temporal-anchors.md` (explicit-time
+  precedence then bounded scoped event resolution). Planned, not implemented.
 
 - **Invalidated recall exclusion:** owned by storage Task5 (plan e41af4a,
   refined 33f50aa). Imported active+invalidated rows currently survive primary,
