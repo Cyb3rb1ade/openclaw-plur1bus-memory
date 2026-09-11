@@ -23,6 +23,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from .inject_markers import is_injected_context_text, looks_like_prompt_injection
@@ -34,6 +35,25 @@ CUTOFF_FILENAME = "explicit-write-since.json"
 ENABLED_FILENAME = "EXPLICIT_WRITES_ENABLED"
 
 _NON_USER_ORIGINS = frozenset({"cron", "internal", "dream"})
+
+
+def is_recallable_epistemic(row: Mapping[str, Any]) -> bool:
+    """Return whether a row has not been explicitly epistemically invalidated."""
+    value = row.get("epistemicStatus")
+    return value is None or str(value).strip().casefold() != "invalidated"
+
+
+def is_missing_epistemic_status_column_error(error: BaseException) -> bool:
+    """Whether a query failed solely because the epistemic status column vanished."""
+    text = str(error).casefold()
+    missing_markers = (
+        "not found", "does not exist", "no such column", "unknown column", "missing column",
+    )
+    return (
+        "epistemicstatus" in text
+        and all(column not in text for column in ("expiresat", "validfrom", "validuntil"))
+        and any(marker in text for marker in missing_markers)
+    )
 
 
 def decide_epistemic_status_for_capture(

@@ -8,11 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .epistemic import is_missing_epistemic_status_column_error
 from .valid_time import is_missing_validity_column_error, validity_where_clause
 
 
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:62]
+
+
+def _schema_names(table: Any) -> set[str]:
+    """Read a table schema without modifying a read-only shared namespace."""
+    schema_attr = getattr(table, "schema", None)
+    schema = schema_attr() if callable(schema_attr) else schema_attr
+    return set(getattr(schema, "names", ()) or ()) | {
+        str(getattr(field, "name", "")) for field in getattr(schema, "fields", ()) or ()
+    }
 
 
 @dataclass(frozen=True)
@@ -152,7 +162,14 @@ class SharedPoolStore:
                 f"sharedScope = '{'user' if name == 'user-shared' else 'workspace'}' "
                 f"AND principalHash = '{principal_hash}' AND status = 'active'"
             )
-            expiry_where = base_where
+            include_epistemic = "epistemicStatus" in _schema_names(table)
+            scoped_where = base_where
+            if include_epistemic:
+                scoped_where += (
+                    " AND (epistemicStatus IS NULL OR btrim(epistemicStatus) = '' "
+                    "OR lower(btrim(epistemicStatus)) != 'invalidated')"
+                )
+            expiry_where = scoped_where
             if now_ms is not None:
                 expiry_where += f" AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
             where = expiry_where
@@ -161,6 +178,17 @@ class SharedPoolStore:
             try:
                 found = table.search(vector).where(where).limit(limit).to_list()
             except Exception as error:
+                if include_epistemic and is_missing_epistemic_status_column_error(error):
+                    fallback_where = base_where
+                    if now_ms is not None:
+                        fallback_where += f" AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
+                    if valid_at is not None:
+                        fallback_where += f" AND {validity_where_clause(valid_at)}"
+                    found = table.search(vector).where(fallback_where).limit(limit).to_list()
+                    for row in found:
+                        row["_namespace"] = name
+                    rows.extend(found)
+                    continue
                 text = str(error).lower()
                 expiry_missing = "expiresat" in text and any(token in text for token in (
                     "not found", "does not exist", "no such column", "unknown column", "missing column",

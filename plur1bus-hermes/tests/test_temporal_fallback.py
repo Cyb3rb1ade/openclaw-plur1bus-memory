@@ -202,6 +202,39 @@ class TemporalFallbackPolicyTests(unittest.TestCase):
         self.assertEqual(len(table.where_calls), 2)
         self.assertIn("validFrom <=", table.where_calls[1])
 
+    def test_shared_epistemic_validity_controls_aggregate_fallback_symmetrically(self) -> None:
+        """A valid shared hit suppresses fallback; an invalidated one cannot."""
+        def run(shared_status: str) -> tuple[str, _Table]:
+            table = _Table([{
+                "id": "private-old", "content": "private fallback", "status": "active",
+                "createdAt": "2025-01-01T00:00:00+00:00", "expiresAt": 0,
+            }])
+            with tempfile.TemporaryDirectory() as directory:
+                runtime = self._runtime(directory)
+                runtime._recall_tables = lambda: [("private", table)]  # type: ignore[method-assign]
+                runtime._shared_pools.recall_rows = lambda *_args, **_kwargs: [{  # type: ignore[method-assign]
+                    "id": f"shared-{shared_status}", "content": "shared in-range", "status": "active",
+                    "createdAt": "2026-08-10T00:00:00+00:00", "expiresAt": 0,
+                    "epistemicStatus": shared_status,
+                }]
+                try:
+                    with patch("plur1bus_hermes.runtime.parse_temporal_range", return_value=_FIXED_RANGE):
+                        recalled = runtime.recall("project last month")
+                finally:
+                    runtime.shutdown()
+            return recalled, table
+
+        observed, observed_table = run("observed")
+        self.assertIn("shared in-range", observed)
+        self.assertNotIn("private fallback", observed)
+        self.assertEqual(len(observed_table.where_calls), 1)
+
+        invalidated, invalidated_table = run("invalidated")
+        self.assertNotIn("shared in-range", invalidated)
+        self.assertIn("private fallback", invalidated)
+        self.assertEqual(len(invalidated_table.where_calls), 2)
+        self.assertNotIn("createdAt >=", invalidated_table.where_calls[1])
+
     def test_lifecycle_recheck_happens_before_fallback_decision(self) -> None:
         """A deleted heuristic row cannot suppress fallback to a live old row."""
         table = _Table([

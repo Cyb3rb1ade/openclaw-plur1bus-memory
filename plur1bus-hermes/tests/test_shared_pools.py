@@ -81,6 +81,20 @@ class SharedPoolTests(unittest.TestCase):
             recalled = store.recall_rows([1.0, 0.0], 1, valid_at=150, now_ms=10_000)
         self.assertEqual([row["content"] for row in recalled], ["valid"])
 
+    def test_invalidated_rows_are_excluded_before_the_shared_pool_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SharedPoolStore(Path(temporary), SharedPrincipal(workspace="ws"))
+            base = {
+                "agentId": "main", "scopeKey": "scope", "status": "active",
+                "type": "observation", "sourceRole": "user",
+            }
+            store.copy({**base, "id": "invalid", "content": "invalidated", "vector": [0.0, 0.0],
+                        "epistemicStatus": " INVALIDATED "}, source_agent="main")
+            store.copy({**base, "id": "observed", "content": "observed", "vector": [1.0, 0.0],
+                        "epistemicStatus": "observed"}, source_agent="main")
+            recalled = store.recall_rows([0.0, 0.0], 1)
+        self.assertEqual([row["content"] for row in recalled], ["observed"])
+
 
 if __name__ == "__main__":
     unittest.main()

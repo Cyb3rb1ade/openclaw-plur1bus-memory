@@ -26,6 +26,8 @@ from .domain import Plur1busDomain
 from .epistemic import (
     decide_epistemic_status_for_capture,
     ensure_epistemic_cutoff,
+    is_missing_epistemic_status_column_error,
+    is_recallable_epistemic,
 )
 from .inject_budget import apply_global_inject_budget
 from .llm_cache import LlmResultCache
@@ -1121,31 +1123,41 @@ class Plur1busRuntime:
                 f" AND createdAt < '{temporal_range['end']}'"
             )
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        def predicate_set(legacy_where: str) -> tuple[str, str, str]:
+        def predicate_set(legacy_where: str, *, include_epistemic: bool) -> tuple[str, str, str]:
+            scoped_where = legacy_where
+            if include_epistemic:
+                scoped_where += (
+                    " AND (epistemicStatus IS NULL OR btrim(epistemicStatus) = '' "
+                    "OR lower(btrim(epistemicStatus)) != 'invalidated')"
+                )
             expiry_where = (
-                f"{legacy_where} AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
+                f"{scoped_where} AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
             )
             where = expiry_where
             if parsed_valid_at is not None:
                 where += f" AND {validity_where_clause(parsed_valid_at)}"
-            return where, expiry_where, legacy_where
-
-        base_predicates = predicate_set(base_legacy_where)
-        heuristic_predicates = predicate_set(heuristic_legacy_where)
+            return where, expiry_where, scoped_where
 
         def search_namespaces(
             search_vector: list[float],
-            predicates: tuple[str, str, str],
+            legacy_where: str,
             candidate_limit: int,
             *,
             query_variant: str = "",
         ) -> list[dict[str, Any]]:
             found_rows: list[dict[str, Any]] = []
-            where, expiry_where, legacy_where = predicates
             for namespace, recall_table in recall_tables:
+                include_epistemic = "epistemicStatus" in self._schema_names(recall_table)
+                where, expiry_where, scoped_where = predicate_set(
+                    legacy_where, include_epistemic=include_epistemic,
+                )
+                epistemic_fallback = (
+                    predicate_set(legacy_where, include_epistemic=False)
+                    if include_epistemic else None
+                )
                 namespace_rows = self._search_recall_rows(
-                    recall_table, search_vector, where, expiry_where, legacy_where,
-                    candidate_limit, parsed_valid_at,
+                    recall_table, search_vector, where, expiry_where, scoped_where,
+                    candidate_limit, parsed_valid_at, epistemic_fallback,
                 )
                 for row in namespace_rows:
                     row["_namespace"] = namespace
@@ -1160,6 +1172,7 @@ class Plur1busRuntime:
                 if row.get("status", "active") == "active"
                 and is_entry_live(row, now_ms)
                 and is_entry_valid_at(row, parsed_valid_at)
+                and is_recallable_epistemic(row)
             ]
 
         def heuristic_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1175,7 +1188,7 @@ class Plur1busRuntime:
                 )
             ]
 
-        private_rows = search_namespaces(vector, heuristic_predicates, adaptive_limit * 3)
+        private_rows = search_namespaces(vector, heuristic_legacy_where, adaptive_limit * 3)
         shared_rows: list[dict[str, Any]] = []
         try:
             shared_rows = self._shared_pools.recall_rows(
@@ -1188,7 +1201,7 @@ class Plur1busRuntime:
                 raise
             shared_rows = self._shared_pools.recall_rows(vector, adaptive_limit * 2)
 
-        selected_predicates = heuristic_predicates
+        selected_legacy_where = heuristic_legacy_where
         using_heuristic = temporal_range is not None
         rows = lifecycle_rows(private_rows + heuristic_rows(shared_rows))
         if temporal_range is not None and not rows:
@@ -1196,9 +1209,9 @@ class Plur1busRuntime:
                 "temporal recall fallback selected: no lifecycle-eligible heuristic rows across %d private namespaces",
                 len(recall_tables),
             )
-            selected_predicates = base_predicates
+            selected_legacy_where = base_legacy_where
             using_heuristic = False
-            private_rows = search_namespaces(vector, base_predicates, adaptive_limit * 3)
+            private_rows = search_namespaces(vector, base_legacy_where, adaptive_limit * 3)
             rows = lifecycle_rows(private_rows + shared_rows)
         if not rows and not recall_tables:
             return ""
@@ -1216,7 +1229,7 @@ class Plur1busRuntime:
         if poor_first_pass and refined_query and refined_query != semantic_query.lower():
             refined_vector = self._embedding.embed(refined_query, purpose="query")
             refined_rows = search_namespaces(
-                refined_vector, selected_predicates, adaptive_limit * 2,
+                refined_vector, selected_legacy_where, adaptive_limit * 2,
                 query_variant="refined",
             )
             if using_heuristic:
@@ -1254,7 +1267,8 @@ class Plur1busRuntime:
         # again after they contribute rows.
         rows = [
             row for row in rows
-            if is_entry_live(row, now_ms) and is_entry_valid_at(row, parsed_valid_at)
+            if (is_entry_live(row, now_ms) and is_entry_valid_at(row, parsed_valid_at)
+                and is_recallable_epistemic(row))
         ]
         recalled = "\n".join(
             f"- {str(row['content']) if full_text else str(row['content'])[:2000]} {validity_label(row)}".rstrip()
@@ -1302,11 +1316,16 @@ class Plur1busRuntime:
     @staticmethod
     def _search_recall_rows(table: Any, vector: list[float], where_clause: str,
                             expiry_where_clause: str, legacy_where_clause: str, limit: int,
-                            valid_at: int | None) -> list[dict[str, Any]]:
+                            valid_at: int | None,
+                            epistemic_fallback: tuple[str, str, str] | None = None) -> list[dict[str, Any]]:
         """Search with only narrow legacy validity/expiry-column retries."""
         try:
             return table.search(vector).where(where_clause).limit(limit).to_list()
         except Exception as error:
+            if (epistemic_fallback is not None
+                    and is_missing_epistemic_status_column_error(error)):
+                fallback_where, _fallback_expiry, _fallback_legacy = epistemic_fallback
+                return table.search(vector).where(fallback_where).limit(limit).to_list()
             error_text = str(error).lower()
             missing_expiry = "expiresat" in error_text and any(token in error_text for token in (
                 "not found", "does not exist", "no such column", "unknown column", "missing column",
