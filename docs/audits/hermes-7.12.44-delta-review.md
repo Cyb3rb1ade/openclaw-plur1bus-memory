@@ -314,6 +314,17 @@ generation switch with stale-Domain denial plus fresh-Domain success. This is
 implementation evidence awaiting independent review, not production activation,
 migration, model, package, publication, or complete-parity evidence.
 
+Task-6 review found one lifecycle-certification gap: missing/null/blank status
+and normalized variants such as `ACTIVE` or whitespace-padded `active` could be
+treated as canonical active state. Commit `d33783a` replaces that boolean with
+an exact tri-state classifier. Only the exact string `active` can proceed to
+TTL/epistemic checks; exact `superseded`, `archived`, and `deleted` are inactive;
+every other status is incomplete evidence. Incomplete status emits no proposal,
+cannot confirm or write `KNOWLEDGE.md`, and leaves pending history unchanged.
+Focused regressions cover all six malformed/unknown variants and the three
+recognized inactive states. The two knowledge files pass 29 tests plus 26
+subtests; independent scoped rereview remains required.
+
 The later foundation gate reads `FEATURES`, `COVERAGE_710`, and
 `COVERAGE_712` directly from
 `c12ec2bba63d74ac8add8782ab6761472b4149c6:plur1bus-hermes/src/plur1bus_hermes/parity.py`.

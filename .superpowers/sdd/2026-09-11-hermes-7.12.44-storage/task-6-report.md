@@ -110,3 +110,56 @@ Implementation checkpoint: `cdfad23` (`fix(hermes): revalidate canonical knowled
 - Independent Task-6 review is still required before the broader storage plan
   or candidate can be called complete. Canonical evolving episodes/cognition,
   Neo candidate indexing, and historical feature coverage remain later work.
+
+## Fix round 1 — exact canonical status tri-state
+
+Independent review identified one Important issue in
+`_knowledge_source_is_live()`: `row.get("status") or "active"` plus normalization
+authorized missing, null, blank, uppercase, and whitespace-padded status values
+as canonical active state. This could create or confirm prompt-adjacent
+knowledge without complete lifecycle evidence.
+
+The regression matrix was added before the production fix. The first RED run
+also exposed subtest state contamination after an expected mutation; the test
+was corrected to remove only its temporary ledger/managed file between cases.
+The authoritative isolated RED command was:
+
+```text
+PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m pytest -q plur1bus-hermes/tests/test_knowledge_canonical_sources.py -k 'malformed_canonical_status or recognized_inactive_statuses'
+```
+
+Result before the production change: **11 failed, 3 passed, 11 deselected, 4
+subtests passed, 110 warnings in 0.80 s**, exit 1. Missing/null/blank/`ACTIVE`/
+whitespace status emitted or confirmed proposals; an unknown status retired
+pending history instead of preserving it. Exact recognized inactive statuses
+already retired, supplying the positive control.
+
+`_knowledge_source_lifecycle()` now returns a tri-state result without
+normalization: only exact string `active` is eligible subject to the existing
+TTL and epistemic gates; exact `superseded`, `archived`, and `deleted` are
+inactive; missing/null/blank/unknown/noncanonical values are incomplete.
+Proposal generation skips incomplete sources, confirmation returns
+`canonical-source-unavailable` without a managed-file write, and retirement
+leaves the existing pending bytes unchanged.
+
+The same targeted command after the fix passed **3 tests, 15 subtests, with 11
+deselected and 112 warnings in 0.65 s**, exit 0. Final focused verification:
+
+```text
+PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m pytest -q plur1bus-hermes/tests/test_knowledge_promotions.py plur1bus-hermes/tests/test_knowledge_canonical_sources.py
+```
+
+Result: **29 passed, 26 subtests passed, 384 warnings in 1.13 s**, exit 0.
+Warnings remain the visible LanceDB deprecations; none was suppressed. The
+complete native suite was not redundantly rerun in this scoped review fix.
+
+Fix checkpoint: `d33783a` (`fix(hermes): require exact canonical knowledge status`).
+
+Self-review: `git diff --check` passed. The change is confined to canonical
+knowledge lifecycle classification plus its real-fixture integration tests;
+known inactive retirement, TTL/epistemic behavior, valid-time semantics,
+generation identity, scope predicates, pending ledger bytes, and the existing
+confirmation-only managed writer remain intact. Tests use the installed Python
+read-only with `-B`, explicit temporary data roots, and no `HOME` override. No
+production data/profile, migration, activation, download, or publication was
+touched. Independent scoped rereview remains required.
