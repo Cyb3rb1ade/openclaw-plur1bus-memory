@@ -146,6 +146,42 @@ The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.
 
+## Native temporal parser expansion (Storage Task 3)
+
+`parse_temporal_range()` now remains a range-only, recall-heuristic parser: it
+does not create semantic event anchors and never writes `validFrom` or
+`validUntil`. It recognizes German and English today/yesterday, bounded days
+and hours ago, rolling last week, explicit month-year, contextual past/current
+months, prior named weekdays, and standalone years 1970–2999. Quarter and
+month-year recognition precede the standalone-year rule. The prior native
+`last month` behavior intentionally remains the complete preceding calendar
+month; upstream's corresponding parser uses a rolling 30-day range.
+
+Duration wording `bis heute` / `until today` is case-insensitively rejected so
+it cannot turn a deadline-duration into a same-day recall filter. Explicit
+same-day deadlines (`bis heute Abend`, `bis heute 18 Uhr`) still resolve as
+today. For a future contextual month, native deliberately returns `None`:
+with the fixed 2026-09-11 UTC reference, `im Dezember` does not return the
+upstream parser's inverted December-to-September range and does not guess a
+previous year. Semantic anchors such as `nach dem X` remain a separate,
+unimplemented recall contract rather than leaking an anchor object to this
+range-only consumer.
+
+The focused RED command was:
+
+```text
+PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m unittest discover -s plur1bus-hermes/tests -p test_temporal_refinement.py -v
+```
+
+Result before implementation: 7 tests ran, with **1 failure and 3 errors**:
+duration text incorrectly became a range while today/month/weekday cases were
+missing. The same focused command passed **7 tests** after implementation.
+The parser, temporal-fallback, and valid-time-runtime suites passed **32
+tests**. Native source verification passed **680 tests, 73 subtests**, with
+the existing **172 LanceDB deprecation warnings**; this is source evidence,
+not a claim about Hermes host lifecycle, production data, models, publication,
+or guest-platform acceptance.
+
 ## Regression evidence
 
 Capture Task1 independent scoped review: PASS at `4c092b5` after all identified

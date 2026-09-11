@@ -33,6 +33,53 @@ _T2_CLASSIFIERS: dict[str, Callable[[str], dict[str, Any]]] = {}
 _T2_CLASSIFIER_LOCK = threading.RLock()
 _MAX_T2_CLASSIFIERS = 8
 
+_DE_MONTHS = {
+    "januar": 1,
+    "februar": 2,
+    "märz": 3,
+    "maerz": 3,
+    "april": 4,
+    "mai": 5,
+    "juni": 6,
+    "juli": 7,
+    "august": 8,
+    "september": 9,
+    "oktober": 10,
+    "november": 11,
+    "dezember": 12,
+}
+_EN_MONTHS = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+_WEEKDAYS = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+    "montag": 0,
+    "dienstag": 1,
+    "mittwoch": 2,
+    "donnerstag": 3,
+    "freitag": 4,
+    "samstag": 5,
+    "sonntag": 6,
+}
+_MONTH_NAME = r"[a-zäöüß]+"
+
 
 def _normalize_classifier_result(value: Any) -> dict[str, Any] | None:
     """Validate a local classifier result before it influences persistent state."""
@@ -254,9 +301,46 @@ def parse_temporal_range(
     *,
     now: datetime | None = None,
 ) -> dict[str, str] | None:
-    """Resolve common relative periods and quarter references to UTC ranges."""
+    """Resolve bounded, recall-only UTC ranges from common German/English phrases."""
     reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    else:
+        reference = reference.astimezone(timezone.utc)
     value = str(text or "")
+
+    # "bis heute" and "until today" describe a duration, not a request to
+    # narrow recall to today. Explicit same-day deadlines (for example
+    # "bis heute Abend" or "bis heute 18 Uhr") intentionally remain ranges.
+    duration = re.search(r"\b(?:bis|until)\s+(?:heute|today)\b", value, re.I)
+    if duration:
+        suffix = value[duration.end():].lstrip()
+        deadline = re.match(
+            r"(?:abend|evening)\b|\d{1,2}(?::\d{2})?\s*(?:uhr|am|pm)\b",
+            suffix,
+            re.I,
+        )
+        if not deadline:
+            return None
+
+    today = reference.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_match = re.search(r"\b(?:heute|today)\b", value, re.I)
+    if today_match:
+        return {
+            "start": today.isoformat(),
+            "end": reference.isoformat(),
+            "source": today_match.group(0),
+        }
+
+    yesterday = re.search(r"\b(?:gestern|yesterday)\b", value, re.I)
+    if yesterday:
+        start = today - timedelta(days=1)
+        return {
+            "start": start.isoformat(),
+            "end": today.isoformat(),
+            "source": yesterday.group(0),
+        }
+
     days_match = re.search(
         r"\b(?:vor|ago)\s*(\d{1,4})\s*(?:tagen?|days?)\b"
         r"|\b(\d{1,4})\s*(?:tagen?|days?)\s*(?:zuvor|ago)\b",
@@ -265,14 +349,38 @@ def parse_temporal_range(
     )
     if days_match:
         days = int(days_match.group(1) or days_match.group(2))
-        start = (reference - timedelta(days=days)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        if 0 < days < 10_000:
+            start = (reference - timedelta(days=days)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            return {
+                "start": start.isoformat(),
+                "end": (start + timedelta(days=1)).isoformat(),
+                "source": days_match.group(0),
+            }
+
+    hours_match = re.search(
+        r"\bvor\s*(\d{1,4})\s*stunden\b|\b(\d{1,4})\s*hours?\s*ago\b",
+        value,
+        re.I,
+    )
+    if hours_match:
+        hours = int(hours_match.group(1) or hours_match.group(2))
+        if 0 < hours < 10_000:
+            return {
+                "start": (reference - timedelta(hours=hours)).isoformat(),
+                "end": reference.isoformat(),
+                "source": hours_match.group(0),
+            }
+
+    last_week = re.search(r"\b(?:letzte\s+woche|last\s+week)\b", value, re.I)
+    if last_week:
         return {
-            "start": start.isoformat(),
-            "end": (start + timedelta(days=1)).isoformat(),
-            "source": days_match.group(0),
+            "start": (reference - timedelta(days=7)).isoformat(),
+            "end": reference.isoformat(),
+            "source": last_week.group(0),
         }
+
     if re.search(r"\b(letzten monat|last month)\b", value, re.I):
         current_month = reference.replace(
             day=1, hour=0, minute=0, second=0, microsecond=0
@@ -284,6 +392,7 @@ def parse_temporal_range(
             "end": current_month.isoformat(),
             "source": "last-month",
         }
+
     quarter = re.search(r"\bq([1-4])\s*(20\d{2})\b", value, re.I)
     if quarter:
         number = int(quarter.group(1))
@@ -299,6 +408,77 @@ def parse_temporal_range(
             "end": end.isoformat(),
             "source": quarter.group(0),
         }
+
+    month_year = re.search(
+        rf"\b(?:im\s+({_MONTH_NAME})|in\s+({_MONTH_NAME}))\s+(\d{{4}})\b",
+        value,
+        re.I,
+    )
+    if month_year:
+        month_name = (month_year.group(1) or month_year.group(2)).casefold()
+        year = int(month_year.group(3))
+        month = _DE_MONTHS.get(month_name, _EN_MONTHS.get(month_name))
+        if month is not None and 1970 <= year < 3000:
+            start = datetime(year, month, 1, tzinfo=timezone.utc)
+            end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) if month == 12 else datetime(
+                year, month + 1, 1, tzinfo=timezone.utc
+            )
+            return {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "source": month_year.group(0),
+            }
+
+    month_only = re.search(
+        rf"\b(?:im\s+({_MONTH_NAME})|in\s+({_MONTH_NAME}))\b", value, re.I
+    )
+    if month_only:
+        month_name = (month_only.group(1) or month_only.group(2)).casefold()
+        month = _DE_MONTHS.get(month_name, _EN_MONTHS.get(month_name))
+        if month is not None:
+            if month > reference.month:
+                return None
+            start = datetime(reference.year, month, 1, tzinfo=timezone.utc)
+            if month == reference.month:
+                if start >= reference:
+                    return None
+                end = reference
+            elif month == 12:
+                end = datetime(reference.year + 1, 1, 1, tzinfo=timezone.utc)
+            else:
+                end = datetime(reference.year, month + 1, 1, tzinfo=timezone.utc)
+            return {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "source": month_only.group(0),
+            }
+
+    weekday = re.search(
+        r"\b(?:am\s+([a-zäöüß]+)|on\s+([a-z]+))\b", value, re.I
+    )
+    if weekday:
+        name = (weekday.group(1) or weekday.group(2)).casefold()
+        target = _WEEKDAYS.get(name)
+        if target is not None:
+            days_back = (reference.weekday() - target) % 7 or 7
+            start = (today - timedelta(days=days_back))
+            return {
+                "start": start.isoformat(),
+                "end": (start + timedelta(days=1)).isoformat(),
+                "source": weekday.group(0),
+            }
+
+    year_match = re.search(r"\b(\d{4})\b", value)
+    if year_match:
+        year = int(year_match.group(1))
+        if 1970 <= year < 3000:
+            start = datetime(year, 1, 1, tzinfo=timezone.utc)
+            end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+            return {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "source": year_match.group(0),
+            }
     return None
 
 
