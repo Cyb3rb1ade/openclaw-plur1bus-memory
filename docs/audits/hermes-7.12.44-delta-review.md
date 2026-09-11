@@ -146,6 +146,34 @@ The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.
 
+## Whole-storage final review repair
+
+The three Important findings from the final storage review are closed in native
+source. Capture receipts now preserve the admission-time cognition result and
+the compact speaker-alias decisions needed to reconstruct the exact hash-bound
+journal rows. Relative temporal hints use the immutable UTC `capturedAt` as
+their reference. Legacy receipts without this metadata retain their original
+fingerprints and fail closed if mutable alias state would change a replay.
+
+Every journal plan is now checked as a complete set before a receipt is created
+or advanced and before any journal append: exact descriptor shape and integer
+types (excluding booleans), per-line size and serialized-length agreement,
+contiguous ranges, deterministic row ownership/fingerprint, and all existing
+target ranges. The prior full episode preflight, no-follow probes, receipt and
+line size caps, exact prefix, and sticky receipt-required boundary remain.
+
+Private, refined, and shared-pool pre-limit queries now share one epistemic SQL
+predicate using Unicode-aware regex stripping plus lowercase comparison. Real
+LanceDB tests cover tab, newline, NBSP, and em-space wrapped invalidation while
+retaining null, blank, and absent-column legacy rows. The Python final gate,
+ACL/status/TTL/valid-time predicates, and narrow epistemic-only schema-race
+fallback are unchanged in authority and placement.
+
+Focused verification passed 97 tests with 31 subtests. Full source QA passed
+924 tests with 124 subtests and 534 existing deprecation warnings. This is
+source/test evidence only; no production data, profile activation, model,
+publication, signing, or guest-runtime operation was performed.
+
 ## Native temporal parser expansion (Storage Task 3)
 
 `parse_temporal_range()` now remains a range-only, recall-heuristic parser: it
