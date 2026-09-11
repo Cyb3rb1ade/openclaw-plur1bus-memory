@@ -7,6 +7,13 @@ before candidate completion; candidate-verification Task1 owns reconciliation.
 
 ## Recall and consolidation
 
+- **Event-relative temporal anchors:** pinned temporal-parser supports
+  `nach dem <event>` / `after the <event>` separately from pure date ranges.
+  Native parser currently returns ranges only. Storage Task3 ports pure ranges;
+  a bounded scoped anchor-resolution task remains required before claiming full
+  temporal recall parity. Any reference lookup must preserve ACL/TTL/validity
+  and stay optional; do not infer a date from an unauthorized or ambiguous hit.
+
 - **Invalidated recall exclusion:** owned by storage Task5 (plan e41af4a,
   refined 33f50aa). Imported active+invalidated rows currently survive primary,
   refined, shared-pool and booster routes. Require pre-limit and final gates.
