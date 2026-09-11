@@ -33,7 +33,9 @@ from .critical_review import (
 )
 from .dreaming import build_rem_dream
 from .dream_diary import append_dream_diary_entry
-from .writer_lock import serialized_memory_write
+from .writer_lock import serialized_memory_write, writer_lock
+from .epistemic import is_recallable_epistemic
+from .generation import effective_generation_config
 from .knowledge import content_fingerprint, is_eligible, is_invalidated, write_confirmed_knowledge
 from .obsidian_maintenance import generate_obsidian_control_room
 from .persona_voice import evolve as evolve_persona_voice_file
@@ -53,6 +55,7 @@ from .proactive import ProactiveEngine
 from .speakers import SpeakerMappingStore
 from .shared_pools import SharedPoolStore, SharedPrincipal
 from .validation import safe_agent_id, safe_memory_id
+from .valid_time import is_entry_live
 from .turn_identity import (
     canonical_capture_id,
     canonical_captured_at,
@@ -153,6 +156,12 @@ class Plur1busDomain:
         self.data_dir = data_dir
         self.config = dict(config or {})
         self.agent_id = safe_agent_id(agent_id)
+        # Knowledge is prompt-adjacent, so bind this Domain instance to the
+        # verified writer generation that existed when it was captured.  A
+        # later pointer switch must require a fresh Domain/runtime instead of
+        # silently certifying cards from a different generation.
+        with writer_lock(self.data_dir):
+            self._knowledge_writer_identity = self._current_knowledge_writer_identity()
         self.neo_dir = data_dir / "neo" / self.agent_id
         self.workspace_dir = data_dir / "profiles" / self.agent_id / "workspace"
         self.state_dir = data_dir / "state" / self.agent_id
@@ -501,6 +510,134 @@ class Plur1busDomain:
                 continue
             rows.append(row)
         return {"queriedIds": queried_ids, "rows": rows, "complete": complete}
+
+    def _current_knowledge_writer_identity(self) -> tuple[str, str, str] | None:
+        """Resolve verified generation config and its exact current writer route."""
+        try:
+            effective = effective_generation_config(
+                self.data_dir, self.agent_id, self.config
+            )
+            writer, _ = resolve_namespace_routes(
+                self.data_dir, self.agent_id, effective
+            )
+            embedding = effective.get("embedding")
+            embedding_digest = hashlib.sha256(json.dumps(
+                embedding if isinstance(embedding, Mapping) else {},
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")).hexdigest()
+            return (writer.name, str(Path(writer.path).resolve()), embedding_digest)
+        except Exception as error:
+            logging.getLogger(__name__).warning(
+                "knowledge writer route is unavailable: %s", type(error).__name__
+            )
+            return None
+
+    @serialized_memory_write
+    def _knowledge_sources_by_ids(
+        self,
+        selector: _ScopeSelector,
+        memory_ids: list[str],
+    ) -> dict[str, Any]:
+        """Read bounded exact canonical sources from this Domain's active writer."""
+        queried_ids: list[str] = []
+        seen: set[str] = set()
+        for memory_id in memory_ids:
+            try:
+                safe_id = safe_memory_id(memory_id)
+            except (TypeError, ValueError):
+                continue
+            if safe_id not in seen:
+                seen.add(safe_id)
+                queried_ids.append(safe_id)
+                if len(queried_ids) >= 100:
+                    break
+        result = {"queriedIds": queried_ids, "rows": [], "complete": False}
+        if not queried_ids:
+            return {**result, "complete": True}
+        before = self._current_knowledge_writer_identity()
+        if before is None or before != self._knowledge_writer_identity:
+            return result
+        try:
+            effective = effective_generation_config(
+                self.data_dir, self.agent_id, self.config
+            )
+            writer, _ = resolve_namespace_routes(
+                self.data_dir, self.agent_id, effective
+            )
+            route = Path(writer.path)
+            if route.is_symlink() or not route.is_dir():
+                return result
+            import lancedb
+
+            database = lancedb.connect(str(route))
+            if "memories" not in database.table_names():
+                return result
+            table = database.open_table("memories")
+            id_predicate = " OR ".join(
+                f"id = '{memory_id}'" for memory_id in queried_ids
+            )
+            raw_rows = [
+                dict(row)
+                for row in table.search().where(
+                    f"({id_predicate}) AND {selector.where()}"
+                ).limit(len(queried_ids) + 1).to_list()
+            ]
+        except Exception as error:
+            logging.getLogger(__name__).warning(
+                "knowledge canonical lookup failed: %s", type(error).__name__
+            )
+            return result
+        after = self._current_knowledge_writer_identity()
+        if after is None or after != before or after != self._knowledge_writer_identity:
+            return result
+        complete = len(raw_rows) <= len(queried_ids)
+        rows: list[dict[str, Any]] = []
+        requested = set(queried_ids)
+        returned_ids: set[str] = set()
+        for row in raw_rows:
+            try:
+                row_id = safe_memory_id(str(row.get("id") or ""))
+            except (TypeError, ValueError):
+                complete = False
+                continue
+            row_scope_key = _row_scope_key(row)
+            if (
+                row_id not in requested
+                or row_id in returned_ids
+                or str(row.get("agentId") or "").strip() != selector.agent_id
+                or not row_scope_key
+                or not _row_matches_scope(row, selector)
+            ):
+                complete = False
+                continue
+            returned_ids.add(row_id)
+            rows.append(row)
+        return {"queriedIds": queried_ids, "rows": rows, "complete": complete}
+
+    @staticmethod
+    def _knowledge_source_is_live(row: Mapping[str, Any], *, now_ms: int | None = None) -> bool:
+        """Apply canonical lifecycle/TTL/epistemic gates, never valid-time expiry."""
+        current_ms = _now_ms() if now_ms is None else int(now_ms)
+        return (
+            str(row.get("status") or "active").strip().casefold() == "active"
+            and is_recallable_epistemic(row)
+            and is_entry_live(dict(row), current_ms)
+        )
+
+    @staticmethod
+    def _canonical_knowledge_metadata(
+        metadata: Mapping[str, Any], source: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Retain human scoring while taking content and type from the source."""
+        return {
+            **dict(metadata),
+            "text": str(source.get("content") or "").strip(),
+            "content": str(source.get("content") or "").strip(),
+            "type": str(source.get("type") or ""),
+        }
 
     @serialized_memory_write
     def on_turn(
@@ -1000,7 +1137,36 @@ class Plur1busDomain:
         state_dir = self._scope_state_dir(selector)
         ledger_path = state_dir / "knowledge-promotions.jsonl"
         ledger = self._read_jsonl(ledger_path)
-        ledger = self._retire_stale_knowledge_proposals(ledger_path, ledger, selector)
+        metadata_rows = self._metadata_rows_for_scope(selector)
+        pending_ids: list[str] = []
+        selected_ids: set[str] = set()
+        for item in self._latest_knowledge_events(ledger, selector).values():
+            if item.get("status") != "pending":
+                continue
+            try:
+                memory_id = safe_memory_id(str(item.get("memoryId") or ""))
+            except ValueError:
+                continue
+            if memory_id not in selected_ids:
+                selected_ids.add(memory_id)
+                pending_ids.append(memory_id)
+                if len(pending_ids) >= 100:
+                    break
+        source_ids = list(pending_ids)
+        for row in metadata_rows:
+            if len(source_ids) >= 100:
+                break
+            try:
+                memory_id = safe_memory_id(str(row.get("id") or ""))
+            except ValueError:
+                continue
+            if memory_id not in selected_ids:
+                selected_ids.add(memory_id)
+                source_ids.append(memory_id)
+        source_lookup = self._knowledge_sources_by_ids(selector, source_ids)
+        ledger = self._retire_stale_knowledge_proposals(
+            ledger_path, ledger, selector, source_lookup=source_lookup
+        )
         maximum = self._bounded_int(config.get("maxPromotionsPerRun"), 3, 0, 3)
         if maximum == 0:
             return {"proposed": [], "skipped": True, "reason": "promotion-limit-disabled"}
@@ -1018,8 +1184,18 @@ class Plur1busDomain:
                 self.neo_dir, self._scope_neo_dir(selector), "memory-cognition.jsonl", selector
             )
         }
+        if not source_lookup["complete"]:
+            return {
+                "proposed": [],
+                "skipped": True,
+                "reason": "canonical-source-unavailable",
+            }
+        sources = {
+            str(row.get("id") or ""): row for row in source_lookup["rows"]
+        }
+        examined = set(source_lookup["queriedIds"])
         proposed: list[dict[str, Any]] = []
-        for row in self._metadata_rows_for_scope(selector):
+        for row in metadata_rows:
             if len(proposed) >= maximum:
                 break
             memory_id = str(row.get("id") or "")
@@ -1027,11 +1203,19 @@ class Plur1busDomain:
                 memory_id = safe_memory_id(memory_id)
             except ValueError:
                 continue
-            metadata = self._metadata_json(row)
-            if not is_eligible(metadata, cognition.get(memory_id, {}), minimum):
+            if memory_id not in examined:
                 continue
-            text = str(metadata.get("text") or metadata.get("content") or "").strip()
-            category = str(metadata.get("type") or metadata.get("category") or "")
+            source = sources.get(memory_id)
+            if source is None or not self._knowledge_source_is_live(source):
+                continue
+            metadata = self._metadata_json(row)
+            candidate = self._canonical_knowledge_metadata(metadata, source)
+            if is_invalidated(metadata) or not is_eligible(
+                candidate, cognition.get(memory_id, {}), minimum
+            ):
+                continue
+            text = str(source.get("content") or "").strip()
+            category = str(source.get("type") or "")
             fingerprint = content_fingerprint(text, category, selector.scope_key)
             if (memory_id, fingerprint) in known:
                 continue
@@ -1096,6 +1280,13 @@ class Plur1busDomain:
         rows = lookup["rows"]
         if not lookup["complete"] or len(rows) != 1:
             return {"confirmed": False, "reason": "memory-not-found"}
+        source_lookup = self._knowledge_sources_by_ids(selector, [memory_id])
+        sources = source_lookup["rows"]
+        if not source_lookup["complete"] or len(sources) != 1:
+            return {"confirmed": False, "reason": "memory-not-found"}
+        source = sources[0]
+        if not self._knowledge_source_is_live(source):
+            return {"confirmed": False, "reason": "proposal-stale"}
         metadata = self._metadata_json(rows[0])
         cognition = {
             str(item.get("id") or ""): item
@@ -1107,14 +1298,28 @@ class Plur1busDomain:
             minimum = max(0.0, min(1.0, float(config.get("minImportance", 0.7))))
         except (TypeError, ValueError):
             minimum = 0.7
-        category = str(metadata.get("type") or metadata.get("category") or "")
-        text = str(metadata.get("text") or metadata.get("content") or "").strip()
+        candidate = self._canonical_knowledge_metadata(metadata, source)
+        category = str(source.get("type") or "")
+        text = str(source.get("content") or "").strip()
         fingerprint = content_fingerprint(text, category, selector.scope_key)
-        if not is_eligible(metadata, cognition.get(memory_id, {}), minimum) or fingerprint != proposal.get("fingerprint"):
+        if (
+            is_invalidated(metadata)
+            or not is_eligible(candidate, cognition.get(memory_id, {}), minimum)
+            or fingerprint != proposal.get("fingerprint")
+        ):
             return {"confirmed": False, "reason": "proposal-stale"}
         confirmed = [item for item in latest.values() if item.get("status") == "confirmed"]
-        entries = [{"id": str(item["memoryId"]), "text": str(item["text"])} for item in confirmed]
-        entries.append({"id": memory_id, "text": text[:2000]})
+        entries_by_memory: dict[str, dict[str, str]] = {}
+        for item in [*confirmed, {"memoryId": memory_id, "text": text[:2000]}]:
+            confirmed_memory_id = str(item["memoryId"])
+            # Re-insertion makes the newest explicit confirmation authoritative
+            # for one UUID while retaining the append-only confirmation ledger.
+            entries_by_memory.pop(confirmed_memory_id, None)
+            entries_by_memory[confirmed_memory_id] = {
+                "id": confirmed_memory_id,
+                "text": str(item["text"]),
+            }
+        entries = list(entries_by_memory.values())
         write_confirmed_knowledge(self._scope_workspace_dir(selector) / "KNOWLEDGE.md", entries)
         event = {**proposal, "status": "confirmed", "confirmedAt": _utcnow()}
         self._append_jsonl(ledger_path, event)
@@ -1137,8 +1342,10 @@ class Plur1busDomain:
         ledger_path: Path,
         ledger: list[dict[str, Any]],
         selector: _ScopeSelector,
+        *,
+        source_lookup: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Append stale events only after one complete bounded owned-table lookup."""
+        """Append stale events only after complete metadata and canonical lookups."""
         pending_by_memory: dict[str, list[dict[str, Any]]] = {}
         for proposal in self._latest_knowledge_events(ledger, selector).values():
             if proposal.get("status") != "pending":
@@ -1154,14 +1361,42 @@ class Plur1busDomain:
         lookup = self._metadata_rows_by_ids(selector, memory_ids)
         if not lookup["complete"] or lookup["queriedIds"] != memory_ids:
             return ledger
+        if source_lookup is None:
+            source_lookup = self._knowledge_sources_by_ids(selector, memory_ids)
+        source_queried = set(source_lookup.get("queriedIds") or [])
+        if (
+            source_lookup.get("complete") is not True
+            or not set(memory_ids).issubset(source_queried)
+        ):
+            return ledger
         rows_by_id = {str(row.get("id") or ""): row for row in lookup["rows"]}
+        sources_by_id = {
+            str(row.get("id") or ""): row for row in source_lookup.get("rows") or []
+        }
         appended: list[dict[str, Any]] = []
         for memory_id in memory_ids:
             row = rows_by_id.get(memory_id)
-            reason = "missing" if row is None else "invalidated" if is_invalidated(self._metadata_json(row)) else ""
-            if not reason:
-                continue
+            source = sources_by_id.get(memory_id)
+            canonical_fingerprint = ""
+            if row is None or source is None:
+                lifecycle_reason = "missing"
+            elif is_invalidated(self._metadata_json(row)) or not self._knowledge_source_is_live(source):
+                lifecycle_reason = "invalidated"
+            else:
+                canonical_fingerprint = content_fingerprint(
+                    str(source.get("content") or "").strip(),
+                    str(source.get("type") or ""),
+                    selector.scope_key,
+                )
+                lifecycle_reason = ""
             for proposal in pending_by_memory[memory_id]:
+                reason = lifecycle_reason or (
+                    "changed"
+                    if str(proposal.get("fingerprint") or "") != canonical_fingerprint
+                    else ""
+                )
+                if not reason:
+                    continue
                 event = {**proposal, "status": "stale", "reason": reason, "staleAt": _utcnow()}
                 self._append_jsonl(ledger_path, event)
                 appended.append(event)
@@ -3235,7 +3470,7 @@ class Plur1busDomain:
         emotion, intensity = self._emotion(content)
         importance_value = self._importance(content, str(record.get("sourceRole") or "")) if importance is None else max(0.0, min(1.0, float(importance)))
         manual_core = importance is not None and importance_value >= 1.0
-        return {
+        metadata = {
             "text": content,
             "summary": content[:500],
             "importance": importance_value,
@@ -3262,6 +3497,13 @@ class Plur1busDomain:
             "reminderStatus": "",
             "remindAt": 0,
         }
+        # Preserve only lifecycle fields actually present on the canonical
+        # writer row.  In particular, legacy absence of epistemicStatus stays
+        # absent instead of being stamped as a trusted state.
+        for name in ("status", "epistemicStatus", "expiresAt", "validFrom", "validUntil"):
+            if name in record:
+                metadata[name] = record[name]
+        return metadata
 
     def _store_metadata(self, record: dict[str, Any], *, importance: float | None = None) -> None:
         agent_dir = self.data_dir / "lancedb" / self.agent_id

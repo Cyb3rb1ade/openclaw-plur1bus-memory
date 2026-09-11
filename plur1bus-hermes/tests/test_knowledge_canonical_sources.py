@@ -147,6 +147,27 @@ class CanonicalKnowledgeSourceTests(unittest.TestCase):
         self.assertEqual(result["reason"], "proposal-stale")
         self.assertFalse((self.domain.workspace_dir / "KNOWLEDGE.md").exists())
 
+    def test_new_explicit_confirmation_replaces_same_id_managed_text(self) -> None:
+        first = self._proposal()
+        self.assertTrue(self.domain.confirm_knowledge_promotion(first["proposalId"])["confirmed"])
+        current = "The current canonical deployment fact requires two verified backups."
+        self.domain._memory_table().update(
+            where=f"id = '{MEMORY_ID}'", values={"content": current}
+        )
+
+        second = self._proposal()
+        self.assertNotEqual(second["fingerprint"], first["fingerprint"])
+        self.assertTrue(self.domain.confirm_knowledge_promotion(second["proposalId"])["confirmed"])
+        rendered = (self.domain.workspace_dir / "KNOWLEDGE.md").read_text()
+        self.assertIn(current, rendered)
+        self.assertNotIn(MEMORY_TEXT, rendered)
+        events = [
+            json.loads(line)
+            for line in (self.domain.state_dir / "knowledge-promotions.jsonl").read_text().splitlines()
+        ]
+        confirmed = [event for event in events if event.get("status") == "confirmed"]
+        self.assertEqual(len(confirmed), 2)
+
     def test_missing_table_and_query_error_are_incomplete_not_absence(self) -> None:
         selector = self.domain._scope_selector()
         self.database.drop_table("memories")
@@ -177,10 +198,24 @@ class CanonicalKnowledgeSourceTests(unittest.TestCase):
         self.assertEqual(failed["rows"], [])
         self.assertEqual(source.count_rows(), 1)
 
+    def test_incomplete_canonical_evidence_preserves_pending_and_denies_confirmation(self) -> None:
+        proposal = self._proposal()
+        ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+        before = ledger.read_bytes()
+        incomplete = {"queriedIds": [MEMORY_ID], "rows": [], "complete": False}
+        with patch.object(self.domain, "_knowledge_sources_by_ids", return_value=incomplete):
+            proposed = self.domain.propose_knowledge_promotions()
+            denied = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
+        self.assertEqual(proposed["proposed"], [])
+        self.assertFalse(denied["confirmed"])
+        self.assertEqual(ledger.read_bytes(), before)
+        self.assertFalse((self.domain.workspace_dir / "KNOWLEDGE.md").exists())
+
     def test_foreign_or_duplicate_collision_is_incomplete(self) -> None:
         selector = self.domain._scope_selector()
         row = self.domain._memory_table().to_arrow().to_pylist()[0]
-        foreign = {**row, "agentId": "other"}
+        foreign_agent = {**row, "agentId": "other"}
+        foreign_scope = {**row, "scopeKey": "foreign"}
 
         class Query:
             def __init__(self, rows):
@@ -212,7 +247,7 @@ class CanonicalKnowledgeSourceTests(unittest.TestCase):
             def open_table(self, _name):
                 return Table(self.rows)
 
-        for rows in ([foreign], [row, row]):
+        for rows in ([foreign_agent], [foreign_scope], [row, row]):
             with self.subTest(rows=len(rows)), patch("lancedb.connect", return_value=Database(rows)):
                 result = self.domain._knowledge_sources_by_ids(selector, [MEMORY_ID])
                 self.assertFalse(result["complete"])

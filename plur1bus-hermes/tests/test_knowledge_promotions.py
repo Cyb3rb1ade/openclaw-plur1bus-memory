@@ -86,10 +86,9 @@ class KnowledgePromotionTests(unittest.TestCase):
 
     def test_confirmation_revalidates_changed_memory(self) -> None:
         proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
-        table = self.domain._metadata_table()
-        metadata = self.domain._metadata_json(table.to_arrow().to_pylist()[0])
-        metadata["text"] = "Changed after review."
-        table.update(where=f"id = '{MEMORY_ID}'", values={"metadataJson": json.dumps(metadata)})
+        self.domain._memory_table().update(
+            where=f"id = '{MEMORY_ID}'", values={"content": "Changed after review."}
+        )
         result = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["reason"], "proposal-stale")
@@ -215,19 +214,29 @@ class KnowledgePromotionTests(unittest.TestCase):
         })
         observed: list[list[str]] = []
         original = self.domain._metadata_rows_by_ids
+        source_observed: list[list[str]] = []
+        original_source = self.domain._knowledge_sources_by_ids
 
         def tracked_lookup(selector, memory_ids):
             result = original(selector, memory_ids)
             observed.append(result["queriedIds"])
             return result
 
+        def tracked_source_lookup(selector, memory_ids):
+            result = original_source(selector, memory_ids)
+            source_observed.append(result["queriedIds"])
+            return result
+
         self.domain._metadata_rows_by_ids = tracked_lookup
+        self.domain._knowledge_sources_by_ids = tracked_source_lookup
         self.domain.config["schicht15"]["maxPromotionsPerRun"] = 0
         try:
             self.domain.propose_knowledge_promotions()
         finally:
             self.domain._metadata_rows_by_ids = original
+            self.domain._knowledge_sources_by_ids = original_source
         self.assertEqual(observed, [[MEMORY_ID, *generated_ids[:99]]])
+        self.assertEqual(source_observed, [[MEMORY_ID, *generated_ids[:99]]])
         events = [json.loads(line) for line in ledger.read_text().splitlines()]
         latest = self.domain._latest_knowledge_events(events, self.domain._scope_selector())
         pending_ids = {
