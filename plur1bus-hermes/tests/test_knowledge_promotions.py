@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -118,10 +119,16 @@ class KnowledgePromotionTests(unittest.TestCase):
                     where=f"id = '{MEMORY_ID}'",
                     values={"metadataJson": json.dumps(metadata)},
                 )
-                self.domain.propose_knowledge_promotions()
+                result = self.domain.propose_knowledge_promotions()
+                self.assertEqual(result["proposed"], [])
                 events = [json.loads(line) for line in (self.domain.state_dir / "knowledge-promotions.jsonl").read_text().splitlines()]
                 own = [row for row in events if row.get("proposalId") == proposal["proposalId"]]
                 self.assertEqual(own[-1]["status"], "stale")
+                latest = self.domain._latest_knowledge_events(events, self.domain._scope_selector())
+                self.assertFalse([
+                    event for event in latest.values()
+                    if event.get("memoryId") == MEMORY_ID and event.get("status") == "pending"
+                ])
                 table.update(
                     where=f"id = '{MEMORY_ID}'",
                     values={"metadataJson": json.dumps({
@@ -133,20 +140,80 @@ class KnowledgePromotionTests(unittest.TestCase):
                     })},
                 )
 
-    def test_incomplete_retirement_lookup_preserves_pending_evidence(self) -> None:
+    def test_unavailable_or_failing_lookup_preserves_pending_evidence(self) -> None:
+        for failure in ("unavailable", "query-error"):
+            with self.subTest(failure=failure):
+                proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+                ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+                before = ledger.read_bytes()
+                original = self.domain._metadata_table
+                source_table = original()
+
+                class Query:
+                    def where(self, predicate):
+                        raise RuntimeError("metadata query failed")
+
+                class Table:
+                    def search(self):
+                        return Query()
+
+                    def to_arrow(self):
+                        return source_table.to_arrow()
+
+                self.domain._metadata_table = (lambda: None) if failure == "unavailable" else (lambda: Table())
+                try:
+                    self.domain.propose_knowledge_promotions()
+                finally:
+                    self.domain._metadata_table = original
+                self.assertEqual(ledger.read_bytes(), before)
+                ledger.unlink()
+
+    def test_retirement_queries_at_most_100_unique_safe_pending_ids(self) -> None:
         proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
         ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
-        before = ledger.read_bytes()
+        generated_ids = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"pending-{index}")) for index in range(101)]
+        for index, memory_id in enumerate(generated_ids):
+            self.domain._append_jsonl(ledger, {
+                **proposal,
+                "proposalId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"proposal-{index}")),
+                "memoryId": memory_id,
+                "status": "pending",
+            })
+        self.domain._append_jsonl(ledger, {
+            **proposal,
+            "proposalId": str(uuid.uuid5(uuid.NAMESPACE_URL, "duplicate")),
+            "memoryId": generated_ids[0],
+            "status": "pending",
+        })
+        self.domain._append_jsonl(ledger, {
+            **proposal,
+            "proposalId": str(uuid.uuid5(uuid.NAMESPACE_URL, "invalid")),
+            "memoryId": "not-a-uuid",
+            "status": "pending",
+        })
+        observed: list[list[str]] = []
         original = self.domain._metadata_rows_by_ids
-        self.domain._metadata_rows_by_ids = lambda selector, ids: {
-            "queriedIds": [MEMORY_ID], "rows": [], "complete": False,
-        }
+
+        def tracked_lookup(selector, memory_ids):
+            result = original(selector, memory_ids)
+            observed.append(result["queriedIds"])
+            return result
+
+        self.domain._metadata_rows_by_ids = tracked_lookup
+        self.domain.config["schicht15"]["maxPromotionsPerRun"] = 0
         try:
             self.domain.propose_knowledge_promotions()
         finally:
             self.domain._metadata_rows_by_ids = original
-        self.assertEqual(ledger.read_bytes(), before)
-        self.assertEqual(self.domain.confirm_knowledge_promotion(proposal["proposalId"])["confirmed"], True)
+        self.assertEqual(observed, [[MEMORY_ID, *generated_ids[:99]]])
+        events = [json.loads(line) for line in ledger.read_text().splitlines()]
+        latest = self.domain._latest_knowledge_events(events, self.domain._scope_selector())
+        pending_ids = {
+            str(event.get("memoryId") or "")
+            for event in latest.values() if event.get("status") == "pending"
+        }
+        self.assertTrue(set(generated_ids[99:]).issubset(pending_ids))
+        self.assertIn("not-a-uuid", pending_ids)
 
     def test_foreign_lookup_row_cannot_retire_pending_evidence(self) -> None:
         proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
