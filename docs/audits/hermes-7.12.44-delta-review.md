@@ -276,6 +276,44 @@ tests), all passing after the corrective round. This is a narrow source/runtime
 recall audit only; it is not a release, production migration, host lifecycle,
 or complete-parity claim.
 
+## Storage Task 6 — canonical knowledge-source revalidation (implementation evidence)
+
+Knowledge proposal and confirmation now require a complete exact lookup in the
+current canonical writer's `memories` table in addition to the existing scoped
+metadata/cognition gates. The lookup accepts at most 100 unique validated UUIDs,
+pushes the exact agent/scope predicate before its limit, validates returned IDs
+and ownership, and revalidates the verified effective-generation writer identity
+after the query. A missing/unreadable table, query failure, duplicate/foreign
+row, or generation/route drift is incomplete evidence: it cannot create or
+confirm prompt-adjacent content and does not erase pending ledger history.
+
+Canonical `status`, hard `expiresAt` TTL, and the normalized Task-5 epistemic
+gate are checked before proposal and again before confirmation. Canonical
+content/type, rather than the metadata projection, supplies the proposal text
+and fingerprint; metadata retains its human importance and cognition role.
+`validUntil` remains semantic valid-time metadata and is not treated as TTL.
+New metadata projections preserve present canonical lifecycle/valid-time fields
+verbatim while legacy missing `epistemicStatus` remains absent.
+
+The proposal job shares one canonical-source batch across pending retirement
+and new candidates, so IDs after the 100-source budget remain pending and cannot
+emit an unexamined proposal. Exact canonical absence or lifecycle invalidation
+appends idempotent latest `stale` events. Confirmation performs its one-source
+check under the existing writer lock immediately before the managed-file path.
+A later explicit confirmation for changed content on the same UUID now makes
+that newest confirmed text authoritative inside the managed block; the
+append-only ledger and manual file content remain intact.
+
+Evidence on commit `cdfad23`: the focused knowledge suite passed 26 tests plus
+11 subtests; controls/scope passed 17 tests; the complete native Hermes pytest
+suite passed 711 tests plus 109 subtests. The regressions use real temporary
+LanceDB tables and include canonical invalidation/deletion/archive/expiry,
+content/type drift, missing/error/foreign/duplicate reads, legacy missing
+epistemic state, past `validUntil`, bounded pending work, and a real staged
+generation switch with stale-Domain denial plus fresh-Domain success. This is
+implementation evidence awaiting independent review, not production activation,
+migration, model, package, publication, or complete-parity evidence.
+
 The later foundation gate reads `FEATURES`, `COVERAGE_710`, and
 `COVERAGE_712` directly from
 `c12ec2bba63d74ac8add8782ab6761472b4149c6:plur1bus-hermes/src/plur1bus_hermes/parity.py`.
