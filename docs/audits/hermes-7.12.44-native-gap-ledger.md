@@ -72,6 +72,45 @@ retrieval_settings.py or retrieval_migrate.py exist in this candidate.
 
 ## Intentional boundaries to retain
 
+## Physical maintenance and health — required owning tasks not yet executed
+
+- **Nightly physical optimization missing:** upstream417ed73 with a72c3eb
+  defaults enabled, keepVersionsHours24 (minimum1), timeoutMs240000. Native
+  jobs.run_jobs calls semantic consolidation only. Add a distinct physical
+  result and scoped executor; do not count semantic proposals as this feature.
+- **Manual retention documentation is wrong:** installed Python LanceDB0.34.0
+  `LanceTable.optimize(cleanup_older_than=None, delete_unverified=False,
+  retrain=False)` defaults to seven-day historical-version pruning as well as
+  fragment/index optimization. Native operator_status says no retention but
+  calls bare optimize(). Preserve the manual action's actual seven-day behavior
+  explicitly and report versionRetentionHours168; do not silently shorten it.
+  Current rows/statuses are distinct from historical table versions.
+- **Stats/cancellation limitations:** the sync wrapper returns None, so fake
+  test stats do not prove real telemetry. AsyncTable.optimize returns stats but
+  exposes no documented safe cancellation or timeout parameter. Never claim
+  asyncio.wait_for stops Rust/I/O work. A measured budget/exceeded flag is an
+  intentional limited contract unless real cancellation safety is proven.
+  Keep delete_unverified=False explicitly; True has concurrent corruption risk.
+- **Maintenance concurrency:** manual process-only _OPTIMIZE_LOCK does not
+  coordinate with other processes/writers. Use the existing writer lock plus
+  active route revalidation and compatible maintenance exclusion. Jobs already
+  hold a shared generation lease; requesting an exclusive lease inside the
+  same job self-blocks. Tests must exercise actual cross-process exclusion and
+  route changes, not only a fake optimizer counter.
+- **Bounded nonblocking health absent:** upstream eafa43a scans without links,
+  caps entries at10000, yields every200, reports bytes+complete and caches SWR.
+  Native dashboard status calls synchronous row-count projection and has no
+  storage-byte completeness/cache. Implement an off-request-path bounded scanner
+  over certified owned roots, route-keyed cache, no path/secret disclosure, safe
+  missing/error/truncation behavior and UI responsiveness tests. Do not reuse
+  cache_budget.disk_bytes, which only measures SQLite+WAL cache files.
+- **Doctor scope check required:** controls doctor directly uses table.count_rows
+  while operator status has a scoped query. Prove scope routing and reuse the
+  scoped projection where required; a raw table total is not proof of an
+  authorized per-scope count. No new leak claim is certified without that test.
+
+## Intentional boundaries to retain (all audit families)
+
 - Jina v3 native execution is deliberately blocked pending remote-code/security
   audit; keep the approved design boundary. Jina v5 nano is a native addition.
 - BGE/Jina nano CPU ONNX profiles require actual prepared artifacts and supported
