@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { runSkillMiner } from "../lib/jobs/skill-miner.js";
+import { runSkillMiner, SKILL_MINER_RATE_LIMIT_MS } from "../lib/jobs/skill-miner.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
 import { renderSkillMd } from "../lib/jobs/skill-miner/skill-md-renderer.js";
 import { readProposals, writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
@@ -231,5 +231,58 @@ describe("7.12.48: withdrawing an applied skill", () => {
     seedActive(dir, "", { status: "pending_review" });
     assert.equal(retireActiveSkill(dir, ID).reason, "not_active");
     assert.equal(retireActiveSkill(dir, "44444444-4444-4444-8444-444444444444").reason, "not_found");
+  });
+});
+
+describe("7.12.48: weekly rate limit tolerates run-time drift", () => {
+  it("lets the next Sunday run start although the last run finished a few minutes after its slot", async (t) => {
+    const dir = workspace("rate-drift-");
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const first = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
+    assert.equal(first.skipped, undefined, "first run executes");
+    // Shift the recorded run so that exactly 7 days minus 3 minutes have passed.
+    const statePath = join(dir, "run-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    for (const entry of Object.values(state.jobRateLimits)) entry.lastRunAt = Date.now() - (7 * 86400000 - 3 * 60000);
+    writeFileSync(statePath, JSON.stringify(state), "utf8");
+    const second = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
+    assert.notEqual(second.reason, "rate_limited");
+    assert.ok(SKILL_MINER_RATE_LIMIT_MS > 6 * 86400000 && SKILL_MINER_RATE_LIMIT_MS < 7 * 86400000);
+    // A run one day later is still blocked.
+    for (const entry of Object.values(JSON.parse(readFileSync(statePath, "utf8")).jobRateLimits)) entry.lastRunAt = Date.now() - 86400000;
+    const blockedState = JSON.parse(readFileSync(statePath, "utf8"));
+    for (const entry of Object.values(blockedState.jobRateLimits)) entry.lastRunAt = Date.now() - 86400000;
+    writeFileSync(statePath, JSON.stringify(blockedState), "utf8");
+    const third = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
+    assert.equal(third.reason, "rate_limited");
+  });
+});
+
+describe("7.12.48: withdraw never deletes a handwritten workspace skill", () => {
+  it("refuses a workspace skills/ entry without the miner provenance and keeps the proposal active", (t) => {
+    const dir = workspace("retire-foreign-");
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const skillDir = join(dir, "skills", "weekly-deploy");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: weekly-deploy\n---\nHandwritten by the operator.", "utf8");
+    writeProposal(dir, { id: ID, skillName: "weekly-deploy", status: "active", activation: { skillPath: join(skillDir, "SKILL.md"), evidence: {} } });
+    const result = retireActiveSkill(dir, ID);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "foreign_skill");
+    assert.equal(existsSync(join(skillDir, "SKILL.md")), true);
+    assert.equal(readProposals(dir)[0].status, "active");
+  });
+
+  it("removes a workspace skills/ entry the miner wrote itself", (t) => {
+    const dir = workspace("retire-own-");
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const skillDir = join(dir, "skills", "weekly-deploy");
+    mkdirSync(skillDir, { recursive: true });
+    const md = renderSkillMd({ skillTitle: "Weekly Deploy", skillName: "weekly-deploy", description: "d", instructions: "i", evidence: { memoryIds: [] } });
+    writeFileSync(join(skillDir, "SKILL.md"), md, "utf8");
+    writeProposal(dir, { id: ID, skillName: "weekly-deploy", status: "active", activation: { skillPath: join(skillDir, "SKILL.md"), evidence: {} } });
+    const result = retireActiveSkill(dir, ID);
+    assert.equal(result.ok, true);
+    assert.equal(existsSync(skillDir), false);
   });
 });

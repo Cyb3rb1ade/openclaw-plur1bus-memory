@@ -40,6 +40,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   nie ein Ledger lag. Live lagen 22 offene Vorschläge (main 10,
   bernhardine 10, heisenberg 2), die keiner je gesehen hat. Chat, Hinweis
   und Dashboard lesen jetzt dieselben Partitionsverzeichnisse wie der Miner.
+- **Skill-Miner lief nur alle zwei Wochen.** Die Wochensperre zählte exakt
+  sieben Tage ab dem Ende des letzten Laufs (06.09. 06:03 für den
+  06:00-Cron). Der nächste Sonntag lag damit wenige Minuten davor und wurde
+  übersprungen; am 30.08. fehlt jeder Lauf. Die Sperre läuft jetzt sechs
+  Stunden vor Ablauf der Woche aus (`SKILL_MINER_RATE_LIMIT_MS`).
+- **Tägliche Konsolidierung fiel jede zweite Nacht aus.** Dieselbe Falle mit
+  24 Stunden: Der Lauf endet 21 bis 37 Sekunden nach dem Slot, der nächste
+  Nachtlauf war um eine Minute gesperrt (bernhardine 10.09. 04:15, main
+  11.09. 04:00, „rate limited — 1min remaining"). Die Sperre fängt jetzt nur
+  noch doppelte Auslöser binnen zwölf Stunden ab
+  (`DAILY_CONSOLIDATION_RATE_LIMIT_MS`); ein zweiter Lauf wäre harmlos, der
+  Batch-Decay rechnet ab `lastDynamicsAt`.
+
+### Sicherheit
+
+- **Withdraw löscht keine handgeschriebenen Skills.** Liegt ein aktivierter
+  Skill im Workspace-Verzeichnis `skills/`, wird er nur entfernt, wenn seine
+  SKILL.md die Herkunftszeile des Skill-Miners trägt. Sonst meldet die
+  Aktion `foreign_skill` und lässt Datei und Vorschlag unverändert.
 
 
 ## [7.12.47] — 2026-09-11
