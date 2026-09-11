@@ -79,6 +79,13 @@ _WEEKDAYS = {
     "sonntag": 6,
 }
 _MONTH_NAME = r"[a-zäöüß]+"
+_DURATION_PHRASES = re.compile(
+    r"\b(?:bis\s+(?:heute|jetzt|dato)|until\s+(?:today|now)|"
+    r"up\s+to\s+(?:today|now)|so\s+far|to\s+date)\b"
+    r"(?!\s+(?:abend|mittag|nachmittag|vormittag|früh|frueh|morgen|nacht|"
+    r"um\b|\d|evening|noon|afternoon|morning|night|at\b))",
+    re.I,
+)
 
 
 def _normalize_classifier_result(value: Any) -> dict[str, Any] | None:
@@ -309,19 +316,10 @@ def parse_temporal_range(
         reference = reference.astimezone(timezone.utc)
     value = str(text or "")
 
-    # "bis heute" and "until today" describe a duration, not a request to
-    # narrow recall to today. Explicit same-day deadlines (for example
-    # "bis heute Abend" or "bis heute 18 Uhr") intentionally remain ranges.
-    duration = re.search(r"\b(?:bis|until)\s+(?:heute|today)\b", value, re.I)
-    if duration:
-        suffix = value[duration.end():].lstrip()
-        deadline = re.match(
-            r"(?:abend|evening)\b|\d{1,2}(?::\d{2})?\s*(?:uhr|am|pm)\b",
-            suffix,
-            re.I,
-        )
-        if not deadline:
-            return None
+    # Duration phrases describe elapsed time, not a request to narrow recall
+    # to a day. Strip only the phrase so a separate remaining anchor can still
+    # resolve. Explicit same-day deadlines intentionally remain untouched.
+    value = _DURATION_PHRASES.sub(" ", value)
 
     today = reference.replace(hour=0, minute=0, second=0, microsecond=0)
     today_match = re.search(r"\b(?:heute|today)\b", value, re.I)

@@ -10,10 +10,23 @@ class TemporalRefinementTests(unittest.TestCase):
         self.now = datetime(2026, 9, 11, 12, tzinfo=timezone.utc)
 
     def test_duration_phrases_do_not_become_today_ranges(self):
-        self.assertIsNone(parse_temporal_range("bis heute keine Antwort", now=self.now))
-        self.assertIsNone(parse_temporal_range("until today no answer", now=self.now))
-        self.assertIsNone(parse_temporal_range("BIS HEUTE keine Antwort", now=self.now))
-        self.assertIsNone(parse_temporal_range("UNTIL TODAY no answer", now=self.now))
+        for phrase in (
+            "bis heute keine Antwort",
+            "bis jetzt keine Antwort",
+            "bis dato keine Antwort",
+            "until today no answer",
+            "until now no answer",
+            "up to today no answer",
+            "up to now no answer",
+            "so far no answer",
+            "to date no answer",
+            "BIS HEUTE keine Antwort",
+            "UNTIL TODAY no answer",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(parse_temporal_range(phrase, now=self.now))
+        stripped_with_anchor = parse_temporal_range("bis heute: gestern", now=self.now)
+        self.assertEqual(stripped_with_anchor["start"], "2026-09-10T00:00:00+00:00")
         evening = parse_temporal_range("bis heute Abend", now=self.now)
         timed_deadline = parse_temporal_range("bis heute 18 Uhr", now=self.now)
         self.assertEqual(evening["start"], "2026-09-11T00:00:00+00:00")
