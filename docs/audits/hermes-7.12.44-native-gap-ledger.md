@@ -70,8 +70,6 @@ retrieval_settings.py or retrieval_migrate.py exist in this candidate.
    download, remote model code or user-license acceptance. Until implemented and
    tested, retain an explicit missing status, not an optimistic selector claim.
 
-## Intentional boundaries to retain
-
 ## Physical maintenance and health — required owning tasks not yet executed
 
 - **Nightly physical optimization missing:** upstream417ed73 with a72c3eb
