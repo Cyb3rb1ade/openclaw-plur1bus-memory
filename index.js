@@ -5343,6 +5343,17 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         },
       });
       const rawTable = db.table;
+      const ACL_ROW_COLUMNS = ["id", "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId", "status"];
+      const readAclRows = async (where) => {
+        let query = rawTable.query().where(where);
+        try {
+          const schema = typeof rawTable.schema === "function" ? await rawTable.schema() : null;
+          const names = new Set((schema?.fields || []).map((f) => f.name));
+          const columns = ACL_ROW_COLUMNS.filter((c) => names.has(c));
+          if (columns.length > 0 && typeof query.select === "function") query = query.select(columns);
+        } catch (_) { /* volle Zeilen lesen */ }
+        return typeof query.limit === "function" ? query.limit(1_000_000).toArray() : query.toArray();
+      };
       const table = rawTable ? {
         schema: (...args) => rawTable.schema(...args),
         query: (...args) => guardedBuilder(rawTable.query(...args)),
@@ -5351,13 +5362,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           assertRows(entries, "add");
           return rawTable.add(entries);
         },
+        // 7.12.47: Der Guard braucht fuer die Pruefung nur die ACL-Spalten —
+        // bisher las er jede betroffene Zeile komplett (Text + 3072-dim
+        // Vektor); beim Batch-Decay ueber ~9000 Zeilen waeren das >100 MB.
         async update(options) {
-          const rows = await rawTable.query().where(options.where).toArray();
+          const rows = await readAclRows(options.where);
           assertRows(rows, "update");
           return rawTable.update(options);
         },
         async delete(where) {
-          const rows = await rawTable.query().where(where).toArray();
+          const rows = await readAclRows(where);
           assertRows(rows, "delete");
           return rawTable.delete(where);
         },
@@ -7268,6 +7282,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         neoStore: dailyStore,
                         requestContext: memoryCtx,
                         aclPartition: dailyPartition,
+                        // 7.12.47: "batch" (Default) oder "rows" (alter Zeilenpfad).
+                        dynamicsDecayMode: dcCfg.decayMode === "rows" ? "rows" : "batch",
                         workspaceDir: dailyWorkspaceDir,
                         workspaceKey: dailyPartition.workspaceIdentity || dailyPartition.ownerUserId || dailyPartition.agentId,
                         compactionLlmCfg: mergingEnabled ? withLlmCallContext(

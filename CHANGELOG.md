@@ -7,6 +7,31 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.47] — 2026-09-11
+
+### Geändert
+
+- **Decay als ein Update-Statement statt je Zeile.** Bis 7.12.46 lief die
+  Vergessenskurve Zeile für Zeile (ein LanceDB-Commit je Zeile, live 0,6 bis
+  1,5 s), mit Deckel und Zeitbudget schaffte Bernd rund 80 Zeilen je Nacht;
+  ein Durchgang über 9385 Zeilen hätte vier Monate gedauert. Jetzt rechnet
+  LanceDB dieselbe Kurve S = S0 · 0,5^(elapsed/halfLife) per
+  `update({ where, valuesSql })` für die ganze Partition in zwei Statements
+  (`applyDailyDecayBatch`: erst die Stärke, dann der Zeitstempel — Lance
+  wertet mehrere Zuweisungen eines Statements in unbestimmter Reihenfolge
+  aus; ohne CASE/SIGN/NULLIF, die Lance nicht kennt bzw. an gemischten
+  Typen scheitern: GREATEST(0, elapsed) lässt Zeitstempel in der Zukunft
+  unverändert). Ausgeschlossen wie bisher: fremde Partition,
+  nicht-aktive, Kern-Erinnerungen (memoryClass core, neverForget) und
+  Nicht-UUID-IDs (Dokument-Fakten). Ergebnis `mode: "batch"`, `decayed` =
+  betroffene Zeilen, `ms`. Schlägt der Batch fehl, läuft der Zeilenpfad mit
+  Cursor wie in 7.12.46; `dailyConsolidation.decayMode: "rows"` erzwingt ihn.
+  Auf einer echten LanceDB-Tabelle gegen die JS-Kurve getestet (Abweichung
+  < 1e-6).
+- **ACL-Guard liest für Update und Delete nur noch die ACL-Spalten** (id,
+  scope, agentId, storedBy, workspaceId, workspaceKey, ownerUserId, status)
+  statt jeder betroffenen Zeile samt Text und 3072-dim Vektor.
+
 ## [7.12.46] — 2026-09-11
 
 ### Behoben
