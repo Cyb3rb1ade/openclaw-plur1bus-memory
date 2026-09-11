@@ -58,6 +58,15 @@ retrieval_settings.py or retrieval_migrate.py exist in this candidate.
    Regression: equal dimensions (and even equal model name) with different
    endpoint/revision/prefix cannot switch a populated store or write fallback
    vectors. Existing BGE/Jina nano/optional oMLX behavior remains explicit.
+   Read-only follow-up confirms the oMLX batch fallback needs the same guard as
+   single embedding, and central bootstrap must stop inferring an E5 fallback
+   from width768. Staging currently hashes almost the entire configuration,
+   including hashed credentials and nonsemantic cache/timeout settings; shared
+   semantic identity must not turn credential rotation into a vector migration.
+   Keep cache authorization isolation separate from semantic space identity:
+   credential/header partition removal is not authorized by this refactor.
+   Clean public endpoints can be normalized; endpoints with userinfo/query or
+   fragment cannot be silently stripped and then certified as equal routes.
 2. **Reranker settings/validation.** Admin lacks candidates/timeoutMs/
    fallbackOnError; Cohere and oMLX use divergent timeout defaults. Manual unknown
    reranker config currently degrades silently. Implement shared startup/admin
