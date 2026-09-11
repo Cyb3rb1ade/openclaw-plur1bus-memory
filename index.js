@@ -5198,11 +5198,19 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
       return createNeoStore(neoRoot, workspaceKey);
     };
-    const sameOwnerPartition = (left, right) => Boolean(left && right
-      && left.scope === right.scope
-      && left.agentId === right.agentId
-      && left.workspaceIdentity === right.workspaceIdentity
-      && left.ownerUserId === right.ownerUserId);
+    // 7.12.45: Der Vergleich folgt dem Partitionsschluessel (ownerStorageKey):
+    // agent-private kennt nur den Agenten, workspace nur die Workspace-
+    // Identitaet, user Agent + Owner. Bis dahin verglich er workspaceIdentity
+    // und ownerUserId fuer ALLE Scopes — Altzeilen (Juli 2026) mit gesetztem
+    // workspaceKey in agent-private-Zeilen (main 7 von 9385, bernhardine 21
+    // von 12034) liessen den Guard werfen, die ganze Seite fiel weg, der
+    // naechtliche Decay blieb bei main/bernhardine seit Tagen bei 0.
+    const sameOwnerPartition = (left, right) => {
+      if (!left || !right || left.scope !== right.scope) return false;
+      if (left.scope === "workspace") return left.workspaceIdentity === right.workspaceIdentity;
+      if (left.scope === "user") return left.agentId === right.agentId && left.ownerUserId === right.ownerUserId;
+      return left.agentId === right.agentId;
+    };
     const ownerStorageKey = (partition) => partition.scope === "workspace"
       ? partition.workspaceIdentity
       : `acl-owner-v1:${partition.scope}:${partition.agentId}:${partition.key}`;
@@ -5335,6 +5343,17 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         },
       });
       const rawTable = db.table;
+      const ACL_ROW_COLUMNS = ["id", "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId", "status"];
+      const readAclRows = async (where) => {
+        let query = rawTable.query().where(where);
+        try {
+          const schema = typeof rawTable.schema === "function" ? await rawTable.schema() : null;
+          const names = new Set((schema?.fields || []).map((f) => f.name));
+          const columns = ACL_ROW_COLUMNS.filter((c) => names.has(c));
+          if (columns.length > 0 && typeof query.select === "function") query = query.select(columns);
+        } catch (_) { /* volle Zeilen lesen */ }
+        return typeof query.limit === "function" ? query.limit(1_000_000).toArray() : query.toArray();
+      };
       const table = rawTable ? {
         schema: (...args) => rawTable.schema(...args),
         query: (...args) => guardedBuilder(rawTable.query(...args)),
@@ -5343,13 +5362,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           assertRows(entries, "add");
           return rawTable.add(entries);
         },
+        // 7.12.47: Der Guard braucht fuer die Pruefung nur die ACL-Spalten —
+        // bisher las er jede betroffene Zeile komplett (Text + 3072-dim
+        // Vektor); beim Batch-Decay ueber ~9000 Zeilen waeren das >100 MB.
         async update(options) {
-          const rows = await rawTable.query().where(options.where).toArray();
+          const rows = await readAclRows(options.where);
           assertRows(rows, "update");
           return rawTable.update(options);
         },
         async delete(where) {
-          const rows = await rawTable.query().where(where).toArray();
+          const rows = await readAclRows(where);
           assertRows(rows, "delete");
           return rawTable.delete(where);
         },
@@ -7260,6 +7282,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         neoStore: dailyStore,
                         requestContext: memoryCtx,
                         aclPartition: dailyPartition,
+                        // 7.12.47: "batch" (Default) oder "rows" (alter Zeilenpfad).
+                        dynamicsDecayMode: dcCfg.decayMode === "rows" ? "rows" : "batch",
                         workspaceDir: dailyWorkspaceDir,
                         workspaceKey: dailyPartition.workspaceIdentity || dailyPartition.ownerUserId || dailyPartition.agentId,
                         compactionLlmCfg: mergingEnabled ? withLlmCallContext(
@@ -7346,7 +7370,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       timeoutMs: optimizePlan.timeoutMs,
                     });
                     lancedbOptimize = outcome?.ok
-                      ? { ok: true, ms: outcome.ms, keepVersionsHours: optimizePlan.keepVersionsHours, ...summarizeLancedbOptimize(outcome.stats, outcome.before, outcome.after) }
+                      ? { ok: true, ms: outcome.ms, keepVersionsHours: optimizePlan.keepVersionsHours, ...summarizeLancedbOptimize(outcome.stats, outcome.before, outcome.after, { attempts: outcome.attempts }) }
                       : { ok: false, reason: outcome?.reason || "unknown" };
                   } catch (optimizeErr) {
                     lancedbOptimize = { ok: false, error: String(optimizeErr?.message || optimizeErr) };

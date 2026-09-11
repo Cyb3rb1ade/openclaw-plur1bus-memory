@@ -38,8 +38,12 @@ describe("summarizeLancedbOptimize", () => {
       fragmentsRemoved: 344, fragmentsAdded: 4, filesRemoved: 611, oldVersionsRemoved: 1050, bytesRemoved: 66252827,
       before: { fragments: 352, smallFragments: 352, medianRows: 1, bytes: 153125665 },
       after: { fragments: 12, smallFragments: 12, medianRows: 268, bytes: 133514291 },
+      attempts: 1,
     });
     assert.doesNotThrow(() => JSON.stringify(summary));
     assert.equal(summarizeLancedbOptimize({}, null, null).before, null);
+    // 7.12.46: Anlaeufe aus dem Adapter-Ergebnis (Retry bei Commit-Konflikt).
+    assert.equal(summarizeLancedbOptimize({}, null, null, { attempts: 3 }).attempts, 3);
+    assert.equal(summarizeLancedbOptimize({}, null, null, { attempts: "x" }).attempts, 1);
   });
 });

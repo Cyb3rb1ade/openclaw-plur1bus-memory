@@ -153,4 +153,39 @@ describe("db-adapter LanceDB timeouts", () => {
       /db-adapter.searchByTopic.vectorSearch/,
     );
   });
+
+  it("7.12.45: optimizeTable wiederholt bei 'Retryable commit conflict' bis zu dreimal und meldet die Versuche", async () => {
+    let calls = 0;
+    const table = makeFakeTable();
+    table.optimize = async () => {
+      calls += 1;
+      if (calls < 3) throw new Error("lance error: Retryable commit conflict for version 28982: This Rewrite transaction was preempted by concurrent transaction Update at version 28982. Please retry.");
+      return { compaction: { fragmentsRemoved: 5 } };
+    };
+    const warnings = [];
+    const adapter = makeAdapter(table, { readTimeoutMs: 5000, writeTimeoutMs: 5000, logger: { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} } });
+    const result = await adapter.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0 });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.attempts, 3);
+    assert.strictEqual(calls, 3);
+    assert.ok(warnings.some((m) => /kollidierte .*Versuch 1\/3/.test(m)), warnings.join(" | "));
+  });
+
+  it("7.12.45: optimizeTable gibt nach drei Konflikten oder bei anderen Fehlern ohne Wiederholung auf", async () => {
+    let calls = 0;
+    const conflict = makeFakeTable();
+    conflict.optimize = async () => { calls += 1; throw new Error("Retryable commit conflict: please retry"); };
+    const a = makeAdapter(conflict, { readTimeoutMs: 5000, writeTimeoutMs: 5000, logger: { warn() {}, info() {}, debug() {}, error() {} } });
+    const r1 = await a.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0 });
+    assert.strictEqual(r1.ok, false);
+    assert.strictEqual(calls, 3);
+    let other = 0;
+    const plain = makeFakeTable();
+    plain.optimize = async () => { other += 1; throw new Error("disk full"); };
+    const b = makeAdapter(plain, { readTimeoutMs: 5000, writeTimeoutMs: 5000, logger: { warn() {}, info() {}, debug() {}, error() {} } });
+    const r2 = await b.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0 });
+    assert.strictEqual(r2.ok, false);
+    assert.match(r2.reason, /disk full/);
+    assert.strictEqual(other, 1);
+  });
 });

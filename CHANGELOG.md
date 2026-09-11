@@ -7,9 +7,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-### Hermes 7.12.44-hermes.0 — unpublished integration candidate
+### Hermes 7.12.47-hermes.0 — unpublished integration candidate
 
-- Integrates the pinned OpenClaw `a3f48f28ac647e81c5260e8a1dbab7977bf9fb51`
+- Integrates the pinned OpenClaw `8a148c991123be31bc4f99376c8198447d9bb717`
   source while retaining Hermes-native payload and distribution paths.
 - This is a candidate only: native-port parity, artifacts, signing, and publication
   remain separately audited gates.
@@ -176,6 +176,72 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
+## Upstream source history
+
+## [7.12.47] — 2026-09-11
+
+### Geändert
+
+- **Decay als ein Update-Statement statt je Zeile.** Bis 7.12.46 lief die
+  Vergessenskurve Zeile für Zeile (ein LanceDB-Commit je Zeile, live 0,6 bis
+  1,5 s), mit Deckel und Zeitbudget schaffte Bernd rund 80 Zeilen je Nacht;
+  ein Durchgang über 9385 Zeilen hätte vier Monate gedauert. Jetzt rechnet
+  LanceDB dieselbe Kurve S = S0 · 0,5^(elapsed/halfLife) per
+  `update({ where, valuesSql })` für die ganze Partition in zwei Statements
+  (`applyDailyDecayBatch`: erst die Stärke, dann der Zeitstempel — Lance
+  wertet mehrere Zuweisungen eines Statements in unbestimmter Reihenfolge
+  aus; ohne CASE/SIGN/NULLIF, die Lance nicht kennt bzw. an gemischten
+  Typen scheitern: GREATEST(0, elapsed) lässt Zeitstempel in der Zukunft
+  unverändert). Ausgeschlossen wie bisher: fremde Partition,
+  nicht-aktive, Kern-Erinnerungen (memoryClass core, neverForget) und
+  Nicht-UUID-IDs (Dokument-Fakten). Ergebnis `mode: "batch"`, `decayed` =
+  betroffene Zeilen, `ms`. Schlägt der Batch fehl, läuft der Zeilenpfad mit
+  Cursor wie in 7.12.46; `dailyConsolidation.decayMode: "rows"` erzwingt ihn.
+  Auf einer echten LanceDB-Tabelle gegen die JS-Kurve getestet (Abweichung
+  < 1e-6).
+- **ACL-Guard liest für Update und Delete nur noch die ACL-Spalten** (id,
+  scope, agentId, storedBy, workspaceId, workspaceKey, ownerUserId, status)
+  statt jeder betroffenen Zeile samt Text und 3072-dim Vektor.
+
+## [7.12.46] — 2026-09-11
+
+### Behoben
+
+- **Der nächtliche Decay verarbeitete jede Nacht dieselben ersten 50
+  Zeilen.** Der Cursor lag nur in `<workspace>/run-state.json`, und die
+  gibt es für partitionsgebundene Läufe nicht (`statePath` null bei
+  geschützter Partition seit der Ownership-Erkennung): heisenberg meldete am
+  10. und 11.09. denselben `nextCursorId`, die Datei-Cursor stammten vom
+  14.08. Der Cursor wohnt jetzt im Hook-Record des partitionseigenen
+  Neo-Stores (`daily-consolidation.dynamicsDecay[<agent>:<workspace>]`), die
+  Datei bleibt Rückfall und wird mitgeschrieben.
+- **Decay-Deckel 300 statt 50 Zeilen, mit Zeitbudget von zwei Minuten**
+  (`dynamicsDecayDeadlineMs`); nach Ablauf bleibt der Cursor auf der letzten
+  Zeile, Ergebnis nennt `deadlineHit`. Bei 9385 Zeilen (main) hätte der alte
+  Deckel 188 Nächte für einen Durchgang gebraucht.
+- Optimize-Zusammenfassung nennt jetzt `attempts` (Anläufe bei
+  Commit-Konflikt, 7.12.45).
+
+## [7.12.45] — 2026-09-11
+
+### Behoben
+
+- **Nächtlicher Decay blieb bei main und bernhardine bei 0 (`errors=1`).**
+  Die 7.12.29-Diagnose nannte die Zeile: agent-private, vom Agenten selbst
+  gespeichert, aber mit gesetztem `workspaceKey` (Altzeilen aus Juli 2026:
+  main 7 von 9385, bernhardine 21 von 12034; heisenberg keine, dort lief der
+  Decay). Der Partitions-Guard verglich `workspaceIdentity` und
+  `ownerUserId` für ALLE Scopes, obwohl der Partitionsschlüssel
+  `agent-private:<agent>` keinen Workspace kennt — die erste Altzeile warf,
+  die ganze Seite fiel weg. Der Vergleich folgt jetzt dem Schlüssel:
+  agent-private nur Agent, workspace nur Workspace-Identität, user Agent +
+  Owner. Keine Datenänderung nötig.
+- **LanceDB-Optimize scheiterte an gleichzeitigen Updates** („Retryable
+  commit conflict … Please retry", 11.09. bernhardine und heisenberg).
+  `optimizeTable` versucht es jetzt bis zu dreimal mit 3 s Pause innerhalb
+  des Zeitbudgets und meldet `attempts`; andere Fehler werden nicht
+  wiederholt.
+
 ## [7.12.44] — 2026-09-11
 
 ### Behoben
