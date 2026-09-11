@@ -13,6 +13,13 @@ before candidate completion; candidate-verification Task1 owns reconciliation.
   a bounded scoped anchor-resolution task remains required before claiming full
   temporal recall parity. Any reference lookup must preserve ACL/TTL/validity
   and stay optional; do not infer a date from an unauthorized or ambiguous hit.
+  The same owning task must port explicit Valid-Time precedence: upstream
+  recall-pipeline.js disables createdAt heuristics whenever validAt is supplied
+  (line1690); native runtime currently calls parse_temporal_range unconditionally.
+  Keeping the validity predicate is not sufficient: an in-range recent hit can
+  suppress otherwise historically valid older-captured rows without triggering
+  the empty-result fallback. Regression needs two validAt-eligible rows with
+  differing captured years and an explicit year phrase; both remain eligible.
 
 - **Invalidated recall exclusion:** owned by storage Task5 (plan e41af4a,
   refined 33f50aa). Imported active+invalidated rows currently survive primary,
