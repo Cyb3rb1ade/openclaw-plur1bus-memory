@@ -35,6 +35,7 @@ class Dynamics747Tests(unittest.TestCase):
             "halfLifeDays": 30,
             "lastDynamicsAt": self.now - 86_400_000,
             "privateIrrelevantWorkspace": "must-not-grant-authority",
+            "escapeText": "O'Brien\\path\nGrüße",
             **metadata_changes,
         }
         return {
@@ -70,7 +71,9 @@ class Dynamics747Tests(unittest.TestCase):
 
         with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
             first = domain.run_dynamics(acl_bindings=self.owner.as_dict())
-        version_after_first = table.version
+        version_after_first = lancedb.connect(
+            str(self.root / "lancedb" / "main")
+        ).open_table("metadata").version
         with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
             second = domain.run_dynamics(acl_bindings=self.owner.as_dict())
 
@@ -84,6 +87,9 @@ class Dynamics747Tests(unittest.TestCase):
         self.assertIsNone(second["nextCursor"])
         self.assertEqual(next(row for row in self._all() if row["id"] == foreign_id), foreign_before)
         self.assertTrue(all(row["opaqueColumn"] == f"opaque-{row['id']}" for row in self._all()))
+        for memory_id in owned_ids:
+            metadata = json.loads(next(row for row in self._all() if row["id"] == memory_id)["metadataJson"])
+            self.assertEqual(metadata["escapeText"], "O'Brien\\path\nGrüße")
 
     def test_core_inactive_invalidated_and_foreign_embedded_binding_are_never_mutated(self):
         ids = [str(uuid.uuid4()) for _ in range(5)]
@@ -129,6 +135,113 @@ class Dynamics747Tests(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["changed"], 1)
         self.assertEqual(result["nextCursor"], owned_ids[0])
+
+    def test_after_commit_exception_is_reconciled_without_replaying_the_page(self):
+        ids = sorted(str(uuid.uuid4()) for _ in range(2))
+        self._create([self._row(memory_id, self.owner) for memory_id in ids])
+        domain = Plur1busDomain(self.root, "main")
+        table = domain._metadata_table()
+        original_merge = table.merge_insert
+
+        class LateFailureBuilder:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def when_matched_update_all(self, **kwargs):
+                self.inner = self.inner.when_matched_update_all(**kwargs)
+                return self
+
+            def execute(self, rows):
+                self.inner.execute(rows)
+                raise RuntimeError("injected after-commit failure")
+
+        table.merge_insert = lambda columns: LateFailureBuilder(original_merge(columns))
+        domain._metadata_table = lambda: table
+        with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
+            failed = domain.run_dynamics(acl_bindings=self.owner.as_dict())
+        prepared = domain._scope_state_dir(domain._scope_selector(
+            acl_bindings=self.owner.as_dict()
+        )) / "job-cursors/dynamics-decay-prepared.json"
+        self.assertEqual(failed["reason"], "batch-write-failed")
+        self.assertTrue(prepared.is_file())
+
+        with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
+            recovered = Plur1busDomain(self.root, "main").run_dynamics(
+                acl_bindings=self.owner.as_dict()
+            )
+        self.assertEqual(recovered["reason"], "prepared-commit-reconciled")
+        self.assertTrue(recovered["complete"])
+        self.assertFalse(prepared.exists())
+
+    def test_real_partial_cas_count_is_incomplete_and_restart_refuses_mixed_state(self):
+        ids = sorted(str(uuid.uuid4()) for _ in range(2))
+        self._create([self._row(memory_id, self.owner) for memory_id in ids])
+        domain = Plur1busDomain(self.root, "main")
+        table = domain._metadata_table()
+        original_merge = table.merge_insert
+        observed_counts = []
+
+        class ConflictBuilder:
+            def __init__(self, inner):
+                self.inner = inner
+
+            def when_matched_update_all(self, **kwargs):
+                self.inner = self.inner.when_matched_update_all(**kwargs)
+                return self
+
+            def execute(self, rows):
+                external = lancedb.connect(str(self_root / "lancedb" / "main")).open_table("metadata")
+                external.update(where=f"id = '{ids[1]}'", values={"metadataJson": "{\"external\":true}"})
+                merge_result = self.inner.execute(rows)
+                observed_counts.append(merge_result.num_updated_rows)
+                return merge_result
+
+        self_root = self.root
+        table.merge_insert = lambda columns: ConflictBuilder(original_merge(columns))
+        domain._metadata_table = lambda: table
+        with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
+            partial = domain.run_dynamics(acl_bindings=self.owner.as_dict())
+        self.assertEqual(observed_counts, [1])
+        self.assertEqual(partial["reason"], "batch-cas-conflict")
+        self.assertFalse(partial["complete"])
+
+        with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
+            restart = Plur1busDomain(self.root, "main").run_dynamics(
+                acl_bindings=self.owner.as_dict()
+            )
+        self.assertEqual(restart["reason"], "prepared-state-uncertain")
+        self.assertFalse(restart["complete"])
+
+    def test_corrupt_cursor_and_deadline_fail_closed_before_mutation(self):
+        memory_id = str(uuid.uuid4())
+        table = self._create([self._row(memory_id, self.owner)])
+        domain = Plur1busDomain(self.root, "main")
+        state = domain._scope_state_dir(domain._scope_selector(
+            acl_bindings=self.owner.as_dict()
+        )) / "job-cursors"
+        state.mkdir(parents=True)
+        (state / "dynamics-decay.json").write_text("not-json", encoding="utf-8")
+        before = table.version
+        invalid = domain.run_dynamics(acl_bindings=self.owner.as_dict())
+        self.assertEqual(invalid["reason"], "invalid-dynamics-state")
+        self.assertEqual(table.version, before)
+
+        (state / "dynamics-decay.json").unlink()
+        deadline_domain = Plur1busDomain(self.root, "main", {
+            "dailyConsolidation": {"dynamicsDecayDeadlineMs": 1}
+        })
+        clock_calls = 0
+
+        def fake_monotonic():
+            nonlocal clock_calls
+            clock_calls += 1
+            return 0.0 if clock_calls == 1 else 1.0
+
+        with patch("plur1bus_hermes.domain.time.monotonic", side_effect=fake_monotonic), \
+                patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
+            deadline = deadline_domain.run_dynamics(acl_bindings=self.owner.as_dict())
+        self.assertTrue(deadline["deadlineHit"])
+        self.assertEqual(lancedb.connect(str(self.root / "lancedb/main")).open_table("metadata").version, before)
 
 
 if __name__ == "__main__":

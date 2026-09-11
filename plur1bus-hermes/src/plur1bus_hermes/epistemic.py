@@ -47,7 +47,7 @@ def epistemic_recall_where_clause(column: str = "epistemicStatus") -> str:
     """Match Python ``strip().lower()`` invalidation before a LanceDB limit."""
     return (
         f"({column} IS NULL OR lower(regexp_replace({column}, "
-        r"'^\s+|\s+$', '', 'g')) != 'invalidated')"
+        r"'^[\s\x1c-\x1f]+|[\s\x1c-\x1f]+$', '', 'g')) != 'invalidated')"
     )
 
 

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import lancedb
 
 from plur1bus_hermes.domain import Plur1busDomain
+from plur1bus_hermes.dynamics import MAX_CONSUMED_FEEDBACK_IDS, transform_metadata
 from plur1bus_hermes.namespaces import binding_from_scope
 
 
@@ -97,6 +98,19 @@ class FeedbackDynamicsTests(unittest.TestCase):
         self.assertEqual(second, first)
         self.assertEqual(len(first[self.ids[2]]["dynamicsConsumedFeedbackIds"]), 2)
         self.assertEqual(first[self.ids[0]]["unrelated"], {"must": "survive"})
+
+    def test_feedback_identity_cap_never_trims_and_replays_old_entries(self) -> None:
+        consumed = [f"event-{index}" for index in range(MAX_CONSUMED_FEEDBACK_IDS)]
+        transformed = transform_metadata(
+            {"memoryStrength": 0.5, "lastDynamicsAt": self.now,
+             "dynamicsConsumedFeedbackIds": consumed},
+            [("new-event", {"feedback": "positive"})],
+            now_ms=self.now,
+        )
+        self.assertEqual(transformed["metadata"]["dynamicsConsumedFeedbackIds"], consumed)
+        self.assertEqual(transformed["metadata"]["memoryStrength"], 0.5)
+        self.assertTrue(transformed["feedbackCapReached"])
+        self.assertEqual(transformed["skippedFeedback"], 1)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import threading
 import time
@@ -33,6 +34,7 @@ from .critical_review import (
 )
 from .dreaming import build_rem_dream
 from .dream_diary import append_dream_diary_entry
+from .dynamics import index_feedback_events, transform_metadata
 from .writer_lock import serialized_memory_write, writer_lock
 from .epistemic import is_recallable_epistemic
 from .generation import effective_generation_config
@@ -2629,6 +2631,233 @@ class Plur1busDomain:
         self._commit_job_page(page)
         return result
 
+    @staticmethod
+    def _dynamics_sql(value: str) -> str:
+        """Quote one already-validated SQL string literal."""
+        return str(value).replace("'", "''")
+
+    @staticmethod
+    def _dynamics_digest(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _dynamics_row_digest(cls, row: Mapping[str, Any]) -> str:
+        serialized = json.dumps(
+            dict(row), ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+            default=str, allow_nan=False,
+        )
+        return cls._dynamics_digest(serialized)
+
+    @staticmethod
+    def _dynamics_schema_digest(table: Any) -> str:
+        fields = [
+            (field.name, str(field.type), bool(field.nullable))
+            for field in table.schema
+        ]
+        return hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
+
+    @staticmethod
+    def _dynamics_write_private(path: Path, value: Mapping[str, Any], *, max_bytes: int) -> None:
+        """Atomically write bounded owner-private state without following symlinks."""
+        if path.is_symlink() or path.parent.is_symlink():
+            raise RuntimeError("unsafe-dynamics-state-path")
+        payload = (json.dumps(
+            dict(value), ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+            default=str, allow_nan=False,
+        ) + "\n").encode("utf-8")
+        if len(payload) > max_bytes:
+            raise OverflowError("dynamics-state-too-large")
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(path.parent, 0o700)
+        temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = -1
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            os.chmod(path, 0o600)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if temporary.exists() and not temporary.is_symlink():
+                temporary.unlink()
+
+    @staticmethod
+    def _dynamics_read_private(path: Path, *, max_bytes: int) -> dict[str, Any] | None:
+        """Read bounded private state, rejecting links and malformed payloads."""
+        if path.is_symlink() or path.parent.is_symlink():
+            raise RuntimeError("unsafe-dynamics-state-path")
+        if not path.exists():
+            return None
+        size = path.stat().st_size
+        if size < 1 or size > max_bytes:
+            raise RuntimeError("invalid-dynamics-state-size")
+        try:
+            loaded = json.loads(path.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("unreadable-dynamics-state") from error
+        if not isinstance(loaded, dict):
+            raise RuntimeError("invalid-dynamics-state-type")
+        return loaded
+
+    @staticmethod
+    def _dynamics_embedded_scope_matches(
+        metadata: Mapping[str, Any], selector: _ScopeSelector
+    ) -> bool:
+        """Reject any embedded owner claim that disagrees with top-level authority."""
+        direct_scope = str(metadata.get("scopeKey") or "").strip()
+        if direct_scope and direct_scope != selector.scope_key:
+            return False
+        direct_agent = str(metadata.get("agentId") or "").strip()
+        if direct_agent and direct_agent != selector.agent_id:
+            return False
+        acl = metadata.get("aclBindings")
+        if acl is None or acl == {}:
+            return True
+        if not isinstance(acl, Mapping):
+            return False
+        acl_agent = str(acl.get("agentId") or "").strip()
+        acl_scope = str(acl.get("scopeKey") or acl.get("key") or "").strip()
+        acl_type = str(acl.get("scopeType") or acl.get("scope_type") or "").strip()
+        return (
+            acl_agent == selector.agent_id
+            and acl_scope == selector.scope_key
+            and (not acl_type or acl_type == selector.scope_type)
+        )
+
+    def _dynamics_validate_cursor(
+        self, state: Mapping[str, Any], selector: _ScopeSelector
+    ) -> str | None:
+        if (
+            state.get("schemaVersion") != 1
+            or state.get("job") != "dynamics-decay"
+            or state.get("agentId") != selector.agent_id
+            or state.get("scopeKey") != selector.scope_key
+            or state.get("scopeType") != selector.scope_type
+        ):
+            raise RuntimeError("dynamics-cursor-owner-mismatch")
+        cursor = state.get("cursorId")
+        if cursor is None:
+            return None
+        return safe_memory_id(str(cursor))
+
+    def _dynamics_cursor_state(
+        self, selector: _ScopeSelector, cursor_id: str | None, *, complete: bool
+    ) -> dict[str, Any]:
+        return {
+            "schemaVersion": 1,
+            "job": "dynamics-decay",
+            "agentId": selector.agent_id,
+            "scopeKey": selector.scope_key,
+            "scopeType": selector.scope_type,
+            "cursorId": cursor_id,
+            "complete": bool(complete),
+            "updatedAt": _utcnow(),
+        }
+
+    def _dynamics_exact_rows(
+        self, table: Any, selector: _ScopeSelector, memory_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        if not memory_ids:
+            return []
+        predicates = " OR ".join(
+            f"id = '{self._dynamics_sql(memory_id)}'" for memory_id in memory_ids
+        )
+        rows = [dict(row) for row in table.search().where(
+            f"({predicates}) AND {selector.where()}"
+        ).limit(len(memory_ids) + 1).to_list()]
+        rows.sort(key=lambda row: str(row.get("id") or ""))
+        return rows
+
+    def _dynamics_verified_row(
+        self, row: Mapping[str, Any], selector: _ScopeSelector
+    ) -> tuple[str, dict[str, Any]] | None:
+        try:
+            memory_id = safe_memory_id(str(row.get("id") or ""))
+        except (TypeError, ValueError):
+            return None
+        if (
+            str(row.get("agentId") or "") != selector.agent_id
+            or str(row.get("scopeKey") or "") != selector.scope_key
+        ):
+            return None
+        metadata = self._metadata_json(dict(row))
+        if not self._dynamics_embedded_scope_matches(metadata, selector):
+            return None
+        for status in (row.get("status") if "status" in row else None,
+                       metadata.get("status") if "status" in metadata else None):
+            if status is not None and status != "active":
+                return None
+        if not is_recallable_epistemic(metadata):
+            return None
+        return memory_id, metadata
+
+    def _dynamics_commit_cursor(
+        self, path: Path, selector: _ScopeSelector, cursor_id: str | None, *, complete: bool
+    ) -> None:
+        self._dynamics_write_private(
+            path, self._dynamics_cursor_state(selector, cursor_id, complete=complete),
+            max_bytes=64 * 1024,
+        )
+
+    def _dynamics_readback_matches(
+        self,
+        table: Any,
+        selector: _ScopeSelector,
+        prepared_rows: list[Mapping[str, Any]],
+        digest_name: str,
+    ) -> bool:
+        ids = [str(item["id"]) for item in prepared_rows]
+        rows = self._dynamics_exact_rows(table, selector, ids)
+        if len(rows) != len(ids) or len({str(row.get("id")) for row in rows}) != len(ids):
+            return False
+        expected = {str(item["id"]): str(item[digest_name]) for item in prepared_rows}
+        return all(
+            self._dynamics_digest(str(row.get("metadataJson") or ""))
+            == expected.get(str(row.get("id") or ""))
+            for row in rows
+        )
+
+    def _dynamics_execute_batch(
+        self,
+        table: Any,
+        selector: _ScopeSelector,
+        operation_rows: list[Mapping[str, Any]],
+        target_rows: list[dict[str, Any]],
+        expected_version: int,
+    ) -> tuple[bool, str]:
+        """Execute exactly one update-only composite CAS merge."""
+        if int(table.version) != int(expected_version):
+            return False, "table-version-changed"
+        clauses = []
+        for item in operation_rows:
+            clauses.append(
+                "(" + " AND ".join((
+                    f"target.id = '{self._dynamics_sql(str(item['id']))}'",
+                    f"target.agentId = '{self._dynamics_sql(selector.agent_id)}'",
+                    f"target.scopeKey = '{self._dynamics_sql(selector.scope_key)}'",
+                    f"target.metadataJson = '{self._dynamics_sql(str(item['baselineMetadata']))}'",
+                )) + ")"
+            )
+        try:
+            result = (
+                table.merge_insert(["id", "agentId", "scopeKey"])
+                .when_matched_update_all(where=" OR ".join(clauses))
+                .execute(target_rows)
+            )
+        except Exception:
+            return False, "batch-write-failed"
+        updated = getattr(result, "num_updated_rows", None)
+        if updated is None or int(updated) != len(operation_rows):
+            return False, "batch-cas-conflict"
+        if not self._dynamics_readback_matches(table, selector, operation_rows, "targetDigest"):
+            return False, "batch-readback-failed"
+        return True, "batch"
+
+    @serialized_memory_write
     def run_dynamics(
         self,
         *,
@@ -2637,10 +2866,155 @@ class Plur1busDomain:
         aclBindings: Any = None,
         scopeKey: str | None = None,
     ) -> dict[str, Any]:
-        """Decay strength by half-life while applying explicit feedback signals."""
+        """Run one bounded, resumable and owner-scoped dynamics page."""
+        started = time.monotonic()
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        settings = self.config.get("dailyConsolidation")
+        settings = settings if isinstance(settings, Mapping) else {}
+        def integer_setting(name: str, default: int, minimum: int, maximum: int) -> int:
+            value = settings.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, int):
+                return default
+            return value if minimum <= value <= maximum else default
+
+        max_rows = integer_setting("dynamicsDecayMaxRows", 300, 1, 10_000)
+        deadline_ms = integer_setting("dynamicsDecayDeadlineMs", 120_000, 1, 240_000)
+        requested_mode = str(settings.get("decayMode") or "batch").strip().lower()
+        requested_mode = requested_mode if requested_mode in {"batch", "rows"} else "batch"
+        deadline = started + deadline_ms / 1000.0
+
+        def result(**values: Any) -> dict[str, Any]:
+            base = {
+                "changed": 0,
+                "mode": requested_mode,
+                "failed": 0,
+                "skipped": 0,
+                "complete": True,
+                "truncated": False,
+                "deadlineHit": False,
+                "nextCursor": None,
+                "ms": max(0, int((time.monotonic() - started) * 1000)),
+            }
+            base.update(values)
+            return base
+
+        table = self._metadata_table()
+        if table is None:
+            return result(reason="metadata-table-unavailable")
+        schema_names = set(table.schema.names)
+        if not {"id", "agentId", "scopeKey", "metadataJson"}.issubset(schema_names):
+            return result(complete=False, failed=1, reason="metadata-schema-incomplete")
+
+        state_root = self._scope_state_dir(selector) / "job-cursors"
+        cursor_path = state_root / "dynamics-decay.json"
+        prepared_path = state_root / "dynamics-decay-prepared.json"
+        try:
+            cursor_state = self._dynamics_read_private(cursor_path, max_bytes=64 * 1024)
+            cursor_id = (
+                self._dynamics_validate_cursor(cursor_state, selector)
+                if cursor_state is not None else None
+            )
+            prepared = self._dynamics_read_private(prepared_path, max_bytes=8 * 1024 * 1024)
+        except Exception:
+            return result(complete=False, failed=1, reason="invalid-dynamics-state")
+
+        # A prepared batch is reconciled before new feedback/config is considered.
+        if prepared is not None:
+            try:
+                operation_rows = prepared["rows"]
+                target_rows = prepared["targetRows"]
+                ids = prepared["orderedIds"]
+                checkpoint_candidate = prepared.get("checkpointCursor")
+                checkpoint_valid = checkpoint_candidate is None or (
+                    safe_memory_id(str(checkpoint_candidate)) == checkpoint_candidate
+                )
+                valid_owner = (
+                    prepared.get("schemaVersion") == 1
+                    and prepared.get("job") == "dynamics-decay"
+                    and prepared.get("agentId") == selector.agent_id
+                    and prepared.get("scopeKey") == selector.scope_key
+                    and prepared.get("scopeType") == selector.scope_type
+                    and prepared.get("cursorBefore") == cursor_id
+                    and prepared.get("schemaDigest") == self._dynamics_schema_digest(table)
+                    and isinstance(operation_rows, list)
+                    and isinstance(target_rows, list)
+                    and isinstance(ids, list)
+                    and 0 < len(ids) <= 10_000
+                    and ids == [item.get("id") for item in operation_rows]
+                    and len(ids) == len(set(ids)) == len(target_rows)
+                    and all(safe_memory_id(str(value)) == value for value in ids)
+                    and checkpoint_valid
+                    and isinstance(prepared.get("fixedNow"), int)
+                    and not isinstance(prepared.get("fixedNow"), bool)
+                    and isinstance(prepared.get("tableVersion"), int)
+                    and prepared.get("tableVersion") >= 1
+                    and all(
+                        isinstance(item, Mapping)
+                        and isinstance(row, Mapping)
+                        and item.get("id") == row.get("id")
+                        and row.get("agentId") == selector.agent_id
+                        and row.get("scopeKey") == selector.scope_key
+                        and set(row) == schema_names
+                        and self._dynamics_verified_row(row, selector) is not None
+                        and self._dynamics_digest(str(item.get("baselineMetadata") or ""))
+                        == item.get("baselineDigest")
+                        and self._dynamics_row_digest(row) == item.get("targetRowDigest")
+                        and
+                        self._dynamics_digest(str(row.get("metadataJson") or ""))
+                        == item.get("targetDigest")
+                        for item, row in zip(operation_rows, target_rows)
+                    )
+                )
+            except Exception:
+                valid_owner = False
+            if not valid_owner:
+                return result(complete=False, failed=1, reason="prepared-operation-invalid")
+            if self._dynamics_readback_matches(table, selector, operation_rows, "targetDigest"):
+                try:
+                    if time.monotonic() >= deadline:
+                        return result(mode="batch", complete=False, truncated=True,
+                                      deadlineHit=True, reason="deadline-before-checkpoint")
+                    checkpoint = prepared.get("checkpointCursor")
+                    complete = checkpoint is None
+                    self._dynamics_commit_cursor(cursor_path, selector, checkpoint, complete=complete)
+                    if prepared_path.is_symlink():
+                        raise RuntimeError("unsafe-dynamics-state-path")
+                    prepared_path.unlink()
+                    return result(mode="batch", complete=complete, truncated=not complete,
+                                  nextCursor=checkpoint, reason="prepared-commit-reconciled")
+                except Exception:
+                    return result(mode="batch", complete=False, failed=1,
+                                  nextCursor=cursor_id, reason="checkpoint-write-failed")
+            if not self._dynamics_readback_matches(table, selector, operation_rows, "baselineDigest"):
+                return result(mode="batch", complete=False, failed=1,
+                              nextCursor=cursor_id, reason="prepared-state-uncertain")
+            if time.monotonic() >= deadline:
+                return result(mode="batch", complete=False, truncated=True, deadlineHit=True,
+                              nextCursor=cursor_id, reason="deadline-before-batch")
+            version = int(table.version)
+            ok, reason_code = self._dynamics_execute_batch(
+                table, selector, operation_rows, target_rows, version
+            )
+            if not ok:
+                return result(mode="batch", complete=False, failed=1,
+                              nextCursor=cursor_id, reason=reason_code)
+            try:
+                checkpoint = prepared.get("checkpointCursor")
+                complete = checkpoint is None
+                if time.monotonic() >= deadline:
+                    return result(mode="batch", changed=len(ids), complete=False,
+                                  truncated=True, deadlineHit=True, nextCursor=cursor_id,
+                                  reason="deadline-before-checkpoint")
+                self._dynamics_commit_cursor(cursor_path, selector, checkpoint, complete=complete)
+                prepared_path.unlink()
+            except Exception:
+                return result(mode="batch", changed=len(ids), complete=False, failed=1,
+                              nextCursor=cursor_id, reason="checkpoint-write-failed")
+            return result(mode="batch", changed=len(ids), complete=complete,
+                          truncated=not complete, nextCursor=checkpoint)
+
         workspace_dir = self._scope_workspace_dir(selector)
         feedback = self._scoped_jsonl(
             self.workspace_dir,
@@ -2648,52 +3022,228 @@ class Plur1busDomain:
             ".adaptive-learning/feedback-log.jsonl",
             selector,
         )
-        adjustments: dict[str, float] = {}
-        for item in feedback:
-            if not _row_matches_scope(item, selector):
-                continue
-            value = {"useful": 0.1, "irrelevant": -0.1, "incorrect": -0.25}.get(str(item.get("feedback")), 0)
-            adjustments[str(item.get("memoryId") or "")] = adjustments.get(str(item.get("memoryId") or ""), 0) + value
-        changed = 0
+        scoped_feedback = [item for item in feedback if _row_matches_scope(item, selector)]
+        feedback_by_id = index_feedback_events(scoped_feedback)
         now = _now_ms()
-        table = self._metadata_table()
-        if table is None:
-            return {"changed": 0}
-        all_rows = [dict(row) for row in table.to_arrow().to_pylist()]
-        rows = [
-            row
-            for row in all_rows
-            if _row_matches_scope(
-                self._metadata_json(row)
-                if _row_scope_key(self._metadata_json(row))
-                else row,
-                selector,
-            )
-        ]
-        for row in rows:
-            metadata = self._metadata_json(row)
-            if metadata.get("neverForget") or str(metadata.get("memoryClass") or "") == "core":
+        where_suffix = f" AND id > '{self._dynamics_sql(cursor_id)}'" if cursor_id else ""
+        try:
+            from lancedb.query import ColumnOrdering
+            columns = [name for name in ("id", "agentId", "scopeKey", "metadataJson", "status")
+                       if name in schema_names]
+            sparse = [dict(row) for row in (
+                table.search().where(selector.where(where_suffix))
+                .select(columns)
+                .order_by([ColumnOrdering(column_name="id", ascending=True)])
+                .limit(max_rows + 1).to_list()
+            )]
+        except Exception:
+            return result(complete=False, failed=1, nextCursor=cursor_id,
+                          reason="dynamics-page-read-failed")
+        has_more = len(sparse) > max_rows
+        page = sparse[:max_rows]
+        page_ids: list[str] = []
+        sparse_by_id: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+        skipped = 0
+        duplicate = False
+        malformed_id = False
+        for row in page:
+            try:
+                memory_id = safe_memory_id(str(row.get("id") or ""))
+            except (TypeError, ValueError):
+                skipped += 1
+                malformed_id = True
                 continue
-            half_life = max(1, int(metadata.get("halfLifeDays") or 30))
-            last = int(metadata.get("lastDynamicsAt") or metadata.get("updatedAt") or metadata.get("sourceTimestamp") or now)
-            elapsed_days = max(0.0, (now - last) / 86_400_000)
-            strength = float(metadata.get("memoryStrength") or 1.0)
-            strength = max(0.0, min(1.0, strength * math.pow(0.5, elapsed_days / half_life) + adjustments.get(row["id"], 0)))
-            metadata["memoryStrength"] = strength
-            metadata["lastDynamicsAt"] = now
-            row["metadataJson"] = json.dumps(
-                metadata,
-                ensure_ascii=True,
-                sort_keys=True,
-                default=str,
-            )
-            changed += 1
-        if rows:
-            import lancedb
+            if memory_id in page_ids:
+                duplicate = True
+                continue
+            page_ids.append(memory_id)
+            verified = self._dynamics_verified_row(row, selector)
+            if verified is None:
+                skipped += 1
+                continue
+            _, metadata = verified
+            if metadata.get("neverForget") is True or metadata.get("neverForget") == 1 \
+                    or str(metadata.get("memoryClass") or "").strip().lower() == "core":
+                skipped += 1
+                continue
+            sparse_by_id[memory_id] = (row, metadata)
+        if duplicate or malformed_id:
+            return result(complete=False, failed=1, skipped=skipped, nextCursor=cursor_id,
+                          reason="duplicate-dynamics-id" if duplicate else "malformed-dynamics-id")
+        checkpoint = page_ids[-1] if has_more and page_ids else None
+        if not page:
+            try:
+                if time.monotonic() >= deadline:
+                    return result(complete=False, truncated=True, deadlineHit=True,
+                                  reason="deadline-before-checkpoint")
+                self._dynamics_commit_cursor(cursor_path, selector, None, complete=True)
+            except Exception:
+                return result(complete=False, failed=1, reason="checkpoint-write-failed")
+            return result(skipped=skipped)
 
-            database = lancedb.connect(str(self.data_dir / "lancedb" / self.agent_id))
-            database.create_table("metadata", data=all_rows, mode="overwrite")
-        return {"changed": changed}
+        selected_ids = sorted(sparse_by_id)
+        try:
+            full_rows = self._dynamics_exact_rows(table, selector, selected_ids)
+            read_version = int(table.version)
+        except Exception:
+            return result(complete=False, failed=1, skipped=skipped, nextCursor=cursor_id,
+                          reason="dynamics-exact-read-failed")
+        if len(full_rows) != len(selected_ids) or len({str(row.get("id")) for row in full_rows}) != len(selected_ids):
+            return result(complete=False, failed=1, skipped=skipped, nextCursor=cursor_id,
+                          reason="dynamics-exact-read-incomplete")
+
+        operation_rows: list[dict[str, Any]] = []
+        target_rows: list[dict[str, Any]] = []
+        for row in full_rows:
+            verified = self._dynamics_verified_row(row, selector)
+            if verified is None or verified[0] not in sparse_by_id:
+                return result(complete=False, failed=1, skipped=skipped, nextCursor=cursor_id,
+                              reason="dynamics-row-changed")
+            memory_id, metadata = verified
+            transformed = transform_metadata(
+                metadata, feedback_by_id.get(memory_id, ()), now_ms=now
+            )
+            skipped += int(transformed["skippedFeedback"])
+            if not transformed["changed"]:
+                continue
+            baseline = str(row.get("metadataJson") or "")
+            target_metadata = json.dumps(
+                transformed["metadata"], ensure_ascii=True, sort_keys=True,
+                separators=(",", ":"), default=str,
+            )
+            target = dict(row)
+            target["metadataJson"] = target_metadata
+            operation_rows.append({
+                "id": memory_id,
+                "baselineMetadata": baseline,
+                "baselineDigest": self._dynamics_digest(baseline),
+                "targetDigest": self._dynamics_digest(target_metadata),
+                "targetRowDigest": self._dynamics_row_digest(target),
+            })
+            target_rows.append(target)
+
+        complete = not has_more
+        if not operation_rows:
+            try:
+                if time.monotonic() >= deadline:
+                    return result(mode=requested_mode, complete=False, truncated=True,
+                                  deadlineHit=True, skipped=skipped, nextCursor=cursor_id,
+                                  reason="deadline-before-checkpoint")
+                self._dynamics_commit_cursor(cursor_path, selector, checkpoint, complete=complete)
+            except Exception:
+                return result(mode=requested_mode, complete=False, failed=1, skipped=skipped,
+                              nextCursor=cursor_id, reason="checkpoint-write-failed")
+            return result(mode=requested_mode, skipped=skipped, complete=complete,
+                          truncated=has_more, nextCursor=checkpoint)
+
+        mode = requested_mode
+        mode_reason = None
+        merge_insert = getattr(table, "merge_insert", None)
+        if mode == "batch" and not callable(merge_insert):
+            mode, mode_reason = "rows", "batch-unavailable"
+
+        prepared_operation = {
+            "schemaVersion": 1,
+            "job": "dynamics-decay",
+            "agentId": selector.agent_id,
+            "scopeKey": selector.scope_key,
+            "scopeType": selector.scope_type,
+            "fixedNow": now,
+            "cursorBefore": cursor_id,
+            "checkpointCursor": checkpoint,
+            "orderedIds": [item["id"] for item in operation_rows],
+            "schemaDigest": self._dynamics_schema_digest(table),
+            "tableVersion": read_version,
+            "rows": operation_rows,
+            "targetRows": target_rows,
+        }
+        if mode == "batch":
+            if time.monotonic() >= deadline:
+                return result(mode="batch", complete=False, truncated=True, deadlineHit=True,
+                              skipped=skipped, nextCursor=cursor_id, reason="deadline-before-prepare")
+            try:
+                self._dynamics_write_private(
+                    prepared_path, prepared_operation, max_bytes=8 * 1024 * 1024
+                )
+            except OverflowError:
+                mode, mode_reason = "rows", "prepared-operation-too-large"
+            except Exception:
+                return result(mode="batch", complete=False, failed=1, skipped=skipped,
+                              nextCursor=cursor_id, reason="prepared-operation-write-failed")
+        if mode == "batch":
+            if time.monotonic() >= deadline:
+                return result(mode="batch", complete=False, truncated=True, deadlineHit=True,
+                              skipped=skipped, nextCursor=cursor_id, reason="deadline-before-batch")
+            ok, reason_code = self._dynamics_execute_batch(
+                table, selector, operation_rows, target_rows, read_version
+            )
+            if not ok:
+                return result(mode="batch", complete=False, failed=1, skipped=skipped,
+                              nextCursor=cursor_id, reason=reason_code)
+            try:
+                if time.monotonic() >= deadline:
+                    return result(mode="batch", changed=len(operation_rows), complete=False,
+                                  truncated=True, deadlineHit=True, skipped=skipped,
+                                  nextCursor=cursor_id, reason="deadline-before-checkpoint")
+                self._dynamics_commit_cursor(cursor_path, selector, checkpoint, complete=complete)
+                prepared_path.unlink()
+            except Exception:
+                return result(mode="batch", changed=len(operation_rows), complete=False,
+                              failed=1, skipped=skipped, nextCursor=cursor_id,
+                              reason="checkpoint-write-failed")
+            return result(mode="batch", changed=len(operation_rows), skipped=skipped,
+                          complete=complete, truncated=has_more, nextCursor=checkpoint)
+
+        changed = 0
+        last_cursor = cursor_id
+        for item, target in zip(operation_rows, target_rows):
+            if time.monotonic() >= deadline:
+                return result(mode="rows", changed=changed, complete=False, truncated=True,
+                              deadlineHit=True, skipped=skipped, nextCursor=last_cursor,
+                              reason="deadline-before-row", modeReason=mode_reason)
+            where = (
+                f"id = '{self._dynamics_sql(str(item['id']))}' AND "
+                f"agentId = '{self._dynamics_sql(selector.agent_id)}' AND "
+                f"scopeKey = '{self._dynamics_sql(selector.scope_key)}' AND "
+                f"metadataJson = '{self._dynamics_sql(str(item['baselineMetadata']))}'"
+            )
+            try:
+                updated = table.update(where=where, values={"metadataJson": target["metadataJson"]})
+                count = getattr(updated, "rows_updated", None)
+                if count is not None and int(count) != 1:
+                    raise RuntimeError("row-cas-conflict")
+                if not self._dynamics_readback_matches(table, selector, [item], "targetDigest"):
+                    raise RuntimeError("row-readback-failed")
+            except Exception:
+                return result(mode="rows", changed=changed, complete=False, failed=1,
+                              skipped=skipped, nextCursor=last_cursor,
+                              reason="row-write-failed", modeReason=mode_reason)
+            changed += 1
+            last_cursor = str(item["id"])
+            try:
+                if time.monotonic() >= deadline:
+                    return result(mode="rows", changed=changed, complete=False,
+                                  truncated=True, deadlineHit=True, skipped=skipped,
+                                  nextCursor=cursor_id, reason="deadline-before-checkpoint",
+                                  modeReason=mode_reason)
+                self._dynamics_commit_cursor(cursor_path, selector, last_cursor, complete=False)
+            except Exception:
+                return result(mode="rows", changed=changed, complete=False, failed=1,
+                              skipped=skipped, nextCursor=cursor_id,
+                              reason="checkpoint-write-failed", modeReason=mode_reason)
+        try:
+            if time.monotonic() >= deadline:
+                return result(mode="rows", changed=changed, complete=False,
+                              truncated=True, deadlineHit=True, skipped=skipped,
+                              nextCursor=last_cursor, reason="deadline-before-checkpoint",
+                              modeReason=mode_reason)
+            self._dynamics_commit_cursor(cursor_path, selector, checkpoint, complete=complete)
+        except Exception:
+            return result(mode="rows", changed=changed, complete=False, failed=1,
+                          skipped=skipped, nextCursor=last_cursor,
+                          reason="checkpoint-write-failed", modeReason=mode_reason)
+        return result(mode="rows", changed=changed, skipped=skipped, complete=complete,
+                      truncated=has_more, nextCursor=checkpoint, modeReason=mode_reason)
 
     def _memory_rows(self) -> list[dict[str, Any]]:
         """Read authoritative memory cards without creating a namespace."""

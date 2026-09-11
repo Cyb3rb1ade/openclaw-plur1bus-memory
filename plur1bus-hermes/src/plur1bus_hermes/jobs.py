@@ -151,13 +151,15 @@ def run_jobs(
             def scoped_call(method: Callable[..., Any], *args: Any) -> Any:
                 return method(*args, **scope_kwargs) if scope_kwargs else method(*args)
 
+            # Retain the native one-hour cadence while sharing one gate across
+            # hourly, daily and all entry points.  "all" must never decay twice.
+            results["dynamics"] = gate.run(
+                "dynamics", 3_600, lambda: scoped_call(domain.run_dynamics)
+            )
             if mode in {"hourly", "all"}:
                 if (config.get("obsidianBridge") or {}).get("watch") is True:
                     from .obsidian_sync import watch_obsidian
                     results["obsidianWatch"] = gate.run("obsidian-watch", 3600, lambda: watch_obsidian(runtime))
-                results["dynamics"] = gate.run(
-                    "dynamics", 3_600, lambda: scoped_call(domain.run_dynamics)
-                )
                 results["proactiveCheck"] = (
                     gate.run("proactive-check", 1_800, domain.proactive_check)
                     if scope_type == "agent-private"
