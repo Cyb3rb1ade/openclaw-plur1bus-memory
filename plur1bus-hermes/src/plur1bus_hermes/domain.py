@@ -618,14 +618,17 @@ class Plur1busDomain:
         return {"queriedIds": queried_ids, "rows": rows, "complete": complete}
 
     @staticmethod
-    def _knowledge_source_is_live(row: Mapping[str, Any], *, now_ms: int | None = None) -> bool:
-        """Apply canonical lifecycle/TTL/epistemic gates, never valid-time expiry."""
+    def _knowledge_source_lifecycle(row: Mapping[str, Any], *, now_ms: int | None = None) -> str:
+        """Classify exact canonical lifecycle without normalizing malformed status."""
+        status = row.get("status")
+        if status in {"superseded", "archived", "deleted"}:
+            return "inactive"
+        if status != "active":
+            return "incomplete"
         current_ms = _now_ms() if now_ms is None else int(now_ms)
-        return (
-            str(row.get("status") or "active").strip().casefold() == "active"
-            and is_recallable_epistemic(row)
-            and is_entry_live(dict(row), current_ms)
-        )
+        if not is_recallable_epistemic(row) or not is_entry_live(dict(row), current_ms):
+            return "inactive"
+        return "eligible"
 
     @staticmethod
     def _canonical_knowledge_metadata(
@@ -1206,7 +1209,7 @@ class Plur1busDomain:
             if memory_id not in examined:
                 continue
             source = sources.get(memory_id)
-            if source is None or not self._knowledge_source_is_live(source):
+            if source is None or self._knowledge_source_lifecycle(source) != "eligible":
                 continue
             metadata = self._metadata_json(row)
             candidate = self._canonical_knowledge_metadata(metadata, source)
@@ -1285,7 +1288,10 @@ class Plur1busDomain:
         if not source_lookup["complete"] or len(sources) != 1:
             return {"confirmed": False, "reason": "memory-not-found"}
         source = sources[0]
-        if not self._knowledge_source_is_live(source):
+        lifecycle = self._knowledge_source_lifecycle(source)
+        if lifecycle == "incomplete":
+            return {"confirmed": False, "reason": "canonical-source-unavailable"}
+        if lifecycle != "eligible":
             return {"confirmed": False, "reason": "proposal-stale"}
         metadata = self._metadata_json(rows[0])
         cognition = {
@@ -1378,9 +1384,17 @@ class Plur1busDomain:
             row = rows_by_id.get(memory_id)
             source = sources_by_id.get(memory_id)
             canonical_fingerprint = ""
+            source_lifecycle = (
+                self._knowledge_source_lifecycle(source) if source is not None else ""
+            )
             if row is None or source is None:
                 lifecycle_reason = "missing"
-            elif is_invalidated(self._metadata_json(row)) or not self._knowledge_source_is_live(source):
+            elif source_lifecycle == "incomplete":
+                continue
+            elif (
+                is_invalidated(self._metadata_json(row))
+                or source_lifecycle == "inactive"
+            ):
                 lifecycle_reason = "invalidated"
             else:
                 canonical_fingerprint = content_fingerprint(

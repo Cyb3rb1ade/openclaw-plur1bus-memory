@@ -130,6 +130,84 @@ class CanonicalKnowledgeSourceTests(unittest.TestCase):
                 (self.domain.state_dir / "knowledge-promotions.jsonl").unlink()
                 self._create_canonical()
 
+    def test_malformed_canonical_status_emits_no_new_proposal(self) -> None:
+        selector = self.domain._scope_selector()
+        canonical = self.domain._memory_table().to_arrow().to_pylist()[0]
+        missing_status = object()
+        for label, status in (
+            ("missing", missing_status),
+            ("null", None),
+            ("blank", ""),
+            ("unknown", "quarantined"),
+            ("uppercase", "ACTIVE"),
+            ("whitespace", " active "),
+        ):
+            with self.subTest(status=label):
+                ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+                if ledger.exists():
+                    ledger.unlink()
+                row = dict(canonical)
+                if status is missing_status:
+                    row.pop("status", None)
+                else:
+                    row["status"] = status
+                lookup = {"queriedIds": [MEMORY_ID], "rows": [row], "complete": True}
+                with patch.object(self.domain, "_knowledge_sources_by_ids", return_value=lookup):
+                    result = self.domain.propose_knowledge_promotions()
+                self.assertEqual(result["proposed"], [])
+                self.assertFalse(ledger.exists())
+
+    def test_malformed_canonical_status_preserves_pending_and_denies_confirmation(self) -> None:
+        canonical = self.domain._memory_table().to_arrow().to_pylist()[0]
+        missing_status = object()
+        for label, status in (
+            ("missing", missing_status),
+            ("null", None),
+            ("blank", ""),
+            ("unknown", "quarantined"),
+            ("uppercase", "ACTIVE"),
+            ("whitespace", " active "),
+        ):
+            with self.subTest(status=label):
+                ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+                if ledger.exists():
+                    ledger.unlink()
+                knowledge_path = self.domain.workspace_dir / "KNOWLEDGE.md"
+                if knowledge_path.exists():
+                    knowledge_path.unlink()
+                proposal = self._proposal()
+                before = ledger.read_bytes()
+                row = dict(canonical)
+                if status is missing_status:
+                    row.pop("status", None)
+                else:
+                    row["status"] = status
+                lookup = {"queriedIds": [MEMORY_ID], "rows": [row], "complete": True}
+                with patch.object(self.domain, "_knowledge_sources_by_ids", return_value=lookup):
+                    result = self.domain.propose_knowledge_promotions()
+                    denied = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
+                self.assertEqual(result["proposed"], [])
+                self.assertEqual(ledger.read_bytes(), before)
+                self.assertFalse(denied["confirmed"])
+                self.assertFalse((self.domain.workspace_dir / "KNOWLEDGE.md").exists())
+                ledger.unlink()
+
+    def test_recognized_inactive_statuses_retire_pending(self) -> None:
+        for status in ("archived", "superseded", "deleted"):
+            with self.subTest(status=status):
+                proposal = self._proposal()
+                self.domain._memory_table().update(
+                    where=f"id = '{MEMORY_ID}'", values={"status": status}
+                )
+                self.domain.propose_knowledge_promotions()
+                ledger = self.domain.state_dir / "knowledge-promotions.jsonl"
+                events = [json.loads(line) for line in ledger.read_text().splitlines()]
+                own = [event for event in events if event.get("proposalId") == proposal["proposalId"]]
+                self.assertEqual(own[-1]["status"], "stale")
+                self.assertEqual(own[-1]["reason"], "invalidated")
+                ledger.unlink()
+                self._create_canonical()
+
     def test_canonical_content_and_type_are_the_proposal_authority(self) -> None:
         table = self.domain._memory_table()
         current = "The current canonical deployment decision requires two backups."
