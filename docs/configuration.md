@@ -405,6 +405,23 @@ Konfidenz, Nutzen und der Anleitung, der der Agent folgen würde. Mit
 - **Withdraw**: bereits angewandten Skill entfernen (Workshop-Verzeichnis des
   Skills wird gelöscht), Name sperren.
 
+Der Miner läuft sonntags um 05:00 (je Agent +15 min), also nach dem
+nächtlichen Speicher-Management: Konsolidierung 04:00–04:30,
+Persona-Evolution 04:15–04:25, GC 04:45, auto-accept-stale 04:50–04:54. Er
+bewertet damit genau die Erinnerungen, die diese Jobs zuvor angefasst haben.
+
+Vorschlägen aus Läufen vor 7.12.48 fehlt der Nutzen-Satz. Er lässt sich
+nachtragen:
+
+```bash
+openclaw plur1bus-command --agent <id> --session <key> "/plur1bus internal skill-benefit-backfill"
+```
+
+Das holt je Vorschlag ohne `benefit` einen Satz vom Modell (höchstens 25 je
+Lauf, optional `… skill-benefit-backfill 50`) und schreibt ihn ins Ledger. Der
+Workshop-Entwurf bleibt unverändert, weil sein Text an den Revisions-Hash
+gebunden ist, den die Freigabe prüft.
+
 Vorschläge aus der Zeit vor der Workshop-Anbindung haben keine Bindung und
 lassen sich nur ablehnen. Das Vorschlags-Ledger liegt je ACL-Partition unter
 `_neo/workspaces/acl-owner-v1_…/.adaptive-learning/skill-proposals.jsonl`;

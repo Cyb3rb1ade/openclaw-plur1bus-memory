@@ -7734,6 +7734,30 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   ...result,
                 });
               }
+              // 7.12.49: Nutzen-Satz fuer Vorschlaege aus Laeufen vor 7.12.48
+              // nachtragen. Liest die Ledger aller ACL-Partitionen des Agenten.
+              if (subKey === "skill-benefit-backfill") {
+                if (!skillMinerEnabled || !isLlmRouteAvailable(skillMinerLlmCfg)) {
+                  return formatJsonCommandResult({ job: "skill-benefit-backfill", skipped: true, reason: "not_configured" });
+                }
+                const { backfillProposalBenefits } = await import("./lib/jobs/skill-miner/benefit-backfill.js");
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const backfillLimit = Number.parseInt(id, 10);
+                const result = await backfillProposalBenefits({
+                  ledgerDirs: skillLedgerDirsFor(memoryCtx),
+                  llmCfg: withLlmCallContext(
+                    skillMinerLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                    { runtimeLlm: sessionRuntime },
+                  ),
+                  callLlm: callCommandLlm,
+                  ...(Number.isFinite(backfillLimit) ? { limit: backfillLimit } : {}),
+                  logger: api.logger,
+                });
+                api.logger?.info?.(`plur1bus internal skill-benefit-backfill[${internalAgent}]: ${JSON.stringify({ ...result, items: result.items?.length })}`);
+                return formatJsonCommandResult({ job: "skill-benefit-backfill", ...result });
+              }
               if (subKey === "afterthought") {
                 if ((cfg.afterthought?.enabled ?? true) === false
                   || !(skillMinerEnabled || mergingEnabled)
@@ -8063,7 +8087,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "skill-benefit-backfill", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild"] });
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");

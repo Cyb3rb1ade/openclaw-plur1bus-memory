@@ -210,6 +210,7 @@ export const DEPLOY_FILES = [
   "lib/jobs/skill-miner.js",
   "lib/jobs/skill-miner/nudge-renderer.js",
   "lib/jobs/skill-miner/proposal-writer.js",
+  "lib/jobs/skill-miner/benefit-backfill.js",
   "lib/metrics.js",
   // ── reminders / nudges ────────────────────────────────────────────────────
   "lib/reminder-extraction.js",

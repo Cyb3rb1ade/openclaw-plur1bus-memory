@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.49] — 2026-09-12
+
+### Hinzugefügt
+
+- **Nutzen-Sätze nachtragen.** `/plur1bus internal skill-benefit-backfill [n]`
+  holt für jeden offenen oder aktiven Vorschlag ohne `benefit` genau einen
+  Satz vom Modell und schreibt ihn ins Ledger der ACL-Partition (Standard
+  höchstens 25 je Lauf). Der Workshop-Entwurf bleibt unangetastet, sein Text
+  hängt am Revisions-Hash, den die Freigabe prüft. Die Vorschlagsfelder gehen
+  als Daten in den Prompt, nicht als Anweisungen.
+
+### Geändert
+
+- **Skill-Miner läuft sonntags um 05:00 statt 03:00.** Er bewertet genau die
+  Erinnerungen, die das nächtliche Speicher-Management vorher anfasst:
+  Konsolidierung 04:00–04:30, Persona-Evolution 04:15–04:25, GC 04:45,
+  auto-accept-stale 04:50–04:54. Vorher lag der Standard davor, auf dieser
+  Installation lag er auf 06:00.
+
+
 ## [7.12.48] — 2026-09-12
 
 ### Hinzugefügt
