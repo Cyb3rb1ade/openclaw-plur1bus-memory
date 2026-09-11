@@ -7354,7 +7354,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       timeoutMs: optimizePlan.timeoutMs,
                     });
                     lancedbOptimize = outcome?.ok
-                      ? { ok: true, ms: outcome.ms, keepVersionsHours: optimizePlan.keepVersionsHours, ...summarizeLancedbOptimize(outcome.stats, outcome.before, outcome.after) }
+                      ? { ok: true, ms: outcome.ms, keepVersionsHours: optimizePlan.keepVersionsHours, ...summarizeLancedbOptimize(outcome.stats, outcome.before, outcome.after, { attempts: outcome.attempts }) }
                       : { ok: false, reason: outcome?.reason || "unknown" };
                   } catch (optimizeErr) {
                     lancedbOptimize = { ok: false, error: String(optimizeErr?.message || optimizeErr) };
