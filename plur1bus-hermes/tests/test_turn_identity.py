@@ -12,6 +12,7 @@ from plur1bus_hermes.domain import Plur1busDomain
 from plur1bus_hermes.capture_journal import (
     MAX_RECEIPT_BYTES,
     read_receipt,
+    record_fingerprint,
     receipt_path,
     write_receipt,
 )
@@ -31,6 +32,40 @@ class TurnIdentityTests(unittest.TestCase):
 
     def _journal(self) -> list[dict]:
         return self.domain._read_jsonl(self.domain.neo_dir / "turn-journal.jsonl")
+
+    @staticmethod
+    def _file_snapshot(root: Path) -> dict[Path, bytes]:
+        return {
+            item.relative_to(root): item.read_bytes()
+            for item in root.rglob("*")
+            if item.is_file()
+        }
+
+    def _interrupt_after_episode_preparation(
+        self, root: Path, capture_id: str
+    ) -> tuple[Plur1busDomain, Path]:
+        domain = Plur1busDomain(root, "main")
+        original_append = domain._append_capture_journal_record
+
+        def interrupt_before_first_journal_append(path, record):
+            if record.get("role") == "user":
+                raise RuntimeError("injected interruption after episode preparation")
+            return original_append(path, record)
+
+        domain._append_capture_journal_record = interrupt_before_first_journal_append
+        with self.assertRaisesRegex(RuntimeError, "after episode preparation"):
+            domain.on_turn(
+                "user", "assistant", "session", capture_id=capture_id,
+                captured_at=self.captured_at,
+            )
+        domain._append_capture_journal_record = original_append
+        path = receipt_path(root, "main", capture_id)
+        receipt = read_receipt(path)
+        assert receipt is not None
+        self.assertEqual(receipt["state"], "prepared")
+        self.assertEqual(receipt["journal"], [])
+        self.assertFalse((domain.neo_dir / "turn-journal.jsonl").exists())
+        return domain, path
 
     def test_turn_record_id_is_stable_and_role_bound(self) -> None:
         user = turn_record_id(self.capture_id, "main", "scope", "session", "user")
@@ -230,6 +265,72 @@ class TurnIdentityTests(unittest.TestCase):
                 }
                 self.assertEqual(after, before)
                 self.assertEqual(callbacks, [])
+
+    def test_prepared_episode_descriptor_is_validated_before_journal_append(self) -> None:
+        def missing_record(receipt):
+            receipt["episodePlan"].pop("record")
+
+        def mismatched_length(receipt):
+            receipt["episodePlan"]["length"] += 1
+
+        def mismatched_fingerprint(receipt):
+            receipt["episodePlan"]["fingerprint"] = "0" * 64
+
+        def incoherent_identity(receipt):
+            record = receipt["episodePlan"]["record"]
+            record["sessionId"] = "different-session"
+            reconstructed = {**record, "summary": "user\nassistant"}
+            receipt["episodePlan"]["fingerprint"] = record_fingerprint(reconstructed)
+            receipt["episodePlan"]["length"] = len(
+                (json.dumps(reconstructed, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+                .encode("utf-8")
+            )
+
+        corruptions = {
+            "missing-record": missing_record,
+            "mismatched-length": mismatched_length,
+            "mismatched-fingerprint": mismatched_fingerprint,
+            "incoherent-identity": incoherent_identity,
+        }
+        for name, corrupt in corruptions.items():
+            with self.subTest(corruption=name):
+                root = self.root / name
+                capture_id = str(uuid.uuid4())
+                domain, path = self._interrupt_after_episode_preparation(root, capture_id)
+                receipt = read_receipt(path)
+                assert receipt is not None
+                corrupt(receipt)
+                write_receipt(path, receipt)
+                before = self._file_snapshot(root)
+
+                with self.assertRaisesRegex(ValueError, "episode (plan|record)"):
+                    domain.on_turn(
+                        "user", "assistant", "session", capture_id=capture_id,
+                        captured_at=self.captured_at,
+                    )
+
+                self.assertEqual(self._file_snapshot(root), before)
+
+    def test_committed_episode_snapshot_drift_is_rejected_without_mutation(self) -> None:
+        self.domain.on_turn(
+            "user", "assistant", "session", capture_id=self.capture_id,
+            captured_at=self.captured_at,
+        )
+        path = receipt_path(self.root, "main", self.capture_id)
+        receipt = read_receipt(path)
+        assert receipt is not None
+        receipt["episodePlan"]["record"].pop("sessionId")
+        receipt["episode"]["record"].pop("sessionId")
+        write_receipt(path, receipt)
+        before = self._file_snapshot(self.root)
+
+        with self.assertRaisesRegex(ValueError, "episode (plan|record)"):
+            self.domain.on_turn(
+                "user", "assistant", "session", capture_id=self.capture_id,
+                captured_at=self.captured_at,
+            )
+
+        self.assertEqual(self._file_snapshot(self.root), before)
 
     def test_receipt_omits_episode_summary_and_rejects_oversize_read(self) -> None:
         self.domain.on_turn("user body", "assistant body", "session", capture_id=self.capture_id,

@@ -91,6 +91,19 @@ capture-retry, and domain command passed 31 tests. This remains bounded receipt
 recovery, not cross-file transactional capture or a claim about live Hermes
 lifecycle behavior.
 
+Round 5 moves complete episode-descriptor validation ahead of the journal
+append loop. One shared preflight reconstructs the intentionally omitted
+summary from hash-bound inputs, requires the snapshot fields, verifies identity
+coherence, and checks the complete-record fingerprint and serialized byte
+length for both `prepared` and `committed` receipts. The regression starts from
+an actual post-preparation/pre-journal interruption and proves missing record,
+length drift, fingerprint drift, and self-consistent identity drift all reject
+with every fixture file byte-identical; a committed unused-snapshot mutation is
+also rejected. The exact focused turn-identity, capture-retry, and domain
+command passed 33 tests. First-admission preparation and append-then-crash
+recovery remain covered, while the existing non-transactional side-effect and
+receipt-loss boundaries are unchanged.
+
 The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.
