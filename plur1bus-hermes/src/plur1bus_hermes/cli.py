@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from . import __version__
 from .migrate import main as migrate_main
 from .provider import Plur1busMemoryProvider
 
@@ -19,7 +20,7 @@ def plur1bus_command(args) -> int:
     if getattr(args, "plur1bus_command", None) == "migrate":
         return migrate_main(getattr(args, "remaining_args", None))
     provider = Plur1busMemoryProvider()
-    print(json.dumps({"provider": provider.name, "available": provider.is_available(), "version": "7.12.44"}, sort_keys=True))
+    print(json.dumps({"provider": provider.name, "available": provider.is_available(), "version": __version__}, sort_keys=True))
     return 0
 
 
