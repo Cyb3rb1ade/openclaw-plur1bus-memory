@@ -2,13 +2,13 @@
 
 ## Verfügbarkeit und Geltungsbereich
 
-**Ab 7.12.7-hermes.4:** Das macOS-PKG enthält den grafischen
-Einrichtungsassistenten. Bei älteren Assets (einschließlich 7.12.7-hermes.3)
-startet man nach dem PKG noch `Install PLUR1BUS.command` in
+**Ab 7.12.47-hermes.0:** Das macOS-PKG enthält den grafischen
+Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
+`Install PLUR1BUS.command` in
 `/Applications/PLUR1BUS Installer`.
 
-Stand **8. September 2026**: Diese Anleitung beschreibt
-Hermes **7.12.7-hermes.4**. Portable Archive und Python-Wheels sind die
+Stand **11. September 2026**: Diese Anleitung beschreibt
+Hermes **7.12.47-hermes.0**. Portable Archive und Python-Wheels sind die
 plattformübergreifenden Referenzartefakte. Native Installer sind separat nach
 Architektur gekennzeichnet; Signatur und Notarisierung sind je Asset in der
 Release-Beschreibung ausgewiesen.

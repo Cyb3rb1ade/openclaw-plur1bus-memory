@@ -1,5 +1,17 @@
 # Distribution acceptance history
 
+## 7.12.47-hermes.0 — final release candidate
+
+The exact reviewed commit is `eff217227dc6c60603a811b4cd9ac4df1bfa884b`.
+The GitHub Actions matrix passed on macOS ARM64, Linux x86-64, Linux ARM64,
+Windows x86-64 and Windows ARM64. Each target completed the Python regression
+suite, dependency-resolution gate, real-wheel installation, LanceDB stub
+capture/recall smoke and file-rollback checks; Windows native executable smoke
+also passed. The macOS ARM64 PKG is Developer ID signed, notarized and stapled;
+Windows executables are intentionally unsigned and are labelled accordingly.
+The final release assets and SHA-256 manifest are generated from these exact
+artefacts. No productive memory migration or model download is implied.
+
 ## 7.12.7-hermes.4 — profile setup and activation
 
 Native graphical Apple Silicon setup and shared activation consistency checks.

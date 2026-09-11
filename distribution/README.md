@@ -1,10 +1,10 @@
 # PLUR1BUS for Hermes — portable distribution
 
 **Deutsch: [Installation Schritt für Schritt für alle Plattformen](INSTALLATION.de.md).**
-**New in 7.12.7-hermes.4:** Graphical macOS setup and guided
-all-profiles/activation defaults. Older assets, including `7.12.7-hermes.3`,
-still stage the terminal `.command` launcher.
-This document describes the `7.12.7-hermes.4` release. Portable archives and
+**New in 7.12.47-hermes.0:** Graphical macOS setup and guided
+all-profiles/activation defaults. Older assets may still stage the terminal
+`.command` launcher.
+This document describes the `7.12.47-hermes.0` release. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.
