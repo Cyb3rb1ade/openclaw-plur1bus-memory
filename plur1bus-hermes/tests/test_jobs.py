@@ -58,6 +58,15 @@ class _Runtime:
 
 
 class JobsTests(unittest.TestCase):
+    def test_daily_runs_shared_dynamics_gate_and_all_runs_it_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            daily = run_jobs(Path(temporary), {}, "main", "daily", runtime_factory=_Runtime)
+        self.assertIn("dynamics", daily["results"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            all_mode = run_jobs(Path(temporary), {}, "main", "all", runtime_factory=_Runtime)
+        self.assertEqual(list(all_mode["results"]).count("dynamics"), 1)
+
     def test_all_mode_runs_maintenance_and_writes_pending_reminders(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

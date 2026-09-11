@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from plur1bus_hermes.epistemic import is_recallable_epistemic
+from plur1bus_hermes.epistemic import epistemic_recall_where_clause, is_recallable_epistemic
 from plur1bus_hermes.runtime import Plur1busRuntime
 
 
@@ -43,6 +43,27 @@ class _Table:
 
 
 class EpistemicRuntimeRecallTests(unittest.TestCase):
+    def test_sql_normalization_matches_every_python_whitespace_character(self) -> None:
+        import lancedb
+
+        whitespace = [chr(codepoint) for codepoint in range(0x110000) if chr(codepoint).isspace()]
+        rows = [
+            {"id": str(uuid.uuid4()), "epistemicStatus": f"{character}invalidated{character}"}
+            for character in whitespace
+        ]
+        rows.extend((
+            {"id": str(uuid.uuid4()), "epistemicStatus": None},
+            {"id": str(uuid.uuid4()), "epistemicStatus": ""},
+            {"id": str(uuid.uuid4()), "epistemicStatus": "observed"},
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            table = lancedb.connect(directory).create_table("statuses", data=rows)
+            recalled = table.search().where(epistemic_recall_where_clause()).limit(len(rows)).to_list()
+        self.assertEqual(
+            sorted(row["epistemicStatus"] for row in recalled if row["epistemicStatus"] is not None),
+            ["", "observed"],
+        )
+
     def _runtime(self, directory: str) -> Plur1busRuntime:
         runtime = Plur1busRuntime(Path(directory), {}, "main")
         runtime._embedding.embed = lambda _text, purpose="query": [0.1, 0.2]  # type: ignore[method-assign]

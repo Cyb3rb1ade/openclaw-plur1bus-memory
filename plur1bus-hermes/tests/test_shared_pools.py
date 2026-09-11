@@ -119,8 +119,8 @@ class SharedPoolTests(unittest.TestCase):
                 "type": "observation", "sourceRole": "user",
             }
             for index, status in enumerate((
-                "\tINVALIDATED\n", "\ninvalidated\t", "\u00a0InVaLiDaTeD\u00a0",
-                "\u2003invalidated\u2003",
+                "\x1cINVALIDATED\x1c", "\x1dinvalidated\x1d",
+                "\x1eInVaLiDaTeD\x1e", "\x1finvalidated\x1f",
             )):
                 store.copy({**base, "id": f"invalid-{index}", "content": f"invalidated-{index}",
                             "vector": [0.0, 0.0], "epistemicStatus": status}, source_agent="main")
