@@ -17,6 +17,7 @@ from plur1bus_hermes.namespaces import binding_from_scope
 
 
 MEMORY_ID = "619c3d51-1d9d-4736-8bf9-91b38aff8246"
+MEMORY_TEXT = "The deploy process requires a preflight backup before migration."
 
 
 class KnowledgePromotionTests(unittest.TestCase):
@@ -32,10 +33,23 @@ class KnowledgePromotionTests(unittest.TestCase):
             "metadataJson": json.dumps({
                 "scopeKey": self.binding.scope_key,
                 "aclBindings": self.binding.as_dict(),
-                "text": "The deploy process requires a preflight backup before migration.",
+                "text": MEMORY_TEXT,
                 "type": "fact",
                 "importance": 0.9,
             }),
+        }])
+        database.create_table("memories", data=[{
+            "id": MEMORY_ID,
+            "agentId": "main",
+            "scopeKey": self.binding.scope_key,
+            "content": MEMORY_TEXT,
+            "type": "fact",
+            "status": "active",
+            "epistemicStatus": "observed",
+            "expiresAt": 0,
+            "validFrom": 0,
+            "validUntil": 0,
+            "vector": [0.0],
         }])
         self.domain = Plur1busDomain(self.root, "main", {"schicht15": {"enabled": True}})
         cognition_path = self.domain.neo_dir / "memory-cognition.jsonl"
@@ -79,6 +93,14 @@ class KnowledgePromotionTests(unittest.TestCase):
         result = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["reason"], "proposal-stale")
+
+    def test_confirmation_revalidates_canonical_invalidation(self) -> None:
+        proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
+        canonical = self.domain._memory_table()
+        canonical.update(where=f"id = '{MEMORY_ID}'", values={"epistemicStatus": "invalidated"})
+        result = self.domain.confirm_knowledge_promotion(proposal["proposalId"])
+        self.assertFalse(result["confirmed"])
+        self.assertFalse((self.domain.workspace_dir / "KNOWLEDGE.md").exists())
 
     def test_missing_source_retires_pending_without_erasing_history(self) -> None:
         proposal = self.domain.propose_knowledge_promotions()["proposed"][0]
@@ -134,7 +156,7 @@ class KnowledgePromotionTests(unittest.TestCase):
                     values={"metadataJson": json.dumps({
                         "scopeKey": self.binding.scope_key,
                         "aclBindings": self.binding.as_dict(),
-                        "text": "The deploy process requires a preflight backup before migration.",
+                        "text": MEMORY_TEXT,
                         "type": "fact",
                         "importance": 0.9,
                     })},
