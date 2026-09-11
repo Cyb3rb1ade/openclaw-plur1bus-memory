@@ -208,11 +208,12 @@ def analyze_text_tiered(
     text: str,
     config: dict[str, Any],
     *,
+    now: datetime | None = None,
     complete_json=None,
     t2_classifier: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Route emotion analysis through T1/T2/T3 with explicit fail-soft metadata."""
-    result = analyze_text(text)
+    result = analyze_text(text, now=now)
     emotion_config = dict(config.get("emotion") or {})
     requested = str(emotion_config.get("tier") or "auto").lower()
     if requested not in {"auto", "t1", "t2", "t3"}:

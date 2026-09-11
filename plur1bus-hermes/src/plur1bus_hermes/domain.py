@@ -64,6 +64,7 @@ from .turn_identity import (
     turn_record_id,
 )
 from .capture_journal import (
+    MAX_JOURNAL_LINE_BYTES,
     RECEIPT_VERSION,
     append_record,
     probe_record,
@@ -697,6 +698,7 @@ class Plur1busDomain:
         if captured_at is None:
             _unused, captured_at = mint_capture_identity()
         captured_at = canonical_captured_at(captured_at)
+        captured_reference = datetime.fromisoformat(captured_at)
         journal_path = neo_dir / "turn-journal.jsonl"
         turn_ids: list[str] = []
         turn_records: list[dict[str, Any]] = []
@@ -704,7 +706,7 @@ class Plur1busDomain:
             text = str(content or "").strip()
             if not text:
                 continue
-            analysis = analyze_text(text)
+            analysis = analyze_text(text, now=captured_reference)
             turn_id = turn_record_id(capture_id, self.agent_id, selector.scope_key, session_id, role)
             turn_ids.append(turn_id)
             turn_records.append({
@@ -730,9 +732,46 @@ class Plur1busDomain:
                 "capturedAt": captured_at,
                 "createdAt": captured_at,
             })
+        stored_plans = receipt.get("journalPlans") if receipt is not None else None
+        if isinstance(stored_plans, list) and len(stored_plans) == len(turn_records):
+            for plan, record in zip(stored_plans, turn_records, strict=True):
+                if not isinstance(plan, Mapping) or "derived" not in plan:
+                    continue
+                derived = plan.get("derived")
+                if not isinstance(derived, Mapping) or set(derived) != {
+                    "cognition", "speakerMappings"
+                } or not isinstance(derived.get("cognition"), Mapping):
+                    raise ValueError("capture receipt journal metadata is invalid")
+                stored_mappings = derived.get("speakerMappings")
+                current_segments = self._speakers.segment(str(record["content"]))
+                if (not isinstance(stored_mappings, Mapping)
+                        or any(not isinstance(key, str)
+                               or (value is not None and not isinstance(value, str))
+                               for key, value in stored_mappings.items())):
+                    raise ValueError("capture receipt journal metadata is invalid")
+                restored_segments: list[dict[str, Any]] = []
+                encountered_keys = {
+                    str(segment.get("speakerLabel") or "").strip().lower()
+                    for segment in current_segments
+                }
+                if set(stored_mappings) != encountered_keys:
+                    raise ValueError("capture receipt journal metadata is invalid")
+                for current in current_segments:
+                    speaker_key = str(current.get("speakerLabel") or "").strip().lower()
+                    speaker_id = stored_mappings[speaker_key]
+                    if speaker_id == "":
+                        raise ValueError("capture receipt journal metadata is invalid")
+                    restored_segments.append({
+                        "speakerLabel": current["speakerLabel"],
+                        "speakerId": speaker_id,
+                        "text": current["text"],
+                        "mapped": speaker_id is not None,
+                    })
+                record["cognition"] = dict(derived["cognition"])
+                record["speakerSegments"] = restored_segments
         if turn_ids:
             combined = "\n".join(text for text in (user.strip(), assistant.strip()) if text)
-            analysis = self._analyze_text(combined)
+            analysis = self._analyze_text(combined, now=captured_reference)
             episode_id = episode_record_id(capture_id, self.agent_id, selector.scope_key, session_id)
             episodes_path = neo_dir / "episodes.jsonl"
             def make_episode_record(mood: Mapping[str, Any]) -> dict[str, Any]:
@@ -803,13 +842,22 @@ class Plur1busDomain:
                 return episode_record, episode_offset, episode_length
 
             episode_record: dict[str, Any] | None = None
+            initial_receipt = receipt is None
             if receipt is None:
                 journal_offset = journal_path.stat().st_size if journal_path.is_file() else 0
                 plans = []
                 for record in turn_records:
                     line = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8") + b"\n"
                     plans.append({"id": record["id"], "offset": journal_offset,
-                                  "length": len(line), "fingerprint": record_fingerprint(record)})
+                                  "length": len(line), "fingerprint": record_fingerprint(record),
+                                  "derived": {
+                                      "cognition": record["cognition"],
+                                      "speakerMappings": {
+                                          str(segment["speakerLabel"]).strip().lower():
+                                              segment["speakerId"]
+                                          for segment in record["speakerSegments"]
+                                      },
+                                  }})
                     journal_offset += len(line)
                 receipt = {"version": RECEIPT_VERSION, "state": "preparing", "captureId": capture_id,
                            "agentId": self.agent_id, "scopeKey": selector.scope_key,
@@ -817,14 +865,36 @@ class Plur1busDomain:
                            "sourceHashes": source_hashes, "journal": [], "journalPlans": plans,
                            "episodePlan": None,
                            "episode": None}
-                write_receipt(path, receipt)
             plans = receipt.get("journalPlans")
             if not isinstance(plans, list) or len(plans) != len(turn_records):
                 raise ValueError("capture receipt journal plan is invalid")
+            descriptors: list[tuple[int, int]] = []
+            next_offset: int | None = None
             for plan, record in zip(plans, turn_records, strict=True):
-                if (not isinstance(plan, Mapping) or plan.get("id") != record["id"]
+                if (not isinstance(plan, Mapping)
+                        or set(plan) not in (
+                            {"id", "offset", "length", "fingerprint"},
+                            {"id", "offset", "length", "fingerprint", "derived"},
+                        )
+                        or plan.get("id") != record["id"]
                         or plan.get("fingerprint") != record_fingerprint(record)):
                     raise ValueError("capture receipt conflicts with journal plan")
+                plan_offset = receipt_integer(plan.get("offset"), name="journal offset")
+                plan_length = receipt_integer(
+                    plan.get("length"), name="journal length", minimum=1
+                )
+                if plan_length > MAX_JOURNAL_LINE_BYTES:
+                    raise ValueError("capture receipt journal length is invalid")
+                expected_length = len(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+                    + b"\n"
+                )
+                if plan_length != expected_length or (
+                    next_offset is not None and plan_offset != next_offset
+                ):
+                    raise ValueError("capture receipt journal range is invalid")
+                descriptors.append((plan_offset, plan_length))
+                next_offset = plan_offset + plan_length
             materialized = receipt.get("journal")
             if not isinstance(materialized, list) or len(materialized) > len(plans):
                 raise ValueError("capture receipt journal state is invalid")
@@ -850,6 +920,27 @@ class Plur1busDomain:
                     raise ValueError("capture receipt completion is invalid")
             else:
                 raise ValueError("capture receipt state is invalid")
+            journal_size = journal_path.stat().st_size if journal_path.is_file() else 0
+            missing_range = False
+            for index, (plan, (plan_offset, plan_length)) in enumerate(
+                zip(plans, descriptors, strict=True)
+            ):
+                range_end = plan_offset + plan_length
+                if journal_size >= range_end:
+                    if missing_range or not probe_record(
+                        journal_path, plan_offset, plan_length, str(plan["fingerprint"])
+                    ):
+                        detail = "target" if index < len(materialized) else "prepared range"
+                        raise ValueError(f"capture receipt journal {detail} drifted")
+                elif journal_size == plan_offset:
+                    missing_range = True
+                elif journal_size < plan_offset:
+                    if not missing_range:
+                        raise ValueError("capture receipt journal prepared range drifted")
+                else:
+                    raise ValueError("capture receipt journal prepared range drifted")
+            if initial_receipt:
+                write_receipt(path, receipt)
             if state == "preparing" and receipt_materialized is not None:
                 receipt_materialized()
             if state == "preparing":
@@ -874,13 +965,6 @@ class Plur1busDomain:
             # Validate every already-indexed target before any append.  The
             # next planned byte range also detects a full line appended just
             # before a crash but before its receipt state was published.
-            for item in materialized:
-                item_offset = receipt_integer(item.get("offset"), name="journal offset") if isinstance(item, Mapping) else -1
-                item_length = receipt_integer(item.get("length"), name="journal length", minimum=1) if isinstance(item, Mapping) else 0
-                if not isinstance(item, Mapping) or not probe_record(
-                        journal_path, item_offset, item_length,
-                        str(item.get("fingerprint") or "")):
-                    raise ValueError("capture receipt journal target drifted")
             assert isinstance(episode_plan, Mapping)
             episode_present = probe_record(
                 episodes_path, episode_offset, episode_length,
@@ -892,8 +976,7 @@ class Plur1busDomain:
                 raise ValueError("capture receipt episode target drifted")
             for index in range(len(materialized), len(plans)):
                 plan = dict(plans[index])
-                plan_offset = receipt_integer(plan.get("offset"), name="journal offset")
-                plan_length = receipt_integer(plan.get("length"), name="journal length", minimum=1)
+                plan_offset, plan_length = descriptors[index]
                 if probe_record(journal_path, plan_offset, plan_length, str(plan["fingerprint"])):
                     pass
                 elif (journal_path.stat().st_size if journal_path.is_file() else 0) == plan_offset:
@@ -2979,13 +3062,14 @@ class Plur1busDomain:
         """Attach the runtime-owned internal LLM backend."""
         self._llm_backend = backend
 
-    def _analyze_text(self, text: str) -> dict[str, Any]:
+    def _analyze_text(self, text: str, *, now: datetime | None = None) -> dict[str, Any]:
         complete = None
         if self._llm_backend is not None and self._llm_backend.available():
             complete = self._llm_backend.complete_json
         return analyze_text_tiered(
             text,
             self.config,
+            now=now,
             complete_json=complete,
         )
 

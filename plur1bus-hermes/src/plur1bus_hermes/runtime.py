@@ -25,6 +25,7 @@ from .cache import EmbeddingCache
 from .domain import Plur1busDomain
 from .epistemic import (
     decide_epistemic_status_for_capture,
+    epistemic_recall_where_clause,
     ensure_epistemic_cutoff,
     is_missing_epistemic_status_column_error,
     is_recallable_epistemic,
@@ -1126,10 +1127,7 @@ class Plur1busRuntime:
         def predicate_set(legacy_where: str, *, include_epistemic: bool) -> tuple[str, str, str]:
             scoped_where = legacy_where
             if include_epistemic:
-                scoped_where += (
-                    " AND (epistemicStatus IS NULL OR btrim(epistemicStatus) = '' "
-                    "OR lower(btrim(epistemicStatus)) != 'invalidated')"
-                )
+                scoped_where += f" AND {epistemic_recall_where_clause()}"
             expiry_where = (
                 f"{scoped_where} AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"
             )

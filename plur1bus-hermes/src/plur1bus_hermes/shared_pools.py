@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .epistemic import is_missing_epistemic_status_column_error
+from .epistemic import epistemic_recall_where_clause, is_missing_epistemic_status_column_error
 from .valid_time import is_missing_validity_column_error, validity_where_clause
 
 
@@ -229,10 +229,7 @@ class SharedPoolStore:
             include_epistemic = "epistemicStatus" in _schema_names(table)
             scoped_where = base_where
             if include_epistemic:
-                scoped_where += (
-                    " AND (epistemicStatus IS NULL OR btrim(epistemicStatus) = '' "
-                    "OR lower(btrim(epistemicStatus)) != 'invalidated')"
-                )
+                scoped_where += f" AND {epistemic_recall_where_clause()}"
             expiry_where = scoped_where
             if now_ms is not None:
                 expiry_where += f" AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > {now_ms})"

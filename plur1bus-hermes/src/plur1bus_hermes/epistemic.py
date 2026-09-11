@@ -40,7 +40,15 @@ _NON_USER_ORIGINS = frozenset({"cron", "internal", "dream"})
 def is_recallable_epistemic(row: Mapping[str, Any]) -> bool:
     """Return whether a row has not been explicitly epistemically invalidated."""
     value = row.get("epistemicStatus")
-    return value is None or str(value).strip().casefold() != "invalidated"
+    return value is None or str(value).strip().lower() != "invalidated"
+
+
+def epistemic_recall_where_clause(column: str = "epistemicStatus") -> str:
+    """Match Python ``strip().lower()`` invalidation before a LanceDB limit."""
+    return (
+        f"({column} IS NULL OR lower(regexp_replace({column}, "
+        r"'^\s+|\s+$', '', 'g')) != 'invalidated')"
+    )
 
 
 def is_missing_epistemic_status_column_error(error: BaseException) -> bool:
