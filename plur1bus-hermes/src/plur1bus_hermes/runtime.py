@@ -625,7 +625,9 @@ class Plur1busRuntime:
         embedding_config["_scopeId"] = "shared" if scope == "shared" else self.agent_id
         self._embedding = EmbeddingBackend(embedding_config, data_dir)
         self._reranker = RerankerBackend(dict(config.get("reranker", {})), data_dir.parent)
-        self._domain = Plur1busDomain(data_dir, self.agent_id, config)
+        self._domain = Plur1busDomain(
+            data_dir, self.agent_id, config, metadata_path=self._writer_route.path
+        )
         llm_cache_config = dict(config.get("llmResultCache", {}))
         for upstream, native in {
             "llmResultCacheTtlMs": "ttlMs", "llmResultCacheMaxEntries": "maxEntries",

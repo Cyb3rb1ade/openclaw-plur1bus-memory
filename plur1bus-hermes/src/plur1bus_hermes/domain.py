@@ -147,6 +147,14 @@ def _row_matches_scope(row: Mapping[str, Any], selector: _ScopeSelector) -> bool
     return selector.include_legacy_private and row_scope_key == legacy_agent_private_scope_key()
 
 
+def _scope_key_matches_selector(scope_key: Any, selector: _ScopeSelector) -> bool:
+    """Accept the canonical key and the pre-Hermes private key for compatibility reads."""
+    normalized = str(scope_key or "").strip()
+    return normalized == selector.scope_key or (
+        selector.include_legacy_private and normalized == legacy_agent_private_scope_key()
+    )
+
+
 class Plur1busDomain:
     """Implement graph, vault, dynamics, dreaming, reminder, and feedback features."""
 
@@ -155,10 +163,16 @@ class Plur1busDomain:
         data_dir: Path,
         agent_id: str,
         config: dict[str, Any] | None = None,
+        metadata_path: Path | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.config = dict(config or {})
         self.agent_id = safe_agent_id(agent_id)
+        # Metadata follows the runtime's resolved writer namespace.  Keep the
+        # historical default when Domain is constructed directly by callers.
+        self._metadata_path = Path(metadata_path) if metadata_path is not None else (
+            data_dir / "lancedb" / self.agent_id
+        )
         # Knowledge is prompt-adjacent, so bind this Domain instance to the
         # verified writer generation that existed when it was captured.  A
         # later pointer switch must require a fresh Domain/runtime instead of
@@ -2709,7 +2723,7 @@ class Plur1busDomain:
     ) -> bool:
         """Reject any embedded owner claim that disagrees with top-level authority."""
         direct_scope = str(metadata.get("scopeKey") or "").strip()
-        if direct_scope and direct_scope != selector.scope_key:
+        if direct_scope and not _scope_key_matches_selector(direct_scope, selector):
             return False
         direct_agent = str(metadata.get("agentId") or "").strip()
         if direct_agent and direct_agent != selector.agent_id:
@@ -2724,7 +2738,7 @@ class Plur1busDomain:
         acl_type = str(acl.get("scopeType") or acl.get("scope_type") or "").strip()
         return (
             acl_agent == selector.agent_id
-            and acl_scope == selector.scope_key
+            and _scope_key_matches_selector(acl_scope, selector)
             and (not acl_type or acl_type == selector.scope_type)
         )
 
@@ -2779,9 +2793,8 @@ class Plur1busDomain:
             memory_id = safe_memory_id(str(row.get("id") or ""))
         except (TypeError, ValueError):
             return None
-        if (
-            str(row.get("agentId") or "") != selector.agent_id
-            or str(row.get("scopeKey") or "") != selector.scope_key
+        if str(row.get("agentId") or "") != selector.agent_id or not _scope_key_matches_selector(
+            row.get("scopeKey"), selector
         ):
             return None
         metadata = self._metadata_json(dict(row))
@@ -2834,11 +2847,14 @@ class Plur1busDomain:
             return False, "table-version-changed"
         clauses = []
         for item in operation_rows:
+            row_scope_key = str(item.get("scopeKey") or "").strip()
+            if not _scope_key_matches_selector(row_scope_key, selector):
+                return False, "batch-scope-mismatch"
             clauses.append(
                 "(" + " AND ".join((
                     f"target.id = '{self._dynamics_sql(str(item['id']))}'",
                     f"target.agentId = '{self._dynamics_sql(selector.agent_id)}'",
-                    f"target.scopeKey = '{self._dynamics_sql(selector.scope_key)}'",
+                    f"target.scopeKey = '{self._dynamics_sql(row_scope_key)}'",
                     f"target.metadataJson = '{self._dynamics_sql(str(item['baselineMetadata']))}'",
                 )) + ")"
             )
@@ -2955,7 +2971,8 @@ class Plur1busDomain:
                         and isinstance(row, Mapping)
                         and item.get("id") == row.get("id")
                         and row.get("agentId") == selector.agent_id
-                        and row.get("scopeKey") == selector.scope_key
+                        and _scope_key_matches_selector(row.get("scopeKey"), selector)
+                        and item.get("scopeKey") == row.get("scopeKey")
                         and set(row) == schema_names
                         and self._dynamics_verified_row(row, selector) is not None
                         and self._dynamics_digest(str(item.get("baselineMetadata") or ""))
@@ -3115,6 +3132,7 @@ class Plur1busDomain:
             target["metadataJson"] = target_metadata
             operation_rows.append({
                 "id": memory_id,
+                "scopeKey": str(row.get("scopeKey") or ""),
                 "baselineMetadata": baseline,
                 "baselineDigest": self._dynamics_digest(baseline),
                 "targetDigest": self._dynamics_digest(target_metadata),
@@ -3204,7 +3222,7 @@ class Plur1busDomain:
             where = (
                 f"id = '{self._dynamics_sql(str(item['id']))}' AND "
                 f"agentId = '{self._dynamics_sql(selector.agent_id)}' AND "
-                f"scopeKey = '{self._dynamics_sql(selector.scope_key)}' AND "
+                f"scopeKey = '{self._dynamics_sql(str(item.get('scopeKey') or ''))}' AND "
                 f"metadataJson = '{self._dynamics_sql(str(item['baselineMetadata']))}'"
             )
             try:
@@ -4154,12 +4172,11 @@ class Plur1busDomain:
         return metadata
 
     def _store_metadata(self, record: dict[str, Any], *, importance: float | None = None) -> None:
-        agent_dir = self.data_dir / "lancedb" / self.agent_id
         try:
             import lancedb
         except ImportError:
             return
-        database = lancedb.connect(str(agent_dir))
+        database = lancedb.connect(str(self._metadata_path))
         metadata = self._metadata_for(record, importance=importance)
         row = {
             "id": record["id"],
@@ -4490,7 +4507,7 @@ class Plur1busDomain:
     def _metadata_table(self) -> Any | None:
         try:
             import lancedb
-            database = lancedb.connect(str(self.data_dir / "lancedb" / self.agent_id))
+            database = lancedb.connect(str(self._metadata_path))
             return database.open_table("metadata") if "metadata" in database.table_names() else None
         except Exception:
             return None

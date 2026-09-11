@@ -12,7 +12,10 @@ from unittest.mock import patch
 import lancedb
 
 from plur1bus_hermes.domain import Plur1busDomain
-from plur1bus_hermes.namespaces import binding_from_scope
+from plur1bus_hermes.namespaces import (
+    binding_from_scope,
+    legacy_agent_private_scope_key,
+)
 
 
 class Dynamics747Tests(unittest.TestCase):
@@ -55,6 +58,56 @@ class Dynamics747Tests(unittest.TestCase):
         return lancedb.connect(str(self.root / "lancedb" / "main")).open_table(
             "metadata"
         ).to_arrow().to_pylist()
+
+    def _all_at(self, path: Path):
+        return lancedb.connect(str(path)).open_table("metadata").to_arrow().to_pylist()
+
+    def test_legacy_private_rows_are_decay_eligible_and_keep_legacy_cas_key(self):
+        """Pre-Hermes private rows remain writable during compatibility reads."""
+        memory_id = str(uuid.uuid4())
+        legacy_key = legacy_agent_private_scope_key()
+        row = {
+            "id": memory_id,
+            "agentId": "main",
+            "scopeKey": legacy_key,
+            "opaqueColumn": "legacy-private",
+            "metadataJson": json.dumps({
+                "scopeKey": legacy_key,
+                "status": "active",
+                "memoryStrength": 1.0,
+                "halfLifeDays": 30,
+                "lastDynamicsAt": self.now - 86_400_000,
+                "escapeText": "legacy private",
+            }, sort_keys=True),
+        }
+        self._create([row])
+        domain = Plur1busDomain(self.root, "main")
+        with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
+            result = domain.run_dynamics()
+        self.assertEqual(result["changed"], 1)
+        updated = self._all()[0]
+        self.assertEqual(updated["scopeKey"], legacy_key)
+        self.assertNotEqual(updated["metadataJson"], row["metadataJson"])
+
+    def test_dynamics_uses_configured_writer_namespace_metadata_path(self):
+        """Dynamics must mutate the resolved writer namespace, not the legacy default path."""
+        writer_path = self.root / "lancedb-namespaces" / "writer" / "main"
+        writer_path.parent.mkdir(parents=True)
+        row = self._row(str(uuid.uuid4()), self.owner)
+        lancedb.connect(str(writer_path)).create_table("metadata", data=[row])
+        config = {
+            "namespaces": {
+                "activeWriteNamespace": "writer",
+                "activeRecallNamespaces": ["writer"],
+            },
+            "dailyConsolidation": {"dynamicsDecayMaxRows": 3, "decayMode": "batch"},
+        }
+        domain = Plur1busDomain(self.root, "main", config, metadata_path=writer_path)
+        with patch("plur1bus_hermes.domain._now_ms", return_value=self.now):
+            result = domain.run_dynamics(acl_bindings=self.owner.as_dict())
+        self.assertEqual(result["changed"], 1)
+        self.assertNotEqual(self._all_at(writer_path)[0]["metadataJson"], row["metadataJson"])
+        self.assertFalse((self.root / "lancedb" / "main").exists())
 
     def test_real_batch_is_one_commit_bounded_resumable_and_preserves_foreign_full_rows(self):
         owned_ids = sorted(str(uuid.uuid4()) for _ in range(3))
