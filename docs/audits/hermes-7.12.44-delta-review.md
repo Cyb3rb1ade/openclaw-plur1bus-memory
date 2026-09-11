@@ -248,6 +248,34 @@ missing-audit-JSON error, before the audit document was created.
 
 ## Historical snapshot rule
 
+## Storage Task 5 — invalidated recall exclusion (current partial audit)
+
+Native recall was reviewed specifically for the upstream invalidated-row
+contract. `runtime.py` now reads every opened private table schema without a
+read migration and pushes a case/whitespace-normalized invalidated exclusion
+before the candidate limit only when `epistemicStatus` exists. It retains the
+existing scope ACL, active status, expiry, and optional `validAt` clauses.
+`shared_pools.py` applies the same schema-aware pre-limit exclusion to each
+authorized physical pool. Both paths also use the pure post-retrieval gate and
+the final booster gate, so a stale adapter or booster cannot leak an invalidated
+row.
+
+The narrow schema-race policy is bounded: an error naming only
+`epistemicStatus` retries once without that one clause, then continues through
+the existing validity/expiry retry ladder. It does not create or migrate a
+read-only namespace; errors naming multiple lifecycle columns or unrelated
+query failures propagate. Native real-LanceDB regressions cover twenty nearer
+invalidated candidates plus observed, null, blank, and no-column legacy rows.
+Focused fake-table regressions cover both orders of
+`epistemicStatus` with missing validity/expiry columns for private and shared
+routes, preserving ACL/status and each still-supported clause.
+
+Evidence: installed Hermes interpreter with `-B` and task-specific temporary
+paths ran `test_epistemic_recall.py` (9 tests) and `test_shared_pools.py` (5
+tests), all passing after the corrective round. This is a narrow source/runtime
+recall audit only; it is not a release, production migration, host lifecycle,
+or complete-parity claim.
+
 The later foundation gate reads `FEATURES`, `COVERAGE_710`, and
 `COVERAGE_712` directly from
 `c12ec2bba63d74ac8add8782ab6761472b4149c6:plur1bus-hermes/src/plur1bus_hermes/parity.py`.

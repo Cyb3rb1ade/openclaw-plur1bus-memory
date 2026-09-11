@@ -80,3 +80,31 @@ behavior in the existing valid-time test; its test passed.
 - This task does not activate installed profiles, download models, run a live
   migration, or publish anything. Installed Python was used only read-only for
   tests with `-B` and temporary homes.
+
+## Review round 1 corrective evidence
+
+The initial narrow `epistemicStatus` schema-race fallback issued its first
+no-epistemic query directly. A later missing `validFrom`/`validUntil` or
+`expiresAt` error therefore bypassed the existing lifecycle retry ladder.
+
+RED command:
+
+```sh
+task5_round1_home=$(mktemp -d)
+HOME="$task5_round1_home" PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m unittest discover -s plur1bus-hermes/tests -p test_epistemic_recall.py -v
+```
+
+Output before the corrective runtime change: `Ran 9 tests in 0.735s` — four
+errors for the sequential `epistemicStatus -> validFrom`, `validFrom ->
+epistemicStatus`, `epistemicStatus -> expiresAt`, and `expiresAt ->
+epistemicStatus` races. The matching Shared Pool RED command produced the same
+four errors (`Ran 5 tests in 0.538s`).
+
+GREEN used those same commands with `task5_round1_home` as a task-specific
+temporary path: runtime output `Ran 9 tests in 0.514s` — `OK`; Shared Pool
+output `Ran 5 tests in 0.530s` — `OK`.
+
+The real-LanceDB primary fixture now creates a nullable `epistemicStatus`
+schema and a separate no-column legacy schema. With twenty nearer invalidated
+vectors it verifies observed, `None`, blank, and absent-column rows remain
+eligible while no invalidated content is returned.

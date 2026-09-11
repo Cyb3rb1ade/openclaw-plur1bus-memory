@@ -1317,40 +1317,55 @@ class Plur1busRuntime:
     def _search_recall_rows(table: Any, vector: list[float], where_clause: str,
                             expiry_where_clause: str, legacy_where_clause: str, limit: int,
                             valid_at: int | None,
-                            epistemic_fallback: tuple[str, str, str] | None = None) -> list[dict[str, Any]]:
+                            epistemic_fallback: tuple[str, str, str] | None = None,
+                            retried_columns: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
         """Search with only narrow legacy validity/expiry-column retries."""
         try:
             return table.search(vector).where(where_clause).limit(limit).to_list()
         except Exception as error:
-            if (epistemic_fallback is not None
+            if ("epistemic" not in retried_columns and epistemic_fallback is not None
                     and is_missing_epistemic_status_column_error(error)):
-                fallback_where, _fallback_expiry, _fallback_legacy = epistemic_fallback
-                return table.search(vector).where(fallback_where).limit(limit).to_list()
+                fallback_where, fallback_expiry, fallback_legacy = epistemic_fallback
+                return Plur1busRuntime._search_recall_rows(
+                    table, vector, fallback_where, fallback_expiry, fallback_legacy, limit, valid_at,
+                    None, retried_columns | {"epistemic"},
+                )
             error_text = str(error).lower()
             missing_expiry = "expiresat" in error_text and any(token in error_text for token in (
                 "not found", "does not exist", "no such column", "unknown column", "missing column",
             ))
-            if is_missing_validity_column_error(error):
-                try:
-                    return table.search(vector).where(expiry_where_clause).limit(limit).to_list()
-                except Exception as retry_error:
-                    retry_text = str(retry_error).lower()
-                    if "expiresat" not in retry_text or not any(token in retry_text for token in (
-                        "not found", "does not exist", "no such column", "unknown column", "missing column",
-                    )):
-                        raise
-                    return table.search(vector).where(legacy_where_clause).limit(limit).to_list()
-            if missing_expiry:
+            if "validity" not in retried_columns and is_missing_validity_column_error(error):
+                fallback = None
+                if epistemic_fallback is not None:
+                    _fallback_where, fallback_expiry, fallback_legacy = epistemic_fallback
+                    fallback = (fallback_expiry, fallback_expiry, fallback_legacy)
+                return Plur1busRuntime._search_recall_rows(
+                    table, vector, expiry_where_clause, expiry_where_clause, legacy_where_clause, limit, None,
+                    fallback, retried_columns | {"validity"},
+                )
+            if "expiry" not in retried_columns and missing_expiry:
                 if valid_at is None:
-                    return table.search(vector).where(legacy_where_clause).limit(limit).to_list()
-                try:
-                    return table.search(vector).where(
-                        f"{legacy_where_clause} AND {validity_where_clause(valid_at)}"
-                    ).limit(limit).to_list()
-                except Exception as retry_error:
-                    if not is_missing_validity_column_error(retry_error):
-                        raise
-                    return table.search(vector).where(legacy_where_clause).limit(limit).to_list()
+                    fallback = None
+                    if epistemic_fallback is not None:
+                        _fallback_where, _fallback_expiry, fallback_legacy = epistemic_fallback
+                        fallback = (fallback_legacy, fallback_legacy, fallback_legacy)
+                    return Plur1busRuntime._search_recall_rows(
+                        table, vector, legacy_where_clause, legacy_where_clause, legacy_where_clause, limit, None,
+                        fallback, retried_columns | {"expiry"},
+                    )
+                validity_where = f"{legacy_where_clause} AND {validity_where_clause(valid_at)}"
+                fallback = None
+                if epistemic_fallback is not None:
+                    _fallback_where, _fallback_expiry, fallback_legacy = epistemic_fallback
+                    fallback = (
+                        f"{fallback_legacy} AND {validity_where_clause(valid_at)}",
+                        fallback_legacy,
+                        fallback_legacy,
+                    )
+                return Plur1busRuntime._search_recall_rows(
+                    table, vector, validity_where, legacy_where_clause, legacy_where_clause, limit, valid_at,
+                    fallback, retried_columns | {"expiry"},
+                )
             raise
 
     def _refine_query(self, semantic_query: str, refinement: Any) -> str:

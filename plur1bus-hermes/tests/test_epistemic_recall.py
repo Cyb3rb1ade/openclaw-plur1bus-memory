@@ -61,7 +61,10 @@ class EpistemicRuntimeRecallTests(unittest.TestCase):
         self.assertTrue(is_recallable_epistemic({"epistemicStatus": object()}))
 
     def test_real_lancedb_invalidated_rows_cannot_starve_an_observed_hit(self) -> None:
-        """The primary ANN predicate excludes invalidated rows before its limit."""
+        """Real nullable and legacy schemas retain eligible rows before the limit."""
+        import lancedb
+        import pyarrow as pa
+
         with tempfile.TemporaryDirectory() as directory:
             runtime = Plur1busRuntime(Path(directory), {"embedding": {"dimensions": 2}}, "main")
             runtime._embedding.embed = lambda _text, purpose="passage": [1.0, 0.0]  # type: ignore[method-assign]
@@ -74,7 +77,20 @@ class EpistemicRuntimeRecallTests(unittest.TestCase):
             try:
                 runtime._remember("observed eligible memory", "session", "user")
                 table, _ = runtime._table(create=False)
-                observed = table.search().limit(1).to_list()[0]
+                observed = dict(table.search().limit(1).to_list()[0])
+                observed.pop("_distance", None)
+                nullable_schema = pa.schema([
+                    pa.field(field.name, field.type, nullable=True)
+                    if field.name == "epistemicStatus" else field
+                    for field in table.schema
+                ])
+                nullable_rows = [
+                    {**observed, "id": str(uuid.uuid4()), "content": "observed eligible memory", "vector": [1.0, 0.0]},
+                    {**observed, "id": str(uuid.uuid4()), "content": "null legacy memory", "epistemicStatus": None,
+                     "vector": [1.0, 0.0]},
+                    {**observed, "id": str(uuid.uuid4()), "content": "blank legacy memory", "epistemicStatus": "",
+                     "vector": [1.0, 0.0]},
+                ]
                 invalidated = []
                 for number in range(20):
                     invalidated.append({
@@ -84,13 +100,28 @@ class EpistemicRuntimeRecallTests(unittest.TestCase):
                         "epistemicStatus": "invalidated",
                         "vector": [0.0, 0.0],
                     })
-                table.add(invalidated)
+                nullable_rows.extend(invalidated)
+                nullable = lancedb.connect(str(Path(directory) / "nullable")).create_table(
+                    "memories", data=pa.Table.from_pylist(nullable_rows, schema=nullable_schema),
+                )
+                legacy_schema = pa.schema([field for field in nullable_schema if field.name != "epistemicStatus"])
+                legacy = lancedb.connect(str(Path(directory) / "legacy")).create_table(
+                    "memories",
+                    data=pa.Table.from_pylist([{
+                        key: value for key, value in observed.items() if key != "epistemicStatus"
+                    } | {"id": str(uuid.uuid4()), "content": "absent column legacy memory", "vector": [1.0, 0.0]}],
+                    schema=legacy_schema),
+                )
+                runtime._recall_tables = lambda: [("nullable", nullable), ("legacy", legacy)]  # type: ignore[method-assign]
                 runtime._embedding.embed = lambda _text, purpose="query": [0.0, 0.0]  # type: ignore[method-assign]
-                recalled = runtime.recall("memory", limit=1)
+                recalled = runtime.recall("memory", limit=4)
             finally:
                 runtime.shutdown()
 
         self.assertIn("observed eligible memory", recalled)
+        self.assertIn("null legacy memory", recalled)
+        self.assertIn("blank legacy memory", recalled)
+        self.assertIn("absent column legacy memory", recalled)
         self.assertNotIn("invalidated nearest memory", recalled)
 
     def test_refined_search_keeps_epistemic_predicate_and_final_gate(self) -> None:
@@ -177,6 +208,36 @@ class EpistemicRuntimeRecallTests(unittest.TestCase):
         self.assertNotIn("epistemicStatus", table.where_calls[1])
         self.assertIn("expiresAt", table.where_calls[1])
         self.assertIn("validFrom <=", table.where_calls[1])
+
+    def test_epistemic_race_and_later_lifecycle_races_preserve_the_retry_ladder(self) -> None:
+        for first, second, surviving_clause in (
+            ("epistemicStatus", "validFrom", "expiresAt"),
+            ("validFrom", "epistemicStatus", "expiresAt"),
+            ("epistemicStatus", "expiresAt", "status = 'active'"),
+            ("expiresAt", "epistemicStatus", "status = 'active'"),
+        ):
+            with self.subTest(first=first, second=second):
+                table = _Table(
+                    [{"id": "legacy", "content": "race legacy", "status": "active", "expiresAt": 0}],
+                    schema_names=("epistemicStatus",),
+                    errors=[
+                        RuntimeError(f"column {first} does not exist"),
+                        RuntimeError(f"column {second} does not exist"),
+                    ],
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    runtime = self._runtime(directory)
+                    runtime._recall_tables = lambda: [("race", table)]  # type: ignore[method-assign]
+                    runtime._domain.boost_recall = lambda rows, _table, _limit, **_kwargs: rows  # type: ignore[method-assign]
+                    try:
+                        recalled = runtime.recall("query", valid_at="2026-01-01T00:00:00Z")
+                    finally:
+                        runtime.shutdown()
+                self.assertIn("race legacy", recalled)
+                self.assertEqual(len(table.where_calls), 3)
+                self.assertIn("epistemicStatus", table.where_calls[0])
+                self.assertNotIn("epistemicStatus", table.where_calls[-1])
+                self.assertIn(surviving_clause, table.where_calls[-1])
 
     def test_unrelated_search_errors_propagate_without_epistemic_retry(self) -> None:
         table = _Table([], schema_names=("epistemicStatus",),
