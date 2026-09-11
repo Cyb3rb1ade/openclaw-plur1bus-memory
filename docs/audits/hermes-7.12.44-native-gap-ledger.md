@@ -26,6 +26,12 @@ before candidate completion; candidate-verification Task1 owns reconciliation.
   rows before replacement table.add. Reproduce add-failure preservation in an
   isolated upstream fix task and review before submitting the user-requested PR.
   Do not copy this mutation ordering into Hermes or report a PR as already made.
+- **Reproduced upstream temporal defect:** `parseTemporal("im Dezember",
+  Date.parse("2026-09-11T12:00:00Z"))` returns
+  `{from:1796083200000,to:1789128000000}`, so from>to. Read-only Node probe on
+  pinned merged source confirmed this. Native Task3 returns None for that
+  ambiguous future month-only context; a separate reviewed upstream regression
+  and PR remain pending. No upstream change/publication has been made.
 
 ## Retrieval provider contracts — required owning fix tasks not yet executed
 
