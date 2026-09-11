@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -15,6 +16,7 @@ from .validation import resolve_inside, safe_agent_id
 
 
 MAX_JOURNAL_LINE_BYTES = 131_072
+MAX_RECEIPT_BYTES = 262_144
 RECEIPT_VERSION = 1
 
 
@@ -59,15 +61,28 @@ def _ensure_parent(path: Path) -> None:
 
 
 def read_receipt(path: Path) -> dict[str, Any] | None:
-    """Read a receipt object strictly; a damaged receipt is not trusted."""
-    if not path.exists():
-        return None
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("capture receipt is not a regular file")
+    """Read one bounded receipt from a regular descriptor; never trust a path race."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise ValueError("capture receipt is not a regular file") from error
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_RECEIPT_BYTES:
+            raise ValueError("capture receipt is invalid")
+        raw = os.read(fd, MAX_RECEIPT_BYTES + 1)
+        if len(raw) > MAX_RECEIPT_BYTES:
+            raise ValueError("capture receipt is invalid")
+        value = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("capture receipt is unreadable") from error
+    finally:
+        os.close(fd)
     if not isinstance(value, dict) or value.get("version") != RECEIPT_VERSION:
         raise ValueError("capture receipt is invalid")
     return value

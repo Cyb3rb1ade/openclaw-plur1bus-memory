@@ -694,6 +694,7 @@ class Plur1busRuntime:
                 payload.get("validFrom"), payload.get("validUntil"), payload.get("expiresAt"), payload.get("ttl"),
                 capture_id=payload.get("captureId"), captured_at=payload.get("capturedAt"),
                 receipt_required=payload.get("receiptRequired") is True,
+                capture_payload=payload,
             )
         except AdmissionRejected as error:
             # Queue pressure did not execute the capture, so preserve the
@@ -1729,7 +1730,8 @@ class Plur1busRuntime:
                       valid_until: Any = None, expires_at: Any = None,
                       ttl: Any = None, *, capture_id: str | None = None,
                       captured_at: str | None = None,
-                      receipt_required: bool = False) -> None:
+                      receipt_required: bool = False,
+                      capture_payload: dict[str, Any] | None = None) -> None:
         self._domain.on_turn(
             user,
             assistant,
@@ -1739,6 +1741,12 @@ class Plur1busRuntime:
             captured_at=captured_at,
             receipt_required=receipt_required,
         )
+        # This mutable admission payload reaches the done callback.  Once the
+        # journal/episode receipt has returned successfully, later embedding
+        # failures must retain that fact even if an external restore deletes
+        # the receipt before retry persistence.
+        if capture_payload is not None:
+            capture_payload["receiptRequired"] = True
         temporal = any(value is not None for value in (valid_from, valid_until, expires_at, ttl))
         if importance is None and not temporal:
             self._remember(user, session_id, "user")

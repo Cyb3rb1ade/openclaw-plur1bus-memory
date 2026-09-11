@@ -143,6 +143,33 @@ class CaptureRetryTests(unittest.TestCase):
             self.runtime._domain.neo_dir / "turn-journal.jsonl")
         self.assertEqual(after, before)
 
+    def test_late_receipt_loss_keeps_sticky_retry_requirement(self) -> None:
+        original_remember = self.runtime._remember
+
+        def delete_receipt_then_fail(*_args, **_kwargs):
+            # The entry is not durable until the callback, so derive the
+            # native admission identity from the just-written journal row.
+            journal = self.runtime._domain._read_jsonl(
+                self.runtime._domain.neo_dir / "turn-journal.jsonl")
+            receipt_path(self.runtime.data_dir, self.runtime.agent_id, journal[0]["captureId"]).unlink()
+            raise RuntimeError("embedding failed after receipt loss")
+
+        self.runtime._remember = delete_receipt_then_fail
+        self.runtime.capture_async("sticky user", "sticky assistant", "sticky-session")
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: len(self._retry_entries()) == 1))
+        entry = self._retry_entries()[0]
+        self.assertTrue(entry["receiptRequired"])
+        before = self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl")
+        self.runtime._remember = original_remember
+        self.embedding.fail = False
+        self.runtime._resubmit_capture_retries()
+        self.runtime.flush()
+        self.assertTrue(self._wait_until(lambda: self._retry_attempts("sticky user") == 2))
+        self.assertEqual(self.runtime._domain._read_jsonl(
+            self.runtime._domain.neo_dir / "turn-journal.jsonl"), before)
+
     def test_legacy_owned_retry_receives_identity_before_restart_replay(self) -> None:
         payload = {
             "user": "legacy user", "assistant": "legacy assistant", "sessionId": "legacy-session",

@@ -582,7 +582,8 @@ class Plur1busDomain:
                                            # A prepared episode preserves its exact derived
                                            # mood snapshot without duplicating either turn's
                                            # full source body in each journal row.
-                                           "record": episode_record},
+                                           "record": {key: value for key, value in episode_record.items()
+                                                      if key != "summary"}},
                            "episode": None}
                 write_receipt(path, receipt)
             plans = receipt.get("journalPlans")
@@ -595,6 +596,8 @@ class Plur1busDomain:
             materialized = receipt.get("journal")
             if not isinstance(materialized, list) or len(materialized) > len(plans):
                 raise ValueError("capture receipt journal state is invalid")
+            if materialized != plans[:len(materialized)]:
+                raise ValueError("capture receipt journal prefix is invalid")
             # Validate every already-indexed target before any append.  The
             # next planned byte range also detects a full line appended just
             # before a crash but before its receipt state was published.
@@ -610,6 +613,14 @@ class Plur1busDomain:
                 raise ValueError("capture receipt episode plan is invalid")
             episode_offset = receipt_integer(episode_plan.get("offset"), name="episode offset")
             episode_length = receipt_integer(episode_plan.get("length"), name="episode length", minimum=1)
+            state = receipt.get("state")
+            if state not in {"prepared", "committed"}:
+                raise ValueError("capture receipt state is invalid")
+            if state == "prepared" and receipt.get("episode") is not None:
+                raise ValueError("capture receipt completion is invalid")
+            if state == "committed" and (len(materialized) != len(plans)
+                                       or receipt.get("episode") != dict(episode_plan)):
+                raise ValueError("capture receipt completion is invalid")
             episode_present = probe_record(
                 episodes_path, episode_offset, episode_length,
                 str(episode_plan["fingerprint"]),
@@ -642,7 +653,7 @@ class Plur1busDomain:
                     stored_episode = episode_plan.get("record")
                     if not isinstance(stored_episode, Mapping):
                         raise ValueError("capture receipt episode record is invalid")
-                    episode_record = dict(stored_episode)
+                    episode_record = {**stored_episode, "summary": combined[:1000]}
                 if (record_fingerprint(episode_record) != str(episode_plan["fingerprint"])
                         or len(json.dumps(episode_record, ensure_ascii=False, sort_keys=True,
                                           default=str).encode("utf-8")) + 1 != episode_length):

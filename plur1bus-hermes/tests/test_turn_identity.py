@@ -9,7 +9,12 @@ import uuid
 from pathlib import Path
 
 from plur1bus_hermes.domain import Plur1busDomain
-from plur1bus_hermes.capture_journal import receipt_path
+from plur1bus_hermes.capture_journal import (
+    MAX_RECEIPT_BYTES,
+    read_receipt,
+    receipt_path,
+    write_receipt,
+)
 from plur1bus_hermes.turn_identity import turn_record_id
 
 
@@ -169,6 +174,36 @@ class TurnIdentityTests(unittest.TestCase):
             self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
                                 captured_at=self.captured_at)
         self.assertEqual(journal_path.read_bytes(), before)
+
+    def test_materialized_receipt_must_be_an_exact_plan_prefix(self) -> None:
+        self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                            captured_at=self.captured_at)
+        path = receipt_path(self.root, "main", self.capture_id)
+        receipt = read_receipt(path)
+        assert receipt is not None
+        receipt["journal"] = [receipt["journalPlans"][1]]
+        write_receipt(path, receipt)
+        journal_path = self.domain.neo_dir / "turn-journal.jsonl"
+        episode_path = self.domain.neo_dir / "episodes.jsonl"
+        before_journal = journal_path.read_bytes()
+        before_episode = episode_path.read_bytes()
+
+        with self.assertRaisesRegex(ValueError, "journal prefix"):
+            self.domain.on_turn("user", "assistant", "session", capture_id=self.capture_id,
+                                captured_at=self.captured_at)
+        self.assertEqual(journal_path.read_bytes(), before_journal)
+        self.assertEqual(episode_path.read_bytes(), before_episode)
+
+    def test_receipt_omits_episode_summary_and_rejects_oversize_read(self) -> None:
+        self.domain.on_turn("user body", "assistant body", "session", capture_id=self.capture_id,
+                            captured_at=self.captured_at)
+        path = receipt_path(self.root, "main", self.capture_id)
+        receipt = read_receipt(path)
+        assert receipt is not None
+        self.assertNotIn("summary", receipt["episodePlan"]["record"])
+        path.write_bytes(b"x" * (MAX_RECEIPT_BYTES + 1))
+        with self.assertRaisesRegex(ValueError, "receipt"):
+            read_receipt(path)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,21 @@ scope/session/source conflicts. `test_capture_retry.py` covers durable retry
 identity, restart replay, malformed/foreign preservation, exhaustion, and a
 numeric foreign retry-key collision during dead-lettering.
 
+Round 2 exact verification:
+
+```text
+PYTHONPATH=plur1bus-hermes/src:plur1bus-controls/src:/Users/cyberblade/.hermes/hermes-agent \
+  /Users/cyberblade/.hermes/hermes-agent/venv/bin/python -B -m unittest \
+  plur1bus-hermes/tests/test_capture_retry.py plur1bus-hermes/tests/test_turn_identity.py \
+  plur1bus-hermes/tests/test_domain.py plur1bus-hermes/tests/test_episode_narrative.py \
+  plur1bus-hermes/tests/test_runtime_scheduler.py plur1bus-hermes/tests/test_runtime_provider.py
+```
+
+Result: 59 tests passed. The corresponding native discovery command with
+`-m unittest discover -s plur1bus-hermes/tests -p 'test_*.py'` passed 565
+tests. The latter is a native unit/integration gate only; it is not a host
+lifecycle, guest-runtime, or universal crash-transaction claim.
+
 The overall native-port coverage is therefore explicitly **incomplete**. The
 inventory makes no claim that remaining commits, host-specific contracts,
 dashboard behavior, model behavior, or guest acceptance have been reviewed.
