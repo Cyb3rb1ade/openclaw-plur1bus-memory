@@ -5198,11 +5198,19 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
       return createNeoStore(neoRoot, workspaceKey);
     };
-    const sameOwnerPartition = (left, right) => Boolean(left && right
-      && left.scope === right.scope
-      && left.agentId === right.agentId
-      && left.workspaceIdentity === right.workspaceIdentity
-      && left.ownerUserId === right.ownerUserId);
+    // 7.12.45: Der Vergleich folgt dem Partitionsschluessel (ownerStorageKey):
+    // agent-private kennt nur den Agenten, workspace nur die Workspace-
+    // Identitaet, user Agent + Owner. Bis dahin verglich er workspaceIdentity
+    // und ownerUserId fuer ALLE Scopes — Altzeilen (Juli 2026) mit gesetztem
+    // workspaceKey in agent-private-Zeilen (main 7 von 9385, bernhardine 21
+    // von 12034) liessen den Guard werfen, die ganze Seite fiel weg, der
+    // naechtliche Decay blieb bei main/bernhardine seit Tagen bei 0.
+    const sameOwnerPartition = (left, right) => {
+      if (!left || !right || left.scope !== right.scope) return false;
+      if (left.scope === "workspace") return left.workspaceIdentity === right.workspaceIdentity;
+      if (left.scope === "user") return left.agentId === right.agentId && left.ownerUserId === right.ownerUserId;
+      return left.agentId === right.agentId;
+    };
     const ownerStorageKey = (partition) => partition.scope === "workspace"
       ? partition.workspaceIdentity
       : `acl-owner-v1:${partition.scope}:${partition.agentId}:${partition.key}`;

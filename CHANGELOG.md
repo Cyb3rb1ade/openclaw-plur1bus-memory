@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.45] — 2026-09-11
+
+### Behoben
+
+- **Nächtlicher Decay blieb bei main und bernhardine bei 0 (`errors=1`).**
+  Die 7.12.29-Diagnose nannte die Zeile: agent-private, vom Agenten selbst
+  gespeichert, aber mit gesetztem `workspaceKey` (Altzeilen aus Juli 2026:
+  main 7 von 9385, bernhardine 21 von 12034; heisenberg keine, dort lief der
+  Decay). Der Partitions-Guard verglich `workspaceIdentity` und
+  `ownerUserId` für ALLE Scopes, obwohl der Partitionsschlüssel
+  `agent-private:<agent>` keinen Workspace kennt — die erste Altzeile warf,
+  die ganze Seite fiel weg. Der Vergleich folgt jetzt dem Schlüssel:
+  agent-private nur Agent, workspace nur Workspace-Identität, user Agent +
+  Owner. Keine Datenänderung nötig.
+- **LanceDB-Optimize scheiterte an gleichzeitigen Updates** („Retryable
+  commit conflict … Please retry", 11.09. bernhardine und heisenberg).
+  `optimizeTable` versucht es jetzt bis zu dreimal mit 3 s Pause innerhalb
+  des Zeitbudgets und meldet `attempts`; andere Fehler werden nicht
+  wiederholt.
+
 ## [7.12.44] — 2026-09-11
 
 ### Behoben
