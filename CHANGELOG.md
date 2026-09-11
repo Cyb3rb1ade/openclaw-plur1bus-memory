@@ -7,6 +7,28 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.50] — 2026-09-12
+
+### Geändert
+
+- **Skill-Miner läuft nächtlich statt wöchentlich.** Cron täglich 05:00 (je
+  Agent +15 min), Sperre 20 Stunden statt einer Woche. Grund: Jeder Lauf ist
+  bei `maxPerRun` gedeckelt und endete zuletzt genau dort (main 1615
+  gescannte Erinnerungen, Bernhardine 1430, je 5 Vorschläge), der Rückstau
+  qualifizierter Cluster brauchte wöchentlich Wochen. Mit Auto-Apply sperrt
+  jeder angewandte Skill seinen Namen, der Miner rückt also jede Nacht zum
+  nächsten Cluster vor.
+
+### Hinzugefügt
+
+- **Fingerabdruck-Memo für Cluster.** Eine Evidenzmenge, die schon einmal
+  nichts ergeben hat (zu geringe Konfidenz, gesperrter Name), kostet in den
+  Folgenächten keinen Modellaufruf mehr. Der Fingerabdruck ist die exakte
+  Menge der Erinnerungs-IDs: Kommt eine Erinnerung hinzu, wird der Cluster
+  erneut geprüft. Höchstens 300 Einträge je Partition in `run-state.json`,
+  Zähler `skippedKnownCluster` im Bericht.
+
+
 ## [7.12.49] — 2026-09-12
 
 ### Hinzugefügt

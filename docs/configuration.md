@@ -405,10 +405,20 @@ Konfidenz, Nutzen und der Anleitung, der der Agent folgen würde. Mit
 - **Withdraw**: bereits angewandten Skill entfernen (Workshop-Verzeichnis des
   Skills wird gelöscht), Name sperren.
 
-Der Miner läuft sonntags um 05:00 (je Agent +15 min), also nach dem
-nächtlichen Speicher-Management: Konsolidierung 04:00–04:30,
-Persona-Evolution 04:15–04:25, GC 04:45, auto-accept-stale 04:50–04:54. Er
-bewertet damit genau die Erinnerungen, die diese Jobs zuvor angefasst haben.
+Der Miner läuft **jede Nacht um 05:00** (je Agent +15 min), also nach dem
+Speicher-Management: Konsolidierung 04:00–04:30, Persona-Evolution
+04:15–04:25, GC 04:45, auto-accept-stale 04:50–04:54. Er bewertet damit genau
+die Erinnerungen, die diese Jobs zuvor angefasst haben.
+
+Bis 7.12.49 lief er wöchentlich. Weil jeder Lauf bei `maxPerRun` gedeckelt ist
+und zuletzt genau dort endete, brauchte der Rückstau qualifizierter Cluster
+Wochen. Damit nächtliche Läufe nicht dieselben Modellaufrufe wiederholen,
+merkt sich der Miner je Partition den Fingerabdruck eines Clusters, das nichts
+ergeben hat (zu geringe Konfidenz oder gesperrter Name): die exakte Menge
+seiner Erinnerungs-IDs. Kommt eine Erinnerung hinzu, wird das Cluster erneut
+geprüft. Höchstens 300 Einträge in `run-state.json`, Zähler
+`skippedKnownCluster` im Bericht. Die Sperre gegen doppelte Auslöser liegt bei
+20 Stunden.
 
 Vorschlägen aus Läufen vor 7.12.48 fehlt der Nutzen-Satz. Er lässt sich
 nachtragen:

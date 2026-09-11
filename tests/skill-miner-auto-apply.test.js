@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { runSkillMiner, SKILL_MINER_RATE_LIMIT_MS } from "../lib/jobs/skill-miner.js";
+import { runSkillMiner, SKILL_MINER_RATE_LIMIT_MS, clusterFingerprint } from "../lib/jobs/skill-miner.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
 import { renderSkillMd } from "../lib/jobs/skill-miner/skill-md-renderer.js";
 import { readProposals, writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
@@ -234,27 +234,79 @@ describe("7.12.48: withdrawing an applied skill", () => {
   });
 });
 
-describe("7.12.48: weekly rate limit tolerates run-time drift", () => {
-  it("lets the next Sunday run start although the last run finished a few minutes after its slot", async (t) => {
+describe("7.12.50: nightly rate limit tolerates run-time drift", () => {
+  const shift = (dir, agoMs) => {
+    const statePath = join(dir, "run-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    for (const entry of Object.values(state.jobRateLimits)) entry.lastRunAt = Date.now() - agoMs;
+    writeFileSync(statePath, JSON.stringify(state), "utf8");
+  };
+
+  it("lets the next night run start although the last run finished after its slot", async (t) => {
     const dir = workspace("rate-drift-");
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const first = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
     assert.equal(first.skipped, undefined, "first run executes");
-    // Shift the recorded run so that exactly 7 days minus 3 minutes have passed.
-    const statePath = join(dir, "run-state.json");
-    const state = JSON.parse(readFileSync(statePath, "utf8"));
-    for (const entry of Object.values(state.jobRateLimits)) entry.lastRunAt = Date.now() - (7 * 86400000 - 3 * 60000);
-    writeFileSync(statePath, JSON.stringify(state), "utf8");
-    const second = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
-    assert.notEqual(second.reason, "rate_limited");
-    assert.ok(SKILL_MINER_RATE_LIMIT_MS > 6 * 86400000 && SKILL_MINER_RATE_LIMIT_MS < 7 * 86400000);
-    // A run one day later is still blocked.
-    for (const entry of Object.values(JSON.parse(readFileSync(statePath, "utf8")).jobRateLimits)) entry.lastRunAt = Date.now() - 86400000;
-    const blockedState = JSON.parse(readFileSync(statePath, "utf8"));
-    for (const entry of Object.values(blockedState.jobRateLimits)) entry.lastRunAt = Date.now() - 86400000;
-    writeFileSync(statePath, JSON.stringify(blockedState), "utf8");
-    const third = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
-    assert.equal(third.reason, "rate_limited");
+    // Live pattern: 05:00 slot, previous run recorded at 05:03 the day before.
+    shift(dir, 24 * 3600000 - 3 * 60000);
+    const nextNight = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
+    assert.notEqual(nextNight.reason, "rate_limited");
+    // A duplicate trigger a few hours later is still caught.
+    shift(dir, 6 * 3600000);
+    const duplicate = await runSkillMiner(mockDb(), "agent-a", minerOptions(dir));
+    assert.equal(duplicate.reason, "rate_limited");
+    assert.ok(SKILL_MINER_RATE_LIMIT_MS >= 6 * 3600000 && SKILL_MINER_RATE_LIMIT_MS < 24 * 3600000);
+  });
+});
+
+describe("7.12.50: cluster fingerprint memo", () => {
+  it("is the exact set of evidence ids and changes when a memory joins", () => {
+    const base = { memories: [{ id: "m2" }, { id: "m1" }] };
+    assert.equal(clusterFingerprint(base), clusterFingerprint({ memories: [{ id: "m1" }, { id: "m2" }] }));
+    assert.notEqual(clusterFingerprint(base), clusterFingerprint({ memories: [{ id: "m1" }, { id: "m2" }, { id: "m3" }] }));
+    assert.equal(typeof clusterFingerprint({}), "string");
+  });
+
+  it("does not call the model again for a cluster whose name was already blocked", async (t) => {
+    const dir = workspace("memo-blocked-");
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    let calls = 0;
+    const options = (extra = {}) => minerOptions(dir, { callLlm: async () => { calls += 1; return candidateResponse(); }, ...extra });
+    const first = await runSkillMiner(mockDb(), "agent-a", options());
+    assert.equal(first.proposalsCreated, 1);
+    assert.equal(calls, 1);
+    assert.equal(first.skippedKnownCluster, 0);
+    // Second night: same evidence, the skill name is blocked by the ledger.
+    const state = JSON.parse(readFileSync(join(dir, "run-state.json"), "utf8"));
+    for (const entry of Object.values(state.jobRateLimits)) entry.lastRunAt = 0;
+    writeFileSync(join(dir, "run-state.json"), JSON.stringify(state), "utf8");
+    const second = await runSkillMiner(mockDb(), "agent-a", options());
+    assert.equal(second.skippedDuplicate, 1, "name blocked on the second night");
+    assert.equal(calls, 2, "the model still decides once");
+    // Third night: the memo answers before the model is asked.
+    const state3 = JSON.parse(readFileSync(join(dir, "run-state.json"), "utf8"));
+    for (const entry of Object.values(state3.jobRateLimits)) entry.lastRunAt = 0;
+    writeFileSync(join(dir, "run-state.json"), JSON.stringify(state3), "utf8");
+    const third = await runSkillMiner(mockDb(), "agent-a", options());
+    assert.equal(third.skippedKnownCluster, 1);
+    assert.equal(calls, 2, "no further model call for the known cluster");
+    assert.ok(JSON.parse(readFileSync(join(dir, "run-state.json"), "utf8")).skillMinerClusterMemo);
+  });
+
+  it("remembers a low-confidence cluster and skips it next night", async (t) => {
+    const dir = workspace("memo-lowconf-");
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    let calls = 0;
+    const options = () => minerOptions(dir, { callLlm: async () => { calls += 1; return JSON.stringify({ confidence: 0.2, skip: true }); } });
+    const first = await runSkillMiner(mockDb(), "agent-a", options());
+    assert.equal(first.skippedLowConfidence, 1);
+    assert.equal(calls, 1);
+    const state = JSON.parse(readFileSync(join(dir, "run-state.json"), "utf8"));
+    for (const entry of Object.values(state.jobRateLimits || {})) entry.lastRunAt = 0;
+    writeFileSync(join(dir, "run-state.json"), JSON.stringify(state), "utf8");
+    const second = await runSkillMiner(mockDb(), "agent-a", options());
+    assert.equal(second.skippedKnownCluster, 1);
+    assert.equal(calls, 1, "the memo answers instead of the model");
   });
 });
 
