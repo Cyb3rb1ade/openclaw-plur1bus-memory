@@ -1,7 +1,8 @@
 # Additional native contract gaps — 7.12.44 candidate
 
 Pinned upstream: `a3f48f28ac647e81c5260e8a1dbab7977bf9fb51`.
-These are read-only audit findings, **not implemented or verified fixes**.
+These originated as read-only audit findings. Only entries explicitly marked
+closed below have implementation/review evidence; the rest remain open.
 Each native-achievable gap requires its own bounded implementation/review gate
 before candidate completion; candidate-verification Task1 owns reconciliation.
 
@@ -29,9 +30,12 @@ before candidate completion; candidate-verification Task1 owns reconciliation.
   Owning plan: `2026-09-11-hermes-7.12.44-temporal-anchors.md` (explicit-time
   precedence then bounded scoped event resolution). Planned, not implemented.
 
-- **Invalidated recall exclusion:** owned by storage Task5 (plan e41af4a,
-  refined 33f50aa). Imported active+invalidated rows currently survive primary,
-  refined, shared-pool and booster routes. Require pre-limit and final gates.
+- **Invalidated recall exclusion — closed at b63af3b:** storage Task5 now
+  excludes imported active+invalidated rows before the candidate limit and after
+  aggregate/refined/shared/booster retrieval. Independent round1 review passed;
+  real LanceDB starvation/null/blank/absent-column and composed schema-race tests
+  passed. Root exact-snapshot all4pytest:902passed,102subtests,222warnings.
+  This closes the scoped contract, not all epistemic/repair/platform features.
 - **Semantic merge proposals:** owned by consolidation Task1 (plan 5a397c4).
   Current automatic_merge.py only concatenates after advisory LLM decision.
 - **Actionable daily consolidation:** owned by consolidation Task2. Current
