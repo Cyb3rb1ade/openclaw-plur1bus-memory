@@ -102,6 +102,7 @@ export const DEPLOY_FILES = [
   "lib/setup/feature-cron-native.js",
   "lib/setup/feature-cron-plugin-runtime.js",
   "lib/setup/skill-workshop-plugin-runtime.js",
+  "lib/setup/skill-workshop-dashboard.js",
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/setup/control-ui-plugin-runtime.js",
@@ -209,6 +210,7 @@ export const DEPLOY_FILES = [
   "lib/jobs/skill-miner.js",
   "lib/jobs/skill-miner/nudge-renderer.js",
   "lib/jobs/skill-miner/proposal-writer.js",
+  "lib/jobs/skill-miner/benefit-backfill.js",
   "lib/metrics.js",
   // ── reminders / nudges ────────────────────────────────────────────────────
   "lib/reminder-extraction.js",

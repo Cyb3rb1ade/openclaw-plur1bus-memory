@@ -378,6 +378,65 @@ Adapters, die Zeile zeigt „compacting…" und danach das Ergebnis. Angenommen
 werden nur Partitionen, die der Health-Scan selbst gelistet hat. Der naechste
 Health-Scan zeigt den neuen Speicherstand.
 
+## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
+
+Der Skill Miner läuft wöchentlich je Agent, bündelt belastbare Erinnerungen
+der letzten 30 Tage nach gemeinsamen Stichworten und lässt das Modell daraus
+wiederkehrende Abläufe als Skill formulieren (Titel, Beschreibung, Nutzen,
+Anleitung, Beispiele). Jeder Fund landet als Entwurf im OpenClaw Skill
+Workshop.
+
+| Schlüssel | Typ | Default | Wirkung |
+| --- | --- | --- | --- |
+| `skillMiner.autoApply` | `"host" \| "on" \| "off"` | `"host"` | `host` folgt `skills.workshop.autonomous.mode` des Hosts (ungesetzt = `auto` → sofort anwenden; `propose`/`off` → Entwurf bleibt offen). `on` wendet immer an, `off` nie. |
+
+Angewandt wird über denselben Weg wie eine manuelle Freigabe: Workshop-Entwurf
+prüfen, hash-gebunden anwenden, Belegerinnerungen auf `corroborated` heben.
+Schlägt das fehl, bleibt der Vorschlag offen; der Lauf zählt `autoApplied` und
+`autoApplyFailed` in `skill-miner-report.jsonl`.
+
+Im PLUR1BUS-Reiter zeigt der Abschnitt **Mined Skills** alle offenen und
+aktiven geminten Skills, gruppiert nach Workspace und Agent, mit Beleglage,
+Konfidenz, Nutzen und der Anleitung, der der Agent folgen würde. Mit
+`controlUi.writeActions: "all"` gibt es je Karte:
+
+- **Approve**: Entwurf im Workshop anwenden, Belege bestätigen.
+- **Decline**: Entwurf ablehnen, Name für künftiges Mining sperren.
+- **Withdraw**: bereits angewandten Skill entfernen (Workshop-Verzeichnis des
+  Skills wird gelöscht), Name sperren.
+
+Der Miner läuft **jede Nacht um 05:00** (je Agent +15 min), also nach dem
+Speicher-Management: Konsolidierung 04:00–04:30, Persona-Evolution
+04:15–04:25, GC 04:45, auto-accept-stale 04:50–04:54. Er bewertet damit genau
+die Erinnerungen, die diese Jobs zuvor angefasst haben.
+
+Bis 7.12.49 lief er wöchentlich. Weil jeder Lauf bei `maxPerRun` gedeckelt ist
+und zuletzt genau dort endete, brauchte der Rückstau qualifizierter Cluster
+Wochen. Damit nächtliche Läufe nicht dieselben Modellaufrufe wiederholen,
+merkt sich der Miner je Partition den Fingerabdruck eines Clusters, das nichts
+ergeben hat (zu geringe Konfidenz oder gesperrter Name): die exakte Menge
+seiner Erinnerungs-IDs. Kommt eine Erinnerung hinzu, wird das Cluster erneut
+geprüft. Höchstens 300 Einträge in `run-state.json`, Zähler
+`skippedKnownCluster` im Bericht. Die Sperre gegen doppelte Auslöser liegt bei
+20 Stunden.
+
+Vorschlägen aus Läufen vor 7.12.48 fehlt der Nutzen-Satz. Er lässt sich
+nachtragen:
+
+```bash
+openclaw plur1bus-command --agent <id> --session <key> "/plur1bus internal skill-benefit-backfill"
+```
+
+Das holt je Vorschlag ohne `benefit` einen Satz vom Modell (höchstens 25 je
+Lauf, optional `… skill-benefit-backfill 50`) und schreibt ihn ins Ledger. Der
+Workshop-Entwurf bleibt unverändert, weil sein Text an den Revisions-Hash
+gebunden ist, den die Freigabe prüft.
+
+Vorschläge aus der Zeit vor der Workshop-Anbindung haben keine Bindung und
+lassen sich nur ablehnen. Das Vorschlags-Ledger liegt je ACL-Partition unter
+`_neo/workspaces/acl-owner-v1_…/.adaptive-learning/skill-proposals.jsonl`;
+auch `/plur1bus skills …` liest seit 7.12.48 dort.
+
 ## B13 Shared-Memory-Routen und Hook-Grenze
 
 Shared-Memory ist keine Konfigurations-Abkürzung für Namespace-Reads.

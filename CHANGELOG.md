@@ -7,6 +7,120 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.51] — 2026-09-12
+
+### Behoben
+
+- **Freigabe brach mit „unexpected target" ab.** Der Workshop legt einen
+  angewandten Skill in seinem eigenen Verzeichnis ab
+  (`agents/<id>/agent/workshop-skills/<name>/SKILL.md`); PLUR1BUS verglich
+  diesen Pfad mit einem selbst geratenen im Ledger-Verzeichnis und verwarf die
+  Freigabe, obwohl der Skill bereits angewandt war. Geprüft wird jetzt die
+  Form des Host-Pfads (`<…>/(workshop-skills|skills)/<name>/SKILL.md`),
+  übernommen wird er. Hat der Workshop schon angewandt und liefert keinen
+  Pfad, wird er aus dem Agentenverzeichnis aufgelöst.
+- **`safeWarn is not defined`.** Der Hook, der den Workshop-Lebenszyklus ins
+  Ledger zurückschreibt, brach in seinem eigenen Fehlerpfad ab; `index.js`
+  benutzte `safeWarn` an zwei Stellen, ohne es zu importieren. Dadurch blieb
+  auch der zweite Weg zur Synchronisierung stehen.
+
+
+## [7.12.50] — 2026-09-12
+
+### Geändert
+
+- **Skill-Miner läuft nächtlich statt wöchentlich.** Cron täglich 05:00 (je
+  Agent +15 min), Sperre 20 Stunden statt einer Woche. Grund: Jeder Lauf ist
+  bei `maxPerRun` gedeckelt und endete zuletzt genau dort (main 1615
+  gescannte Erinnerungen, Bernhardine 1430, je 5 Vorschläge), der Rückstau
+  qualifizierter Cluster brauchte wöchentlich Wochen. Mit Auto-Apply sperrt
+  jeder angewandte Skill seinen Namen, der Miner rückt also jede Nacht zum
+  nächsten Cluster vor.
+
+### Hinzugefügt
+
+- **Fingerabdruck-Memo für Cluster.** Eine Evidenzmenge, die schon einmal
+  nichts ergeben hat (zu geringe Konfidenz, gesperrter Name), kostet in den
+  Folgenächten keinen Modellaufruf mehr. Der Fingerabdruck ist die exakte
+  Menge der Erinnerungs-IDs: Kommt eine Erinnerung hinzu, wird der Cluster
+  erneut geprüft. Höchstens 300 Einträge je Partition in `run-state.json`,
+  Zähler `skippedKnownCluster` im Bericht.
+
+
+## [7.12.49] — 2026-09-12
+
+### Hinzugefügt
+
+- **Nutzen-Sätze nachtragen.** `/plur1bus internal skill-benefit-backfill [n]`
+  holt für jeden offenen oder aktiven Vorschlag ohne `benefit` genau einen
+  Satz vom Modell und schreibt ihn ins Ledger der ACL-Partition (Standard
+  höchstens 25 je Lauf). Der Workshop-Entwurf bleibt unangetastet, sein Text
+  hängt am Revisions-Hash, den die Freigabe prüft. Die Vorschlagsfelder gehen
+  als Daten in den Prompt, nicht als Anweisungen.
+
+### Geändert
+
+- **Skill-Miner läuft sonntags um 05:00 statt 03:00.** Er bewertet genau die
+  Erinnerungen, die das nächtliche Speicher-Management vorher anfasst:
+  Konsolidierung 04:00–04:30, Persona-Evolution 04:15–04:25, GC 04:45,
+  auto-accept-stale 04:50–04:54. Vorher lag der Standard davor, auf dieser
+  Installation lag er auf 06:00.
+
+
+## [7.12.48] — 2026-09-12
+
+### Hinzugefügt
+
+- **Auto-Apply geminter Skills.** `skillMiner.autoApply` (`host` | `on` |
+  `off`, Default `host`). `host` folgt dem Selbstlern-Modus des Hosts
+  (`skills.workshop.autonomous.mode`, ungesetzt = `auto`). Ein frisch
+  geminter Entwurf wird dann sofort über denselben Weg angewandt wie eine
+  manuelle Freigabe: Workshop-Entwurf prüfen, hash-gebunden anwenden,
+  Belegerinnerungen auf `corroborated` heben (Akteur
+  `plur1bus-skill-miner`, Stufe `system:skill-workshop`). Scheitert das,
+  bleibt der Vorschlag offen. Neue Zähler `autoApplied`/`autoApplyFailed`
+  im Bericht. Wie bei der Persona-Evolution sichern Schranken statt eines
+  Freigabe-Tors: Evidenz-Score, Konfidenz, höchstens fünf je Lauf.
+- **„Mined Skills" im PLUR1BUS-Reiter.** Offene und aktive geminte Skills je
+  Workspace und Agent, mit Kategorie, Beleglage, Konfidenz, Fundtag,
+  Beschreibung, Nutzen und der vollständigen Anleitung. Mit
+  `controlUi.writeActions: "all"`: Approve, Decline und Withdraw. Withdraw
+  entfernt das Workshop-Verzeichnis eines angewandten Skills (der Workshop
+  bietet dafür keinen RPC) und sperrt den Namen. Alle Kartentexte sind
+  Modellausgabe und werden gekürzt und escaped.
+- **Nutzen je Skill.** Der Extraktor liefert ein Feld `benefit` (ein Satz),
+  das in Dashboard und SKILL.md erscheint. Ältere Vorschläge ohne das Feld
+  bleiben gültig.
+
+### Behoben
+
+- **Skill-Vorschläge waren im Chat unsichtbar.** Das Ledger liegt je
+  ACL-Partition unter dem Neo-Store; `/plur1bus skills review|approve|
+  reject|show` und der wöchentliche Hinweis lasen den Agenten-Workspace, wo
+  nie ein Ledger lag. Live lagen 22 offene Vorschläge (main 10,
+  bernhardine 10, heisenberg 2), die keiner je gesehen hat. Chat, Hinweis
+  und Dashboard lesen jetzt dieselben Partitionsverzeichnisse wie der Miner.
+- **Skill-Miner lief nur alle zwei Wochen.** Die Wochensperre zählte exakt
+  sieben Tage ab dem Ende des letzten Laufs (06.09. 06:03 für den
+  06:00-Cron). Der nächste Sonntag lag damit wenige Minuten davor und wurde
+  übersprungen; am 30.08. fehlt jeder Lauf. Die Sperre läuft jetzt sechs
+  Stunden vor Ablauf der Woche aus (`SKILL_MINER_RATE_LIMIT_MS`).
+- **Tägliche Konsolidierung fiel jede zweite Nacht aus.** Dieselbe Falle mit
+  24 Stunden: Der Lauf endet 21 bis 37 Sekunden nach dem Slot, der nächste
+  Nachtlauf war um eine Minute gesperrt (bernhardine 10.09. 04:15, main
+  11.09. 04:00, „rate limited — 1min remaining"). Die Sperre fängt jetzt nur
+  noch doppelte Auslöser binnen zwölf Stunden ab
+  (`DAILY_CONSOLIDATION_RATE_LIMIT_MS`); ein zweiter Lauf wäre harmlos, der
+  Batch-Decay rechnet ab `lastDynamicsAt`.
+
+### Sicherheit
+
+- **Withdraw löscht keine handgeschriebenen Skills.** Liegt ein aktivierter
+  Skill im Workspace-Verzeichnis `skills/`, wird er nur entfernt, wenn seine
+  SKILL.md die Herkunftszeile des Skill-Miners trägt. Sonst meldet die
+  Aktion `foreign_skill` und lässt Datei und Vorschlag unverändert.
+
+
 ## [7.12.47] — 2026-09-11
 
 ### Geändert
