@@ -4560,6 +4560,11 @@ const plugin = {
         logger: api.logger,
         resultCache: llmResultCache,
         credentialUnavailable,
+        // 7.12.55: Nur wenn der Betreiber es einschaltet, schreibt der Router
+        // die redigierte Fehlermeldung in eine eigene Datei — nie ins Log.
+        diagnosticsPath: cfg.llmRouter?.errorDiagnostics === true
+          ? join(baseDbPath, "llm-router-errors.log")
+          : "",
       });
       return isLlmRouteAvailable(route) ? route : null;
     };

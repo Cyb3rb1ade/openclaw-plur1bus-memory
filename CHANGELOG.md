@@ -7,6 +7,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.55] — 2026-09-12
+
+### Hinzugefügt
+
+- **Schaltbare Fehlerdiagnose der Modellrouten.** `llmRouter.errorDiagnostics`
+  (Standard aus) schreibt die redigierte Meldung eines gescheiterten
+  Modellaufrufs nach `<baseDbPath>/llm-router-errors.log`, mit Name und Code.
+  Im normalen Log steht sie weiterhin nie, weil sie Bruchstücke des Prompts
+  enthalten kann. Gedacht für genau den Fall, der die Kategorie allein nicht
+  aufklärt; nach der Klärung wieder ausschalten.
+
 ## [7.12.54] — 2026-09-12
 
 ### Geändert

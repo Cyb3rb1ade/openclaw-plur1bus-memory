@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 import {
   LLM_ROUTE_KINDS,
@@ -973,4 +976,30 @@ test("7.12.54: die Fehlerwarnung nennt eine Kategorie und den Code, nie die Meld
   assert.equal(errorHint(new Error("rate limit exceeded")), "rate-limited");
   assert.equal(errorHint(new Error("etwas ganz anderes")), "other");
   assert.equal(errorHint(null), "other");
+});
+
+test("7.12.55: die Fehlerdiagnose schreibt nur, wenn der Betreiber sie einschaltet", async () => {
+  const dir = makeTempDir("llm-router-diag-");
+  const target = join(dir, "llm-router-errors.log");
+  const secret = "upstream-secret-diag-441";
+  const originalError = Object.assign(new Error(`Configured agent runtime is unavailable. ${secret}`), { code: "LLM_RUNTIME_UNAVAILABLE" });
+  const runtimeLlm = { complete: async () => { throw originalError; } };
+
+  const off = resolveFeatureLlmRoute({}, { feature: "episode-extraction", runtimeLlm, logger: createLogger() });
+  await completeFeatureLlm([{ role: "user", content: "x" }], off, {}, createTimerHarness());
+  assert.equal(existsSync(target), false, "ohne Schalter entsteht keine Datei");
+
+  const on = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm,
+    logger: createLogger(),
+    diagnosticsPath: target,
+  });
+  await completeFeatureLlm([{ role: "user", content: "x" }], on, {}, createTimerHarness());
+  const entries = readFileSync(target, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].feature, "episode-extraction");
+  assert.equal(entries[0].code, "LLM_RUNTIME_UNAVAILABLE");
+  assert.match(entries[0].message, /Configured agent runtime is unavailable/);
+  rmSync(dir, { recursive: true, force: true });
 });
