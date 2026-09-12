@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -65,15 +66,34 @@ class CaptureRetryTests(unittest.TestCase):
         return False
 
     def _retry_entries(self) -> list[dict[str, Any]]:
-        path = self.runtime._capture_retry_path()
-        if not path.is_file():
-            return []
-        entries = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-        return entries
+        # Polling must cooperate with the same queue lock as production readers.
+        # A raw Windows CRT read handle denies delete-sharing and can itself
+        # make the callback's otherwise valid atomic replacement fail.
+        return self.runtime._read_capture_retries()
+
+    def test_retry_inspection_waits_for_queue_publication_lock(self) -> None:
+        started = threading.Event()
+        finished = threading.Event()
+        results = []
+
+        def inspect():
+            started.set()
+            try:
+                results.append(self._retry_entries())
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=inspect)
+        try:
+            with self.runtime._locked_capture_retry_queue():
+                thread.start()
+                self.assertTrue(started.wait(1))
+                self.assertFalse(finished.wait(0.05), "test reader bypassed the publication lock")
+            self.assertTrue(finished.wait(2))
+        finally:
+            thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results, [[]])
 
     def _retry_attempts(self, user: str) -> int | None:
         for entry in self._retry_entries():

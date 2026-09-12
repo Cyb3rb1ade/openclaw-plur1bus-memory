@@ -755,8 +755,8 @@ class SkillWorkshop:
             raise ValidationError("proposal revision changed; inspect and confirm the new revision")
         if not self._evidence_is_current(proposal):
             raise ValidationError("proposal evidence changed, was deleted, or is no longer active")
-        rendered = self._render_skill(proposal)
-        rendered_hash = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        rendered = self._render_skill(proposal).encode("utf-8")
+        rendered_hash = hashlib.sha256(rendered).hexdigest()
         target = self._target(proposal, hermes_home)
         if proposal.get("nativeSkill") and proposal["nativeSkill"] != str(target):
             raise ValidationError("native skill publication is already bound to a different profile")
@@ -788,7 +788,9 @@ class SkillWorkshop:
         self._write(proposals)
         fd, temporary = tempfile.mkstemp(prefix=".SKILL-", dir=target.parent)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            # Hash, publication, retry checks and archives share exact bytes;
+            # platform text-mode newline translation must never change them.
+            with os.fdopen(fd, "wb") as handle:
                 handle.write(rendered)
                 handle.flush()
                 os.fsync(handle.fileno())

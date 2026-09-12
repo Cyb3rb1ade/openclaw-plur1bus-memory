@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import tempfile
 import unittest
@@ -105,6 +107,42 @@ class WorkshopDeltaTests(unittest.TestCase):
         self.assertEqual(self.workshop.inspect(proposal["id"])["revision"], proposal["revision"])
         self.assertEqual(target.read_bytes(), before)
         self.assertTrue(self.workshop.publish(proposal["id"], proposal["revision"], self.home)["idempotent"])
+
+    def test_publication_writes_exact_utf8_bytes_even_with_windows_text_translation(self):
+        self.candidate["instructions"] = "Prüfe die Quelle.\nKeep LF.\r\nPreserve reviewed CRLF too."
+        original_fdopen = os.fdopen
+
+        def windows_fdopen(fd, mode="r", *args, **kwargs):
+            # Reproduce Windows TextIOWrapper translation on every CI host.
+            if "b" not in mode and kwargs.get("newline") is None:
+                kwargs["newline"] = "\r\n"
+            return original_fdopen(fd, mode, *args, **kwargs)
+
+        with patch("plur1bus_hermes.skill_workshop.os.fdopen", side_effect=windows_fdopen):
+            proposal, _ = self._publish()
+        saved = self.workshop.inspect(proposal["id"])
+        expected = self.workshop._render_skill(saved).encode("utf-8")
+        target = Path(saved["nativeSkill"])
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual(saved["publishedHash"], hashlib.sha256(expected).hexdigest())
+        modified_at = target.stat().st_mtime_ns
+        self.assertTrue(self.workshop.publish(proposal["id"], proposal["revision"], self.home)["idempotent"])
+        self.assertEqual(target.stat().st_mtime_ns, modified_at)
+        result = self.workshop.withdraw(proposal["id"], proposal["revision"], self.home)
+        self.assertEqual(Path(result["archivePath"]).read_bytes(), expected)
+        self.assertFalse(target.exists())
+
+    def test_newline_only_manual_edits_are_not_normalized_away(self):
+        proposal, _ = self._publish()
+        saved = self.workshop.inspect(proposal["id"])
+        target = Path(saved["nativeSkill"])
+        edited = self.workshop._render_skill(saved).encode("utf-8").replace(b"\n", b"\r\n")
+        target.write_bytes(edited)
+        with self.assertRaisesRegex(ValidationError, "missing or was changed"):
+            self.workshop.publish(proposal["id"], proposal["revision"], self.home)
+        with self.assertRaisesRegex(ValidationError, "manual edits"):
+            self.workshop.withdraw(proposal["id"], proposal["revision"], self.home)
+        self.assertEqual(target.read_bytes(), edited)
 
     def test_legacy_revision_and_render_survive_backfill(self):
         proposal = self._mine()

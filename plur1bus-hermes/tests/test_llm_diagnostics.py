@@ -76,6 +76,11 @@ class ErrorCategoryTests(unittest.TestCase):
         self.assertEqual(classify_error(TimeoutError("secret"))["errorHint"], "timeout")
         self.assertEqual(classify_error(urllib.error.URLError("TLS handshake failed"))["errorHint"], "network")
 
+    def test_windows_errno_alias_cannot_hide_canonical_allowed_code(self):
+        with patch.dict(errno.errorcode, {errno.ECONNREFUSED: "WSAECONNREFUSED"}):
+            self.assertEqual(classify_error(OSError(errno.ECONNREFUSED, "private error")),
+                             {"errorClass": "ConnectionError", "errorHint": "network", "errorCode": "ECONNREFUSED"})
+
     def test_foreign_getters_and_custom_class_names_do_not_escape(self):
         class ForeignError(RuntimeError):
             @property
@@ -321,6 +326,8 @@ class DiagnosticTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Requires real Windows security APIs")
     def test_windows_files_have_protected_owner_only_acl(self):
+        import ctypes
+        from ctypes import wintypes
         from plur1bus_hermes.llm_diagnostics_windows import _WindowsFiles
         reporter = self.reporter()
         reporter.report(RuntimeError("private diagnostic"), "query-refinement")
@@ -328,18 +335,38 @@ class DiagnosticTests(unittest.TestCase):
         security = _WindowsFiles()
         try:
             sid = security.sid
+            # Read the existing ACL through independent, non-mutating Win32
+            # APIs. Do not rely on an external PowerShell executable/runtime.
+            read_acl = security.security.GetNamedSecurityInfoW
+            read_acl.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD,
+                                 ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                 ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+            read_acl.restype = wintypes.DWORD
+            render_acl = security.security.ConvertSecurityDescriptorToStringSecurityDescriptorW
+            render_acl.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.POINTER(wintypes.LPWSTR), ctypes.c_void_p]
+            render_acl.restype = wintypes.BOOL
+            for target in (path, path.parent, path.parent / ".lock"):
+                descriptor = ctypes.c_void_p()
+                rendered = wintypes.LPWSTR()
+                try:
+                    self.assertEqual(read_acl(str(target), 1, 5, None, None, None, None,
+                                              ctypes.byref(descriptor)), 0)
+                    self.assertTrue(render_acl(descriptor, 1, 5, ctypes.byref(rendered), None),
+                                    f"ACL rendering failed: {ctypes.get_last_error()}")
+                    sddl = rendered.value
+                    self.assertIn("D:P", sddl)
+                    # Exactly one access-allowed ACE, assigned to the process user.
+                    self.assertEqual(sddl.count("(A;"), 1)
+                    self.assertEqual(sddl.count(";;;"), 1)
+                    self.assertIn(";;;" + sid + ")", sddl)
+                finally:
+                    if rendered:
+                        security.kernel.LocalFree(ctypes.cast(rendered, ctypes.c_void_p))
+                    if descriptor:
+                        security.kernel.LocalFree(descriptor)
         finally:
             security.close()
-        for target in (path, path.parent, path.parent / ".lock"):
-            result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                "(Get-Acl -LiteralPath $env:PLUR1BUS_TEST_ACL_PATH).Sddl"],
-                env={**os.environ, "PLUR1BUS_TEST_ACL_PATH": str(target)}, check=True, capture_output=True, text=True)
-            sddl = result.stdout.strip()
-            self.assertIn("D:P", sddl)
-            # Exactly one access-allowed ACE, assigned to the process user.
-            self.assertEqual(sddl.count("(A;"), 1)
-            self.assertEqual(sddl.count(";;;"), 1)
-            self.assertIn(";;;" + sid + ")", sddl)
 
     @unittest.skipUnless(os.name == "nt", "Requires Windows junctions and security APIs")
     def test_windows_junctions_and_hardlinks_are_rejected(self):
@@ -379,7 +406,7 @@ class DiagnosticTests(unittest.TestCase):
                     path.mkdir(exist_ok=True)
             def file(self, path):
                 events.append(("file", path.name))
-                return os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+                return os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
             def close(self):
                 events.append(("close",))
         root = self.root

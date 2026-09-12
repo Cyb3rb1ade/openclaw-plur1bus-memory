@@ -91,6 +91,16 @@ diagnostic writer now skips only the optional record, without delaying another
 model failure fallback. Real Windows ACL/reparse/rotation tests run in the Windows
 matrix rather than being represented by POSIX tests or mock-only evidence.
 
+The first native Windows matrix exposed a real Skill Workshop newline bug:
+text-mode publication converted LF to CRLF after the approved UTF-8 hash was
+computed. Publication now writes the exact hashed bytes in binary mode; retry,
+withdrawal and archived bytes are regression-tested without normalizing away
+manual edits. Windows errno aliases also map to the canonical safe error codes.
+The ACL assertion reads actual protected Windows security descriptors directly;
+it does not depend on a separate PowerShell process. Retry test polling now uses
+the production queue lock, avoiding test-created Windows delete-sharing races.
+None of these changes silently accepts or rewrites previously mismatched files.
+
 The .53 integration's final local gates were 967 Python tests plus 135 subtests,
 4,640 Node passes with 76 conditional skips, and 30 dashboard tests. Those are
 historical baseline results, not certification of the .55 source or packages.

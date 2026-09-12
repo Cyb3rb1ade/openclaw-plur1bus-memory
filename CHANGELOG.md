@@ -27,6 +27,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Unabhängiges Review: profilübergreifenden UI-Downgrade und wartende optionale
   Diagnose-Sperre behoben; OpenClaw-Episodenidentität und sichere Fehlerdiagnose
   zusätzlich korrigiert und als Upstream-PR #151 eingereicht.
+- Native Windows-Prüfung: Skill-Publikation schreibt exakt die gehashten UTF-8-
+  Bytes ohne CRLF-Umwandlung; sichere OS-Fehlercodes bleiben plattformübergreifend
+  identisch. Manuelle Änderungen werden weiterhin strikt geschützt.
 
 ### Hermes 7.12.47-hermes.0 — release
 

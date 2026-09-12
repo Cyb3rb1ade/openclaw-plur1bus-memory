@@ -34,6 +34,9 @@ _CODES = {
     "EPIPE": "network", "ENETUNREACH": "network", "EHOSTUNREACH": "network",
     "EAI_AGAIN": "network", "ENOTFOUND": "network", "ABORT_ERR": "aborted",
 }
+# Windows errno.errorcode can prefer WSA* aliases for the same integer.
+# Derive the reverse mapping from our canonical allowlist, not that alias map.
+_OS_CODES = {getattr(errno, name): name for name in _CODES if hasattr(errno, name)}
 _HINTS = tuple((re.compile(pattern, re.I), hint) for pattern, hint in (
     (r"requires an injected runtime config scope", "no-config-scope"),
     (r"configured agent runtime is unavailable", "runtime-unavailable"),
@@ -106,7 +109,7 @@ def classify_error(error: BaseException) -> dict[str, str]:
             return result
         if isinstance(error, OSError):
             number = OSError.errno.__get__(error)
-            os_code = errno.errorcode.get(number) if type(number) is int else None
+            os_code = _OS_CODES.get(number) if type(number) is int else None
             if os_code in _CODES:
                 result.update(errorCode=os_code, errorHint=_CODES[os_code])
                 return result
