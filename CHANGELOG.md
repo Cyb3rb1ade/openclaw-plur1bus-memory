@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.54] — 2026-09-12
+
+### Geändert
+
+- **Fehlschläge der Modellroute sind jetzt einzuordnen.** Die Warnung nannte
+  nur das Etikett `transport-failed`; am 12.09. standen 30 solcher Zeilen im
+  Log, ohne jeden Hinweis auf die Ursache. Die Meldung des Fremdsystems darf
+  bewusst nicht ins Log, weil sie Prompt-Inhalte oder Zugangsdaten tragen kann
+  (ein Test hält das fest). Die Warnung trägt deshalb jetzt eine feste
+  Kategorie (`errorHint`: aborted, timeout, rate-limited, quota, auth, busy,
+  denied, unavailable, network, server-error, request-rejected, other) und,
+  falls vorhanden, den Fehlercode des Hosts wie `LLM_COMPLETION_ABORTED` —
+  beides ohne den Text selbst.
+
+
 ## [7.12.53] — 2026-09-12
 
 ### Behoben

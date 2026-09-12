@@ -6,6 +6,7 @@ import {
   completeFeatureLlm,
   isLlmRouteAvailable,
   resolveFeatureLlmRoute,
+  errorHint,
 } from "../lib/llm-router.js";
 
 function createLogger() {
@@ -944,4 +945,29 @@ test("native routes never forward agentId to the OpenClaw runtime", async () => 
   assert.equal(receivedParams.purpose, "emotion-classification");
   assert.equal(result.status, "ok");
   assert.equal(result.text, "host answer");
+});
+
+test("7.12.54: die Fehlerwarnung nennt eine Kategorie und den Code, nie die Meldung", async () => {
+  const logger = createLogger();
+  const timer = createTimerHarness();
+  const secret = "upstream-secret-hint-778";
+  const originalError = Object.assign(new Error(`Plugin LLM completion was aborted. ${secret}`), { code: "LLM_COMPLETION_ABORTED" });
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm: { complete: async () => { throw originalError; } },
+    logger,
+  });
+
+  const result = await completeFeatureLlm([{ role: "user", content: "prompt" }], route, { agentId: "agent-a" }, timer);
+
+  assert.equal(result.status, "failed");
+  assert.equal(logger.calls.length, 1);
+  const serialized = JSON.stringify(logger.calls);
+  assert.match(serialized, /"errorHint":"aborted"/);
+  assert.match(serialized, /"errorCode":"LLM_COMPLETION_ABORTED"/);
+  assert.doesNotMatch(serialized, new RegExp(secret), "die Meldung des Hosts bleibt draußen");
+  assert.equal(errorHint(new Error("Isolated completion timed out after 30000ms.")), "timeout");
+  assert.equal(errorHint(new Error("rate limit exceeded")), "rate-limited");
+  assert.equal(errorHint(new Error("etwas ganz anderes")), "other");
+  assert.equal(errorHint(null), "other");
 });
