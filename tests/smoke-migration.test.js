@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { MemoryDB } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let lancedb;
 try {
@@ -13,7 +14,7 @@ try {
   // LanceDB native bindings not available in this environment
 }
 
-const TEST_DB_PATH = mkdtempSync(join(tmpdir(), "plur1bus-migration-smoke-"));
+const TEST_DB_PATH = makeTempDir("plur1bus-migration-smoke-");
 const VECTOR_DIM = 384;
 const TABLE_NAME = "memories";
 
@@ -243,7 +244,7 @@ const TABLE_NAME = "memories";
   });
 
   it("brand-new table persists all seven Phase 1/2 fields on the first store", async () => {
-    const freshDir = mkdtempSync(join(tmpdir(), "plur1bus-migration-smoke-fresh-"));
+    const freshDir = makeTempDir("plur1bus-migration-smoke-fresh-");
     const memoryDb = new MemoryDB(freshDir, VECTOR_DIM);
 
     await memoryDb.init();

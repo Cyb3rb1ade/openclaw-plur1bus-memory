@@ -18,6 +18,7 @@ import {
   syncWorkspace,
 } from "../lib/obsidian-bridge.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function snapshot(root) {
   const output = {};
@@ -66,11 +67,11 @@ describe("B14 zero-mutation service and sink paths", () => {
   it("preserves the complete tree and mtimes for missing, augment, allowWrite false, and unconfirmed policies", async () => {
     for (const policy of [
       null,
-      vaultPolicy(mkdtempSync(join(tmpdir(), "b14-db-augment-")), "augment", true, true),
-      vaultPolicy(mkdtempSync(join(tmpdir(), "b14-db-nowrite-")), "apply", false, true),
-      vaultPolicy(mkdtempSync(join(tmpdir(), "b14-db-unconfirmed-")), "apply", true, false),
+      vaultPolicy(makeTempDir("b14-db-augment-"), "augment", true, true),
+      vaultPolicy(makeTempDir("b14-db-nowrite-"), "apply", false, true),
+      vaultPolicy(makeTempDir("b14-db-unconfirmed-"), "apply", true, false),
     ]) {
-      const vault = mkdtempSync(join(tmpdir(), "b14-zero-vault-"));
+      const vault = makeTempDir("b14-zero-vault-");
       mkdirSync(join(vault, "notes"));
       writeFileSync(join(vault, "notes", "source.md"), "# source\n");
       const before = snapshot(vault);
@@ -101,8 +102,8 @@ describe("B14 zero-mutation service and sink paths", () => {
   });
 
   it("retains confirmed positive vault writes", () => {
-    const vault = mkdtempSync(join(tmpdir(), "b14-positive-vault-"));
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-positive-db-"));
+    const vault = makeTempDir("b14-positive-vault-");
+    const baseDbPath = makeTempDir("b14-positive-db-");
     const result = initWorkspace(workspace(vault), {
       dryRun: false,
       mutationPolicy: vaultPolicy(baseDbPath),

@@ -8,6 +8,7 @@ import plugin, * as pluginModule from "../index.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 
+import { makeTempDir as createTrackedTempDir } from "./helpers/temp-dir.js";
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
     const match = /^agent:([^:]+):(.+)$/.exec(value);
@@ -27,7 +28,7 @@ const routingCapability = Object.freeze({
 // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) while production
 // code resolves real paths, so temp base dirs must be canonical for comparisons.
 function makeTempDir(prefix) {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync(createTrackedTempDir(prefix));
 }
 
 // Explicit named namespace routing needs fd-backed directory capabilities,

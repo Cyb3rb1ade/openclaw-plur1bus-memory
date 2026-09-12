@@ -25,11 +25,12 @@ import {
   readTombstoneRegistry,
   tombstoneRegistryDir,
 } from "../lib/tombstone.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "cache-agent";
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "registry-cache-"));
+  const dir = makeTempDir("registry-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return join(dir, "lancedb-namespaced");
 }

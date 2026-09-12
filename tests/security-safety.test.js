@@ -26,6 +26,7 @@ import {
   safeTimestamp,
 } from "../lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation } from "../lib/security.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("safeUuid", () => {
   it("accepts valid UUIDs", () => {
@@ -113,7 +114,7 @@ describe("resolveInside", () => {
   let tmpDir;
 
   it("before hook", () => {
-    tmpDir = mkdtempSync(join(tmpdir(), "security-test-"));
+    tmpDir = makeTempDir("security-test-");
     mkdirSync(join(tmpDir, "subdir"), { recursive: true });
     writeFileSync(join(tmpDir, "subdir", "file.txt"), "hello");
   });

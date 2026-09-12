@@ -7,8 +7,9 @@ import { test } from "node:test";
 import { rotateOldArchives } from "../lib/obsidian/archive-rotation.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 
+import { makeTempDir as createTrackedTempDir } from "./helpers/temp-dir.js";
 function makeTempDir(prefix = "plur1bus-archive-test-") {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return createTrackedTempDir(prefix);
 }
 
 function rotationPolicy(baseDbPath, action = "move") {

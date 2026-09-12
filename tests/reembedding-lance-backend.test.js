@@ -9,6 +9,7 @@ import {
   createLanceGenerationBackend,
   stableNonVectorRowHash,
 } from "../lib/reembedding/lance-backend.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const rows = [
   {
@@ -43,7 +44,7 @@ describe("quarantined LanceDB reembedding generations", () => {
   let sourceDb;
 
   beforeEach(async () => {
-    root = mkdtempSync(join(tmpdir(), "plur1bus-reembedding-lance-"));
+    root = makeTempDir("plur1bus-reembedding-lance-");
     activeRoot = join(root, "active");
     stateRoot = join(root, "state");
     sourceDb = await connect(join(activeRoot, "agent-a"));

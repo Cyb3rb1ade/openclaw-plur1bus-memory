@@ -9,6 +9,7 @@ import { createControlUiHttpHandler } from "../lib/setup/control-ui-plugin-runti
 import { projectSkillWorkshop } from "../lib/control-plane-projection.js";
 import { collectSkillWorkshopProposals } from "../lib/setup/skill-workshop-dashboard.js";
 import { writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const ID = "55555555-5555-4555-8555-555555555555";
 const ID2 = "66666666-6666-4666-8666-666666666666";
@@ -93,9 +94,9 @@ describe("7.12.48: mined skills in the projection", () => {
   });
 
   it("groups ledgers by workspace basename and skips agents without proposals", (t) => {
-    const ledgerA = mkdtempSync(join(tmpdir(), "dash-ledger-a-"));
-    const ledgerB = mkdtempSync(join(tmpdir(), "dash-ledger-b-"));
-    const empty = mkdtempSync(join(tmpdir(), "dash-ledger-empty-"));
+    const ledgerA = makeTempDir("dash-ledger-a-");
+    const ledgerB = makeTempDir("dash-ledger-b-");
+    const empty = makeTempDir("dash-ledger-empty-");
     t.after(() => [ledgerA, ledgerB, empty].forEach((dir) => rmSync(dir, { recursive: true, force: true })));
     writeProposal(ledgerA, { id: ID, skillName: "a", status: "pending_review" });
     writeProposal(ledgerB, { id: ID2, skillName: "b", status: "active" });

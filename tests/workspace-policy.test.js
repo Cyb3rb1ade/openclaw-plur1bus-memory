@@ -8,9 +8,10 @@ import {
   createWorkspacePolicyStore,
   workspacePolicyKey,
 } from "../lib/workspace-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function temporaryStateRoot() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-workspace-policy-"));
+  return makeTempDir("plur1bus-workspace-policy-");
 }
 
 const alpha = Object.freeze({

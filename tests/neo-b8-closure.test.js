@@ -12,9 +12,10 @@ import {
   workspaceKeyFromContext,
 } from "../lib/neo-arch.js";
 import { createNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function root() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-neo-b8-"));
+  return makeTempDir("plur1bus-neo-b8-");
 }
 
 function startMutationWorker(moduleUrl, workerData) {

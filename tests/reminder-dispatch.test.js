@@ -5,11 +5,12 @@ import { readPendingReminders, clearPendingReminders } from "../lib/reminder-pen
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("reminder-dispatch", () => {
   let tmpDir;
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "dispatch-"));
+    tmpDir = makeTempDir("dispatch-");
   });
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });

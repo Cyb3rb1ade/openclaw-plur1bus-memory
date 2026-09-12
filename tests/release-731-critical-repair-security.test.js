@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { createDbAdapter } from "../lib/db-adapter.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REPAIR_SCRIPT = fileURLToPath(new URL("../scripts/repair-tombstones.mjs", import.meta.url));
 const AGENT = "release731-agent";
@@ -89,7 +90,7 @@ function makeQueryTable(rows, { withWhere = true, maxRowsPerQuery = Infinity } =
 }
 
 function tempDir(t, prefix) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = makeTempDir(prefix);
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

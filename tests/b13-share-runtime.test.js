@@ -8,6 +8,7 @@ import { shareCard as productionShareCard } from "../lib/telegram-commands/memor
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const OWNER = "owner";
@@ -242,8 +243,8 @@ function makeApi(baseDbPath, workspaceDir, namespaces) {
 }
 
 async function registeredHarness(t, cards, { legacyCards, namespaces } = {}) {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "p1b-share-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "p1b-share-ws-"));
+  const baseDbPath = makeTempDir("p1b-share-db-");
+  const workspaceDir = makeTempDir("p1b-share-ws-");
   const runtime = createShareRuntime(cards, { baseDbPath, legacyCards, namespaces });
   const confirmationIdentities = [];
   const api = makeApi(baseDbPath, workspaceDir, namespaces);

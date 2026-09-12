@@ -12,6 +12,7 @@ import {
   localEmbeddingPreparationTarget,
   pinnedLocalModelProfile,
 } from "../lib/providers/local-model-artifacts.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const MODEL = "jinaai/jina-embeddings-v5-text-nano-retrieval";
 const NANO_DIMENSIONS = [32, 64, 128, 256, 512, 768];
@@ -100,7 +101,7 @@ function fakeTransformersRuntime(calls, {
 }
 
 function provider(calls, overrides = {}, runtimeOptions = {}) {
-  const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-jina-v5-"));
+  const cacheDir = makeTempDir("plur1bus-jina-v5-");
   return new LocalTransformersEmbeddingProvider({
     model: MODEL,
     dimensions: 768,

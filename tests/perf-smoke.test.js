@@ -17,6 +17,7 @@ import { buildGraphIndex, queryGraphIndex } from "../lib/graph-index.js";
 import { createMetricsDebouncer } from "../lib/metrics-debounce.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
 import { measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -243,7 +244,7 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
   });
 
   it("100x direct atomicJsonUpdate ist deutlich langsamer", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "perf-atomic-"));
+    const dir = makeTempDir("perf-atomic-");
     const path = join(dir, "state.json");
 
     // Referenz: 100x reines In-Memory-accumulate im selben Environment messen,

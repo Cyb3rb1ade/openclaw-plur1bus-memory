@@ -7,6 +7,7 @@ import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import OpenAI from "openai";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "testagent-merge";
@@ -55,11 +56,11 @@ describe("memory store merge safety (K1-04)", () => {
   let originalEmbed;
 
   before(async () => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-merge-safety-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-safety-ws-"));
+    basePath = makeTempDir("plur1bus-merge-safety-");
+    workspaceDir = makeTempDir("plur1bus-merge-safety-ws-");
 
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    openclawHome = makeTempDir("openclaw-test-");
     process.env.OPENCLAW_HOME = openclawHome;
     const archiveDir = join(openclawHome, ".openclaw", "memory", "_archive");
     mkdirSync(archiveDir, { recursive: true });

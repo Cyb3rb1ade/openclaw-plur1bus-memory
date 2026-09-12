@@ -25,6 +25,7 @@ import {
   writeGraphLinks as writeGraphLinksSink,
 } from "../lib/obsidian/graph-link-writer.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function writeGraphLinks(rawConfig, records, options = {}) {
   const mutationPolicy = parseObsidianCommandPlan(["links", "suggest"], {
@@ -207,7 +208,7 @@ describe("graph-link-writer: tier2", () => {
 
 describe("graph-link-writer: writeGraphLinks", () => {
   function makeVault() {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-glw-"));
+    const dir = makeTempDir("plur1bus-glw-");
     mkdirSync(join(dir, "plur1bus", "records", "decisions"), { recursive: true });
     mkdirSync(join(dir, "plur1bus", "records", "sources"), { recursive: true });
     return dir;
@@ -346,7 +347,7 @@ describe("graph-link-writer: writeGraphLinks", () => {
 
 describe("graph-link-writer: Tier 3 (semantic link index)", () => {
   function makeVault() {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-t3-"));
+    const dir = makeTempDir("plur1bus-t3-");
     mkdirSync(join(dir, "plur1bus", "records", "decisions"), { recursive: true });
     return dir;
   }
@@ -489,7 +490,7 @@ describe("graph-link-writer: Tier 3 (semantic link index)", () => {
 
 describe("graph-link-writer: Tier 3 with memory notes (memory_id)", () => {
   function makeVault() {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-t3m-"));
+    const dir = makeTempDir("plur1bus-t3m-");
     mkdirSync(join(dir, "plur1bus", "memories"), { recursive: true });
     return dir;
   }
@@ -684,7 +685,7 @@ describe("graph-link-writer: Tier 3 with memory notes (memory_id)", () => {
 
 describe("readMemoryNotes", () => {
   it("reads memory notes from memories dir", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-rmn-"));
+    const vault = makeTempDir("plur1bus-rmn-");
     const memoriesDir = join(vault, "plur1bus", "memories");
     mkdirSync(memoriesDir, { recursive: true });
 
@@ -736,7 +737,7 @@ describe("readMemoryNotes", () => {
   });
 
   it("returns empty array when memories dir missing", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-rmn-"));
+    const vault = makeTempDir("plur1bus-rmn-");
     mkdirSync(join(vault, "plur1bus"), { recursive: true });
     const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
     const records = readMemoryNotes(rawConfig);
@@ -744,7 +745,7 @@ describe("readMemoryNotes", () => {
   });
 
   it("skips non-memory files (plur1bus_type !== memory)", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-rmn-"));
+    const vault = makeTempDir("plur1bus-rmn-");
     const memoriesDir = join(vault, "plur1bus", "memories");
     mkdirSync(memoriesDir, { recursive: true });
 
@@ -787,7 +788,7 @@ describe("readMemoryNotes", () => {
   });
 
   it("returns null title when body has no heading", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-ri-"));
+    const vault = makeTempDir("plur1bus-ri-");
     const memoriesDir = join(vault, "plur1bus", "memories");
     mkdirSync(memoriesDir, { recursive: true });
     writeFileSync(
@@ -813,7 +814,7 @@ describe("readMemoryNotes", () => {
   });
 
   it("buildRecordIndex indexes by memory_id", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-bri-"));
+    const vault = makeTempDir("plur1bus-bri-");
     mkdirSync(join(vault, "plur1bus"), { recursive: true });
 
     const uuid = "aaaaaaaa-0000-0000-0000-000000000001";

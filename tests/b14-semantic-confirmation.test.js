@@ -9,6 +9,7 @@ import {
   confirmSemanticDiscovery,
   prepareSemanticDiscovery,
 } from "../lib/obsidian-semantic-discovery-flow.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const EMPTY_ALIASES = Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) });
 
@@ -66,7 +67,7 @@ function rows() {
 
 describe("B14 bound Semantic Discovery", () => {
   it("prepare is in-memory only and ACL-filters both sources and ANN neighbors", async () => {
-    const vaultPath = mkdtempSync(join(tmpdir(), "b14-semantic-prepare-"));
+    const vaultPath = makeTempDir("b14-semantic-prepare-");
     const store = new Map();
     const result = await prepareSemanticDiscovery({
       rawConfig: { vaultPath, graphLinks: { semanticDiscovery: { threshold: 0.5 } } },
@@ -87,8 +88,8 @@ describe("B14 bound Semantic Discovery", () => {
   });
 
   it("wrong user/chat/scope/digest and replay produce no writes; exact confirmation writes once", async () => {
-    const vaultPath = mkdtempSync(join(tmpdir(), "b14-semantic-confirm-"));
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-semantic-db-"));
+    const vaultPath = makeTempDir("b14-semantic-confirm-");
+    const baseDbPath = makeTempDir("b14-semantic-db-");
     const store = new Map();
     const memoryCtx = ctx();
     const rawConfig = { vaultPath, graphLinks: { semanticDiscovery: { threshold: 0.5 } } };

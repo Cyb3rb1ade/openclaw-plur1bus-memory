@@ -27,6 +27,7 @@ import {
   scoreNeoRecallItem,
   formatNeoRecallContext,
 } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const QUERY = "gateway systemd service neustart";
 // Live-Wert aus index.js (Auto-Recall-Callsite).
@@ -69,7 +70,7 @@ describe("Neo-Status-Transition — die veraltete Kopie darf nicht gewinnen", ()
   });
 
   it("der Store behält beide Revisionen — das ist gewollt (Event-Log)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-neo-dedupe-"));
+    const dir = makeTempDir("plur1bus-neo-dedupe-");
     try {
       const store = createNeoStore(dir, "default");
       const original = makeRecord();
@@ -85,7 +86,7 @@ describe("Neo-Status-Transition — die veraltete Kopie darf nicht gewinnen", ()
   });
 
   it("der Recall zeigt nur die jüngste Revision, nicht die veraltete", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-neo-dedupe-"));
+    const dir = makeTempDir("plur1bus-neo-dedupe-");
     try {
       const store = createNeoStore(dir, "default");
       const original = makeRecord();

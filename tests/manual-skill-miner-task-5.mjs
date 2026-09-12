@@ -7,9 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function setup() {
-  const tmpDir = mkdtempSync(join(tmpdir(), "sm-orch-"));
+  const tmpDir = makeTempDir("sm-orch-");
   mkdirSync(join(tmpDir, ".adaptive-learning"), { recursive: true });
   return tmpDir;
 }

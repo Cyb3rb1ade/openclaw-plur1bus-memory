@@ -14,6 +14,7 @@ import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { resolveToolMemoryRequestContext } from "../lib/memory-request-context.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "testagent-validation";
@@ -45,10 +46,10 @@ describe("memory_store input validation", () => {
   let basePath, workspaceDir, openclawHome, originalHome, originalEmbed;
 
   before(() => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-val-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-val-ws-"));
+    basePath = makeTempDir("plur1bus-val-");
+    workspaceDir = makeTempDir("plur1bus-val-ws-");
     originalHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-val-"));
+    openclawHome = makeTempDir("openclaw-val-");
     process.env.OPENCLAW_HOME = openclawHome;
     mkdirSync(join(openclawHome, ".openclaw", "memory", "_archive"), { recursive: true });
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;

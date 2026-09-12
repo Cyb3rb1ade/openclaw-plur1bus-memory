@@ -11,10 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContradictionDetector } from "../lib/contradiction-detector.js";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("ContradictionDetector — flagContradictoryOverlays", () => {
   it("flags overlays that appear in persisted contradiction records", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-test-"));
+    const tmpDir = makeTempDir("plur1bus-contradiction-test-");
     try {
       const contradictionPath = join(tmpDir, "contradictions.jsonl");
       writeFileSync(
@@ -46,7 +47,7 @@ describe("ContradictionDetector — flagContradictoryOverlays", () => {
   });
 
   it("does nothing when contradictions file is missing", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-test-"));
+    const tmpDir = makeTempDir("plur1bus-contradiction-test-");
     try {
       const detector = new ContradictionDetector({ workspaceDir: tmpDir });
       const overlays = [{ id: "ov-only", targetMemoryId: "m1" }];
@@ -60,7 +61,7 @@ describe("ContradictionDetector — flagContradictoryOverlays", () => {
   });
 
   it("returns early for empty overlay input", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-test-"));
+    const tmpDir = makeTempDir("plur1bus-contradiction-test-");
     try {
       const detector = new ContradictionDetector({ workspaceDir: tmpDir });
       const result = await detector.flagContradictoryOverlays([]);
@@ -71,7 +72,7 @@ describe("ContradictionDetector — flagContradictoryOverlays", () => {
   });
 
   it("does not flag a contradiction when the other side is no longer active", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-test-"));
+    const tmpDir = makeTempDir("plur1bus-contradiction-test-");
     try {
       writeFileSync(
         join(tmpDir, "contradictions.jsonl"),
@@ -105,7 +106,7 @@ describe("ContradictionDetector — flagContradictoryOverlays", () => {
   });
 
   it("flags a surviving overlay when its partner is active but not in the input list", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-collapse-"));
+    const tmpDir = makeTempDir("plur1bus-contradiction-collapse-");
     try {
       const store = new InterpretationOverlayStore(tmpDir);
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Postgres.", triggerContext: "a" });

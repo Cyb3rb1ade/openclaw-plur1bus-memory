@@ -6,9 +6,10 @@ import { join } from "node:path";
 
 import { handleObsidianBridgeCommand, runEveningDeepReview } from "../lib/obsidian-control-room.js";
 import { buildRecordIndex } from "../lib/obsidian/record-index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeVault() {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-evening-guard-"));
+  const dir = makeTempDir("plur1bus-evening-guard-");
   mkdirSync(join(dir, "plur1bus"), { recursive: true });
   return dir;
 }

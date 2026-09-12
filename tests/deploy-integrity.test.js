@@ -12,11 +12,12 @@ import {
   DEPLOY_FILES,
 } from "../scripts/lib/deploy-integrity.mjs";
 import * as deployIntegrity from "../scripts/lib/deploy-integrity.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let dir;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "deploy-integrity-test-"));
+  dir = makeTempDir("deploy-integrity-test-");
   mkdirSync(join(dir, "repo", "lib"), { recursive: true });
   mkdirSync(join(dir, "deploy", "lib"), { recursive: true });
 });

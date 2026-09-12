@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 
@@ -52,8 +53,8 @@ function createApi(baseDbPath) {
 }
 
 test("Telegram skills review confirm nonce activates the proposal", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "skill-confirm-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "skill-confirm-ws-"));
+  const baseDbPath = makeTempDir("skill-confirm-db-");
+  const workspaceDir = makeTempDir("skill-confirm-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
@@ -100,8 +101,8 @@ test("Telegram skills review confirm nonce activates the proposal", async (t) =>
 });
 
 test("the installed plugin registers one exact Workshop lifecycle hook and synchronizes its isolated local JSONL", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "skill-hook-db-"));
-  const eventWorkspace = mkdtempSync(join(tmpdir(), "skill-hook-event-ws-"));
+  const baseDbPath = makeTempDir("skill-hook-db-");
+  const eventWorkspace = makeTempDir("skill-hook-event-ws-");
   const proposalWorkspace = join(baseDbPath, "_neo", "workspaces", "partition-a");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
@@ -159,8 +160,8 @@ test("the installed plugin registers one exact Workshop lifecycle hook and synch
 });
 
 test("Telegram approval delegates a Workshop-bound proposal to OpenClaw exactly once", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "skill-confirm-workshop-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "skill-confirm-workshop-ws-"));
+  const baseDbPath = makeTempDir("skill-confirm-workshop-db-");
+  const workspaceDir = makeTempDir("skill-confirm-workshop-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });

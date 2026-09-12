@@ -17,6 +17,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readdirSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/maintain-lancedb.mjs", import.meta.url));
 
@@ -41,7 +42,7 @@ function run(base, extraArgs = []) {
 
 describe("maintain-lancedb — Verzeichnisse ohne Agent-ID blockieren die Wartung nicht", () => {
   it("überspringt Backup-Verzeichnisse und verarbeitet die echten Agenten", () => {
-    const base = mkdtempSync(join(tmpdir(), "plur1bus-maint-"));
+    const base = makeTempDir("plur1bus-maint-");
     try {
       makeTable(base, "main", 60);
       makeTable(base, "main.bak-20260804", 60);
@@ -57,7 +58,7 @@ describe("maintain-lancedb — Verzeichnisse ohne Agent-ID blockieren die Wartun
   });
 
   it("prunt den echten Agenten und lässt das Backup unangetastet", () => {
-    const base = mkdtempSync(join(tmpdir(), "plur1bus-maint-"));
+    const base = makeTempDir("plur1bus-maint-");
     try {
       const live = makeTable(base, "main", 60);
       const backup = makeTable(base, "main.bak-20260804", 60);
@@ -75,7 +76,7 @@ describe("maintain-lancedb — Verzeichnisse ohne Agent-ID blockieren die Wartun
     // Die Sicherheitseigenschaft des Guards bleibt erhalten: ein Name, der wie
     // ein Traversal-Versuch aussieht, bricht die Wartung ab, BEVOR irgendetwas
     // geprunt wird. Nur harmlose Nicht-Agent-Namen werden übersprungen.
-    const base = mkdtempSync(join(tmpdir(), "plur1bus-maint-"));
+    const base = makeTempDir("plur1bus-maint-");
     try {
       const live = makeTable(base, "main", 60);
       makeTable(base, "bad..agent", 4);
@@ -92,7 +93,7 @@ describe("maintain-lancedb — Verzeichnisse ohne Agent-ID blockieren die Wartun
   });
 
   it("läuft ohne Backup-Verzeichnisse unverändert und meldet keinen Skip", () => {
-    const base = mkdtempSync(join(tmpdir(), "plur1bus-maint-"));
+    const base = makeTempDir("plur1bus-maint-");
     try {
       makeTable(base, "main", 60);
 

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { tombstoneRegistryDir } from "../lib/tombstone.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 
@@ -62,7 +63,7 @@ describe("memory_forget Scope-Enforcement (workspace/user)", () => {
   let originalEmbedPassage;
 
   before(() => {
-    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-forget-scope-"));
+    testRoot = makeTempDir("plur1bus-forget-scope-");
     baseDbPath = join(testRoot, "db");
     mkdirSync(baseDbPath);
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
@@ -100,8 +101,8 @@ describe("memory_forget Scope-Enforcement (workspace/user)", () => {
 
   it("Workspace B kann Workspace-A-Memory weder per ID noch per Query finden/tombstonen", async () => {
     const agentId = "scope-agent-a";
-    const wsA = mkdtempSync(join(tmpdir(), "plur1bus-scope-wsa-"));
-    const wsB = mkdtempSync(join(tmpdir(), "plur1bus-scope-wsb-"));
+    const wsA = makeTempDir("plur1bus-scope-wsa-");
+    const wsB = makeTempDir("plur1bus-scope-wsb-");
     const text = `workspace scoped target ${randomUUID()}`;
 
     const toolsA = toolsFor({ agentId, workspaceDir: wsA });
@@ -132,8 +133,8 @@ describe("memory_forget Scope-Enforcement (workspace/user)", () => {
 
   it("Deleted-Recovery ist workspace-gebunden: Workspace B kann keine gelöschte Workspace-A-Karte auflösen", async () => {
     const agentId = "scope-recovery-agent";
-    const wsA = mkdtempSync(join(tmpdir(), "plur1bus-scope-reca-"));
-    const wsB = mkdtempSync(join(tmpdir(), "plur1bus-scope-recb-"));
+    const wsA = makeTempDir("plur1bus-scope-reca-");
+    const wsB = makeTempDir("plur1bus-scope-recb-");
     const text = `recovery scoped target ${randomUUID()}`;
 
     const toolsA = toolsFor({ agentId, workspaceDir: wsA });
@@ -156,7 +157,7 @@ describe("memory_forget Scope-Enforcement (workspace/user)", () => {
 
   it("User-Scope: fremder User kann eine user-scoped Memory nicht tombstonen", async () => {
     const agentId = "scope-user-agent";
-    const ws = mkdtempSync(join(tmpdir(), "plur1bus-scope-user-"));
+    const ws = makeTempDir("plur1bus-scope-user-");
     const text = `user scoped target ${randomUUID()}`;
 
     const toolsOwner = toolsFor({ agentId, workspaceDir: ws, requesterSenderId: "owner-user", messageChannel: "telegram", agentAccountId: "default" });

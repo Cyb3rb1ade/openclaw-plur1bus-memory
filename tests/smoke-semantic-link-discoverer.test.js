@@ -22,6 +22,7 @@ import {
   runSemanticLinkIndexBatch,
 } from "../lib/obsidian/semantic-link-discoverer.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function semanticPolicy(vault, agentId = "main", workspaceIdentity = "workspace:v1:main") {
   return parseObsidianCommandPlan(["semantic-discovery", "confirm"], {
@@ -130,7 +131,7 @@ describe("link-index: buildPriorityQueue", () => {
 
 describe("link-index: loadLinkIndex / saveLinkIndex", () => {
   function makeVault() {
-    return mkdtempSync(join(tmpdir(), "plur1bus-li-"));
+    return makeTempDir("plur1bus-li-");
   }
 
   it("loadLinkIndex returns empty index when file missing", () => {
@@ -174,7 +175,7 @@ import { discoverSemanticLinks } from "../lib/obsidian/semantic-link-discoverer.
 
 describe("discoverSemanticLinks", () => {
   function makeVault() {
-    return mkdtempSync(join(tmpdir(), "plur1bus-sld-"));
+    return makeTempDir("plur1bus-sld-");
   }
 
   // pool.getDb() returns a MemoryDB-like object.
@@ -316,7 +317,7 @@ describe("discoverSemanticLinks", () => {
 
 describe("semantic-link dry-run from memory mirrors", () => {
   function makeMirrorVault() {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-mirror-dry-"));
+    const vault = makeTempDir("plur1bus-mirror-dry-");
     mkdirSync(join(vault, "plur1bus", "memories"), { recursive: true });
     return vault;
   }

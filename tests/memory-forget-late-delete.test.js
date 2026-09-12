@@ -8,6 +8,7 @@ import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { tombstoneRegistryDir } from "../lib/tombstone.js";
 import { withTimeout } from "../lib/with-timeout.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 
@@ -82,7 +83,7 @@ describe("memory_forget late tombstone audit continuation", () => {
   async function createCase() {
     sequence += 1;
     const agentId = `forgetagent${sequence}`;
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-ws-"));
+    const workspaceDir = makeTempDir("plur1bus-forget-late-ws-");
     workspaceDirs.push(workspaceDir);
     const memoryId = randomUUID();
     const text = `Unique forget target ${sequence} with enough detail for a semantic query.`;
@@ -110,11 +111,11 @@ describe("memory_forget late tombstone audit continuation", () => {
   }
 
   before(() => {
-    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-db-"));
+    testRoot = makeTempDir("plur1bus-forget-late-db-");
     baseDbPath = join(testRoot, "db");
     mkdirSync(baseDbPath);
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-home-"));
+    openclawHome = makeTempDir("plur1bus-forget-late-home-");
     process.env.OPENCLAW_HOME = openclawHome;
     originalTombstone = MemoryDB.prototype.tombstone;
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;

@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let tmpDir;
 
 function makeVault() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-mnw-"));
+  return makeTempDir("plur1bus-mnw-");
 }
 
 const baseConfig = (vault) => ({
@@ -120,7 +121,7 @@ describe("writeMemoryNotes", () => {
   });
 
   it("sanitizes newlines in frontmatter fields", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-mnw-"));
+    const tmpDir = makeTempDir("plur1bus-mnw-");
     const record = {
       id: "aaaaaaaa-0000-0000-0000-000000000001",
       text: "hello world",

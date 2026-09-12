@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import plugin from "../index.js";
 import { writePlur1busStartNotice } from "../lib/setup/feature-profiles.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -56,8 +57,8 @@ function makeApi(baseDbPath, configOverrides = {}) {
 
 describe("/plur1bus start", () => {
   it("registers the slash alias and renders the read-only onboarding status", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-start-db-"));
-    const openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-start-home-"));
+    const baseDbPath = makeTempDir("plur1bus-start-db-");
+    const openclawHome = makeTempDir("plur1bus-start-home-");
     const oldHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = openclawHome;
     try {
@@ -98,7 +99,7 @@ describe("/plur1bus start", () => {
   });
 
   it("keeps PLUR1BUS control commands registered when neo is disabled", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-start-db-"));
+    const baseDbPath = makeTempDir("plur1bus-start-db-");
     try {
       const api = makeApi(baseDbPath, { neo: { enabled: false } });
       plugin.register(api, { importRouting: async () => routingCapability });
@@ -116,8 +117,8 @@ describe("/plur1bus start", () => {
   });
 
   it("lists setup profiles without mutating openclaw.json", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-setup-list-db-"));
-    const openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-setup-list-home-"));
+    const baseDbPath = makeTempDir("plur1bus-setup-list-db-");
+    const openclawHome = makeTempDir("plur1bus-setup-list-home-");
     const configPath = join(openclawHome, "openclaw.json");
     const original = '{"untouched":true}\n';
     const oldConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -156,8 +157,8 @@ describe("/plur1bus start", () => {
   });
 
   it("applies Safe and Recommended only through explicit setup selections", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-setup-profile-db-"));
-    const openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-setup-profile-home-"));
+    const baseDbPath = makeTempDir("plur1bus-setup-profile-db-");
+    const openclawHome = makeTempDir("plur1bus-setup-profile-home-");
     const configPath = join(openclawHome, "openclaw.json");
     const oldConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     process.env.OPENCLAW_CONFIG_PATH = configPath;

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const EXPECTED_TOOL_NAMES = [
   "knowledge_update",
@@ -41,7 +42,7 @@ function makeMockApi(baseDbPath) {
 
 describe("tool registration metadata", () => {
   it("declares PLUR1BUS factory tool names for OpenClaw allowlist discovery", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-tool-meta-"));
+    const baseDbPath = makeTempDir("plur1bus-tool-meta-");
     try {
       const api = makeMockApi(baseDbPath);
       plugin.register(api);

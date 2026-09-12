@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Geändert
+
+- **Tests räumen ihre temporären Verzeichnisse auf.** 762 Aufrufstellen in 232
+  Testdateien legten ihr Arbeitsverzeichnis direkt per `mkdtempSync` an und
+  löschten es bestenfalls im Erfolgsfall; ein voller Lauf hinterließ 444
+  Verzeichnisse, auf dem Entwicklungsrechner hatten sich rund 33 000 Reste mit
+  4 GB angesammelt. Alle gehen jetzt über `tests/helpers/temp-dir.js`, das je
+  Testprozess einen `exit`-Hook setzt und damit auch nach Fehlschlag, Abbruch
+  oder Ausnahme aufräumt. Ein Wächter-Test schlägt an, sobald eine Testdatei
+  wieder selbst ein temporäres Verzeichnis anlegt. Nachgemessen: 444 → 0
+  zurückgelassene Verzeichnisse je Suite-Lauf.
+
+
 ## [7.12.51] — 2026-09-12
 
 ### Behoben

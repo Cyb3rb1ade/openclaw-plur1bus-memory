@@ -7,9 +7,10 @@ import { join } from "node:path";
 import { collectTier1Links, writeGraphLinks } from "../lib/obsidian/graph-link-writer.js";
 import { backfillMemoryNoteScope, writeMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeVault(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return makeTempDir(prefix);
 }
 
 function vaultPolicy(vault) {

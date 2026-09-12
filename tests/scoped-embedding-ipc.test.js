@@ -15,6 +15,7 @@ import {
   resolveScopedEmbeddingIpcPaths,
   resolveScopedEmbeddingOwnerClaimAddress,
 } from "../lib/providers/scoped-embedding-ipc.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
 const STALE_FINGERPRINT_ID = `embedding:v1:sha256:${"b".repeat(64)}`;
@@ -76,7 +77,7 @@ function createStateRoot(prefix) {
   // macOS limits filesystem Unix socket names to 103 bytes.  Its default
   // per-user temporary directory is longer than that before this test adds
   // the private IPC path, while /tmp keeps this fixture portable.
-  return mkdtempSync(join("/tmp", prefix));
+  return makeTempDir(prefix, "/tmp");
 }
 
 describe("scoped embedding through activation-owned Unix IPC", () => {

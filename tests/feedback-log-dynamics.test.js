@@ -4,11 +4,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { recordFeedback } from "../lib/feedback-log.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let workspaceDir;
 
 beforeEach(() => {
-  workspaceDir = mkdtempSync(join(tmpdir(), "feedback-log-dynamics-"));
+  workspaceDir = makeTempDir("feedback-log-dynamics-");
 });
 
 afterEach(() => {

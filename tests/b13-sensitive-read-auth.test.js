@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 
 import plugin from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -18,7 +19,7 @@ const routingCapability = Object.freeze({
 });
 
 function register({ commandRuntimeHooks, handleObsidianBridgeCommand, config = {} } = {}) {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b13-read-auth-"));
+  const baseDbPath = makeTempDir("plur1bus-b13-read-auth-");
   const commands = [];
   const noop = () => {};
   plugin.register({
@@ -274,7 +275,7 @@ describe("B13 sensitive command-read authorization matrix", () => {
       config: { merging: { enabled: true } },
       commandRuntimeHooks: { onLlmCallContext: (context) => contexts.push(context) },
     });
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-runtime-llm-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-runtime-llm-");
     const runtimeLlm = { async complete() { return "- concise\n- helpful\n- warm"; } };
     const owner = { ...intruder, senderId: "owner", userId: "owner", chatId: "owner-dm", chatType: "private" };
     try {

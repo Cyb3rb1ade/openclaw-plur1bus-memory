@@ -13,10 +13,11 @@ import {
   readPromotedKnowledgeIds,
   computeContentHash,
 } from "../lib/jobs/schicht15-tracker.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("schicht15-tracker", () => {
   it("tracks promoted knowledge per workspace+agent", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
+    const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
 
@@ -34,7 +35,7 @@ describe("schicht15-tracker", () => {
   });
 
   it("enforces maxPromotionsPerRun inside a 24-hour window, not for life", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
+    const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
 
@@ -61,7 +62,7 @@ describe("schicht15-tracker", () => {
   });
 
   it("does not count legacy promotions recorded without timestamps (unblocks a stuck workspace)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
+    const dir = makeTempDir("plur1bus-s15-");
     const statePath = join(dir, "run-state.json");
     // Live shape from 2026-06-27: seven ids, no promotedAt, blocked as "7/3".
     writeFileSync(statePath, JSON.stringify({
@@ -74,7 +75,7 @@ describe("schicht15-tracker", () => {
   });
 
   it("persists in run-state.json", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
+    const dir = makeTempDir("plur1bus-s15-");
     recordKnowledgePromotion(dir, "ws", "agent", "mem-x", "hash-x");
     const statePath = join(dir, "run-state.json");
     assert.ok(existsSync(statePath));
@@ -128,7 +129,7 @@ describe("schicht15-tracker", () => {
   });
 
   it("deduplicates by contentHash even with different memoryId (Option A+)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
+    const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
     const text = "Installation des Zabbix Agents unter Ubuntu Jammy";
@@ -152,7 +153,7 @@ describe("schicht15-tracker", () => {
   });
 
   it("safely handles broken/missing contentHash without silent double-promotion", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-s15-"));
+    const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
 

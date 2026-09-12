@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { inferEmotionalValenceAsync, setEmotionConfig } from "../lib/emotion.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // 7.12.22: Tier 3 laeuft fuer neue Erinnerungen nicht mehr im Turn, sondern
 // im Feature-Cron `emotion-refine`. Diese Tests decken die drei Stellen ab:
@@ -96,8 +97,8 @@ function findCommand(api) {
 }
 
 function withTempPaths(t) {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-emotion-refine-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-emotion-refine-ws-"));
+  const baseDbPath = makeTempDir("plur1bus-emotion-refine-db-");
+  const workspaceDir = makeTempDir("plur1bus-emotion-refine-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });

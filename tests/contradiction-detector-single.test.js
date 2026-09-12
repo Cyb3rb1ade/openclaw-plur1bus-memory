@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContradictionDetector } from "../lib/contradiction-detector.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("ContradictionDetector single-overlay helpers", () => {
   it("detectContradiction returns true when LLM says yes", async () => {
@@ -52,7 +53,7 @@ describe("ContradictionDetector single-overlay helpers", () => {
   });
 
   it("persistContradiction writes a correctly shaped record to contradictions.jsonl", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-single-"));
+    const tmpDir = makeTempDir("plur1bus-contra-single-");
     const detector = new ContradictionDetector({ workspaceDir: tmpDir });
     try {
       await detector.persistContradiction({
@@ -77,7 +78,7 @@ describe("ContradictionDetector single-overlay helpers", () => {
   });
 
   it("persistContradiction is a no-op when required fields are missing", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-missing-"));
+    const tmpDir = makeTempDir("plur1bus-contra-missing-");
     const detector = new ContradictionDetector({ workspaceDir: tmpDir });
     try {
       await detector.persistContradiction({});

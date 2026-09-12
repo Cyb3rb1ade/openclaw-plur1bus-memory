@@ -29,9 +29,10 @@ import { join, dirname } from "node:path";
 
 import { turnEventsFromMessages, createNeoStore } from "../lib/neo-arch.js";
 import { groupTurnsIntoEpisodes, createEpisode } from "../lib/episodes.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tmpDir(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return makeTempDir(prefix);
 }
 
 function writeJsonlLine(path, record) {

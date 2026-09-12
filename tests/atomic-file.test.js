@@ -4,9 +4,10 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJsonSafe, writeJsonAtomic, writeTextAtomic } from "../lib/atomic-file.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tmpDir() {
-  return mkdtempSync(join(tmpdir(), "atomic-file-"));
+  return makeTempDir("atomic-file-");
 }
 
 describe("atomic-file", () => {

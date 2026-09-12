@@ -10,10 +10,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("InterpretationOverlayStore — supersedeOverlay", () => {
   it("supersedeOverlay appends a new overlay linking to the old one", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -48,7 +49,7 @@ describe("InterpretationOverlayStore — supersedeOverlay", () => {
   });
 
   it("supersedeOverlay returns false for unknown id", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -64,7 +65,7 @@ describe("InterpretationOverlayStore — supersedeOverlay", () => {
   });
 
   it("supersedeOverlay throws for missing id", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -78,7 +79,7 @@ describe("InterpretationOverlayStore — supersedeOverlay", () => {
   });
 
   it("supersedeOverlay throws for empty newDescription", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {

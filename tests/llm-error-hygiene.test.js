@@ -20,6 +20,7 @@ import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
 import { withAbortableLlmTimeout } from "../lib/llm-failure.js";
 import { OverlayGenerator } from "../lib/overlay-generator.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const SECRET = "Authorization Bearer TEST_SECRET";
 const tempDirs = [];
@@ -53,7 +54,7 @@ function makeEvidenceGroup() {
 }
 
 function makeConflictWorkspace() {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-hygiene-"));
+  const dir = makeTempDir("plur1bus-llm-hygiene-");
   tempDirs.push(dir);
   const adaptiveDir = join(dir, ".adaptive-learning");
   mkdirSync(adaptiveDir, { recursive: true });

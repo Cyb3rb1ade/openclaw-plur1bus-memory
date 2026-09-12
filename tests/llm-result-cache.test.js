@@ -13,6 +13,7 @@ import {
   withLlmCallContext,
   withLlmResultCacheContext,
 } from "../lib/llm-result-cache.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const request = (overrides = {}) => ({
   scopeId: "agent-a",
@@ -432,7 +433,7 @@ test("partial hit usage counts each available token field and marks missing usag
 
 test("persistent cache survives instances without storing prompt or API key", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let calls = 0;
   const first = createLlmResultCache({ persist: true, baseDbPath: dir });
@@ -457,7 +458,7 @@ test("persistent cache survives instances without storing prompt or API key", as
 
 test("persistent cache initializes an absent configured base and isolates agents", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const trustedParent = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-parent-"));
+  const trustedParent = makeTempDir("plur1bus-llm-cache-parent-");
   const baseDbPath = join(trustedParent, "absent-cache-base");
   const warnings = [];
   let first;
@@ -519,7 +520,7 @@ test("persistent cache initializes an absent configured base and isolates agents
 
 test("persistent TTL is absolute across instances", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let now = 5_000;
   let calls = 0;
@@ -547,7 +548,7 @@ test("persistent TTL is absolute across instances", async (t) => {
 
 test("invalid fulfilled results are absent after reopening persistent cache", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cases = [
     { name: "null", value: result(null) },
@@ -595,7 +596,7 @@ test("invalid fulfilled results are absent after reopening persistent cache", as
 });
 
 test("invalid agent paths fail open without creating persistence", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let calls = 0;
   const cache = createLlmResultCache({ persist: true, baseDbPath: dir });
@@ -608,7 +609,7 @@ test("invalid agent paths fail open without creating persistence", async (t) => 
 });
 
 test("permission hardening failure disables persistence for the scope", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let calls = 0;
   const cache = createLlmResultCache({
@@ -623,7 +624,7 @@ test("permission hardening failure disables persistence for the scope", async (t
 
 test("hard byte limit skips persistence without breaking the memory cache", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   let calls = 0;
   const cache = createLlmResultCache({
@@ -653,7 +654,7 @@ test("hard byte limit skips persistence without breaking the memory cache", asyn
 
 test("SQLite cleanup caps expired-row deletion work per persistent write", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const dbPath = join(dir, "llm-result-cache-v1", "agent-a.db");
   let now = 1_000;
@@ -694,7 +695,7 @@ test("SQLite cleanup caps expired-row deletion work per persistent write", async
 
 test("opening persistence sweeps expired rows beyond the per-write cap", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const versionDir = join(dir, "llm-result-cache-v1");
   mkdirSync(versionDir, { recursive: true });
@@ -740,7 +741,7 @@ test("opening persistence sweeps expired rows beyond the per-write cap", async (
 
 test("soft-limit cleanup evicts multiple oldest SQLite rows but keeps the newest", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const dbPath = join(dir, "llm-result-cache-v1", "agent-a.db");
   let now = 1_000;
@@ -788,7 +789,7 @@ test("soft-limit cleanup evicts multiple oldest SQLite rows but keeps the newest
 
 test("WAL-heavy hard-limit cleanup reclaims space and persists the new result", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const dbPath = join(dir, "llm-result-cache-v1", "agent-a.db");
   let now = 10_000;
@@ -846,7 +847,7 @@ test("WAL-heavy hard-limit cleanup reclaims space and persists the new result", 
 
 test("persistent cache directory is created with owner-only permissions", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cache = createLlmResultCache({ persist: true, baseDbPath: dir });
   await cache.getOrCompute(request(), async () => result("answer"));
@@ -855,7 +856,7 @@ test("persistent cache directory is created with owner-only permissions", async 
 });
 
 test("close drains in-flight persist writes before closing handles", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
   let releaseLoader;
@@ -927,7 +928,7 @@ test("close drains in-flight persist writes before closing handles", async (t) =
 });
 
 test("close waits for pending opens and permanently disables persistence", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
   let releaseLoader;

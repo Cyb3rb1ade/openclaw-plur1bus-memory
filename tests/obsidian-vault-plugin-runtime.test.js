@@ -16,9 +16,10 @@ import {
   registerObsidianVaultRuntime,
 } from "../lib/setup/obsidian-vault-plugin-runtime.js";
 import { DEFAULT_WS_SUFFIXES, detectObsidianVaults, listWorkspaceDirectories } from "../lib/setup/feature-profiles.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-vault-"));
+  const dir = makeTempDir("plur1bus-vault-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -16,6 +16,7 @@ import {
   getPreviousWeekWindow,
   runRemDream,
 } from "../lib/dreaming/rem-dream.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "release731-followup-agent";
 const USER = `user:v1:${"f".repeat(64)}`;
@@ -145,7 +146,7 @@ function baseArgs({ db, partition, sink, callLlm, workspaceDir, narrativeCfg = {
 }
 
 test("REM vectorSearch failure aborts the run with zero side effects and leaves retry possible", async () => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "release731-rem-vector-failure-"));
+  const workspaceDir = makeTempDir("release731-rem-vector-failure-");
   try {
     const partition = buildRemPartition({
       scope: "agent-private", agentId: AGENT, workspaceIdentity: "", ownerUserId: "",
@@ -213,7 +214,7 @@ test("REM vectorSearch failure aborts the run with zero side effects and leaves 
 });
 
 test("REM analysis completes when narrative memory persistence has no optional bound sink", async () => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "release731-rem-optional-sink-"));
+  const workspaceDir = makeTempDir("release731-rem-optional-sink-");
   try {
     const partition = buildRemPartition({
       scope: "agent-private", agentId: AGENT, workspaceIdentity: "", ownerUserId: "",

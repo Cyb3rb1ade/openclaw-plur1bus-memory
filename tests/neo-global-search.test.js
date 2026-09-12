@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createNeoStore, searchNeoCandidatesGlobal, dedupeNeoLanesAgainstTexts, routeNeoRecall } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // 7.12.27: Suche ueber alle Kandidaten auf dem Vektor-Sidecar.
 const NOW = Date.parse("2026-09-10T00:00:00Z");
@@ -45,7 +46,7 @@ async function seedStore(root) {
 
 describe("searchNeoCandidatesGlobal", () => {
   it("ranks by cosine with a recency discount, honours status, threshold, excludeIds and topK", async () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-global-"));
+    const root = makeTempDir("neo-global-");
     try {
       const store = await seedStore(root);
       const query = [1, 0, 0, 0];
@@ -78,7 +79,7 @@ describe("searchNeoCandidatesGlobal", () => {
   });
 
   it("readVectors returns the same values as readVector for a batch of ids", async () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-global-batch-"));
+    const root = makeTempDir("neo-global-batch-");
     try {
       const store = await seedStore(root);
       const batch = store.readVectors(["mem-far", "mem-tea", "missing"]);
@@ -91,7 +92,7 @@ describe("searchNeoCandidatesGlobal", () => {
   });
 
   it("global hits compete in the recall lanes together with the window", async () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-global-lanes-"));
+    const root = makeTempDir("neo-global-lanes-");
     try {
       const store = await seedStore(root);
       const query = [1, 0, 0, 0];

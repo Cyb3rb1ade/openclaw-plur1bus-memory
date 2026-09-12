@@ -7,6 +7,7 @@ import test from "node:test";
 import { buildRemPartition, buildSparseNeighborGraph, loadCandidateMemories, runRemDream, writeRemDreamToVault } from "../lib/dreaming/rem-dream.js";
 import { appendDreamEcho, loadFreshDreamEcho } from "../lib/dream-echo.js";
 import { lightDream } from "../lib/dreaming/light-dream.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const NOW = Date.now();
 const REQUEST_CONTEXT = Object.freeze({
@@ -270,7 +271,7 @@ test("REM reads last-week patterns with a requester and stamps new pattern visib
 });
 
 test("a protected REM echo is not loaded without its matching owner context", (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-rem-echo-"));
+  const workspaceDir = makeTempDir("plur1bus-rem-echo-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   appendDreamEcho(workspaceDir, {
     sentence: "Private owner dream echo.",
@@ -283,14 +284,14 @@ test("a protected REM echo is not loaded without its matching owner context", (t
 });
 
 test("legacy or unbound dream echoes fail closed", (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-unbound-echo-"));
+  const workspaceDir = makeTempDir("plur1bus-unbound-echo-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   appendDreamEcho(workspaceDir, { sentence: "legacy echo", createdAt: NOW });
   assert.equal(loadFreshDreamEcho(workspaceDir, { now: NOW, requestContext: REQUEST_CONTEXT }), null);
 });
 
 test("light dreaming writes only a validated bound echo", async (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-light-bound-"));
+  const workspaceDir = makeTempDir("plur1bus-light-bound-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const aclBindings = { scope: "workspace", agentId: "agent-a", workspaceIdentity: "workspace:v1:workspace-a", ownerUserId: "" };
   await lightDream({
@@ -305,7 +306,7 @@ test("light dreaming writes only a validated bound echo", async (t) => {
 });
 
 test("REM workspace vault output retains the matching workspace ACL binding", (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-rem-vault-"));
+  const workspaceDir = makeTempDir("plur1bus-rem-vault-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const aclBindings = WORKSPACE_PARTITION;
   const output = writeRemDreamToVault({ weekOf: "2026-W01", patternsFound: 1, new: 1, stronger: 0, weaker: 0, disappeared: 0, aclPartition: aclBindings }, [{

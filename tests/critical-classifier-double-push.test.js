@@ -14,6 +14,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runClassifier } from "../lib/jobs/critical-classifier.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const model = { complete: async () => ({ text: "person" }) }; // → critical type
 const card = { id: "c1", content: "Christians Geburtstag ist am 1. Mai", title: "x" };
@@ -29,7 +30,7 @@ function makeDb(overrides = {}) {
 describe("critical-classifier double-push guard", () => {
   it("does not push when updateCardType throws (card stays unclassified)", async () => {
     let sent = 0;
-    const statePath = mkdtempSync(join(tmpdir(), "crit-state-"));
+    const statePath = makeTempDir("crit-state-");
     const db = makeDb({ updateCardType: async () => { throw new Error("not wired"); } });
     const res = await runClassifier(db, "agentA", {
       model, telegramSend: async () => { sent++; }, statePath,
@@ -41,7 +42,7 @@ describe("critical-classifier double-push guard", () => {
 
   it("does not push when updateCardType is unwired", async () => {
     let sent = 0;
-    const statePath = mkdtempSync(join(tmpdir(), "crit-state-"));
+    const statePath = makeTempDir("crit-state-");
     const db = makeDb({ updateCardType: undefined });
     const res = await runClassifier(db, "agentB", {
       model, telegramSend: async () => { sent++; }, statePath,
@@ -58,7 +59,7 @@ describe("critical-classifier tombstone guard", () => {
   it("neither classifies nor pushes a card with status deleted", async () => {
     let sent = 0;
     let typed = 0;
-    const statePath = mkdtempSync(join(tmpdir(), "crit-state-"));
+    const statePath = makeTempDir("crit-state-");
     const db = makeDb({
       findRecentUnclassified: async () => [
         { ...card, id: "dead1", status: "deleted" },
@@ -90,7 +91,7 @@ describe("critical-classifier hideTypes", () => {
 
   it("shows the health preview by default and hides it when hideTypes says so", async () => {
     for (const [hideTypes, expectPreview] of [[undefined, true], [["gesundheit"], false]]) {
-      const statePath = mkdtempSync(join(tmpdir(), "crit-state-"));
+      const statePath = makeTempDir("crit-state-");
       const db = makeDb({ findRecentUnclassified: async () => [healthCard] });
       const res = await runClassifier(db, "agentH", { model: healthModel, statePath, hideTypes });
       assert.strictEqual(res.pushed, 1);

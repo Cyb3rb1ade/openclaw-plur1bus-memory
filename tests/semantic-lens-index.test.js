@@ -11,9 +11,10 @@ import {
   loadSemanticLensIndex,
   resolveSemanticLensConfig,
 } from "../lib/semantic-lens-index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tempWorkspace() {
-  const dir = mkdtempSync(join(tmpdir(), "semantic-lens-"));
+  const dir = makeTempDir("semantic-lens-");
   mkdirSync(join(dir, ".plur1bus"), { recursive: true });
   return dir;
 }

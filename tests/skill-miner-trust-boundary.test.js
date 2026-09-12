@@ -14,12 +14,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("skill-miner trust boundary", () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "skill-miner-trust-"));
+    tmpDir = makeTempDir("skill-miner-trust-");
   });
 
   afterEach(() => {

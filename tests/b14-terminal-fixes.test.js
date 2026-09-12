@@ -29,6 +29,7 @@ import {
   recordOwnedVaultConfirmation,
 } from "../lib/obsidian-vault-authority.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const aliases = Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) });
 
@@ -120,9 +121,9 @@ describe("B14 terminal selector binding", () => {
   });
 
   it("denies a cross-scope init target and retains exact-scope init writes", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-selector-db-"));
-    const vaultA = mkdtempSync(join(tmpdir(), "b14-selector-a-"));
-    const vaultB = mkdtempSync(join(tmpdir(), "b14-selector-b-"));
+    const baseDbPath = makeTempDir("b14-selector-db-");
+    const vaultA = makeTempDir("b14-selector-a-");
+    const vaultB = makeTempDir("b14-selector-b-");
     const config = {
       mode: "apply",
       allowWrite: true,
@@ -155,9 +156,9 @@ describe("B14 terminal selector binding", () => {
   });
 
   it("validates every same-scope vault policy before a multi-target init writes", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-multi-init-db-"));
-    const vaultOne = mkdtempSync(join(tmpdir(), "b14-multi-init-one-"));
-    const vaultTwo = mkdtempSync(join(tmpdir(), "b14-multi-init-two-"));
+    const baseDbPath = makeTempDir("b14-multi-init-db-");
+    const vaultOne = makeTempDir("b14-multi-init-one-");
+    const vaultTwo = makeTempDir("b14-multi-init-two-");
     const ctx = memoryCtx();
     recordOwnedVaultConfirmation({
       baseDbPath,
@@ -191,8 +192,8 @@ describe("B14 terminal selector binding", () => {
 
 describe("B14 terminal non-mutating Semantic Discovery prepare", () => {
   it("does not create or change DB filesystem state when the production namespace is absent", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-semantic-runtime-db-"));
-    const vaultPath = mkdtempSync(join(tmpdir(), "b14-semantic-runtime-vault-"));
+    const baseDbPath = makeTempDir("b14-semantic-runtime-db-");
+    const vaultPath = makeTempDir("b14-semantic-runtime-vault-");
     const commands = [];
     const noop = () => {};
     plugin.register({
@@ -258,8 +259,8 @@ describe("B14 terminal protected review status commands", () => {
     ["snooze", "snoozed"],
   ]) {
     it(`persists review ${action} with review_write-only policy`, async () => {
-      const baseDbPath = mkdtempSync(join(tmpdir(), `b14-review-${action}-`));
-      const vaultPath = mkdtempSync(join(tmpdir(), `b14-review-vault-${action}-`));
+      const baseDbPath = makeTempDir(`b14-review-${action}-`);
+      const vaultPath = makeTempDir(`b14-review-vault-${action}-`);
       const policy = parseObsidianCommandPlan(["review", action], {
         memoryCtx: memoryCtx(),
         baseDbPath,
@@ -301,8 +302,8 @@ describe("B14 terminal protected review status commands", () => {
 
 describe("B14 terminal cron and background dashboard sinks", () => {
   it("uses the immutable command policy when installing generated cron jobs", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-cron-db-"));
-    const vaultPath = mkdtempSync(join(tmpdir(), "b14-cron-vault-"));
+    const baseDbPath = makeTempDir("b14-cron-db-");
+    const vaultPath = makeTempDir("b14-cron-vault-");
     const calls = [];
     const result = await handleObsidianBridgeCommand(
       ["cron", "install-workspace-reviews", "--force"],
@@ -329,7 +330,7 @@ describe("B14 terminal cron and background dashboard sinks", () => {
   });
 
   it("passes the confirmed policy into background dashboard generation", async () => {
-    const vaultPath = mkdtempSync(join(tmpdir(), "b14-background-dashboard-"));
+    const vaultPath = makeTempDir("b14-background-dashboard-");
     const service = createObsidianBridgeService({
       enabled: true,
       dryRun: false,

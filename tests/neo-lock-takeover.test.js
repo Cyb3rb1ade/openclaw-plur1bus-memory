@@ -16,9 +16,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNeoStore } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function freshStore() {
-  const root = mkdtempSync(join(tmpdir(), "neo-lock-takeover-"));
+  const root = makeTempDir("neo-lock-takeover-");
   const store = createNeoStore(root, "workspace");
   mkdirSync(store.paths.workspaceDir, { recursive: true });
   return { root, store, lockPath: join(store.paths.workspaceDir, ".neo-write.lock") };

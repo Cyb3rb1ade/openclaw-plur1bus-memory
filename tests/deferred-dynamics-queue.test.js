@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createDeferredDynamicsQueue } from "../lib/deferred-dynamics-queue.js";
 import { recordFeedbackBatch } from "../lib/feedback-log.js";
 import { completePendingReplyOutcomes, recordPendingReplyOutcome } from "../lib/reply-outcome-tracking.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // 7.12.30: Reply-Outcome-Dynamik laeuft nicht mehr im Prompt-Hook.
 
@@ -88,7 +89,7 @@ function slowDb(updates, delayMs) {
 
 describe("recordFeedbackBatch with a dynamics scheduler", () => {
   it("returns synchronously and hands the DB work to the scheduler", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-feedback-sched-"));
+    const workspaceDir = makeTempDir("plur1bus-feedback-sched-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const updates = [];
     const scheduled = [];
@@ -108,7 +109,7 @@ describe("recordFeedbackBatch with a dynamics scheduler", () => {
   });
 
   it("completePendingReplyOutcomes passes the scheduler through and no longer waits for updates", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-outcome-sched-"));
+    const workspaceDir = makeTempDir("plur1bus-outcome-sched-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const memoryIds = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
     recordPendingReplyOutcome(workspaceDir, {

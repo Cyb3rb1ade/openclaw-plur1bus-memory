@@ -25,11 +25,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 
 import { validateDeployment, DEPLOY_FILES } from "../scripts/lib/deploy-integrity.mjs";
 import { run as runWorkspaceWriter } from "../scripts/verify-workspace-writer.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 function makeTmpDir() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-repair-test-"));
+  return makeTempDir("plur1bus-repair-test-");
 }
 
 function cleanup(dir) {

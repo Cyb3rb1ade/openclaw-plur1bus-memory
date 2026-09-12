@@ -13,6 +13,7 @@ import {
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 import { recordOwnedVaultConfirmation } from "../lib/obsidian-vault-authority.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "control-room-agent";
@@ -91,9 +92,9 @@ describe("registered Obsidian Control-Room memory apply", () => {
   let workspaceDir;
 
   beforeEach(async () => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-control-room-db-"));
-    vaultPath = mkdtempSync(join(tmpdir(), "plur1bus-control-room-vault-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-control-room-workspace-"));
+    baseDbPath = makeTempDir("plur1bus-control-room-db-");
+    vaultPath = makeTempDir("plur1bus-control-room-vault-");
+    workspaceDir = makeTempDir("plur1bus-control-room-workspace-");
     bundleId = `rb-${randomUUID()}`;
 
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;

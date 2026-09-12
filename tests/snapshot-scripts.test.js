@@ -4,6 +4,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const SCRIPT_DIR = new URL("../scripts/", import.meta.url).pathname;
 
@@ -17,7 +18,7 @@ const SKIP = SCRIPTS_PRESENT
   : { skip: "scripts/*.sh not present (scripts/ is gitignored)" };
 
 function makeTempOpenclawHome() {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-snapshot-test-"));
+  const dir = makeTempDir("plur1bus-snapshot-test-");
   return dir;
 }
 
@@ -210,7 +211,7 @@ test("restore rejects invalid snapshot path", SKIP, () => {
   const home = makeTempOpenclawHome();
   try {
     // Create a directory outside the snapshots root
-    const evilDir = mkdtempSync(join(tmpdir(), "plur1bus-evil-"));
+    const evilDir = makeTempDir("plur1bus-evil-");
     writeFileSync(join(evilDir, "manifest.json"), "{}");
 
     let threw = false;

@@ -9,6 +9,7 @@ import { runRecallPipeline } from "../lib/recall-pipeline.js";
 import { createNeoStore } from "../lib/neo-arch.js";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function privateRow(id, score = 0.1) {
   return {
@@ -162,8 +163,8 @@ describe("B12-P advertised recall runtime contract", () => {
   });
 
   it("applies adaptive budget and final ledger once to the default private route", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12p-private-budget-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b12p-private-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-b12p-private-budget-");
+    const workspaceDir = makeTempDir("plur1bus-b12p-private-workspace-");
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => runtimeVector();
@@ -194,8 +195,8 @@ describe("B12-P advertised recall runtime contract", () => {
   });
 
   it("drops every auto-injected memory when a token budget of one allocates zero slots", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12p-compress-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b12p-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-b12p-compress-");
+    const workspaceDir = makeTempDir("plur1bus-b12p-workspace-");
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => runtimeVector();
@@ -227,8 +228,8 @@ describe("B12-P advertised recall runtime contract", () => {
   });
 
   it("keeps multiline compressed text attached to its original metadata slot", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12p-compress-slots-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b12p-slots-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-b12p-compress-slots-");
+    const workspaceDir = makeTempDir("plur1bus-b12p-slots-workspace-");
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => runtimeVector();

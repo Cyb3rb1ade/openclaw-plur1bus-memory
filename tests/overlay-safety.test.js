@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { OverlayGenerator } from "../lib/overlay-generator.js";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
 import { formatRelevantMemoriesContext } from "../lib/relevant-memory-context.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("overlay safety", () => {
   it("default-off: generator does nothing when disabled", async () => {
@@ -40,7 +41,7 @@ describe("overlay safety", () => {
   });
 
   it("generated overlays never mutate factual memory (only append JSONL)", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-safety-"));
+    const tmpDir = makeTempDir("plur1bus-safety-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {

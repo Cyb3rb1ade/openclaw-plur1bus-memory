@@ -13,6 +13,7 @@ import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capabilit
 import { createNeoStore } from "../lib/neo-arch.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { TimeoutError } from "../lib/with-timeout.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "namespace-recall-agent";
@@ -121,8 +122,8 @@ const namespaceRoutingOptions = stableDirectoryCapabilitiesSupported()
 
 describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   it("merges same-agent namespace records globally for memory_recall, memory_search, and before_prompt_build without writing legacy storage", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-runtime-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-namespace-runtime-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-workspace-");
     const activePath = join(baseDbPath, "active", AGENT_ID);
     const legacyPath = join(baseDbPath, "legacy", AGENT_ID);
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
@@ -235,8 +236,8 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   });
 
   it("waits for every namespace pipeline before reporting a query failure", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-settlement-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-settlement-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-namespace-settlement-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-settlement-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalInit = MemoryDB.prototype.init;
     const legacyStarted = deferred();
@@ -294,8 +295,8 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   });
 
   it("rejects a merged namespace recall when strict graph endpoint authorization cannot read", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-graph-read-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-graph-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-namespace-graph-read-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-graph-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalInit = MemoryDB.prototype.init;
     const seedId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -375,8 +376,8 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   });
 
   it("rejects a multi-namespace read timeout and retains leases through its raw settlement", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-timeout-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-timeout-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-namespace-timeout-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-timeout-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalInit = MemoryDB.prototype.init;
     const rawSettlements = [deferred(), deferred()];
@@ -453,8 +454,8 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   });
 
   it("keeps strict read semantics after an absent configured legacy namespace", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-missing-legacy-timeout-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-missing-legacy-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-namespace-missing-legacy-timeout-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-missing-legacy-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalInit = MemoryDB.prototype.init;
     const rawSettlement = deferred();
@@ -513,8 +514,8 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   });
 
   it("preserves fail-soft reads for a genuinely single configured namespace", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-single-timeout-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-single-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-namespace-single-timeout-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-single-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalInit = MemoryDB.prototype.init;
     const rawSettlement = deferred();
@@ -563,8 +564,8 @@ describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   });
 
   it("rejects a temporal anchor namespace timeout without partial output", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-anchor-timeout-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-anchor-workspace-"));
+    const baseDbPath = makeTempDir("plur1bus-namespace-anchor-timeout-");
+    const workspaceDir = makeTempDir("plur1bus-namespace-anchor-workspace-");
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalInit = MemoryDB.prototype.init;

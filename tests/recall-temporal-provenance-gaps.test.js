@@ -20,6 +20,7 @@ import {
 } from "../lib/temporal-provenance.js";
 import { knowledgeMtimeMs, searchCanonical } from "../lib/recall-pipeline.js";
 import { formatReactivationContext } from "../lib/conversation-reactivation-recall.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const NOW_ISO = "2026-08-11T12:00:00.000Z";
 const NOW_MS = new Date(NOW_ISO).getTime();
@@ -27,7 +28,7 @@ const ONE_HOUR_AGO = new Date(NOW_MS - 60 * 60 * 1000).toISOString();
 
 describe("Lücke A — Canonical-Hits tragen die KNOWLEDGE.md-mtime", () => {
   it("knowledgeMtimeMs liefert die mtime der Datei", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-knowledge-"));
+    const dir = makeTempDir("plur1bus-knowledge-");
     try {
       mkdirSync(join(dir, "memory"), { recursive: true });
       const file = join(dir, "memory", "KNOWLEDGE.md");
@@ -42,7 +43,7 @@ describe("Lücke A — Canonical-Hits tragen die KNOWLEDGE.md-mtime", () => {
   });
 
   it("knowledgeMtimeMs liefert 0 bei fehlender Datei oder fehlendem Workspace", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-knowledge-empty-"));
+    const dir = makeTempDir("plur1bus-knowledge-empty-");
     try {
       assert.equal(knowledgeMtimeMs(dir), 0);
       assert.equal(knowledgeMtimeMs(""), 0);
@@ -56,7 +57,7 @@ describe("Lücke A — Canonical-Hits tragen die KNOWLEDGE.md-mtime", () => {
     // Sichert den Feldnamen-Vertrag zwischen searchCanonical und dem
     // Canonical-Mapping in index.js ab. Ohne diesen Test würde ein Tippfehler
     // (c.mtime statt c.mtimeMs) von allen anderen Tests unbemerkt bleiben.
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-canonical-"));
+    const dir = makeTempDir("plur1bus-canonical-");
     try {
       mkdirSync(join(dir, "memory"), { recursive: true });
       const file = join(dir, "memory", "KNOWLEDGE.md");

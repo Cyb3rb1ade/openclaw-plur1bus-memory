@@ -6,9 +6,10 @@ import { join } from "node:path";
 
 import { createObsidianBridgeService } from "../lib/obsidian-bridge.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeVault(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return makeTempDir(prefix);
 }
 
 function memoryRecord(id, overrides = {}) {

@@ -6,12 +6,13 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 import { resolveEmbeddingGenerationLayout } from "../lib/reembedding/generation-layout.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const targetFingerprintId = `embedding:v1:sha256:${"a".repeat(64)}`;
 
 describe("active embedding generation routing", () => {
   let root;
-  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "plur1bus-generation-layout-")); });
+  beforeEach(() => { root = makeTempDir("plur1bus-generation-layout-"); });
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
   it("preserves the current named writer until a generation is selected", () => {

@@ -29,6 +29,7 @@ import {
 import { forgetCard } from "../lib/telegram-commands/memory-edit.js";
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { safeStatus } from "../lib/sql-safety.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const UUID_A = "11111111-1111-4111-8111-111111111111";
 
@@ -133,7 +134,7 @@ describe("Scope-Bindung (tombstoneBlocksCapture)", () => {
 
 describe("Registry (append/read/find)", () => {
   it("append + find by fingerprint und origin, nur committed blockiert", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-tombstone-reg-"));
+    const dir = makeTempDir("plur1bus-tombstone-reg-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     try {
       const tombstone = buildTombstone({
@@ -160,7 +161,7 @@ describe("Registry (append/read/find)", () => {
 
 describe("forgetCard kanonischer Vorgang", () => {
   it("tombstoned statt physisch zu löschen (Zeile bleibt, status=deleted)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-forget-card-"));
+    const dir = makeTempDir("plur1bus-forget-card-");
     const ws = join(dir, "ws");
     try {
       const db = makeTombstoneDb({ [UUID_A]: { text: "Geheim", title: "x", scope: "agent-private" } });
@@ -182,7 +183,7 @@ describe("forgetCard kanonischer Vorgang", () => {
   });
 
   it("wiederholtes Forget ist idempotent (keine zweite Löschung)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-forget-idem-"));
+    const dir = makeTempDir("plur1bus-forget-idem-");
     try {
       const db = makeTombstoneDb({ [UUID_A]: { text: "x", title: "x", scope: "agent-private" } });
       const ws = join(dir, "ws");
@@ -198,7 +199,7 @@ describe("forgetCard kanonischer Vorgang", () => {
   });
 
   it("fehlgeschlagene Persistierung erzeugt kein Committed-Audit", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-forget-fail-"));
+    const dir = makeTempDir("plur1bus-forget-fail-");
     const ws = join(dir, "ws");
     try {
       const db = {
@@ -253,7 +254,7 @@ describe("db-adapter tombstoneCard", () => {
 
 describe("Re-Capture-Block (findBlockingTombstoneForCapture)", () => {
   it("identischer normalisierter Inhalt wird im selben Scope blockiert", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-recapture-"));
+    const dir = makeTempDir("plur1bus-recapture-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     try {
       const tombstone = buildTombstone({
@@ -313,7 +314,7 @@ describe("Scope-Auflösung (alle Treffer)", () => {
   }
 
   it("mehrere gleichlautende Tombstones in verschiedenen Workspaces blockieren jeweils den richtigen Workspace", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-scope-multi-"));
+    const dir = makeTempDir("plur1bus-scope-multi-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     try {
       const text = "Gelöschter Inhalt";
@@ -336,7 +337,7 @@ describe("Scope-Auflösung (alle Treffer)", () => {
   });
 
   it("agent-private blockiert nur agent-private; workspace/user nur ihren Principal", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-scope-ap-"));
+    const dir = makeTempDir("plur1bus-scope-ap-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     try {
       const text = "Privater Fakt";
@@ -356,7 +357,7 @@ describe("Scope-Auflösung (alle Treffer)", () => {
 
 describe("Registry fail-safe", () => {
   it("beschädigte JSONL-Zeile blockiert Capture konservativ", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-corrupt-"));
+    const dir = makeTempDir("plur1bus-corrupt-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const registryDir = join(dir, "_tombstones");
     try {
@@ -372,7 +373,7 @@ describe("Registry fail-safe", () => {
   });
 
   it("Lesefehler blockiert Capture konservativ statt still \"kein Tombstone\"", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-readerr-"));
+    const dir = makeTempDir("plur1bus-readerr-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const registryDir = join(dir, "_tombstones");
     try {
@@ -391,7 +392,7 @@ describe("Registry fail-safe", () => {
 
 describe("Forget crash-recovery + ACL vor Idempotenz", () => {
   it("wiederholtes Forget einer bereits gelöschten Karte trägt fehlenden committed Tombstone nach", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-backfill-"));
+    const dir = makeTempDir("plur1bus-backfill-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const ws = join(dir, "ws");
     try {
@@ -412,7 +413,7 @@ describe("Forget crash-recovery + ACL vor Idempotenz", () => {
   });
 
   it("ACL wird vor der idempotenten Erfolgsauskunft geprüft (kein Information-Leak)", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-acl-idem-"));
+    const dir = makeTempDir("plur1bus-acl-idem-");
     try {
       const id = "aaaaaaaa-1111-4111-8111-111111111111";
       const db = {
@@ -435,7 +436,7 @@ describe("Forget crash-recovery + ACL vor Idempotenz", () => {
 
 describe("Registry-Agent-Bindung und Validierung", () => {
   it("Tombstone mit fremder agentId in agent-a.jsonl gilt als corrupt und blockiert konservativ", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-agent-bind-"));
+    const dir = makeTempDir("plur1bus-agent-bind-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     try {
       const tombstone = buildTombstone({
@@ -471,7 +472,7 @@ describe("Registry-Agent-Bindung und Validierung", () => {
   });
 
   it("corrupt Registry blockiert Backfill (fail-closed)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-backfill-corrupt-"));
+    const dir = makeTempDir("plur1bus-backfill-corrupt-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const registryDir = join(dir, "_tombstones");
     try {

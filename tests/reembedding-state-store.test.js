@@ -10,11 +10,12 @@ import {
   verifyMigrationConfirmation,
 } from "../lib/reembedding/confirmation.js";
 import { createMigrationStateStore } from "../lib/reembedding/state-store.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("durable reembedding state and confirmations", () => {
   let stateRoot;
 
-  beforeEach(() => { stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-reembedding-state-")); });
+  beforeEach(() => { stateRoot = makeTempDir("plur1bus-reembedding-state-"); });
   afterEach(() => { rmSync(stateRoot, { recursive: true, force: true }); });
 
   it("stores no confirmation token and validates its hash, digest, and expiry", () => {

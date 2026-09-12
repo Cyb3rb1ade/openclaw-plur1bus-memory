@@ -4,9 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main as runCodeIndex } from "../scripts/build-code-index.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tempWorkspace() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-code-index-cli-"));
+  return makeTempDir("plur1bus-code-index-cli-");
 }
 
 async function captureConsoleLog(fn) {

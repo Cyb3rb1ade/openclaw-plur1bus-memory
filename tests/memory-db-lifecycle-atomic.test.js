@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { MemoryDB } from "../index.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 
+import { makeTempDir as createTrackedTempDir } from "./helpers/temp-dir.js";
 const VECTOR_DIM = 3;
 
 function deferred() {
@@ -42,7 +43,7 @@ async function settleCleanup(promise, label) {
 }
 
 function makeTempDir(t, prefix) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = createTrackedTempDir(prefix);
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

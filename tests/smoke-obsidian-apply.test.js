@@ -15,6 +15,7 @@ import {
   bridgePaths,
 } from "../lib/obsidian-bridge.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("obsidian-apply", () => {
   function makeWorkspace(dir) {
@@ -48,7 +49,7 @@ describe("obsidian-apply", () => {
   }
 
   it("blocks apply when vault path is not confirmed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-"));
+    const dir = makeTempDir("plur1bus-obs-");
     const ws = makeWorkspace(dir);
     const result = await syncWorkspace(ws, {
       dryRun: false,
@@ -63,7 +64,7 @@ describe("obsidian-apply", () => {
   });
 
   it("allows apply when vault path is confirmed", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-"));
+    const dir = makeTempDir("plur1bus-obs-");
     const ws = makeWorkspace(dir);
     mkdirSync(join(dir, "memory", "cards"), { recursive: true });
     writeFileSync(join(dir, "memory", "cards", "test.md"), [
@@ -96,7 +97,7 @@ describe("obsidian-apply", () => {
   });
 
   it("creates backup, manifest and audit log on apply", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-"));
+    const dir = makeTempDir("plur1bus-obs-");
     const ws = makeWorkspace(dir);
     mkdirSync(join(dir, "memory", "cards"), { recursive: true });
     const originalContent = [

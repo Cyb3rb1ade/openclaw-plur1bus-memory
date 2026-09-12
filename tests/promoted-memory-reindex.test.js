@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_PATH = join(TEST_DIR, "..", "lib", "promoted-memory-reindex.js");
@@ -17,7 +18,7 @@ async function loadModule() {
 function makeHome() {
   // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
   // production code resolves real paths, so expectations must match.
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-promoted-reindex-")));
+  const dir = realpathSync(makeTempDir("plur1bus-promoted-reindex-"));
   tempDirs.push(dir);
   return dir;
 }

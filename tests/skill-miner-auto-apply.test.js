@@ -9,12 +9,13 @@ import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.
 import { renderSkillMd } from "../lib/jobs/skill-miner/skill-md-renderer.js";
 import { readProposals, writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
 import { findProposalWorkspace, retireActiveSkill } from "../lib/telegram-commands/skill-commands.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REVISION = "b".repeat(64);
 const ID = "22222222-2222-4222-8222-222222222222";
 
 function workspace(prefix = "plur1bus-auto-apply-") {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return makeTempDir(prefix);
 }
 
 function candidateResponse(extra = {}) {

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import OpenAI from "openai";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "testagent-dedup";
@@ -51,11 +52,11 @@ describe("memory store dedup safety (K1-05)", () => {
   let originalEmbed;
 
   before(async () => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-dedup-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-dedup-ws-"));
+    basePath = makeTempDir("plur1bus-dedup-");
+    workspaceDir = makeTempDir("plur1bus-dedup-ws-");
 
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    openclawHome = makeTempDir("openclaw-test-");
     process.env.OPENCLAW_HOME = openclawHome;
     const archiveDir = join(openclawHome, ".openclaw", "memory", "_archive");
     mkdirSync(archiveDir, { recursive: true });

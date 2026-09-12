@@ -40,6 +40,7 @@ import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import plugin, { MemoryDB, applyValidTimeCloseToLanceDb } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const FIXED_NOW = Date.parse("2026-08-11T12:00:00.000Z");
 function at(offsetMs) {
@@ -76,7 +77,7 @@ afterEach(async () => {
   while (roots.length) rmSync(roots.pop(), { recursive: true, force: true });
 });
 function tmpRoot(prefix) {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  const root = makeTempDir(prefix);
   roots.push(root);
   return root;
 }
@@ -1388,10 +1389,10 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
   let basePath, workspaceDir, openclawHome, originalOpenClawHome, originalEmbed, originalQueryEmbed;
 
   before(() => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-validtime-store9-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-validtime-store9-ws-"));
+    basePath = makeTempDir("plur1bus-validtime-store9-");
+    workspaceDir = makeTempDir("plur1bus-validtime-store9-ws-");
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-test-validtime9-"));
+    openclawHome = makeTempDir("openclaw-test-validtime9-");
     process.env.OPENCLAW_HOME = openclawHome;
     mkdirSync(join(openclawHome, ".openclaw", "memory", "_archive"), { recursive: true });
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
@@ -1549,10 +1550,10 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
   let basePath, workspaceDir, openclawHome, originalOpenClawHome, originalCreate, originalEmbed, originalQueryEmbed;
 
   before(() => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-validtime-store15-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-validtime-store15-ws-"));
+    basePath = makeTempDir("plur1bus-validtime-store15-");
+    workspaceDir = makeTempDir("plur1bus-validtime-store15-ws-");
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-test-validtime15-"));
+    openclawHome = makeTempDir("openclaw-test-validtime15-");
     process.env.OPENCLAW_HOME = openclawHome;
     mkdirSync(join(openclawHome, ".openclaw", "memory", "_archive"), { recursive: true });
     originalCreate = OpenAI.Chat.Completions.prototype.create;

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildMaintenanceNudges, appendConflictLog } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("buildMaintenanceNudges conflict-log prompt build", () => {
   let dir;
@@ -16,7 +17,7 @@ describe("buildMaintenanceNudges conflict-log prompt build", () => {
   });
 
   it("reads conflict-review-summary.json and flags old conflicts", () => {
-    dir = mkdtempSync(join(tmpdir(), "plur1bus-conflict-summary-"));
+    dir = makeTempDir("plur1bus-conflict-summary-");
     const alDir = join(dir, ".adaptive-learning");
     mkdirSync(alDir, { recursive: true });
     const oldStamp = new Date(Date.now() - 31 * 86_400_000).toISOString();
@@ -38,7 +39,7 @@ describe("buildMaintenanceNudges conflict-log prompt build", () => {
   });
 
   it("does not flag recent summary", () => {
-    dir = mkdtempSync(join(tmpdir(), "plur1bus-conflict-summary-recent-"));
+    dir = makeTempDir("plur1bus-conflict-summary-recent-");
     const alDir = join(dir, ".adaptive-learning");
     mkdirSync(alDir, { recursive: true });
     const recentStamp = new Date(Date.now() - 1 * 86_400_000).toISOString();
@@ -60,7 +61,7 @@ describe("buildMaintenanceNudges conflict-log prompt build", () => {
   });
 
   it("falls back to lazy log rebuild when summary is missing", () => {
-    dir = mkdtempSync(join(tmpdir(), "plur1bus-conflict-missing-summary-"));
+    dir = makeTempDir("plur1bus-conflict-missing-summary-");
     const alDir = join(dir, ".adaptive-learning");
     mkdirSync(alDir, { recursive: true });
     const oldStamp = new Date(Date.now() - 31 * 86_400_000).toISOString();
@@ -75,7 +76,7 @@ describe("buildMaintenanceNudges conflict-log prompt build", () => {
   });
 
   it("appendConflictLog creates and updates summary", () => {
-    dir = mkdtempSync(join(tmpdir(), "plur1bus-conflict-append-"));
+    dir = makeTempDir("plur1bus-conflict-append-");
     const oldStamp = new Date(Date.now() - 31 * 86_400_000).toISOString();
 
     appendConflictLog(dir, { timestamp: oldStamp, topic: "x" });

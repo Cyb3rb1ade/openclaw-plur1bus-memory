@@ -19,6 +19,7 @@ import { safeProfile } from "../lib/setup/feature-profiles.js";
 import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 
@@ -169,8 +170,8 @@ async function readMemory(pluginModule, baseDbPath, agentId, id) {
 }
 
 function withTempPaths(t) {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-llm-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-llm-ws-"));
+  const baseDbPath = makeTempDir("plur1bus-openclaw-llm-db-");
+  const workspaceDir = makeTempDir("plur1bus-openclaw-llm-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });

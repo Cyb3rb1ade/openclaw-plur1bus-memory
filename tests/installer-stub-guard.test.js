@@ -4,11 +4,12 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { smokeTestExports } from "../scripts/lib/deploy-integrity.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let dir;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "installer-stub-guard-test-"));
+  dir = makeTempDir("installer-stub-guard-test-");
   mkdirSync(join(dir, "lib"), { recursive: true });
 });
 

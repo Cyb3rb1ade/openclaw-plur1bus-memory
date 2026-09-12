@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { renderSkillProposalNudge } from "../lib/jobs/skill-miner/nudge-renderer.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let passed = 0;
 let failed = 0;
@@ -53,7 +54,7 @@ test("shows 'and X more' when multiple proposals", () => {
 });
 
 test("reads SOUL.MD tone when available", () => {
-  const tmpDir = mkdtempSync(join(tmpdir(), "soul-"));
+  const tmpDir = makeTempDir("soul-");
   writeFileSync(join(tmpDir, "SOUL.MD"), "# Agent\n\nTone: casual and friendly\n\nBe relaxed.");
   const text = renderSkillProposalNudge(
     { description: "Pattern", skillTitle: "Skill" },
@@ -65,7 +66,7 @@ test("reads SOUL.MD tone when available", () => {
 });
 
 test("reads IDENTITY.md as fallback", () => {
-  const tmpDir = mkdtempSync(join(tmpdir(), "id-"));
+  const tmpDir = makeTempDir("id-");
   writeFileSync(join(tmpDir, "IDENTITY.md"), "# Identity\n\nVoice: formal\n\nBe professional.");
   const text = renderSkillProposalNudge(
     { description: "Pattern", skillTitle: "Skill" },

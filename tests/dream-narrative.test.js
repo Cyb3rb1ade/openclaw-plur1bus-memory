@@ -24,6 +24,7 @@ import {
   DREAM_MEMORY_CLASS,
   DREAM_HALF_LIFE_DAYS,
 } from "../lib/dreaming/dream-narrative.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const MOOD_FEAR = {
   label: "vorsichtig",
@@ -84,7 +85,7 @@ describe("loadSoulSketch", () => {
   });
 
   it("entfernt den plur1bus-Managed-Block und HTML-Kommentare, kürzt auf maxChars", () => {
-    const dir = mkdtempSync(join(tmpdir(), "soul-test-"));
+    const dir = makeTempDir("soul-test-");
     writeFileSync(join(dir, "SOUL.MD"), [
       "# Nova",
       "",
@@ -105,7 +106,7 @@ describe("loadSoulSketch", () => {
   });
 
   it("liefert null wenn nach dem Aufräumen fast nichts übrig ist", () => {
-    const dir = mkdtempSync(join(tmpdir(), "soul-test-"));
+    const dir = makeTempDir("soul-test-");
     writeFileSync(join(dir, "SOUL.MD"), [
       '<!-- plur1bus:soul:start id="memory-runtime-rules" version="1" hash="sha256:x" -->',
       "nur Regeln",
@@ -191,13 +192,13 @@ describe("loadMoodSnapshot", () => {
   });
 
   it("liefert null bei korrupter Datei", () => {
-    const dir = mkdtempSync(join(tmpdir(), "dream-test-"));
+    const dir = makeTempDir("dream-test-");
     writeFileSync(join(dir, ".emotional-state.json"), "{kaputt");
     assert.strictEqual(loadMoodSnapshot(dir), null);
   });
 
   it("extrahiert Label, Nuancen und numerische Intensität aus der Baseline-Abweichung", () => {
-    const dir = mkdtempSync(join(tmpdir(), "dream-test-"));
+    const dir = makeTempDir("dream-test-");
     writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
       label: "einsam und nachdenklich",
       dominant: "sadness",

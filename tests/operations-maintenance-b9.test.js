@@ -22,6 +22,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import * as lancedb from "@lancedb/lancedb";
 
+import { makeTempDir as createTrackedTempDir } from "./helpers/temp-dir.js";
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(TEST_DIR, "..");
 const MAINTAIN_SCRIPT = join(REPO_ROOT, "scripts", "maintain-lancedb.mjs");
@@ -35,7 +36,7 @@ const DREAMING_CRON_ID = "12345678-1234-1234-1234-123456789abc";
 function makeTempDir(prefix) {
   // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
   // production code resolves real paths, so expectations must match.
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync(createTrackedTempDir(prefix));
 }
 
 function removeTempDir(dir) {

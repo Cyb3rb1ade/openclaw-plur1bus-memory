@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { MemoryDB } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let lancedb;
 try {
@@ -38,7 +39,7 @@ async function createTableWithSchema(dbPath) {
 
 (lancedb ? describe : describe.skip)("MemoryDB.store validation", () => {
   it("rejects entry with empty text and empty summary", async () => {
-    const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-store-val-"));
+    const dbPath = makeTempDir("plur1bus-store-val-");
     await createTableWithSchema(dbPath);
 
     const db = new MemoryDB(dbPath, VECTOR_DIM);
@@ -60,7 +61,7 @@ async function createTableWithSchema(dbPath) {
   });
 
   it("rejects entry with only whitespace text and summary", async () => {
-    const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-store-ws-"));
+    const dbPath = makeTempDir("plur1bus-store-ws-");
     await createTableWithSchema(dbPath);
 
     const db = new MemoryDB(dbPath, VECTOR_DIM);
@@ -82,7 +83,7 @@ async function createTableWithSchema(dbPath) {
   });
 
   it("accepts entry with non-empty text", async () => {
-    const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-store-ok-"));
+    const dbPath = makeTempDir("plur1bus-store-ok-");
     await createTableWithSchema(dbPath);
 
     const db = new MemoryDB(dbPath, VECTOR_DIM);
@@ -106,7 +107,7 @@ async function createTableWithSchema(dbPath) {
   });
 
   it("accepts entry with non-empty summary even if text is empty", async () => {
-    const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-store-sum-"));
+    const dbPath = makeTempDir("plur1bus-store-sum-");
     await createTableWithSchema(dbPath);
 
     const db = new MemoryDB(dbPath, VECTOR_DIM);
