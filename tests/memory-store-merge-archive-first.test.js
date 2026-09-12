@@ -16,6 +16,7 @@ import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { withTimeout } from "../lib/with-timeout.js";
 import OpenAI from "openai";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID_PREFIX = "testagent";
@@ -136,11 +137,11 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
   before(async () => {
     // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
     // production code resolves real paths, so compare against resolved paths.
-    basePath = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-merge-")));
-    workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-merge-ws-")));
+    basePath = realpathSync(makeTempDir("plur1bus-merge-"));
+    workspaceDir = realpathSync(makeTempDir("plur1bus-merge-ws-"));
 
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-test-")));
+    openclawHome = realpathSync(makeTempDir("openclaw-test-"));
     process.env.OPENCLAW_HOME = openclawHome;
     archiveDir = join(openclawHome, ".openclaw", "memory", "_archive");
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { withTimeout } from "../lib/with-timeout.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 // Capture fails closed without the host incognito classifier (since the
@@ -108,9 +109,9 @@ describe("auto-capture uses embedBatch when available", () => {
   let originalEmbed;
 
   before(() => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-auto-capture-batch-"));
+    basePath = makeTempDir("plur1bus-auto-capture-batch-");
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    openclawHome = makeTempDir("openclaw-test-");
     process.env.OPENCLAW_HOME = openclawHome;
     const archiveDir = join(openclawHome, ".openclaw", "memory", "_archive");
     mkdirSync(archiveDir, { recursive: true });

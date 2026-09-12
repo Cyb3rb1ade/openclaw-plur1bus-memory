@@ -14,14 +14,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { measureControlHealthStorage } from "../lib/control-plane-storage.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let root;
 let aussen;
 
 before(() => {
-  aussen = mkdtempSync(join(tmpdir(), "plur1bus-aussen-"));
+  aussen = makeTempDir("plur1bus-aussen-");
   writeFileSync(join(aussen, "geheim.bin"), Buffer.alloc(5_000));
-  root = mkdtempSync(join(tmpdir(), "plur1bus-store-"));
+  root = makeTempDir("plur1bus-store-");
   writeFileSync(join(root, "a.bin"), Buffer.alloc(1_000));
   mkdirSync(join(root, "unterordner"));
   writeFileSync(join(root, "unterordner", "b.bin"), Buffer.alloc(2_000));

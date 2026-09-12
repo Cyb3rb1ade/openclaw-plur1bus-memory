@@ -10,6 +10,7 @@ import {
   resolutionApplyText,
 } from "../lib/jobs/apply-conflict-resolution.js";
 import { createConfirmation } from "../lib/security.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const EXISTING = "00000000-0000-4000-8000-0000000000c1";
 const NEW = "00000000-0000-4000-8000-0000000000c2";
@@ -22,7 +23,7 @@ describe("applyConflictViaSafeUpdate", () => {
   });
 
   it("applies only after nonce-bound confirm payload is complete", async () => {
-    const root = mkdtempSync(join(tmpdir(), "conflict-apply-"));
+    const root = makeTempDir("conflict-apply-");
     mkdirSync(join(root, ".adaptive-learning"), { recursive: true });
     writeFileSync(join(root, ".adaptive-learning", "conflict-resolved.jsonl"), `${JSON.stringify({
       original: { existingMemoryId: EXISTING, newMemoryId: NEW, existingText: "old", newText: "new" },

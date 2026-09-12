@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeProposal, readProposals, patchProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
 import { activateSkillProposal, rejectSkillProposal } from "../lib/telegram-commands/skill-commands.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function workspace() {
-  return mkdtempSync(join(tmpdir(), "skill-activate-"));
+  return makeTempDir("skill-activate-");
 }
 
 function seedProposal(dir, extra = {}) {

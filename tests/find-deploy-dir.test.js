@@ -4,12 +4,13 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findDeployDir } from "../scripts/lib/find-deploy-dir.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let dir;
 let savedEnv;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "find-deploy-dir-test-"));
+  dir = makeTempDir("find-deploy-dir-test-");
   savedEnv = { PLUR1BUS_DEPLOY: process.env.PLUR1BUS_DEPLOY, OPENCLAW_HOME: process.env.OPENCLAW_HOME };
   delete process.env.PLUR1BUS_DEPLOY;
   delete process.env.OPENCLAW_HOME;

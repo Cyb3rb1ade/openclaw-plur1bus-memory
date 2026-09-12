@@ -6,6 +6,7 @@ import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import { buildBatchDecaySql, applyDailyDecayBatch } from "../lib/jobs/memory-dynamics-maintenance.js";
 import { computeDecayedStrength } from "../lib/memory-dynamics.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const DAY = 86_400_000;
 
@@ -36,7 +37,7 @@ describe("7.12.47: Batch-Decay als ein Update-Statement", () => {
   });
 
   it("decayt auf einer echten LanceDB-Tabelle genau wie die JS-Kurve und laesst fremde, Kern- und Hash-ID-Zeilen in Ruhe", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "decay-batch-"));
+    const dir = makeTempDir("decay-batch-");
     try {
       const now = Date.now();
       const base = { scope: "agent-private", storedBy: "main", agentId: "", status: "active", memoryClass: "", neverForget: 0, lastStrengthenedAt: 0 };

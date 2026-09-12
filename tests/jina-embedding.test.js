@@ -8,6 +8,7 @@ import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-l
 import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 import { embeddingDimensionCapability } from "../lib/providers/dimensions.js";
 import { JINA_EMBEDDING_PROFILE } from "../lib/providers/local-model-artifacts.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const JINA_TASKS = [
   "retrieval.query",
@@ -148,7 +149,7 @@ describe("downloadable multilingual JinaAI embedding", () => {
 
   it("loads the pinned model offline, selects query/passage adapters, truncates, then normalizes", async () => {
     const calls = [];
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-jina-embedding-"));
+    const cacheDir = makeTempDir("plur1bus-jina-embedding-");
     const provider = new LocalTransformersEmbeddingProvider({
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 256,
@@ -197,7 +198,7 @@ describe("downloadable multilingual JinaAI embedding", () => {
     const provider = new LocalTransformersEmbeddingProvider({
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 256,
-      cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-license-provider-")),
+      cacheDir: makeTempDir("plur1bus-jina-license-provider-"),
       embeddingCacheEnabled: false,
       ensureModelArtifacts: async () => { artifactCalls += 1; },
       loadTransformers: async () => {
@@ -219,7 +220,7 @@ describe("downloadable multilingual JinaAI embedding", () => {
     const provider = new LocalTransformersEmbeddingProvider({
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 256,
-      cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-license-cache-hit-")),
+      cacheDir: makeTempDir("plur1bus-jina-license-cache-hit-"),
     });
     provider._cache = {
       async getMany() {
@@ -240,7 +241,7 @@ describe("downloadable multilingual JinaAI embedding", () => {
     const provider = new LocalTransformersEmbeddingProvider({
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 1024,
-      cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-embedding-drift-")),
+      cacheDir: makeTempDir("plur1bus-jina-embedding-drift-"),
       acceptNonCommercialLicense: true,
       embeddingCacheEnabled: false,
       ensureModelArtifacts: async () => {},
@@ -256,7 +257,7 @@ describe("downloadable multilingual JinaAI embedding", () => {
     const provider = new LocalTransformersEmbeddingProvider({
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 256,
-      cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-embedding-signature-")),
+      cacheDir: makeTempDir("plur1bus-jina-embedding-signature-"),
       acceptNonCommercialLicense: true,
       embeddingCacheEnabled: false,
       ensureModelArtifacts: async () => {},

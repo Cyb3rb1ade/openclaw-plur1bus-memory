@@ -14,6 +14,7 @@ import { runConsolidation } from "../lib/jobs/daily-consolidation.js";
 import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = join(TEST_DIR, "..");
@@ -274,7 +275,7 @@ describe("deterministic LLM result-cache allowlist", () => {
   });
 
   it("attaches conflict-resolution context to conflict resolution", async () => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "llm-cache-conflict-"));
+    const workspaceDir = makeTempDir("llm-cache-conflict-");
     try {
       writeEligibleConflict(workspaceDir);
       let captureCfg;
@@ -301,7 +302,7 @@ describe("deterministic LLM result-cache allowlist", () => {
   });
 
   it("forwards the consolidation agent to compaction and conflict resolution", async () => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "llm-cache-consolidation-"));
+    const workspaceDir = makeTempDir("llm-cache-consolidation-");
     try {
       writeEligibleConflict(workspaceDir);
       const capturedCfgs = [];
@@ -365,7 +366,7 @@ describe("deterministic LLM result-cache allowlist", () => {
   });
 
   it("forwards the skill-miner agent to skill extraction", async () => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "llm-cache-skill-miner-"));
+    const workspaceDir = makeTempDir("llm-cache-skill-miner-");
     const rows = [{
       id: "skill-memory-1",
       text: "User confirmed the same weekly release verification workflow",

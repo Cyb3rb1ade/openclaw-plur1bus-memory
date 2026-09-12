@@ -28,12 +28,13 @@ import {
   readTombstoneRegistry,
   tombstoneRegistryDir,
 } from "../lib/tombstone.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const TOMBSTONE_MODULE = fileURLToPath(new URL("../lib/tombstone.js", import.meta.url));
 const AGENT = "torn-agent";
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "torn-write-"));
+  const dir = makeTempDir("torn-write-");
   t.after(() => {
     try { chmodSync(tombstoneRegistryDir(join(dir, "lancedb-namespaced")), 0o700); } catch { /* egal */ }
     rmSync(dir, { recursive: true, force: true });

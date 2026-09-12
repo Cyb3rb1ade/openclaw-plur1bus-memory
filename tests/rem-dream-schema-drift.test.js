@@ -24,12 +24,13 @@ import { describe, it } from "node:test";
 import * as lancedb from "@lancedb/lancedb";
 
 import { buildRemPartition, loadCandidateMemories } from "../lib/dreaming/rem-dream.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const TAG = 86_400_000;
 const AGENT = "dream-agent";
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "rem-dream-drift-"));
+  const dir = makeTempDir("rem-dream-drift-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

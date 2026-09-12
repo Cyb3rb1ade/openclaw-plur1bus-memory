@@ -19,6 +19,7 @@ import {
   validateFeatureCronRequest,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import { runFeatureCronRunner } from "../scripts/run-feature-cron.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const require = createRequire(import.meta.url);
 
@@ -285,7 +286,7 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
   });
 
   it("resolves the active public OpenClaw runtime from PATH in a standalone cron runner", async () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-runtime-"));
+    const root = makeTempDir("plur1bus-openclaw-runtime-");
     try {
       const packageRoot = join(root, "openclaw");
       const packageBin = join(packageRoot, "bin");

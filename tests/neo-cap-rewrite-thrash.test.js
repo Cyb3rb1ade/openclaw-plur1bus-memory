@@ -25,6 +25,7 @@ import assert from "node:assert";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const MAX_RECORDS = 500; // Untergrenze der Konstante (Math.max(500, ...))
 
@@ -55,7 +56,7 @@ describe("appendJsonl Cap — kein Vollrewrite bei jedem Append", () => {
   });
 
   it("laesst die Inode stabil, wenn die Datei schon auf dem Cap steht", () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-cap-thrash-"));
+    const root = makeTempDir("neo-cap-thrash-");
     try {
       const store = createNeoStore(root, "testws");
       const path = store.paths.turns;
@@ -89,7 +90,7 @@ describe("appendJsonl Cap — kein Vollrewrite bei jedem Append", () => {
   // zahlte beim ersten Append den vollen Tail-Read plus Rewrite (10–17 s bei
   // 154 MB). Ein frisch geladenes Modul muss den Stand aus dem Sidecar lesen.
   it("ueberspringt die teure Pruefung nach einem Modul-Neustart dank Sidecar", async () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-cap-sidecar-"));
+    const root = makeTempDir("neo-cap-sidecar-");
     try {
       const store = createNeoStore(root, "testws");
       const turns = Array.from({ length: MAX_RECORDS + 5 }, (_, i) => makeTurn(i));
@@ -113,7 +114,7 @@ describe("appendJsonl Cap — kein Vollrewrite bei jedem Append", () => {
   });
 
   it("verwirft den Sidecar-Stand, wenn die Datei geschrumpft ist", async () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-cap-sidecar-shrink-"));
+    const root = makeTempDir("neo-cap-sidecar-shrink-");
     try {
       const store = createNeoStore(root, "testws");
       store.appendTurns(Array.from({ length: MAX_RECORDS + 5 }, (_, i) => makeTurn(i)));
@@ -134,7 +135,7 @@ describe("appendJsonl Cap — kein Vollrewrite bei jedem Append", () => {
   });
 
   it("cappt weiterhin, wenn der Ueberhang gross genug wird", () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-cap-thrash-"));
+    const root = makeTempDir("neo-cap-thrash-");
     try {
       const store = createNeoStore(root, "testws");
       const path = store.paths.turns;

@@ -11,9 +11,10 @@ import {
   recordPresentation,
   lastPresentationAgeMs,
 } from "../lib/jobs/skill-miner/proposal-writer.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function setup() {
-  const tmpDir = mkdtempSync(join(tmpdir(), "sm-note-"));
+  const tmpDir = makeTempDir("sm-note-");
   mkdirSync(join(tmpDir, ".adaptive-learning"), { recursive: true });
   return tmpDir;
 }

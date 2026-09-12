@@ -15,6 +15,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { buildCriticalMessage } from "../lib/critical-review.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 
@@ -132,8 +133,8 @@ async function readCard(pluginModule, baseDbPath, agentId, id) {
 }
 
 function withTempPaths(t) {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-critical-cmd-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-critical-cmd-ws-"));
+  const baseDbPath = makeTempDir("plur1bus-critical-cmd-");
+  const workspaceDir = makeTempDir("plur1bus-critical-cmd-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });

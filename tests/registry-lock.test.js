@@ -15,11 +15,12 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { withRegistryLock } from "../lib/registry-lock.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const LOCK_MODULE = fileURLToPath(new URL("../lib/registry-lock.js", import.meta.url));
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "registry-lock-"));
+  const dir = makeTempDir("registry-lock-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -12,6 +12,7 @@ import {
   generateMemoryCardTemplate,
 } from "../lib/obsidian-control-room.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("smoke-ux: U6 — normalizeReviewProfile", () => {
   it("maps adversarial to standard", () => {
@@ -37,7 +38,7 @@ describe("smoke-ux: U6 — normalizeReviewProfile", () => {
 
 describe("smoke-ux: U2 — writeCommandsMarkdown", () => {
   it("writes commands.md to vault and returns written:true", () => {
-    const vaultPath = mkdtempSync(join(tmpdir(), "smoke-ux-u2-"));
+    const vaultPath = makeTempDir("smoke-ux-u2-");
     const mutationPolicy = confirmedObsidianPolicy({
       baseDbPath: vaultPath,
       command: ["dashboards", "build"],

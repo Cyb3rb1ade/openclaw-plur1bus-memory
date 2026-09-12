@@ -18,6 +18,7 @@ import { AgentDbPool, MemoryDB } from "../index.js";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 3;
 
@@ -49,7 +50,7 @@ function snapshotTree(root) {
 
 describe("read-only MemoryDB", { concurrency: false }, () => {
   it("opens and queries a minimal existing memories table without changing its schema", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-existing-"));
+    const root = makeTempDir("plur1bus-readonly-existing-");
     const agentPath = join(root, "agent-a");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const fixture = await lancedb.connect(agentPath);
@@ -77,8 +78,8 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("pins the agent directory before a final guard return can pivot the configured path", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-race-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-capability-race-outside-"));
+    const root = makeTempDir("plur1bus-capability-race-root-");
+    const outside = makeTempDir("plur1bus-capability-race-outside-");
     const displaced = join(root, "agent-a-held");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     t.after(() => rmSync(outside, { recursive: true, force: true }));
@@ -112,8 +113,8 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("opens an existing read-only table through the held agent capability after an openTable pivot", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-read-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-capability-read-outside-"));
+    const root = makeTempDir("plur1bus-capability-read-root-");
+    const outside = makeTempDir("plur1bus-capability-read-outside-");
     const insideAgent = join(root, "legacy", "agent-a");
     const displaced = join(root, "legacy", "agent-a-held");
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -155,7 +156,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("retains a capability across failed init retry and closes capabilities on eviction and shutdown", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-lifecycle-"));
+    const root = makeTempDir("plur1bus-capability-lifecycle-");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     let failConnect = true;
     class RetryAgentDbPool extends AgentDbPool {
@@ -192,8 +193,8 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("pins legacy-flat agent writes through the same stable directory capability", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-flat-capability-base-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-flat-capability-outside-"));
+    const basePath = makeTempDir("plur1bus-flat-capability-base-");
+    const outside = makeTempDir("plur1bus-flat-capability-outside-");
     const displaced = join(basePath, "flat-agent-held");
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     t.after(() => rmSync(outside, { recursive: true, force: true }));
@@ -222,7 +223,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("keeps a symlinked legacy-flat base usable through its held directory", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-flat-symlink-base-"));
+    const root = makeTempDir("plur1bus-flat-symlink-base-");
     const physicalBase = join(root, "physical");
     const configuredBase = join(root, "legacy");
     mkdirSync(physicalBase);
@@ -240,7 +241,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("closes cached directory capabilities when a reusable pool is cleared", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-"));
+    const basePath = makeTempDir("plur1bus-agent-pool-clear-");
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
     const first = pool.getDb("agent-a");
@@ -256,7 +257,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("does not close a lease that starts while clear is waiting", async (t) => {
-    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-lease-"));
+    const basePath = makeTempDir("plur1bus-agent-pool-clear-lease-");
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
     let releaseFirst;
@@ -286,7 +287,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("closes the base capability when a concurrent clear reports a DB close failure", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-failure-"));
+    const basePath = makeTempDir("plur1bus-agent-pool-clear-failure-");
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
     const db = pool.getDb("agent-a");
@@ -302,7 +303,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("returns false without creating a missing agent path", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-missing-"));
+    const root = makeTempDir("plur1bus-readonly-missing-");
     const agentPath = join(root, "missing-agent");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const db = new MemoryDB(agentPath, VECTOR_DIM, null, { readOnly: true });
@@ -312,7 +313,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("returns false without creating a table in an existing empty directory", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-empty-"));
+    const root = makeTempDir("plur1bus-readonly-empty-");
     const agentPath = join(root, "agent-a");
     mkdirSync(agentPath);
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -325,7 +326,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("rejects an absent read-only table when handle cleanup reports an error", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-close-failure-"));
+    const root = makeTempDir("plur1bus-readonly-close-failure-");
     const agentPath = join(root, "agent-a");
     mkdirSync(agentPath);
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -350,7 +351,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("does not reopen a MemoryDB after terminal shutdown", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-memory-db-terminal-"));
+    const root = makeTempDir("plur1bus-memory-db-terminal-");
     const agentPath = join(root, "agent-a");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const db = new MemoryDB(agentPath, VECTOR_DIM);
@@ -361,7 +362,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("rechecks a cached secure read-only directory after a table appears", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-late-table-"));
+    const root = makeTempDir("plur1bus-readonly-late-table-");
     const basePath = join(root, "legacy");
     const agentPath = join(basePath, "agent-a");
     mkdirSync(agentPath, { recursive: true });
@@ -441,7 +442,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("validates agent IDs and never creates paths in a read-only AgentDbPool", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-pool-"));
+    const root = makeTempDir("plur1bus-readonly-pool-");
     const missingBase = join(root, "legacy");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const pool = new AgentDbPool(missingBase, VECTOR_DIM, null, { readOnly: true });
@@ -455,7 +456,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("securely acquires a read-only agent that appears after an earlier missing lookup", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-late-agent-"));
+    const root = makeTempDir("plur1bus-readonly-late-agent-");
     const basePath = join(root, "legacy");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM, null, { readOnly: true });
@@ -477,8 +478,8 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("rejects an active namespace swapped outside after MemoryDB caching and never writes there", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-active-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-active-outside-"));
+    const root = makeTempDir("plur1bus-open-guard-active-root-");
+    const outside = makeTempDir("plur1bus-open-guard-active-outside-");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     t.after(() => rmSync(outside, { recursive: true, force: true }));
     mkdirSync(join(root, "active"));
@@ -503,8 +504,8 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("rejects a legacy namespace swapped outside after MemoryDB caching and never reads or mutates it", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-legacy-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-legacy-outside-"));
+    const root = makeTempDir("plur1bus-open-guard-legacy-root-");
+    const outside = makeTempDir("plur1bus-open-guard-legacy-outside-");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     t.after(() => rmSync(outside, { recursive: true, force: true }));
     mkdirSync(join(root, "active"));
@@ -563,8 +564,8 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("rejects an active agent path swapped outside after MemoryDB caching", async (t) => {
-    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-open-agent-active-base-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-open-agent-active-outside-"));
+    const basePath = makeTempDir("plur1bus-open-agent-active-base-");
+    const outside = makeTempDir("plur1bus-open-agent-active-outside-");
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     t.after(() => rmSync(outside, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
@@ -583,8 +584,8 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
   });
 
   it("rejects a read-only agent path swapped outside after MemoryDB caching", async (t) => {
-    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-open-agent-readonly-base-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-open-agent-readonly-outside-"));
+    const basePath = makeTempDir("plur1bus-open-agent-readonly-base-");
+    const outside = makeTempDir("plur1bus-open-agent-readonly-outside-");
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     t.after(() => rmSync(outside, { recursive: true, force: true }));
     const insideAgent = join(basePath, "agent-a");

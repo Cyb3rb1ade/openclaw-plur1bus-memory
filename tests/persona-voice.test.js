@@ -14,6 +14,7 @@ import {
   directiveCharsForBullets, resolvePersonaMaxBullets,
   DEFAULT_PERSONA_MAX_BULLETS, DEFAULT_MAX_DIRECTIVE_CHARS, PERSONA_EVOLUTION_STATE_FILE,
 } from "../lib/persona-voice.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const SEED = "- Kurze, direkte Sätze.\n- Lieblingswendung: „passt schon“.\n- Emojis sparsam: 🙂 gelegentlich.";
 
@@ -31,7 +32,7 @@ describe("persona-voice", () => {
   });
 
   it("writePersonaVoice legt Datei mit Managed-Block an, aber nie doppelt", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     assert.strictEqual(hasPersonaVoice(dir), false);
     assert.strictEqual(writePersonaVoice(dir, SEED), true);
     assert.strictEqual(hasPersonaVoice(dir), true);
@@ -42,7 +43,7 @@ describe("persona-voice", () => {
   });
 
   it("loadPersonaDirective: kompakt, ≤ Default-Deckel, nur Managed-Block", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, SEED);
     // User-Text außerhalb der Marker darf nicht in die Direktive
     const path = join(dir, "persona-voice.md");
@@ -55,7 +56,7 @@ describe("persona-voice", () => {
   });
 
   it("loadPersonaDirective (7.12.38): 24 Zeilen passen ohne Kappung, Grenze konfigurierbar, Cache kennt die Grenze", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     const n = DEFAULT_PERSONA_MAX_BULLETS;
     const bullets = Array.from({ length: n }, (_, i) => `- Marker ${i + 1}: ${"x".repeat(110)} Ende${i + 1}.`);
     writePersonaVoice(dir, bullets.join("\n"));
@@ -77,14 +78,14 @@ describe("persona-voice", () => {
   });
 
   it("loadPersonaDirective: null ohne Datei, fail-open bei kaputtem Inhalt", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     assert.strictEqual(loadPersonaDirective(dir), null);
     writeFileSync(join(dir, "persona-voice.md"), "kein marker", "utf8");
     assert.strictEqual(loadPersonaDirective(dir), null);
   });
 
   it("loadPersonaEmojiPalette liest nur den Managed-Block", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, "- Emoji-Palette: 🌊 🧭 ✨, selten\n- Lieblingswendung: „passt schon“.");
     const path = join(dir, "persona-voice.md");
     writeFileSync(path, readFileSync(path, "utf8") + "\nUser-Notiz: 😀 😈", "utf8");
@@ -92,19 +93,19 @@ describe("persona-voice", () => {
   });
 
   it("loadPersonaEmojiPalette behandelt Frequenz-Notizen nicht als Palette", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, "- Emojis sparsam: 🙂 gelegentlich.\n- Lieblingswendung: „passt schon“.");
     assert.strictEqual(loadPersonaEmojiPalette(dir), null);
   });
 
   it("loadPersonaEmojiPalette: null ohne offensichtliche Emoji-Palette", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, "- Lieblingswendung: „passt schon“.\n- Satzlängen-Neigung: kurz.");
     assert.strictEqual(loadPersonaEmojiPalette(dir), null);
   });
 
   it("appendMarkerToManagedBlock hängt im Block an, User-Text bleibt", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, SEED);
     const path = join(dir, "persona-voice.md");
     writeFileSync(path, readFileSync(path, "utf8") + "\nUser-Notiz", "utf8");
@@ -115,14 +116,14 @@ describe("persona-voice", () => {
   });
 
   it("loadPersonaEmojiPalette: ZWJ-Komposit-Emoji zählt als EIN Match, kein Split", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, "- Emoji-Palette: 🏳️‍🌈 🌊, ab und zu\n- Lieblingswendung: „passt schon“.");
     const palette = loadPersonaEmojiPalette(dir);
     assert.strictEqual(palette, "🏳️‍🌈 🌊");
   });
 
   it("loadPersonaEmojiPalette: ein einzelnes ZWJ-Familien-Emoji besteht die ≥2-Heuristik nicht", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, "- Emoji-Palette: 👨‍👩‍👧, selten\n- Lieblingswendung: „passt schon“.");
     assert.strictEqual(loadPersonaEmojiPalette(dir), null);
   });
@@ -130,7 +131,7 @@ describe("persona-voice", () => {
 
 describe("scheduleEnsurePersonaVoiceSeed (hot-path throttle)", () => {
   it("blockiert den Aufrufer nie, auch wenn callLlm hängt", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     const callLlm = () => new Promise(() => {}); // hängt für immer
     let returned = false;
     scheduleEnsurePersonaVoiceSeed(
@@ -142,7 +143,7 @@ describe("scheduleEnsurePersonaVoiceSeed (hot-path throttle)", () => {
   });
 
   it("in-flight guard: gleichzeitige Aufrufe feuern callLlm nur einmal", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     let calls = 0;
     let resolveLlm;
     const callLlm = () => new Promise((resolve) => { calls += 1; resolveLlm = resolve; });
@@ -163,7 +164,7 @@ describe("scheduleEnsurePersonaVoiceSeed (hot-path throttle)", () => {
   });
 
   it("6h Backoff nach fehlgeschlagenem Versuch: kein erneuter callLlm-Aufruf im Fenster", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     let calls = 0;
     const callLlm = async () => { calls += 1; return null; }; // generatePersonaSeed liefert null → Fehlschlag
     const attempts = new Map();
@@ -199,13 +200,13 @@ function outcome(ts, kind) { return { timestamp: ts, outcome: kind }; }
 
 describe("persona evolution", () => {
   function seededDir() {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, SEED);
     return dir;
   }
 
   it("ensurePersonaVoiceSeed erzeugt beim Erststart ein Persona-Profil", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writeFileSync(join(dir, "IDENTITY.md"), "identity fallback", "utf8");
     writeFileSync(join(dir, "SOUL.md"), "soul first", "utf8");
     let seenMessages = null;
@@ -227,7 +228,7 @@ describe("persona evolution", () => {
   });
 
   it("ensurePersonaVoiceSeed bleibt ohne LLM inert", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writeFileSync(join(dir, "SOUL.md"), "soul first", "utf8");
     assert.strictEqual(await ensurePersonaVoiceSeed({ workspaceDir: dir, agentId: "anna" }), false);
     assert.strictEqual(hasPersonaVoice(dir), false);
@@ -324,7 +325,7 @@ describe("persona evolution", () => {
 
 describe("appendMarkerToManagedBlock: Kappung (explizit 12; Default seit 7.12.38: 24)", () => {
   function seededDir() {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, SEED); // 3 Seed-Bullets
     return dir;
   }
@@ -366,7 +367,7 @@ describe("appendMarkerToManagedBlock: Kappung (explizit 12; Default seit 7.12.38
   });
 
   it("(d) 6-Bullet-Seed via writePersonaVoice: ALLE 6 Seed-Zeilen überleben die Kappung", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     const seed6 = [
       "- Seed A.", "- Seed B.", "- Seed C.", "- Seed D.", "- Seed E.", "- Seed F.",
     ].join("\n");
@@ -386,7 +387,7 @@ describe("appendMarkerToManagedBlock: Kappung (explizit 12; Default seit 7.12.38
   });
 
   it("(e) Legacy-Block OHNE seed-end-Boundary: Fallback schützt die ersten 3 Bullets", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     // Legacy-Datei manuell ohne Boundary schreiben (wie vor dieser Änderung).
     const legacy = [
       "# Persona-Voice", "",
@@ -409,7 +410,7 @@ describe("appendMarkerToManagedBlock: Kappung (explizit 12; Default seit 7.12.38
   });
 
   it("(f) seed-end-Boundary leakt weder in Direktive noch Palette", () => {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, "- Emoji-Palette: 🌊 🧭 ✨, selten\n- Lieblingswendung: „passt schon“.\n- Satzlängen-Neigung: kurz.");
     const raw = readFileSync(join(dir, "persona-voice.md"), "utf8");
     assert.ok(raw.includes("persona:seed-end"), "writePersonaVoice muss die Boundary schreiben");
@@ -492,7 +493,7 @@ describe("appendMarkerToManagedBlock: Kappung (explizit 12; Default seit 7.12.38
 
 describe("evolvePersonaVoice (7.12.38): Belege, ADD/REPLACE/NONE, Bremsen, Heartbeat-Filter", () => {
   function seededDir() {
-    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const dir = makeTempDir("pv-");
     writePersonaVoice(dir, SEED);
     return dir;
   }

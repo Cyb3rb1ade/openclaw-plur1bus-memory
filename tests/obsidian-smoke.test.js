@@ -34,6 +34,7 @@ import {
 import { resolveInside } from "../lib/sql-safety.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("obsidian-smoke-p5", () => {
   function makeWorkspace(dir) {
@@ -60,7 +61,7 @@ describe("obsidian-smoke-p5", () => {
   // 1. Bidirektionaler Sync
   // ------------------------------------------------------------------
   it("bidirectional sync: obsidian → candidates + pluri1bus → frontmatter update", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-bidi-"));
+    const dir = makeTempDir("plur1bus-obs-bidi-");
     const ws = makeWorkspace(dir);
     const mutationPolicy = confirmedObsidianPolicy({ baseDbPath: dir });
     confirmVaultPath(ws);
@@ -115,7 +116,7 @@ describe("obsidian-smoke-p5", () => {
   // 2. Conflict-Report
   // ------------------------------------------------------------------
   it("generates conflict review when a synced decision changes", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-conflict-"));
+    const dir = makeTempDir("plur1bus-obs-conflict-");
     const ws = makeWorkspace(dir);
     const mutationPolicy = confirmedObsidianPolicy({ baseDbPath: dir });
     confirmVaultPath(ws);
@@ -198,7 +199,7 @@ describe("obsidian-smoke-p5", () => {
   // 3. Apply-Mode mit Backup
   // ------------------------------------------------------------------
   it("creates backup before apply with manifest and audit log", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-backup-"));
+    const dir = makeTempDir("plur1bus-obs-backup-");
     const ws = makeWorkspace(dir);
     const mutationPolicy = confirmedObsidianPolicy({ baseDbPath: dir });
     confirmVaultPath(ws);
@@ -271,7 +272,7 @@ describe("obsidian-smoke-p5", () => {
   // 4. Path-Traversal-Schutz
   // ------------------------------------------------------------------
   it("blocks path traversal attempts via resolveInside", () => {
-    const base = mkdtempSync(join(tmpdir(), "plur1bus-safe-"));
+    const base = makeTempDir("plur1bus-safe-");
     assert.throws(() => resolveInside(base, "../../../etc/passwd"), /Path traversal blocked/);
     assert.throws(() => resolveInside(base, "foo/../../../etc/passwd"), /Path traversal blocked/);
     assert.doesNotThrow(() => resolveInside(base, "memory/cards/test.md"));
@@ -280,7 +281,7 @@ describe("obsidian-smoke-p5", () => {
   it("blocks path traversal via safeBridgePath", () => {
     const cfg = {
       obsidianBridge: {
-        vaultPath: mkdtempSync(join(tmpdir(), "plur1bus-vault-")),
+        vaultPath: makeTempDir("plur1bus-vault-"),
         reviewRoot: "plur1bus",
         allowWrite: true,
       },
@@ -295,7 +296,7 @@ describe("obsidian-smoke-p5", () => {
   it("blocks path traversal via resolveObsidianBridgePaths", () => {
     const cfg = {
       obsidianBridge: {
-        vaultPath: mkdtempSync(join(tmpdir(), "plur1bus-vault2-")),
+        vaultPath: makeTempDir("plur1bus-vault2-"),
         reviewRoot: "plur1bus",
       },
     };
@@ -309,7 +310,7 @@ describe("obsidian-smoke-p5", () => {
   // 5. Atomic JSON parallele Writes
   // ------------------------------------------------------------------
   it("atomicJsonUpdate prevents corrupted JSON under parallel writes", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-atomic-"));
+    const dir = makeTempDir("plur1bus-atomic-");
     const filePath = join(dir, "counter.json");
     writeFileSync(filePath, JSON.stringify({ count: 0 }), "utf8");
 

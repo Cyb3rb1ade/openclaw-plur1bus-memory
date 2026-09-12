@@ -6,8 +6,9 @@ import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
-const TMP_BASE = mkdtempSync(join(tmpdir(), "plur1bus-multi-ns-"));
+const TMP_BASE = makeTempDir("plur1bus-multi-ns-");
 after(() => rmSync(TMP_BASE, { recursive: true, force: true }));
 
 // Named-mode routing requires fd-backed directory capabilities. The production
@@ -498,8 +499,8 @@ describe("MultiNamespacePool", () => {
   });
 
   itNamed("rejects an outside symlink and canonical route collision before creating a child", () => {
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-outside-"));
-    const symlinkRoot = mkdtempSync(join(tmpdir(), "plur1bus-route-root-"));
+    const outside = makeTempDir("plur1bus-outside-");
+    const symlinkRoot = makeTempDir("plur1bus-route-root-");
     try {
       symlinkSync(outside, join(symlinkRoot, "outside"));
       const outsideLayout = resolveNamespaceLayout(symlinkRoot, {
@@ -526,8 +527,8 @@ describe("MultiNamespacePool", () => {
   });
 
   itNamed("revalidates all routes before creating each late child", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-late-route-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-late-route-outside-"));
+    const root = makeTempDir("plur1bus-late-route-root-");
+    const outside = makeTempDir("plur1bus-late-route-outside-");
     try {
       mkdirSync(join(root, "active"));
       mkdirSync(join(root, "legacy"));
@@ -553,8 +554,8 @@ describe("MultiNamespacePool", () => {
   });
 
   itNamed("rejects a cached legacy read route swapped to an outside symlink before reuse", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-cached-legacy-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-legacy-outside-"));
+    const root = makeTempDir("plur1bus-cached-legacy-root-");
+    const outside = makeTempDir("plur1bus-cached-legacy-outside-");
     try {
       mkdirSync(join(root, "active"));
       mkdirSync(join(root, "legacy"));
@@ -584,8 +585,8 @@ describe("MultiNamespacePool", () => {
   });
 
   itNamed("rejects a cached active writer route swapped to an outside symlink before reuse", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-cached-writer-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-writer-outside-"));
+    const root = makeTempDir("plur1bus-cached-writer-root-");
+    const outside = makeTempDir("plur1bus-cached-writer-outside-");
     try {
       mkdirSync(join(root, "active"));
       const layout = resolveNamespaceLayout(root, {
@@ -608,9 +609,9 @@ describe("MultiNamespacePool", () => {
   });
 
   itNamed("rejects whole named-root substitution before the first child is created", () => {
-    const parent = mkdtempSync(join(tmpdir(), "plur1bus-root-swap-parent-"));
+    const parent = makeTempDir("plur1bus-root-swap-parent-");
     const root = join(parent, "named-root");
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-root-swap-outside-"));
+    const outside = makeTempDir("plur1bus-root-swap-outside-");
     try {
       mkdirSync(join(root, "active"), { recursive: true });
       mkdirSync(join(outside, "active"));
@@ -629,9 +630,9 @@ describe("MultiNamespacePool", () => {
   });
 
   itNamed("rejects whole named-root substitution before reusing a cached writer", () => {
-    const parent = mkdtempSync(join(tmpdir(), "plur1bus-cached-root-swap-parent-"));
+    const parent = makeTempDir("plur1bus-cached-root-swap-parent-");
     const root = join(parent, "named-root");
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-root-swap-outside-"));
+    const outside = makeTempDir("plur1bus-cached-root-swap-outside-");
     try {
       mkdirSync(join(root, "active"), { recursive: true });
       mkdirSync(join(outside, "active"));
@@ -654,7 +655,7 @@ describe("MultiNamespacePool", () => {
 
   itNamed("pins existing namespace targets and rejects later in-root substitutions", () => {
     for (const route of ["active", "legacy"]) {
-      const root = mkdtempSync(join(tmpdir(), `plur1bus-pinned-${route}-root-`));
+      const root = makeTempDir(`plur1bus-pinned-${route}-root-`);
       try {
         mkdirSync(join(root, "active"));
         mkdirSync(join(root, "legacy"));
@@ -687,7 +688,7 @@ describe("MultiNamespacePool", () => {
 
   itNamed("pins initially absent namespace targets before any child is created", () => {
     for (const route of ["active", "legacy"]) {
-      const root = mkdtempSync(join(tmpdir(), `plur1bus-pinned-missing-${route}-root-`));
+      const root = makeTempDir(`plur1bus-pinned-missing-${route}-root-`);
       try {
         mkdirSync(join(root, "replacement"));
         if (route === "active") mkdirSync(join(root, "legacy"));
@@ -741,7 +742,7 @@ describe("MultiNamespacePool", () => {
   });
 
   itNamed("creates a nested missing named root at the canonical target derived from its existing ancestor", () => {
-    const parent = mkdtempSync(join(tmpdir(), "plur1bus-canonical-missing-parent-"));
+    const parent = makeTempDir("plur1bus-canonical-missing-parent-");
     const root = join(parent, "one", "two", "named-root");
     try {
       const layout = resolveNamespaceLayout(root, { activeWriteNamespace: "active" }, { explicit: true });

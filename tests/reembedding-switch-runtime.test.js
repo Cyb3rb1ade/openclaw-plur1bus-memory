@@ -11,6 +11,7 @@ import {
   createReembeddingSwitchRecovery,
   createReembeddingSwitchRuntime,
 } from "../lib/reembedding/switch-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const sourceFingerprint = normalizeEmbeddingFingerprint({ provider: "openai", model: "source", dimensions: 3 }, []);
 const targetFingerprint = normalizeEmbeddingFingerprint({ provider: "openai", model: "target", dimensions: 4 }, []);
@@ -55,7 +56,7 @@ async function readyRecord(store, { sourceSecretRef = { source: "env", provider:
 
 describe("maintenance-gated generation switch", () => {
   let stateRoot;
-  beforeEach(() => { stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-reembedding-switch-")); });
+  beforeEach(() => { stateRoot = makeTempDir("plur1bus-reembedding-switch-"); });
   afterEach(() => { rmSync(stateRoot, { recursive: true, force: true }); });
 
   it("hands a confirmed switch to the activated target runtime before completing", async () => {

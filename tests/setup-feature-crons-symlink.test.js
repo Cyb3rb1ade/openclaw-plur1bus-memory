@@ -16,13 +16,14 @@ import { mkdtempSync, symlinkSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const scriptPath = path.join(__dirname, "..", "scripts", "setup-feature-crons.mjs");
 
 describe("setup-feature-crons.mjs IS_MAIN detection through a symlink", () => {
   it("still runs (prints non-empty JSON) when argv[1] is a symlinked path", () => {
-    const workDir = mkdtempSync(path.join(tmpdir(), "setup-feature-crons-symlink-"));
+    const workDir = makeTempDir("setup-feature-crons-symlink-");
     const emptyPathDir = path.join(workDir, "empty-path");
     mkdirSync(emptyPathDir);
 

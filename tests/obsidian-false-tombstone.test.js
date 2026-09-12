@@ -14,6 +14,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { syncWorkspace, confirmVaultPath } from "../lib/obsidian-bridge.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("obsidian false-tombstone guard", () => {
   function makeWorkspace(dir) {
@@ -27,7 +28,7 @@ describe("obsidian false-tombstone guard", () => {
   }
 
   it("does not tombstone an unchanged file on the second apply-mode sync", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-tomb-"));
+    const dir = makeTempDir("plur1bus-tomb-");
     const ws = makeWorkspace(dir);
     confirmVaultPath(ws);
 

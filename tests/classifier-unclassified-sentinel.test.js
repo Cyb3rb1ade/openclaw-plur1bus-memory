@@ -20,6 +20,7 @@ import { describe, it } from "node:test";
 
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { runClassifier } from "../lib/jobs/critical-classifier.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 8;
 const AGENT = "sentinel-agent";
@@ -29,7 +30,7 @@ async function loadFreshPlugin() {
 }
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "classifier-sentinel-"));
+  const dir = makeTempDir("classifier-sentinel-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

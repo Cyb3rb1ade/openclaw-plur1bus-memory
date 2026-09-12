@@ -17,6 +17,7 @@ import {
   rebuildEpisode,
   findEpisodeCardPath,
 } from "../lib/episodes.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const T0 = new Date("2026-09-10T19:03:45.000Z").getTime();
 function turn(role, content, i = 0) {
@@ -25,7 +26,7 @@ function turn(role, content, i = 0) {
 
 describe("episodes (7.12.40): Metadaten", () => {
   it("Teilnehmer kommen aus USER.md und IDENTITY.md, nicht aus grossgeschriebenen Woertern", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const dir = makeTempDir("ep-");
     writeFileSync(join(dir, "USER.md"), "# USER.md\n\n- **Name:** Christian\n- **What to call them:** Chris\n", "utf8");
     writeFileSync(join(dir, "IDENTITY.md"), "# IDENTITY.md\n\n> **Name:** Bernd dasBot\n> **Creature:** Kumpel\n", "utf8");
     const names = resolveParticipantNames(dir, { agentId: "main" });
@@ -36,7 +37,7 @@ describe("episodes (7.12.40): Metadaten", () => {
     ], { participantNames: names, agentId: "main" });
     assert.deepEqual(ep.participants, ["Christian", "Bernd dasBot"]);
     // Rueckfall ohne Dateien
-    const empty = mkdtempSync(join(tmpdir(), "ep-"));
+    const empty = makeTempDir("ep-");
     assert.deepEqual(resolveParticipantNames(empty, { agentId: "heisenberg" }), { user: "Nutzer", assistant: "heisenberg" });
     // Cache folgt der mtime: Datei aendern → neuer Name.
     writeFileSync(join(dir, "USER.md"), "- **Name:** Chris\n", "utf8");
@@ -135,7 +136,7 @@ describe("episodes (7.12.40): Metadaten", () => {
   });
 
   it("ohne Modell bleiben Titel/Summary generisch, mit Modell kommt alles in die Karte", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const dir = makeTempDir("ep-");
     writeFileSync(join(dir, "USER.md"), "- **Name:** Christian\n", "utf8");
     writeFileSync(join(dir, "IDENTITY.md"), "> **Name:** Bernd dasBot\n", "utf8");
     const turns = [turn("user", "Was kochen wir morgen? Milchsuppe?", 0), turn("assistant", "Milchsuppe geht immer, Diggi.", 1)];
@@ -200,7 +201,7 @@ describe("episodes (7.12.40): Metadaten", () => {
   });
 
   it("Fortschreiben ersetzt die eigene Karte im Vault, laesst Sammeldateien in Ruhe und raeumt bei Titelwechsel auf", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const dir = makeTempDir("ep-");
     const ep1 = createEpisode([turn("user", "a", 0), turn("assistant", "b", 1)], { title: "Erste Fassung" });
     const w1 = writeEpisodeToVault(ep1, dir);
     assert.equal(w1.replaced, false);
@@ -223,7 +224,7 @@ describe("episodes (7.12.40): Metadaten", () => {
   });
 
   it("7.12.42: mentioned steht in der Karte und zaehlt beim episodischen Recall schwaecher als participants", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const dir = makeTempDir("ep-");
     const names = { user: "Christian", assistant: "Bernd dasBot" };
     const turns = [turn("user", "Bernhardine hat gestern was Lustiges gesagt", 0), turn("assistant", "Typisch Bernhardine.", 1)];
     const ep = applyEnrichment(createEpisode(turns, { participantNames: names, title: "Über Bernhardine" }), { people: ["Bernhardine", "Audrey Hepburn"], emotion: "joy", emotionIntensity: "mittel" }, { turns, names });
@@ -256,7 +257,7 @@ describe("episodes (7.12.40): Metadaten", () => {
     assert.match(seenPrompt, /Per Stimme erkannte Mitsprecher .*: Eva\./);
     assert.deepEqual(ep.participants, ["Christian", "Bernd dasBot", "Eva"]);
     assert.deepEqual(ep.mentioned, ["Erik"], "Eva spoke, Erik was only named");
-    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const dir = makeTempDir("ep-");
     const card = readFileSync(writeEpisodeToVault(ep, dir).path, "utf8");
     assert.match(card, /participants: \[Christian, Bernd dasBot, Eva\]/);
     assert.match(card, /voice_speakers: \[Eva\]/);
@@ -264,7 +265,7 @@ describe("episodes (7.12.40): Metadaten", () => {
   });
 
   it("7.12.43: rebuildEpisode baut eine alte Karte mit gleicher id neu, findEpisodeCardPath findet nur Einzeldateien", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ep-"));
+    const dir = makeTempDir("ep-");
     writeFileSync(join(dir, "USER.md"), "- **Name:** Christian\n", "utf8");
     writeFileSync(join(dir, "IDENTITY.md"), "> **Name:** Bernd dasBot\n", "utf8");
     const turns = [turn("user", "Bernhardine war heute witzig, und Audrey Hepburn hat das mal gesagt.", 0), turn("assistant", "Stimmt, Diggi.", 1)];

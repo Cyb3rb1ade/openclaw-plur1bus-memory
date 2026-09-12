@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { findAfterthoughtCandidate, composeAfterthought, runAfterthoughtJob } from "../lib/afterthought.js";
 import { normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "../lib/open-threads.js";
 import { loadGovernorState, recordProactiveSend, saveGovernorState } from "../lib/proactive-governor.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const M = 60000;
 const T0 = 1750000000000;
@@ -87,7 +88,7 @@ describe("composeAfterthought", () => {
 
 describe("runAfterthoughtJob", () => {
   function seedDir(entries) {
-    const dir = mkdtempSync(join(tmpdir(), "at-"));
+    const dir = makeTempDir("at-");
     mkdirSync(join(dir, ".adaptive-learning"), { recursive: true });
     if (entries.length) {
       writeFileSync(join(dir, ".adaptive-learning", "reply-outcomes.jsonl"), entries.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");

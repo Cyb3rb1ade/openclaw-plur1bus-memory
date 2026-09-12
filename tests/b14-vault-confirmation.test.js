@@ -10,6 +10,7 @@ import {
   prepareVaultConfirmation,
 } from "../lib/obsidian-vault-confirmation-flow.js";
 import { isOwnedVaultConfirmed } from "../lib/obsidian-vault-authority.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const aliases = Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) });
 
@@ -30,9 +31,9 @@ function memoryCtx(overrides = {}) {
 
 describe("B14 public protected vault confirmation", () => {
   it("writes only for one exact user/chat/agent/workspace/vault confirmation", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-vault-confirm-db-"));
-    const vaultPath = mkdtempSync(join(tmpdir(), "b14-vault-confirm-vault-"));
-    const otherVault = mkdtempSync(join(tmpdir(), "b14-vault-confirm-other-"));
+    const baseDbPath = makeTempDir("b14-vault-confirm-db-");
+    const vaultPath = makeTempDir("b14-vault-confirm-vault-");
+    const otherVault = makeTempDir("b14-vault-confirm-other-");
     const confirmationStore = new Map();
     const ctx = memoryCtx();
     const prepared = prepareVaultConfirmation({
@@ -83,8 +84,8 @@ describe("B14 public protected vault confirmation", () => {
   });
 
   it("rejects expiry without writing and exposes prepare/confirm through the public handler", async () => {
-    const expiredBase = mkdtempSync(join(tmpdir(), "b14-vault-expired-db-"));
-    const expiredVault = mkdtempSync(join(tmpdir(), "b14-vault-expired-vault-"));
+    const expiredBase = makeTempDir("b14-vault-expired-db-");
+    const expiredVault = makeTempDir("b14-vault-expired-vault-");
     const expiredStore = new Map();
     const ctx = memoryCtx();
     const expired = prepareVaultConfirmation({
@@ -104,8 +105,8 @@ describe("B14 public protected vault confirmation", () => {
     assert.equal(expiredResult.ok, false);
     assert.deepEqual(readdirSync(expiredBase), []);
 
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-vault-public-db-"));
-    const vaultPath = mkdtempSync(join(tmpdir(), "b14-vault-public-vault-"));
+    const baseDbPath = makeTempDir("b14-vault-public-db-");
+    const vaultPath = makeTempDir("b14-vault-public-vault-");
     const confirmationStore = new Map();
     const context = {
       config: { mode: "apply", allowWrite: true, vaultPath },
@@ -158,7 +159,7 @@ describe("binding mismatch names its fields", () => {
   }
 
   it("names only the field that moved between prepare and confirm", (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-bind-"));
+    const dir = makeTempDir("plur1bus-bind-");
     const vaultPath = join(dir, "vault");
     mkdirSync(vaultPath, { recursive: true });
     const { confirmationStore, callbackData } = prepared(vaultPath, dir, base);
@@ -176,7 +177,7 @@ describe("binding mismatch names its fields", () => {
   });
 
   it("names every field that moved, and no values", (t) => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-bind-"));
+    const dir = makeTempDir("plur1bus-bind-");
     const vaultPath = join(dir, "vault");
     mkdirSync(vaultPath, { recursive: true });
     const { confirmationStore, callbackData } = prepared(vaultPath, dir, base);

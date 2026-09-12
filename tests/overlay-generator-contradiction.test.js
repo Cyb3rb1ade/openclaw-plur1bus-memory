@@ -6,12 +6,13 @@ import { join } from "node:path";
 import { OverlayGenerator } from "../lib/overlay-generator.js";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
 import { ContradictionDetector } from "../lib/contradiction-detector.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 describe("OverlayGenerator auto-contradiction handling", () => {
   it("supersedes an existing meaning overlay when the new one contradicts it", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-ogen-contra-"));
+    const tmpDir = makeTempDir("plur1bus-ogen-contra-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -58,7 +59,7 @@ describe("OverlayGenerator auto-contradiction handling", () => {
   });
 
   it("supersedes the most recent of multiple contradictory overlays", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-gen-contra-multi-"));
+    const dir = makeTempDir("plur1bus-gen-contra-multi-");
     try {
       const store = new InterpretationOverlayStore(dir);
       const now = Date.now();
@@ -106,7 +107,7 @@ describe("OverlayGenerator auto-contradiction handling", () => {
   });
 
   it("does not supersede when there is no contradiction", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-ogen-contra-"));
+    const tmpDir = makeTempDir("plur1bus-ogen-contra-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -145,7 +146,7 @@ describe("OverlayGenerator auto-contradiction handling", () => {
   });
 
   it("skips contradiction checks for non-meaning shift types", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-ogen-contra-"));
+    const tmpDir = makeTempDir("plur1bus-ogen-contra-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -191,7 +192,7 @@ describe("OverlayGenerator auto-contradiction handling", () => {
   });
 
   it("writes a contradiction audit record only after the overlay is appended", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-ogen-contra-"));
+    const tmpDir = makeTempDir("plur1bus-ogen-contra-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -242,7 +243,7 @@ describe("OverlayGenerator auto-contradiction handling", () => {
   });
 
   it("includes descriptionA and descriptionB in the persisted contradiction record", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-ogen-contra-desc-"));
+    const tmpDir = makeTempDir("plur1bus-ogen-contra-desc-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {

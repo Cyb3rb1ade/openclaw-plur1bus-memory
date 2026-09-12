@@ -29,6 +29,7 @@ import { describe, it } from "node:test";
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { runClassifier } from "../lib/jobs/critical-classifier.js";
 import { safeType } from "../lib/sql-safety.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 8;
 const AGENT = "fakt-agent";
@@ -39,7 +40,7 @@ async function loadFreshPlugin() {
 }
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "classifier-fakt-"));
+  const dir = makeTempDir("classifier-fakt-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

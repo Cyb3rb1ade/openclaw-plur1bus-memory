@@ -18,11 +18,12 @@ import {
 import {
   createOpenClawSkillWorkshopClient,
 } from "../lib/setup/skill-workshop-plugin-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REVISION = "a".repeat(64);
 
 function workspace() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-skill-workshop-"));
+  return makeTempDir("plur1bus-skill-workshop-");
 }
 
 function candidateResponse() {
@@ -520,7 +521,7 @@ describe("7.12.51: der Workshop schreibt in sein eigenes Verzeichnis", () => {
 
   it("übernimmt den vom Host gemeldeten Zielpfad statt ihn gegen einen geratenen zu prüfen", async (t) => {
     const dir = workspace();
-    const host = mkdtempSync(join(tmpdir(), "plur1bus-host-"));
+    const host = makeTempDir("plur1bus-host-");
     t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
     seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
     const target = workshopFile(host, "weekly-deploy");
@@ -543,7 +544,7 @@ describe("7.12.51: der Workshop schreibt in sein eigenes Verzeichnis", () => {
 
   it("lehnt einen Zielpfad ab, dessen Verzeichnis nicht zum Skill gehört", async (t) => {
     const dir = workspace();
-    const host = mkdtempSync(join(tmpdir(), "plur1bus-host-"));
+    const host = makeTempDir("plur1bus-host-");
     t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
     seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
     const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
@@ -564,7 +565,7 @@ describe("7.12.51: der Workshop schreibt in sein eigenes Verzeichnis", () => {
 
   it("holt den Pfad aus dem Agentenverzeichnis, wenn der Workshop schon angewandt hat", async (t) => {
     const dir = workspace();
-    const host = mkdtempSync(join(tmpdir(), "plur1bus-host-"));
+    const host = makeTempDir("plur1bus-host-");
     t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
     seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
     const target = workshopFile(host, "weekly-deploy");

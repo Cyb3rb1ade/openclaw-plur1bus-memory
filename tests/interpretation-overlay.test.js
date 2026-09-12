@@ -11,10 +11,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("InterpretationOverlayStore — append", () => {
   it("writes a JSONL line to file (file didn't exist before)", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -45,7 +46,7 @@ describe("InterpretationOverlayStore — append", () => {
   });
 
   it("calling twice with same dedupeKey returns false on second call, file has exactly 1 line", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -72,7 +73,7 @@ describe("InterpretationOverlayStore — append", () => {
   });
 
   it("same dedupeKey after cooldown window has passed returns true (writes second overlay)", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -114,7 +115,7 @@ describe("InterpretationOverlayStore — append", () => {
   });
 
   it("blocks a new append when a live record only matches the legacy dedupe key", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -154,7 +155,7 @@ describe("InterpretationOverlayStore — append", () => {
   });
 
   it("auto-generates id and createdAt if not provided", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -181,7 +182,7 @@ describe("InterpretationOverlayStore — append", () => {
   });
 
   it("preserves manually-provided id and createdAt", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -211,7 +212,7 @@ describe("InterpretationOverlayStore — append", () => {
   });
 
   it("throws TypeError when required fields are missing", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -235,7 +236,7 @@ describe("InterpretationOverlayStore — append", () => {
 
 describe("InterpretationOverlayStore — loadFor", () => {
   it("returns only overlays for specified memoryIds", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -274,7 +275,7 @@ describe("InterpretationOverlayStore — loadFor", () => {
   });
 
   it("filters out overlays older than maxAgeDays", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -308,7 +309,7 @@ describe("InterpretationOverlayStore — loadFor", () => {
   });
 
   it("returns [] if file doesn't exist", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -320,7 +321,7 @@ describe("InterpretationOverlayStore — loadFor", () => {
   });
 
   it("skips malformed JSON lines without throwing", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -358,7 +359,7 @@ describe("InterpretationOverlayStore — loadFor", () => {
 
 describe("InterpretationOverlayStore — loadForTargets", () => {
   it("returns overlays for specified targets", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -378,7 +379,7 @@ describe("InterpretationOverlayStore — loadForTargets", () => {
   });
 
   it("respects maxAgeDays parameter", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -399,7 +400,7 @@ describe("InterpretationOverlayStore — loadForTargets", () => {
   });
 
   it("returns empty array when no overlays match", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -420,7 +421,7 @@ describe("InterpretationOverlayStore — loadForTargets", () => {
 
 describe("InterpretationOverlayStore — computeDedupeKey", () => {
   it("same inputs produce same hash", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -436,7 +437,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
   });
 
   it("different targetMemoryId produces different hash", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -450,7 +451,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
   });
 
   it("different shiftType produces different hash", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -464,7 +465,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
   });
 
   it("different triggerContext produces different hash", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -478,7 +479,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
   });
 
   it("handles null/undefined triggerContext gracefully", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -494,7 +495,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
   });
 
   it("uses full triggerContext for deduping", () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -516,7 +517,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
 
 describe("InterpretationOverlayStore — integration", () => {
   it("completes full workflow: append, load, check dedupes", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -598,7 +599,7 @@ describe("InterpretationOverlayStore — shouldSkipLlmResponse static helper", (
 
 describe("InterpretationOverlayStore — loadForTargets render path", () => {
   it("returns only the latest overlay per target", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -627,7 +628,7 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
   });
 
   it("filters out superseded overlays", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -654,7 +655,7 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
   });
 
   it("filters overlays superseded by a newer overlay", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -685,7 +686,7 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
   });
 
   it("filters provisional overlays by default", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -708,7 +709,7 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
   });
 
   it("excludes forgotten tombstone overlays from loadFor and loadForTargets", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {
@@ -733,7 +734,7 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
 
 describe("InterpretationOverlayStore — non-blocking record regression", () => {
   it("superseded, provisional, and forgotten records do not block live duplicates", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
 
     try {

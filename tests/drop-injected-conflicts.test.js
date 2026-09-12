@@ -7,6 +7,7 @@ import { createNeoStore } from "../lib/neo-arch.js";
 import { previewDropInjected, applyDropInjected } from "../lib/drop-injected-conflicts.js";
 import { createConfirmation } from "../lib/security.js";
 import { rememberPendingConfirmation, completePendingConfirmation } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const INJECTED = "Write a dream diary entry from these memory fragments: leftover prompt";
 const REAL = "User prefers short answers in the morning.";
@@ -17,7 +18,7 @@ const REQUESTER = {
 };
 
 function storeWith(rows) {
-  const dir = mkdtempSync(join(tmpdir(), "drop-inj-"));
+  const dir = makeTempDir("drop-inj-");
   const store = createNeoStore(dir, "ws-a");
   store.appendBehaviorCards(rows);
   return { dir, store };

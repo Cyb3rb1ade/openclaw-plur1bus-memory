@@ -16,6 +16,7 @@ import {
   createFailedModelPreparationCoordinator,
   createModelPreparationCoordinator,
 } from "../lib/model-preparation/coordinator.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function activeFingerprint() {
   return embeddingFingerprintFromNormalizedConfig({
@@ -73,7 +74,7 @@ describe("automatic local embedding model preparation", () => {
   });
 
   it("downloads, validates, persists progress, and only suggests re-embedding", async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-model-preparation-"));
+    const stateRoot = makeTempDir("plur1bus-model-preparation-");
     const cacheDir = join(stateRoot, "models");
     const events = [];
     const coordinator = createModelPreparationCoordinator({
@@ -175,7 +176,7 @@ describe("automatic local embedding model preparation", () => {
   });
 
   it("does not download Jina until the non-commercial license is acknowledged", async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-model-license-"));
+    const stateRoot = makeTempDir("plur1bus-model-license-");
     let downloads = 0;
     const coordinator = createModelPreparationCoordinator({
       stateRoot,
@@ -196,7 +197,7 @@ describe("automatic local embedding model preparation", () => {
   });
 
   it("recognizes a prepared active fingerprint without proposing a migration", async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-model-same-fingerprint-"));
+    const stateRoot = makeTempDir("plur1bus-model-same-fingerprint-");
     const fingerprint = activeFingerprint();
     const coordinator = createModelPreparationCoordinator({
       stateRoot,
@@ -223,7 +224,7 @@ describe("automatic local embedding model preparation", () => {
   });
 
   it("stores only a stable diagnostic code when artifact validation fails", async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-model-failure-"));
+    const stateRoot = makeTempDir("plur1bus-model-failure-");
     const sentinel = `secret-${createHash("sha256").update(stateRoot).digest("hex")}`;
     const coordinator = createModelPreparationCoordinator({
       stateRoot,
@@ -243,7 +244,7 @@ describe("automatic local embedding model preparation", () => {
   });
 
   it("cancels validation on shutdown and never publishes a ready state afterwards", async () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-model-validation-abort-"));
+    const stateRoot = makeTempDir("plur1bus-model-validation-abort-");
     let signalSeen;
     let validationStarted;
     const started = new Promise((resolve) => { validationStarted = resolve; });
@@ -281,7 +282,7 @@ describe("automatic local embedding model preparation", () => {
 
   it("uses phase-specific stable diagnostics for inventory and disk failures", async () => {
     const makeCoordinator = (overrides) => {
-      const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-model-dry-run-code-"));
+      const stateRoot = makeTempDir("plur1bus-model-dry-run-code-");
       return createModelPreparationCoordinator({
         stateRoot,
         cacheDir: join(stateRoot, "models"),
@@ -314,7 +315,7 @@ describe("automatic local embedding model preparation", () => {
   });
 
   it("keeps malformed durable preparation state fail-closed without breaking status reads", () => {
-    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-model-state-invalid-"));
+    const stateRoot = makeTempDir("plur1bus-model-state-invalid-");
     const coordinator = createModelPreparationCoordinator({
       stateRoot,
       cacheDir: join(stateRoot, "models"),

@@ -10,9 +10,10 @@ import {
   isOwnedVaultConfirmed,
   recordOwnedVaultConfirmation,
 } from "../lib/obsidian-vault-authority.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function scratch(t) {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-vault-diag-"));
+  const dir = makeTempDir("plur1bus-vault-diag-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

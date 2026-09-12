@@ -9,6 +9,7 @@ import { executeCompactionMergeAction } from "../lib/jobs/memory-compaction.js";
 import { selectCaptureRowsToAdd } from "../scripts/auto-capture-lancedb.mjs";
 import { replaceLightDreamRow, strengthenMemory } from "../lib/dreaming/light-dream.js";
 import { MemoryDB } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const UUID = "00000000-0000-4000-8000-0000000000aa";
 
@@ -23,7 +24,7 @@ function forgotten(baseDbPath, text) {
 }
 
 function base() {
-  const root = mkdtempSync(join(tmpdir(), "tomb-bulk-"));
+  const root = makeTempDir("tomb-bulk-");
   const baseDbPath = join(root, "lancedb-namespaced");
   mkdirSync(baseDbPath, { recursive: true });
   return { root, baseDbPath };

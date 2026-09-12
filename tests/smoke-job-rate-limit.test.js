@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { checkJobRateLimit, recordJobRun } from "../lib/job-rate-limit.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("job-rate-limit", () => {
   function makeStatePath() {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-rate-"));
+    const dir = makeTempDir("plur1bus-rate-");
     return join(dir, "run-state.json");
   }
 

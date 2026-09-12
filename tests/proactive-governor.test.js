@@ -7,6 +7,7 @@ import {
   createGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend,
   acquireGovernorLock, releaseGovernorLock, withGovernorLock,
 } from "../lib/proactive-governor.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const H = 3600000, D = 86400000;
 const T0 = 1750000000000;
@@ -95,7 +96,7 @@ describe("proactive-governor", () => {
 
 describe("governor lock (Fix 6 — cross-process advisory lock)", () => {
   function tmpDir() {
-    return mkdtempSync(join(tmpdir(), "gov-lock-"));
+    return makeTempDir("gov-lock-");
   }
 
   it("acquire/release roundtrip", () => {
@@ -188,7 +189,7 @@ describe("governor lock (Fix 6 — cross-process advisory lock)", () => {
 
 describe("withGovernorLock", () => {
   function tmpDir() {
-    return mkdtempSync(join(tmpdir(), "gov-lock-with-"));
+    return makeTempDir("gov-lock-with-");
   }
 
   it("führt fn aus und released danach", async () => {

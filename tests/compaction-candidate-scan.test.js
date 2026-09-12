@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { loadCompactionCandidates } from "../lib/jobs/memory-compaction.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 8;
 const AGENT = "compaction-scan-agent";
@@ -32,7 +33,7 @@ async function loadFreshPlugin() {
 }
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "compaction-scan-"));
+  const dir = makeTempDir("compaction-scan-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -9,6 +9,7 @@ import { join } from "node:path";
 
 import { runRecallPipeline as runRecallPipelineRaw } from "../lib/recall-pipeline.js";
 import { filterAssociativeCandidates } from "../lib/continuity-gate.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 4;
 
@@ -140,7 +141,7 @@ describe("recall-pipeline decision trace", () => {
   });
 
   it("records canonical memory with source=canonical", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-canonical-"));
+    const tmpDir = makeTempDir("plur1bus-canonical-");
     try {
       const knowledgePath = join(tmpDir, "memory");
       mkdirSync(knowledgePath, { recursive: true });

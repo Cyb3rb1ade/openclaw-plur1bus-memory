@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createNeoStore, transitionRecordStatus, migrateInlineVectorsToSidecar } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // 7.12.26: Vektoren liegen als Float32 im Sidecar, nicht mehr in den JSONL-Zeilen.
 // Testwerte sind bewusst float32-exakt (dyadische Brueche), damit deepStrictEqual
@@ -13,7 +14,7 @@ const V1 = [0.25, -0.5, 0.125, 1];
 const V2 = [0.75, 0.0625, -0.375, -1];
 
 function makeRoot(prefix) {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  const root = makeTempDir(prefix);
   return root;
 }
 

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   distillDreamEcho, appendDreamEcho, loadFreshDreamEcho, formatDreamEchoContext,
 } from "../lib/dream-echo.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const T0 = 1750000000000;
 const D = 86400000;
@@ -43,7 +44,7 @@ describe("distillDreamEcho", () => {
 
 describe("dream-echo store + format", () => {
   it("append + load: liefert das jüngste frische Echo", () => {
-    const dir = mkdtempSync(join(tmpdir(), "echo-"));
+    const dir = makeTempDir("echo-");
     appendDreamEcho(dir, { sentence: "alt", topics: [], createdAt: T0 - 5 * D, aclBindings: ECHO_BINDINGS });
     appendDreamEcho(dir, { sentence: "frisch", topics: ["a"], createdAt: T0 - 1000, aclBindings: ECHO_BINDINGS });
     const echo = loadFreshDreamEcho(dir, { now: T0, requestContext: ECHO_CONTEXT });
@@ -51,20 +52,20 @@ describe("dream-echo store + format", () => {
   });
 
   it("zu alte Echos werden ignoriert", () => {
-    const dir = mkdtempSync(join(tmpdir(), "echo-"));
+    const dir = makeTempDir("echo-");
     appendDreamEcho(dir, { sentence: "alt", topics: [], createdAt: T0 - 3 * D });
     assert.strictEqual(loadFreshDreamEcho(dir, { now: T0, maxAgeDays: 2 }), null);
   });
 
   it("Store bleibt auf 20 Zeilen begrenzt", () => {
-    const dir = mkdtempSync(join(tmpdir(), "echo-"));
+    const dir = makeTempDir("echo-");
     for (let i = 0; i < 30; i++) appendDreamEcho(dir, { sentence: `s${i}`, topics: [], createdAt: T0 + i });
     const lines = readFileSync(join(dir, ".dream-echoes.jsonl"), "utf8").split("\n").filter(Boolean);
     assert.strictEqual(lines.length, 20);
   });
 
   it("loadFreshDreamEcho fail-open bei kaputter Datei", () => {
-    const dir = mkdtempSync(join(tmpdir(), "echo-"));
+    const dir = makeTempDir("echo-");
     writeFileSync(join(dir, ".dream-echoes.jsonl"), "{kaputt\n", "utf8");
     assert.strictEqual(loadFreshDreamEcho(dir, { now: T0 }), null);
   });

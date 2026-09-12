@@ -11,6 +11,7 @@ import {
   readLinesFromOffset,
   readSessionLinesSinceOffset,
 } from "../scripts/auto-capture-lancedb.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("auto-capture import path", () => {
   it("PLUR1BUS_PLUGIN_DIR env var can override path", () => {
@@ -49,7 +50,7 @@ describe("auto-capture import path", () => {
   });
 
   it("reads only complete lines appended after a byte offset", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-capture-offset-"));
+    const dir = makeTempDir("auto-capture-offset-");
     const path = join(dir, "session.jsonl");
     const existing = `${JSON.stringify({ message: { role: "user", content: "old memory text" } })}\n`;
     const appendedLines = [
@@ -64,7 +65,7 @@ describe("auto-capture import path", () => {
   });
 
   it("does not advance past a partial trailing JSONL record", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "auto-capture-partial-"));
+    const dir = makeTempDir("auto-capture-partial-");
     const path = join(dir, "session.jsonl");
     const existing = `${JSON.stringify({ message: { role: "user", content: "old memory text" } })}\n`;
     const complete = `${JSON.stringify({ message: { role: "user", content: "complete memory text" } })}\n`;

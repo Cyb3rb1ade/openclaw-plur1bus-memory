@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { createDbAdapter } from "../lib/db-adapter.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 8;
 const AGENT = "pending-scan-agent";
@@ -27,7 +28,7 @@ async function loadFreshPlugin() {
 }
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "critical-pending-"));
+  const dir = makeTempDir("critical-pending-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

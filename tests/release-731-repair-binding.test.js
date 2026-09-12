@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REPAIR_SCRIPT = fileURLToPath(new URL("../scripts/repair-tombstones.mjs", import.meta.url));
 const AGENT_A = "release731-agent-a";
@@ -58,7 +59,7 @@ function snapshotBytes(root) {
 }
 
 function seedCase(t, kind) {
-  const root = mkdtempSync(join(tmpdir(), `release-731-repair-binding-${kind}-`));
+  const root = makeTempDir(`release-731-repair-binding-${kind}-`);
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
   const workspace = join(root, "workspace");

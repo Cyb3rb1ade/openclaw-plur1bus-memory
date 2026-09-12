@@ -15,10 +15,11 @@ import {
 } from "../lib/jobs/skill-miner/proposal-writer.js";
 
 import { renderSkillMd } from "../lib/jobs/skill-miner/skill-md-renderer.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let tmpDir;
 function setup() {
-  tmpDir = mkdtempSync(join(tmpdir(), "sm-test-"));
+  tmpDir = makeTempDir("sm-test-");
 }
 function teardown() {
   if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });

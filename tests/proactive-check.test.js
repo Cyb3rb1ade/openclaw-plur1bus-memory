@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProactiveCheck } from "../lib/jobs/proactive-check.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -11,7 +12,7 @@ const HOUR_MS = 3_600_000;
 let dir;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "plur1bus-proactive-check-"));
+  dir = makeTempDir("plur1bus-proactive-check-");
 });
 
 afterEach(() => {

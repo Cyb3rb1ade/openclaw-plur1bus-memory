@@ -22,6 +22,7 @@ import {
   writePlur1busStartNotice,
 } from "../lib/setup/feature-profiles.js";
 import { manifestConfigDefaults, validatePluginConfig } from "../lib/setup/config-contract.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("feature-profiles", () => {
   it("recommendedProfile explicitly enables additional features behind safety gates", () => {
@@ -418,7 +419,7 @@ describe("feature-profiles", () => {
   });
 
   it("start notice is operational state and consume-after-display", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-notice-"));
+    const dir = makeTempDir("plur1bus-notice-");
     try {
       const written = writePlur1busStartNotice(dir);
       assert.strictEqual(written.payload.text, PLUR1BUS_START_NOTICE);

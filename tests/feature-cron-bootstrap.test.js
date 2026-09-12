@@ -18,6 +18,7 @@ import {
 } from "../scripts/setup-feature-crons.mjs";
 import { REQUIRED_FEATURE_CRONS } from "../lib/setup/feature-cron-plan.js";
 import { buildNativeFeatureCommandArgv } from "../lib/setup/feature-cron-native.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // Auf den fail-closed-Pfaden meldet das Skript `pendingByDefault`, also die
 // Zahl der ausgelieferten Feature-Crons. Gegen die Konstante prüfen statt gegen
@@ -1363,7 +1364,7 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
   });
 
   it("can force the safety run despite a fresh successful marker", async () => {
-    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-force-"));
+    const baseDbPath = makeTempDir("feature-cron-bootstrap-force-");
     const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
     writeFileSync(markerPath, JSON.stringify({
       pluginVersion: "7.1.6",
@@ -1386,7 +1387,7 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
   });
 
   it("retries a forced safety run in the current process until setup is no longer skipped", async () => {
-    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-retry-"));
+    const baseDbPath = makeTempDir("feature-cron-bootstrap-retry-");
     const waits = [];
     let spawned = 0;
 
@@ -1433,7 +1434,7 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
   });
 
   it("writes the marker on a successful run (close code 0)", async () => {
-    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-ok-"));
+    const baseDbPath = makeTempDir("feature-cron-bootstrap-ok-");
     const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
     const api = makeApi();
 
@@ -1449,7 +1450,7 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
   });
 
   it("does not overwrite a previous marker when the spawned run fails (close code != 0)", async () => {
-    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-fail-"));
+    const baseDbPath = makeTempDir("feature-cron-bootstrap-fail-");
     const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
     const previousMarker = { pluginVersion: PV, lastRunAt: new Date(NOW - 25 * 60 * 60 * 1000).toISOString(), lastPlanCreateCount: 0 };
     writeFileSync(markerPath, JSON.stringify(previousMarker, null, 2));
@@ -1466,7 +1467,7 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
   });
 
   it("does not write a marker at all when the spawned run fails and no marker existed before", async () => {
-    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-fail-nomarker-"));
+    const baseDbPath = makeTempDir("feature-cron-bootstrap-fail-nomarker-");
     const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
     const api = makeApi();
 

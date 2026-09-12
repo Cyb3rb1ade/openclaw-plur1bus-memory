@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryDB } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const DIM = 8;
 const vector = (seed) => Array.from({ length: DIM }, (_, i) => Math.sin(seed + i));
@@ -34,7 +35,7 @@ const row = (id, seed) => ({
 });
 
 describe("MemoryDB: writes through one handle are visible to another open handle", () => {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-cross-handle-"));
+  const dir = makeTempDir("plur1bus-cross-handle-");
   const handles = [];
   after(async () => {
     for (const db of handles) await db.shutdown().catch(() => {});

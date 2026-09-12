@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMemories, runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { ensureEpistemicCutoff, readEpistemicCutoff } from "../lib/epistemic-cutoff.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const DAY = 86_400_000;
 const NOW = 1_787_000_000_000;
@@ -64,10 +65,10 @@ describe("skill-miner first-upgrade legacy bootstrap", () => {
   });
 
   it("creates the cutoff on first miner run and then admits existing empty rows", async () => {
-    const root = mkdtempSync(join(tmpdir(), "miner-boot-"));
+    const root = makeTempDir("miner-boot-");
     const baseDbPath = join(root, "lancedb-namespaced");
     mkdirSync(baseDbPath, { recursive: true });
-    const workspaceDir = mkdtempSync(join(tmpdir(), "miner-boot-ws-"));
+    const workspaceDir = makeTempDir("miner-boot-ws-");
     assert.equal(readEpistemicCutoff(baseDbPath).ok, false);
     const db = mockDb([legacyRow("old-legacy", 90)]);
     let llmCalls = 0;

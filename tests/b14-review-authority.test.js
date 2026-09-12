@@ -15,6 +15,7 @@ import {
   latestOwnedReviewBundleId,
   updateOwnedReviewBundle,
 } from "../lib/obsidian-review-authority.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function memoryCtx(agentId, workspaceIdentity) {
   return {
@@ -38,7 +39,7 @@ function reviewPolicy(baseDbPath, agentId, workspaceIdentity) {
 
 describe("B14 protected review authority", () => {
   it("uses collision-resistant IDs and physically partitions two agents sharing one vault", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-review-authority-"));
+    const baseDbPath = makeTempDir("b14-review-authority-");
     const workspaceIdentity = "workspace:v1:shared";
     const policyA = reviewPolicy(baseDbPath, "agent-a", workspaceIdentity);
     const policyB = reviewPolicy(baseDbPath, "agent-b", workspaceIdentity);
@@ -61,7 +62,7 @@ describe("B14 protected review authority", () => {
   });
 
   it("makes foreign explicit IDs indistinguishable from not-found on load and update", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-review-owner-"));
+    const baseDbPath = makeTempDir("b14-review-owner-");
     const workspaceIdentity = "workspace:v1:shared";
     const policyA = reviewPolicy(baseDbPath, "agent-a", workspaceIdentity);
     const policyB = reviewPolicy(baseDbPath, "agent-b", workspaceIdentity);
@@ -83,7 +84,7 @@ describe("B14 protected review authority", () => {
   });
 
   it("does not trust vault display JSON to change protected payload or approval", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-review-tamper-"));
+    const baseDbPath = makeTempDir("b14-review-tamper-");
     const policy = reviewPolicy(baseDbPath, "agent-a", "workspace:v1:shared");
     const created = createOwnedReviewBundle({
       policy,
@@ -106,7 +107,7 @@ describe("B14 protected review authority", () => {
   });
 
   it("performs zero writes when policy is missing or denied", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "b14-review-denied-"));
+    const baseDbPath = makeTempDir("b14-review-denied-");
     assert.throws(
       () => createOwnedReviewBundle({ policy: null, bundle: { status: "pending_user_review" } }),
       /mutation policy required/i,

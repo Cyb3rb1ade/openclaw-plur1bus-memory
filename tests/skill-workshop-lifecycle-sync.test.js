@@ -6,11 +6,12 @@ import test from "node:test";
 
 import * as skillCommands from "../lib/telegram-commands/skill-commands.js";
 import { patchProposal, readProposals } from "../lib/jobs/skill-miner/proposal-writer.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REVISION = "a".repeat(64);
 
 function workspace(t) {
-  const dir = mkdtempSync(join(tmpdir(), "skill-workshop-hook-"));
+  const dir = makeTempDir("skill-workshop-hook-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, ".adaptive-learning"), { recursive: true });
   mkdirSync(join(dir, "skills"), { recursive: true });

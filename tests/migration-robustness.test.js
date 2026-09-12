@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { MemoryDB } from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let lancedb;
 try {
@@ -13,7 +14,7 @@ try {
   // LanceDB native bindings not available in this environment
 }
 
-const TEST_DB_PATH = mkdtempSync(join(tmpdir(), "plur1bus-migration-robust-"));
+const TEST_DB_PATH = makeTempDir("plur1bus-migration-robust-");
 const VECTOR_DIM = 384;
 const TABLE_NAME = "memories";
 

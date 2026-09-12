@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { it } from "node:test";
 import { pathToFileURL } from "node:url";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const require = createRequire(import.meta.url);
 
@@ -22,7 +23,7 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin load
   // macOS resolves its per-user temporary root to a path that can exceed the
   // Unix-domain IPC limit once the plugin's private socket suffix is added.
   // Keep Linux on its ordinary tmpdir while using the short local /tmp root.
-  const isolatedHome = mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "plur1bus-openclaw-loader-"));
+  const isolatedHome = makeTempDir("plur1bus-openclaw-loader-", process.platform === "darwin" ? "/tmp" : tmpdir());
   const previousEnv = Object.fromEntries(
     ["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"].map((name) => [name, process.env[name]]),
   );

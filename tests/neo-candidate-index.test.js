@@ -12,6 +12,7 @@ import {
   searchNeoCandidatesGlobal,
   transitionRecordStatus,
 } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // 7.12.28: Kandidaten-Metadatenindex (candidate-index.jsonl).
 const NOW = Date.parse("2026-09-10T00:00:00Z");
@@ -30,7 +31,7 @@ function candidate(id, statement, extra = {}) {
 const REQUESTER = { requesterAgentId: "bernhardine", requesterWorkspaceKey: "ws" };
 
 function withTmp(fn) {
-  const root = mkdtempSync(join(tmpdir(), "neo-cidx-"));
+  const root = makeTempDir("neo-cidx-");
   return Promise.resolve(fn(root)).finally(() => rmSync(root, { recursive: true, force: true }));
 }
 

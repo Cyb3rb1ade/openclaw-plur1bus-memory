@@ -11,11 +11,12 @@ import {
   proposalsNeedingBenefit,
 } from "../lib/jobs/skill-miner/benefit-backfill.js";
 import { readProposals, writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const ID = (n) => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
 
 function ledger(entries) {
-  const dir = mkdtempSync(join(tmpdir(), "benefit-backfill-"));
+  const dir = makeTempDir("benefit-backfill-");
   for (const entry of entries) writeProposal(dir, entry);
   return dir;
 }

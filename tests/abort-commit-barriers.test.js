@@ -13,6 +13,7 @@ import {
   hasPersonaVoice,
   writePersonaVoice,
 } from "../lib/persona-voice.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function deferred() {
   let resolve;
@@ -42,7 +43,7 @@ function makeTurns(count = 5) {
 }
 
 function makeDreamHarness(t) {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-dream-abort-barrier-"));
+  const workspaceDir = makeTempDir("plur1bus-dream-abort-barrier-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const writes = [];
   const memoryId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -187,7 +188,7 @@ test("episode extraction exposes no late result when its LLM ignores abort", asy
 });
 
 test("contradiction detection persists nothing when its LLM ignores abort", async (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-abort-barrier-"));
+  const workspaceDir = makeTempDir("plur1bus-contradiction-abort-barrier-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const controller = new AbortController();
   const late = deferred();
@@ -215,7 +216,7 @@ test("contradiction detection persists nothing when its LLM ignores abort", asyn
 });
 
 test("an aborted queued contradiction append does not poison the next append", async (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-queue-abort-"));
+  const workspaceDir = makeTempDir("plur1bus-contradiction-queue-abort-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const detector = new ContradictionDetector({ workspaceDir, logger: { warn() {}, debug() {} } });
   const gate = deferred();
@@ -247,7 +248,7 @@ test("an aborted queued contradiction append does not poison the next append", a
 
 test("persona seed and evolution do not write after an abort-ignoring LLM resolves", async (t) => {
   for (const operation of ["seed", "evolution"]) {
-    const workspaceDir = mkdtempSync(join(tmpdir(), `plur1bus-persona-${operation}-abort-`));
+    const workspaceDir = makeTempDir(`plur1bus-persona-${operation}-abort-`);
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     if (operation === "evolution") {
       writePersonaVoice(workspaceDir, "- Kurze Saetze\n- Freundlich direkt\n- Emoji-Palette: 🌿 ✨");

@@ -9,6 +9,7 @@ import {
   createMemoryTurnRouteRegistry,
   resolveHostHookMemoryContext,
 } from "../lib/memory-request-context.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // 7.12.30: Session-Eintraege von OpenClaw 2026.9 (entry.delivery) und Hooks
 // ohne messageProvider muessen den authentifizierten Kontext liefern.
@@ -85,7 +86,7 @@ function resolve(hook, registry, entry, logger = null) {
 
 describe("hook identity with 2026.9 session entries", () => {
   it("authenticates a DM turn from the entry.delivery object", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-hook-delivery-"));
+    const workspaceDir = makeTempDir("plur1bus-hook-delivery-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = registryWithDispatch();
     const warnings = [];
@@ -98,7 +99,7 @@ describe("hook identity with 2026.9 session entries", () => {
   });
 
   it("derives the provider from the canonical session key when the hook carries no messageProvider", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-hook-noprovider-"));
+    const workspaceDir = makeTempDir("plur1bus-hook-noprovider-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = registryWithDispatch();
     const hook = hookCtx(workspaceDir);
@@ -109,7 +110,7 @@ describe("hook identity with 2026.9 session entries", () => {
   });
 
   it("still rejects a conflicting delivery channel and reports values in the fallback warning", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-hook-conflict-"));
+    const workspaceDir = makeTempDir("plur1bus-hook-conflict-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = registryWithDispatch();
     const entry = deliveryEntry();
@@ -126,7 +127,7 @@ describe("hook identity with 2026.9 session entries", () => {
   });
 
   it("reports an entry without any provider alias as reason=provider with both values", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-hook-noentry-"));
+    const workspaceDir = makeTempDir("plur1bus-hook-noentry-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = registryWithDispatch();
     const warnings = [];
@@ -139,7 +140,7 @@ describe("hook identity with 2026.9 session entries", () => {
   });
 
   it("warns when the session entry read is slow but still authenticates", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-hook-slow-"));
+    const workspaceDir = makeTempDir("plur1bus-hook-slow-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = registryWithDispatch();
     const warnings = [];

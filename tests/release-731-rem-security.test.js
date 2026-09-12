@@ -20,6 +20,7 @@ import {
   runRemDream,
   writeRemDreamToVault,
 } from "../lib/dreaming/rem-dream.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "release731-agent";
 const USER_A = `user:v1:${"a".repeat(64)}`;
@@ -324,7 +325,7 @@ test("REM user partition does not mix multiple normalized users and avoids prefi
 });
 
 test("REM refuses a shared workspace vault target for private material", () => {
-  const root = mkdtempSync(join(tmpdir(), "release731-rem-output-"));
+  const root = makeTempDir("release731-rem-output-");
   try {
     const requestContext = context();
     const privatePartition = buildRemPartition({
@@ -356,7 +357,7 @@ test("REM refuses a shared workspace vault target for private material", () => {
 });
 
 test("REM refuses a path-only private output target even when its metadata claims private ACL", () => {
-  const root = mkdtempSync(join(tmpdir(), "release731-rem-private-target-"));
+  const root = makeTempDir("release731-rem-private-target-");
   try {
     const requestContext = context();
     const privatePartition = buildRemPartition({

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createNeoStore, isDerivedRecordAccessible, stampDerivedVisibility } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("derived record ACL", () => {
   it("denies a foreign agent when visibility is missing", () => {
@@ -31,7 +32,7 @@ describe("derived record ACL", () => {
   });
 
   it("appendPatterns stamps visibility and hides the row from a foreign requester", () => {
-    const root = mkdtempSync(join(tmpdir(), "derived-scope-"));
+    const root = makeTempDir("derived-scope-");
     try {
       const store = createNeoStore(root, "workspace-a");
       store.appendPatterns([{ id: "p1", agentId: "agent-a", patternKey: "k" }]);
@@ -46,7 +47,7 @@ describe("derived record ACL", () => {
   });
 
   it("lets the owning agent read a legacy unstamped pattern", () => {
-    const root = mkdtempSync(join(tmpdir(), "derived-legacy-"));
+    const root = makeTempDir("derived-legacy-");
     try {
       const store = createNeoStore(root, "workspace-a");
       mkdirSync(dirname(store.paths.patterns), { recursive: true });

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeRecordNote } from "../lib/obsidian/record-writer.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeConfig(tmp) {
   return {
@@ -15,7 +16,7 @@ function makeConfig(tmp) {
 }
 
 test("unchanged managed block does not rewrite the file", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-record-writer-"));
+  const tmp = makeTempDir("plur1bus-record-writer-");
   try {
     const cfg = makeConfig(tmp);
     const options = {
@@ -59,7 +60,7 @@ test("unchanged managed block does not rewrite the file", () => {
 });
 
 test("changed managed block still rewrites the file", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-record-writer-"));
+  const tmp = makeTempDir("plur1bus-record-writer-");
   try {
     const cfg = makeConfig(tmp);
     const options = {
@@ -102,7 +103,7 @@ test("changed managed block still rewrites the file", () => {
 });
 
 test("existing file content remains identical on unchanged rewrite", () => {
-  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-record-writer-"));
+  const tmp = makeTempDir("plur1bus-record-writer-");
   try {
     const cfg = makeConfig(tmp);
     const options = {

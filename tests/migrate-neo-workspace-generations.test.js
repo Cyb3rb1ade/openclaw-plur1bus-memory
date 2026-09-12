@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { planMigration, migrateWorkspace } from "../scripts/migrate-neo-workspace-generations.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const CANONICAL = "workspace-bernhardine--7722278e420517df6437";
 const KEY = "workspace-bernhardine";
@@ -28,7 +29,7 @@ function episode(id, agentId = "bernhardine", startTime = "2026-07-01T10:00:00.0
 
 /** Baut die drei Generationen in einem temporären _neo-Verzeichnis auf. */
 function fixture({ gen1 = [], gen2 = [], gen3 = [] } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "neo-migrate-"));
+  const root = makeTempDir("neo-migrate-");
   const workspaces = join(root, "workspaces");
   if (gen3.length) writeJsonl(join(workspaces, CANONICAL), "episodes.jsonl", gen3);
   else mkdirSync(join(workspaces, CANONICAL), { recursive: true });
@@ -140,7 +141,7 @@ describe("migrateWorkspace", () => {
     // appendJsonl cappt grosse Dateien auf die LETZTEN NEO_MAX_RECORDS Zeilen.
     // Migrierte Records sind aelter, landen aber am Ende — ein Merge wuerde
     // also die alten behalten und die aktuellen wegwerfen.
-    const root = mkdtempSync(join(tmpdir(), "neo-migrate-capped-"));
+    const root = makeTempDir("neo-migrate-capped-");
     const workspaces = join(root, "workspaces");
     try {
       writeJsonl(join(workspaces, CANONICAL), "episodes.jsonl", [episode("c")]);
