@@ -323,7 +323,7 @@ import {
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
-import { redactError, safeDebug, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
+import { redactError, safeDebug, safeWarn, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
 import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
@@ -5688,6 +5688,18 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       tone,
       logger: api.logger,
       skillWorkshop: openClawSkillWorkshop,
+      // 7.12.51: Wo der Host einen angewandten Skill ablegt. Nur benutzt, wenn
+      // der Workshop den Vorschlag schon angewandt hat und keinen Zielpfad
+      // mitliefert.
+      workshopSkillPath: (skillName) => join(
+        process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"),
+        "agents",
+        agentId,
+        "agent",
+        "workshop-skills",
+        skillName,
+        "SKILL.md",
+      ),
       memoryCtx,
       loadEvidenceRecord: async (memoryId) => {
         try {

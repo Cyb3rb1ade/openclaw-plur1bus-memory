@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -512,5 +512,75 @@ describe("Skill Workshop approval lifecycle", () => {
       .trim().split("\n").filter(Boolean).map(JSON.parse);
     assert.equal(rejected.length, 1);
     assert.equal(readProposals(dir)[0].openClawWorkshop.status, "rejected");
+  });
+});
+
+describe("7.12.51: der Workshop schreibt in sein eigenes Verzeichnis", () => {
+  const workshopFile = (root, name) => join(root, "agents", "agent-a", "agent", "workshop-skills", name, "SKILL.md");
+
+  it("übernimmt den vom Host gemeldeten Zielpfad statt ihn gegen einen geratenen zu prüfen", async (t) => {
+    const dir = workspace();
+    const host = mkdtempSync(join(tmpdir(), "plur1bus-host-"));
+    t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
+    const target = workshopFile(host, "weekly-deploy");
+    const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      agentId: "agent-a",
+      skillWorkshop: {
+        async inspectProposal() {
+          return { proposalId: "weekly-deploy-20260826", revisionHash: REVISION, status: "pending", skillName: "weekly-deploy" };
+        },
+        async applyProposal() {
+          return { proposalId: "weekly-deploy-20260826", status: "applied", targetSkillFile: target };
+        },
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "active");
+    assert.equal(readProposals(dir)[0].activation.skillPath, target);
+    assert.equal(existsSync(join(dir, "skills", "weekly-deploy", "SKILL.md")), false, "PLUR1BUS schreibt die Datei nicht selbst");
+  });
+
+  it("lehnt einen Zielpfad ab, dessen Verzeichnis nicht zum Skill gehört", async (t) => {
+    const dir = workspace();
+    const host = mkdtempSync(join(tmpdir(), "plur1bus-host-"));
+    t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
+    const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      agentId: "agent-a",
+      skillWorkshop: {
+        async inspectProposal() {
+          return { proposalId: "weekly-deploy-20260826", revisionHash: REVISION, status: "pending", skillName: "weekly-deploy" };
+        },
+        async applyProposal() {
+          return { proposalId: "weekly-deploy-20260826", status: "applied", targetSkillFile: workshopFile(host, "something-else") };
+        },
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "workshop_apply_failed");
+    assert.equal(readProposals(dir)[0].status, "pending_review");
+  });
+
+  it("holt den Pfad aus dem Agentenverzeichnis, wenn der Workshop schon angewandt hat", async (t) => {
+    const dir = workspace();
+    const host = mkdtempSync(join(tmpdir(), "plur1bus-host-"));
+    t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
+    const target = workshopFile(host, "weekly-deploy");
+    mkdirSync(join(target, ".."), { recursive: true });
+    writeFileSync(target, "# applied by the workshop", "utf8");
+    const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      agentId: "agent-a",
+      workshopSkillPath: (name) => workshopFile(host, name),
+      skillWorkshop: {
+        async inspectProposal() {
+          return { proposalId: "weekly-deploy-20260826", revisionHash: REVISION, status: "applied", skillName: "weekly-deploy" };
+        },
+        async applyProposal() { throw new Error("darf nicht erneut anwenden"); },
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(readProposals(dir)[0].activation.skillPath, target);
   });
 });

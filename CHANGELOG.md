@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.51] — 2026-09-12
+
+### Behoben
+
+- **Freigabe brach mit „unexpected target" ab.** Der Workshop legt einen
+  angewandten Skill in seinem eigenen Verzeichnis ab
+  (`agents/<id>/agent/workshop-skills/<name>/SKILL.md`); PLUR1BUS verglich
+  diesen Pfad mit einem selbst geratenen im Ledger-Verzeichnis und verwarf die
+  Freigabe, obwohl der Skill bereits angewandt war. Geprüft wird jetzt die
+  Form des Host-Pfads (`<…>/(workshop-skills|skills)/<name>/SKILL.md`),
+  übernommen wird er. Hat der Workshop schon angewandt und liefert keinen
+  Pfad, wird er aus dem Agentenverzeichnis aufgelöst.
+- **`safeWarn is not defined`.** Der Hook, der den Workshop-Lebenszyklus ins
+  Ledger zurückschreibt, brach in seinem eigenen Fehlerpfad ab; `index.js`
+  benutzte `safeWarn` an zwei Stellen, ohne es zu importieren. Dadurch blieb
+  auch der zweite Weg zur Synchronisierung stehen.
+
+
 ## [7.12.50] — 2026-09-12
 
 ### Geändert
