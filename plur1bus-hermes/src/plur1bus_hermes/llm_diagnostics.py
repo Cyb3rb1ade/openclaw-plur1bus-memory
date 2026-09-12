@@ -215,8 +215,12 @@ class LlmErrorReporter:
             encoded = (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
             if len(encoded) > 8192:
                 raise ValueError("diagnostic record exceeds hard limit")
-            with self._lock:
+            if not self._lock.acquire(blocking=False):
+                return fields
+            try:
                 self._append(encoded)
+            finally:
+                self._lock.release()
         except Exception:
             try:
                 LOGGER.debug("LLM diagnostics skipped: diagnostic-write-failed")

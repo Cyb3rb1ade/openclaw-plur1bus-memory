@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import traceback
 import unittest
 import urllib.error
@@ -261,6 +262,35 @@ class DiagnosticTests(unittest.TestCase):
              patch("plur1bus_hermes.llm_diagnostics.LOGGER.warning", side_effect=RuntimeError("secret logger failure")), \
              patch("plur1bus_hermes.llm_diagnostics.LOGGER.debug", side_effect=RuntimeError("secret logger failure")):
             self.assertEqual(reporter.report(TimeoutError("provider secret"), "query-refinement")["errorHint"], "timeout")
+        self.assertTrue(reporter._lock.acquire(blocking=False))
+        reporter._lock.release()
+
+    def test_thread_mutex_contention_skips_write_without_waiting_for_owner(self):
+        reporter = self.reporter()
+        completed = threading.Event()
+        results = []
+
+        def report():
+            try:
+                results.append(reporter.report(TimeoutError("private provider error"), "query-refinement"))
+            finally:
+                completed.set()
+
+        reporter._lock.acquire()
+        thread = threading.Thread(target=report)
+        with patch.object(reporter, "_append") as append:
+            thread.start()
+            try:
+                self.assertTrue(completed.wait(timeout=1), "LLM failure waited on a contended diagnostic mutex")
+                append.assert_not_called()
+            finally:
+                reporter._lock.release()
+                thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results, [{"errorClass": "TimeoutError", "errorHint": "timeout"}])
+        self.assertEqual(self.files(), [])
+        reporter.report(TimeoutError("later failure"), "query-refinement")
+        self.assertEqual(len(self.files()), 1)
 
     def test_locked_diagnostic_file_does_not_block_operation(self):
         from plur1bus_hermes import file_lock
