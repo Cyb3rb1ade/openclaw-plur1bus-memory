@@ -45,11 +45,12 @@
     const n = React.useState(""), notice = n[0], setNotice = n[1];
     const b = React.useState(false), busy = b[0], setBusy = b[1];
     const Panel = C.Card || "section", Content = C.CardContent || "div", Button = C.Button || "button";
-    const load = React.useCallback(function () {
-      setLoading(true); setNotice("");
-      Promise.all([json("/status"), json("/workshop/proposals")])
+    const load = React.useCallback(function (completedNotice) {
+      const message = typeof completedNotice === "string" ? completedNotice : "";
+      setLoading(true); setNotice(message);
+      return Promise.all([json("/status"), json("/workshop/proposals")])
         .then(function (values) { setData(values[0]); setProposals(values[1].proposals || []); })
-        .catch(function () { setData(null); setProposals([]); setNotice("Dashboard data is unavailable."); })
+        .catch(function () { setData(null); setProposals([]); setNotice((message ? message + " " : "") + "Dashboard data is unavailable."); })
         .finally(function () { setLoading(false); });
     }, []);
     React.useEffect(function () { load(); }, [load]);
@@ -64,7 +65,7 @@
       if (!review || review.verb === "inspect") return;
       setBusy(true); setNotice("");
       json("/workshop/" + review.verb, { method: "POST", headers: { "Content-Type": "application/json", "X-Plur1bus-Confirm": review.verb, "X-Plur1bus-Action-Nonce": review.nonce }, body: JSON.stringify({ proposal_id: review.proposal.id, revision: review.proposal.revision }) })
-        .then(function () { setNotice("Workshop action completed."); setReview(null); load(); })
+        .then(function (result) { setReview(null); return load(result && result.activationPartial ? "Skill published; evidence confirmation is still incomplete. Review Finish evidence confirmation to retry." : "Workshop action completed."); })
         .catch(function () { setNotice("Action was rejected. Review again before retrying."); setReview(null); })
         .finally(function () { setBusy(false); });
     }, [review, load]);
