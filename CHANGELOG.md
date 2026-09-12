@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.56] — 2026-09-12
+
+### Behoben
+
+- **Der offene Episodenzustand überlebt eine bekannte letzte Spanne.** Endete
+  ein Turn auf einer Spanne, deren Turns schon episodiert sind, baute die
+  Extraktion den Zustand trotzdem aus einer frisch erzeugten Episode auf —
+  mit einer Kennung, die nie in den Vault geschrieben wurde. Die nächste
+  Fortsetzung hätte an eine nicht existierende Episode angehängt. Jetzt bleibt
+  der vom Aufrufer gespeicherte Zustand erhalten, auch bei gemischten Gruppen
+  aus neuen und bekannten Turns.
+- **Die Fehlerdiagnose fasst auch Name und Code nur noch redigiert an.** Beide
+  sind wie die Meldung Freitext. Gelesen werden sie über den
+  Eigenschafts-Deskriptor, ein feindseliger Getter kann also weder Code
+  ausführen noch die Einordnung verfälschen. `normalizedErrorClass` und die
+  Diagnose scheitern nicht mehr an solchen Objekten; der native `AbortError`
+  bleibt über den eingebauten Getter erkennbar.
+
+
 ## [7.12.55] — 2026-09-12
 
 ### Behoben
