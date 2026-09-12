@@ -346,11 +346,16 @@ class DiagnosticTests(unittest.TestCase):
             render_acl.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
                                   ctypes.POINTER(wintypes.LPWSTR), ctypes.c_void_p]
             render_acl.restype = wintypes.BOOL
+            get_ace = security.security.GetAce
+            get_ace.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+            get_ace.restype = wintypes.BOOL
             for target in (path, path.parent, path.parent / ".lock"):
                 descriptor = ctypes.c_void_p()
                 rendered = wintypes.LPWSTR()
+                owner = ctypes.c_void_p()
+                dacl = ctypes.c_void_p()
                 try:
-                    self.assertEqual(read_acl(str(target), 1, 5, None, None, None, None,
+                    self.assertEqual(read_acl(str(target), 1, 5, ctypes.byref(owner), None, ctypes.byref(dacl), None,
                                               ctypes.byref(descriptor)), 0)
                     self.assertTrue(render_acl(descriptor, 1, 5, ctypes.byref(rendered), None),
                                     f"ACL rendering failed: {ctypes.get_last_error()}")
@@ -359,7 +364,14 @@ class DiagnosticTests(unittest.TestCase):
                     # Exactly one access-allowed ACE, assigned to the process user.
                     self.assertEqual(sddl.count("(A;"), 1)
                     self.assertEqual(sddl.count(";;;"), 1)
-                    self.assertIn(";;;" + sid + ")", sddl)
+                    self.assertEqual(security._sid_text(owner), sid)
+                    # SDDL may abbreviate RID500 as LA. Compare the actual
+                    # ACCESS_ALLOWED_ACE SID, not its display alias. The SID
+                    # follows the 4-byte ACE_HEADER and 4-byte ACCESS_MASK.
+                    ace = ctypes.c_void_p()
+                    self.assertTrue(get_ace(dacl, 0, ctypes.byref(ace)))
+                    self.assertEqual(ctypes.c_ubyte.from_address(ace.value).value, 0)
+                    self.assertEqual(security._sid_text(ctypes.c_void_p(ace.value + 8)), sid)
                 finally:
                     if rendered:
                         security.kernel.LocalFree(ctypes.cast(rendered, ctypes.c_void_p))
