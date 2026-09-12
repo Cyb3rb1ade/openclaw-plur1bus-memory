@@ -18,9 +18,10 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNeoStore } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeWorkspace(itemCount) {
-  const root = mkdtempSync(join(tmpdir(), "neo-drain-budget-"));
+  const root = makeTempDir("neo-drain-budget-");
   const store = createNeoStore(root, "testws");
   const queuePath = store.paths?.embeddings
     || join(root, "workspaces", "testws", "embedding-queue.jsonl");

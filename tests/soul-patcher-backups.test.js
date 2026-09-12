@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { patchSoulMd } from "../lib/install/soul-patcher.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function backupNames(dir) {
   return readdirSync(dir).filter((name) => name.startsWith("SOUL.MD.bak-plur1bus-soul-"));
@@ -12,7 +13,7 @@ function backupNames(dir) {
 
 describe("soul patcher backups", () => {
   it("prunes old SOUL.MD backups to the configured limit", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-soul-backups-"));
+    const dir = makeTempDir("plur1bus-soul-backups-");
 
     try {
       const target = join(dir, "SOUL.MD");

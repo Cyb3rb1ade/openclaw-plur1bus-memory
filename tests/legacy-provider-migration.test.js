@@ -9,10 +9,11 @@ import {
   hasExistingLanceMemoryData,
   hasExistingLanceMemoryTables,
 } from "../lib/providers/legacy-provider-migration.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("legacy provider migration", () => {
   it("treats missing and table-free LanceDB roots as switchable", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-empty-"));
+    const root = makeTempDir("plur1bus-provider-empty-");
     mkdirSync(join(root, "main"), { recursive: true });
 
     assert.equal(hasExistingLanceMemoryTables(join(root, "missing")), false);
@@ -20,7 +21,7 @@ describe("legacy provider migration", () => {
   });
 
   it("detects existing memory tables without opening LanceDB", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-table-"));
+    const root = makeTempDir("plur1bus-provider-table-");
     mkdirSync(join(root, "main", "memories.lance"), { recursive: true });
 
     assert.equal(hasExistingLanceMemoryTables(root), true);
@@ -28,7 +29,7 @@ describe("legacy provider migration", () => {
   });
 
   it("detects existing LanceDB data fragments without opening LanceDB", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-data-"));
+    const root = makeTempDir("plur1bus-provider-data-");
     mkdirSync(join(root, "main", "memories.lance", "data"), { recursive: true });
     mkdirSync(join(root, "main", "memories.lance", "_versions"), { recursive: true });
     const dataFile = join(root, "main", "memories.lance", "data", "fragment.lance");
@@ -39,7 +40,7 @@ describe("legacy provider migration", () => {
   });
 
   it("treats empty LanceDB table directories as switchable", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-empty-table-"));
+    const root = makeTempDir("plur1bus-provider-empty-table-");
     mkdirSync(join(root, "main", "memories.lance"), { recursive: true });
 
     const result = applyLegacyProviderDefaults(
@@ -58,7 +59,7 @@ describe("legacy provider migration", () => {
 
   it("treats PLUR1BUS schema-seed-only LanceDB tables as switchable", async () => {
     const lancedb = await import("@lancedb/lancedb");
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-schema-only-"));
+    const root = makeTempDir("plur1bus-provider-schema-only-");
     const db = await lancedb.connect(join(root, "main"));
     const table = await db.createTable("memories", [
       { id: "__schema__", text: "", vector: [0, 0, 0], importance: 0 },
@@ -82,7 +83,7 @@ describe("legacy provider migration", () => {
 
   it("does not switch a one-fragment real LanceDB table with a later delete transaction", async () => {
     const lancedb = await import("@lancedb/lancedb");
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-one-fragment-real-"));
+    const root = makeTempDir("plur1bus-provider-one-fragment-real-");
     const db = await lancedb.connect(join(root, "main"));
     const table = await db.createTable("memories", [
       { id: "real-1", text: "real memory", vector: [0.1, 0.2, 0.3], importance: 1 },
@@ -101,7 +102,7 @@ describe("legacy provider migration", () => {
   });
 
   it("moves a missing embedding locally without overriding an explicit reranker opt-out", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-legacy-"));
+    const root = makeTempDir("plur1bus-provider-legacy-");
     const result = applyLegacyProviderDefaults(
       {
         reranker: { enabled: false },
@@ -119,7 +120,7 @@ describe("legacy provider migration", () => {
   });
 
   it("does not switch providers once a memory table has data", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-locked-"));
+    const root = makeTempDir("plur1bus-provider-locked-");
     mkdirSync(join(root, "main", "memories.lance", "data"), { recursive: true });
     writeFileSync(join(root, "main", "memories.lance", "data", "fragment.lance"), "fragment");
     const existing = {
@@ -134,7 +135,7 @@ describe("legacy provider migration", () => {
   });
 
   it("preserves explicit remote provider credentials on empty installs", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-explicit-"));
+    const root = makeTempDir("plur1bus-provider-explicit-");
     const existing = {
       embedding: { provider: "openai", apiKeyEnv: "OPENAI_API_KEY", model: "text-embedding-3-large", dimensions: 3072 },
       reranker: { provider: "cohere", apiKeyEnv: "COHERE_API_KEY", enabled: true },
@@ -164,7 +165,7 @@ describe("legacy provider migration", () => {
         embeddingCachePersist: true,
       },
     ]) {
-      const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-explicit-embedding-"));
+      const root = makeTempDir("plur1bus-provider-explicit-embedding-");
       const existing = {
         embedding,
         reranker: { provider: "disabled", enabled: false },
@@ -181,7 +182,7 @@ describe("legacy provider migration", () => {
   });
 
   it("preserves explicit Cohere reranker selection without inline credentials", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-explicit-cohere-"));
+    const root = makeTempDir("plur1bus-provider-explicit-cohere-");
     const previousKey = process.env.COHERE_API_KEY;
     process.env.COHERE_API_KEY = "resolved-later";
     const existing = {
@@ -208,7 +209,7 @@ describe("legacy provider migration", () => {
   });
 
   it("preserves an explicit disabled reranker provider", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-explicit-disabled-"));
+    const root = makeTempDir("plur1bus-provider-explicit-disabled-");
     const existing = {
       embedding: { provider: "local-transformers" },
       reranker: { provider: "disabled", timeoutMs: 3210 },
@@ -222,7 +223,7 @@ describe("legacy provider migration", () => {
   });
 
   it("synthesizes both local providers when provider selection is absent", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-absent-"));
+    const root = makeTempDir("plur1bus-provider-absent-");
 
     const result = applyLegacyProviderDefaults({}, { baseDbPath: root });
 

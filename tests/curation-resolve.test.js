@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNeoStore } from "../lib/neo-arch.js";
 import { resolveCurationRecord } from "../lib/curation-resolve.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("resolveCurationRecord", () => {
   it("keep promotes a conflict record", () => {
-    const dir = mkdtempSync(join(tmpdir(), "curation-"));
+    const dir = makeTempDir("curation-");
     const store = createNeoStore(dir, "default");
     const rec = {
       id: "11111111-1111-4111-8111-111111111111",

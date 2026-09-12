@@ -55,13 +55,13 @@
     React.useEffect(function () { load(); }, [load]);
     const preview = React.useCallback(function (verb, proposal) {
       setBusy(true); setNotice("");
-      json("/workshop/" + verb + "/preview/" + encodeURIComponent(proposal.id) + "?revision=" + encodeURIComponent(proposal.revision))
-        .then(function (value) { setReview({ verb: verb, proposal: value.review, nonce: value.nonce, warning: value.warning || "" }); })
+      json(verb === "inspect" ? "/workshop/proposals/" + encodeURIComponent(proposal.id) : "/workshop/" + verb + "/preview/" + encodeURIComponent(proposal.id) + "?revision=" + encodeURIComponent(proposal.revision))
+        .then(function (value) { setReview({ verb: verb, proposal: verb === "inspect" ? value : value.review, nonce: value.nonce, warning: value.warning || "" }); })
         .catch(function () { setNotice("That proposal can no longer be reviewed. Refresh the list."); setReview(null); })
         .finally(function () { setBusy(false); });
     }, []);
     const confirm = React.useCallback(function () {
-      if (!review) return;
+      if (!review || review.verb === "inspect") return;
       setBusy(true); setNotice("");
       json("/workshop/" + review.verb, { method: "POST", headers: { "Content-Type": "application/json", "X-Plur1bus-Confirm": review.verb, "X-Plur1bus-Action-Nonce": review.nonce }, body: JSON.stringify({ proposal_id: review.proposal.id, revision: review.proposal.revision }) })
         .then(function () { setNotice("Workshop action completed."); setReview(null); load(); })
@@ -74,8 +74,24 @@
       React.createElement("div", { className: "pb-signal " + (configured ? "is-ready" : "is-degraded") }, React.createElement("span", { "aria-hidden": "true" }), configured ? "Memory partition configured" : "Memory partition needs attention"),
       notice ? React.createElement(Panel, { className: "pb-error" }, React.createElement(Content, null, notice)) : null,
       !loading && data ? React.createElement("div", { className: "pb-grid" }, React.createElement(Panel, null, React.createElement(Content, null, React.createElement("h2", null, "Active partition"), React.createElement("dl", null, field("Agent", data.agentId), field("Scope", data.scopeType), field("Cards", storage.cards)))), React.createElement(Panel, null, React.createElement(Content, null, React.createElement("h2", null, "Retrieval"), React.createElement("dl", null, field("Embedding provider", embedding.provider), field("Model", embedding.model), field("Dimensions", embedding.dimensions), field("Credentials", embedding.credentials))))) : null,
-      React.createElement(Panel, { className: "pb-workshop" }, React.createElement(Content, null, React.createElement("h2", null, "Skill Workshop"), React.createElement("p", null, "Only existing scoped proposals are shown. Mining and activation are not available here."), proposals.length ? React.createElement("ul", { className: "pb-proposals" }, proposals.map(function (proposal) { return React.createElement("li", { key: proposal.id }, React.createElement("div", null, React.createElement("strong", null, proposal.title || proposal.skillName || "Untitled proposal"), React.createElement("small", null, "Revision " + String(proposal.revision || "").slice(0, 12))), React.createElement(Button, { onClick: function () { preview("approve", proposal); }, disabled: busy }, "Review approval"), React.createElement(Button, { onClick: function () { preview("publish", proposal); }, disabled: busy }, "Review publish")); })) : React.createElement("p", { className: "pb-empty" }, "No proposals in this active scope."))),
-      reviewed ? React.createElement(Panel, { className: "pb-review" }, React.createElement(Content, null, React.createElement("h2", null, review.verb === "publish" ? "Review profile-wide publication" : "Review approval"), review.warning ? React.createElement("p", { className: "pb-warning" }, review.warning) : null, React.createElement("dl", null, field("Skill", reviewed.skillName), field("Status", reviewed.status), field("Evidence records", Array.isArray(reviewed.evidence) ? reviewed.evidence.length : 0)), React.createElement("h3", null, reviewed.title || "Untitled proposal"), React.createElement("p", null, reviewed.description || "No description"), React.createElement("pre", { className: "pb-instructions" }, reviewed.instructions || "No instructions"), React.createElement("div", { className: "pb-actions" }, React.createElement(Button, { onClick: function () { setReview(null); }, disabled: busy }, "Cancel"), React.createElement(Button, { onClick: confirm, disabled: busy }, busy ? "Submitting…" : (review.verb === "publish" ? "Confirm publish" : "Confirm approval"))))) : null,
+      React.createElement(Panel, { className: "pb-workshop" }, React.createElement(Content, null,
+        React.createElement("h2", null, "Skill Workshop · Mined Skills"),
+        React.createElement("p", null, "Review scoped proposals and applied skills. Withdrawal archives unchanged generated content and preserves manual edits."),
+        proposals.length ? React.createElement("ul", { className: "pb-proposals" }, proposals.map(function (proposal) {
+          const actions = [["inspect", "View skill"]];
+          if (proposal.status === "pending_review") actions.push(["approve", "Review approval"]);
+          if (proposal.status === "approved" || proposal.activationPartial) actions.push(["publish", proposal.activationPartial ? "Finish evidence confirmation" : "Review publish"]);
+          if (["pending_review", "approved"].includes(proposal.status)) actions.push(["reject", "Decline"]);
+          if (proposal.status === "published") actions.push(["withdraw", "Withdraw"]);
+          return React.createElement("li", { key: proposal.id },
+            React.createElement("div", null, React.createElement("strong", null, proposal.title || proposal.skillName || "Untitled proposal"),
+              React.createElement("small", null, String(proposal.status || "") + " · " + String(proposal.category || "workflow") + " · confidence " + String(proposal.confidence ?? "—") + " · evidence " + String(proposal.evidenceCount || 0)),
+              React.createElement("small", null, String(proposal.createdAt || "").slice(0, 10)),
+              React.createElement("p", null, String(proposal.benefit || "").slice(0, 500))),
+            ...actions.map(function (action) { return React.createElement(Button, { key: action[0], onClick: function () { preview(action[0], proposal); }, disabled: busy }, action[1]); }));
+        })) : React.createElement("p", { className: "pb-empty" }, "No proposals in this active scope."))),
+
+      reviewed ? React.createElement(Panel, { className: "pb-review" }, React.createElement(Content, null, React.createElement("h2", null, ({ publish: "Review profile-wide publication", approve: "Review approval", reject: "Reject proposal", withdraw: "Withdraw generated skill", inspect: "Mined skill" })[review.verb]), review.warning ? React.createElement("p", { className: "pb-warning" }, review.warning) : null, React.createElement("dl", null, field("Skill", reviewed.skillName), field("Status", reviewed.status), field("Evidence records", Array.isArray(reviewed.evidence) ? reviewed.evidence.length : 0)), React.createElement("h3", null, reviewed.title || "Untitled proposal"), React.createElement("p", null, reviewed.description || "No description"), React.createElement("p", null, reviewed.benefit || ""), React.createElement("pre", { className: "pb-instructions" }, reviewed.instructions || "No instructions"), React.createElement("div", { className: "pb-actions" }, React.createElement(Button, { onClick: function () { setReview(null); }, disabled: busy }, "Cancel"), review.verb !== "inspect" ? React.createElement(Button, { onClick: confirm, disabled: busy }, busy ? "Submitting…" : ({ publish: "Confirm publish", approve: "Confirm approval", reject: "Confirm rejection", withdraw: "Confirm withdrawal" })[review.verb]) : null))) : null,
       data ? React.createElement(ObsidianPanel) : null,
       loading ? React.createElement("p", { className: "pb-loading" }, "Reading active memory status…") : null);
   }

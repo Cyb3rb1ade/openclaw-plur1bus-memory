@@ -17,6 +17,7 @@ import {
 } from "../lib/providers/local-model-artifacts.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { LocalTransformersRerankerProvider } from "../lib/providers/reranker-local-transformers.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -73,7 +74,7 @@ describe("pinned local model artifacts", () => {
   it("downloads to a unique partial file and exposes only the verified final artifact", async () => {
     const bytes = Buffer.from("verified model bytes");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-cache-"));
+    const cacheDir = makeTempDir("plur1bus-model-cache-");
     const urls = [];
 
     const result = await ensurePinnedModelArtifacts(profile, cacheDir, {
@@ -96,7 +97,7 @@ describe("pinned local model artifacts", () => {
   it("reports bounded aggregate progress while preserving atomic publication", async () => {
     const bytes = Buffer.from("progress-visible-model-bytes");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-progress-"));
+    const cacheDir = makeTempDir("plur1bus-model-progress-");
     const progress = [];
 
     await ensurePinnedModelArtifacts(profile, cacheDir, {
@@ -123,7 +124,7 @@ describe("pinned local model artifacts", () => {
   it("coalesces concurrent preparation and provider downloads for one artifact", async () => {
     const bytes = Buffer.from("one-network-transfer-for-two-consumers");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-coalesced-"));
+    const cacheDir = makeTempDir("plur1bus-model-coalesced-");
     let fetches = 0;
     let releaseFetch;
     const fetchReady = new Promise((resolve) => { releaseFetch = resolve; });
@@ -148,7 +149,7 @@ describe("pinned local model artifacts", () => {
   it("rechecks a completed artifact when a delayed subscriber misses the in-flight entry", async () => {
     const bytes = Buffer.from("late-subscriber-reuses-published-artifact");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-late-subscriber-"));
+    const cacheDir = makeTempDir("plur1bus-model-late-subscriber-");
     let fetches = 0;
     let releaseFetch;
     let releaseSecondProgress;
@@ -187,7 +188,7 @@ describe("pinned local model artifacts", () => {
   it("gives every coalesced consumer progress and isolates one consumer abort", async () => {
     const bytes = Buffer.from("shared-transfer-survives-one-consumer-abort");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-subscriber-abort-"));
+    const cacheDir = makeTempDir("plur1bus-model-subscriber-abort-");
     const firstAbort = new AbortController();
     const secondProgress = [];
     let fetches = 0;
@@ -228,7 +229,7 @@ describe("pinned local model artifacts", () => {
   it("isolates a failing coalesced progress subscriber without cancelling the shared transfer", async () => {
     const bytes = Buffer.from("shared-transfer-survives-progress-listener-failure");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-progress-failure-"));
+    const cacheDir = makeTempDir("plur1bus-model-progress-failure-");
     const survivorProgress = [];
     let fetches = 0;
     let releaseFetch;
@@ -268,7 +269,7 @@ describe("pinned local model artifacts", () => {
   it("does not create or join a transfer after an awaited initial progress callback aborts", async () => {
     const bytes = Buffer.from("abort-after-initial-progress");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-progress-abort-"));
+    const cacheDir = makeTempDir("plur1bus-model-progress-abort-");
     const controller = new AbortController();
     let fetches = 0;
 
@@ -292,7 +293,7 @@ describe("pinned local model artifacts", () => {
   it("aborts the shared transfer only after every coalesced consumer cancels", async () => {
     const bytes = Buffer.from("all-consumers-cancel");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-all-abort-"));
+    const cacheDir = makeTempDir("plur1bus-model-all-abort-");
     const firstAbort = new AbortController();
     const secondAbort = new AbortController();
     let sharedSignal;
@@ -339,7 +340,7 @@ describe("pinned local model artifacts", () => {
         sha256: sha256(bytes),
       })]),
     });
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-converted-model-cache-"));
+    const cacheDir = makeTempDir("plur1bus-converted-model-cache-");
     const urls = [];
 
     await ensurePinnedModelArtifacts(profile, cacheDir, {
@@ -366,7 +367,7 @@ describe("pinned local model artifacts", () => {
   });
 
   it("blocks a non-commercial Jina artifact before network or cache mutation without explicit acknowledgement", async () => {
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-jina-license-gate-"));
+    const cacheDir = makeTempDir("plur1bus-jina-license-gate-");
     let fetches = 0;
 
     await assert.rejects(
@@ -390,7 +391,7 @@ describe("pinned local model artifacts", () => {
   it("reuses a valid artifact without a network request", async () => {
     const bytes = Buffer.from("already valid");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-cache-"));
+    const cacheDir = makeTempDir("plur1bus-model-cache-");
     const target = join(modelCacheRevisionDir(cacheDir, profile), "onnx/model.onnx");
     const { mkdirSync } = await import("node:fs");
     mkdirSync(join(modelCacheRevisionDir(cacheDir, profile), "onnx"), { recursive: true });
@@ -415,7 +416,7 @@ describe("pinned local model artifacts", () => {
   it("never publishes a truncated or hash-mismatched download", async () => {
     const expected = Buffer.from("complete artifact");
     const profile = fixtureProfile(expected);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-cache-"));
+    const cacheDir = makeTempDir("plur1bus-model-cache-");
     const finalPath = join(modelCacheRevisionDir(cacheDir, profile), "onnx/model.onnx");
 
     await assert.rejects(
@@ -437,7 +438,7 @@ describe("pinned local model artifacts", () => {
   it("rejects an oversized Content-Length before writing and cancels the body", async () => {
     const expected = Buffer.from("bounded-artifact");
     const profile = fixtureProfile(expected);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-length-bound-"));
+    const cacheDir = makeTempDir("plur1bus-model-length-bound-");
     const finalPath = join(modelCacheRevisionDir(cacheDir, profile), "onnx/model.onnx");
     let cancellations = 0;
 
@@ -458,7 +459,7 @@ describe("pinned local model artifacts", () => {
   it("stops an oversized stream before the excess chunk is written and removes partial files", async () => {
     const expected = Buffer.from("exact-size");
     const profile = fixtureProfile(expected);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-stream-bound-"));
+    const cacheDir = makeTempDir("plur1bus-model-stream-bound-");
     const revisionDir = modelCacheRevisionDir(cacheDir, profile);
     const finalPath = join(revisionDir, "onnx/model.onnx");
     let cancellations = 0;
@@ -486,7 +487,7 @@ describe("pinned local model artifacts", () => {
   it("fails clearly on HTTP errors without creating a usable artifact", async () => {
     const bytes = Buffer.from("expected");
     const profile = fixtureProfile(bytes);
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-cache-"));
+    const cacheDir = makeTempDir("plur1bus-model-cache-");
 
     let cancellations = 0;
     await assert.rejects(
@@ -504,7 +505,7 @@ describe("pinned local model artifacts", () => {
   });
 
   it("verifies E5 artifacts before constructing a revision-pinned offline pipeline", async () => {
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-e5-order-"));
+    const cacheDir = makeTempDir("plur1bus-e5-order-");
     const order = [];
     const provider = new LocalTransformersEmbeddingProvider({
       model: E5_EMBEDDING_PROFILE.model,
@@ -536,7 +537,7 @@ describe("pinned local model artifacts", () => {
   });
 
   it("verifies Jina artifacts before config inspection and pipeline construction", async () => {
-    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-jina-order-"));
+    const cacheDir = makeTempDir("plur1bus-jina-order-");
     const order = [];
     const provider = new LocalTransformersRerankerProvider({
       model: JINA_RERANKER_PROFILE.model,

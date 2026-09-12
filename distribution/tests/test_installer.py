@@ -29,6 +29,7 @@ class InstallerTests(unittest.TestCase):
         (self.home / "profiles/alpha/config.yaml").write_text(json.dumps(self.config))
         self.files = {
             "payload/plugins/plur1bus/__init__.py": b"new provider",
+            "payload/plugins/plur1bus/desktop/plugin.js": b"new UI",
             "payload/plugins/plur1bus-controls/__init__.py": b"new controls",
             "payload/desktop-plugins/plur1bus/plugin.js": b"new UI",
             "wheels/plur1bus_hermes-1-py3-none-any.whl": b"fixture wheel",
@@ -82,6 +83,10 @@ class InstallerTests(unittest.TestCase):
         transaction = self.apply(plan)
         config = installer.read_config(sys.executable, self.home / "profiles/alpha/config.yaml")
         self.assertEqual(config["memory"]["provider"], "plur1bus")
+        self.assertIs(config["memory"]["memory_enabled"], True)
+        for relative in ("plugins/plur1bus/desktop/plugin.js", "desktop-plugins/plur1bus/plugin.js"):
+            self.assertEqual((self.home / "profiles/alpha" / relative).read_bytes(), b"new UI")
+            self.assertFalse((self.home / relative).exists())
         self.assertEqual(config["model"], self.config["model"])
         self.assertIn("other", config["plugins"]["enabled"])
         self.assertNotIn("plur1bus", config["plugins"]["disabled"])
@@ -126,6 +131,26 @@ class InstallerTests(unittest.TestCase):
         (self.home / "profiles/later").mkdir()
         (self.home / "profiles/later/config.yaml").write_text(json.dumps(self.config))
         self.assertFalse((self.home / "profiles/later/plugins").exists())
+
+    def test_disabled_memory_is_reported_and_only_repaired_with_activation(self):
+        partial = {"memory": {"provider": "plur1bus", "memory_enabled": False, "user_profile_enabled": False},
+                   "plugins": {"enabled": ["other", "plur1bus", "plur1bus-controls"]}}
+        path = self.home / "profiles/alpha/config.yaml"
+        path.write_text(json.dumps(partial))
+        original = path.read_bytes()
+        preview = self.plan(profiles=["alpha"])
+        self.assertFalse(preview["profileStatus"]["alpha"]["active"])
+        self.assertFalse(preview["profileStatus"]["alpha"]["memoryEnabled"])
+        self.assertTrue(preview["profileStatus"]["alpha"]["inconsistent"])
+        self.apply(preview)
+        self.assertEqual(path.read_bytes(), original)
+        transaction = self.apply(self.plan(profiles=["alpha"], activate=True))
+        config = installer.read_config(sys.executable, path)
+        self.assertIs(config["memory"]["memory_enabled"], True)
+        self.assertIs(config["memory"]["user_profile_enabled"], False)
+        review = installer.rollback(self.home, transaction.name)
+        installer.rollback(self.home, transaction.name, review["confirmation"], True)
+        self.assertEqual(path.read_bytes(), original)
 
     def test_profile_inventory_is_readonly_and_does_not_leak_config(self):
         config = dict(self.config, api_key="SECRET-DO-NOT-OUTPUT")
@@ -183,6 +208,116 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b"old")
         self.assertFalse((self.home / "desktop-plugins/plur1bus/plugin.js").exists())
         self.assertTrue((transaction / "removed/desktop-plugins/plur1bus/plugin.js").exists())
+        self.assertFalse((self.home / "plugins/plur1bus/desktop/plugin.js").exists())
+        self.assertTrue((transaction / "removed/plugins/plur1bus/desktop/plugin.js").exists())
+
+    def test_unified_desktop_upgrade_and_rollback_preserve_local_state(self):
+        target = self.home / "profiles/alpha/plugins/plur1bus/desktop/plugin.js"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"old UI")
+        local = target.parent / "preferences.json"
+        local.write_bytes(b"user preferences")
+        transaction = self.apply(self.plan(profiles=["alpha"]))
+        self.assertEqual(target.read_bytes(), b"new UI")
+        self.assertEqual(local.read_bytes(), b"user preferences")
+        review = installer.rollback(self.home, transaction.name)
+        installer.rollback(self.home, transaction.name, review["confirmation"], True)
+        self.assertEqual(target.read_bytes(), b"old UI")
+        self.assertEqual(local.read_bytes(), b"user preferences")
+
+    def test_unified_desktop_symlink_is_refused_before_writes(self):
+        target = self.home / "profiles/alpha/plugins/plur1bus/desktop"
+        target.parent.mkdir(parents=True)
+        outside = self.root / "outside"
+        outside.mkdir()
+        try:
+            target.symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(str(error))
+        with self.assertRaisesRegex(ValueError, "symbolic links/junctions"):
+            self.plan(profiles=["alpha"])
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertFalse((self.home / "plur1bus-install-backups").exists())
+
+    def test_named_profile_updates_shared_root_ui_and_receipt_with_rollback(self):
+        ui_paths = ("plugins/plur1bus/desktop/plugin.js", "desktop-plugins/plur1bus/plugin.js")
+        for relative in ui_paths:
+            target = self.home / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"old UI")
+        source_mtime = (self.home / ui_paths[0]).stat().st_mtime_ns
+        backend = self.home / "plugins/plur1bus/__init__.py"
+        backend.write_bytes(b"old default backend")
+        marker = self.home / "desktop-plugins/plur1bus/.hermes-package.json"
+        marker.write_text('{"source":"preserve existing host marker"}')
+        receipt_path = self.home / installer.RECEIPT
+        original_receipt = json.dumps({"version": "7.12.0-hermes.1", "files": {
+            **{relative: installer.digest(b"old UI") for relative in ui_paths},
+            "plugins/plur1bus/__init__.py": installer.digest(backend.read_bytes())}}).encode()
+        receipt_path.write_bytes(original_receipt)
+        config_before = (self.home / "config.yaml").read_bytes()
+        plan = self.plan(profiles=["alpha"], activate=True)
+        self.assertEqual(set(plan["sharedDesktop"]), {*ui_paths, installer.RECEIPT, "desktop-plugins/plur1bus/.hermes-package.json"})
+        self.assertIsNone(plan["sharedDesktop"]["desktop-plugins/plur1bus/.hermes-package.json"]["after"])
+        transaction = self.apply(plan)
+        for relative in ui_paths:
+            self.assertEqual((self.home / relative).read_bytes(), b"new UI")
+        receipt = json.loads(receipt_path.read_bytes())
+        self.assertEqual(receipt["version"], "7.12.0-hermes.1")
+        self.assertTrue(all(receipt["files"][relative] == installer.digest(b"new UI") for relative in ui_paths))
+        self.assertEqual(backend.read_bytes(), b"old default backend")
+        self.assertEqual((self.home / "config.yaml").read_bytes(), config_before)
+        self.assertFalse(marker.exists())
+        self.assertEqual((transaction / "retired/desktop-plugins/plur1bus/.hermes-package.json").read_text(),
+                         '{"source":"preserve existing host marker"}')
+        review = installer.rollback(self.home, transaction.name)
+        installer.rollback(self.home, transaction.name, review["confirmation"], True)
+        self.assertEqual(receipt_path.read_bytes(), original_receipt)
+        for relative in ui_paths:
+            self.assertEqual((self.home / relative).read_bytes(), b"old UI")
+        self.assertEqual(marker.read_text(), '{"source":"preserve existing host marker"}')
+        self.assertEqual((self.home / ui_paths[0]).stat().st_mtime_ns, source_mtime)
+
+    def test_named_profile_refreshes_existing_unified_ui_without_creating_root_desktop(self):
+        target = self.home / "plugins/plur1bus/desktop/plugin.js"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"old UI")
+        plan = self.plan(profiles=["alpha"])
+        self.assertEqual(set(plan["sharedDesktop"]), {"plugins/plur1bus/desktop/plugin.js"})
+        self.apply(plan)
+        self.assertEqual(target.read_bytes(), b"new UI")
+        self.assertFalse((self.home / "desktop-plugins").exists())
+        self.assertFalse((self.home / "plugins/plur1bus/__init__.py").exists())
+
+    def test_shared_root_ui_is_bound_to_plan_and_symlinks_fail_before_writes(self):
+        target = self.home / "desktop-plugins/plur1bus/plugin.js"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"old UI")
+        plan = self.plan(profiles=["alpha"])
+        target.write_bytes(b"manual edit after review")
+        with self.assertRaisesRegex(ValueError, "stale plan"):
+            self.apply(plan)
+        self.assertFalse((self.home / "profiles/alpha/plugins").exists())
+        outside = self.root / "outside UI.js"
+        outside.write_bytes(b"preserve")
+        target.unlink()
+        try:
+            target.symlink_to(outside)
+        except OSError as error:
+            self.skipTest(str(error))
+        with self.assertRaisesRegex(ValueError, "symbolic links/junctions"):
+            self.plan(profiles=["alpha"])
+        self.assertEqual(outside.read_bytes(), b"preserve")
+
+    def test_shared_root_ui_cannot_downgrade_a_newer_installation(self):
+        target = self.home / "desktop-plugins/plur1bus/plugin.js"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"newer UI")
+        (self.home / installer.RECEIPT).write_text(json.dumps({"version": "7.99.0-hermes.0", "files": {
+            "desktop-plugins/plur1bus/plugin.js": installer.digest(b"newer UI")}}))
+        with self.assertRaisesRegex(ValueError, "shared desktop downgrade"):
+            self.plan(profiles=["alpha"])
+        self.assertEqual(target.read_bytes(), b"newer UI")
 
     def test_rollback_refuses_new_user_edits(self):
         transaction = self.apply(self.plan())

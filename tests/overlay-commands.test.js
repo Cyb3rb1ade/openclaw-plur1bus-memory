@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runOverlayAuditCommand } from "../lib/overlay-commands.js";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tmpDir() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-cmd-"));
+  return makeTempDir("plur1bus-cmd-");
 }
 
 describe("overlay audit commands", () => {

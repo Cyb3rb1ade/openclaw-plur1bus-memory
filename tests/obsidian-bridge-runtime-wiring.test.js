@@ -13,6 +13,7 @@ import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { normalizeWorkspaceTarget } from "../lib/memory-request-context.js";
 import { recordOwnedVaultConfirmation } from "../lib/obsidian-vault-authority.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT_ID = "obsidian-runtime-agent";
 const WORKSPACE_ID = "obsidian-runtime-workspace";
@@ -137,9 +138,9 @@ afterEach(async () => {
 
 describe("registered Obsidian bridge runtime wiring", () => {
   it("loads the authoritative read-only agent DB and mirrors only ACL-visible real memories", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-runtime-db-"));
-    const vaultPath = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-runtime-vault-"));
-    const openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-runtime-home-"));
+    const baseDbPath = makeTempDir("plur1bus-obsidian-runtime-db-");
+    const vaultPath = makeTempDir("plur1bus-obsidian-runtime-vault-");
+    const openclawHome = makeTempDir("plur1bus-obsidian-runtime-home-");
     mkdirSync(join(baseDbPath, AGENT_ID), { recursive: true });
     const oldHome = process.env.OPENCLAW_HOME;
     const oldStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -215,9 +216,9 @@ describe("registered Obsidian bridge runtime wiring", () => {
   });
 
   it("keeps authoritative loader failures visible and writes no memory mirror", async () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-runtime-fail-db-"));
-    const vaultPath = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-runtime-fail-vault-"));
-    const openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-runtime-fail-home-"));
+    const baseDbPath = makeTempDir("plur1bus-obsidian-runtime-fail-db-");
+    const vaultPath = makeTempDir("plur1bus-obsidian-runtime-fail-vault-");
+    const openclawHome = makeTempDir("plur1bus-obsidian-runtime-fail-home-");
     mkdirSync(join(baseDbPath, AGENT_ID), { recursive: true });
     const oldHome = process.env.OPENCLAW_HOME;
     const oldStateDir = process.env.OPENCLAW_STATE_DIR;

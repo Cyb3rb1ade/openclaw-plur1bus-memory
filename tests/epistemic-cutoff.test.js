@@ -12,9 +12,10 @@ import {
   isCreatedAtOnOrAfterCutoff,
   toFiniteMs,
 } from "../lib/epistemic-cutoff.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tempBase() {
-  const root = mkdtempSync(join(tmpdir(), "epi-cutoff-"));
+  const root = makeTempDir("epi-cutoff-");
   const baseDbPath = join(root, "lancedb-namespaced");
   mkdirSync(baseDbPath, { recursive: true });
   return { root, baseDbPath };

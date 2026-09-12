@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildWeeklySynthesis } from "../lib/obsidian/weekly-synthesis.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("weekly synthesis index", () => {
   it("preserves previous week links when generating a later synthesis", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-weekly-index-"));
+    const vault = makeTempDir("plur1bus-weekly-index-");
 
     try {
       const config = { vaultPath: vault };

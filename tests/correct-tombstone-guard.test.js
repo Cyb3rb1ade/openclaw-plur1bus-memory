@@ -19,12 +19,13 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { correctCard } from "../lib/telegram-commands/memory-edit.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "correct-guard-agent";
 const CARD_ID = "00000000-0000-4000-8000-0000000000c1";
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "correct-guard-"));
+  const dir = makeTempDir("correct-guard-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

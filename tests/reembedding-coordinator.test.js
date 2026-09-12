@@ -8,6 +8,7 @@ import { createReembeddingCoordinator } from "../lib/reembedding/coordinator.js"
 import { normalizeEmbeddingFingerprint } from "../lib/reembedding/fingerprint.js";
 import { createMigrationStateStore } from "../lib/reembedding/state-store.js";
 import { stableNonVectorRowHash } from "../lib/reembedding/lance-backend.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const sourceFingerprint = normalizeEmbeddingFingerprint({
   provider: "local-transformers",
@@ -159,7 +160,7 @@ async function expiredProviderRotation({ stateRoot, shutdownFirstProvider, close
 
 describe("resumable reembedding coordinator", () => {
   let stateRoot;
-  beforeEach(() => { stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-reembedding-coordinator-")); });
+  beforeEach(() => { stateRoot = makeTempDir("plur1bus-reembedding-coordinator-"); });
   afterEach(() => { rmSync(stateRoot, { recursive: true, force: true }); });
 
   it("keeps each default CPU inference operation to one Gateway-safe batch", async () => {

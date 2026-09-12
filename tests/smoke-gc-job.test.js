@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runGcJob } from "../lib/jobs/gc-job.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("GC Job smoke", () => {
   it("returns error when missing baseDbPath", async () => {
@@ -31,7 +32,7 @@ describe("GC Job smoke", () => {
   });
 
   it("never leases reembedding control-plane directories as agent databases", async () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-gc-control-plane-"));
+    const root = makeTempDir("plur1bus-gc-control-plane-");
     mkdirSync(join(root, "control"), { recursive: true });
     mkdirSync(join(root, "generations", "candidate"), { recursive: true });
     mkdirSync(join(root, "real-agent"), { recursive: true });

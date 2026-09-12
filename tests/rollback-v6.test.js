@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { MemoryDB } from "../index.js";
 import { resolveHalfLifeDays } from "../lib/memory-dynamics.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let lancedb;
 try {
@@ -105,7 +106,7 @@ const TABLE_NAME = "memories";
 
   describe("Data preservation: v5-format memory DB after v6 upgrade", () => {
     it("does not lose rows when a v5 table is opened by v6 MemoryDB", async () => {
-      const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-rollback-rows-"));
+      const dbPath = makeTempDir("plur1bus-rollback-rows-");
 
       // 1. Create a v5.2.11-like table
       const db = await lancedb.connect(dbPath);
@@ -159,7 +160,7 @@ const TABLE_NAME = "memories";
     });
 
     it("allows a simulated v5 client to query the upgraded table", async () => {
-      const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-rollback-v5client-"));
+      const dbPath = makeTempDir("plur1bus-rollback-v5client-");
 
       // 1. Create and migrate
       const db = await lancedb.connect(dbPath);
@@ -251,7 +252,7 @@ const TABLE_NAME = "memories";
 
   describe("No destructive ops: migration must not delete or rewrite memory files", () => {
     it("preserves external files in the DB directory during init", async () => {
-      const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-rollback-files-"));
+      const dbPath = makeTempDir("plur1bus-rollback-files-");
 
       // Pre-existing user data that must survive
       const userFile = join(dbPath, "user-memories-backup.jsonl");
@@ -304,7 +305,7 @@ const TABLE_NAME = "memories";
     });
 
     it("does not drop or recreate the table during migration", async () => {
-      const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-rollback-table-"));
+      const dbPath = makeTempDir("plur1bus-rollback-table-");
 
       const db = await lancedb.connect(dbPath);
       await db.createTable(

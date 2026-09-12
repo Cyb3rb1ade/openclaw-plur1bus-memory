@@ -112,7 +112,9 @@ class Plur1busDashboardTests(unittest.TestCase):
             "hermes_cli.plugins_cmd._get_disabled_set", return_value=set()
         ):
             web_server_dashboard._mount_plugin_api_routes()
-        self.assertIn("/api/plugins/plur1bus/status", {route.path for route in app.routes})
+        # New FastAPI versions retain included routers until schema/dispatch
+        # traversal. Assert the mounted public route, not a private route type.
+        self.assertIn("/api/plugins/plur1bus/status", app.openapi()["paths"])
 
     def test_real_host_discovery_finds_installed_plugin_under_plugins_root(self) -> None:
         from hermes_cli import web_server_dashboard

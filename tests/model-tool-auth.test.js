@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import plugin from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeApi(baseDbPath, configOverrides = {}) {
   const noop = () => {};
@@ -33,8 +34,8 @@ describe("model-facing destructive tool auth", () => {
   let workspaceDir;
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-tool-auth-db-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-tool-auth-ws-"));
+    baseDbPath = makeTempDir("plur1bus-tool-auth-db-");
+    workspaceDir = makeTempDir("plur1bus-tool-auth-ws-");
   });
 
   after(() => {

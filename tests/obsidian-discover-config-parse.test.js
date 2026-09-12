@@ -6,10 +6,11 @@ import { join } from "node:path";
 
 import { writeDiscoveredObsidianWorkspaces } from "../lib/obsidian-bridge.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("writeDiscoveredObsidianWorkspaces — malformed config", () => {
   it("throws a clear error (not a raw SyntaxError) when the OpenClaw config is invalid JSON", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-discover-"));
+    const dir = makeTempDir("plur1bus-discover-");
     const configPath = join(dir, "openclaw.json");
     writeFileSync(configPath, "{ this is not valid json", "utf8");
     const mutationPolicy = confirmedObsidianPolicy({

@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync, readFileSync, appendFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("InterpretationOverlayStore — Phase 3", () => {
   it("getLineage returns predecessors and successors", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "First", triggerContext: "a" });
@@ -39,7 +40,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("disableOverlay appends a tombstone and hides the overlay", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Live", triggerContext: "a" });
@@ -61,7 +62,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("loadAllOverlays([]) loads the entire file", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "A", triggerContext: "a" });
@@ -76,7 +77,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("loadForTargets excludes disabled overlays unless includeDisabled is true", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Live", triggerContext: "a" });
@@ -96,7 +97,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("getLineage skips malformed JSON lines and still returns correct lineage", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "First", triggerContext: "a" });
@@ -125,7 +126,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("disableOverlay(undefined) throws TypeError", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await assert.rejects(store.disableOverlay(undefined), TypeError);
@@ -135,7 +136,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("disableOverlay(non-existent-id) returns false", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       const result = await store.disableOverlay("non-existent-id", "test");
@@ -146,7 +147,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("loadAllOverlays excludes records superseded via supersedes unless includeSuperseded is true", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Old", triggerContext: "a" });
@@ -173,7 +174,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("loadForTargets returns an empty array for a target whose only overlay is superseded", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Old", triggerContext: "a" });
@@ -197,7 +198,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("disableOverlay can disable two different overlays for the same target with the same reason", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "First", triggerContext: "a" });
@@ -218,7 +219,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("getLineage stops at a circular supersedes chain without hanging", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       const now = new Date().toISOString();
@@ -239,7 +240,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("loadAllOverlays skips malformed JSON lines and returns valid records", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Good", triggerContext: "a" });
@@ -256,7 +257,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("targeted loadAllOverlays skips unrelated malformed JSONL before parsing", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     const originalWarn = console.warn;
     const warnings = [];
@@ -277,7 +278,7 @@ describe("InterpretationOverlayStore — Phase 3", () => {
   });
 
   it("loadForTargets returns the latest overlay when multiple non-superseded overlays exist for one target", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const tmpDir = makeTempDir("plur1bus-phase3-");
     const store = new InterpretationOverlayStore(tmpDir);
     try {
       const now = Date.now();

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import OpenAI from "openai";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 const AGENT_PREFIX = "testagent-store-trace";
@@ -62,11 +63,11 @@ describe("memory store decision trace", () => {
   let originalEmbed;
 
   before(async () => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-store-trace-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-store-trace-ws-"));
+    basePath = makeTempDir("plur1bus-store-trace-");
+    workspaceDir = makeTempDir("plur1bus-store-trace-ws-");
 
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    openclawHome = makeTempDir("openclaw-test-");
     process.env.OPENCLAW_HOME = openclawHome;
     const archiveDir = join(openclawHome, ".openclaw", "memory", "_archive");
     mkdirSync(archiveDir, { recursive: true });

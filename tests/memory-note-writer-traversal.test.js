@@ -14,12 +14,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const baseRecord = { text: "x", summary: "x", category: "fact", scope: "agent-private", createdAt: 1 };
 
 describe("memory-note-writer path traversal", () => {
   it("contains a malicious '../' record id inside the memories dir", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-vault-"));
+    const vault = makeTempDir("plur1bus-vault-");
     const mutationPolicy = confirmedObsidianPolicy({
       baseDbPath: vault,
       command: ["dashboards", "build"],
@@ -35,7 +36,7 @@ describe("memory-note-writer path traversal", () => {
   });
 
   it("preserves a UUID id as the filename", () => {
-    const vault = mkdtempSync(join(tmpdir(), "plur1bus-vault-"));
+    const vault = makeTempDir("plur1bus-vault-");
     const uuid = "8400e29b-1c2d-4e5f-9a0b-1c2d3e4f5a6b";
     const mutationPolicy = confirmedObsidianPolicy({
       baseDbPath: vault,

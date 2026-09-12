@@ -21,8 +21,9 @@ import { checkAccess } from "../lib/acl-middleware.js";
 import { resolveHostCommandMemoryContext } from "../lib/memory-request-context.js";
 import { safeUpdate } from "../lib/safe-update.js";
 import * as pluginModule from "../index.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
-const archiveDir = mkdtempSync(join(tmpdir(), "p1b-confirm-"));
+const archiveDir = makeTempDir("p1b-confirm-");
 
 function mockDb(initial = []) {
   const cards = new Map(initial.map((c) => [c.id, c]));
@@ -399,7 +400,7 @@ describe("forget/correct confirmation completion", () => {
 
   it("/correct preserves canonical workspace ownership and replacement visibility", async () => {
     const ownerCtx = await officialMemoryContext();
-    const otherWorkspace = mkdtempSync(join(tmpdir(), "p1b-correct-other-"));
+    const otherWorkspace = makeTempDir("p1b-correct-other-");
     const otherWorkspaceCtx = await officialMemoryContext({
       workspaceDir: otherWorkspace,
       workspaceKey: "workspace:v1:ws-b",

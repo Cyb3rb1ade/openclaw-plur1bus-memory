@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createNeoStore } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // 7.12.30: recordHookAsync wartet asynchron auf den Workspace-Lock.
 describe("recordHookAsync", () => {
   it("merges hook state like recordHook and returns the merged record", async () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-hook-async-"));
+    const root = makeTempDir("neo-hook-async-");
     try {
       const store = createNeoStore(root, "ws");
       store.recordHook("before_prompt_build", { agentId: "a", processedDreams: ["d1"] });

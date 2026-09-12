@@ -148,12 +148,27 @@ skill name, status, and revision hash, then calls `skills.proposals.apply` with
 that hash. Reject follows the same inspect-and-bind rule. A changed revision or
 missing Workshop capability leaves the proposal unapplied.
 
-OpenClaw's autonomous self-learning defaults to `auto`; PLUR1BUS deployments
-that enable the Skill Miner should set `skills.workshop.autonomous.mode` to
-`propose` (used by the compatibility lab) or `off`. This keeps OpenClaw's own
-experience reviewer and PLUR1BUS's LanceDB evidence miner from independently
-applying overlapping skills. Both can still share the same Workshop proposal
-queue and scanner.
+OpenClaw's autonomous self-learning defaults to `auto`. Since 7.12.48 the
+Skill Miner follows that setting through `skillMiner.autoApply` (default
+`host`): with the host in `auto`, a freshly mined draft is applied at once
+through the same inspect-and-bind path a manual approval uses, and its evidence
+memories move to `corroborated`. With the host in `propose` or `off`, drafts
+stay pending for review. `on` and `off` override the host in either direction.
+
+Both learning loops write into the same agent-owned Workshop directory and
+share its scanner, hash binding and no-clobber rule. They complement each
+other: the host reviews one conversation right after it happened, the miner
+looks for procedures that recur across weeks of memory. The Workshop's
+no-clobber rule only catches identical names, so two loops can still produce
+skills with overlapping content under different names; the host's weekly
+collection review is where such overlaps get merged.
+
+Pending, applied and withdrawn mined skills are listed per workspace in the
+PLUR1BUS operator tab (section "Mined Skills"). With
+`controlUi.writeActions: "all"` each card offers approve, decline, or withdraw.
+Withdraw removes an applied skill's Workshop directory, because the Workshop
+has no RPC for removing an applied skill, and blocks the name for future
+mining.
 
 ## Feature-overlap policy
 

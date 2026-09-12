@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendTombstoneToRegistry, buildTombstone } from "../lib/tombstone.js";
 import { assertCardWriteAllowed, isContentChangingUpdate } from "../lib/tombstone-write-guard.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const UUID = "00000000-0000-4000-8000-000000000001";
 
 describe("tombstone write guard", () => {
   it("blocks same-scope forgotten text and allows a foreign agent", () => {
-    const root = mkdtempSync(join(tmpdir(), "tomb-guard-"));
+    const root = makeTempDir("tomb-guard-");
     const baseDbPath = join(root, "lancedb-namespaced");
     mkdirSync(baseDbPath, { recursive: true });
     const tombstone = buildTombstone({

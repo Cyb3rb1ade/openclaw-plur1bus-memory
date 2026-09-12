@@ -18,8 +18,9 @@ import {
   routeNeoRecall,
   transitionRecordStatus,
 } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
-const TEST_DIR = mkdtempSync(join(tmpdir(), "plur1bus-neo-smoke-"));
+const TEST_DIR = makeTempDir("plur1bus-neo-smoke-");
 mkdirSync(TEST_DIR, { recursive: true });
 
 function readJsonl(path) {
@@ -157,7 +158,7 @@ describe("neo-arch file I/O", () => {
   });
 
   it("drains pending low-impact embedding queue entries", async () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-drain-"));
+    const root = makeTempDir("plur1bus-neo-drain-");
     const store = createNeoStore(root, "workspace-test");
     const candidate = {
       id: "mem-low-001",
@@ -193,7 +194,7 @@ describe("neo-arch file I/O", () => {
   });
 
   it("captures identical agent_end events idempotently", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-capture-"));
+    const root = makeTempDir("plur1bus-neo-capture-");
     const workspaceKey = "workspace-capture";
     const store = createNeoStore(root, workspaceKey);
     const event = {
@@ -243,7 +244,7 @@ describe("neo-arch file I/O", () => {
   });
 
   it("does not enqueue duplicate capture records when replayed after drain", async () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-capture-drain-"));
+    const root = makeTempDir("plur1bus-neo-capture-drain-");
     const workspaceKey = "workspace-capture-drain";
     const store = createNeoStore(root, workspaceKey);
     const event = {
@@ -273,7 +274,7 @@ describe("neo-arch file I/O", () => {
   });
 
   it("dedupes memory candidates by normalized statement across different ids", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-candidate-content-dedupe-"));
+    const root = makeTempDir("plur1bus-neo-candidate-content-dedupe-");
     const workspaceKey = "workspace-candidate-content-dedupe";
     const store = createNeoStore(root, workspaceKey);
     const first = {
@@ -299,7 +300,7 @@ describe("neo-arch file I/O", () => {
   });
 
   it("preserves candidate status transitions with duplicate statement text", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-candidate-status-transition-"));
+    const root = makeTempDir("plur1bus-neo-candidate-status-transition-");
     const workspaceKey = "workspace-candidate-status-transition";
     const store = createNeoStore(root, workspaceKey);
     const candidate = {
@@ -327,7 +328,7 @@ describe("neo-arch file I/O", () => {
   });
 
   it("uses ctx session identity for turn ids while deduping repeated candidate content", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-ctx-session-"));
+    const root = makeTempDir("plur1bus-neo-ctx-session-");
     const workspaceKey = "workspace-ctx-session";
     const store = createNeoStore(root, workspaceKey);
     const event = {
@@ -349,7 +350,7 @@ describe("neo-arch file I/O", () => {
   });
 
   it("keeps replay idempotent after the original id falls outside the JSONL tail window", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-index-replay-"));
+    const root = makeTempDir("plur1bus-neo-index-replay-");
     const workspaceKey = "workspace-index-replay";
     const store = createNeoStore(root, workspaceKey);
     const event = {

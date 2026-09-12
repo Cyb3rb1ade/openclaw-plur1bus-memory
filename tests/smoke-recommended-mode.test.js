@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { recommendedProfile, applyFeatureProfile, isApplyBlocked, detectPendingFeatures, reportDormantFeature } from "../lib/setup/feature-profiles.js";
 import { checkJobRateLimit, recordJobRun } from "../lib/job-rate-limit.js";
 import { collectStatusData } from "../lib/telegram-commands/status-data.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("recommended-mode-full", () => {
   it("recommendedProfile enables advanced features behind required safety gates", () => {
@@ -60,7 +61,7 @@ describe("recommended-mode-full", () => {
   });
 
   it("daily consolidation rate limit prevents double run", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-rate-"));
+    const dir = makeTempDir("plur1bus-rate-");
     const statePath = join(dir, "run-state.json");
     const agent = "test-agent";
     const ws = "test-ws";

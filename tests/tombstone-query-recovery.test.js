@@ -16,6 +16,7 @@ import { join } from "node:path";
 import plugin from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { tombstoneRegistryDir } from "../lib/tombstone.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 
@@ -64,7 +65,7 @@ describe("query audit recovery respektiert forgetThreshold ohne Klartext", () =>
   let originalEmbedPassage;
 
   before(() => {
-    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-query-recovery-"));
+    testRoot = makeTempDir("plur1bus-query-recovery-");
     baseDbPath = join(testRoot, "db");
     mkdirSync(baseDbPath);
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
@@ -92,7 +93,7 @@ describe("query audit recovery respektiert forgetThreshold ohne Klartext", () =>
 
   it("exakte Wiederholung repariert das Audit; unpassende Query liefert 'No matching memory found'", async () => {
     const agentId = "query-recovery-agent";
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-query-recovery-ws-"));
+    const workspaceDir = makeTempDir("plur1bus-query-recovery-ws-");
     const exactText = `exact target ${randomUUID()}`;
     const unrelatedQuery = "completely unrelated query";
 

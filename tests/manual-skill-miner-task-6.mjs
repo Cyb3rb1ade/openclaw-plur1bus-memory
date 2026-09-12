@@ -14,9 +14,10 @@ import {
   showProposal,
   isSkillNameBlocked,
 } from "../lib/telegram-commands/skill-commands.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function setup() {
-  const tmpDir = mkdtempSync(join(tmpdir(), "sm-cmd-"));
+  const tmpDir = makeTempDir("sm-cmd-");
   mkdirSync(join(tmpDir, ".adaptive-learning"), { recursive: true });
   return tmpDir;
 }

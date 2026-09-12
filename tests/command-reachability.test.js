@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { tombstoneRegistryDir } from "../lib/tombstone.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // Explicit shared memory requires verified fd-backed directory aliases, which
 // are unavailable on darwin; the share write path fails closed there.
@@ -122,11 +123,11 @@ describe("registered memory command reachability", () => {
   let originalEmbedPassage;
 
   before(async () => {
-    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-b1-db-"));
+    testRoot = makeTempDir("plur1bus-b1-db-");
     baseDbPath = join(testRoot, "db");
     mkdirSync(baseDbPath);
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b1-workspace-"));
-    openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-b1-home-"));
+    workspaceDir = makeTempDir("plur1bus-b1-workspace-");
+    openclawHome = makeTempDir("plur1bus-b1-home-");
     previousOpenclawHome = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = openclawHome;
 

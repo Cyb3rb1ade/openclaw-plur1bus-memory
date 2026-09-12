@@ -15,6 +15,7 @@ import {
   insertDiaryEntry,
   narrativeFingerprint,
 } from "../lib/dreaming/dream-diary.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const NARRATIVE = "Ich schwebe über einer Stadt aus Zahlen, und jede Straße kennt meinen Namen.";
 const HOST_FILE = `# Dream Diary
@@ -33,7 +34,7 @@ deep block
 `;
 
 function tempWorkspace() {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-diary-"));
+  const dir = makeTempDir("plur1bus-diary-");
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 

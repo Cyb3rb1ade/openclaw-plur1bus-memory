@@ -14,6 +14,7 @@ import {
 import { recordActivity } from "../lib/session-time.js";
 import { shouldSkipAutoRecallForInternalTurn } from "../lib/runtime-scheduler.js";
 import { isInjectedContextText } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
@@ -230,7 +231,7 @@ describe("temporal continuity context", () => {
     let tmpDir;
 
     beforeEach(() => {
-      tmpDir = mkdtempSync(join(tmpdir(), "temporal-ctx-"));
+      tmpDir = makeTempDir("temporal-ctx-");
     });
 
     afterEach(() => {

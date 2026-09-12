@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.47-hermes.0",
+  "version": "7.12.53-hermes.0",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-command", "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session", "hasSubcommands": false },
@@ -50,7 +50,7 @@
     "emotion.t3.apiKey": { "label": "Emotion Tier 3 API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
     "autoCapture": { "label": "Automatic Capture", "help": "Capture durable memory from eligible conversations." },
     "autoRecall": { "label": "Automatic Recall", "help": "Inject relevant durable memory before an eligible turn." },
-    "skillMiner.enabled": { "label": "Skill Miner", "help": "Mine proposals and hand approved skills to OpenClaw Skill Workshop." },
+    "skillMiner.enabled": { "label": "Skill Miner", "help": "Mine skills from memory evidence into the OpenClaw Skill Workshop; applied automatically when self-learning is on (skillMiner.autoApply)." },
     "featureCronSetup.auto": { "label": "Automatic Feature Cron Setup", "advanced": true, "help": "Create OpenClaw-native PLUR1BUS feature cron jobs." },
     "modelPreparation.profile": { "label": "Prepare Local Embedding Model", "help": "Selecting a pinned model/dimension profile downloads and hash-validates it automatically. It only creates a dry-run recommendation; it never switches the active embedding generation." },
     "modelPreparation.acceptNonCommercialLicense": { "label": "Accept Jina CC BY-NC 4.0", "advanced": true, "help": "Required before downloading the optional Jina v3 embedding. This profile is not licensed for commercial use." },
@@ -850,7 +850,7 @@
           },
           "cron": {
             "type": "string",
-            "default": "0 3 * * 0"
+            "default": "0 5 * * *"
           },
           "timezone": {
             "type": [
@@ -871,14 +871,11 @@
             "type": "number",
             "default": 3
           },
-          "hideTypes": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": ["person", "beziehung", "geburtstag", "geld_konto", "gesundheit", "zugang_passwort"]
-            },
-            "default": [],
-            "description": "Critical types whose content is hidden in the push card in addition to zugang_passwort, which is always hidden. Pushes go to the owner's direct chat only; before 7.12.2 gesundheit and geld_konto were hidden as well."
+          "autoApply": {
+            "type": "string",
+            "enum": ["host", "on", "off"],
+            "default": "host",
+            "description": "Apply mined skills through the OpenClaw Skill Workshop without a manual review: \"host\" follows skills.workshop.autonomous.mode (auto applies, propose/off leaves drafts pending), \"on\" always applies, \"off\" always waits for approval in the PLUR1BUS dashboard or /plur1bus skills."
           },
           "model": {
             "type": "string",

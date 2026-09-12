@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { resolveHostCommandMemoryContext } from "../lib/memory-request-context.js";
 import { confirmVaultConfirmation, prepareVaultConfirmation } from "../lib/obsidian-vault-confirmation-flow.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 const routing = Object.freeze({
   parseAgentSessionKey(v) { const m = /^agent:([^:]+):(.+)$/u.exec(v); return m ? { agentId: m[1], rest: m[2] } : null; },
   parseThreadSessionSuffix(v) { return { baseSessionKey: v, threadId: "" }; },
@@ -18,7 +19,7 @@ describe("prepare in a fresh chat, first agent turn, then confirm", () => {
   // confirmation prepared before that turn is refused loudly with the field
   // named. The user repeats prepare. Documented in KNOWN-ISSUES.
   it("is refused with the conversation principal named", async (t) => {
-    const ws = mkdtempSync(join(tmpdir(), "edge-")); t.after(() => rmSync(ws, { recursive: true, force: true }));
+    const ws = makeTempDir("edge-"); t.after(() => rmSync(ws, { recursive: true, force: true }));
     const vault = join(ws, "vault"); mkdirSync(vault);
     let entry = null;
     const resolve = (ctx) => resolveHostCommandMemoryContext(ctx, { resolveAgentWorkspaceDir: async () => ws, routingLoader: async () => routing, requireConversation: true, resolveSessionEntry: async () => ({ available: true, entry }) });

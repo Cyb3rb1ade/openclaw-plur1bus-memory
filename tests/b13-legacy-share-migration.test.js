@@ -21,6 +21,7 @@ import {
 } from "../lib/shared-memory-migration.js";
 import { normalizeAndFreezeWorkspaceAliases } from "../lib/memory-request-context.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // Report publishing routes through fd-backed directory capabilities, which are only
 // verifiable on platforms with a stat-verifiable fd alias (Linux; see lib/directory-capability.js).
@@ -34,7 +35,7 @@ afterEach(() => {
 });
 
 function reportRoot() {
-  const root = mkdtempSync(join(tmpdir(), "plur1bus-b13-migration-"));
+  const root = makeTempDir("plur1bus-b13-migration-");
   roots.push(root);
   return root;
 }

@@ -4,11 +4,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runConsolidation } from "../lib/jobs/daily-consolidation.js";
+import { runConsolidation, DAILY_CONSOLIDATION_RATE_LIMIT_MS } from "../lib/jobs/daily-consolidation.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("daily-consolidation statePath wiring", () => {
   it("records a successful non-dry run and rate-limits the immediate second run", async () => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-daily-consolidation-"));
+    const workspaceDir = makeTempDir("plur1bus-daily-consolidation-");
     const logger = { info() {}, warn() {} };
     const db = {
       async init() {},
@@ -47,8 +48,34 @@ describe("daily-consolidation statePath wiring", () => {
     }
   });
 
+  it("7.12.48: the next nightly slot runs although the last run finished a minute after its slot", async () => {
+    const workspaceDir = makeTempDir("plur1bus-daily-drift-");
+    const logger = { info() {}, warn() {} };
+    const db = { async init() {}, async isAvailable() { return false; } };
+    const statePath = join(workspaceDir, "run-state.json");
+    const shiftLastRun = (agoMs) => {
+      const state = JSON.parse(readFileSync(statePath, "utf8"));
+      state.jobRateLimits["daily-consolidation:agent-1:ws-1"].lastRunAt = Date.now() - agoMs;
+      writeFileSync(statePath, JSON.stringify(state), "utf8");
+    };
+    const run = () => runConsolidation(db, "agent-1", { workspaceDir, workspaceKey: "ws-1", logger, dryRun: false });
+    try {
+      assert.strictEqual((await run()).skipped, undefined);
+      // Live pattern: 04:00 slot, previous run recorded at 04:00:37 the day before.
+      shiftLastRun(24 * 3600000 - 60000);
+      const nextNight = await run();
+      assert.notStrictEqual(nextNight.reason, "rate_limited");
+      // A duplicate trigger six hours later is still caught.
+      shiftLastRun(6 * 3600000);
+      assert.strictEqual((await run()).reason, "rate_limited");
+      assert.ok(DAILY_CONSOLIDATION_RATE_LIMIT_MS >= 6 * 3600000 && DAILY_CONSOLIDATION_RATE_LIMIT_MS < 23 * 3600000);
+    } finally {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("continues daily decay from the persisted cursor and records the next cursor", async () => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-daily-decay-cursor-"));
+    const workspaceDir = makeTempDir("plur1bus-daily-decay-cursor-");
     const logger = { info() {}, warn() {} };
     const rows = Array.from({ length: 3 }, (_, index) => ({
       id: `11111111-1111-4111-8111-11111111111${index}`,

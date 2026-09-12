@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runOverlayAuditCommand } from "../lib/overlay-commands.js";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("overlay-commands doctor", () => {
   function tmpDir() {
-    return mkdtempSync(join(tmpdir(), "plur1bus-doctor-cmd-"));
+    return makeTempDir("plur1bus-doctor-cmd-");
   }
 
   it("doctor returns a summary when no id is given", async () => {

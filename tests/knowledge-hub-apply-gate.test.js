@@ -8,9 +8,10 @@ import {
   applyKnowledgeHubGraphLinks,
   planKnowledgeHubGraphLinks,
 } from "../lib/obsidian/knowledge-hub-graph.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeVault(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return makeTempDir(prefix);
 }
 
 function writeMemory(vault, id, title = `Memory ${id}`, type = "memory") {

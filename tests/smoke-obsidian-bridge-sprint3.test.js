@@ -13,6 +13,7 @@ import {
   loadOwnedReviewBundle,
 } from "../lib/obsidian-review-authority.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // Bundle records live at {vaultPath}/plur1bus/review-bundles/{bundleId}.items.json
 function writeBundleRecord(_vaultPath, bundleId, record, policy) {
@@ -60,7 +61,7 @@ describe("smoke-obsidian-bridge-sprint3", () => {
   // ---------------------------------------------------------------
 
   it("expireStaleBundles: bundle older than maxAgeDays is expired", () => {
-    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const dir = makeTempDir("obs-sprint3-");
     const policy = confirmedObsidianPolicy({ baseDbPath: dir });
     const now = new Date("2026-06-08T12:00:00.000Z");
     const old = new Date(now - 8 * 86_400_000).toISOString(); // 8 days ago
@@ -77,7 +78,7 @@ describe("smoke-obsidian-bridge-sprint3", () => {
   });
 
   it("expireStaleBundles: bundle younger than maxAgeDays is untouched", () => {
-    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const dir = makeTempDir("obs-sprint3-");
     const policy = confirmedObsidianPolicy({ baseDbPath: dir });
     const now = new Date("2026-06-08T12:00:00.000Z");
     const recent = new Date(now - 3 * 86_400_000).toISOString(); // 3 days ago
@@ -97,7 +98,7 @@ describe("smoke-obsidian-bridge-sprint3", () => {
   // ---------------------------------------------------------------
 
   it("autoApproveAndApplyLowRisk: low-risk+pass items are approved and applied", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const dir = makeTempDir("obs-sprint3-");
     const policy = confirmedObsidianPolicy({ baseDbPath: dir });
     const bundleId = `rb-${randomUUID()}`;
     const item1 = makeItem({ id: "rbi-auto-001" });
@@ -117,7 +118,7 @@ describe("smoke-obsidian-bridge-sprint3", () => {
   });
 
   it("autoApproveAndApplyLowRisk: medium-risk items are skipped", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const dir = makeTempDir("obs-sprint3-");
     const policy = confirmedObsidianPolicy({ baseDbPath: dir });
     const bundleId = `rb-${randomUUID()}`;
     const item = makeItem({ id: "rbi-med-001", risk: "medium" });
@@ -136,7 +137,7 @@ describe("smoke-obsidian-bridge-sprint3", () => {
   });
 
   it("autoApproveAndApplyLowRisk: adversarial-fail items are skipped", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const dir = makeTempDir("obs-sprint3-");
     const policy = confirmedObsidianPolicy({ baseDbPath: dir });
     const bundleId = `rb-${randomUUID()}`;
     const item = makeItem({ id: "rbi-fail-001", adversarialReview: { status: "fail" } });
@@ -154,7 +155,7 @@ describe("smoke-obsidian-bridge-sprint3", () => {
   });
 
   it("autoApproveAndApplyLowRisk: gate=false (default) is a no-op", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const dir = makeTempDir("obs-sprint3-");
     const policy = confirmedObsidianPolicy({ baseDbPath: dir });
     const bundleId = `rb-${randomUUID()}`;
     const item = makeItem({ id: "rbi-gate-001" });
@@ -172,7 +173,7 @@ describe("smoke-obsidian-bridge-sprint3", () => {
   });
 
   it("autoApproveAndApplyLowRisk: vault_hygiene items are not auto-approved", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const dir = makeTempDir("obs-sprint3-");
     const policy = confirmedObsidianPolicy({ baseDbPath: dir });
     const bundleId = `rb-${randomUUID()}`;
     const item = makeItem({ id: "rbi-hygiene-001", type: "vault_hygiene" });

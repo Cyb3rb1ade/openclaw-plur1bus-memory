@@ -12,9 +12,10 @@ import {
   readReplyOutcomeLog,
   sessionKeyFrom,
 } from "../lib/reply-outcome-tracking.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let dir;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "reply-outcome-")); });
+beforeEach(() => { dir = makeTempDir("reply-outcome-"); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("reply-outcome-tracking", () => {

@@ -32,13 +32,14 @@ import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { buildUpdateEntry, safeUpdate } from "../lib/safe-update.js";
 import { applyDynamicsDefaults } from "../lib/memory-dynamics.js";
 import { MEMORY_ORIGINS } from "../lib/categorize.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const roots = [];
 afterEach(() => {
   while (roots.length) rmSync(roots.pop(), { recursive: true, force: true });
 });
 function tmpRoot(prefix) {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  const root = makeTempDir(prefix);
   roots.push(root);
   return root;
 }

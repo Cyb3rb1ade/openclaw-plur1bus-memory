@@ -6,6 +6,7 @@ import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("OverlayGenerator", () => {
   it("omits invented model provenance when no model is configured", async () => {
@@ -243,7 +244,7 @@ describe("OverlayGenerator", () => {
   });
 
   it("prevents duplicate overlays via dedupe key", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
     const generator = new OverlayGenerator({
       enabled: true,
@@ -465,7 +466,7 @@ describe("OverlayGenerator", () => {
   });
 
   it("allows confidence overlay after stored meaning overlay for same memory/context", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
     const sharedContext = "Since then, the meaning has shifted.";
 
@@ -539,7 +540,7 @@ describe("OverlayGenerator", () => {
   });
 
   it("early-dedupes unresolved-thread without calling LLM again", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const tmpDir = makeTempDir("plur1bus-test-");
     const store = new InterpretationOverlayStore(tmpDir);
     const sharedContext = "This is still unresolved.";
 

@@ -3,6 +3,7 @@ import assert from "node:assert";
 import { rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let lancedb;
 try {
@@ -11,7 +12,7 @@ try {
   // LanceDB native bindings not available in this environment
 }
 
-const TEST_DB_PATH = mkdtempSync(join(tmpdir(), "plur1bus-smoke-"));
+const TEST_DB_PATH = makeTempDir("plur1bus-smoke-");
 
 (lancedb ? describe : describe.skip)("LanceDB Smoke", () => {
   it("connects to a local database", async () => {

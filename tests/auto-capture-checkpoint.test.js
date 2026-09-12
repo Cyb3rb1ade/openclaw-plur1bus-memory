@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const SCRIPT_PATH = join(process.cwd(), "scripts", "auto-capture-lancedb.mjs");
 const AGENT_ID = "agent-a";
@@ -241,7 +242,7 @@ function createFixture(sessionText) {
   // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
   // production code resolves real paths (resolveInside -> realpathSync), so
   // the preload's path comparison must see the resolved path too.
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-auto-capture-checkpoint-")));
+  const root = realpathSync(makeTempDir("plur1bus-auto-capture-checkpoint-"));
   tempDirs.push(root);
   const homeDir = join(root, "home");
   const pluginDir = join(root, "plugin");

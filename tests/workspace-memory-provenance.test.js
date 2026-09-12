@@ -9,13 +9,14 @@ import {
   ELIGIBLE_MEMORY_ORIGIN_CLASSES,
 } from "../lib/setup/workspace-memory-provenance.js";
 import { createMemoryHostRuntime } from "../lib/setup/memory-host-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 let root;
 let ws;
 let outside;
 
 before(() => {
-  root = mkdtempSync(path.join(tmpdir(), "plur1bus-provenance-"));
+  root = makeTempDir("plur1bus-provenance-");
   ws = path.join(root, "workspace");
   outside = path.join(root, "outside.md");
   mkdirSync(path.join(ws, "memory", "dreaming"), { recursive: true });

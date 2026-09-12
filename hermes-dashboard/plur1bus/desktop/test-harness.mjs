@@ -7,7 +7,7 @@ const values = {
   host: { state: { profile: { get: () => state.profile, subscribe: fn => { fn(); return () => {}; } },
     connectionId: { get: () => state.connection, subscribe: fn => { fn(); return () => {}; } } }, navigate() {} },
   useValue: () => undefined,
-  STATUSBAR_AREAS: { left: 'statusBar.left' }, PALETTE_AREA: 'palette', SIDEBAR_NAV_AREA: 'sidebar.nav',
+  STATUSBAR_AREAS: { left: 'statusBar.left' }, PALETTE_AREA: 'palette', ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar.nav',
 };
 const sdk = new vm.SyntheticModule(Object.keys(values), function () {
   for (const [key, value] of Object.entries(values)) this.setExport(key, value);
@@ -240,7 +240,7 @@ assert.equal(visibilityStates.at(-1), true);
 const staleProbe = visibility.refresh(); const staleReply = navPending.shift();
 navOwner = 'local:disabled';
 const disabledProbe = visibility.refresh();
-assert.equal(visibilityStates.at(-1), false, 'profile switch cannot inherit the enabled menu');
+assert.equal(visibilityStates.at(-1), true, 'unknown profile retains entry while its own backend is checked');
 navPending.shift()(false); await disabledProbe;
 staleReply(true); await staleProbe;
 assert.equal(visibilityStates.at(-1), false, 'late enabled result cannot resurrect a disabled profile menu');
@@ -252,38 +252,38 @@ assert.equal(visibilityStates.at(-1), false, 'authoritative disable removes navi
 visibility.dispose();
 
 let contributions, opened = [], closed = 0;
+const registeredBatches = [];
 const disposers = [];
 globalThis.window = { location: { hash: '#/' }, addEventListener() {}, removeEventListener() {},
   hermesDesktop: { api: async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: true }) } };
 values.host.profileRoutes = async () => [{ connectionId: state.connection, profile: state.profile, targetProfile: state.profile }];
 values.host.openWorkspace = (id, options) => { opened.push({ id, options }); return () => { closed++; }; };
-plugin.namespace.default.register({ rest() {}, onDispose(fn) { disposers.push(fn); }, registerMany(value) { contributions = value; return () => {}; } });
+plugin.namespace.default.register({ rest() {}, onDispose(fn) { disposers.push(fn); }, registerMany(value) { registeredBatches.push(value); contributions = value; return () => {}; } });
 await new Promise(resolve => setTimeout(resolve, 0));
 assert.equal(plugin.namespace.default.id, 'plur1bus');
-assert.equal(contributions.some(c => c.area === 'routes'), false, 'must not rely on the stale compiled route table');
+assert.ok(registeredBatches.flat().some(c => c.area === 'routes' && c.data.path === '/plur1bus'), 'modern sidebar path resolves to a registered page');
 const button = contributions.find(c => c.area === 'statusBar.left').data;
 assert.equal(button.label, 'PLUR1BUS');
 button.onSelect();
 const sidebar = contributions.find(c => c.area === 'sidebar.nav').data;
 assert.equal(sidebar.label, 'PLUR1BUS');
-assert.equal(sidebar.path, undefined, 'sidebar must open workspace, not a stale route');
-sidebar.onSelect();
+assert.equal(sidebar.path, '/plur1bus', 'modern sidebar uses its registered route');
 assert.equal(contributions.find(c => c.area === 'palette').data.id, 'plur1bus.open');
 contributions.find(c => c.area === 'palette').data.run();
-assert.deepEqual(opened.map(c => c.id), ['plur1bus', 'plur1bus', 'plur1bus'], 'all entry points share the same workspace');
+assert.deepEqual(opened.map(c => c.id), ['plur1bus', 'plur1bus'], 'status and palette share the same workspace');
 assert.equal(opened[0].options.title, 'PLUR1BUS');
 disposers.forEach(dispose => dispose());
 const inactiveDisposers = [], inactiveBatches = [];
 globalThis.window.hermesDesktop.api = async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: false });
 plugin.namespace.default.register({ onDispose: fn => inactiveDisposers.push(fn),
-  registerMany: batch => { inactiveBatches.push(batch); return () => {}; } });
+  registerMany: batch => { inactiveBatches.push(batch); return () => { inactiveBatches.splice(inactiveBatches.indexOf(batch), 1); }; } });
 await new Promise(resolve => setTimeout(resolve, 0));
-assert.equal(inactiveBatches.flat().length, 1);
-assert.equal(inactiveBatches.flat()[0].data.id, 'plur1bus.host-check', 'disabled profiles only retain diagnostics, not a memory button');
+assert.ok(inactiveBatches.flat().some(c => c.data.id === 'plur1bus.host-check'));
+assert.ok(!inactiveBatches.flat().some(c => c.area === 'sidebar.nav' || c.area === 'statusBar.left'), 'disabled profile removes its memory navigation');
 inactiveDisposers.forEach(dispose => dispose());
 
 // Older hosts can omit the sidebar area entirely; status/palette still load.
-const legacyNames = Object.keys(values).filter(name => name !== 'SIDEBAR_NAV_AREA');
+const legacyNames = Object.keys(values).filter(name => !['SIDEBAR_NAV_AREA', 'ROUTES_AREA'].includes(name));
 const legacySdk = new vm.SyntheticModule(legacyNames, function () {
   for (const name of legacyNames) this.setExport(name, values[name]);
 });

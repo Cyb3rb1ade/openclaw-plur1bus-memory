@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContradictionDetector } from "../lib/contradiction-detector.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("ContradictionDetector", () => {
   it("returns empty array when no meaning overlays exist", async () => {
@@ -68,7 +69,7 @@ describe("ContradictionDetector", () => {
   });
 
   it("persists contradiction records to JSONL", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-"));
+    const tmpDir = makeTempDir("plur1bus-contra-");
     const detector = new ContradictionDetector({
       llm: async () => "yes",
       workspaceDir: tmpDir,
@@ -100,7 +101,7 @@ describe("ContradictionDetector", () => {
   });
 
   it("loadFor filters records by memory ids", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-"));
+    const tmpDir = makeTempDir("plur1bus-contra-");
     const detector = new ContradictionDetector({
       llm: async () => "yes",
       workspaceDir: tmpDir,
@@ -120,7 +121,7 @@ describe("ContradictionDetector", () => {
   });
 
   it("loadFor returns empty when file is missing", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-"));
+    const tmpDir = makeTempDir("plur1bus-contra-");
     const detector = new ContradictionDetector({
       llm: async () => "yes",
       workspaceDir: tmpDir,
@@ -134,7 +135,7 @@ describe("ContradictionDetector", () => {
   });
 
   it("loadFor skips malformed JSON lines", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-"));
+    const tmpDir = makeTempDir("plur1bus-contra-");
     const detector = new ContradictionDetector({
       llm: async () => "yes",
       workspaceDir: tmpDir,
@@ -155,7 +156,7 @@ describe("ContradictionDetector", () => {
   });
 
   it("loadFor returns empty when memoryIds is not an array", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-"));
+    const tmpDir = makeTempDir("plur1bus-contra-");
     const detector = new ContradictionDetector({
       llm: async () => "yes",
       workspaceDir: tmpDir,
@@ -177,7 +178,7 @@ describe("ContradictionDetector", () => {
   });
 
   it("serializes concurrent JSONL appends", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contra-"));
+    const tmpDir = makeTempDir("plur1bus-contra-");
     const detector = new ContradictionDetector({
       llm: async () => "yes",
       workspaceDir: tmpDir,

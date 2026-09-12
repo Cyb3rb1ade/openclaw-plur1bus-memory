@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeBoundedCache } from "../lib/bounded-cache.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("makeBoundedCache", () => {
   it("stores and retrieves values", () => {
@@ -54,7 +55,7 @@ describe("atomicJsonUpdate", () => {
   });
 
   it("writes atomically", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "atomic-test-"));
+    const dir = makeTempDir("atomic-test-");
     const path = join(dir, "state.json");
     await atomicJsonUpdate(path, (data) => ({ ...data, count: 1 }));
     const result = JSON.parse(readFileSync(path, "utf8"));
@@ -62,7 +63,7 @@ describe("atomicJsonUpdate", () => {
   });
 
   it("queues parallel updates", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "atomic-test-"));
+    const dir = makeTempDir("atomic-test-");
     const path = join(dir, "state.json");
     await Promise.all([
       atomicJsonUpdate(path, (data) => ({ ...data, a: 1 })),
@@ -76,7 +77,7 @@ describe("atomicJsonUpdate", () => {
   });
 
   it("continues queue after error", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "atomic-test-"));
+    const dir = makeTempDir("atomic-test-");
     const path = join(dir, "state.json");
     const p1 = atomicJsonUpdate(path, () => { throw new Error("fail"); });
     const p2 = atomicJsonUpdate(path, (data) => ({ ...data, ok: true }));

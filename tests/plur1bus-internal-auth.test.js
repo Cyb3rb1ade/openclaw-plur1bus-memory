@@ -7,6 +7,7 @@ import { join } from "node:path";
 import plugin from "../index.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { workspaceKeyFromContext } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // Migration report publication requires verified fd-backed directory aliases,
 // which are unavailable on darwin; the migration write path fails closed there.
@@ -63,8 +64,8 @@ function makeApi(baseDbPath, configOverrides = {}) {
 }
 
 async function withPlugin(fn, registrationDependencies = {}) {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-internal-auth-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-internal-auth-ws-"));
+  const baseDbPath = makeTempDir("plur1bus-internal-auth-db-");
+  const workspaceDir = makeTempDir("plur1bus-internal-auth-ws-");
   try {
     const api = makeApi(baseDbPath);
     plugin.register(api, { importRouting: async () => routingCapability, ...registrationDependencies });

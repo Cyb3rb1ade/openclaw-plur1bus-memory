@@ -7,8 +7,10 @@ Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
 `Install PLUR1BUS.command` in
 `/Applications/PLUR1BUS Installer`.
 
-Stand **11. September 2026**: Diese Anleitung beschreibt
-Hermes **7.12.47-hermes.0**. Portable Archive und Python-Wheels sind die
+Stand **12. September 2026**: Diese Anleitung beschreibt den aktuellen
+Hermes-Installer. Der Zwischenstand **7.12.53-hermes.0** ist nicht veröffentlicht;
+der finale Paketbau wartet auf Upstream 7.12.54 oder 7.12.55.
+Portable Archive und Python-Wheels sind die
 plattformübergreifenden Referenzartefakte. Native Installer sind separat nach
 Architektur gekennzeichnet; Signatur und Notarisierung sind je Asset in der
 Release-Beschreibung ausgewiesen.
@@ -24,6 +26,19 @@ und deren Prüfsummen verwenden. GitHubs automatisch erzeugtes „Source code“
 ist ebenfalls **kein fertiges Installationspaket**.
 
 ## Welches Paket brauche ich?
+
+Optional ist eine begleitende Installations-/Diagnoseanleitung als
+[Hermes Skills Hub-Quelle](https://github.com/Cyb3rb1ade/plur1bus-hermes-skills)
+veröffentlicht:
+
+```sh
+hermes skills install Cyb3rb1ade/plur1bus-hermes-skills/skills/plur1bus-hermes
+hermes skills tap add Cyb3rb1ade/plur1bus-hermes-skills
+```
+
+Der Skill ersetzt kein Paket und aktiviert PLUR1BUS nicht. Der zweite Befehl
+macht die Community-Quelle im Hub durchsuchbar. Hermes' Scan und
+Installationsbestätigung vor der Übernahme prüfen.
 
 `VERSION` steht nachfolgend für die tatsächlich veröffentlichte Hermes-Version.
 Die Dateinamen in der Tabelle entsprechen den veröffentlichten oder im
@@ -93,7 +108,8 @@ Die Einrichtung hat zwei klar getrennte Schritte:
      (default)** klicken oder einzelne Profile an-/abwählen. Aktivierungsstatus
      und unvollständige Aktivierungen werden pro Profil angezeigt.
    - **PLUR1BUS aktivieren** ist vorausgewählt. Dies setzt den Memory-Provider
-     und aktiviert Hauptplugin, Dashboard und Controls. Abwählen bedeutet
+     sowie `memory.memory_enabled=true` und aktiviert Hauptplugin, Dashboard
+     und Controls. Abwählen bedeutet
      ausdrücklich „nur Dateien installieren“, nicht „PLUR1BUS verfügbar machen“.
    - **Installationsplan prüfen**, konkrete Profile kontrollieren, betroffene
      Hermes-Laufzeiten beenden und **Jetzt installieren und aktivieren** klicken.
@@ -105,6 +121,15 @@ PKG-Komponentenseite.** Er läuft als normaler Benutzer und verändert kein
 erratenes Benutzerprofil aus einem privilegierten PKG-Skript heraus.
 Für später angelegte Profile denselben Assistenten erneut öffnen. Die Auswahl
 „alle“ gilt nur für die konkret aufgelisteten, bestehenden Profile.
+
+Die Desktop-Oberfläche ist bei Hermes appweit. Existiert bereits eine gemeinsame
+PLUR1BUS-Oberfläche im Root-Verzeichnis, kann auch ein Update nur eines benannten
+Profils diese UI-Dateien aktualisieren. Der Plan zeigt diese zusätzlichen
+Frontend-Pfade unter `sharedDesktop`; sie sind gesichert und zurückrollbar.
+Das aktiviert **nicht** das Standardprofil und ändert dort weder Provider noch
+Erinnerungen. Alte Materialisierungsmarker werden wiederherstellbar aus dem
+aktiven Pfad genommen, damit Hermes beim Neustart nicht den gesamten UI-Ordner
+einschließlich eigener Zusatzdateien ersetzt.
 
 Alternativ das zur Architektur passende ZIP/TAR in einen neuen Ordner entpacken,
 im Terminal in den enthaltenen Ordner `plur1bus-VERSION` wechseln und starten:

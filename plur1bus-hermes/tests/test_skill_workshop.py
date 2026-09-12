@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,9 +18,17 @@ class _Query:
         self.rows = rows
 
     def where(self, _clause):
+        match = re.search(r"\bid = '((?:[^']|'')*)'", _clause)
+        if match:
+            identifier = match[1].replace("''", "'")
+            self.rows = [row for row in self.rows if row["id"] == identifier]
         return self
 
     def limit(self, _limit):
+        return self
+
+    def order_by(self, _ordering):
+        self.rows = sorted(self.rows, key=lambda row: row["id"])
         return self
 
     def to_list(self):
@@ -124,7 +133,9 @@ class SkillWorkshopTests(unittest.TestCase):
             workshop = SkillWorkshop(_runtime(Path(directory), binding, [
                 _row(binding, "a", sourceRole="tool"), _row(binding, "b", sourceRole="merge"),
             ], _candidate()))
-            self.assertEqual(workshop.mine(), {"created": 0, "proposals": []})
+            result = workshop.mine()
+            self.assertEqual(result["created"], 0)
+            self.assertEqual(result["proposals"], [])
 
     def test_invalid_backend_candidate_does_not_fall_back_to_generic_type_skill(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -132,7 +143,9 @@ class SkillWorkshopTests(unittest.TestCase):
             workshop = SkillWorkshop(_runtime(Path(directory), binding, [
                 _row(binding, "a"), _row(binding, "b"),
             ], _candidate(evidence=("a", "missing"))))
-            self.assertEqual(workshop.mine(), {"created": 0, "proposals": []})
+            result = workshop.mine()
+            self.assertEqual(result["created"], 0)
+            self.assertEqual(result["proposals"], [])
 
     def test_evidence_change_or_deletion_invalidates_approval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

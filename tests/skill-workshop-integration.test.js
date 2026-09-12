@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -18,11 +18,12 @@ import {
 import {
   createOpenClawSkillWorkshopClient,
 } from "../lib/setup/skill-workshop-plugin-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REVISION = "a".repeat(64);
 
 function workspace() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-skill-workshop-"));
+  return makeTempDir("plur1bus-skill-workshop-");
 }
 
 function candidateResponse() {
@@ -414,13 +415,13 @@ describe("Skill Workshop approval lifecycle", () => {
   it("does not repeat evidence promotion when the committed hook synchronizes during apply RPC", async (t) => {
     const dir = workspace();
     t.after(() => rmSync(dir, { recursive: true, force: true }));
-    seedWorkshopProposal(dir, { evidence: { memoryIds: ["memory-a"] } });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: ["11111111-2222-4333-8444-5555555555aa"] } });
     let transitions = 0;
     const evidenceCtx = {
       agentId: "agent-a",
       memoryCtx: { agentId: "agent-a", workspaceAliases: { paths: [], aliases: [] } },
       async loadEvidenceRecord() {
-        return { id: "memory-a", agentId: "agent-a", scope: "agent-private", epistemicStatus: "observed" };
+        return { id: "11111111-2222-4333-8444-5555555555aa", agentId: "agent-a", scope: "agent-private", epistemicStatus: "observed" };
       },
       async applyEpistemicStatus() {
         transitions += 1;
@@ -471,7 +472,7 @@ describe("Skill Workshop approval lifecycle", () => {
     assert.equal(result.ok, true);
     assert.equal(result.status, "active");
     assert.equal(transitions, 1);
-    assert.equal(readProposals(dir)[0].activation.evidence["memory-a"].ok, true);
+    assert.equal(readProposals(dir)[0].activation.evidence["11111111-2222-4333-8444-5555555555aa"].ok, true);
   });
 
   it("does not append a second rejection when the committed hook synchronizes during reject RPC", async (t) => {
@@ -512,5 +513,75 @@ describe("Skill Workshop approval lifecycle", () => {
       .trim().split("\n").filter(Boolean).map(JSON.parse);
     assert.equal(rejected.length, 1);
     assert.equal(readProposals(dir)[0].openClawWorkshop.status, "rejected");
+  });
+});
+
+describe("7.12.51: der Workshop schreibt in sein eigenes Verzeichnis", () => {
+  const workshopFile = (root, name) => join(root, "agents", "agent-a", "agent", "workshop-skills", name, "SKILL.md");
+
+  it("übernimmt den vom Host gemeldeten Zielpfad statt ihn gegen einen geratenen zu prüfen", async (t) => {
+    const dir = workspace();
+    const host = makeTempDir("plur1bus-host-");
+    t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
+    const target = workshopFile(host, "weekly-deploy");
+    const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      agentId: "agent-a",
+      skillWorkshop: {
+        async inspectProposal() {
+          return { proposalId: "weekly-deploy-20260826", revisionHash: REVISION, status: "pending", skillName: "weekly-deploy" };
+        },
+        async applyProposal() {
+          return { proposalId: "weekly-deploy-20260826", status: "applied", targetSkillFile: target };
+        },
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "active");
+    assert.equal(readProposals(dir)[0].activation.skillPath, target);
+    assert.equal(existsSync(join(dir, "skills", "weekly-deploy", "SKILL.md")), false, "PLUR1BUS schreibt die Datei nicht selbst");
+  });
+
+  it("lehnt einen Zielpfad ab, dessen Verzeichnis nicht zum Skill gehört", async (t) => {
+    const dir = workspace();
+    const host = makeTempDir("plur1bus-host-");
+    t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
+    const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      agentId: "agent-a",
+      skillWorkshop: {
+        async inspectProposal() {
+          return { proposalId: "weekly-deploy-20260826", revisionHash: REVISION, status: "pending", skillName: "weekly-deploy" };
+        },
+        async applyProposal() {
+          return { proposalId: "weekly-deploy-20260826", status: "applied", targetSkillFile: workshopFile(host, "something-else") };
+        },
+      },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "workshop_apply_failed");
+    assert.equal(readProposals(dir)[0].status, "pending_review");
+  });
+
+  it("holt den Pfad aus dem Agentenverzeichnis, wenn der Workshop schon angewandt hat", async (t) => {
+    const dir = workspace();
+    const host = makeTempDir("plur1bus-host-");
+    t.after(() => { rmSync(dir, { recursive: true, force: true }); rmSync(host, { recursive: true, force: true }); });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: [] } });
+    const target = workshopFile(host, "weekly-deploy");
+    mkdirSync(join(target, ".."), { recursive: true });
+    writeFileSync(target, "# applied by the workshop", "utf8");
+    const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      agentId: "agent-a",
+      workshopSkillPath: (name) => workshopFile(host, name),
+      skillWorkshop: {
+        async inspectProposal() {
+          return { proposalId: "weekly-deploy-20260826", revisionHash: REVISION, status: "applied", skillName: "weekly-deploy" };
+        },
+        async applyProposal() { throw new Error("darf nicht erneut anwenden"); },
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(readProposals(dir)[0].activation.skillPath, target);
   });
 });

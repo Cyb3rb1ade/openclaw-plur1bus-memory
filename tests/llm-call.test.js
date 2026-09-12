@@ -9,6 +9,7 @@ import {
   createLlmResultCache,
   withLlmResultCacheContext,
 } from "../lib/llm-result-cache.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeResponse({ text, reasoningContent, usage }) {
   return {
@@ -204,7 +205,7 @@ test("provider errors are not cached and cache persistence errors fail open", as
   assert.equal(await callLlm(messages, cfg, { OpenAI, resultCache: cache }), "recovered");
   assert.equal(calls.length, 2);
 
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-call-cache-"));
+  const dir = makeTempDir("plur1bus-llm-call-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const warnings = [];
   const persistenceCache = createLlmResultCache({

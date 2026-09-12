@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const require = createRequire(import.meta.url);
 
@@ -41,7 +42,7 @@ test("Local Inference resolves patched adm-zip with ONNX Runtime-compatible APIs
   const AdmZip = onnxRequire("adm-zip");
   const archive = new AdmZip();
   archive.addFile("payload/model.bin", Buffer.from("local-inference-compatibility"));
-  const tempRoot = mkdtempSync(join(tmpdir(), "plur1bus-adm-zip-"));
+  const tempRoot = makeTempDir("plur1bus-adm-zip-");
   const packagePath = join(tempRoot, "local-inference-runtime.nupkg");
   const extractDir = join(tempRoot, "extracted");
   try {

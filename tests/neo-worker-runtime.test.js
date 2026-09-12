@@ -6,9 +6,10 @@ import { join } from "node:path";
 
 import { createNeoStore } from "../lib/neo-arch.js";
 import { createNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function makeRoot(prefix = "plur1bus-neo-worker-") {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return makeTempDir(prefix);
 }
 
 function readJsonl(path) {

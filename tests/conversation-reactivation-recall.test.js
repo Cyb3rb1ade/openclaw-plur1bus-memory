@@ -16,6 +16,7 @@ import {
   markUserTurn,
   markCrrRun,
 } from "../lib/conversation-reactivation-recall.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("conversation-reactivation-recall", () => {
   const now = 1_000_000_000_000;
@@ -561,7 +562,7 @@ describe("conversation-reactivation-recall", () => {
       const agentId = `idle-agent-${Math.random()}`;
       const sessionKey = `idle-session-${Math.random()}`;
       markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
-      const tmpDir = mkdtempSync(join(tmpdir(), "crr-test-"));
+      const tmpDir = makeTempDir("crr-test-");
       mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
       writeFileSync(
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
@@ -592,7 +593,7 @@ describe("conversation-reactivation-recall", () => {
     it("continuation trigger works", async () => {
       const agentId = `cont-agent-${Math.random()}`;
       const sessionKey = `cont-session-${Math.random()}`;
-      const tmpDir = mkdtempSync(join(tmpdir(), "crr-test-"));
+      const tmpDir = makeTempDir("crr-test-");
       mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
       writeFileSync(
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
@@ -640,7 +641,7 @@ describe("conversation-reactivation-recall", () => {
       const agentId = `timeout-agent-${Math.random()}`;
       const sessionKey = `timeout-session-${Math.random()}`;
       markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
-      const tmpDir = mkdtempSync(join(tmpdir(), "crr-pending-hydration-"));
+      const tmpDir = makeTempDir("crr-pending-hydration-");
       mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
       writeFileSync(
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
@@ -677,7 +678,7 @@ describe("conversation-reactivation-recall", () => {
       const agentId = `write-agent-${Math.random()}`;
       const sessionKey = `write-session-${Math.random()}`;
       markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
-      const tmpDir = mkdtempSync(join(tmpdir(), "crr-write-test-"));
+      const tmpDir = makeTempDir("crr-write-test-");
       mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
       writeFileSync(
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
@@ -704,7 +705,7 @@ describe("conversation-reactivation-recall", () => {
     it("cold dry-run stays on the precomputed path with <=3 additions", async () => {
       const agentId = `perf-agent-${Math.random()}`;
       const sessionKey = `perf-session-${Math.random()}`;
-      const tmpDir = mkdtempSync(join(tmpdir(), "crr-perf-"));
+      const tmpDir = makeTempDir("crr-perf-");
       mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
       writeFileSync(
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
@@ -769,7 +770,7 @@ describe("conversation-reactivation-recall", () => {
       const agentId = `timeout-deliver-agent-${Math.random()}`;
       const sessionKey = `timeout-deliver-session-${Math.random()}`;
       markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
-      const tmpDir = mkdtempSync(join(tmpdir(), "crr-timeout-deliver-"));
+      const tmpDir = makeTempDir("crr-timeout-deliver-");
       mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
 
       const communities = [];

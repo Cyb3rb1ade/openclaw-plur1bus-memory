@@ -28,6 +28,7 @@ import {
   resolveSessionOwnerMemoryContext,
 } from "../lib/memory-request-context.js";
 import { buildNeoWorkspaceAliases } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -161,7 +162,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("accepts configured path and aliases only when they resolve to one target", (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-context-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-context-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const workspaceAliases = Object.freeze({
       paths: Object.freeze([{ path: realpathSync(workspaceDir), workspaceKey: "canonical-a" }]),
@@ -287,7 +288,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("decodes the closed Telegram, Discord, Slack, and Mattermost command route grammar", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-providers-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-providers-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const cases = [
       { provider: "telegram", sessionKey: "agent:a:main", from: "telegram:user-a", to: "telegram:user-a", chatId: "user-a", kind: "private" },
@@ -319,7 +320,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("accepts official provider-relative Discord user and channel delivery targets", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-discord-relative-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-discord-relative-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     for (const fixture of [
       { provider: "discord", sessionKey: "agent:a:discord:channel:chan-a", target: "channel:chan-a", chatId: "chan-a" },
@@ -357,7 +358,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("rejects unknown one-part agent session routes", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-closed-session-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-closed-session-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     for (const sessionKey of [
       "agent:a:evil",
@@ -378,7 +379,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("rejects malformed, foreign, extra, and conflicting command route aliases", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-route-deny-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-route-deny-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const base = {
       senderId: "42", channel: "discord", accountId: "default", agentId: "a",
@@ -405,7 +406,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("binds confirmations field-by-field to the verified host conversation principal", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-confirm-principal-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-confirm-principal-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const base = {
       senderId: "42", channel: "telegram", accountId: "default", agentId: "a",
@@ -475,7 +476,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("resolves official command and tool fields without synthetic identity fallbacks", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-host-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-host-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const aliases = Object.freeze({ paths: Object.freeze([{ path: realpathSync(workspaceDir), workspaceKey: "ws-a" }]), aliases: Object.freeze([]) });
     const ctx = await resolveHostCommandMemoryContext({
@@ -627,8 +628,8 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("rejects conflicting raw workspace path basenames before Neo can collapse them", (t) => {
-    const rootA = mkdtempSync(join(tmpdir(), "plur1bus-b13-alias-a-"));
-    const rootB = mkdtempSync(join(tmpdir(), "plur1bus-b13-alias-b-"));
+    const rootA = makeTempDir("plur1bus-b13-alias-a-");
+    const rootB = makeTempDir("plur1bus-b13-alias-b-");
     const pathA = join(rootA, "shared");
     const pathB = join(rootB, "shared");
     mkdirSync(pathA);
@@ -652,7 +653,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("rejects exact workspace path duplicates with different targets", (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-path-conflict-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-path-conflict-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const conflicting = {
       neo: {
@@ -677,7 +678,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("joins a real reply_dispatch ticket to the latest prompt session without retaining text", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-hook-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-hook-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     assert.equal(registry.observeReplyDispatch({
@@ -786,7 +787,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("re-verifies immutable claimed tickets on same-run retries", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-retry-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-retry-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     registry.observeReplyDispatch(dispatchFixture());
@@ -804,7 +805,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("treats repeated claimed dispatches as idempotent only for the same identity", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-claimed-dispatch-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-claimed-dispatch-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     registry.observeReplyDispatch(dispatchFixture());
@@ -817,7 +818,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("requires every present ticket run id to match in every proof mode", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-run-proof-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-run-proof-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
@@ -831,7 +832,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("exercises account-session, exact-run, and single-account proof modes", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-proof-modes-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-proof-modes-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const ambiguous = buildMemoryAccountTopology({ channels: { telegram: { accounts: { named: {} } } } });
     const cases = [
@@ -888,7 +889,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("binds claimed retries to the originally verified session id", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-session-retry-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-session-retry-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     registry.observeReplyDispatch(dispatchFixture());
@@ -903,7 +904,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("keeps interleaved FIFO users bound to their own sender proofs", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-users-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-users-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     registry.observeReplyDispatch(dispatchFixture({ runId: "", senderId: "42" }));
@@ -923,7 +924,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("bounds pending, claimed, session taint, and global overflow state", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-bounds-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-bounds-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     let current = 1000;
     const registry = createMemoryTurnRouteRegistry({
@@ -955,7 +956,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("denies an out-of-order exact run and taints rather than skipping the FIFO head", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-fifo-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-fifo-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     const ambiguous = buildMemoryAccountTopology({ channels: { telegram: { accounts: { named: {} } } } });
@@ -972,7 +973,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("cross-checks every present dispatch and hook thread or identity duplicate", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-duplicates-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-duplicates-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     const dispatch = dispatchFixture();
@@ -997,7 +998,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("rejects every present empty SessionEntry provider or account alias", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-empty-entry-alias-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-empty-entry-alias-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const aliases = [
       ["deliveryContext", "channel"],
@@ -1028,7 +1029,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("requires explicit hook and entry thread proof and rejects malformed present entry targets", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-thread-proof-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-thread-proof-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const sessionKey = "agent:a:telegram:group:chat-a:topic:77";
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
@@ -1063,7 +1064,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("evicts claimed runs deterministically and cleanup cannot borrow another ticket", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-claimed-cap-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-claimed-cap-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000, maxClaimed: 1 });
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
@@ -1086,7 +1087,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("expires and evicts only the claimed retry while fresh same-session turns recover", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-claimed-recovery-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-claimed-recovery-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     let current = 1000;
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10, maxClaimed: 2 });
@@ -1108,7 +1109,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("fails closed when A/B/C claimed-run retirement overflows its bounded tombstones", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-retired-overflow-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-retired-overflow-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     let current = 1000;
     const registry = createMemoryTurnRouteRegistry({
@@ -1153,7 +1154,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("does not repopulate bounded tombstones after prune-triggered retirement overflow", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-prune-overflow-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-prune-overflow-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     let current = 1000;
     const registry = createMemoryTurnRouteRegistry({
@@ -1196,7 +1197,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("accepts official prompt hooks without optional channelContext duplicates", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-optional-channel-context-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-optional-channel-context-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     for (const channelContext of [undefined, {}]) {
       const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
@@ -1210,7 +1211,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("accepts an official headless agent hook without inventing a user or warning", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-headless-beta3-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-headless-beta3-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const warnings = [];
     let sessionReads = 0;
@@ -1244,7 +1245,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("does not treat an identity-bearing webchat hook as a headless route", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-webchat-identity-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-webchat-identity-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const warnings = [];
     const resolved = await resolveHostHookMemoryContext({
@@ -1273,7 +1274,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("ignores non-host flat channelContext identity and thread fields", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-official-channel-context-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-official-channel-context-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     const dispatch = dispatchFixture();
@@ -1289,7 +1290,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("7.12.39: an unclaimed ticket that expires is dropped, not a session taint (second message during a running turn)", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-expired-unclaimed-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-expired-unclaimed-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     let current = 1000;
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10 });
@@ -1307,7 +1308,7 @@ describe("B13 canonical memory request context", () => {
   });
 
   it("7.12.39: two messages inside the TTL — the head ticket is claimed, nothing lingers or taints afterwards", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-double-message-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-double-message-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     let current = 1000;
     const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10 });
@@ -1350,7 +1351,7 @@ describe("operator session context for identity-bound steps", () => {
   const { mkdtempSync, mkdirSync } = require("node:fs");
   const { tmpdir } = require("node:os");
   const { join } = require("node:path");
-  const root = mkdtempSync(join(tmpdir(), "plur1bus-session-ctx-"));
+  const root = makeTempDir("plur1bus-session-ctx-");
   for (const agent of ["heisenberg", "main"]) mkdirSync(join(root, agent), { recursive: true });
   const resolveAgentWorkspaceDir = async (_config, agentId) => join(root, agentId);
 
@@ -1398,7 +1399,7 @@ describe("shared workspace pool labels", () => {
     const { mkdtempSync, mkdirSync } = require("node:fs");
     const { tmpdir } = require("node:os");
     const { join } = require("node:path");
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-pool-labels-"));
+    const root = makeTempDir("plur1bus-pool-labels-");
     const mainDir = join(root, "workspace"); mkdirSync(mainDir);
     const bDir = join(root, "workspace-bernhardine"); mkdirSync(bDir);
     const labels = describeWorkspacePoolLabels({

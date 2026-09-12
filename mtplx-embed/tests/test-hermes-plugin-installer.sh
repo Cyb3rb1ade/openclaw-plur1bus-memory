@@ -26,6 +26,7 @@ stage_repo() {
   ln -s "$repo_dir/plur1bus-hermes" "$staged_repo/plur1bus-hermes"
   ln -s "$repo_dir/plur1bus-controls" "$staged_repo/plur1bus-controls"
   ln -s "$repo_dir/hermes-model-providers" "$staged_repo/hermes-model-providers"
+  ln -s "$repo_dir/hermes-dashboard" "$staged_repo/hermes-dashboard"
 }
 
 run_plugin_installer() {
@@ -50,11 +51,29 @@ run_plugin_installer empty > "$empty_case.output" 2>&1
 resolved_empty_home="$(cd -P "$empty_case/hermes" && pwd)"
 grep -Fqx "hermes:--hermes-home $resolved_empty_home" "$empty_case/record" || \
   fail 'retrieval installer was not invoked without extra arguments'
-grep -Fqx 'hermes:config set memory.provider plur1bus' "$empty_case/record" || \
+grep -Fqx 'hermes:--profile default config set memory.provider plur1bus' "$empty_case/record" || \
   fail 'empty retrieval-args path did not reach Hermes activation'
+grep -Fqx 'hermes:--profile default config set memory.memory_enabled true' "$empty_case/record" || \
+  fail 'memory lifecycle was not enabled'
+grep -Fqx 'hermes:--profile default plugins enable plur1bus' "$empty_case/record" || \
+  fail 'unified PLUR1BUS plugin was not enabled'
+grep -Fqx 'hermes:--profile default plugins enable plur1bus-controls' "$empty_case/record" || \
+  fail 'controls plugin was not enabled'
+cmp "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$empty_case/hermes/plugins/plur1bus/desktop/plugin.js" || \
+  fail 'plain installation omitted the unified desktop entry'
 if grep -Fq 'retrieval_args[@]: unbound variable' "$empty_case.output"; then
   fail 'empty retrieval-args path still triggered the Bash 3.2 nounset crash'
 fi
+
+# No-activation applies to optional retrieval configuration as well as the
+# primary provider; the source UI still belongs to the installed package.
+no_setup_case="$scratch/no-setup"
+run_plugin_installer no-setup --no-setup > "$no_setup_case.output" 2>&1
+[[ ! -s "$no_setup_case/record" ]] || fail 'no-setup invoked Hermes or retrieval setup'
+cmp "$repo_dir/hermes-dashboard/plur1bus/desktop/plugin.js" "$no_setup_case/hermes/plugins/plur1bus/desktop/plugin.js" || \
+  fail 'no-setup omitted the unified desktop entry'
+cmp "$repo_dir/hermes-dashboard/plur1bus/dashboard/plugin_api.py" "$no_setup_case/hermes/plugins/plur1bus/dashboard/plugin_api.py" || \
+  fail 'no-setup omitted the dashboard backend'
 
 # Non-empty retrieval arguments must retain their exact order and values.
 args_case="$scratch/with-args"
@@ -73,7 +92,7 @@ run_plugin_installer sidecar-fails > "$sidecar_case.output" 2>&1 || \
 resolved_sidecar_home="$(cd -P "$sidecar_case/hermes" && pwd)"
 grep -Fqx "failing-sidecar:--hermes-home $resolved_sidecar_home" "$sidecar_case/record" || \
   fail 'failing sidecar was not invoked'
-grep -Fqx 'hermes:config set memory.provider plur1bus' "$sidecar_case/record" || \
+grep -Fqx 'hermes:--profile default config set memory.provider plur1bus' "$sidecar_case/record" || \
   fail 'failing sidecar skipped the main plugin activation'
 grep -Fq 'optional retrieval sidecar failed' "$sidecar_case.output" || \
   fail 'sidecar failure did not surface as a warning'

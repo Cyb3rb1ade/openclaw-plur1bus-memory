@@ -4,10 +4,11 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectActiveMemories, runGcJob } from "../lib/jobs/gc-job.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("gc-job timeout", () => {
   it("returns timeout reason when scanActive hangs", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-gc-timeout-"));
+    const dir = makeTempDir("plur1bus-gc-timeout-");
     const agentDir = join(dir, "agent-1");
     mkdirSync(agentDir, { recursive: true });
     // Minimal marker so listAgentIds finds it.
@@ -32,7 +33,7 @@ describe("gc-job timeout", () => {
   });
 
   it("completes normally when scanActive is fast", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-gc-fast-"));
+    const dir = makeTempDir("plur1bus-gc-fast-");
     const agentDir = join(dir, "agent-1");
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "memories.lance"), "", "utf8");

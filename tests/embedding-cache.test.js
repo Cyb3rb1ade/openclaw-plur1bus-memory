@@ -22,6 +22,7 @@ import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 // node:sqlite is only stable (no flag) from Node 22.12+; 22.5–22.11 require --experimental-sqlite
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
@@ -320,7 +321,7 @@ describe("embedding-cache config passthrough", () => {
 
 describe("embedding-cache v2 getMany", () => {
   function makeTempBase() {
-    return mkdtempSync(join(tmpdir(), "plur1bus-emb-cache-"));
+    return makeTempDir("plur1bus-emb-cache-");
   }
 
   function makeCache(opts = {}) {
@@ -446,7 +447,7 @@ describe("embedding-cache v2 getMany", () => {
 
 describeSqlite("embedding-cache v2 persistence", () => {
   function makeTempBase() {
-    return mkdtempSync(join(tmpdir(), "plur1bus-emb-cache-"));
+    return makeTempDir("plur1bus-emb-cache-");
   }
 
   it("creates a configured but not-yet-existing cache base instead of silently skipping persistence", async () => {
@@ -661,7 +662,7 @@ describeSqlite("embedding-cache v2 persistence", () => {
 
 describeSqlite("embedding-cache v2 size limits", () => {
   function makeTempBase() {
-    return mkdtempSync(join(tmpdir(), "plur1bus-emb-cache-"));
+    return makeTempDir("plur1bus-emb-cache-");
   }
 
   function physicalDbSize(dbPath) {

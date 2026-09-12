@@ -2,9 +2,27 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from plur1bus_hermes.jobs import run_jobs
+from plur1bus_hermes.jobs import run_jobs, _bind_profile_home
 from plur1bus_hermes import file_lock
+
+
+class JobProfileBindingTests(unittest.TestCase):
+    def test_canonical_provider_config_binds_its_own_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve() / "profiles" / "alpha"
+            config = {"skillWorkshop": {"enabled": True, "autoApply": "on"}}
+            result = _bind_profile_home(config, home / "plugins/plur1bus/config.json")
+            self.assertEqual(result["hermesHome"], str(home))
+            self.assertNotIn("hermesHome", config)
+            with self.assertRaises(ValueError):
+                _bind_profile_home(config, home / "plugins/plur1bus/config.json", home.parent / "beta")
+
+    def test_nonstandard_config_does_not_guess_profile_home(self):
+        self.assertNotIn("hermesHome", _bind_profile_home({}, Path("/custom/provider.json")))
+        expected = str(Path("/custom/profile").resolve())
+        self.assertEqual(_bind_profile_home({}, Path("/custom/provider.json"), Path(expected))["hermesHome"], expected)
 
 
 class _Domain:
@@ -58,6 +76,38 @@ class _Runtime:
 
 
 class JobsTests(unittest.TestCase):
+    def test_nightly_mining_runs_after_consolidation_and_tolerates_late_previous_slot(self):
+        events = []
+        class OrderedDomain(_Domain):
+            def run_consolidation(self, table):
+                events.append("consolidation")
+                return {"reviewed": 3}
+        class OrderedRuntime(_Runtime):
+            def __init__(self, *args):
+                super().__init__(*args)
+                self._domain = OrderedDomain()
+        config = {"skillWorkshop": {"enabled": True}, "hermesHome": "/bound/profile"}
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "plur1bus_hermes.skill_workshop.SkillWorkshop"
+        ) as workshop, patch("plur1bus_hermes.rate_gate.time.time", return_value=100_000) as clock:
+            workshop.return_value.mine.side_effect = lambda **kw: events.append("mine") or {"created": 0}
+            first = run_jobs(Path(temporary), config, "main", "daily", runtime_factory=OrderedRuntime)
+            self.assertEqual(events, ["consolidation", "mine"])
+            workshop.return_value.mine.assert_called_once_with(hermes_home=Path("/bound/profile"))
+            duplicate = run_jobs(Path(temporary), config, "main", "daily", runtime_factory=OrderedRuntime)
+            self.assertEqual(duplicate["results"]["skillMiner"]["reason"], "rate-limited")
+            clock.return_value = 100_000 + 86_350
+            later = run_jobs(Path(temporary), config, "main", "daily", runtime_factory=OrderedRuntime)
+            self.assertEqual(later["results"]["skillMiner"], {"created": 0})
+            self.assertEqual(events, ["consolidation", "mine", "consolidation", "mine"])
+
+    def test_disabled_workshop_never_constructs_miner(self):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "plur1bus_hermes.skill_workshop.SkillWorkshop"
+        ) as workshop:
+            run_jobs(Path(temporary), {"skillWorkshop": {"enabled": False}}, "main", "daily", runtime_factory=_Runtime)
+            workshop.assert_not_called()
+
     def test_daily_runs_shared_dynamics_gate_and_all_runs_it_once(self):
         with tempfile.TemporaryDirectory() as temporary:
             daily = run_jobs(Path(temporary), {}, "main", "daily", runtime_factory=_Runtime)

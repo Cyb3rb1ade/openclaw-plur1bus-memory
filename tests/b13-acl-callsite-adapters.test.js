@@ -16,6 +16,7 @@ import {
   resolveMemoryRequestContext,
 } from "../lib/memory-request-context.js";
 import { isAuthorized } from "../lib/security.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -161,7 +162,7 @@ describe("B13 strict ownership ACL adapters", () => {
   });
 
   it("authorizes registered destructive commands from the frozen official host context", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-command-auth-ws-"));
+    const workspaceDir = makeTempDir("plur1bus-b13-command-auth-ws-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const officialCtx = {
       args: "",
@@ -240,7 +241,7 @@ describe("B13 strict ownership ACL adapters", () => {
 
   it("registers the passive identity bridge only for autoRecall and never message_received", async (t) => {
     const makeApi = (autoRecall) => {
-      const baseDbPath = mkdtempSync(join(tmpdir(), `plur1bus-b13-register-${autoRecall}-`));
+      const baseDbPath = makeTempDir(`plur1bus-b13-register-${autoRecall}-`);
       t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
       const hooks = [];
       const api = {

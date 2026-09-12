@@ -23,11 +23,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REPAIR_SCRIPT = fileURLToPath(new URL("../scripts/repair-tombstones.mjs", import.meta.url));
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "audit-kleinkram-"));
+  const dir = makeTempDir("audit-kleinkram-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

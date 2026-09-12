@@ -25,6 +25,7 @@ import { describe, it } from "node:test";
 import * as lancedb from "@lancedb/lancedb";
 
 import { buildRemPartition, buildRemPartitions, loadCandidateMemories } from "../lib/dreaming/rem-dream.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "partition-agent";
 const USER_PRINCIPAL = `user:v1:${"a".repeat(64)}`;
@@ -95,7 +96,7 @@ describe("buildRemPartitions gegen echte agent-private Zeilen", () => {
 
   /** Tabelle in der Live-Form: agent-private Zeilen im Wochenfenster. */
   async function agentPrivateTable(t) {
-    const dir = mkdtempSync(join(tmpdir(), "rem-partition-"));
+    const dir = makeTempDir("rem-partition-");
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const jetzt = Date.now();
     const rows = [0, 1, 2].map((i) => ({

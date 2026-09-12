@@ -7,6 +7,7 @@ import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { tombstoneRegistryDir } from "../lib/tombstone.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
 
@@ -45,7 +46,7 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
   let originalEmbedQuery;
 
   before(() => {
-    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-tombstone-e2e-"));
+    testRoot = makeTempDir("plur1bus-tombstone-e2e-");
     baseDbPath = join(testRoot, "db");
     mkdirSync(baseDbPath);
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
@@ -100,7 +101,7 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
 
   it("identischer Store im selben Scope nach Forget wird blockiert", async () => {
     const agentId = "e2e-agent-a";
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-e2e-ws-"));
+    const workspaceDir = makeTempDir("plur1bus-e2e-ws-");
     const text = `E2E forgotten target ${randomUUID()}`;
 
     const stored = await store(agentId, workspaceDir, text);
@@ -117,8 +118,8 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
 
   it("anderer Agent bleibt unbeeinflusst", async () => {
     const text = `E2E other-agent target ${randomUUID()}`;
-    const wsA = mkdtempSync(join(tmpdir(), "plur1bus-e2e-a-"));
-    const wsB = mkdtempSync(join(tmpdir(), "plur1bus-e2e-b-"));
+    const wsA = makeTempDir("plur1bus-e2e-a-");
+    const wsB = makeTempDir("plur1bus-e2e-b-");
 
     const stored = await store("e2e-agent-b", wsA, text);
     await forgetById("e2e-agent-b", wsA, stored.details.id);
@@ -131,7 +132,7 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
 
   it("Audit-Fehler → Wiederholung trägt das Audit tatsächlich nach", async () => {
     const agentId = "e2e-audit-agent";
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-e2e-audit-ws-"));
+    const workspaceDir = makeTempDir("plur1bus-e2e-audit-ws-");
     const text = `E2E audit recovery target ${randomUUID()}`;
 
     const stored = await store(agentId, workspaceDir, text);
@@ -160,7 +161,7 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
 
   it("Query-Forget mit Audit-Fehler → Wiederholung derselben Query trägt das Audit nach", async () => {
     const agentId = "e2e-query-audit-agent";
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-e2e-query-ws-"));
+    const workspaceDir = makeTempDir("plur1bus-e2e-query-ws-");
     const text = `E2E query recovery target ${randomUUID()}`;
 
     const stored = await store(agentId, workspaceDir, text);

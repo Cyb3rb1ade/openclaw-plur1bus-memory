@@ -12,6 +12,7 @@ import {
   validateWorkspacePolicyGetRequest,
   validateWorkspacePolicySetRequest,
 } from "../lib/setup/workspace-policy-plugin-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 async function loadFreshPlugin() {
   return import(`../index.js?workspace-policy-beta1=${Date.now()}-${Math.random()}`);
@@ -169,9 +170,9 @@ describe("workspace policy OpenClaw runtime", () => {
   });
 
   it("plugin-registered Gateway policy handlers resolve Beta1 spawnedCwd sessions", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-policy-beta1-state-"));
-    const spawnedCwd = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-policy-beta1-cwd-")));
-    const fallbackWorkspace = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-policy-beta1-fallback-")));
+    const baseDbPath = makeTempDir("plur1bus-policy-beta1-state-");
+    const spawnedCwd = realpathSync(makeTempDir("plur1bus-policy-beta1-cwd-"));
+    const fallbackWorkspace = realpathSync(makeTempDir("plur1bus-policy-beta1-fallback-"));
     t.after(() => {
       rmSync(baseDbPath, { recursive: true, force: true });
       rmSync(spawnedCwd, { recursive: true, force: true });

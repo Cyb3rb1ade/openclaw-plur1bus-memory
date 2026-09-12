@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContradictionDetector } from "../lib/contradiction-detector.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("ContradictionDetector.loadAll", () => {
   it("returns all persisted contradiction records", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-contra-all-"));
+    const dir = makeTempDir("plur1bus-contra-all-");
     try {
       writeFileSync(
         join(dir, "contradictions.jsonl"),
@@ -25,7 +26,7 @@ describe("ContradictionDetector.loadAll", () => {
   });
 
   it("returns an empty array when the contradictions file does not exist", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-contra-empty-"));
+    const dir = makeTempDir("plur1bus-contra-empty-");
     try {
       const detector = new ContradictionDetector({ workspaceDir: dir });
       const all = await detector.loadAll();
@@ -42,7 +43,7 @@ describe("ContradictionDetector.loadAll", () => {
   });
 
   it("skips malformed JSON lines and non-contradiction records", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-contra-skip-"));
+    const dir = makeTempDir("plur1bus-contra-skip-");
     try {
       writeFileSync(
         join(dir, "contradictions.jsonl"),

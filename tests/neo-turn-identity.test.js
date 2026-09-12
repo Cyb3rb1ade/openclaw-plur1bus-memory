@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { turnIdentityParams, turnEventsFromMessages, captureNeoFromAgentEnd, createNeoStore, workspaceKeyFromContext } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("7.12.44: eine Turn-Identitaet fuer Journal und Episoden", () => {
   const messages = [
@@ -23,7 +24,7 @@ describe("7.12.44: eine Turn-Identitaet fuer Journal und Episoden", () => {
   });
 
   it("index.js-Seite und Worker-Journal erzeugen dieselben Turn-IDs, auch ueber Laeufe hinweg", () => {
-    const root = mkdtempSync(join(tmpdir(), "neo-identity-"));
+    const root = makeTempDir("neo-identity-");
     try {
       const workspaceKey = workspaceKeyFromContext(ctx, { event });
       const store = createNeoStore(root, workspaceKey);

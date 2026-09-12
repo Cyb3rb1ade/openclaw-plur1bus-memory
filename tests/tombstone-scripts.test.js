@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const SCRIPTS = fileURLToPath(new URL("../scripts", import.meta.url));
 
@@ -28,7 +29,7 @@ function run(script, args, env = {}) {
 
 describe("reapply-tombstones.mjs fail-closed", () => {
   it("beschädigte Registry-Zeile → Exit 1 (nicht fail-open)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-reapply-corrupt-"));
+    const dir = makeTempDir("plur1bus-reapply-corrupt-");
     try {
       const baseDbPath = join(dir, "lancedb-namespaced");
       mkdirSync(join(dir, "_tombstones"), { recursive: true });
@@ -43,7 +44,7 @@ describe("reapply-tombstones.mjs fail-closed", () => {
   });
 
   it("unlesbare Registry → Exit 1", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-reapply-readerr-"));
+    const dir = makeTempDir("plur1bus-reapply-readerr-");
     try {
       const baseDbPath = join(dir, "lancedb-namespaced");
       mkdirSync(join(dir, "_tombstones", "agent-a.jsonl"), { recursive: true });
@@ -59,7 +60,7 @@ describe("reapply-tombstones.mjs fail-closed", () => {
 
 describe("repair-tombstones.mjs Whitelist + Kollision", () => {
   function makeWorkspace() {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-repair-ws-"));
+    const dir = makeTempDir("plur1bus-repair-ws-");
     mkdirSync(join(dir, ".adaptive-learning"), { recursive: true });
     return dir;
   }
@@ -71,7 +72,7 @@ describe("repair-tombstones.mjs Whitelist + Kollision", () => {
   const MEMORY_ID = "a4563cc9-7611-4528-992a-075f8889a018";
 
   it("result=failed wird nie rekonstruiert", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-repair-failed-"));
+    const dir = makeTempDir("plur1bus-repair-failed-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const archiveDir = join(dir, "archive");
     try {
@@ -87,7 +88,7 @@ describe("repair-tombstones.mjs Whitelist + Kollision", () => {
   });
 
   it("attempted/unbekannte Ergebnisse werden übersprungen", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-repair-unconf-"));
+    const dir = makeTempDir("plur1bus-repair-unconf-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const archiveDir = join(dir, "archive");
     try {
@@ -108,7 +109,7 @@ describe("repair-tombstones.mjs Whitelist + Kollision", () => {
   });
 
   it("historisches Event ohne result wird konservativ rekonstruiert", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-repair-noresult-"));
+    const dir = makeTempDir("plur1bus-repair-noresult-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const archiveDir = join(dir, "archive");
     try {
@@ -127,7 +128,7 @@ describe("repair-tombstones.mjs Whitelist + Kollision", () => {
   });
 
   it("korrupte JSONL-Zeilen erscheinen im Report", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-repair-corruptline-"));
+    const dir = makeTempDir("plur1bus-repair-corruptline-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const archiveDir = join(dir, "archive");
     try {
@@ -146,11 +147,11 @@ describe("repair --apply Idempotenz + semantisch invalider Tombstone", () => {
   const MEMORY_ID = "a4563cc9-7611-4528-992a-075f8889a018";
 
   it("--apply ist idempotent (zweiter Lauf rekonstruiert nichts erneut)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-repair-apply-"));
+    const dir = makeTempDir("plur1bus-repair-apply-");
     const baseDbPath = join(dir, "lancedb-namespaced");
     const archiveDir = join(dir, "archive");
     try {
-      const ws = mkdtempSync(join(tmpdir(), "plur1bus-repair-apply-ws-"));
+      const ws = makeTempDir("plur1bus-repair-apply-ws-");
       mkdirSync(join(ws, ".adaptive-learning"), { recursive: true });
       const archivePath = join(archiveDir, "agent-a", `${MEMORY_ID}.json`);
       mkdirSync(join(archiveDir, "agent-a"), { recursive: true });
@@ -171,7 +172,7 @@ describe("repair --apply Idempotenz + semantisch invalider Tombstone", () => {
   });
 
   it("semantisch invalider Tombstone (valid JSON ohne memoryId) → Exit 1", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-reapply-invalid-"));
+    const dir = makeTempDir("plur1bus-reapply-invalid-");
     try {
       const baseDbPath = join(dir, "lancedb-namespaced");
       mkdirSync(join(dir, "_tombstones"), { recursive: true });
@@ -186,7 +187,7 @@ describe("repair --apply Idempotenz + semantisch invalider Tombstone", () => {
   });
 
   it("ungültiger Registry-Dateiname (bad agent.jsonl) → Exit 1", () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-reapply-badname-"));
+    const dir = makeTempDir("plur1bus-reapply-badname-");
     try {
       const baseDbPath = join(dir, "lancedb-namespaced");
       mkdirSync(join(dir, "_tombstones"), { recursive: true });

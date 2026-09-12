@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { run as runWorkspaceWriter } from "../scripts/verify-workspace-writer.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(
@@ -55,7 +56,7 @@ describe("verify-workspace-writer.mjs", () => {
   let tempHome;
 
   beforeEach(() => {
-    tempHome = mkdtempSync(join(tmpdir(), "verify-writer-test-"));
+    tempHome = makeTempDir("verify-writer-test-");
   });
 
   afterEach(() => {

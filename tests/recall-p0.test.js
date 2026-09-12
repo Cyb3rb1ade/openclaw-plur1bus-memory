@@ -11,6 +11,7 @@ import { dedupResults, runRecallPipeline } from "../lib/recall-pipeline.js";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("P0 tokenize acronyms", () => {
   it("preserves 2-3 letter tech acronyms: AI, API, GPU, SQL, CSS, HTML, IoT", () => {
@@ -94,7 +95,7 @@ describe("P0 recall defaults", () => {
   });
 
   it("runRecallPipeline allows up to 5 canonical items by default (canonicalMaxItems)", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-canonical-"));
+    const tmpDir = makeTempDir("plur1bus-canonical-");
     try {
       const memoryDir = join(tmpDir, "memory");
       mkdirSync(memoryDir, { recursive: true });

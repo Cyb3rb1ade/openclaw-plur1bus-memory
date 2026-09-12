@@ -8,12 +8,13 @@ import plugin, * as pluginModule from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 
+import { makeTempDir as createTrackedTempDir } from "./helpers/temp-dir.js";
 const VECTOR_DIM = 384;
 
 function makeTempDir(prefix) {
   // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
   // production code resolves real paths, so expectations must match.
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync(createTrackedTempDir(prefix));
 }
 
 // Directory capabilities only exist where fd-backed routing is supported

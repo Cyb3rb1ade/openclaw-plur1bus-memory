@@ -35,5 +35,5 @@ class DashboardInstallerTests(unittest.TestCase):
             dashboard = home / "plugins/plur1bus/dashboard"
             self.assertTrue((dashboard / "manifest.json").is_file())
             self.assertTrue((dashboard / "dist/index.js").is_file())
-            self.assertIn("hermes:plugins enable plur1bus\n", record.read_text())
+            self.assertIn("hermes:--profile default plugins enable plur1bus\n", record.read_text())
             self.assertFalse((home / "dashboard-plugins").exists())

@@ -68,6 +68,14 @@ class DesktopActionsTests(unittest.TestCase):
                 calls.append((identifier, rev, home))
                 return {"ok": True}
 
+            def reject(self, identifier, rev):
+                calls.append((identifier, rev))
+                return {"ok": True}
+
+            def withdraw(self, identifier, rev, home):
+                calls.append((identifier, rev, home))
+                return {"ok": True}
+
         @contextmanager
         def lease():
             yield runtime, view
@@ -80,7 +88,7 @@ class DesktopActionsTests(unittest.TestCase):
         ), patch.object(api, "SkillWorkshop", Workshop), TestClient(app) as client:
             self.assertFalse(client.get("/desktop/capabilities").json()["workshopActions"])
             self.assertTrue(client.get("/desktop/capabilities", headers=headers).json()["workshopActions"])
-            for verb in ("approve", "publish"):
+            for verb in ("approve", "publish", "reject", "withdraw"):
                 preview = client.get(f"/workshop/{verb}/preview/id?revision={revision}", headers=headers).json()
                 body = {"proposal_id": "id", "revision": revision, "confirmation": verb, "nonce": preview["nonce"]}
                 url = f"/desktop/workshop/{verb}"
@@ -91,13 +99,13 @@ class DesktopActionsTests(unittest.TestCase):
                 self.assertEqual(client.post(url, json={**body, "nonce": "wrong"}, headers=headers).status_code, 409)
                 self.assertEqual(client.post(url, json=body, headers=headers).status_code, 200)
                 self.assertEqual(client.post(url, json=body, headers=headers).status_code, 409)
-            self.assertEqual(len(calls), 2)
+            self.assertEqual(len(calls), 4)
             nonce = client.get(f"/workshop/approve/preview/id?revision={revision}", headers=headers).json()["nonce"]
             runtime.scope_key = "different"
             self.assertEqual(client.post("/desktop/workshop/approve", headers=headers, json={
                 "proposal_id": "id", "revision": revision, "confirmation": "approve", "nonce": nonce
             }).status_code, 409)
-            self.assertEqual(len(calls), 2)
+            self.assertEqual(len(calls), 4)
 
     def test_oauth_cookie_identity_alone_is_not_native_authority(self):
         api = _load_api()

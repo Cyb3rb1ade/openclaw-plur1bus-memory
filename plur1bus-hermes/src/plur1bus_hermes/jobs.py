@@ -223,7 +223,7 @@ def run_jobs(
                     lambda: scoped_call(domain.auto_accept_stale_criticals),
                 )
                 results["consolidation"] = gate.run(
-                    "consolidation", 86_400, lambda: scoped_call(domain.run_consolidation, table)
+                    "consolidation", 43_200, lambda: scoped_call(domain.run_consolidation, table)
                 )
                 if (config.get("gc") or {}).get("enabled") is True:
                     results["gc"] = gate.run(
@@ -243,6 +243,18 @@ def run_jobs(
                     if scope_type == "agent-private"
                     else {"skipped": True, "reason": "agent-private-only"}
                 )
+                # Run after native maintenance, with enough tolerance that a
+                # nightly run finishing late never blocks tomorrow's slot.
+                workshop_config = config.get("skillWorkshop") or {}
+                if isinstance(workshop_config, dict) and workshop_config.get("enabled") is True:
+                    from .skill_workshop import SkillWorkshop
+                    home = config.get("hermesHome")
+                    results["skillMiner"] = (
+                        gate.run("skill-miner", 72_000, lambda: SkillWorkshop(runtime).mine(
+                            hermes_home=Path(home) if home else None))
+                        if scope_type == "agent-private"
+                        else {"skipped": True, "reason": "agent-private-only"}
+                    )
             incomplete = any(
                 isinstance(result, dict) and result.get("complete") is False
                 for result in results.values()
@@ -272,13 +284,29 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--hermes-home", type=Path, help="profile home for native skill publication with a nonstandard config path")
     parser.add_argument("--agent", required=True)
     parser.add_argument("--mode", choices=("hourly", "daily", "all"), default="all")
     arguments = parser.parse_args(argv)
     config = json.loads(arguments.config.read_text(encoding="utf-8"))
+    config = _bind_profile_home(config, arguments.config, arguments.hermes_home)
     result = run_jobs(arguments.data_dir, config, arguments.agent, arguments.mode)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["status"] in {"completed", "skipped"} else 1
+
+
+def _bind_profile_home(config: dict[str, Any], config_path: Path, explicit: Path | None = None) -> dict[str, Any]:
+    """Bind scheduled publication to its config's profile, not the process home."""
+    bound = dict(config)
+    path = Path(config_path).expanduser().resolve()
+    canonical_home = path.parents[2] if path.name == "config.json" and path.parent.name == "plur1bus" and path.parent.parent.name == "plugins" else None
+    selected = explicit or config.get("hermesHome") or canonical_home
+    if selected is not None:
+        home = Path(selected).expanduser().resolve()
+        if canonical_home is not None and home != canonical_home:
+            raise ValueError("scheduled Hermes home does not match the provider config profile")
+        bound["hermesHome"] = str(home)
+    return bound
 
 
 if __name__ == "__main__":

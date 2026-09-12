@@ -21,6 +21,7 @@ import {
   resolveHalfLifeDays,
 } from "../lib/memory-dynamics.js";
 import { applyInstallerFeaturePolicy } from "../scripts/lib/installer-config.mjs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schemaPath = join(__dirname, "..", "openclaw.plugin.json");
@@ -263,7 +264,7 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
     assert.ok(match, "remote NODEOF body missing");
 
     for (const pluginEntry of installerPatchFixtures()) {
-      const dir = mkdtempSync(join(tmpdir(), "plur1bus-installer-remote-"));
+      const dir = makeTempDir("plur1bus-installer-remote-");
       const configPath = join(dir, "openclaw.json");
       const programPath = join(dir, "installer-patch.mjs");
       try {

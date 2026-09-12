@@ -12,10 +12,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runConflictResolver } from "../lib/jobs/conflict-resolver.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("conflict-resolver", () => {
   it("proposes resolutions without autoApply", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-conflict-"));
+    const dir = makeTempDir("plur1bus-conflict-");
     const conflict = {
       timestamp: new Date(Date.now() - 8 * 86400000).toISOString(),
       newMemoryId: "11111111-1111-1111-1111-111111111111",
@@ -54,7 +55,7 @@ describe("conflict-resolver", () => {
   });
 
   it("high confidence gets apply_via_safe_reconsolidation recommendation", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-conflict-"));
+    const dir = makeTempDir("plur1bus-conflict-");
     const conflict = {
       timestamp: new Date(Date.now() - 8 * 86400000).toISOString(),
       newMemoryId: "33333333-3333-3333-3333-333333333333",
@@ -88,7 +89,7 @@ describe("conflict-resolver", () => {
   });
 
   it("skips conflicts younger than minAgeDays", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-conflict-"));
+    const dir = makeTempDir("plur1bus-conflict-");
     const conflict = {
       timestamp: new Date().toISOString(),
       newMemoryId: "55555555-5555-5555-5555-555555555555",

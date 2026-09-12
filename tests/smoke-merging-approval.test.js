@@ -11,6 +11,7 @@ import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("merging-approval-gate", () => {
   function makeDbTable(rows) {
@@ -42,7 +43,7 @@ describe("merging-approval-gate", () => {
 
   it("does NOT modify DB when autoApply=false", async () => {
     const table = makeDbTable(candidates);
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));
+    const workspaceDir = makeTempDir("plur1bus-merge-");
     const result = await runMemoryCompaction(
       { table },
       {
@@ -70,7 +71,7 @@ describe("merging-approval-gate", () => {
 
   it("modifies DB when autoApply=true", async () => {
     const table = makeDbTable(candidates);
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));
+    const workspaceDir = makeTempDir("plur1bus-merge-");
     const result = await runMemoryCompaction(
       { table },
       {
@@ -91,7 +92,7 @@ describe("merging-approval-gate", () => {
 
   it("defaults to autoApply=true but low-risk only", async () => {
     const table = makeDbTable(candidates);
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));
+    const workspaceDir = makeTempDir("plur1bus-merge-");
     const result = await runMemoryCompaction(
       { table },
       {
@@ -112,7 +113,7 @@ describe("merging-approval-gate", () => {
 
   it("respects dryRun even with autoApply=true", async () => {
     const table = makeDbTable(candidates);
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));
+    const workspaceDir = makeTempDir("plur1bus-merge-");
     const result = await runMemoryCompaction(
       { table },
       {

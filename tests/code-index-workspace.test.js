@@ -12,9 +12,10 @@ import {
   loadCodeIndex,
   saveCodeIndex,
 } from "../lib/code-index/workspace-indexer.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tempWorkspace() {
-  return mkdtempSync(join(tmpdir(), "plur1bus-code-index-"));
+  return makeTempDir("plur1bus-code-index-");
 }
 
 describe("code index workspace indexer", () => {

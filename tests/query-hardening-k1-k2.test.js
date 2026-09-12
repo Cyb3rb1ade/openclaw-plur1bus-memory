@@ -27,6 +27,7 @@ import { describe, it } from "node:test";
 import * as lancedb from "@lancedb/lancedb";
 
 import { createDbAdapter } from "../lib/db-adapter.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 8;
 const AGENT = "hardening-agent";
@@ -38,7 +39,7 @@ async function loadFreshPlugin() {
 }
 
 function tempDir(t) {
-  const dir = mkdtempSync(join(tmpdir(), "query-hardening-"));
+  const dir = makeTempDir("query-hardening-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

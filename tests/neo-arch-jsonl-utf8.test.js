@@ -14,6 +14,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readJsonlTailLines } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("readJsonlTailLines — UTF-8 across chunk boundary", () => {
   it("does not corrupt a multibyte char straddling the 64KB read boundary", () => {
@@ -28,7 +29,7 @@ describe("readJsonlTailLines — UTF-8 across chunk boundary", () => {
     buf[boundary] = 0xbc;               // cont byte of 'ü'  → first byte of chunk 1
     buf[size - 1] = 0x0a;               // terminate the last line
 
-    const dir = mkdtempSync(join(tmpdir(), "neo-jsonl-utf8-"));
+    const dir = makeTempDir("neo-jsonl-utf8-");
     const path = join(dir, "test.jsonl");
     try {
       writeFileSync(path, buf);

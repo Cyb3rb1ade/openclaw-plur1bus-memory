@@ -421,7 +421,8 @@ def _review(workshop: SkillWorkshop, proposal_id: str, revision: str) -> dict[st
     # No source-memory content, paths, or credentials are sent to the browser.
     return {
         key: proposal.get(key)
-        for key in ("id", "skillName", "title", "description", "instructions", "evidence", "status", "revision")
+        for key in ("id", "skillName", "title", "description", "instructions", "evidence", "status", "revision",
+                    "benefit", "confidence", "category", "createdAt", "activationPartial", "evidencePromotion")
     }
 
 
@@ -493,7 +494,8 @@ def workshop_inspect(proposal_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="proposal_unavailable") from error
         return {
             key: proposal.get(key)
-            for key in ("id", "skillName", "title", "description", "instructions", "evidence", "status", "revision")
+            for key in ("id", "skillName", "title", "description", "instructions", "evidence", "status", "revision",
+                        "benefit", "confidence", "category", "createdAt", "activationPartial", "evidencePromotion")
         }
 
 
@@ -530,17 +532,17 @@ def _run_workshop_action(action: _WorkshopAction, request: Request, verb: str) -
 
 
 def _commit_workshop_action(action: _WorkshopAction, actor: str, nonce: str, verb: str) -> dict[str, Any]:
+    if verb not in {"approve", "publish", "reject", "withdraw"}:
+        raise HTTPException(status_code=403, detail="unsupported_workshop_action")
     with _runtime_lease() as (runtime, view):
         context = _route_context(runtime, view)
         _consume_nonce(nonce=nonce, actor=actor, context=context, verb=verb,
                        proposal_id=action.proposal_id, revision=action.revision)
         workshop = SkillWorkshop(runtime)
         try:
-            result = (
-                workshop.approve(action.proposal_id, action.revision)
-                if verb == "approve"
-                else workshop.publish(action.proposal_id, action.revision, view.hermes_home)
-            )
+            method = getattr(workshop, verb)
+            args = (action.proposal_id, action.revision)
+            result = method(*args, view.hermes_home) if verb in {"publish", "withdraw"} else method(*args)
         except Exception as error:
             # Do not expose local paths, evidence, or backend details.
             raise HTTPException(status_code=409, detail="workshop_action_rejected") from error
@@ -553,7 +555,7 @@ def desktop_workshop_action(verb: str, action: _DesktopWorkshopAction, request: 
     actor = _desktop_actor(request)
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(status_code=415, detail="json_required")
-    if verb not in {"approve", "publish"} or action.confirmation != verb:
+    if verb not in {"approve", "publish", "reject", "withdraw"} or action.confirmation != verb:
         raise HTTPException(status_code=403, detail="explicit_confirmation_required")
     return _commit_workshop_action(action, actor, action.nonce, verb)
 
@@ -566,3 +568,28 @@ def workshop_approve(action: _WorkshopAction, request: Request) -> dict[str, Any
 @router.post("/workshop/publish")
 def workshop_publish(action: _WorkshopAction, request: Request) -> dict[str, Any]:
     return _run_workshop_action(action, request, "publish")
+
+
+@router.get("/workshop/{verb}/preview/{proposal_id}")
+def workshop_remove_preview(verb: str, proposal_id: str, revision: str, request: Request) -> dict[str, Any]:
+    """Review rejection or recoverable withdrawal, bound to actor and revision."""
+    if verb not in {"reject", "withdraw"}:
+        raise HTTPException(status_code=404, detail="unsupported_workshop_action")
+    actor = _actor(request)
+    with _runtime_lease() as (runtime, view):
+        review = _review(SkillWorkshop(runtime), proposal_id, revision)
+        nonce = _issue_nonce(actor=actor, context=_route_context(runtime, view), verb=verb,
+                             proposal_id=proposal_id, revision=revision)
+    return {"review": review, "nonce": nonce, "expiresInSeconds": _NONCE_TTL_SECONDS,
+            "warning": "Withdrawal archives only an unchanged PLUR1BUS-generated skill. Manual edits are preserved."
+            if verb == "withdraw" else "Reject this proposal and reserve its name against repeated mining."}
+
+
+@router.post("/workshop/reject")
+def workshop_reject(action: _WorkshopAction, request: Request) -> dict[str, Any]:
+    return _run_workshop_action(action, request, "reject")
+
+
+@router.post("/workshop/withdraw")
+def workshop_withdraw(action: _WorkshopAction, request: Request) -> dict[str, Any]:
+    return _run_workshop_action(action, request, "withdraw")

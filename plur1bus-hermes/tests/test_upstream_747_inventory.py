@@ -13,8 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM_BASE = "c59366f637db5b636c2d822351018b88476f37fb"
 UPSTREAM_HEAD = "8a148c991123be31bc4f99376c8198447d9bb717"
-JS_VERSION = "7.12.47-hermes.0"
-PYTHON_VERSION = "7.12.47"
+JS_VERSION = "7.12.53-hermes.0"
+PYTHON_VERSION = "7.12.53"
+CURRENT_UPSTREAM_HEAD = "a7ea21719ff9249b7318dbe7c6b7d61129dd074d"
 EXPECTED_CHANGED_FILES = {
     "CHANGELOG.md",
     "index.js",
@@ -99,8 +100,8 @@ class Upstream747InventoryTests(unittest.TestCase):
             JS_VERSION,
         )
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn(f"**PLUR1BUS {JS_VERSION} — unpublished", readme)
-        self.assertIn(f"`{UPSTREAM_HEAD}` while retaining the native Hermes", readme)
+        self.assertIn(f"**PLUR1BUS {JS_VERSION}", readme)
+        self.assertIn(f"`{CURRENT_UPSTREAM_HEAD}` while retaining the native Hermes", readme)
 
     def test_active_python_versions_match_candidate(self) -> None:
         """Keep both Python distributions and plugin manifests coherent."""

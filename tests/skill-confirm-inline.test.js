@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
 import { buildSkillReviewPayload } from "../lib/telegram-commands/skill-commands.js";
 import { createConfirmation, validateConfirmation } from "../lib/security.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("skill review confirmations", () => {
   it("binds approve/reject to user and chat and rejects the wrong user", () => {
-    const dir = mkdtempSync(join(tmpdir(), "skill-confirm-"));
+    const dir = makeTempDir("skill-confirm-");
     writeProposal(dir, {
       id: "prop-1",
       skillName: "a-skill",

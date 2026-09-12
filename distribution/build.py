@@ -178,6 +178,9 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
                         "--wheel-dir", str(bundle / "wheels"), str(wheel_source)], check=True)
     for relative in tracked("hermes-dashboard/plur1bus/dashboard/"):
         copy(REPO / relative, bundle / "payload/plugins/plur1bus/dashboard" / relative.split("/dashboard/", 1)[1])
+    # Modern Hermes discovers the unified desktop half from each active
+    # profile's plugin package. Keep the materialized entry for existing hosts.
+    copy(REPO / "hermes-dashboard/plur1bus/desktop/plugin.js", bundle / "payload/plugins/plur1bus/desktop/plugin.js")
     copy(REPO / "hermes-dashboard/plur1bus/desktop/plugin.js", bundle / "payload/desktop-plugins/plur1bus/plugin.js")
     copy(REPO / "scripts/hermes-desktop-host.py", bundle / "helpers/plur1bus-desktop-host.py")
     for relative in tracked("hermes-dashboard/patches/"):

@@ -8,6 +8,7 @@ import {
   registerOpenClawMemoryEmbeddingProviders,
 } from "../lib/providers/openclaw-memory-embedding-adapters.js";
 import { createScopedEmbeddingIpcServer } from "../lib/providers/scoped-embedding-ipc.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const originalFetch = globalThis.fetch;
 const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
@@ -108,7 +109,7 @@ describe("OpenClaw memory embedding provider adapters", () => {
   });
 
   it("keeps a tool-discovery local adapter usable across activation-owner rotation", async () => {
-    const stateRoot = mkdtempSync(join("/tmp", "plur1bus-adapter-ipc-"));
+    const stateRoot = makeTempDir("plur1bus-adapter-ipc-", "/tmp");
     const calls = [];
     const embeddings = {
       model: "intfloat/multilingual-e5-small",

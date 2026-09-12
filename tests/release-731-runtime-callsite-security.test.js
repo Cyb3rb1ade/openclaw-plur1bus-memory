@@ -13,6 +13,7 @@ import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
 import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const EMPTY_ALIASES = Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) });
 const USER_A = "user:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -332,7 +333,7 @@ test("unsupported directory-capability hosts reject explicit shared writes witho
     t.skip("supported hosts exercise the shared-memory integration happy paths below");
     return;
   }
-  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-unsupported-shared-"));
+  const baseDbPath = makeTempDir("release-731-unsupported-shared-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   class UnusedPool {}
   const pool = new SharedMemoryPool(baseDbPath, VECTOR_DIM, UnusedPool);
@@ -353,8 +354,8 @@ test("registered internal REM processes every allowed partition with isolated pr
     t.skip("user/workspace shared partitions require stable fd-backed directory capabilities");
     return;
   }
-  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-rem-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-rem-ws-"));
+  const baseDbPath = makeTempDir("release-731-runtime-rem-db-");
+  const workspaceDir = makeTempDir("release-731-runtime-rem-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
@@ -406,8 +407,8 @@ test("registered internal skill-miner processes every allowed partition without 
     t.skip("user/workspace shared partitions require stable fd-backed directory capabilities");
     return;
   }
-  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-skill-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-skill-ws-"));
+  const baseDbPath = makeTempDir("release-731-runtime-skill-db-");
+  const workspaceDir = makeTempDir("release-731-runtime-skill-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
@@ -469,8 +470,8 @@ test("registered internal skill-miner scans physically isolated workspace shared
     t.skip("shared-memory routing requires stable directory capabilities");
     return;
   }
-  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-shared-skill-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-shared-skill-ws-"));
+  const baseDbPath = makeTempDir("release-731-runtime-shared-skill-db-");
+  const workspaceDir = makeTempDir("release-731-runtime-shared-skill-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
@@ -517,8 +518,8 @@ test("registered internal daily compaction invokes the partition-aware API per a
     t.skip("user/workspace shared partitions require stable fd-backed directory capabilities");
     return;
   }
-  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-ws-"));
+  const baseDbPath = makeTempDir("release-731-runtime-daily-db-");
+  const workspaceDir = makeTempDir("release-731-runtime-daily-ws-");
   t.after(() => {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
@@ -568,7 +569,7 @@ test("REM provider callback receives only the exact workspace partition", async 
   const seen = [];
   const neoStore = {
     aclBindings: partition,
-    paths: { workspaceDir: mkdtempSync(join(tmpdir(), "release-731-rem-store-")) },
+    paths: { workspaceDir: makeTempDir("release-731-rem-store-") },
     hasCompletedRun: () => false,
     readPatterns: () => [],
     appendPatterns: () => {},
@@ -605,7 +606,7 @@ test("REM provider callback receives only the exact workspace partition", async 
 });
 
 test("skill-miner callback receives one authorized partition, not foreign evidence", async (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-skill-callsite-"));
+  const workspaceDir = makeTempDir("release-731-skill-callsite-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const rows = [
     workspaceRow(uuidFor(11), "LOCAL release deployment procedure verification", { category: "workspace_rule" }),

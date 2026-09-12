@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,23 @@ from plur1bus_controls.request_context import RequestIdentity
 
 
 class ControlsTests(unittest.TestCase):
+    def test_controls_resolve_context_home_for_each_profile_request(self) -> None:
+        plugin = Plur1busControlsPlugin()
+        host = SimpleNamespace(get_hermes_home=lambda: Path("/profile/alpha"))
+        with patch.dict(sys.modules, {"hermes_constants": host}):
+            self.assertEqual(plugin._config_path(), Path("/profile/alpha/plugins/plur1bus/config.json"))
+            host.get_hermes_home = lambda: Path("/profile/beta")
+            self.assertEqual(plugin._hermes_home(), Path("/profile/beta"))
+            self.assertEqual(plugin._config_path(), Path("/profile/beta/plugins/plur1bus/config.json"))
+            explicit = Plur1busControlsPlugin({"hermesHome": "/profile/pinned"})
+            self.assertEqual(explicit._hermes_home(), Path("/profile/pinned"))
+
+    def test_controls_standalone_resolves_process_profile(self) -> None:
+        with patch.dict(sys.modules, {"hermes_constants": None}), patch.dict(
+            "os.environ", {"HERMES_HOME": "/profile/standalone"},
+        ):
+            self.assertEqual(Plur1busControlsPlugin()._hermes_home(), Path("/profile/standalone"))
+
     def test_bootstrap_registers_command_and_all_documented_hooks(self) -> None:
         commands = []
         hooks = {}
@@ -146,6 +164,34 @@ class ControlsTests(unittest.TestCase):
             ))
         self.assertTrue(second["approved"])
         workshop_cls.return_value.approve.assert_called_once_with(proposal_id, revision)
+
+    def test_skill_reject_and_withdraw_require_identity_bound_confirmation(self) -> None:
+        runtime = SimpleNamespace(
+            config={}, _domain=SimpleNamespace(),
+            scope_binding=SimpleNamespace(as_dict=lambda: {"scopeType": "agent-private"}),
+            _table=lambda create=False: (None, None),
+        )
+        identity = RequestIdentity("telegram", "user", "chat", "private", "main", True)
+        proposal_id = "11111111-1111-4111-8111-111111111111"
+        revision = "a" * 64
+        for verb in ("reject", "withdraw"):
+            with self.subTest(verb=verb):
+                plugin = Plur1busControlsPlugin({"agentId": "main", "hermesHome": "/bound/profile"})
+                with patch.object(plugin, "_runtime", return_value=runtime), patch(
+                    "plur1bus_controls.plugin.current_identity", return_value=identity,
+                ), patch("plur1bus_controls.plugin.SkillWorkshop") as workshop_cls:
+                    action = getattr(workshop_cls.return_value, verb)
+                    action.return_value = {"status": "ok"}
+                    command = f"skills {verb} {proposal_id} {revision}"
+                    first = json.loads(plugin.handle_command(command))
+                    self.assertEqual(first["status"], "confirmation_required")
+                    action.assert_not_called()
+                    second = json.loads(plugin.handle_command(f"{command} --confirm {first['nonce']}"))
+                    self.assertEqual(second["status"], "ok")
+                    expected = (proposal_id, revision)
+                    if verb == "withdraw":
+                        expected += (Path("/bound/profile"),)
+                    action.assert_called_once_with(*expected)
 
     def test_merge_apply_requires_revision_bound_confirmation(self) -> None:
         runtime = SimpleNamespace(

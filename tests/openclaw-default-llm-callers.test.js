@@ -11,6 +11,7 @@ import { buildRemPartition, runRemDream } from "../lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns } from "../lib/episodes.js";
 import { resolveMemoryRequestContext, userPoolKey, workspacePoolKey } from "../lib/memory-request-context.js";
 import { storeSharedMemory } from "../lib/shared-memory.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const repoSource = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const VECTOR_DIM = 384;
@@ -229,7 +230,7 @@ test("the router seam prefers the call-local scheduler signal", () => {
 });
 
 test("long /memory query uses its session runtime and recall-query owner route", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-owner-query-"));
+  const baseDbPath = makeTempDir("plur1bus-owner-query-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
   LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => makeVector();
@@ -299,7 +300,7 @@ test("long /memory query uses its session runtime and recall-query owner route",
 });
 
 test("exact-limit punctuation-free /memory input stays usable with merging disabled", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-bounded-query-fallback-"));
+  const baseDbPath = makeTempDir("plur1bus-bounded-query-fallback-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
   LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => makeVector();
@@ -333,7 +334,7 @@ test("exact-limit punctuation-free /memory input stays usable with merging disab
 });
 
 test("light dreaming fans out to four distinct owner descriptors", async (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-light-routes-"));
+  const workspaceDir = makeTempDir("plur1bus-light-routes-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const features = [];
   const callLlm = async (_messages, cfg) => {
@@ -374,7 +375,7 @@ test("light dreaming fans out to four distinct owner descriptors", async (t) => 
 });
 
 test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors", async (t) => {
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-rem-routes-"));
+  const workspaceDir = makeTempDir("plur1bus-rem-routes-");
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const now = Date.now();
   const rows = ["a", "b", "c"].map((id) => ({
@@ -504,7 +505,7 @@ test("episode enrichment receives only the episode owner descriptor", async () =
 });
 
 test("tool and auto-recall query summaries carry global agent and scheduler context", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-global-query-routes-"));
+  const baseDbPath = makeTempDir("plur1bus-global-query-routes-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
   const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
@@ -570,7 +571,7 @@ test("verified auto-recall tickets and /memory compose authorized shared pools",
     t.skip("stable directory capabilities are unavailable on this platform; shared pool reads are disabled");
     return;
   }
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-shared-runtime-recall-"));
+  const baseDbPath = makeTempDir("plur1bus-shared-runtime-recall-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
   const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
@@ -693,7 +694,7 @@ test("verified auto-recall tickets and /memory compose authorized shared pools",
 });
 
 test("/correct bounds an oversized canonical replacement before candidate lookup", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-correction-limit-"));
+  const baseDbPath = makeTempDir("plur1bus-correction-limit-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const pluginModule = await loadFreshPlugin();
   let runtimeCalls = 0;
@@ -739,7 +740,7 @@ test("/correct bounds an oversized canonical replacement before candidate lookup
 
 test("capture scheduler abort reaches summary and Emotion without late durable writes", async (t) => {
   for (const scenario of ["capture-summary", "emotion-classification"]) {
-    const baseDbPath = mkdtempSync(join(tmpdir(), `plur1bus-capture-abort-${scenario}-`));
+    const baseDbPath = makeTempDir(`plur1bus-capture-abort-${scenario}-`);
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalEmbedBatch = LocalTransformersEmbeddingProvider.prototype.embedBatch;
@@ -810,7 +811,7 @@ test("capture scheduler abort reaches summary and Emotion without late durable w
 });
 
 test("automatic capture reflection uses the captured workspace context", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-auto-reflection-workspace-"));
+  const baseDbPath = makeTempDir("plur1bus-auto-reflection-workspace-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
   const originalEmbedBatch = LocalTransformersEmbeddingProvider.prototype.embedBatch;
@@ -862,7 +863,7 @@ test("automatic capture reflection uses the captured workspace context", async (
 
 test("recall commit barriers block writes when the runtime ignores abort and succeeds late", async (t) => {
   for (const scenario of ["emotion-classification", "continuity-overlay"]) {
-    const baseDbPath = mkdtempSync(join(tmpdir(), `plur1bus-recall-abort-${scenario}-`));
+    const baseDbPath = makeTempDir(`plur1bus-recall-abort-${scenario}-`);
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
@@ -977,7 +978,7 @@ test("recall commit barriers block writes when the runtime ignores abort and suc
 });
 
 test("continuity overlay contradiction enrichment reuses the recall target set", async (t) => {
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-continuity-overlay-targets-"));
+  const baseDbPath = makeTempDir("plur1bus-continuity-overlay-targets-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
   const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;

@@ -4,7 +4,9 @@
 **New in 7.12.47-hermes.0:** Graphical macOS setup and guided
 all-profiles/activation defaults. Older assets may still stage the terminal
 `.command` launcher.
-This document describes the `7.12.47-hermes.0` release. Portable archives and
+This document describes the current Hermes installer. The intermediate
+`7.12.53-hermes.0` integration is not a release; final packaging is held for
+upstream 7.12.54 or 7.12.55. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.
@@ -15,6 +17,20 @@ No npm installation is needed for the Python Hermes provider. The OpenClaw npm
 package remains a separate distribution; do not install it into Hermes.
 
 ## Choose the right artifact
+
+### Companion skill in the Hermes Skills Hub
+
+The [PLUR1BUS Hermes tap](https://github.com/Cyb3rb1ade/plur1bus-hermes-skills)
+provides installation and diagnostic guidance, not the plugin runtime:
+
+```sh
+hermes skills install Cyb3rb1ade/plur1bus-hermes-skills/skills/plur1bus-hermes
+hermes skills tap add Cyb3rb1ade/plur1bus-hermes-skills
+```
+
+The second command makes the community source searchable in the Hub. Review the
+scan and confirmation prompts. Installing a skill does not activate persistent
+memory or install the native package; select the appropriate package below.
 
 After installation, `plur1bus-hermes-snapshot` provides offline export/verify/
 restore; see [snapshot instructions](docs/hermes-snapshot-restore.md) before use.
@@ -56,7 +72,7 @@ The Windows `.exe` bundles its installer Python, but still uses the explicitly
 selected Hermes venv for the provider. Run the assistant as your normal user.
 Native artifacts are platform-qualified (for example,
 `plur1bus-<version>-windows-arm64-setup-unsigned.exe` and
-`plur1bus-<version>-macos-x86_64-unsigned.pkg`); their accompanying native
+`plur1bus-<version>-macos-arm64.pkg`); their accompanying native
 `.zip` and `.tar.gz` use the same qualifier. Portable builds without a native
 installer flag deliberately retain the unqualified bundle name.
 Package installation does not change ExecutionPolicy, disable antivirus, install
@@ -80,7 +96,18 @@ The new guided defaults are all existing profiles plus activation; no write
 happens just by accepting those defaults. Noninteractive CLI defaults remain
 read-only, default-profile-only, and without activation. Both paths now warn
 when PLUR1BUS is selected but its required plugins are missing/disabled. An
-activated install verifies provider and both plugin allow/deny lists afterward.
+activated install verifies provider, `memory.memory_enabled`, and both plugin
+allow/deny lists afterward. Dashboard backend and the unified Desktop
+contribution are included in a normal backend installation.
+
+Hermes treats its materialized Desktop frontend as app-wide. A named-profile
+upgrade may therefore also refresh an **existing** shared root Desktop entry and
+existing default unified UI, without installing/activating the default backend.
+These frontend-only paths are explicitly listed under `sharedDesktop` in the
+installation plan and participate in its backup/rollback transaction. An existing
+host materialization marker is retired recoverably so the host does not recreate
+the whole directory on restart and remove its other files. Profile configuration,
+provider/model selection and memory data remain restricted to the selected profiles.
 Native Windows normally uses `%LOCALAPPDATA%\hermes`; Linux/macOS/WSL use
 `~/.hermes`. `HERMES_HOME` is suggested but never silently applied.
 Hermes environments created by `uv` may omit `pip`. The preview uses Python's

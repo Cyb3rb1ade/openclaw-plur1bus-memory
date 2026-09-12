@@ -252,10 +252,11 @@ def activation_status(config):
     if not isinstance(enabled, list) or not isinstance(disabled, list) or not all(isinstance(v, str) for v in enabled + disabled):
         raise ValueError("invalid plugin allow/deny lists")
     provider = memory.get("provider") == "plur1bus"
+    memory_enabled = memory.get("memory_enabled", True) is True
     missing = sorted({"plur1bus", "plur1bus-controls"} - (set(enabled) - set(disabled)))
-    return {"providerSelected": provider, "missingPlugins": missing,
-            "active": provider and not missing,
-            "inconsistent": provider and bool(missing)}
+    return {"providerSelected": provider, "memoryEnabled": memory_enabled, "missingPlugins": missing,
+            "active": provider and memory_enabled and not missing,
+            "inconsistent": provider and (not memory_enabled or bool(missing))}
 
 
 def inspect_profiles(home, python=None):
@@ -271,6 +272,83 @@ def inspect_profiles(home, python=None):
             raise ValueError("invalid Hermes config mapping")
         rows.append({"name": name, **activation_status(config)})
     return {"home": str(home), "python": str(python), "profiles": rows}
+
+
+def shared_desktop_updates(bundle, home, selected, manifest, desktop_only=False):
+    """Refresh existing app-wide UI without installing an unselected backend."""
+    unified = "plugins/plur1bus/desktop/plugin.js"
+    materialized = "desktop-plugins/plur1bus/plugin.js"
+    incoming = {}
+    def source_bytes():
+        key = "payload/" + materialized
+        if key not in manifest["files"]:
+            raise ValueError("verified desktop entry is required for shared UI updates")
+        return resolve_inside(bundle, key).read_bytes()
+    if "default" not in selected:
+        directory = home / "desktop-plugins/plur1bus"
+        if directory.exists() or redirected(directory):
+            directory = resolve_inside(home, "desktop-plugins/plur1bus")
+            if not directory.is_dir():
+                raise ValueError("shared desktop destination is not a directory")
+            incoming[materialized] = source_bytes()
+    if "default" not in selected or desktop_only:
+        path = home / unified
+        if path.exists() or redirected(path):
+            path = resolve_inside(home, unified)
+            if not path.is_file():
+                raise ValueError("shared desktop source is not a regular file")
+            incoming[unified] = source_bytes()
+    # Our distribution owns standalone desktop entries. Archive host-generated
+    # materialization markers so reconciliation cannot recursively replace the
+    # refreshed directory and discard local sibling files on the next launch.
+    marker_homes = dict(selected)
+    if materialized in incoming:
+        marker_homes["default"] = home
+    for name, target in marker_homes.items():
+        relative = "desktop-plugins/plur1bus/.hermes-package.json"
+        marker = target / relative
+        if marker.exists() or redirected(marker):
+            marker = resolve_inside(target, relative)
+            if not marker.is_file():
+                raise ValueError("desktop materialization marker is not a regular file")
+            prefix = "" if name == "default" else "profiles/" + name + "/"
+            incoming[prefix + relative] = None
+    if not incoming:
+        return incoming
+    for relative in incoming:
+        path = resolve_inside(home, relative)
+        if path.exists() and not path.is_file():
+            raise ValueError("shared desktop destination is not a regular file")
+    hashes = {relative: digest(data) if data is not None else None for relative, data in incoming.items()
+              if not relative.startswith("profiles/")}
+    if not hashes:
+        return incoming
+    if "default" in selected:
+        hashes[materialized] = digest(source_bytes())
+        if not desktop_only and "payload/" + unified in manifest["files"]:
+            hashes[unified] = manifest["files"]["payload/" + unified]
+    for receipt_name in (RECEIPT, DESKTOP_RECEIPT):
+        if "default" in selected and receipt_name == (DESKTOP_RECEIPT if desktop_only else RECEIPT):
+            continue
+        receipt = resolve_inside(home, receipt_name)
+        if not receipt.exists():
+            continue
+        previous = json.loads(receipt.read_text(encoding="utf-8"))
+        if not isinstance(previous, dict) or not isinstance(previous.get("files"), dict):
+            raise ValueError("invalid shared desktop installation receipt")
+        if not all(managed(relative) for relative in previous["files"]):
+            raise ValueError("invalid shared desktop installation receipt")
+        if tuple(map(int, re.findall(r"\d+", previous.get("version", "0")))) > tuple(map(int, re.findall(r"\d+", manifest["version"]))):
+            raise ValueError("shared desktop downgrade refused")
+        updated = {relative: value for relative, value in hashes.items() if relative in previous["files"]}
+        if updated:
+            for relative, value in updated.items():
+                if value is None:
+                    previous["files"].pop(relative, None)
+                else:
+                    previous["files"][relative] = value
+            incoming[receipt_name] = json.dumps(previous, indent=2).encode()
+    return incoming
 
 
 def plan_install(bundle, home, profiles=None, python=None, activate=False, dependencies=True, desktop_only=False):
@@ -296,6 +374,12 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
         payload = {key: value for key, value in payload.items() if key.startswith("desktop-plugins/plur1bus/")}
     if not payload or not all(managed(name) for name in payload):
         raise ValueError("invalid plugin payload")
+    shared_updates = shared_desktop_updates(bundle, home, selected, manifest, desktop_only)
+    shared_desktop = {
+        relative: {"before": digest(resolve_inside(home, relative).read_bytes()) if resolve_inside(home, relative).exists() else None,
+                   "after": digest(data) if data is not None else None}
+        for relative, data in shared_updates.items()
+    }
     wheels = sorted(key for key in manifest["files"] if key.startswith("wheels/") and key.endswith(".whl"))
     if len(wheels) != 2:
         raise ValueError("both Python wheels are required")
@@ -331,7 +415,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
                 raise ValueError("invalid Hermes config mapping")
             profile_status[name] = activation_status(config)
             if not activate and profile_status[name]["inconsistent"]:
-                warnings.append(f"{name}: PLUR1BUS is selected but required plugins are disabled/missing; dashboard or controls may be unavailable. Re-run with --activate to repair.")
+                warnings.append(f"{name}: PLUR1BUS is selected but memory or required plugins are disabled/missing; memory, dashboard or controls may be unavailable. Re-run with --activate to repair.")
             elif not activate and not profile_status[name]["active"]:
                 warnings.append(f"{name}: files will be installed WITHOUT activating PLUR1BUS. Use --activate to enable it.")
         receipt = resolve_inside(target, DESKTOP_RECEIPT if desktop_only else RECEIPT)
@@ -353,9 +437,10 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
               "desktopOnly": desktop_only,
               "profiles": list(selected), "activate": activate, "dependencies": dependencies,
               "profileStatus": profile_status, "warnings": warnings,
+              "sharedDesktop": shared_desktop,
               "configs": configs, "receipts": receipts, "destinations": destinations, "wheels": wheels,
               "nativeWheels": native_wheels, "torch": torch,
-              "effects": "Install Python wheels into selected Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile writes. File rollback does not roll back pip dependencies."}
+              "effects": "Install Python wheels into selected Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile configuration/backend writes. File rollback does not roll back pip dependencies."}
     if not desktop_only:
         environment = environment_state(python)
         if not environment["pipAvailable"] and not environment["ensurepipAvailable"]:
@@ -370,6 +455,9 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             result["effects"] += " Existing Torch is preserved and constrained against replacement during dependency resolution."
     else:
         result["effects"] = "Install desktop frontend only. No Python, backend, model, provider configuration or host patch changes."
+    if shared_desktop:
+        result["effects"] += " Also refresh existing app-wide Desktop entries and existing default unified UI; their receipt hashes, backups and rollback are included under sharedDesktop."
+        result["effects"] += " Existing Hermes materialization markers are archived so these standalone installer-owned Desktop entries retain local sibling files on restart."
     # A frozen one-file executable extracts into a different directory per run.
     # Bind to verified content, not that ephemeral extraction path.
     result["confirmation"] = digest(json.dumps({k: v for k, v in result.items() if k != "bundle"}, sort_keys=True).encode())
@@ -400,7 +488,7 @@ def apply_install(plan, confirmation, stopped=False):
         atomic_write(transaction / "plan.json", json.dumps(plan, indent=2).encode())
         selected = targets(home, plan["profiles"], plan["desktopOnly"])
         manifest = verify_bundle(bundle)
-        incoming = {}
+        incoming = shared_desktop_updates(bundle, home, selected, manifest, plan["desktopOnly"])
         for name, target in selected.items():
             prefix = "" if name == "default" else "profiles/" + name + "/"
             receipt_files = {}
@@ -427,6 +515,7 @@ def apply_install(plan, confirmation, stopped=False):
                 if not isinstance(enabled, list) or not isinstance(disabled, list) or not all(isinstance(v, str) for v in enabled + disabled):
                     raise ValueError("invalid plugin allow/deny lists")
                 memory["provider"] = "plur1bus"
+                memory["memory_enabled"] = True
                 plugins["enabled"] = sorted(set(enabled) | {"plur1bus", "plur1bus-controls"})
                 plugins["disabled"] = [v for v in disabled if v not in {"plur1bus", "plur1bus-controls"}]
                 incoming[prefix + "config.yaml"] = config_bytes(plan["python"], config)
@@ -437,6 +526,10 @@ def apply_install(plan, confirmation, stopped=False):
             if old is not None:
                 atomic_write(resolve_inside(transaction, "before/" + relative), old)
             journal["files"][relative] = {"before": digest(old) if old is not None else None, "after": digest(data) if data is not None else None}
+            if old is not None and relative.endswith("plugins/plur1bus/desktop/plugin.js"):
+                # Restoring a host marker also restores the source timestamp it
+                # refers to, so rollback cannot trigger a destructive recopy.
+                journal["files"][relative]["beforeMtimeNs"] = destination.stat().st_mtime_ns
         record()
         # Pip changes are intentionally separate from the file transaction and
         # recorded honestly; restoring files cannot undo an environment resolver.
@@ -563,6 +656,8 @@ def rollback(home, transaction, confirmation=None, stopped=False):
             raise ValueError("file changed since installation; manual merge required: " + relative)
         if item["before"] is not None and digest(resolve_inside(backup, "before/" + relative).read_bytes()) != item["before"]:
             raise ValueError("backup checksum mismatch")
+        if "beforeMtimeNs" in item and (not isinstance(item["beforeMtimeNs"], int) or isinstance(item["beforeMtimeNs"], bool)):
+            raise ValueError("invalid backup source timestamp")
         current[relative] = sha
     token = digest(raw + json.dumps(current, sort_keys=True).encode())
     if confirmation is None:
@@ -578,6 +673,8 @@ def rollback(home, transaction, confirmation=None, stopped=False):
             destination = resolve_inside(home, relative)
             if item["before"] is not None:
                 atomic_write(destination, resolve_inside(backup, "before/" + relative).read_bytes())
+                if "beforeMtimeNs" in item:
+                    os.utime(destination, ns=(item["beforeMtimeNs"], item["beforeMtimeNs"]))
             elif destination.exists():
                 # Recoverable removal, never recursively delete an installed tree.
                 removed = resolve_inside(backup, "removed/" + relative)

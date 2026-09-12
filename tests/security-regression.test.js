@@ -18,6 +18,7 @@ import { isAuthorized, resolveChatKind, createConfirmation, validateConfirmation
 import { parseFilters, buildWhereClause } from "../lib/filter-parser.js";
 import { safeAgentId, resolveInside } from "../lib/sql-safety.js";
 import { archiveCard } from "../lib/telegram-commands/memory-edit.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("Auth: private DM vs group chat (no ACL)", () => {
   it("allows destructive in private DM", () => {
@@ -145,7 +146,7 @@ describe("Path handling", () => {
   let tmpDir;
 
   it("setup temp dir", () => {
-    tmpDir = mkdtempSync(join(tmpdir(), "sec-reg-"));
+    tmpDir = makeTempDir("sec-reg-");
   });
 
   it("rejects path traversal in agentId", () => {

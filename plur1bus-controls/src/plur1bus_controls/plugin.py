@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 import asyncio
 import json
+import os
 import logging
 import weakref
 from pathlib import Path
@@ -586,7 +587,7 @@ class Plur1busControlsPlugin:
             )
             mutating_command = mutating_command or (
                 command == "skills" and bool(arguments)
-                and arguments[0] in {"mine", "approve", "publish"}
+                and arguments[0] in {"mine", "approve", "publish", "reject", "withdraw", "benefit-backfill"}
             )
             if mutating_command and not is_mutation_authorized(
                 runtime.config, current_identity()
@@ -612,7 +613,7 @@ class Plur1busControlsPlugin:
             )
             requires_confirmation = requires_confirmation or (
                 command == "skills" and bool(arguments)
-                and arguments[0] in {"approve", "publish"}
+                and arguments[0] in {"approve", "publish", "reject", "withdraw"}
             )
             requires_confirmation = requires_confirmation or (
                 command in {"knowledge", "persona", "merge"} and bool(arguments)
@@ -1035,7 +1036,14 @@ class Plur1busControlsPlugin:
                     return json.dumps({"proposals": workshop.list()}, ensure_ascii=False, indent=2)
                 action = arguments[0]
                 if action == "mine" and len(arguments) == 1:
-                    return json.dumps(workshop.mine(), ensure_ascii=False, indent=2)
+                    return json.dumps(workshop.mine(hermes_home=self._hermes_home()), ensure_ascii=False, indent=2)
+                if action == "benefit-backfill" and len(arguments) in {1, 2}:
+                    limit = int(arguments[1]) if len(arguments) == 2 else 25
+                    return json.dumps(workshop.backfill_benefits(limit=limit), ensure_ascii=False, indent=2)
+                if action == "reject" and len(arguments) == 3:
+                    return json.dumps(workshop.reject(arguments[1], arguments[2]), ensure_ascii=False, indent=2)
+                if action == "withdraw" and len(arguments) == 3:
+                    return json.dumps(workshop.withdraw(arguments[1], arguments[2], self._hermes_home()), ensure_ascii=False, indent=2)
                 if action == "show" and len(arguments) == 2:
                     return json.dumps(workshop.inspect(arguments[1]), ensure_ascii=False, indent=2)
                 if action == "approve" and len(arguments) == 3:
@@ -1047,13 +1055,14 @@ class Plur1busControlsPlugin:
                     return json.dumps(
                         workshop.publish(
                             arguments[1], arguments[2],
-                            Path(str(self.config.get("hermesHome") or Path.home() / ".hermes")),
+                            self._hermes_home(),
                         ),
                         ensure_ascii=False, indent=2,
                     )
                 return (
                     "Usage: /plur1bus skills [--agent ID] list|mine|show PROPOSAL_ID|"
-                    "approve PROPOSAL_ID REVISION|publish PROPOSAL_ID REVISION"
+                    "approve PROPOSAL_ID REVISION|publish PROPOSAL_ID REVISION|"
+                    "reject PROPOSAL_ID REVISION|withdraw PROPOSAL_ID REVISION|benefit-backfill [LIMIT]"
                 )
             if command == "jobs":
                 if table is None:
@@ -1084,8 +1093,25 @@ class Plur1busControlsPlugin:
         PLUR1BUS_CONTROLS_CONTAINER.put("last_bootstrap_at", _utcnow())
         PLUR1BUS_CONTROLS_CONTAINER.put("commands", self.commands)
 
+    def _hermes_home(self) -> Path:
+        """Resolve the request-local host profile, never cache a multiplexed home."""
+        explicit = self.config.get("hermesHome")
+        if explicit:
+            return Path(str(explicit)).expanduser()
+        try:
+            from hermes_constants import get_hermes_home
+        except ImportError:
+            # Standalone commands and older hosts use the process profile.
+            process_home = os.environ.get("HERMES_HOME")
+            if process_home:
+                return Path(process_home).expanduser()
+            if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+                return Path(os.environ["LOCALAPPDATA"]) / "hermes"
+            return Path.home() / ".hermes"
+        return Path(get_hermes_home()).expanduser()
+
     def _runtime(self, agent: str, identity: RequestIdentity | None = None) -> Plur1busRuntime:
-        hermes_home = Path(str(self.config.get("hermesHome") or Path.home() / ".hermes")).expanduser()
+        hermes_home = self._hermes_home()
         config_path = self._config_path()
         try:
             provider_config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -1101,9 +1127,7 @@ class Plur1busControlsPlugin:
 
     def _config_path(self) -> Path:
         """Return the one authoritative provider config path."""
-        hermes_home = Path(
-            str(self.config.get("hermesHome") or Path.home() / ".hermes")
-        ).expanduser()
+        hermes_home = self._hermes_home()
         return hermes_home / "plugins" / "plur1bus" / "config.json"
 
     def _agent_and_arguments(self, tokens: list[str]) -> tuple[str, list[str]]:
@@ -1116,7 +1140,7 @@ class Plur1busControlsPlugin:
             agent = arguments[index + 1]
             del arguments[index:index + 2]
         if not agent:
-            hermes_home = Path(str(self.config.get("hermesHome") or Path.home() / ".hermes")).expanduser()
+            hermes_home = self._hermes_home()
             try:
                 provider_config = json.loads((hermes_home / "plugins" / "plur1bus" / "config.json").read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):

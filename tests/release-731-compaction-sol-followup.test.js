@@ -13,6 +13,7 @@ import { describe, it } from "node:test";
 
 import { createNeoStore } from "../lib/neo-arch.js";
 import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const EMPTY_ALIASES = Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) });
 const USER_A = "user:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -44,7 +45,7 @@ const USER_PARTITION = Object.freeze({
 });
 
 function tempDir(t, prefix) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = makeTempDir(prefix);
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

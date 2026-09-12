@@ -19,6 +19,7 @@ import { describe, it } from "node:test";
 
 import { collectActiveMemories } from "../lib/jobs/gc-job.js";
 import { archiveMemories, selectCandidatesForGc } from "../lib/garbage-collector.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 8;
 const AGENT = "gc-scan-agent";
@@ -28,7 +29,7 @@ async function loadFreshPlugin() {
 }
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "gc-superseded-"));
+  const dir = makeTempDir("gc-superseded-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

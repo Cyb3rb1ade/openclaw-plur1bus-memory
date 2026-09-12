@@ -10,6 +10,7 @@ import {
   guardWorkspaceTools,
   workspaceDisabledResult,
 } from "../lib/workspace-policy-guard.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const context = Object.freeze({
   agentId: "agent-a",
@@ -19,7 +20,7 @@ const context = Object.freeze({
 function harness() {
   const invalidations = [];
   const store = createWorkspacePolicyStore({
-    stateRoot: mkdtempSync(join(tmpdir(), "plur1bus-workspace-guard-")),
+    stateRoot: makeTempDir("plur1bus-workspace-guard-"),
     now: () => 1234,
   });
   const guard = createWorkspacePolicyGuard({

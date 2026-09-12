@@ -1,7 +1,7 @@
 import React from 'react';
 import * as sdk from '@hermes/plugin-sdk';
 // Optional newer exports must not prevent the diagnostic/fallback from loading.
-const { host, useValue, STATUSBAR_AREAS, PALETTE_AREA, SIDEBAR_NAV_AREA } = sdk;
+const { host, useValue, STATUSBAR_AREAS, PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA } = sdk;
 
 /** Read-only startup check; source patch presence is never inferred from an API name.
  * @param {object} runtime Hermes SDK host.
@@ -319,10 +319,11 @@ function Workshop({ rest, proposals, error, loading, refresh }) {
     } });
     if (!result || result.stale) return;
     setBusy(false); setReview(null);
-    setNotice(result.error ? 'Aktion nicht bestätigt. Nicht automatisch wiederholt; Zustand aktualisieren und erneut prüfen.' : 'Workshop-Aktion erfolgreich.');
+    setNotice(result.error ? 'Aktion nicht bestätigt. Nicht automatisch wiederholt; Zustand aktualisieren und erneut prüfen.'
+      : result.value?.activationPartial ? 'Skill veröffentlicht; Belegbestätigung noch unvollständig. „Freigabe abschließen“ erneut prüfen.' : 'Workshop-Aktion erfolgreich.');
     refresh();
   }
-  return h('section', null, h('h2', null, 'Skill Workshop'),
+  return h('section', null, h('h2', null, 'Skill Workshop · Mined Skills'),
     h('p', null, capable ? 'Vorschläge prüfen und anschließend ausdrücklich freigeben oder als Hermes-Skill veröffentlichen.'
       : 'Lesende Ansicht. Für Aktionen wird der aktualisierte Backendteil und die native Hermes-Authentifizierung benötigt.'),
     error ? h('p', { role: 'alert' }, error) : null,
@@ -331,17 +332,25 @@ function Workshop({ rest, proposals, error, loading, refresh }) {
     h('ul', null, proposals.map((p, index) => h('li', { key: `${p.id}-${index}` },
       h('strong', null, String(p.title || p.skillName || 'Unbenannter Vorschlag')),
       h('small', null, `Status: ${p.status || 'unbekannt'} · Revision: ${String(p.revision || '').slice(0, 12)}`),
+      h('small', null, `Kategorie: ${p.category || '—'} · Konfidenz: ${p.confidence ?? '—'} · Belege: ${p.evidenceCount || 0}`),
+      p.benefit ? h('p', null, String(p.benefit).slice(0, 500)) : null,
+      p.createdAt ? h('small', null, `Gefunden: ${String(p.createdAt).slice(0, 10)}`) : null,
       h('div', { className: 'pb-actions' },
         h('button', { disabled: busy, onClick: () => { void inspect(p, null); } }, 'Ansehen'),
-        h('button', { disabled: busy || !capable, onClick: () => { void inspect(p, 'approve'); } }, 'Freigabe prüfen'),
-        h('button', { disabled: busy || !capable, onClick: () => { void inspect(p, 'publish'); } }, 'Veröffentlichung prüfen'))))),
+        p.status === 'pending_review' ? h('button', { disabled: busy || !capable, onClick: () => { void inspect(p, 'approve'); } }, 'Freigabe prüfen') : null,
+        p.status === 'approved' || p.activationPartial ? h('button', { disabled: busy || !capable, onClick: () => { void inspect(p, 'publish'); } }, p.activationPartial ? 'Freigabe abschließen' : 'Veröffentlichung prüfen') : null,
+        ['pending_review', 'approved'].includes(p.status) ? h('button', { disabled: busy || !capable, onClick: () => { void inspect(p, 'reject'); } }, 'Ablehnen') : null,
+        p.status === 'published' ? h('button', { disabled: busy || !capable, onClick: () => { void inspect(p, 'withdraw'); } }, 'Zurückziehen') : null)))),
     review ? h('div', { className: 'pb-review' }, h('h3', null, review.proposal.title),
       review.verb === 'publish' ? h('p', { role: 'alert' }, 'Achtung: Dieser Skill wird profilweit sichtbar, auch für andere Agenten dieses Hermes-Profils. PLUR1BUS-ACLs schützen den veröffentlichten Skill nicht.') : null,
       h('p', null, review.proposal.description), h('pre', null, review.proposal.instructions),
+      review.proposal.benefit ? h('p', null, review.proposal.benefit) : null,
+      review.warning ? h('p', { role: 'alert' }, review.warning) : null,
       h('p', null, `Evidenz: ${review.proposal.evidence?.length || 0} Datensätze · Revision: ${review.proposal.revision}`),
       h('div', { className: 'pb-actions' }, h('button', { disabled: busy, onClick: () => setReview(null) }, 'Schließen'),
         review.verb ? h('button', { disabled: busy, onClick: () => { void confirm(); } }, busy ? 'Wird übermittelt…'
-          : review.verb === 'publish' ? 'Profilweite Veröffentlichung bestätigen' : 'Freigabe bestätigen') : null)) : null);
+          : ({ publish: 'Profilweite Veröffentlichung bestätigen', approve: 'Freigabe bestätigen',
+            reject: 'Ablehnung bestätigen', withdraw: 'Rücknahme bestätigen' })[review.verb]) : null)) : null);
 }
 const css = `
 .plur1bus-desktop{padding:24px;max-width:1200px;width:100%;height:100%;overflow:auto;margin:0 auto;color:var(--foreground);font:inherit}
@@ -561,13 +570,13 @@ export function createNavigationVisibility(probe, current, show) {
     async refresh() {
       if (disposed) return;
       const identity = current(), turn = ++sequence;
-      if (owner !== identity) { owner = identity; show(known.get(identity) === true); }
+      if (owner !== identity) { owner = identity; show(known.get(identity) !== false); }
       let enabled;
       try { enabled = await probe(); } catch { enabled = null; }
       if (disposed || turn !== sequence || current() !== identity) return;
       if (typeof enabled === 'boolean') known.set(identity, enabled);
       // A temporary connection failure must not erase a verified menu entry.
-      show(known.get(identity) === true);
+      show(known.get(identity) !== false);
     },
     dispose() { disposed = true; sequence++; show(false); },
   };
@@ -607,8 +616,13 @@ export default {
         else host.notify?.({ kind: 'error', message: 'Hermes Workspace-API fehlt. Hermes aktualisieren oder scripts/hermes-desktop-host.py aus dem PLUR1BUS-Paket verwenden.' });
       } } }]);
     ctx.onDispose(() => { removeHelp(); closeHelp?.(); });
-    // Retire our old experimental route, which Hermes can mistake for a chat.
-    if (typeof window !== 'undefined' && window.location.hash === '#/plur1bus') host.navigate('/');
+    // Current Hermes sidebar navigation requires an actual route and path.
+    // Older hosts retain the workspace callback when route contributions are absent.
+    if (ROUTES_AREA) {
+      const removeRoute = ctx.registerMany([{ id: 'page', area: ROUTES_AREA,
+        data: { path: '/plur1bus' }, render: () => h(Page) }]);
+      ctx.onDispose(() => { removeRoute(); });
+    }
     let removeNavigation = null;
     const notified = new Set();
     const visibility = createNavigationVisibility(async () => {
@@ -624,7 +638,8 @@ export default {
       if (removeNavigation) return;
       removeNavigation = ctx.registerMany([
       ...(SIDEBAR_NAV_AREA ? [{ id: 'sidebar-open', area: SIDEBAR_NAV_AREA, order: 55,
-        data: { codicon: 'database', label: 'PLUR1BUS', onSelect: open } }] : []),
+        data: { codicon: 'database', label: 'PLUR1BUS',
+          ...(ROUTES_AREA ? { path: '/plur1bus' } : { onSelect: open }) } }] : []),
       { id: 'open-button', area: STATUSBAR_AREAS.left, order: 55,
         data: { id: 'plur1bus-open', variant: 'action', label: 'PLUR1BUS', disabled: !supported, onSelect: open,
           title: supported ? 'PLUR1BUS als Workspace öffnen' : 'Hermes Desktop mit openWorkspace-Unterstützung erforderlich' } },

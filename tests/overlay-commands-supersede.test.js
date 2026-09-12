@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runOverlayAuditCommand } from "../lib/overlay-commands.js";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("supersede-overlay command", () => {
   it("supersedes an overlay and returns ok", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "plur1bus-cmd-super-"));
+    const dir = makeTempDir("plur1bus-cmd-super-");
     try {
       const store = new InterpretationOverlayStore(dir);
       await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Old", triggerContext: "a" });

@@ -6,10 +6,11 @@ import { join } from "node:path";
 import { MemoryDoctor } from "../lib/memory-doctor.js";
 import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
 import { ContradictionDetector } from "../lib/contradiction-detector.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("MemoryDoctor", () => {
   function tmpDir() {
-    return mkdtempSync(join(tmpdir(), "plur1bus-doctor-"));
+    return makeTempDir("plur1bus-doctor-");
   }
 
   it("summarize reports zero state for an empty workspace", async () => {

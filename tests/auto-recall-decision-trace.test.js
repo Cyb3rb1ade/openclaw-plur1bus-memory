@@ -15,6 +15,7 @@ import {
 } from "../lib/recall-decision-trace.js";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -46,7 +47,7 @@ describe("auto-recall-decision-trace", () => {
   };
 
   function makeLensDir(memories, communities) {
-    const dir = mkdtempSync(join(tmpdir(), "crr-trace-"));
+    const dir = makeTempDir("crr-trace-");
     mkdirSync(join(dir, ".plur1bus"), { recursive: true });
     writeFileSync(
       join(dir, ".plur1bus", "semantic-lens-index.json"),
@@ -196,7 +197,7 @@ describe("auto-recall decision trace integration", () => {
   let originalEmbedQuery;
 
   before(async () => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-auto-trace-"));
+    basePath = makeTempDir("plur1bus-auto-trace-");
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
   });
@@ -321,7 +322,7 @@ describe("auto-recall decision trace integration", () => {
 
   it("before_prompt_build preserves known valid-time bounds on Semantic Lens projection", async () => {
     const agentId = `${AGENT_PREFIX}-semantic-lens-valid-time`;
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-semantic-lens-valid-time-"));
+    const workspaceDir = makeTempDir("plur1bus-semantic-lens-valid-time-");
     mkdirSync(join(workspaceDir, ".plur1bus"), { recursive: true });
     writeFileSync(join(workspaceDir, ".plur1bus", "semantic-lens-index.json"), JSON.stringify({
       version: 1,

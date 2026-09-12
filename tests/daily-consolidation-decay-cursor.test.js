@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readDynamicsDecayCursor, recordDynamicsDecayCursor } from "../lib/jobs/daily-consolidation.js";
 import { applyDailyDecayToAll } from "../lib/jobs/memory-dynamics-maintenance.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function fakeNeoStore() {
   const hooks = {};
@@ -32,7 +33,7 @@ describe("7.12.46: Decay-Cursor lebt im partitionseigenen Neo-Store", () => {
   });
 
   it("faellt ohne Store auf run-state.json zurueck und schreibt bei Store UND Datei beides", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "decay-cursor-"));
+    const dir = makeTempDir("decay-cursor-");
     const statePath = join(dir, "run-state.json");
     assert.equal(readDynamicsDecayCursor(statePath, "main", "workspace", null, null), null);
     await recordDynamicsDecayCursor(statePath, "main", "workspace", "dddd-4", null);

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { resolveHostCommandMemoryContext } from "../lib/memory-request-context.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -44,7 +45,7 @@ const base = {
  */
 describe("conversation principal and the persisted session entry", () => {
   function resolver(t, resolveSessionEntry) {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-persisted-session-"));
+    const workspaceDir = makeTempDir("plur1bus-persisted-session-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     return (ctx) => resolveHostCommandMemoryContext(ctx, {
       resolveAgentWorkspaceDir: async () => workspaceDir,
