@@ -119,4 +119,33 @@ describe("7.12.52: Belegbestätigung nach Auto-Apply", () => {
     assert.deepEqual(transitions, [], "kein erneuter Versuch des illegalen Übergangs");
     assert.equal(readProposals(dir)[0].activation.evidence[UUID_A].reason, "skipped");
   });
+
+  it("7.12.53: ein unvollständiger Datensatz wird beim zweiten Versuch fertig", async (t) => {
+    const dir = makeTempDir("evidence-retry-");
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const REVISION = "c".repeat(64);
+    writeProposal(dir, {
+      id: ID,
+      skillName: "weekly-deploy",
+      skillTitle: "Weekly Deploy",
+      status: "activation_partial",
+      evidence: { memoryIds: [UUID_A] },
+      openClawWorkshop: { proposalId: "weekly-deploy-1", revisionHash: REVISION, status: "applied" },
+      activation: { skillPath: "", evidence: { [UUID_A]: { ok: false, reason: "acl_or_missing" } } },
+    });
+    const transitions = [];
+    const result = await activateSkillProposal(dir, ID, {
+      agentId: "agent-a",
+      ...context({ [UUID_A]: { id: UUID_A, epistemicStatus: "observed" } }, { tier: "system:skill-workshop", transitions }),
+      skillWorkshop: {
+        async inspectProposal() {
+          return { proposalId: "weekly-deploy-1", revisionHash: REVISION, status: "applied", skillName: "weekly-deploy" };
+        },
+        async applyProposal() { throw new Error("darf nicht erneut anwenden"); },
+      },
+    });
+    assert.equal(result.status, "active", "der zweite Versuch zieht die Belege nach");
+    assert.deepEqual(transitions, [[UUID_A, "corroborated"]]);
+    assert.equal(readProposals(dir)[0].status, "active");
+  });
 });

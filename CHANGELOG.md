@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.53] — 2026-09-12
+
+### Behoben
+
+- **„Freigabe abschließen" bewirkte nichts.** Eine Abkürzung in
+  `activateSkillProposal` fängt den Fall ab, dass der Lebenszyklus-Hook
+  während des laufenden `apply`-Aufrufs schon synchronisiert hat. Sie griff
+  aber auch für `activation_partial`, sodass jeder zweite Versuch zurückkehrte,
+  bevor die Belegschleife lief: weder der Knopf im Dashboard noch ein erneutes
+  `/plur1bus skills approve` konnten einen unvollständigen Datensatz je fertig
+  machen. Nur ein vollständig aktiver Datensatz nimmt die Abkürzung jetzt.
+
+
 ## [7.12.52] — 2026-09-12
 
 ### Behoben
