@@ -24,6 +24,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `docs/audits/hermes-7.12.55-delta-review.md`.
 - Begleitende Anleitung als Community-Tap für den Hermes Skills Hub:
   `Cyb3rb1ade/plur1bus-hermes-skills`. Sie ersetzt keine Plugininstallation.
+- Unabhängiges Review: profilübergreifenden UI-Downgrade und wartende optionale
+  Diagnose-Sperre behoben; OpenClaw-Episodenidentität und sichere Fehlerdiagnose
+  zusätzlich korrigiert und als Upstream-PR #151 eingereicht.
 
 ### Hermes 7.12.47-hermes.0 — release
 

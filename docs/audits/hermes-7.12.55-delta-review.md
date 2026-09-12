@@ -74,14 +74,22 @@ Independent review also reproduced three defects in the upstream .55 changes:
 an all-covered episode retry can replace the persisted open-episode identity,
 the opt-in diagnostic sink redacts `message` but not `name`/`code`, and a throwing
 foreign `message` getter can escape the model router's fail-soft error path.
-The release requires regression-tested fixes for these defects; the upstream PR
-and exact incorporated fix commit are recorded in the final release receipt.
+Regression-tested fixes are incorporated from commit
+`94484bf84ad822c3c4aa00e2f2a8807a347a6af7`, submitted as
+[upstream PR #151](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/pull/151).
 The native episode path uses content-bound append-only derived receipts and does
 not share the OpenClaw open-episode state machine.
 
-The installer review additionally checks shared UI downgrade prevention across
-disjoint profile selections: updating one profile must not allow a later older
-bundle for a different profile to replace the app-wide UI with older bytes.
+The installer review additionally fixed shared UI downgrade prevention across
+disjoint profile selections. A separate rollback-bound shared UI receipt prevents
+this installer from replacing a newer app-wide UI while installing an older bundle
+for another profile; it does not falsify the unselected backend's version.
+Already shipped older installer binaries cannot be retroactively changed.
+
+Independent native diagnostic review also removed a waiting thread mutex: a busy
+diagnostic writer now skips only the optional record, without delaying another
+model failure fallback. Real Windows ACL/reparse/rotation tests run in the Windows
+matrix rather than being represented by POSIX tests or mock-only evidence.
 
 The .53 integration's final local gates were 967 Python tests plus 135 subtests,
 4,640 Node passes with 76 conditional skips, and 30 dashboard tests. Those are
