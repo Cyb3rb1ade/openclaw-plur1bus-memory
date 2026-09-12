@@ -963,10 +963,13 @@ test("7.12.54: die Fehlerwarnung nennt eine Kategorie und den Code, nie die Meld
   assert.equal(result.status, "failed");
   assert.equal(logger.calls.length, 1);
   const serialized = JSON.stringify(logger.calls);
-  assert.match(serialized, /"errorHint":"aborted"/);
+  assert.match(serialized, /"errorHint":"host-aborted"/);
   assert.match(serialized, /"errorCode":"LLM_COMPLETION_ABORTED"/);
+  assert.doesNotMatch(serialized, /"errorName"/, "der Fehlername ist Freitext und bleibt draußen");
   assert.doesNotMatch(serialized, new RegExp(secret), "die Meldung des Hosts bleibt draußen");
-  assert.equal(errorHint(new Error("Isolated completion timed out after 30000ms.")), "timeout");
+  assert.equal(errorHint(new Error("Isolated completion timed out after 30000ms.")), "host-timeout");
+  assert.equal(errorHint(new Error("Configured agent runtime is unavailable.")), "runtime-unavailable");
+  assert.equal(errorHint(new Error("Plugin LLM completion requires an injected runtime config scope.")), "no-config-scope");
   assert.equal(errorHint(new Error("rate limit exceeded")), "rate-limited");
   assert.equal(errorHint(new Error("etwas ganz anderes")), "other");
   assert.equal(errorHint(null), "other");
