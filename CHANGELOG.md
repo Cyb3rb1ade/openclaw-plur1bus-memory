@@ -7,6 +7,31 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.57] — 2026-09-12
+
+### Behoben
+
+- **Nachgedanken kommen wieder zustande.** Die Kandidatensuche prüfte
+  ausschließlich den jüngsten Eintrag des Antwort-Ausgangs-Protokolls und nur
+  in einem Fenster von 30 bis 120 Minuten. Beides zusammen ließ den Job
+  praktisch nie auslösen: ein einzelner Heartbeat- oder Diagnose-Turn schob
+  sich als jüngster Eintrag davor und verdeckte jeden offenen Gesprächsfaden,
+  der kurz davor lag, und lag das letzte Gespräch mehr als zwei Stunden
+  zurück, fiel es ganz heraus. Gemessen an 14 Tagen Echtdaten scheiterten 26
+  von 36 Läufen allein am Alter des jüngsten Eintrags; die letzte tatsächlich
+  verschickte Nachricht stammte vom 20. Juli 2026.
+
+  Die Suche betrachtet jetzt alle Einträge im Fenster und nimmt den jüngsten
+  offenen darunter. Das Fenster reicht bis 180 Minuten. Gegen dieselben
+  Echtdaten gemessen steigt die Zahl der Tage mit einem Kandidaten von zwei
+  auf vier von vierzehn — bei unverändertem Tageslimit von einer Nachricht.
+
+### Geändert
+
+- **`corrected` zählt als offener Gesprächsfaden.** Eine Korrektur durch den
+  Nutzer ist der natürlichste Anlass für ein „mir ist dazu noch eingefallen".
+  Bisher galten nur `asked_details` und `ignored_or_topic_shifted`.
+
 ## [7.12.56] — 2026-09-12
 
 ### Behoben
