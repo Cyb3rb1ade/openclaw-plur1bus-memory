@@ -1,5 +1,9 @@
 # Hermes 7.12.55: recent-upstream coverage
 
+Intermediate, unpublished candidate review. The final version/pin is superseded
+by [the 7.12.56 integration record](hermes-7.12.56-delta-review.md); the feature
+inventory and reproduced fixes below remain the detailed analysis.
+
 Upstream range: `8a148c991123be31bc4f99376c8198447d9bb717` (v7.12.47)
 through `c53a289753ea0e5ab161bc67ee213eed2e145965` (v7.12.55).
 This covers **12 commits and 259 changed paths**, including **238 test paths**.

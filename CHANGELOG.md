@@ -7,9 +7,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-### Hermes 7.12.55-hermes.0
+### Hermes 7.12.56-hermes.0
 
-- Native Übernahme der Änderungen aus OpenClaw 7.12.48–7.12.55 unter Erhalt
+- Native Übernahme der Änderungen aus OpenClaw 7.12.48–7.12.56 unter Erhalt
   von Profilisolierung, Wartung, Snapshot-/Retrieval-Migration und Desktop.
 - Skill Workshop: nächtliches Mining, begrenzter persistenter Fortschritt,
   Nutzen/Confidence/Kategorie, explizites Auto-Apply, Benefit-Backfill,
@@ -21,7 +21,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Teilaktivierungen bleiben im Desktop und Web sichtbar und erneut prüfbar.
 - Episoden und schaltbare LLM-Fehlerdiagnose werden nativ angepasst; Details,
   bewusste Unterschiede und gemessene Gates in
-  `docs/audits/hermes-7.12.55-delta-review.md`.
+  `docs/audits/hermes-7.12.56-delta-review.md`.
 - Begleitende Anleitung als Community-Tap für den Hermes Skills Hub:
   `Cyb3rb1ade/plur1bus-hermes-skills`. Sie ersetzt keine Plugininstallation.
 - Unabhängiges Review: profilübergreifenden UI-Downgrade und wartende optionale
@@ -202,6 +202,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
 ## Upstream source history
+## [7.12.56] — 2026-09-12
+
+### Behoben
+
+- **Der offene Episodenzustand überlebt eine bekannte letzte Spanne.** Endete
+  ein Turn auf einer Spanne, deren Turns schon episodiert sind, baute die
+  Extraktion den Zustand trotzdem aus einer frisch erzeugten Episode auf —
+  mit einer Kennung, die nie in den Vault geschrieben wurde. Die nächste
+  Fortsetzung hätte an eine nicht existierende Episode angehängt. Jetzt bleibt
+  der vom Aufrufer gespeicherte Zustand erhalten, auch bei gemischten Gruppen
+  aus neuen und bekannten Turns.
+- **Die Fehlerdiagnose fasst auch Name und Code nur noch redigiert an.** Beide
+  sind wie die Meldung Freitext. Gelesen werden sie über den
+  Eigenschafts-Deskriptor, ein feindseliger Getter kann also weder Code
+  ausführen noch die Einordnung verfälschen. `normalizedErrorClass` und die
+  Diagnose scheitern nicht mehr an solchen Objekten; der native `AbortError`
+  bleibt über den eingebauten Getter erkennbar.
+
+
 ## [7.12.55] — 2026-09-12
 
 ### Behoben

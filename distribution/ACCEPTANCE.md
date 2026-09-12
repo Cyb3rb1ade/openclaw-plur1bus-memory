@@ -1,10 +1,10 @@
 # Distribution acceptance history
 
-## 7.12.55-hermes.0 — candidate evidence boundary
+## 7.12.56-hermes.0 — candidate evidence boundary
 
-The source incorporates upstream v7.12.55
-(`c53a289753ea0e5ab161bc67ee213eed2e145965`) and native Hermes adaptations of
-the .47–.55 delta. See `docs/audits/hermes-7.12.55-delta-review.md` for the
+The source incorporates upstream v7.12.56
+(`5d79fb91a907b13929e41523348b761a748e6c81`) and native Hermes adaptations of
+the .47–.56 delta. See `docs/audits/hermes-7.12.56-delta-review.md` for the
 feature inventory, retained host-specific behavior and limitations.
 
 Final source-pinned platform receipts, a release-review receipt, checksums and
