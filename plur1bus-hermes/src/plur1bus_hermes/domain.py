@@ -1067,16 +1067,25 @@ class Plur1busDomain:
         neo_dir = self._scope_neo_dir(selector)
         path = neo_dir / "episode-narratives.jsonl"
         with writer_lock(self.data_dir):
-            turns = self._scoped_jsonl(self.neo_dir, neo_dir, "turn-journal.jsonl", selector)[-100:]
-            completed = {row.get("key") for row in self._read_jsonl(path)}
+            # Owner partitions can contain legacy/misfiled rows. Apply the same
+            # ownership gate to evidence and success receipts before any LLM work.
+            turns = self._filter_rows(self._scoped_jsonl(
+                self.neo_dir, neo_dir, "turn-journal.jsonl", selector), selector)[-100:]
+            completed = {row["key"] for row in self._filter_rows(self._scoped_jsonl(
+                self.neo_dir, neo_dir, "episode-narratives.jsonl", selector), selector)
+                if isinstance(row.get("key"), str)}
             written = []
+            skipped_episoded_spans = 0
             try:
                 groups = group_turns(turns)[-3:]
             except (KeyError, TypeError, ValueError) as error:
                 logging.getLogger(__name__).warning("Episode grouping rejected: %s", type(error).__name__)
                 return {"executed": False, "reason": "invalid-turn-evidence"}
             for group in groups:
+                # Unlike an ID-only coverage set, this durable key also binds
+                # content, roles and scope: changed/extended evidence must run.
                 if enrichment_key(group) in completed:
+                    skipped_episoded_spans += 1
                     continue
                 try:
                     narrative = enrich(group, backend.complete_json)
@@ -1092,8 +1101,10 @@ class Plur1busDomain:
                               "promptInjectable": False, "dreamEligible": False,
                           }}
                 self._append_jsonl(path, record)
+                completed.add(record["key"])
                 written.append(record["id"])
-            return {"executed": bool(written), "created": written, "mode": "derived-only"}
+            return {"executed": bool(written), "created": written, "mode": "derived-only",
+                    "skippedEpisodedSpans": skipped_episoded_spans}
 
     def on_memory(
         self,

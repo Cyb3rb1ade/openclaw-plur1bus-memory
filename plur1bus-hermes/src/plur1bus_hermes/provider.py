@@ -259,7 +259,8 @@ class Plur1busMemoryProvider(MemoryProvider):
         try:
             self._runtime = Plur1busRuntime(
                 self._base_path(),
-                self.config,
+                {**self.config, "hermesHome": str(self._hermes_home.resolve()),
+                 "_hermesProfile": profile_name},
                 runtime_agent,
                 request_scope,
             )

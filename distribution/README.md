@@ -4,9 +4,7 @@
 **New in 7.12.47-hermes.0:** Graphical macOS setup and guided
 all-profiles/activation defaults. Older assets may still stage the terminal
 `.command` launcher.
-This document describes the current Hermes installer. The intermediate
-`7.12.53-hermes.0` integration is not a release; final packaging is held for
-upstream 7.12.54 or 7.12.55. Portable archives and
+This document describes the `7.12.55-hermes.0` Hermes installer. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.

@@ -257,7 +257,8 @@ class InstallerTests(unittest.TestCase):
         receipt_path.write_bytes(original_receipt)
         config_before = (self.home / "config.yaml").read_bytes()
         plan = self.plan(profiles=["alpha"], activate=True)
-        self.assertEqual(set(plan["sharedDesktop"]), {*ui_paths, installer.RECEIPT, "desktop-plugins/plur1bus/.hermes-package.json"})
+        self.assertEqual(set(plan["sharedDesktop"]), {*ui_paths, installer.RECEIPT, installer.SHARED_DESKTOP_RECEIPT,
+                                                     "desktop-plugins/plur1bus/.hermes-package.json"})
         self.assertIsNone(plan["sharedDesktop"]["desktop-plugins/plur1bus/.hermes-package.json"]["after"])
         transaction = self.apply(plan)
         for relative in ui_paths:
@@ -283,7 +284,7 @@ class InstallerTests(unittest.TestCase):
         target.parent.mkdir(parents=True)
         target.write_bytes(b"old UI")
         plan = self.plan(profiles=["alpha"])
-        self.assertEqual(set(plan["sharedDesktop"]), {"plugins/plur1bus/desktop/plugin.js"})
+        self.assertEqual(set(plan["sharedDesktop"]), {"plugins/plur1bus/desktop/plugin.js", installer.SHARED_DESKTOP_RECEIPT})
         self.apply(plan)
         self.assertEqual(target.read_bytes(), b"new UI")
         self.assertFalse((self.home / "desktop-plugins").exists())
@@ -318,6 +319,78 @@ class InstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "shared desktop downgrade"):
             self.plan(profiles=["alpha"])
         self.assertEqual(target.read_bytes(), b"newer UI")
+
+    def test_shared_ui_version_blocks_older_bundle_for_a_different_profile_and_rolls_back(self):
+        target = self.home / "desktop-plugins/plur1bus/plugin.js"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"UI 47")
+        receipt = self.home / installer.RECEIPT
+        original_receipt = json.dumps({"version": "7.12.47-hermes.0", "files": {
+            "desktop-plugins/plur1bus/plugin.js": installer.digest(b"UI 47")}}).encode()
+        receipt.write_bytes(original_receipt)
+        (self.home / "profiles/beta").mkdir()
+        (self.home / "profiles/beta/config.yaml").write_text(json.dumps(self.config))
+        self.write_bundle("7.12.55-hermes.0")
+        transaction = self.apply(self.plan(profiles=["alpha"]))
+        self.write_bundle("7.12.53-hermes.0")
+        with self.assertRaisesRegex(ValueError, "shared desktop downgrade"):
+            self.plan(profiles=["beta"])
+        self.assertEqual(target.read_bytes(), b"new UI")
+        self.assertEqual(json.loads(receipt.read_bytes())["version"], "7.12.47-hermes.0")
+        self.assertFalse((self.home / "profiles/beta/plugins").exists())
+        shared_receipt = self.home / installer.SHARED_DESKTOP_RECEIPT
+        self.assertEqual(json.loads(shared_receipt.read_bytes())["version"], "7.12.55-hermes.0")
+        review = installer.rollback(self.home, transaction.name)
+        installer.rollback(self.home, transaction.name, review["confirmation"], True)
+        self.assertEqual(target.read_bytes(), b"UI 47")
+        self.assertEqual(receipt.read_bytes(), original_receipt)
+        self.assertFalse(shared_receipt.exists())
+        self.assertEqual(self.plan(profiles=["beta"])["version"], "7.12.53-hermes.0")
+
+    def test_shared_ui_receipt_upgrade_rollback_restores_previous_metadata_bytes(self):
+        self.write_bundle("7.12.53-hermes.0")
+        self.apply(self.plan(profiles=["alpha"]))
+        receipt = self.home / installer.SHARED_DESKTOP_RECEIPT
+        original = receipt.read_bytes()
+        self.write_bundle("7.12.55-hermes.0")
+        transaction = self.apply(self.plan(profiles=["alpha"]))
+        self.assertNotEqual(receipt.read_bytes(), original)
+        review = installer.rollback(self.home, transaction.name)
+        installer.rollback(self.home, transaction.name, review["confirmation"], True)
+        self.assertEqual(receipt.read_bytes(), original)
+
+    def test_legacy_named_ui_receipt_prevents_downgrade_without_shared_metadata(self):
+        receipt = self.home / "profiles/alpha" / installer.RECEIPT
+        receipt.write_text(json.dumps({"version": "7.12.55-hermes.0", "files": {
+            "plugins/plur1bus/desktop/plugin.js": installer.digest(b"UI 55")}}))
+        self.write_bundle("7.12.53-hermes.0")
+        with self.assertRaisesRegex(ValueError, "shared desktop downgrade"):
+            self.plan(profiles=["default"])
+        self.assertFalse((self.home / "plugins").exists())
+
+    def test_legacy_backend_only_receipt_does_not_invent_a_shared_ui_version(self):
+        (self.home / "profiles/alpha" / installer.RECEIPT).write_text(json.dumps({
+            "version": "7.99.0-hermes.0", "files": {"plugins/plur1bus/__init__.py": "legacy"}}))
+        self.assertEqual(self.plan(profiles=["default"])["version"], "7.12.0-hermes.2")
+
+    def test_shared_ui_metadata_is_bound_to_plan_and_symlinks_fail_closed(self):
+        self.apply(self.plan())
+        receipt = self.home / installer.SHARED_DESKTOP_RECEIPT
+        plan = self.plan()
+        previous = receipt.read_bytes()
+        receipt.write_bytes(previous + b"\n")
+        with self.assertRaisesRegex(ValueError, "stale plan"):
+            self.apply(plan)
+        outside = self.root / "outside-ui-receipt.json"
+        outside.write_bytes(previous)
+        receipt.unlink()
+        try:
+            receipt.symlink_to(outside)
+        except OSError as error:
+            self.skipTest(str(error))
+        with self.assertRaisesRegex(ValueError, "symbolic links/junctions"):
+            self.plan()
+        self.assertEqual(outside.read_bytes(), previous)
 
     def test_rollback_refuses_new_user_edits(self):
         transaction = self.apply(self.plan())

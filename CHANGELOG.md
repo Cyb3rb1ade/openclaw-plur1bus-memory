@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.55-hermes.0
+
+- Native Übernahme der Änderungen aus OpenClaw 7.12.48–7.12.55 unter Erhalt
+  von Profilisolierung, Wartung, Snapshot-/Retrieval-Migration und Desktop.
+- Skill Workshop: nächtliches Mining, begrenzter persistenter Fortschritt,
+  Nutzen/Confidence/Kategorie, explizites Auto-Apply, Benefit-Backfill,
+  sichere Ablehnung/Archivierung und wiederholbare Belegbestätigung.
+- Installer: vollständiges Dashboard, Unified-/gemeinsame Desktop-Dateien,
+  explizite Profilaktivierung und Persistent-Memory-Schalter; wiederherstellbare
+  Materialisierungsmarker schützen zusätzliche UI-Dateien beim Host-Neustart.
+- Controls und Skill-Publikation verwenden das tatsächlich aktive Hermes-Profil.
+  Teilaktivierungen bleiben im Desktop und Web sichtbar und erneut prüfbar.
+- Episoden und schaltbare LLM-Fehlerdiagnose werden nativ angepasst; Details,
+  bewusste Unterschiede und gemessene Gates in
+  `docs/audits/hermes-7.12.55-delta-review.md`.
+- Begleitende Anleitung als Community-Tap für den Hermes Skills Hub:
+  `Cyb3rb1ade/plur1bus-hermes-skills`. Sie ersetzt keine Plugininstallation.
+
 ### Hermes 7.12.47-hermes.0 — release
 
 - Integrates the pinned OpenClaw `8a148c991123be31bc4f99376c8198447d9bb717`
@@ -178,6 +196,42 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
 ## Upstream source history
+## [7.12.55] — 2026-09-12
+
+### Behoben
+
+- **Bereits episodierte Spannen kosteten je einen Modellaufruf.** Die
+  Episodenerstellung ließ das Modell jede Spanne ausarbeiten und verwarf erst
+  danach die, deren Turns schon in einer Episode stehen. Nach einem Turn von
+  Bernhardine standen so 15 Anreicherungen für 16 anschließend verworfene
+  Spannen im Log — samt der Fehlschläge, die sie auslösten. Der Abgleich
+  läuft jetzt vor der Anreicherung (`episodedTurnIds`), der Bericht zählt
+  `skippedEpisodedSpans`.
+
+### Hinzugefügt
+
+- **Schaltbare Fehlerdiagnose der Modellrouten.** `llmRouter.errorDiagnostics`
+  (Standard aus) schreibt die redigierte Meldung eines gescheiterten
+  Modellaufrufs nach `<baseDbPath>/llm-router-errors.log`, mit Name und Code.
+  Im normalen Log steht sie weiterhin nie, weil sie Bruchstücke des Prompts
+  enthalten kann. Gedacht für genau den Fall, der die Kategorie allein nicht
+  aufklärt; nach der Klärung wieder ausschalten.
+
+## [7.12.54] — 2026-09-12
+
+### Geändert
+
+- **Fehlschläge der Modellroute sind jetzt einzuordnen.** Die Warnung nannte
+  nur das Etikett `transport-failed`; am 12.09. standen 30 solcher Zeilen im
+  Log, ohne jeden Hinweis auf die Ursache. Die Meldung des Fremdsystems darf
+  bewusst nicht ins Log, weil sie Prompt-Inhalte oder Zugangsdaten tragen kann
+  (ein Test hält das fest). Die Warnung trägt deshalb jetzt eine feste
+  Kategorie (`errorHint`: aborted, timeout, rate-limited, quota, auth, busy,
+  denied, unavailable, network, server-error, request-rejected, other) und,
+  falls vorhanden, den Fehlercode des Hosts wie `LLM_COMPLETION_ABORTED` —
+  beides ohne den Text selbst.
+
+
 ## [7.12.53] — 2026-09-12
 
 ### Behoben

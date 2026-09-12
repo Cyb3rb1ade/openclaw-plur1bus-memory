@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 import {
   LLM_ROUTE_KINDS,
   completeFeatureLlm,
   isLlmRouteAvailable,
   resolveFeatureLlmRoute,
+  errorHint,
 } from "../lib/llm-router.js";
 
 function createLogger() {
@@ -944,4 +948,58 @@ test("native routes never forward agentId to the OpenClaw runtime", async () => 
   assert.equal(receivedParams.purpose, "emotion-classification");
   assert.equal(result.status, "ok");
   assert.equal(result.text, "host answer");
+});
+
+test("7.12.54: die Fehlerwarnung nennt eine Kategorie und den Code, nie die Meldung", async () => {
+  const logger = createLogger();
+  const timer = createTimerHarness();
+  const secret = "upstream-secret-hint-778";
+  const originalError = Object.assign(new Error(`Plugin LLM completion was aborted. ${secret}`), { code: "LLM_COMPLETION_ABORTED" });
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm: { complete: async () => { throw originalError; } },
+    logger,
+  });
+
+  const result = await completeFeatureLlm([{ role: "user", content: "prompt" }], route, { agentId: "agent-a" }, timer);
+
+  assert.equal(result.status, "failed");
+  assert.equal(logger.calls.length, 1);
+  const serialized = JSON.stringify(logger.calls);
+  assert.match(serialized, /"errorHint":"host-aborted"/);
+  assert.match(serialized, /"errorCode":"LLM_COMPLETION_ABORTED"/);
+  assert.doesNotMatch(serialized, /"errorName"/, "der Fehlername ist Freitext und bleibt draußen");
+  assert.doesNotMatch(serialized, new RegExp(secret), "die Meldung des Hosts bleibt draußen");
+  assert.equal(errorHint(new Error("Isolated completion timed out after 30000ms.")), "host-timeout");
+  assert.equal(errorHint(new Error("Configured agent runtime is unavailable.")), "runtime-unavailable");
+  assert.equal(errorHint(new Error("Plugin LLM completion requires an injected runtime config scope.")), "no-config-scope");
+  assert.equal(errorHint(new Error("rate limit exceeded")), "rate-limited");
+  assert.equal(errorHint(new Error("etwas ganz anderes")), "other");
+  assert.equal(errorHint(null), "other");
+});
+
+test("7.12.55: die Fehlerdiagnose schreibt nur, wenn der Betreiber sie einschaltet", async () => {
+  const dir = makeTempDir("llm-router-diag-");
+  const target = join(dir, "llm-router-errors.log");
+  const secret = "upstream-secret-diag-441";
+  const originalError = Object.assign(new Error(`Configured agent runtime is unavailable. ${secret}`), { code: "LLM_RUNTIME_UNAVAILABLE" });
+  const runtimeLlm = { complete: async () => { throw originalError; } };
+
+  const off = resolveFeatureLlmRoute({}, { feature: "episode-extraction", runtimeLlm, logger: createLogger() });
+  await completeFeatureLlm([{ role: "user", content: "x" }], off, {}, createTimerHarness());
+  assert.equal(existsSync(target), false, "ohne Schalter entsteht keine Datei");
+
+  const on = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm,
+    logger: createLogger(),
+    diagnosticsPath: target,
+  });
+  await completeFeatureLlm([{ role: "user", content: "x" }], on, {}, createTimerHarness());
+  const entries = readFileSync(target, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].feature, "episode-extraction");
+  assert.equal(entries[0].code, "LLM_RUNTIME_UNAVAILABLE");
+  assert.match(entries[0].message, /Configured agent runtime is unavailable/);
+  rmSync(dir, { recursive: true, force: true });
 });

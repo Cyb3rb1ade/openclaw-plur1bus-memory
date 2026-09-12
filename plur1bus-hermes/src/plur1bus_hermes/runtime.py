@@ -652,7 +652,10 @@ class Plur1busRuntime:
             # never prevent capture/recall from starting.
             LOGGER.warning("LLM result cache persistence disabled: %s", type(error).__name__)
             self._llm_cache = LlmResultCache(data_dir, self.agent_id, persist=False)
-        self._internal_llm = InternalLlmBackend(config, self.agent_id, cache=self._llm_cache)
+        self._internal_llm = InternalLlmBackend(
+            config, self.agent_id, cache=self._llm_cache,
+            data_dir=data_dir, scope_key=self.scope_key,
+        )
         self._domain.set_llm_backend(self._internal_llm)
         # Restore-safe epistemic cutoff, created on the first upgrade before
         # the first write (upstream 7.4.0 contract). A broken cutoff fails

@@ -2,10 +2,11 @@
 
 This directory contains the installable Hermes memory-provider package for PLUR1BUS.
 
-Hermes release: **7.12.7-hermes.2**, Python **7.12.7.post2**.
-Compatibility was inspected against Hermes 0.21.0. Detailed coverage and
-remaining gaps: `docs/audits/hermes-7.10.0-contract-matrix.md` and
-`docs/audits/hermes-7.12.0-contract-delta.md` in the repository.
+Hermes candidate: **7.12.55-hermes.0**, Python **7.12.55**.
+Recent feature/fix coverage and intentional host differences are documented in
+[the .47–.55 delta review](../docs/audits/hermes-7.12.55-delta-review.md).
+The retained historical contract matrices describe earlier implementation stages;
+the current distribution receipts separately establish tested platforms and artifacts.
 
 ### Cross-platform distribution
 
@@ -16,7 +17,7 @@ Linux/WSL archives and Windows setup builds, profile selection, dependency check
 explicit activation, file rollback and the separate Desktop-only path.
 Native artifacts are candidates until their OS-specific CI and release gates pass.
 
-### Desktop host preparation (next update; not in the published .1 assets)
+### Desktop host preparation
 
 Once the desktop plugin is enabled, startup/profile-switch checks are read-only:
 they verify workspace/routing APIs and the selected backend's identity before
@@ -95,11 +96,34 @@ It intentionally runs without a Node.js dependency and is designed to run
 inside Hermes' plugin process. Install it with `scripts/install-hermes-plugins.sh`;
 the provider and controls are copied below the selected Hermes home.
 
-Capture/recall, graph, Obsidian, dreaming and migration are native Python
-implementations. This candidate does not claim full 7.10 UI/Workshop parity.
+Capture/recall, graph, Obsidian, dreaming, migration and the scoped Skill Workshop
+are native Python implementations. The Workshop supports mining, benefit backfill,
+approval, publication, partial-completion retry, rejection and protected withdrawal
+through Controls and the Desktop/web surfaces. OpenClaw-specific transports and
+host policy APIs are not emulated; the delta review identifies the differences.
 No production cutover, live installation or publication is implied by a build.
 `plur1bus-hermes-parity --strict` deliberately reports incomplete upstream
 coverage even when the retained native-runtime baseline is ready.
+
+### Internal model error diagnosis
+
+Ordinary internal-model failures report only fixed categories and safe codes, not
+provider exception text, endpoints or prompts. For an explicit investigation, set
+the following in the selected profile's `plugins/plur1bus/config.json` and restart
+that profile's runtime:
+
+```json
+{"llmRouter": {"errorDiagnostics": true}}
+```
+
+This is off by default. Opt-in JSONL records are kept below the resolved PLUR1BUS
+data directory at `diagnostics/llm-router/<agent>/<profile-and-scope-hash>/`.
+They are owner/profile/scope-bound and limited to two 64 KiB segments. Credential
+and URL redaction is applied to message, name and code, but non-secret prompt
+fragments may remain: treat these files as private and do not upload them blindly.
+Turning the option off stops new writes; it does not erase existing diagnostics.
+An unavailable or unsafe diagnostic sink never blocks the model failure fallback.
+This describes the native HTTP JSON backend, not an OpenClaw host-completion API.
 
 ### Critical Push privacy
 

@@ -2,15 +2,16 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.53-hermes.0 — Hermes integration candidate (not published)**
+**PLUR1BUS 7.12.55-hermes.0 — Hermes release candidate**
 
-Source version: **7.12.53-hermes.0** (Python distributions:
-**7.12.53**). It integrates the pinned upstream commit
-`a7ea21719ff9249b7318dbe7c6b7d61129dd074d` while retaining the native Hermes
-payload. See the [Hermes delta review](docs/audits/hermes-7.12.53-delta-review.md)
+Source version: **7.12.55-hermes.0** (Python distributions:
+**7.12.55**). It integrates the pinned upstream commit
+`c53a289753ea0e5ab161bc67ee213eed2e145965` while retaining the native Hermes
+payload. See the [Hermes delta review](docs/audits/hermes-7.12.55-delta-review.md)
 and [platform installation guide](distribution/INSTALLATION.de.md).
-The final package/release version is held for the requested upstream 7.12.54 or
-7.12.55. This intermediate integration is not a published Hermes release.
+Use only the assets and verification receipts of the published
+[Hermes release](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/7.12.55-hermes.0).
+Source availability alone does not establish packaging or publication.
 Existing host compatibility evidence is retained in the
 [compatibility contract](docs/compatibility-openclaw.md), but is not fresh
 candidate verification.

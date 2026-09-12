@@ -1,5 +1,20 @@
 # Distribution acceptance history
 
+## 7.12.55-hermes.0 — candidate evidence boundary
+
+The source incorporates upstream v7.12.55
+(`c53a289753ea0e5ab161bc67ee213eed2e145965`) and native Hermes adaptations of
+the .47–.55 delta. See `docs/audits/hermes-7.12.55-delta-review.md` for the
+feature inventory, retained host-specific behavior and limitations.
+
+Final source-pinned platform receipts, a release-review receipt, checksums and
+macOS notarization evidence are attached only after the corresponding gates run.
+Source preparation is not a claim of successful CI, signing or publication.
+Windows executables remain explicitly labelled unsigned; the macOS ARM64 PKG
+requires Developer ID signing, notarization and stapling. Intel macOS is not a
+release target. No productive profile installation, model switch or memory
+migration is implied by isolated installer and storage tests.
+
 ## 7.12.47-hermes.0 — final release candidate
 
 The exact reviewed commit is `eff217227dc6c60603a811b4cd9ac4df1bfa884b`.

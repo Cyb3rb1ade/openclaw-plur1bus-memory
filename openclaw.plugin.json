@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.53-hermes.0",
+  "version": "7.12.55-hermes.0",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-command", "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session", "hasSubcommands": false },
@@ -837,6 +837,18 @@
             "type": "number",
             "default": 0,
             "description": "Maximum KNOWLEDGE.md promotions per 24-hour window (0 = unlimited). Before 7.12.3 the lifetime count was compared, which blocked a workspace forever once it had promoted that many cards."
+          }
+        }
+      },
+      "llmRouter": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Diagnose der Modellrouten. Standardmäßig aus.",
+        "properties": {
+          "errorDiagnostics": {
+            "type": "boolean",
+            "default": false,
+            "description": "Schreibt die redigierte Fehlermeldung eines gescheiterten Modellaufrufs nach <baseDbPath>/llm-router-errors.log. Nur zur Fehlersuche einschalten: die Meldung des Fremdsystems kann Bruchstücke des Prompts enthalten, deshalb steht sie nie im normalen Log."
           }
         }
       },

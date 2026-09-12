@@ -23,6 +23,7 @@ from native_launcher import plan as plan_native_launcher
 MANIFEST = "distribution.json"
 RECEIPT = "plur1bus-install.json"
 DESKTOP_RECEIPT = "plur1bus-desktop-install.json"
+SHARED_DESKTOP_RECEIPT = "plur1bus-shared-desktop-install.json"
 CPU_TORCH_INDEX = "https://download.pytorch.org/whl/cpu"
 
 
@@ -274,11 +275,53 @@ def inspect_profiles(home, python=None):
     return {"home": str(home), "python": str(python), "profiles": rows}
 
 
+def shared_desktop_receipt(home, manifest):
+    """Track app-wide UI separately from backend versions, including legacy installs."""
+    receipt = resolve_inside(home, SHARED_DESKTOP_RECEIPT)
+    incoming_version = tuple(map(int, re.findall(r"\d+", manifest["version"])))
+    if receipt.exists():
+        previous = json.loads(receipt.read_text(encoding="utf-8"))
+        if (not isinstance(previous, dict) or previous.get("schema") != 1
+            or not re.fullmatch(r"\d+\.\d+\.\d+-hermes(?:\.\d+)?", str(previous.get("version", "")))
+            or not re.fullmatch(r"[a-f0-9]{64}", str(previous.get("entrySha256", "")))):
+            raise ValueError("invalid shared desktop version receipt")
+        if tuple(map(int, re.findall(r"\d+", previous["version"]))) > incoming_version:
+            raise ValueError("shared desktop downgrade refused")
+    else:
+        # Before this receipt existed a newer named profile could supply the
+        # app-wide frontend while the default backend receipt stayed older.
+        roots = [home]
+        profiles = resolve_inside(home, "profiles")
+        if profiles.exists():
+            for profile in profiles.iterdir():
+                if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", profile.name) and (profile.is_dir() or redirected(profile)):
+                    roots.append(resolve_inside(home, "profiles/" + profile.name))
+        for root in roots:
+            for name in (RECEIPT, DESKTOP_RECEIPT):
+                legacy = resolve_inside(root, name)
+                if not legacy.exists():
+                    continue
+                previous = json.loads(legacy.read_text(encoding="utf-8"))
+                if not isinstance(previous, dict) or not isinstance(previous.get("files"), dict):
+                    raise ValueError("invalid legacy desktop installation receipt")
+                if not {"plugins/plur1bus/desktop/plugin.js", "desktop-plugins/plur1bus/plugin.js"}.intersection(previous["files"]):
+                    continue
+                version = previous.get("version", "0")
+                if not isinstance(version, str):
+                    raise ValueError("invalid legacy desktop installation version")
+                if tuple(map(int, re.findall(r"\d+", version))) > incoming_version:
+                    raise ValueError("shared desktop downgrade refused")
+    return json.dumps({"schema": 1, "version": manifest["version"],
+                      "entrySha256": manifest["files"]["payload/desktop-plugins/plur1bus/plugin.js"]}, indent=2).encode()
+
+
 def shared_desktop_updates(bundle, home, selected, manifest, desktop_only=False):
     """Refresh existing app-wide UI without installing an unselected backend."""
     unified = "plugins/plur1bus/desktop/plugin.js"
     materialized = "desktop-plugins/plur1bus/plugin.js"
-    incoming = {}
+    # Also record a fresh named-profile install: Hermes can move/materialize
+    # that UI into the app root later, outside this installation transaction.
+    incoming = {SHARED_DESKTOP_RECEIPT: shared_desktop_receipt(home, manifest)}
     def source_bytes():
         key = "payload/" + materialized
         if key not in manifest["files"]:
@@ -313,20 +356,18 @@ def shared_desktop_updates(bundle, home, selected, manifest, desktop_only=False)
                 raise ValueError("desktop materialization marker is not a regular file")
             prefix = "" if name == "default" else "profiles/" + name + "/"
             incoming[prefix + relative] = None
-    if not incoming:
-        return incoming
     for relative in incoming:
         path = resolve_inside(home, relative)
         if path.exists() and not path.is_file():
             raise ValueError("shared desktop destination is not a regular file")
     hashes = {relative: digest(data) if data is not None else None for relative, data in incoming.items()
-              if not relative.startswith("profiles/")}
-    if not hashes:
-        return incoming
+              if not relative.startswith("profiles/") and relative != SHARED_DESKTOP_RECEIPT}
     if "default" in selected:
         hashes[materialized] = digest(source_bytes())
         if not desktop_only and "payload/" + unified in manifest["files"]:
             hashes[unified] = manifest["files"]["payload/" + unified]
+    if not hashes:
+        return incoming
     for receipt_name in (RECEIPT, DESKTOP_RECEIPT):
         if "default" in selected and receipt_name == (DESKTOP_RECEIPT if desktop_only else RECEIPT):
             continue
@@ -456,6 +497,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     else:
         result["effects"] = "Install desktop frontend only. No Python, backend, model, provider configuration or host patch changes."
     if shared_desktop:
+        result["effects"] += " The shared Desktop UI version is tracked separately from profile backend versions, including backup and rollback."
         result["effects"] += " Also refresh existing app-wide Desktop entries and existing default unified UI; their receipt hashes, backups and rollback are included under sharedDesktop."
         result["effects"] += " Existing Hermes materialization markers are archived so these standalone installer-owned Desktop entries retain local sibling files on restart."
     # A frozen one-file executable extracts into a different directory per run.
@@ -649,7 +691,7 @@ def rollback(home, transaction, confirmation=None, stopped=False):
         destination = resolve_inside(home, relative)
         # Restrict even a manipulated local journal to our explicit file domains.
         stripped = re.sub(r"^profiles/[A-Za-z0-9_-]{1,64}/", "", relative)
-        if stripped not in {"config.yaml", RECEIPT, DESKTOP_RECEIPT} and not managed(stripped):
+        if relative != SHARED_DESKTOP_RECEIPT and stripped not in {"config.yaml", RECEIPT, DESKTOP_RECEIPT} and not managed(stripped):
             raise ValueError("invalid rollback target")
         sha = digest(destination.read_bytes()) if destination.exists() else None
         if sha not in {item["before"], item["after"]}:

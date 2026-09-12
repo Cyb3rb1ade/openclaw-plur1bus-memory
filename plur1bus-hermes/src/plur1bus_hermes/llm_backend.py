@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable
+
+from .llm_diagnostics import LlmErrorReporter
 
 
 # Native names keep their validation/logging semantics; only the cache key is
@@ -24,11 +26,14 @@ class InternalLlmBackend:
         *,
         opener: Callable[..., Any] = urllib.request.urlopen,
         cache: Any = None,
+        data_dir: Path | None = None,
+        scope_key: str | None = None,
     ) -> None:
         self.config = dict(config.get("llm") or {})
         self.agent_id = agent_id
         self.opener = opener
         self.cache = cache
+        self._errors = LlmErrorReporter(config, agent_id, data_dir=data_dir, scope_key=scope_key)
 
     def available(self) -> bool:
         return bool(self.config.get("model"))
@@ -39,6 +44,15 @@ class InternalLlmBackend:
         system: str,
         user: str,
     ) -> dict[str, Any]:
+        try:
+            return self._complete_json(purpose, system, user)
+        except Exception as error:
+            fields = self._errors.report(error, purpose)
+            # Neither callers nor traceback logging receive upstream text,
+            # endpoint URLs, arbitrary exception class names or chained errors.
+            raise RuntimeError(f"internal LLM failed: {fields['errorHint']}") from None
+
+    def _complete_json(self, purpose: str, system: str, user: str) -> dict[str, Any]:
         if not self.available():
             raise RuntimeError("internal LLM model is not configured")
         provider = str(self.config.get("provider") or "omlx").lower()
@@ -112,25 +126,23 @@ class InternalLlmBackend:
             value = json.loads(text)
             try:
                 self.cache.put(cache_request, text, usage)
-            except Exception as cache_error:
-                logging.getLogger(__name__).warning("LLM cache repair bypassed: %s", type(cache_error).__name__)
+            except Exception:
+                logging.getLogger(__name__).warning("LLM cache repair bypassed")
         if not isinstance(value, dict):
             raise RuntimeError("internal LLM JSON result must be an object")
         return value
 
     def _request_json(self, request: Any, timeout: float, purpose: str) -> tuple[str, dict[str, Any]]:
         """Validate the live result before it can enter the exact cache."""
-        try:
-            with self.opener(request, timeout=timeout) as response:
+        with self.opener(request, timeout=timeout) as response:
+            try:
                 body = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, ValueError) as error:
-            raise RuntimeError(
-                f"internal LLM {purpose} failed: {type(error).__name__}"
-            ) from error
-        content = body["choices"][0]["message"]["content"]
+            except ValueError as error:
+                raise RuntimeError("internal LLM returned invalid JSON") from error
         try:
+            content = body["choices"][0]["message"]["content"]
             value = json.loads(content)
-        except (TypeError, ValueError) as error:
+        except (TypeError, ValueError, KeyError, IndexError) as error:
             raise RuntimeError("internal LLM returned invalid JSON") from error
         if not isinstance(value, dict):
             raise RuntimeError("internal LLM JSON result must be an object")
