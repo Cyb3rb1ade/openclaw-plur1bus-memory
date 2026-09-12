@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.58] — 2026-09-13
+
+### Hinzugefügt
+
+- **`llmRouter.defaultModel`: ein gemeinsames Modell für die Hintergrundarbeit.**
+  Ein Teil der Features bekommt im Code fest eine leere Konfiguration und kann
+  deshalb gar kein eigenes Modell tragen — Episodenextraktion, Traumdeutung,
+  Gesprächsanalyse, Verdichtung, Konfliktauflösung und einige mehr. Sie folgten
+  damit zwangsläufig dem Hauptmodell des Agenten und verbrauchten dessen
+  Kontingent für Arbeit, die nichts vom laufenden Gespräch braucht. Gemessen am
+  12.09.2026 waren das allein für die Episodenextraktion 105 Aufrufe an einem
+  Tag auf dem größten verfügbaren Modell.
+
+  Der neue Schlüssel setzt einen gemeinsamen Boden. Ein feature-eigenes Modell
+  hat weiterhin Vorrang, und Features mit eigenem Transport bleiben unberührt:
+  dort wäre ein fremdes Modell am fremden Endpunkt sinnlos. Die Route bleibt
+  `openclaw-override`, Anmeldung und Transport also beim Host.
+
 ## [7.12.57] — 2026-09-12
 
 ### Behoben
