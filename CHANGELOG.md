@@ -9,6 +9,16 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [7.12.55] — 2026-09-12
 
+### Behoben
+
+- **Bereits episodierte Spannen kosteten je einen Modellaufruf.** Die
+  Episodenerstellung ließ das Modell jede Spanne ausarbeiten und verwarf erst
+  danach die, deren Turns schon in einer Episode stehen. Nach einem Turn von
+  Bernhardine standen so 15 Anreicherungen für 16 anschließend verworfene
+  Spannen im Log — samt der Fehlschläge, die sie auslösten. Der Abgleich
+  läuft jetzt vor der Anreicherung (`episodedTurnIds`), der Bericht zählt
+  `skippedEpisodedSpans`.
+
 ### Hinzugefügt
 
 - **Schaltbare Fehlerdiagnose der Modellrouten.** `llmRouter.errorDiagnostics`
