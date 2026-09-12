@@ -7,6 +7,42 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.55] — 2026-09-12
+
+### Behoben
+
+- **Bereits episodierte Spannen kosteten je einen Modellaufruf.** Die
+  Episodenerstellung ließ das Modell jede Spanne ausarbeiten und verwarf erst
+  danach die, deren Turns schon in einer Episode stehen. Nach einem Turn von
+  Bernhardine standen so 15 Anreicherungen für 16 anschließend verworfene
+  Spannen im Log — samt der Fehlschläge, die sie auslösten. Der Abgleich
+  läuft jetzt vor der Anreicherung (`episodedTurnIds`), der Bericht zählt
+  `skippedEpisodedSpans`.
+
+### Hinzugefügt
+
+- **Schaltbare Fehlerdiagnose der Modellrouten.** `llmRouter.errorDiagnostics`
+  (Standard aus) schreibt die redigierte Meldung eines gescheiterten
+  Modellaufrufs nach `<baseDbPath>/llm-router-errors.log`, mit Name und Code.
+  Im normalen Log steht sie weiterhin nie, weil sie Bruchstücke des Prompts
+  enthalten kann. Gedacht für genau den Fall, der die Kategorie allein nicht
+  aufklärt; nach der Klärung wieder ausschalten.
+
+## [7.12.54] — 2026-09-12
+
+### Geändert
+
+- **Fehlschläge der Modellroute sind jetzt einzuordnen.** Die Warnung nannte
+  nur das Etikett `transport-failed`; am 12.09. standen 30 solcher Zeilen im
+  Log, ohne jeden Hinweis auf die Ursache. Die Meldung des Fremdsystems darf
+  bewusst nicht ins Log, weil sie Prompt-Inhalte oder Zugangsdaten tragen kann
+  (ein Test hält das fest). Die Warnung trägt deshalb jetzt eine feste
+  Kategorie (`errorHint`: aborted, timeout, rate-limited, quota, auth, busy,
+  denied, unavailable, network, server-error, request-rejected, other) und,
+  falls vorhanden, den Fehlercode des Hosts wie `LLM_COMPLETION_ABORTED` —
+  beides ohne den Text selbst.
+
+
 ## [7.12.53] — 2026-09-12
 
 ### Behoben

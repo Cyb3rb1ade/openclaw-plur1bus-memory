@@ -4560,6 +4560,11 @@ const plugin = {
         logger: api.logger,
         resultCache: llmResultCache,
         credentialUnavailable,
+        // 7.12.55: Nur wenn der Betreiber es einschaltet, schreibt der Router
+        // die redigierte Fehlermeldung in eine eigene Datei — nie ins Log.
+        diagnosticsPath: cfg.llmRouter?.errorDiagnostics === true
+          ? join(baseDbPath, "llm-router-errors.log")
+          : "",
       });
       return isLlmRouteAvailable(route) ? route : null;
     };
@@ -10850,6 +10855,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   // 7.12.40: Namen aus USER.md/IDENTITY.md, Stimmung der
                   // EmotionEngine und Session-Art fuer brauchbare Karten-Metadaten.
                   postProcessing.push(extractEpisodesWithState(normalizedTurns, {
+                    // 7.12.55: vor der Anreicherung bekannt geben, was bereits
+                    // episodiert ist — sonst zahlt jede verworfene Spanne einen
+                    // Modellaufruf.
+                    episodedTurnIds,
                     workspaceKey: ctx?.workspaceKey,
                     workspaceDir: ctx?.workspaceDir,
                     sessionKey: event?.sessionKey || ctx?.sessionKey || "",
