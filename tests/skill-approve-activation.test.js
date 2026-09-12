@@ -21,7 +21,7 @@ function seedProposal(dir, extra = {}) {
     instructions: "Backup then deploy",
     examples: ["deploy"],
     status: "pending_review",
-    evidence: { memoryIds: ["mem-empty", "mem-obs", "mem-bad"], score: 4, llmConfidence: 0.9, grade: "unreviewed-legacy" },
+    evidence: { memoryIds: ["11111111-2222-4333-8444-555555555501", "11111111-2222-4333-8444-555555555502", "11111111-2222-4333-8444-555555555503"], score: 4, llmConfidence: 0.9, grade: "unreviewed-legacy" },
     aclBindings: { scope: "agent-private", agentId: "agent-1", workspaceIdentity: "", ownerUserId: "" },
     ...extra,
   };
@@ -34,16 +34,16 @@ describe("skill approve activation", () => {
     const dir = workspace();
     seedProposal(dir);
     const records = {
-      "mem-empty": { id: "mem-empty", epistemicStatus: "", scope: "agent-private", agentId: "agent-1" },
-      "mem-obs": { id: "mem-obs", epistemicStatus: "observed", scope: "agent-private", agentId: "agent-1" },
-      "mem-bad": { id: "mem-bad", epistemicStatus: "observed", scope: "agent-private", agentId: "agent-1" },
+      "11111111-2222-4333-8444-555555555501": { id: "11111111-2222-4333-8444-555555555501", epistemicStatus: "", scope: "agent-private", agentId: "agent-1" },
+      "11111111-2222-4333-8444-555555555502": { id: "11111111-2222-4333-8444-555555555502", epistemicStatus: "observed", scope: "agent-private", agentId: "agent-1" },
+      "11111111-2222-4333-8444-555555555503": { id: "11111111-2222-4333-8444-555555555503", epistemicStatus: "observed", scope: "agent-private", agentId: "agent-1" },
     };
     let failOnce = true;
     const applied = [];
     const first = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
       loadEvidenceRecord: async (id) => records[id],
       applyEpistemicStatus: async (id, next) => {
-        if (id === "mem-bad" && failOnce) {
+        if (id === "11111111-2222-4333-8444-555555555503" && failOnce) {
           failOnce = false;
           throw new Error("boom");
         }
@@ -55,7 +55,7 @@ describe("skill approve activation", () => {
     assert.equal(existsSync(join(dir, "skills", "weekly-deploy", "SKILL.md")), true);
     assert.equal(first.partial, true);
     assert.equal(readProposals(dir)[0].status, "activation_partial");
-    assert.deepEqual(applied, [["mem-empty", "observed"], ["mem-obs", "corroborated"]]);
+    assert.deepEqual(applied, [["11111111-2222-4333-8444-555555555501", "observed"], ["11111111-2222-4333-8444-555555555502", "corroborated"]]);
 
     const second = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
       loadEvidenceRecord: async (id) => records[id],
@@ -67,7 +67,7 @@ describe("skill approve activation", () => {
     });
     assert.equal(second.partial, false);
     assert.equal(readProposals(dir)[0].status, "active");
-    assert.ok(applied.some((pair) => pair[0] === "mem-bad" && pair[1] === "corroborated"));
+    assert.ok(applied.some((pair) => pair[0] === "11111111-2222-4333-8444-555555555503" && pair[1] === "corroborated"));
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -92,16 +92,16 @@ describe("skill approve activation", () => {
     const dir = workspace();
     seedProposal(dir);
     const records = {
-      "mem-empty": { id: "mem-empty", epistemicStatus: "observed", scope: "agent-private", agentId: "agent-1" },
-      "mem-obs": { id: "mem-obs", epistemicStatus: "corroborated", scope: "agent-private", agentId: "agent-1" },
-      "mem-bad": { id: "mem-bad", epistemicStatus: "invalidated", scope: "agent-private", agentId: "agent-1" },
+      "11111111-2222-4333-8444-555555555501": { id: "11111111-2222-4333-8444-555555555501", epistemicStatus: "observed", scope: "agent-private", agentId: "agent-1" },
+      "11111111-2222-4333-8444-555555555502": { id: "11111111-2222-4333-8444-555555555502", epistemicStatus: "corroborated", scope: "agent-private", agentId: "agent-1" },
+      "11111111-2222-4333-8444-555555555503": { id: "11111111-2222-4333-8444-555555555503", epistemicStatus: "invalidated", scope: "agent-private", agentId: "agent-1" },
     };
     patchProposal(dir, "11111111-1111-4111-8111-111111111111", {
       status: "activation_partial",
       activation: {
         skillPath: join(dir, "skills", "weekly-deploy", "SKILL.md"),
         evidence: {
-          "mem-empty": { ok: false, reason: "pending", from: "", to: "observed" },
+          "11111111-2222-4333-8444-555555555501": { ok: false, reason: "pending", from: "", to: "observed" },
         },
       },
     });
@@ -117,7 +117,7 @@ describe("skill approve activation", () => {
     });
     assert.equal(again.partial, false);
     assert.deepEqual(applied, []);
-    assert.equal(records["mem-empty"].epistemicStatus, "observed");
+    assert.equal(records["11111111-2222-4333-8444-555555555501"].epistemicStatus, "observed");
     rmSync(dir, { recursive: true, force: true });
   });
 

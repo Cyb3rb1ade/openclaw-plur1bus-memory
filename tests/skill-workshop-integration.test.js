@@ -415,13 +415,13 @@ describe("Skill Workshop approval lifecycle", () => {
   it("does not repeat evidence promotion when the committed hook synchronizes during apply RPC", async (t) => {
     const dir = workspace();
     t.after(() => rmSync(dir, { recursive: true, force: true }));
-    seedWorkshopProposal(dir, { evidence: { memoryIds: ["memory-a"] } });
+    seedWorkshopProposal(dir, { evidence: { memoryIds: ["11111111-2222-4333-8444-5555555555aa"] } });
     let transitions = 0;
     const evidenceCtx = {
       agentId: "agent-a",
       memoryCtx: { agentId: "agent-a", workspaceAliases: { paths: [], aliases: [] } },
       async loadEvidenceRecord() {
-        return { id: "memory-a", agentId: "agent-a", scope: "agent-private", epistemicStatus: "observed" };
+        return { id: "11111111-2222-4333-8444-5555555555aa", agentId: "agent-a", scope: "agent-private", epistemicStatus: "observed" };
       },
       async applyEpistemicStatus() {
         transitions += 1;
@@ -472,7 +472,7 @@ describe("Skill Workshop approval lifecycle", () => {
     assert.equal(result.ok, true);
     assert.equal(result.status, "active");
     assert.equal(transitions, 1);
-    assert.equal(readProposals(dir)[0].activation.evidence["memory-a"].ok, true);
+    assert.equal(readProposals(dir)[0].activation.evidence["11111111-2222-4333-8444-5555555555aa"].ok, true);
   });
 
   it("does not append a second rejection when the committed hook synchronizes during reject RPC", async (t) => {

@@ -7,6 +7,39 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.53] — 2026-09-12
+
+### Behoben
+
+- **„Freigabe abschließen" bewirkte nichts.** Eine Abkürzung in
+  `activateSkillProposal` fängt den Fall ab, dass der Lebenszyklus-Hook
+  während des laufenden `apply`-Aufrufs schon synchronisiert hat. Sie griff
+  aber auch für `activation_partial`, sodass jeder zweite Versuch zurückkehrte,
+  bevor die Belegschleife lief: weder der Knopf im Dashboard noch ein erneutes
+  `/plur1bus skills approve` konnten einen unvollständigen Datensatz je fertig
+  machen. Nur ein vollständig aktiver Datensatz nimmt die Abkürzung jetzt.
+
+
+## [7.12.52] — 2026-09-12
+
+### Behoben
+
+- **Automatisch angewandte Skills blieben auf `activation_partial` stehen.**
+  Der erste Nachtlauf wandte 15 Skills an, aber keine einzige Belegkette wurde
+  fertig bestätigt. Zwei Ursachen:
+  - **Stufenregel:** Beim Auto-Apply handelt der Miner als
+    `system:skill-workshop`, und diese Stufe darf eine Erinnerung nur nach
+    `corroborated` heben. Der Zwischenschritt `""` → `observed` ist für sie
+    illegal, wurde aber trotzdem versucht („illegal transition untrusted ->
+    observed"). `nextEvidenceStatus` kennt jetzt die Stufe und überspringt,
+    was sie nicht darf; eine gemerkte Absicht aus einem früheren Versuch gilt
+    nur, wenn die jetzige Stufe sie auch ausführen kann.
+  - **Dokument-Fakten mit Hash-ID:** Deren IDs sind keine UUIDs, die
+    Speicherschicht weist sie ab („Invalid memory ID format", 162 Logzeilen in
+    einer Nacht). Sie gelten jetzt als übersprungen statt als Fehlschlag; bei
+    `multi-provider-web-search-routing` betraf das alle 37 Belege.
+
+
 ### Geändert
 
 - **Tests räumen ihre temporären Verzeichnisse auf.** 762 Aufrufstellen in 232
