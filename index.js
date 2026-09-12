@@ -5688,6 +5688,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       tone,
       logger: api.logger,
       skillWorkshop: openClawSkillWorkshop,
+      // 7.12.52: Mit welcher Stufe die Belege gehoben werden. Die
+      // Workshop-Stufe darf nur nach corroborated; die Aktivierung überspringt
+      // dann alles andere, statt an einem illegalen Übergang zu scheitern.
+      evidenceActorTier: actorTier,
       // 7.12.51: Wo der Host einen angewandten Skill ablegt. Nur benutzt, wenn
       // der Workshop den Vorschlag schon angewandt hat und keinen Zielpfad
       // mitliefert.

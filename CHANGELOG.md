@@ -7,6 +7,26 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.52] — 2026-09-12
+
+### Behoben
+
+- **Automatisch angewandte Skills blieben auf `activation_partial` stehen.**
+  Der erste Nachtlauf wandte 15 Skills an, aber keine einzige Belegkette wurde
+  fertig bestätigt. Zwei Ursachen:
+  - **Stufenregel:** Beim Auto-Apply handelt der Miner als
+    `system:skill-workshop`, und diese Stufe darf eine Erinnerung nur nach
+    `corroborated` heben. Der Zwischenschritt `""` → `observed` ist für sie
+    illegal, wurde aber trotzdem versucht („illegal transition untrusted ->
+    observed"). `nextEvidenceStatus` kennt jetzt die Stufe und überspringt,
+    was sie nicht darf; eine gemerkte Absicht aus einem früheren Versuch gilt
+    nur, wenn die jetzige Stufe sie auch ausführen kann.
+  - **Dokument-Fakten mit Hash-ID:** Deren IDs sind keine UUIDs, die
+    Speicherschicht weist sie ab („Invalid memory ID format", 162 Logzeilen in
+    einer Nacht). Sie gelten jetzt als übersprungen statt als Fehlschlag; bei
+    `multi-provider-web-search-routing` betraf das alle 37 Belege.
+
+
 ### Geändert
 
 - **Tests räumen ihre temporären Verzeichnisse auf.** 762 Aufrufstellen in 232
