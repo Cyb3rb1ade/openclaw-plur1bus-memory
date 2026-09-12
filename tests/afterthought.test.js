@@ -15,7 +15,7 @@ function o(agoMin, outcome, userPrompt = "wie richte ich das Backup ein?") {
 }
 
 describe("findAfterthoughtCandidate", () => {
-  it("findet offenen jüngsten Eintrag im 30–120min-Fenster", () => {
+  it("findet offenen jüngsten Eintrag im 30–180min-Fenster", () => {
     const c = findAfterthoughtCandidate([o(45, "asked_details")], { now: T0 });
     assert.ok(c);
     assert.match(c.topic, /Backup/);
@@ -27,9 +27,41 @@ describe("findAfterthoughtCandidate", () => {
     assert.strictEqual(findAfterthoughtCandidate([o(45, "confirmed_or_continued")], { now: T0 }), null);
   });
 
-  it("nur der JÜNGSTE Eintrag zählt (Gespräch ging danach weiter → kein Nachgedanke)", () => {
-    const entries = [o(20, "confirmed_or_continued"), o(45, "asked_details")]; // newest-first wie readReplyOutcomeLog
-    assert.strictEqual(findAfterthoughtCandidate(entries, { now: T0 }), null);
+  it("Fenster reicht bis 180min (vorher 120min — Hauptgrund für 'no_candidate')", () => {
+    const c = findAfterthoughtCandidate([o(150, "asked_details")], { now: T0 });
+    assert.ok(c, "Eintrag von vor 2,5 Stunden muss zählen");
+    assert.strictEqual(findAfterthoughtCandidate([o(200, "asked_details")], { now: T0 }), null);
+  });
+
+  it("'corrected' zählt als offener Faden", () => {
+    const c = findAfterthoughtCandidate([o(45, "corrected")], { now: T0 });
+    assert.ok(c);
+  });
+
+  it("ein jüngerer geschlossener Eintrag verdeckt den offenen NICHT mehr", () => {
+    // Bis 7.12.56 zählte allein der jüngste Logeintrag: ein Heartbeat- oder
+    // Diagnose-Turn unmittelbar danach machte jeden offenen Faden unsichtbar.
+    const entries = [o(20, "confirmed_or_continued"), o(45, "asked_details")];
+    const c = findAfterthoughtCandidate(entries, { now: T0 });
+    assert.ok(c, "der offene Eintrag von vor 45min muss gefunden werden");
+    assert.strictEqual(c.timestamp, T0 - 45 * M);
+  });
+
+  it("Heartbeat-Turn verdeckt kein Nutzergespräch", () => {
+    const entries = [
+      { timestamp: T0 - 20 * M, outcome: "continued_topic", userPrompt: "Read HEARTBEAT.md", sessionKey: "agent:main:main:heartbeat" },
+      { timestamp: T0 - 45 * M, outcome: "asked_details", userPrompt: "wie richte ich das Backup ein?", sessionKey: "agent:main:telegram:direct:1" },
+    ];
+    const c = findAfterthoughtCandidate(entries, { now: T0 });
+    assert.ok(c);
+    assert.match(c.topic, /Backup/);
+  });
+
+  it("bei mehreren offenen Einträgen gewinnt der jüngste", () => {
+    const entries = [o(40, "asked_details", "Frage zum Kalender"), o(100, "corrected", "Frage zum Backup")];
+    const c = findAfterthoughtCandidate(entries, { now: T0 });
+    assert.ok(c);
+    assert.match(c.topic, /Kalender/);
   });
 
   it("fail-open bei leerem/kaputtem Input", () => {
