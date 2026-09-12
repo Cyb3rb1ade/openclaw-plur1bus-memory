@@ -1003,3 +1003,78 @@ test("7.12.55: die Fehlerdiagnose schreibt nur, wenn der Betreiber sie einschalt
   assert.match(entries[0].message, /Configured agent runtime is unavailable/);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("7.12.55: optionale Fehlerdiagnose redigiert name und code ebenfalls", async () => {
+  const dir = makeTempDir("llm-router-diag-fields-");
+  const target = join(dir, "llm-router-errors.log");
+  const secret = "sk-live-diagnostic-secret-755";
+  const originalError = Object.assign(
+    new Error("Configured agent runtime is unavailable."),
+    {
+      name: `Bearer ${secret}`,
+      code: `access_token=${secret}`,
+    },
+  );
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm: { complete: async () => { throw originalError; } },
+    logger: createLogger(),
+    diagnosticsPath: target,
+  });
+
+  const result = await completeFeatureLlm([{ role: "user", content: "x" }], route, {}, createTimerHarness());
+
+  assert.equal(result.status, "failed");
+  const [entry] = readFileSync(target, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(entry.name, "[REDACTED]");
+  assert.equal(entry.code, "[REDACTED]");
+  assert.doesNotMatch(JSON.stringify(entry), new RegExp(secret));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("7.12.55: hostile Fehlerobjekte lassen Dispatch und Diagnose fail-soft", async () => {
+  const dir = makeTempDir("llm-router-diag-hostile-");
+  const target = join(dir, "llm-router-errors.log");
+  const hostile = Object.create(null);
+  Object.defineProperties(hostile, {
+    message: { get() { throw new Error("message getter invoked"); } },
+    name: { get() { throw new Error("name getter invoked"); } },
+    code: { get() { throw new Error("code getter invoked"); } },
+    toString: { value() { throw new Error("toString invoked"); } },
+  });
+  const logger = createLogger();
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm: { complete: async () => { throw hostile; } },
+    logger,
+    diagnosticsPath: target,
+  });
+
+  const result = await completeFeatureLlm([{ role: "user", content: "x" }], route, {}, createTimerHarness());
+
+  assert.equal(result.status, "failed");
+  assert.equal(errorHint(hostile), "other");
+  assert.equal(logger.calls.length, 1);
+  assert.doesNotMatch(JSON.stringify(logger.calls), /getter invoked|toString invoked/);
+  const [entry] = readFileSync(target, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(entry.name, null);
+  assert.equal(entry.code, null);
+  assert.equal(entry.message, "non-standard error");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("7.12.55: der native AbortError bleibt als Fehlerklasse erkennbar", async () => {
+  const logger = createLogger();
+  const abortError = new DOMException("aborted", "AbortError");
+  Object.defineProperty(abortError, "name", { configurable: true, value: "NotAbortError" });
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm: { complete: async () => { throw abortError; } },
+    logger,
+  });
+
+  const result = await completeFeatureLlm([{ role: "user", content: "x" }], route, {}, createTimerHarness());
+
+  assert.equal(result.status, "failed");
+  assert.match(JSON.stringify(logger.calls), /"errorClass":"AbortError"/);
+});
