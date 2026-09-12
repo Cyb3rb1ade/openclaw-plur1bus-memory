@@ -161,7 +161,9 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
         from hermes_cli.config import load_config_readonly
         result.update(profileBinding=1, profile=get_active_profile_name())
         config = load_config_readonly()
-        result["memoryProviderEnabled"] = (config.get("memory") or {}).get("provider") == "plur1bus"
+        memory = config.get("memory") or {}
+        result["memoryProviderEnabled"] = (isinstance(memory, dict)
+            and memory.get("provider") == "plur1bus" and memory.get("memory_enabled", True) is True)
     return result
 
 

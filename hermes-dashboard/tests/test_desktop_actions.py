@@ -19,6 +19,10 @@ class DesktopActionsTests(unittest.TestCase):
             "hermes_cli.config.load_config_readonly", return_value={"memory": {"provider": "plur1bus"}}
         ) as config, TestClient(app) as client:
             self.assertTrue(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
+            config.return_value = {"memory": {"provider": "plur1bus", "memory_enabled": False}}
+            self.assertFalse(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
+            config.return_value["memory"]["memory_enabled"] = True
+            self.assertTrue(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
             config.return_value = {"memory": {"provider": "builtin"}}
             self.assertFalse(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
             config.return_value = {}
