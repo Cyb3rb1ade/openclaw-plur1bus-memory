@@ -7,6 +7,36 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.59] — 2026-09-13
+
+### Behoben
+
+- **LanceDB-Kompaktierung setzt sich gegen laufende Schreiber durch.** Die
+  nächtliche `optimizeTable` verlor jede Nacht mit „Rewrite transaction was
+  preempted by concurrent transaction Update" — drei Versuche im Abstand von
+  drei Sekunden reichten nicht gegen Emotions-, Dynamik- und Zähler-Updates.
+  Bernds Tabelle stand am 13.09. bei 1522 Fragmenten und 1203 Versionen
+  (1,2 GB), Bernhardines bei 1206 / 1099 (1,4 GB). Jedes `getById`/`update`
+  lief über alle Fragmente; die Antwort-Ausgangs-Dynamik nach einem Turn
+  brauchte 15 bis 143 Sekunden auf dem Hauptthread und blockierte den
+  Gateway. Jetzt zwölf Versuche mit wachsendem Abstand (3 s bis 60 s),
+  innerhalb des bestehenden Zeitbudgets; `maxAttempts` und `retryDelayMs`
+  bleiben per Option übersteuerbar.
+
+- **REM-Dream markiert eine Woche nur als erledigt, wenn ein Traum entstand.**
+  Lieferte das Narrativ-Modell nichts (Zeitüberschreitung, 403), wurde der
+  Lauf trotzdem als abgeschlossen festgeschrieben; jede weitere Nacht meldete
+  „already_processed", und `DREAMS.md` blieb seit dem 04.09. unverändert.
+  Jetzt bleibt der Lauf offen und wird in der nächsten Nacht wiederholt;
+  Muster werden erst zusammen mit dem Narrativ angehängt, damit die
+  Wiederholung sie nicht doppelt. Ist das Narrativ per Konfiguration
+  abgeschaltet, schließt der Lauf wie bisher.
+
+- **Feature-Crons: Rückfall auf den Hauptagenten, wenn kein Agent gebunden
+  ist.** Eine Installation ohne Kanalbindungen bekam stillschweigend keine
+  Feature-Crons. Der Rückfall greift nur ohne gebundenen Agenten und nur auf
+  einen, der sich als Hauptagent ausweist — nie auf einen Subagenten.
+
 ## [7.12.58] — 2026-09-13
 
 ### Hinzugefügt
