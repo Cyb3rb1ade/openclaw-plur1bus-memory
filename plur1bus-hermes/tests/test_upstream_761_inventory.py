@@ -42,5 +42,8 @@ class Upstream761InventoryTests(unittest.TestCase):
             if Path(path).name in metadata:
                 continue
             with self.subTest(path=path):
-                expected = subprocess.check_output(["git", "show", HERMES_BASE + ":" + path], cwd=ROOT)
-                self.assertEqual((ROOT / path).read_bytes(), expected)
+                # Compare canonical Git blobs, applying this checkout's clean
+                # filters. Windows autocrlf changes working-tree bytes without
+                # changing source; binary files remain byte-exact.
+                expected = git("rev-parse", HERMES_BASE + ":" + path).strip()
+                self.assertEqual(git("hash-object", "--path=" + path, path).strip(), expected)
