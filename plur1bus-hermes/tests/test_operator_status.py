@@ -166,6 +166,7 @@ class OperatorStatusTests(unittest.TestCase):
             self.assertEqual(optimize_runtime_table(runtime, authorized=False, connect=connect), {"ok": False, "code": "unauthorized"})
             result = optimize_runtime_table(runtime, authorized=True, connect=connect)
         self.assertEqual(table.optimized, 1)
+        self.assertGreaterEqual(result.pop('writerWaitMs'), 0)
         self.assertEqual(result, {"ok": True, "code": "optimized", "stats": {"fragmentsRemoved": 7, "fragmentsAdded": 2}, "attempts": 1})
 
     def test_route_substitution_is_not_a_foreign_partition_probe(self) -> None:

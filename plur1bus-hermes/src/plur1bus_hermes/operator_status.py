@@ -18,6 +18,7 @@ from typing import Any
 
 from .namespaces import resolve_namespace_routes, scope_where_clause
 from .validation import safe_agent_id, safe_status
+from .writer_lock import writer_lock, WriterLockTimeout
 
 
 _PUBLIC_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -259,6 +260,9 @@ def optimize_runtime_table(
     deletes rows itself or creates a missing table. Conflict retries have a
     bounded waiting budget; an executing synchronous LanceDB call cannot be
     cancelled by a Python deadline. Non-conflict failures are never retried.
+    Start as soon as cooperating writers release their current transaction;
+    no idle-period deferral. Hold their existing lease only during an attempt,
+    not backoff, and report cumulative acquisition time without exposing paths.
     """
     if authorized is not True:
         return {"ok": False, "code": "unauthorized"}
@@ -272,17 +276,30 @@ def optimize_runtime_table(
         return {"ok": False, "code": "busy"}
     try:
         deadline = time.monotonic() + retry_budget_seconds
+        writer_wait_seconds = 0.0
         for attempt in range(1, max_attempts + 1):
             if time.monotonic() >= deadline:
                 return {"ok": False, "code": "optimize_retry_budget_exhausted"}
-            # Revalidate the certified generation before every attempt.
-            table = _open_exact_table(runtime, connect)
-            optimize = getattr(table, "optimize", None)
-            if not callable(optimize):
-                return {"ok": False, "code": "optimize_unavailable"}
+            # Validate before creating any coordination path, then reopen the
+            # certified generation after acquiring the same lease as writers.
+            _exact_route(runtime)
+            waiting_since = time.monotonic()
             try:
-                stats = optimize()
-                return {"ok": True, "code": "optimized", "stats": _safe_stats(stats), "attempts": attempt}
+                with writer_lock(Path(runtime.data_dir), timeout=min(86400, max(0, deadline - waiting_since))):
+                    writer_wait_seconds += time.monotonic() - waiting_since
+                    if time.monotonic() >= deadline:
+                        return {"ok": False, "code": "optimize_retry_budget_exhausted"}
+                    table = _open_exact_table(runtime, connect)
+                    optimize = getattr(table, "optimize", None)
+                    if not callable(optimize):
+                        return {"ok": False, "code": "optimize_unavailable"}
+                    stats = optimize()
+                return {"ok": True, "code": "optimized", "stats": _safe_stats(stats), "attempts": attempt,
+                        "writerWaitMs": round(writer_wait_seconds * 1000)}
+            except WriterLockTimeout:
+                writer_wait_seconds += time.monotonic() - waiting_since
+                return {"ok": False, "code": "writer_busy", "attempts": attempt - 1,
+                        "writerWaitMs": round(writer_wait_seconds * 1000)}
             except Exception as error:
                 delay = min(60, retry_delay_seconds * 2 ** (attempt - 1))
                 conflict = re.search(r"retryable commit conflict|preempted by concurrent", str(error), re.I)
