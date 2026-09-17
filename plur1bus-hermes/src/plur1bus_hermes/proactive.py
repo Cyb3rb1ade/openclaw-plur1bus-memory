@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -135,6 +136,7 @@ class ProactiveEngine:
                     try:
                         value = json.loads(line)
                     except (TypeError, ValueError):
+                        logging.getLogger(__name__).debug('Skipping malformed proactive journal record')
                         continue  # Same malformed-record policy as _jsonl.
                     if isinstance(value, dict):
                         values.append(value)

@@ -9,6 +9,7 @@ from pathlib import Path
 import threading
 import time
 import math
+import logging
 
 from .validation import resolve_inside
 from .restore_guard import assert_restore_idle
@@ -56,11 +57,15 @@ def writer_lock(data_dir: Path, *, restoring: bool = False, timeout: float | Non
             if deadline is None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
             else:
+                contention_logged = False
                 while True:
                     try:
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
                     except BlockingIOError:
+                        if not contention_logged:
+                            logging.getLogger(__name__).debug('Waiting for memory writer lease')
+                            contention_logged = True
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise WriterLockTimeout('memory writer acquisition budget exhausted') from None
