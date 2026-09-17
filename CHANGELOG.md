@@ -1,5 +1,14 @@
 # Changelog — PLUR1BUS Memory
 
+## 7.12.60-hermes.0 — candidate
+
+- Merge upstream .57–.60, retaining native UI, installer, retrieval/migration and profile isolation.
+- Native afterthought: newest eligible open/corrected thread, 30–180 minutes, own timestamp; explicit corrections captured.
+- Shared background-model fallback without replacing an explicit native model or changing chat routing.
+- Bounded compaction conflict retries; REM remains retryable if its expected narrative is missing.
+- Active-profile primary-agent counts in both UIs; unknown stays unknown, other profiles are not scanned.
+- Upstream false-zero defect reported as #155; optional JS dependency advisories remain in #150. No productive installation/publication implied.
+
 Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert.
 
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
@@ -202,6 +211,101 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
 ## Upstream source history
+## [7.12.60] — 2026-09-17
+
+### Geändert
+
+- **Dashboard: „Cards by primary agent“ statt „Cards by user“.** Die Karte
+  „Cards by user“ zählte nur die per `/share <id> --user` geteilten
+  Partitionen und stand deshalb dauerhaft auf 0, obwohl Bernd, Bernhardine
+  und Heisenberg laufend Karten schreiben — die liegen in der privaten
+  Partition des Agenten. An ihrer Stelle listet die Seite jetzt die privaten
+  Kartenzahlen der Hauptagenten. Hauptagent ist jeder Agent mit eigener
+  Kanal-Bindung (`bindings` in der Host-Config), live gelesen; Subagenten
+  erscheinen nicht. Der Health-Snapshot trägt dafür `cards.byPrimaryAgent`;
+  ältere Snapshots ohne das Feld ergeben eine leere Liste.
+
+### Behoben
+
+- **REM-Laufzeittest an 7.12.59 angepasst.** Die Test-Attrappe antwortete auf
+  `dream-narrative` mit `{}`; seit 7.12.59 bleibt eine Woche ohne Traum offen
+  und schreibt keine Muster, der Test erwartete sie trotzdem. Die Attrappe
+  liefert jetzt einen Traumtext. `package-lock.json` trägt wieder die
+  Paketversion (stand seit 7.12.56).
+
+## [7.12.59] — 2026-09-13
+
+### Behoben
+
+- **LanceDB-Kompaktierung setzt sich gegen laufende Schreiber durch.** Die
+  nächtliche `optimizeTable` verlor jede Nacht mit „Rewrite transaction was
+  preempted by concurrent transaction Update" — drei Versuche im Abstand von
+  drei Sekunden reichten nicht gegen Emotions-, Dynamik- und Zähler-Updates.
+  Bernds Tabelle stand am 13.09. bei 1522 Fragmenten und 1203 Versionen
+  (1,2 GB), Bernhardines bei 1206 / 1099 (1,4 GB). Jedes `getById`/`update`
+  lief über alle Fragmente; die Antwort-Ausgangs-Dynamik nach einem Turn
+  brauchte 15 bis 143 Sekunden auf dem Hauptthread und blockierte den
+  Gateway. Jetzt zwölf Versuche mit wachsendem Abstand (3 s bis 60 s),
+  innerhalb des bestehenden Zeitbudgets; `maxAttempts` und `retryDelayMs`
+  bleiben per Option übersteuerbar.
+
+- **REM-Dream markiert eine Woche nur als erledigt, wenn ein Traum entstand.**
+  Lieferte das Narrativ-Modell nichts (Zeitüberschreitung, 403), wurde der
+  Lauf trotzdem als abgeschlossen festgeschrieben; jede weitere Nacht meldete
+  „already_processed", und `DREAMS.md` blieb seit dem 04.09. unverändert.
+  Jetzt bleibt der Lauf offen und wird in der nächsten Nacht wiederholt;
+  Muster werden erst zusammen mit dem Narrativ angehängt, damit die
+  Wiederholung sie nicht doppelt. Ist das Narrativ per Konfiguration
+  abgeschaltet, schließt der Lauf wie bisher.
+
+- **Feature-Crons: Rückfall auf den Hauptagenten, wenn kein Agent gebunden
+  ist.** Eine Installation ohne Kanalbindungen bekam stillschweigend keine
+  Feature-Crons. Der Rückfall greift nur ohne gebundenen Agenten und nur auf
+  einen, der sich als Hauptagent ausweist — nie auf einen Subagenten.
+
+## [7.12.58] — 2026-09-13
+
+### Hinzugefügt
+
+- **`llmRouter.defaultModel`: ein gemeinsames Modell für die Hintergrundarbeit.**
+  Ein Teil der Features bekommt im Code fest eine leere Konfiguration und kann
+  deshalb gar kein eigenes Modell tragen — Episodenextraktion, Traumdeutung,
+  Gesprächsanalyse, Verdichtung, Konfliktauflösung und einige mehr. Sie folgten
+  damit zwangsläufig dem Hauptmodell des Agenten und verbrauchten dessen
+  Kontingent für Arbeit, die nichts vom laufenden Gespräch braucht. Gemessen am
+  12.09.2026 waren das allein für die Episodenextraktion 105 Aufrufe an einem
+  Tag auf dem größten verfügbaren Modell.
+
+  Der neue Schlüssel setzt einen gemeinsamen Boden. Ein feature-eigenes Modell
+  hat weiterhin Vorrang, und Features mit eigenem Transport bleiben unberührt:
+  dort wäre ein fremdes Modell am fremden Endpunkt sinnlos. Die Route bleibt
+  `openclaw-override`, Anmeldung und Transport also beim Host.
+
+## [7.12.57] — 2026-09-12
+
+### Behoben
+
+- **Nachgedanken kommen wieder zustande.** Die Kandidatensuche prüfte
+  ausschließlich den jüngsten Eintrag des Antwort-Ausgangs-Protokolls und nur
+  in einem Fenster von 30 bis 120 Minuten. Beides zusammen ließ den Job
+  praktisch nie auslösen: ein einzelner Heartbeat- oder Diagnose-Turn schob
+  sich als jüngster Eintrag davor und verdeckte jeden offenen Gesprächsfaden,
+  der kurz davor lag, und lag das letzte Gespräch mehr als zwei Stunden
+  zurück, fiel es ganz heraus. Gemessen an 14 Tagen Echtdaten scheiterten 26
+  von 36 Läufen allein am Alter des jüngsten Eintrags; die letzte tatsächlich
+  verschickte Nachricht stammte vom 20. Juli 2026.
+
+  Die Suche betrachtet jetzt alle Einträge im Fenster und nimmt den jüngsten
+  offenen darunter. Das Fenster reicht bis 180 Minuten. Gegen dieselben
+  Echtdaten gemessen steigt die Zahl der Tage mit einem Kandidaten von zwei
+  auf vier von vierzehn — bei unverändertem Tageslimit von einer Nachricht.
+
+### Geändert
+
+- **`corrected` zählt als offener Gesprächsfaden.** Eine Korrektur durch den
+  Nutzer ist der natürlichste Anlass für ein „mir ist dazu noch eingefallen".
+  Bisher galten nur `asked_details` und `ignored_or_topic_shifted`.
+
 ## [7.12.56] — 2026-09-12
 
 ### Behoben

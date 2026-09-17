@@ -180,23 +180,32 @@ class ProactiveEngine:
     def afterthought(self, *, now: datetime | None = None) -> dict[str, Any]:
         reference = now or datetime.now(timezone.utc)
         episodes = self._jsonl(self.neo_dir / "episodes.jsonl")
-        threads = [
-            item
-            for item in self._jsonl(self.neo_dir / "open-threads.jsonl")
-            if item.get("status") == "open"
-        ]
-        if not episodes or not threads:
+        # Latest state per thread wins: a later closed record cannot be
+        # resurrected by an earlier open record in this append-only journal.
+        threads = {str(item.get("id")): item for item in
+                   self._jsonl(self.neo_dir / "open-threads.jsonl") if item.get("id")}
+        candidates = []
+        for item in threads.values():
+            if item.get("status") not in {"open", "corrected"} or not str(item.get("text") or "").strip():
+                continue
+            timestamp = item.get("createdAt")
+            if timestamp is None:
+                # Legacy threads have no creation time. Only a unique matching
+                # episode is evidence; an unrelated newest heartbeat is not.
+                matching = [episode for episode in episodes
+                            if episode.get("sessionId") == item.get("sessionId")]
+                timestamp = matching[0].get("endTime") if len(matching) == 1 else None
+            try:
+                ended = datetime.fromisoformat(str(timestamp or ""))
+            except ValueError:
+                continue
+            if ended.tzinfo is None:
+                ended = ended.replace(tzinfo=timezone.utc)
+            if 30 <= (reference - ended).total_seconds() / 60 <= 180:
+                candidates.append((ended, item))
+        if not candidates:
             return {"skipped": True, "reason": "no-open-outcome"}
-        try:
-            ended = datetime.fromisoformat(str(episodes[-1].get("endTime") or ""))
-        except ValueError:
-            return {"skipped": True, "reason": "invalid-episode-time"}
-        if ended.tzinfo is None:
-            ended = ended.replace(tzinfo=timezone.utc)
-        age_minutes = (reference - ended).total_seconds() / 60
-        if age_minutes < 30 or age_minutes > 120:
-            return {"skipped": True, "reason": "outside-30-120-minute-window"}
-        thread = threads[-1]
+        _, thread = max(candidates, key=lambda candidate: candidate[0])
         topic_id = "afterthought:" + str(thread.get("id") or "")
         if not self._consume_budget(topic_id, reference):
             return {"skipped": True, "reason": "governor-budget-or-cooldown"}

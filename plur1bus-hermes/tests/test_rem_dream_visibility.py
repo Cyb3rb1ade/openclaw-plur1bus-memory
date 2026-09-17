@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from plur1bus_hermes.domain import Plur1busDomain
@@ -49,6 +50,37 @@ def _row(memory_id: str, agent: str = "main") -> dict:
 
 
 class RunDreamingVisibilityTests(unittest.TestCase):
+    def test_intentionally_disabled_narrative_does_not_block_completion(self):
+        from plur1bus_hermes.dreaming import build_rem_dream
+        with tempfile.TemporaryDirectory() as directory:
+            domain = Plur1busDomain(Path(directory), 'main', config={'dreaming': {'narrative': {'enabled': False}}})
+            empty = build_rem_dream([_row('a')], 'main')
+            empty['narrative'] = ''
+            with patch('plur1bus_hermes.domain.build_rem_dream', return_value=empty):
+                result = domain.run_dreaming(_FakeTable([_row('a')]))
+            self.assertEqual(result['persisted'], 1)
+            self.assertTrue(result['complete'])
+
+    def test_empty_narrative_keeps_page_retryable_without_diary_or_echo_writes(self):
+        from plur1bus_hermes.dreaming import build_rem_dream
+        from plur1bus_hermes.rate_gate import JobRateGate
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            domain = Plur1busDomain(root, 'main')
+            empty = build_rem_dream([_row('a')], 'main')
+            empty['narrative'] = '  '
+            gate = JobRateGate(root / 'gate.json')
+            with patch('plur1bus_hermes.domain.build_rem_dream', return_value=empty), \
+                 patch.object(domain, '_commit_job_page') as commit, \
+                 patch.object(domain, '_append_jsonl') as append:
+                result = gate.run('dream', 86400, lambda: domain.run_dreaming(_FakeTable([_row('a')])))
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['persisted'], 0)
+            commit.assert_not_called()
+            append.assert_not_called()
+            self.assertFalse((root / 'gate.json').exists())
+            self.assertEqual(domain.run_dreaming(_FakeTable([_row('a')]))['persisted'], 1)
+
     def test_dream_record_is_stamped_with_visibility(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain = Plur1busDomain(Path(directory), "main")

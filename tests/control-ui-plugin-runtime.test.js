@@ -451,7 +451,7 @@ describe("Obsidian target with path confirmation switched off", () => {
 });
 
 describe("shared partition counters", () => {
-  it("explains all-zero shared workspace partitions instead of showing bare zeros", async () => {
+  it("explains all-zero shared workspace partitions and lists primary agents instead of user partitions", async () => {
     const handler = createControlUiHttpHandler({
       getProjection: async () => ({
         schemaVersion: 2,
@@ -459,7 +459,12 @@ describe("shared partition counters", () => {
           status: "ready",
           observedAt: 1_000,
           namespaces: [],
-          cards: { byAgent: [{ id: "main", cards: 9 }], byWorkspace: [{ id: "main", cards: 0 }, { id: "main.dir", cards: 0 }], byUser: [] },
+          cards: {
+            byAgent: [{ id: "developer", cards: 4 }, { id: "main", cards: 9 }],
+            byWorkspace: [{ id: "main", cards: 0 }, { id: "main.dir", cards: 0 }],
+            byUser: [{ id: "main.telegram.default", cards: 0 }],
+            byPrimaryAgent: [{ id: "bernhardine", cards: 12 }, { id: "main", cards: 9 }],
+          },
           storage: { bytes: 1, complete: true },
           lastError: null,
         },
@@ -467,10 +472,29 @@ describe("shared partition counters", () => {
     });
     const response = fakeResponse();
     await handler({ method: "GET", url: CONTROL_UI_PATH }, response);
-    assert.match(response.body, /<code>main<\/code><strong>0<\/strong>/);
     assert.match(response.body, /<code>main\.dir<\/code><strong>0<\/strong>/);
     assert.match(response.body, /hold no cards yet\. A card gets there through \/share &lt;id&gt;/);
-    assert.match(response.body, /No shared user cards observed\./);
-    assert.doesNotMatch(response.body, /through \/share &lt;id&gt; --user/, "the user hint only appears for existing all-zero user partitions");
+    assert.match(response.body, /<h3>Cards by primary agent<\/h3><ul class="count-list"><li><code>bernhardine<\/code><strong>12<\/strong><\/li><li><code>main<\/code><strong>9<\/strong><\/li><\/ul>/);
+    assert.doesNotMatch(response.body, /Cards by user/);
+    assert.doesNotMatch(response.body, /main\.telegram\.default/);
+  });
+
+  it("says so when no primary agent is known", async () => {
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        memoryHealth: {
+          status: "ready",
+          observedAt: 1_000,
+          namespaces: [],
+          cards: { byAgent: [], byWorkspace: [], byUser: [] },
+          storage: { bytes: 1, complete: true },
+          lastError: null,
+        },
+      }),
+    });
+    const response = fakeResponse();
+    await handler({ method: "GET", url: CONTROL_UI_PATH }, response);
+    assert.match(response.body, /No channel-bound agent found\./);
   });
 });

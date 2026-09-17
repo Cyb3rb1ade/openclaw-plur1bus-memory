@@ -488,7 +488,7 @@ def parse_temporal_range(
 
 
 def extract_open_threads(text: str, *, limit: int = 5) -> list[str]:
-    """Extract explicit questions, TODOs, and future commitments as open threads."""
+    """Extract explicit questions, corrections, TODOs and future commitments."""
     threads = []
     for segment in re.split(r"(?<=[.!?])\s+|\n+", str(text or "")):
         candidate = segment.strip()
@@ -496,6 +496,7 @@ def extract_open_threads(text: str, *, limit: int = 5) -> list[str]:
             continue
         if (
             candidate.endswith("?")
+            or re.match(r"^(?:correction|korrektur)\s*:", candidate, re.I)
             or re.search(r"\b(todo|offen|später|later|noch machen|muss noch|will do)\b", candidate, re.I)
         ):
             threads.append(candidate[:500])

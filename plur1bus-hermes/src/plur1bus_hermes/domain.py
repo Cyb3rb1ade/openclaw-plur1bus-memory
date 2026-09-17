@@ -2316,6 +2316,14 @@ class Plur1busDomain:
         if not rows:
             self._commit_job_page(page)
             return dream
+        diary_config = self.config.get("dreaming")
+        narrative_config = diary_config.get("narrative") if isinstance(diary_config, Mapping) else None
+        narrative_expected = not isinstance(narrative_config, Mapping) or narrative_config.get("enabled", True) is not False
+        if narrative_expected and not str(dream.get("narrative") or "").strip():
+            # Native REM normally derives a deterministic narrative. If that
+            # ever fails, preserve the cursor and rate gate: no half-dream,
+            # echo, or diary entry may make the next run look completed.
+            return {**dream, "complete": False, "reason": "narrative-unavailable"}
         self._append_jsonl(neo_dir / "dream-diary.jsonl", dream)
         if self._opt_in_feature_enabled("dreamEcho"):
             # The echo is a short derived summary, not a copy of the diary; it
@@ -3761,7 +3769,7 @@ class Plur1busDomain:
         return self._proactive.proactive_check()
 
     def run_afterthought(self) -> dict[str, Any]:
-        """Run the governed 30-120 minute afterthought workflow."""
+        """Run the governed 30-180 minute afterthought workflow."""
         return self._proactive.afterthought()
 
     def run_meta_reflection(self) -> dict[str, Any]:

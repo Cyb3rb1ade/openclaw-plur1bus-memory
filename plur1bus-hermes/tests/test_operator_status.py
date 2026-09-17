@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from plur1bus_hermes.namespaces import binding_from_scope, resolve_namespace_routes
 from plur1bus_hermes.operator_status import browse_runtime_memories, optimize_runtime_table, read_operator_status
@@ -36,6 +37,53 @@ class _Database:
 
 
 class OperatorStatusTests(unittest.TestCase):
+    def test_retry_budget_and_generation_revalidation_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            table = _Table()
+            runtime, connect = self._runtime(Path(temporary), table)
+            with patch.object(table, 'optimize', side_effect=RuntimeError('retryable commit conflict')) as optimize, \
+                 patch('plur1bus_hermes.operator_status.time.sleep') as sleep:
+                result = optimize_runtime_table(runtime, authorized=True, connect=connect, retry_budget_seconds=1)
+                self.assertFalse(result['ok'])
+                self.assertEqual(optimize.call_count, 1)
+                sleep.assert_not_called()
+            with patch.object(table, 'optimize', side_effect=RuntimeError('retryable commit conflict')) as optimize, \
+                 patch('plur1bus_hermes.operator_status._open_exact_table', side_effect=[table, RuntimeError('generation changed')]) as opened:
+                result = optimize_runtime_table(runtime, authorized=True, retry_delay_seconds=0)
+                self.assertFalse(result['ok'])
+                self.assertEqual(opened.call_count, 2)
+                self.assertEqual(optimize.call_count, 1)
+            self.assertEqual(optimize_runtime_table(runtime, authorized=True, max_attempts=True)['code'], 'invalid_retry_options')
+
+    def test_primary_agent_cards_are_current_profile_only_and_unknown_is_not_zero(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime, connect = self._runtime(Path(temporary), _Table())
+            runtime.profile = 'Coder'
+            result = read_operator_status(runtime, connect=connect)
+            self.assertEqual(result['cards']['byPrimaryAgent'], [{'id': 'main', 'profile': 'Coder', 'cards': 4}])
+            failed = read_operator_status(runtime, connect=lambda _: (_ for _ in ()).throw(OSError('private path')))
+            self.assertEqual(failed['cards']['byPrimaryAgent'], [{'id': 'main', 'profile': 'Coder', 'cards': None}])
+            runtime.scope_binding = binding_from_scope('main', {'scopeType': 'chat', 'platform': 'telegram', 'chat': 'room'})
+            self.assertEqual(read_operator_status(runtime, connect=connect)['cards']['byPrimaryAgent'], [])
+
+    def test_optimize_retries_only_conflicts_and_does_not_change_data_route(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            table = _Table()
+            runtime, connect = self._runtime(Path(temporary), table)
+            with patch.object(table, 'optimize', side_effect=[RuntimeError('preempted by concurrent transaction Update'),
+                                                            {'fragments_removed': 7}]) as optimize:
+                result = optimize_runtime_table(runtime, authorized=True, connect=connect, retry_delay_seconds=0)
+                self.assertTrue(result['ok'])
+                self.assertEqual(result['attempts'], 2)
+                self.assertEqual(optimize.call_count, 2)
+            with patch.object(table, 'optimize', side_effect=RuntimeError('permission denied')) as optimize:
+                self.assertFalse(optimize_runtime_table(runtime, authorized=True, connect=connect)['ok'])
+                self.assertEqual(optimize.call_count, 1)
+            with patch.object(table, 'optimize', side_effect=RuntimeError('retryable commit conflict')) as optimize:
+                self.assertFalse(optimize_runtime_table(runtime, authorized=True, connect=connect,
+                                                       max_attempts=2, retry_delay_seconds=0)['ok'])
+                self.assertEqual(optimize.call_count, 2)
+
     def test_memory_browser_real_lance_scope_literal_search_and_paging(self):
         import lancedb
         with tempfile.TemporaryDirectory() as temporary:
@@ -118,7 +166,7 @@ class OperatorStatusTests(unittest.TestCase):
             self.assertEqual(optimize_runtime_table(runtime, authorized=False, connect=connect), {"ok": False, "code": "unauthorized"})
             result = optimize_runtime_table(runtime, authorized=True, connect=connect)
         self.assertEqual(table.optimized, 1)
-        self.assertEqual(result, {"ok": True, "code": "optimized", "stats": {"fragmentsRemoved": 7, "fragmentsAdded": 2}})
+        self.assertEqual(result, {"ok": True, "code": "optimized", "stats": {"fragmentsRemoved": 7, "fragmentsAdded": 2}, "attempts": 1})
 
     def test_route_substitution_is_not_a_foreign_partition_probe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

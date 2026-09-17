@@ -3,6 +3,20 @@ import * as sdk from '@hermes/plugin-sdk';
 // Optional newer exports must not prevent the diagnostic/fallback from loading.
 const { host, useValue, STATUSBAR_AREAS, PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA } = sdk;
 
+/** Project only the active private agent; unknown counts remain unknown.
+ * @param {object} status Profile-bound backend status.
+ * @returns {object[]} Safe rows for the active-profile card.
+ */
+export function primaryAgentRows(status) {
+  if (status?.scopeType !== 'agent-private') return [];
+  const rows = status.cards?.byPrimaryAgent;
+  if (!Array.isArray(rows)) return [];
+  return rows.filter(row => row && row.id === status.agentId).map(row => ({
+    id: row.id, profile: typeof row.profile === 'string' ? row.profile : '',
+    cards: Number.isSafeInteger(row.cards) && row.cards >= 0 ? row.cards : null,
+  }));
+}
+
 /** Read-only startup check; source patch presence is never inferred from an API name.
  * @param {object} runtime Hermes SDK host.
  * @param {object} bridge Electron renderer bridge.
@@ -545,6 +559,11 @@ function Partition({ rest, profile }) {
       h('div', { className: 'pb-grid' },
         h('section', null, h('h2', null, 'Memory-Partition'), h('dl', null,
           field('Agent', s.agentId), field('Scope', s.scopeType), field('Datensätze', s.storage?.cards))),
+        h('section', null, h('h2', null, 'Karten des Hauptagenten · aktives Profil'),
+          h('p', null, 'Private Karten dieses Profils. Andere Profile und Subagenten werden nicht ausgelesen.'),
+          ...primaryAgentRows(s).map(row => h('dl', { key: row.id },
+            field('Profil', row.profile), field('Agent', row.id), field('Karten', row.cards))),
+          !primaryAgentRows(s).length ? h('p', null, 'Keine private Hauptagenten-Zählung verfügbar.') : null),
         h('section', null, h('h2', null, 'Embeddings'), h('dl', null,
           field('Provider', embedding.provider), field('Modell', embedding.model), field('Dimensionen', embedding.dimensions))),
         h('section', null, h('h2', null, 'Reranking'), h('dl', null,

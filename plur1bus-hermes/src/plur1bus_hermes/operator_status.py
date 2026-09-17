@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 import threading
+import time
+import math
 from collections.abc import Callable, Mapping
 import os
 from pathlib import Path
@@ -174,6 +176,7 @@ def read_operator_status(
         "embedding": _embedding_projection(getattr(runtime, "config", {})),
         "reranker": _reranker_projection(getattr(runtime, "config", {})),
         "storage": {"status": "unavailable", "cards": None},
+        "cards": {"byPrimaryAgent": []},
         "configured": False,
     }
     try:
@@ -194,6 +197,13 @@ def read_operator_status(
             "cards": None,
             "code": "table_unavailable",
         }
+    # Hermes' authority boundary is the active profile, not an OpenClaw
+    # channel-binding roster. Never enumerate sibling profiles to fill a card.
+    profile = _public_value(getattr(runtime, "profile", None))
+    if profile is not None and projection["scopeType"] == "agent-private":
+        projection["cards"]["byPrimaryAgent"] = [{
+            "id": agent_id, "profile": profile, "cards": projection["storage"]["cards"],
+        }]
     return projection
 
 
@@ -239,23 +249,46 @@ def optimize_runtime_table(
     *,
     authorized: bool,
     connect: Callable[[str], Any] | None = None,
+    max_attempts: int = 12,
+    retry_delay_seconds: float = 3,
+    retry_budget_seconds: float = 600,
 ) -> dict[str, Any]:
     """Compact exactly runtime's existing table after caller-side authorization.
 
     This invokes only LanceDB's physical ``optimize`` primitive.  It never
-    deletes rows, applies a retention policy, or creates a missing table.
+    deletes rows itself or creates a missing table. Conflict retries have a
+    bounded waiting budget; an executing synchronous LanceDB call cannot be
+    cancelled by a Python deadline. Non-conflict failures are never retried.
     """
     if authorized is not True:
         return {"ok": False, "code": "unauthorized"}
+    if (type(max_attempts) is not int or not 1 <= max_attempts <= 100
+            or not isinstance(retry_delay_seconds, (int, float))
+            or not math.isfinite(retry_delay_seconds) or retry_delay_seconds < 0
+            or not isinstance(retry_budget_seconds, (int, float))
+            or not math.isfinite(retry_budget_seconds) or retry_budget_seconds <= 0):
+        return {"ok": False, "code": "invalid_retry_options"}
     if not _OPTIMIZE_LOCK.acquire(blocking=False):
         return {"ok": False, "code": "busy"}
     try:
-        table = _open_exact_table(runtime, connect)
-        optimize = getattr(table, "optimize", None)
-        if not callable(optimize):
-            return {"ok": False, "code": "optimize_unavailable"}
-        stats = optimize()
-        return {"ok": True, "code": "optimized", "stats": _safe_stats(stats)}
+        deadline = time.monotonic() + retry_budget_seconds
+        for attempt in range(1, max_attempts + 1):
+            if time.monotonic() >= deadline:
+                return {"ok": False, "code": "optimize_retry_budget_exhausted"}
+            # Revalidate the certified generation before every attempt.
+            table = _open_exact_table(runtime, connect)
+            optimize = getattr(table, "optimize", None)
+            if not callable(optimize):
+                return {"ok": False, "code": "optimize_unavailable"}
+            try:
+                stats = optimize()
+                return {"ok": True, "code": "optimized", "stats": _safe_stats(stats), "attempts": attempt}
+            except Exception as error:
+                delay = min(60, retry_delay_seconds * 2 ** (attempt - 1))
+                conflict = re.search(r"retryable commit conflict|preempted by concurrent", str(error), re.I)
+                if not conflict or attempt == max_attempts or time.monotonic() + delay >= deadline:
+                    return {"ok": False, "code": "optimize_failed", "attempts": attempt}
+                time.sleep(delay)
     except Exception:
         return {"ok": False, "code": "optimize_failed"}
     finally:

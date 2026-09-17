@@ -169,7 +169,7 @@ def run_jobs(
                 # raised this cadence to 3 h to save model-carrier tokens. The
                 # port's afterthought is LLM-free and deterministic
                 # (proactive.py), so the token rationale does not apply, and the
-                # hourly launchd cadence lands inside the 30-120 min proactive
+                # hourly launchd cadence lands inside the 30-180 min proactive
                 # window far better than a 3 h spacing.
                 results["afterthought"] = (
                     gate.run("afterthought", 1_800, domain.run_afterthought)

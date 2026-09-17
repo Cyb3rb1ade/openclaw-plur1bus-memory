@@ -30,6 +30,15 @@ class InternalLlmBackend:
         scope_key: str | None = None,
     ) -> None:
         self.config = dict(config.get("llm") or {})
+        # Hermes already has a shared internal transport (`llm`), independent
+        # of the chat model. The upstream default is a fallback on that route,
+        # never permission to replace an explicitly selected native model.
+        router = config.get("llmRouter")
+        default_model = router.get("defaultModel") if isinstance(router, dict) else None
+        own_model = self.config.get("model")
+        if not (isinstance(own_model, str) and own_model.strip()):
+            if isinstance(default_model, str) and default_model.strip():
+                self.config["model"] = default_model.strip()
         self.agent_id = agent_id
         self.opener = opener
         self.cache = cache

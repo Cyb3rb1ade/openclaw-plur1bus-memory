@@ -24,6 +24,15 @@ await plugin.link(name => {
   throw new Error(`Unexpected external import: ${name}`);
 });
 await plugin.evaluate();
+const { primaryAgentRows } = plugin.namespace;
+const counts = { scopeType: 'agent-private', agentId: 'alpha', cards: { byPrimaryAgent: [
+  { id: 'alpha', profile: 'alpha', cards: 0 }, { id: 'beta', profile: 'beta', cards: 88 },
+] } };
+assert.equal(primaryAgentRows(counts).length, 1);
+assert.equal(primaryAgentRows(counts)[0].cards, 0, 'a measured zero is preserved');
+assert.equal(primaryAgentRows({ ...counts, cards: { byPrimaryAgent: [{ id: 'alpha', cards: null }] } })[0].cards, null);
+assert.equal(primaryAgentRows({ ...counts, scopeType: 'chat' }).length, 0, 'shared rows are not private agent cards');
+assert.equal(primaryAgentRows({ ...counts, cards: undefined }).length, 0, 'legacy status does not invent counts');
 const { createScopedReader } = plugin.namespace;
 const { createScopedRequest } = plugin.namespace;
 const { createProfileTransport } = plugin.namespace;

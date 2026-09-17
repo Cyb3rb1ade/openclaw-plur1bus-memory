@@ -1,5 +1,12 @@
 # Distribution acceptance history
 
+## 7.12.60-hermes.0 — new candidate
+
+Source includes upstream `bcb80ccef6ce5ab9e4604cfe923901885cc59d9e` and
+native adaptations documented in `docs/audits/hermes-7.12.60-delta-review.md`.
+Current verification is recorded separately in `docs/audits/hermes-7.12.60-verification.md`.
+The .56 evidence below is historical, not certification of this candidate.
+
 ## 7.12.56-hermes.0 — candidate evidence boundary
 
 The source incorporates upstream v7.12.56

@@ -154,7 +154,7 @@ describe("db-adapter LanceDB timeouts", () => {
     );
   });
 
-  it("7.12.45: optimizeTable wiederholt bei 'Retryable commit conflict' bis zu dreimal und meldet die Versuche", async () => {
+  it("7.12.45/7.12.59: optimizeTable wiederholt bei 'Retryable commit conflict' bis maxAttempts und meldet die Versuche", async () => {
     let calls = 0;
     const table = makeFakeTable();
     table.optimize = async () => {
@@ -164,26 +164,46 @@ describe("db-adapter LanceDB timeouts", () => {
     };
     const warnings = [];
     const adapter = makeAdapter(table, { readTimeoutMs: 5000, writeTimeoutMs: 5000, logger: { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} } });
-    const result = await adapter.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0 });
+    const result = await adapter.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0, maxAttempts: 3 });
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.attempts, 3);
     assert.strictEqual(calls, 3);
     assert.ok(warnings.some((m) => /kollidierte .*Versuch 1\/3/.test(m)), warnings.join(" | "));
   });
 
-  it("7.12.45: optimizeTable gibt nach drei Konflikten oder bei anderen Fehlern ohne Wiederholung auf", async () => {
+  it("7.12.59: ohne maxAttempts sind zwoelf Versuche mit wachsendem Abstand der Standard", async () => {
+    // Drei Versuche im Abstand von drei Sekunden verloren jede Nacht gegen
+    // Emotions-, Dynamik- und Zaehler-Updates (13.09.2026: 1522 Fragmente).
+    let calls = 0;
+    const table = makeFakeTable();
+    table.optimize = async () => {
+      calls += 1;
+      if (calls < 8) throw new Error("Retryable commit conflict: preempted by concurrent transaction Update. Please retry.");
+      return { compaction: { fragmentsRemoved: 100 } };
+    };
+    const warnings = [];
+    const adapter = makeAdapter(table, { readTimeoutMs: 5000, writeTimeoutMs: 5000, logger: { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} } });
+    const result = await adapter.optimizeTable("main", { timeoutMs: 120_000, retryDelayMs: 1 });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.attempts, 8);
+    assert.strictEqual(calls, 8);
+    assert.ok(warnings.some((m) => /Versuch 1\/12.*neuer Anlauf in 1 ms/.test(m)), warnings.join(" | "));
+    assert.ok(warnings.some((m) => /Versuch 7\/12.*neuer Anlauf in 64 ms/.test(m)), "Abstand muss wachsen: " + warnings.join(" | "));
+  });
+
+  it("7.12.45/7.12.59: optimizeTable gibt nach maxAttempts Konflikten oder bei anderen Fehlern ohne Wiederholung auf", async () => {
     let calls = 0;
     const conflict = makeFakeTable();
     conflict.optimize = async () => { calls += 1; throw new Error("Retryable commit conflict: please retry"); };
     const a = makeAdapter(conflict, { readTimeoutMs: 5000, writeTimeoutMs: 5000, logger: { warn() {}, info() {}, debug() {}, error() {} } });
-    const r1 = await a.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0 });
+    const r1 = await a.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0, maxAttempts: 3 });
     assert.strictEqual(r1.ok, false);
     assert.strictEqual(calls, 3);
     let other = 0;
     const plain = makeFakeTable();
     plain.optimize = async () => { other += 1; throw new Error("disk full"); };
     const b = makeAdapter(plain, { readTimeoutMs: 5000, writeTimeoutMs: 5000, logger: { warn() {}, info() {}, debug() {}, error() {} } });
-    const r2 = await b.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0 });
+    const r2 = await b.optimizeTable("main", { timeoutMs: 20_000, retryDelayMs: 0, maxAttempts: 3 });
     assert.strictEqual(r2.ok, false);
     assert.match(r2.reason, /disk full/);
     assert.strictEqual(other, 1);

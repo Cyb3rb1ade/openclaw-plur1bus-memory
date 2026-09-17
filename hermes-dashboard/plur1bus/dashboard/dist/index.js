@@ -70,11 +70,19 @@
         .finally(function () { setBusy(false); });
     }, [review, load]);
     const storage = data && data.storage ? data.storage : {}, embedding = data && data.embedding ? data.embedding : {}, configured = Boolean(data && data.configured), reviewed = review && review.proposal;
+    const primaryRows = data && data.scopeType === "agent-private" && Array.isArray(data.cards?.byPrimaryAgent)
+      ? data.cards.byPrimaryAgent.filter(row => row && row.id === data.agentId) : [];
     return React.createElement("main", { className: "pb-page" },
       React.createElement("header", { className: "pb-header" }, React.createElement("div", null, React.createElement("h1", null, "Memory status"), React.createElement("p", null, "This view reports the memory partition selected by the dashboard server.")), React.createElement(Button, { onClick: load, disabled: loading || busy }, loading ? "Checking…" : "Refresh")),
       React.createElement("div", { className: "pb-signal " + (configured ? "is-ready" : "is-degraded") }, React.createElement("span", { "aria-hidden": "true" }), configured ? "Memory partition configured" : "Memory partition needs attention"),
       notice ? React.createElement(Panel, { className: "pb-error" }, React.createElement(Content, null, notice)) : null,
       !loading && data ? React.createElement("div", { className: "pb-grid" }, React.createElement(Panel, null, React.createElement(Content, null, React.createElement("h2", null, "Active partition"), React.createElement("dl", null, field("Agent", data.agentId), field("Scope", data.scopeType), field("Cards", storage.cards)))), React.createElement(Panel, null, React.createElement(Content, null, React.createElement("h2", null, "Retrieval"), React.createElement("dl", null, field("Embedding provider", embedding.provider), field("Model", embedding.model), field("Dimensions", embedding.dimensions), field("Credentials", embedding.credentials))))) : null,
+      data ? React.createElement(Panel, null, React.createElement(Content, null,
+        React.createElement("h2", null, "Cards by primary agent · active profile"),
+        React.createElement("p", null, "Private cards in this profile. Other profiles and subagents are not scanned."),
+        ...primaryRows.map(row => React.createElement("dl", { key: row.id }, field("Profile", row.profile),
+          field("Agent", row.id), field("Cards", Number.isSafeInteger(row.cards) && row.cards >= 0 ? row.cards : null))),
+        !primaryRows.length ? React.createElement("p", null, "No private primary-agent count available.") : null)) : null,
       React.createElement(Panel, { className: "pb-workshop" }, React.createElement(Content, null,
         React.createElement("h2", null, "Skill Workshop · Mined Skills"),
         React.createElement("p", null, "Review scoped proposals and applied skills. Withdrawal archives unchanged generated content and preserves manual edits."),
