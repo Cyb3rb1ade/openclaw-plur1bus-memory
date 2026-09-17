@@ -31,11 +31,11 @@ test("Local Inference resolves patched adm-zip with ONNX Runtime-compatible APIs
   const runtimeVersion = onnxRequire("adm-zip/package.json").version;
 
   assert.ok(
-    versionAtLeast(lockedVersion, "0.6.0"),
+    versionAtLeast(lockedVersion, "0.6.1"),
     `onnxruntime-node lock path ${lockPackagePath} resolved vulnerable adm-zip ${lockedVersion}`,
   );
   assert.ok(
-    versionAtLeast(runtimeVersion, "0.6.0"),
+    versionAtLeast(runtimeVersion, "0.6.1"),
     `onnxruntime-node resolved vulnerable adm-zip ${runtimeVersion} from ${admZipPackagePath}`,
   );
 

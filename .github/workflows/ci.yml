@@ -40,10 +40,9 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
-      # 2026-09-10: informational. The remaining advisories have no upstream fix
-      # (adm-zip via @huggingface/transformers/onnxruntime-node — patched locally,
-      # see tests/local-inference-*; sharp/libheif). The report stays visible in
-      # the job log; the job no longer fails on it.
+      # Informational policy retained. The pinned optional inference patches
+      # (adm-zip 0.6.1, sharp 0.35.4) are covered by local-inference regressions;
+      # audit output remains visible for newly published advisories.
       - name: Run security audit (informational)
         run: npm audit --audit-level=moderate || true
       - name: Verify lockfile signatures (informational)
