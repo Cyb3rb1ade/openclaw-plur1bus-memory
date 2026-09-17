@@ -35,4 +35,9 @@ from local package construction and must never be inferred from it.
 - Complete upstream delta retained and native adaptations implemented/documented.
 - Both UI harnesses green; full JS suite green (4,668 passed, 76 skipped).
 - Upstream defect #155 reported; existing optional-JS audit issue #150 updated.
-- Final Python, host integration and artifact verification in progress.
+- Final Python gate: 1,044 passed, 230 subtests, 2 platform skips; 81% coverage.
+- Host API integration: 30 passed; mtplx: 9 passed; four shell suites passed.
+- Native CI 35257658387 passed all five platforms, with real wheel installation, LanceDB smoke and rollback; Windows EXE smoke passed on both architectures.
+- All downloaded artifact checksums and ZIP payload manifests verified against source 2aa945f7990bba5f5f84a1db60ddc56799344fc3.
+- Two standalone Python wheels and separate npm tarball built/inspected. Candidate installers remain unsigned; no publication or productive activation performed.
+- Final review and efficiency proposals recorded. Optional optimizations are not implemented; the user decides separately.
