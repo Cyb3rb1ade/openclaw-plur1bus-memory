@@ -127,7 +127,8 @@ class ProactiveEngine:
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode):
                 return []
-            position, pending = info.st_size, b''
+            position = info.st_size
+            pending: list[bytes] = []
 
             def consume(segment: bytes) -> bool:
                 for line in reversed(segment.decode('utf-8').splitlines()):
@@ -148,12 +149,20 @@ class ProactiveEngine:
                 chunk = stream.read(length)
                 if len(chunk) != length:
                     raise OSError('journal changed during tail read')
-                parts = (chunk + pending).split(b'\n')
-                pending = parts[0]
-                for segment in reversed(parts[1:]):
+                parts = chunk.split(b'\n')
+                if len(parts) == 1:
+                    # A large record/no-LF file must not repeatedly copy its
+                    # growing suffix on every chunk (quadratic work).
+                    pending.append(chunk)
+                    continue
+                last = parts[-1] + b''.join(reversed(pending))
+                pending = [parts[0]]
+                if consume(last):
+                    return list(reversed(values))
+                for segment in reversed(parts[1:-1]):
                     if consume(segment):
                         return list(reversed(values))
-            consume(pending)
+            consume(b''.join(reversed(pending)))
         return list(reversed(values))
 
     def detect_patterns(
