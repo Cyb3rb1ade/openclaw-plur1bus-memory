@@ -7,10 +7,14 @@ import json
 import math
 import os
 import re
+import stat
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from .file_lock import open_existing
+from .validation import resolve_inside
 
 
 def _utcnow() -> str:
@@ -55,6 +59,30 @@ def _cosine(first: list[float], second: list[float]) -> float:
     return sum(left * right for left, right in zip(first, second))
 
 
+def _nearest_pattern_cluster(vector: list[float], clusters: list[dict], threshold: float) -> dict | None:
+    """Use running centroids, preserving legacy decisions near ties/thresholds.
+
+    This private path handles at most 500 nonnegative unit vectors of 128
+    dimensions from _vector. 1e-10 conservatively exceeds accumulation and dot
+    product roundoff for those bounds; it is not a new similarity threshold.
+    """
+    scored = [(_cosine(vector, cluster['_centroid']), cluster) for cluster in clusters]
+    if not scored:
+        return None
+    scores = sorted((score for score, _ in scored), reverse=True)
+    margin = 1e-10
+    if (abs(scores[0]) <= margin or abs(scores[0] - threshold) <= margin
+            or (len(scores) > 1 and scores[0] - scores[1] <= 2 * margin)):
+        # Reproduce the original summation and strict > tie rule exactly.
+        scored = [(_cosine(vector, [sum(v[d] for v in cluster['_vectors']) / len(cluster['_vectors'])
+                                   for d in range(len(vector))]), cluster) for cluster in clusters]
+    best, best_score = None, 0.0
+    for score, cluster in scored:
+        if score > best_score:
+            best, best_score = cluster, score
+    return best if best is not None and not best_score < threshold else None
+
+
 class ProactiveEngine:
     """Agent-local persistent governor for nudges, afterthoughts, and reflection."""
 
@@ -76,6 +104,58 @@ class ProactiveEngine:
                 values.append(value)
         return values
 
+    def _jsonl_tail(self, path: Path, limit: int) -> list[dict[str, Any]]:
+        """Read the last valid objects, not merely the last physical lines.
+
+        Read an initial-size prefix backwards in 64 KiB chunks. Decode only
+        complete LF-delimited segments, so UTF-8 boundaries stay intact;
+        splitlines preserves legacy CR/Unicode separator handling as well.
+        Long/no-LF segments may require more I/O, never silent truncation.
+        Other journal readers deliberately retain their full-history semantics.
+        """
+        if type(limit) is not int or limit < 0:
+            raise ValueError('invalid journal tail limit')
+        if limit == 0:
+            return []
+        checked = resolve_inside(str(self.neo_dir), str(path.relative_to(self.neo_dir)))
+        try:
+            descriptor = open_existing(checked)
+        except FileNotFoundError:
+            return []
+        values: list[dict[str, Any]] = []
+        with os.fdopen(descriptor, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return []
+            position, pending = info.st_size, b''
+
+            def consume(segment: bytes) -> bool:
+                for line in reversed(segment.decode('utf-8').splitlines()):
+                    try:
+                        value = json.loads(line)
+                    except (TypeError, ValueError):
+                        continue  # Same malformed-record policy as _jsonl.
+                    if isinstance(value, dict):
+                        values.append(value)
+                        if len(values) == limit:
+                            return True
+                return False
+
+            while position:
+                length = min(65536, position)
+                position -= length
+                stream.seek(position)
+                chunk = stream.read(length)
+                if len(chunk) != length:
+                    raise OSError('journal changed during tail read')
+                parts = (chunk + pending).split(b'\n')
+                pending = parts[0]
+                for segment in reversed(parts[1:]):
+                    if consume(segment):
+                        return list(reversed(values))
+            consume(pending)
+        return list(reversed(values))
+
     def detect_patterns(
         self,
         *,
@@ -84,25 +164,21 @@ class ProactiveEngine:
     ) -> dict[str, Any]:
         turns = [
             turn
-            for turn in self._jsonl(self.neo_dir / "turn-journal.jsonl")[-500:]
+            for turn in self._jsonl_tail(self.neo_dir / "turn-journal.jsonl", 500)
             if turn.get("role") == "user" and str(turn.get("content") or "").strip()
         ]
         clusters: list[dict[str, Any]] = []
         for turn in turns:
             text = str(turn["content"])
             vector = _vector(text)
-            best = None
-            best_score = 0.0
-            for cluster in clusters:
-                score = _cosine(vector, cluster["_centroid"])
-                if score > best_score:
-                    best, best_score = cluster, score
-            if best is None or best_score < similarity_threshold:
+            best = _nearest_pattern_cluster(vector, clusters, similarity_threshold)
+            if best is None:
                 clusters.append({
                     "id": "p-" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:12],
                     "turnIds": [str(turn.get("id") or "")],
                     "examples": [text[:500]],
                     "_vectors": [vector],
+                    "_sum": list(vector),
                     "_centroid": vector,
                 })
             else:
@@ -110,10 +186,8 @@ class ProactiveEngine:
                 best["examples"].append(text[:500])
                 best["_vectors"].append(vector)
                 count = len(best["_vectors"])
-                best["_centroid"] = [
-                    sum(item[index] for item in best["_vectors"]) / count
-                    for index in range(len(vector))
-                ]
+                best["_sum"] = [a + b for a, b in zip(best["_sum"], vector)]
+                best["_centroid"] = [value / count for value in best["_sum"]]
         persisted = [
             {
                 "id": cluster["id"],
