@@ -7,6 +7,28 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.60] — 2026-09-17
+
+### Geändert
+
+- **Dashboard: „Cards by primary agent“ statt „Cards by user“.** Die Karte
+  „Cards by user“ zählte nur die per `/share <id> --user` geteilten
+  Partitionen und stand deshalb dauerhaft auf 0, obwohl Bernd, Bernhardine
+  und Heisenberg laufend Karten schreiben — die liegen in der privaten
+  Partition des Agenten. An ihrer Stelle listet die Seite jetzt die privaten
+  Kartenzahlen der Hauptagenten. Hauptagent ist jeder Agent mit eigener
+  Kanal-Bindung (`bindings` in der Host-Config), live gelesen; Subagenten
+  erscheinen nicht. Der Health-Snapshot trägt dafür `cards.byPrimaryAgent`;
+  ältere Snapshots ohne das Feld ergeben eine leere Liste.
+
+### Behoben
+
+- **REM-Laufzeittest an 7.12.59 angepasst.** Die Test-Attrappe antwortete auf
+  `dream-narrative` mit `{}`; seit 7.12.59 bleibt eine Woche ohne Traum offen
+  und schreibt keine Muster, der Test erwartete sie trotzdem. Die Attrappe
+  liefert jetzt einen Traumtext. `package-lock.json` trägt wieder die
+  Paketversion (stand seit 7.12.56).
+
 ## [7.12.59] — 2026-09-13
 
 ### Behoben
