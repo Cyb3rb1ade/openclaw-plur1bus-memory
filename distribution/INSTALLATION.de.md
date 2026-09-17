@@ -8,7 +8,7 @@ Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
 `/Applications/PLUR1BUS Installer`.
 
 Stand **17. September 2026**: Diese Anleitung beschreibt den
-Hermes-Installer-Kandidaten **7.12.60-hermes.0** (noch nicht veröffentlicht). Maßgeblich für die Verfügbarkeit sind
+Hermes-Installer-Kandidaten **7.12.61-hermes.0** (noch nicht veröffentlicht). Maßgeblich für die Verfügbarkeit sind
 die veröffentlichten Assets samt Prüfberichten unter dem passenden Release-Tag.
 Portable Archive und Python-Wheels sind die
 plattformübergreifenden Referenzartefakte. Native Installer sind separat nach
