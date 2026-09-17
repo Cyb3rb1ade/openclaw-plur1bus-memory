@@ -23,6 +23,7 @@ import {
   userPoolKey,
   workspacePoolKey,
   describeDirectSessionRoute,
+  describePrimaryAgentIds,
   describeUserPoolLabels,
   describeWorkspacePoolLabels,
   resolveSessionOwnerMemoryContext,
@@ -1452,5 +1453,20 @@ describe("shared user pool labels", () => {
       assert.match(label, /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
     }
     assert.deepEqual(describeUserPoolLabels({}), []);
+  });
+
+  it("names the channel-bound agents as primary agents, once each and sorted", () => {
+    const hostConfig = {
+      bindings: [
+        { agentId: "main", match: { channel: "discord", accountId: "default" } },
+        { agentId: "main", match: { channel: "telegram", accountId: "default" } },
+        { agentId: "heisenberg", match: { channel: "telegram", accountId: "heisenberg" } },
+        { agentId: "bernhardine", match: { channel: "telegram", accountId: "bernhardine" } },
+        { agentId: "/root/private", match: { channel: "telegram", accountId: "x" } },
+        { match: { channel: "telegram", accountId: "y" } },
+      ],
+    };
+    assert.deepEqual(describePrimaryAgentIds(hostConfig), ["bernhardine", "heisenberg", "main"]);
+    assert.deepEqual(describePrimaryAgentIds({}), []);
   });
 });

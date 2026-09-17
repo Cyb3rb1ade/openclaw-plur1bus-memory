@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.57",
+  "version": "7.12.60",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-command", "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session", "hasSubcommands": false },
@@ -843,8 +843,13 @@
       "llmRouter": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Diagnose der Modellrouten. Standardmäßig aus.",
+        "description": "Modellrouten der Hintergrund-Features: gemeinsamer Standard und Diagnose.",
         "properties": {
+          "defaultModel": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Modell für alle Hintergrund-Features, die kein eigenes konfiguriert haben (Episodenextraktion, Traumdeutung, Gesprächsanalyse, Verdichtung …). Ohne diesen Wert folgen sie dem Hauptmodell des Agenten und verbrauchen dessen Kontingent, obwohl sie nichts vom laufenden Gespräch brauchen. Ein feature-eigenes Modell hat Vorrang; Features mit eigenem Transport (baseUrl/apiKey/headers) bleiben unberührt. Die Route bleibt openclaw-override, Anmeldung und Transport also beim Host."
+          },
           "errorDiagnostics": {
             "type": "boolean",
             "default": false,

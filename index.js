@@ -210,6 +210,7 @@ import {
   getSharedMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
+  describePrimaryAgentIds,
   describeUserPoolLabels,
   describeWorkspacePoolLabels,
   resolveMemoryRequestContext,
@@ -4539,8 +4540,26 @@ const plugin = {
       baseDbPath,
       logger: api.logger,
     });
+    // 7.12.58: Hintergrund-Features ohne eigenes Modell folgten dem Hauptmodell
+    // des Agenten. Episodenextraktion, Traumdeutung, Gesprächsanalyse und die
+    // Verdichtung bekommen hier fest `{}` übergeben, können also gar kein
+    // eigenes Modell tragen — sie verbrauchten damit das Kontingent des
+    // teuersten Modells für Arbeit, die nichts vom laufenden Gespräch braucht.
+    // `llmRouter.defaultModel` ist der gemeinsame Boden dafür. Ein
+    // feature-eigenes Modell hat weiterhin Vorrang, und Features mit eigenem
+    // Transport bleiben unberührt: dort wäre ein fremdes Modell am fremden
+    // Endpunkt sinnlos.
+    const featureDefaultModel = typeof cfg.llmRouter?.defaultModel === "string"
+      && cfg.llmRouter.defaultModel.trim()
+      ? cfg.llmRouter.defaultModel.trim()
+      : "";
     const createFeatureRoute = (feature, featureConfig = {}) => {
       const routeConfig = { ...featureConfig };
+      const hasOwnTransport = Boolean(routeConfig.baseUrl || routeConfig.apiKey || routeConfig.headers);
+      if (featureDefaultModel && !hasOwnTransport
+        && !(typeof routeConfig.model === "string" && routeConfig.model.trim())) {
+        routeConfig.model = featureDefaultModel;
+      }
       let credentialUnavailable = false;
       if (typeof routeConfig.apiKey === "string" && routeConfig.apiKey.trim()) {
         try {
@@ -5472,6 +5491,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     // table, directory, or card as a side effect.
     const controlHealthWorkspaceIdentityByKey = new Map();
     const controlHealthUserLabelByKey = new Map();
+    let controlHealthPrimaryAgentIds = [];
     const controlHealthNamespaceRoots = namespaceLayout.mode === "named"
       ? namespaceLayout.recallReadNamespaces.map((id) => ({
           id,
@@ -5496,6 +5516,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       measureStorage: () => measureControlHealthStorage(baseDbPath),
       workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
       userIdentityForKey: (key) => controlHealthUserLabelByKey.get(key) ?? null,
+      primaryAgentIds: () => controlHealthPrimaryAgentIds,
       maxPartitions: CONTROL_HEALTH_MAX_PARTITIONS,
     });
     // The workspace identities are refreshed inside the scan, not by the page
@@ -5537,6 +5558,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       for (const entry of describeUserPoolLabels(liveHostConfig)) {
         controlHealthUserLabelByKey.set(entry.poolKey, entry.label);
       }
+      controlHealthPrimaryAgentIds = describePrimaryAgentIds(liveHostConfig);
     };
     const controlHealth = createControlPlaneHealthInspector({
       scan: async () => {

@@ -365,9 +365,14 @@ test("registered internal REM processes every allowed partition with isolated pr
     async complete(params) {
       prompts.push({ purpose: params.purpose, content: params.messages?.map((message) => message.content).join("\n") || "" });
       return {
+        // Seit 7.12.59 schreibt REM Muster erst zusammen mit einem Traum fest;
+        // ohne Narrativ bleibt die Woche offen. Das Modell liefert hier also
+        // einen echten Traumtext (mindestens 40 Zeichen).
         text: params.purpose === "rem-pattern-analysis"
           ? JSON.stringify({ patternName: "release", description: "release only", trend: "neu", confidence: 0.9 })
-          : "{}",
+          : params.purpose === "dream-narrative"
+            ? "Ich stand in einem Bahnhof aus Glas, und jeder Zug trug eine andere Woche davon."
+            : "{}",
         provider: "runtime-test",
         model: "runtime-test",
         usage: {},

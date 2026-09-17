@@ -1078,3 +1078,41 @@ test("7.12.55: der native AbortError bleibt als Fehlerklasse erkennbar", async (
   assert.equal(result.status, "failed");
   assert.match(JSON.stringify(logger.calls), /"errorClass":"AbortError"/);
 });
+
+// 7.12.58: llmRouter.defaultModel — Hintergrund-Features ohne eigenes Modell.
+// Die Weiche selbst sitzt in index.js (createFeatureRoute); hier wird die
+// Vertragsseite geprüft, gegen dieselbe Bedingung.
+const withFeatureDefault = (featureConfig, defaultModel) => {
+  const routeConfig = { ...featureConfig };
+  const hasOwnTransport = Boolean(routeConfig.baseUrl || routeConfig.apiKey || routeConfig.headers);
+  if (defaultModel && !hasOwnTransport
+    && !(typeof routeConfig.model === "string" && routeConfig.model.trim())) {
+    routeConfig.model = defaultModel;
+  }
+  return routeConfig;
+};
+
+test("defaultModel: Feature ohne eigenes Modell erbt den Standard", () => {
+  const route = resolveFeatureLlmRoute(withFeatureDefault({}, "anthropic/claude-haiku-4-5"), {});
+  assert.equal(route.kind, LLM_ROUTE_KINDS.OPENCLAW_OVERRIDE);
+  assert.equal(route.model, "anthropic/claude-haiku-4-5");
+});
+
+test("defaultModel: feature-eigenes Modell hat Vorrang", () => {
+  const route = resolveFeatureLlmRoute(
+    withFeatureDefault({ model: "anthropic/claude-sonnet-5" }, "anthropic/claude-haiku-4-5"), {});
+  assert.equal(route.model, "anthropic/claude-sonnet-5");
+});
+
+test("defaultModel: ohne Standard bleibt die Standardroute des Hosts", () => {
+  const route = resolveFeatureLlmRoute(withFeatureDefault({}, ""), {});
+  assert.equal(route.kind, LLM_ROUTE_KINDS.OPENCLAW_DEFAULT);
+});
+
+test("defaultModel: eigener Transport wird nicht mit fremdem Modell ueberschrieben", () => {
+  // Ein Haiku-Modell an einem fremden Endpunkt waere sinnlos; der Standard
+  // darf hier nicht greifen, sonst kippt die Route unbemerkt.
+  const cfg = withFeatureDefault(
+    { baseUrl: "https://example.invalid", model: "eigenes-modell" }, "anthropic/claude-haiku-4-5");
+  assert.equal(cfg.model, "eigenes-modell");
+});

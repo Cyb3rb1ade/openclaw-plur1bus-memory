@@ -980,6 +980,50 @@ describe("selectAgentsForCronSetup", () => {
     assert.deepStrictEqual(selectAgentsForCronSetup(null), []);
     assert.deepStrictEqual(selectAgentsForCronSetup(undefined), []);
   });
+
+  it("falls back to the default agent when nobody is bound (CLI-only install)", () => {
+    // Ohne diesen Rückfall bekäme eine Installation ohne Kanalbindungen
+    // stillschweigend null Feature-Crons.
+    const agents = [{ id: "main", workspace: "/ws/main", bindings: 0, isDefault: true }];
+    assert.deepStrictEqual(selectAgentsForCronSetup(agents), [{ id: "main", isDefault: true }]);
+  });
+
+  it("falls back to the operator-supplied agent id when no agent is flagged default", () => {
+    const agents = [
+      { id: "hector", workspace: "/ws/hector", bindings: 0, isDefault: false },
+      { id: "sidekick", workspace: "/ws/hector", bindings: 0, isDefault: false },
+    ];
+    const selected = selectAgentsForCronSetup(agents, { defaultAgentId: "hector" });
+    assert.deepStrictEqual(selected, [{ id: "hector", isDefault: true }]);
+  });
+
+  it("falls back to conventional `main` when neither default flag nor operator id is given", () => {
+    const agents = [
+      { id: "researcher", workspace: "/ws/main", bindings: 0, isDefault: false },
+      { id: "main", workspace: "/ws/main", bindings: 0, isDefault: false },
+    ];
+    assert.deepStrictEqual(selectAgentsForCronSetup(agents), [{ id: "main", isDefault: true }]);
+  });
+
+  it("does NOT fall back to an arbitrary subagent", () => {
+    // Kein Agent weist sich als Hauptagent aus: lieber gar keine Crons als
+    // Crons auf einem Subagenten.
+    const agents = [
+      { id: "researcher", workspace: "/ws/a", bindings: 0, isDefault: false },
+      { id: "scribe", workspace: "/ws/b", bindings: 0, isDefault: false },
+    ];
+    assert.deepStrictEqual(selectAgentsForCronSetup(agents), []);
+  });
+
+  it("does NOT fall back while at least one agent is bound", () => {
+    const agents = [
+      { id: "main", workspace: "/ws/main", bindings: 0, isDefault: true },
+      { id: "bernhardine", workspace: "/ws/bernhardine", bindings: 1, isDefault: false },
+    ];
+    // main bleibt draußen (bindings 0) und wird auch nicht nachträglich zum
+    // Standard erklärt, weil es gar nicht in der Auswahl steht.
+    assert.deepStrictEqual(selectAgentsForCronSetup(agents), [{ id: "bernhardine", isDefault: false }]);
+  });
 });
 
 describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
