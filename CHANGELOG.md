@@ -1,5 +1,15 @@
 # Changelog — PLUR1BUS Memory
 
+## 7.12.61-hermes.0 — 2026-09-18
+
+- Merge des veröffentlichten Upstream-Tags v7.12.61 inklusive Dashboard-,
+  Journal-Tail- und Dependency-Fixes. Hermes-Profilisolierung, Installer,
+  Migrationen und unmittelbare Compaction-Schreibkoordination bleiben erhalten.
+- Native Regressionen sichern unbekannte Zählungen und lange Leerzeilenfolgen.
+- Hermes-Prerelease mit plattformspezifischen Installationspaketen; konkrete
+  Test-, Signatur- und Notarisierungsbelege stehen bei den Release-Assets.
+- Keine automatische Installation oder Modell-/Datenmigration durch das Release.
+
 ## 7.12.60-hermes.0 — candidate
 
 - Merge upstream .57–.60, retaining native UI, installer, retrieval/migration and profile isolation.
@@ -15,14 +25,6 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
-
-### Hermes 7.12.61-hermes.0 (candidate)
-
-- Merge des veröffentlichten Upstream-Tags v7.12.61 inklusive Dashboard-,
-  Journal-Tail- und Dependency-Fixes. Hermes-Profilisolierung, Installer,
-  Migrationen und unmittelbare Compaction-Schreibkoordination bleiben erhalten.
-- Native Regressionen sichern unbekannte Zählungen und lange Leerzeilenfolgen.
-- Kandidatenstand, noch keine produktive Installation oder Veröffentlichung.
 
 ### Hermes 7.12.56-hermes.0
 
