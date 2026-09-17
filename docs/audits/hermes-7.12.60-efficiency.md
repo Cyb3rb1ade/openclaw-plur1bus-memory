@@ -64,10 +64,39 @@ saved outputs and measures the whole pattern-detection operation (five repeats).
 No end-to-end model/token savings are inferred from this local CPU/I/O workload.
 
 Local benchmark (macOS ARM/Python 3.12): 6,988,890 journal bytes, 100,000
-records, identical saved outputs; median whole detection 329.815 ms before,
-7.982 ms after (about 41x for this synthetic workload). Near-boundary clustering
+records, identical saved outputs; final reviewed candidate median whole detection
+332.005 ms before, 10.603 ms after (about 31x for this synthetic workload).
+Timings vary with host load. Near-boundary clustering
 deliberately falls back to the old calculation and may show little speedup.
 
-Final suite/platform results and PR link will be added after verification.
+## Final evidence (2026-09-17)
+
+- Reviewed head: `84175775a19f333bea4947dd302d75bf94353da5`.
+- [PR #156](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/pull/156)
+  merged normally into `codex/hermes-port-7.12.60` as
+  `02a1a865278f091b49b7ae441bfce155fecf7ef7`. OpenClaw main is untouched.
+- [Five-platform CI](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/actions/runs/35261676689):
+  all jobs successful. macOS ARM and Linux x64/ARM each passed 1,055 tests plus
+  242 subtests (2 skips). Windows x64/ARM each passed 1,048 tests plus 236
+  subtests (9 platform skips). No failures.
+- Local final native/controls/distribution suite: 1,055 passed plus 242 subtests,
+  2 skips, 81% statement coverage. Host integration: 30 passed; desktop and web
+  UI harnesses passed. Targeted Ruff correctness checks, Python compilation,
+  npm lint, dependency consistency and diff whitespace checks passed.
+- Every platform built and actually installed its bundle into a disposable
+  home, imported the installed wheels, exercised real LanceDB capture/recall
+  with **stub embeddings**, and verified file rollback. Windows executable
+  smoke passed; Linux x64 additionally verified a fresh CPU-only Torch install.
+  These are not real-model inference or productive-profile tests.
+- Downloaded all five artifact sets under
+  `distribution-artifacts/efficiency-ci-35261676689`; verified all outer
+  SHA256SUMS and every ZIP payload digest. Manifests report `dirty: false`.
+  CI source is synthetic merge `5a2f1812f3099e82d94d7fb2f1e2e681abde53f5`;
+  its tree `c7d316e829d879524ea1eb08a37048185789c4f8` equals both the reviewed
+  head and actual merge tree. Changed Python payloads match source bytes after
+  normalizing Windows checkout CRLF to LF on Windows targets only.
+- Artifacts are **unsigned test candidates**. No tag, public release, registry
+  publication, productive installation or gateway restart was performed.
+
 Source integration is separate from installing/restarting a productive Hermes
 instance. No productive data or active plugin files are modified by these tests.
