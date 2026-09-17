@@ -210,6 +210,7 @@ import {
   getSharedMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
+  describePrimaryAgentIds,
   describeUserPoolLabels,
   describeWorkspacePoolLabels,
   resolveMemoryRequestContext,
@@ -5490,6 +5491,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     // table, directory, or card as a side effect.
     const controlHealthWorkspaceIdentityByKey = new Map();
     const controlHealthUserLabelByKey = new Map();
+    let controlHealthPrimaryAgentIds = [];
     const controlHealthNamespaceRoots = namespaceLayout.mode === "named"
       ? namespaceLayout.recallReadNamespaces.map((id) => ({
           id,
@@ -5514,6 +5516,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       measureStorage: () => measureControlHealthStorage(baseDbPath),
       workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
       userIdentityForKey: (key) => controlHealthUserLabelByKey.get(key) ?? null,
+      primaryAgentIds: () => controlHealthPrimaryAgentIds,
       maxPartitions: CONTROL_HEALTH_MAX_PARTITIONS,
     });
     // The workspace identities are refreshed inside the scan, not by the page
@@ -5555,6 +5558,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       for (const entry of describeUserPoolLabels(liveHostConfig)) {
         controlHealthUserLabelByKey.set(entry.poolKey, entry.label);
       }
+      controlHealthPrimaryAgentIds = describePrimaryAgentIds(liveHostConfig);
     };
     const controlHealth = createControlPlaneHealthInspector({
       scan: async () => {

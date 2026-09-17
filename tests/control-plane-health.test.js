@@ -45,6 +45,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
         byAgent: [{ id: "agent-a", cards: 5 }],
         byWorkspace: [{ id: "workspace:v1:alpha", cards: 2 }],
         byUser: [{ id: "user:v1:alpha", cards: 1 }],
+        byPrimaryAgent: [],
       },
       storage: { bytes: 1234, complete: true },
       lastError: { component: "lancedb", code: "lancedb_count_failed" },
@@ -207,7 +208,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
     assert.deepStrictEqual(snapshot, {
       status: "degraded",
       namespaces: [],
-      cards: { byAgent: [], byWorkspace: [], byUser: [] },
+      cards: { byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
       storage: { bytes: null, complete: false },
       lastError: { component: "health", code: "health_scan_failed" },
       observedAt: 99,
@@ -253,6 +254,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
         byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
         byWorkspace: [{ id: "workspace:v1:alpha", cards: 2 }],
         byUser: [{ id: "u-0123456789abcdef", cards: 1 }],
+        byPrimaryAgent: [],
       },
       storage: { bytes: 9_876, complete: true },
       lastError: null,
@@ -290,7 +292,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
     assert.deepStrictEqual(await inspector.snapshot(), {
       status: "degraded",
       namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 0 }],
-      cards: { byAgent: [], byWorkspace: [], byUser: [] },
+      cards: { byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
       storage: { bytes: null, complete: false },
       lastError: { component: "storage", code: "storage_measure_failed" },
       observedAt: 77,
@@ -328,6 +330,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
         byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
         byWorkspace: [],
         byUser: [{ id: "u-0123456789abcdef", cards: 1 }],
+        byPrimaryAgent: [],
       },
       storage: { bytes: 9_876, complete: true },
       lastError: { component: "health", code: "partition_id_unsupported" },
@@ -425,5 +428,29 @@ describe("shared user pool labels in the scan", () => {
     assert.equal(invalid.status, "degraded");
     assert.deepStrictEqual(invalid.lastError, { component: "health", code: "user_identity_invalid" });
     assert.deepStrictEqual(invalid.cards.byUser.map((entry) => entry.id), ["u-0123456789abcdef", "u-fedcba9876543210"]);
+  });
+});
+
+describe("primary agent cards in the scan", () => {
+  it("lists the private card counts of the primary agents only", async () => {
+    const scanFor = (primaryAgentIds) => createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      listPartitions: async () => ["bernhardine", "developer", "main"],
+      inspectRows: async ({ partitionId }) => ({ bernhardine: 12, developer: 5, main: 9 })[partitionId],
+      measureStorage: async () => ({ bytes: 1, complete: true }),
+      ...(primaryAgentIds ? { primaryAgentIds } : {}),
+    });
+    const snapshot = await scanFor(() => ["main", "bernhardine", "heisenberg"])();
+    assert.equal(snapshot.status, "ready");
+    assert.deepStrictEqual(snapshot.cards.byPrimaryAgent, [
+      { id: "bernhardine", cards: 12 },
+      { id: "heisenberg", cards: 0 },
+      { id: "main", cards: 9 },
+    ]);
+    assert.equal(snapshot.cards.byAgent.length, 3, "the full agent list stays unchanged");
+    assert.deepStrictEqual((await scanFor(null)()).cards.byPrimaryAgent, []);
+    const broken = await scanFor(() => { throw new Error("config gone"); })();
+    assert.deepStrictEqual(broken.cards.byPrimaryAgent, []);
+    assert.equal(broken.status, "ready", "a missing roster is not a storage problem");
   });
 });

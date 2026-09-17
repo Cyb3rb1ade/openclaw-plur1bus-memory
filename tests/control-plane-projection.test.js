@@ -99,6 +99,7 @@ describe("redacted PLUR1BUS control-plane projection", () => {
 
     assert.equal(projection.schemaVersion, 2);
     assert.deepStrictEqual(projection.memoryHealth.cards.byAgent, [{ id: "agent-a", cards: 3 }]);
+    assert.deepStrictEqual(projection.memoryHealth.cards.byPrimaryAgent, [], "an older snapshot without the group projects an empty list");
     assert.deepStrictEqual(projection.memoryHealth.storage, { bytes: 2048, complete: true });
     assert.equal(projection.workspaceMatrix.defaultEnabled, true);
     assert.deepStrictEqual(projection.workspaceMatrix.overrides[0], {
