@@ -84,6 +84,21 @@ class OperatorStatusTests(unittest.TestCase):
                                                        max_attempts=2, retry_delay_seconds=0)['ok'])
                 self.assertEqual(optimize.call_count, 2)
 
+    def test_761_count_query_failure_is_unknown_but_measured_zero_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            table = _Table()
+            runtime, connect = self._runtime(Path(temporary), table)
+            runtime.profile = 'Coder'
+            with patch.object(table, 'count_rows', side_effect=OSError('private backend path')):
+                result = read_operator_status(runtime, connect=connect)
+            self.assertIsNone(result['storage']['cards'])
+            self.assertIsNone(result['cards']['byPrimaryAgent'][0]['cards'])
+            self.assertNotIn('private backend path', repr(result))
+            with patch.object(table, 'count_rows', return_value=0):
+                result = read_operator_status(runtime, connect=connect)
+            self.assertEqual(result['storage'], {'status': 'ready', 'cards': 0})
+            self.assertEqual(result['cards']['byPrimaryAgent'], [{'id': 'main', 'profile': 'Coder', 'cards': 0}])
+
     def test_memory_browser_real_lance_scope_literal_search_and_paging(self):
         import lancedb
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.12.60-hermes.0",
+  "version": "7.12.61-hermes.0",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -86,9 +86,9 @@
   },
   "overrides": {
     "@huggingface/transformers": {
-      "sharp": "0.35.3",
+      "sharp": "0.35.4",
       "onnxruntime-node": {
-        "adm-zip": "0.6.0"
+        "adm-zip": "0.6.1"
       },
       "onnxruntime-web": "1.26.0"
     }

@@ -44,6 +44,22 @@ class ProactiveEfficiencyTests(unittest.TestCase):
                 result = engine.detect_patterns()
             self.assertEqual(result['clusters'][0]['size'], 500)
 
+    def test_tail_761_blank_runs_cannot_hide_older_valid_objects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            engine = self.engine(root)
+            engine.neo_dir.mkdir()
+            path = engine.neo_dir / 'turn-journal.jsonl'
+            rows = [{'id': str(i), 'content': 'Grüße 🦉'} for i in range(12)]
+            for separator in ['\n', '\r\n']:
+                for blanks in [1, 300, 70000]:
+                    with self.subTest(separator=repr(separator), blanks=blanks):
+                        text = (separator * blanks).join(json.dumps(row, ensure_ascii=False) for row in rows)
+                        text += separator * blanks
+                        path.write_text(text, encoding='utf-8', newline='')
+                        for limit in [1, 5, 12, 20]:
+                            self.assertEqual(engine._jsonl_tail(path, limit), rows[-limit:])
+
     def test_tail_handles_multibyte_and_long_record_crossing_read_chunks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

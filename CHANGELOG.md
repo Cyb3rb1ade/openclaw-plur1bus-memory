@@ -16,6 +16,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hermes 7.12.61-hermes.0 (candidate)
+
+- Merge des veröffentlichten Upstream-Tags v7.12.61 inklusive Dashboard-,
+  Journal-Tail- und Dependency-Fixes. Hermes-Profilisolierung, Installer,
+  Migrationen und unmittelbare Compaction-Schreibkoordination bleiben erhalten.
+- Native Regressionen sichern unbekannte Zählungen und lange Leerzeilenfolgen.
+- Kandidatenstand, noch keine produktive Installation oder Veröffentlichung.
+
 ### Hermes 7.12.56-hermes.0
 
 - Native Übernahme der Änderungen aus OpenClaw 7.12.48–7.12.56 unter Erhalt
@@ -211,6 +219,32 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
 ## Upstream source history
+## [7.12.61] — 2026-09-17
+
+### Behoben
+
+- **Unbekannte Kartenzahlen sind nicht mehr Null (#155).** Schlug die Zählung
+  einer Partition fehl, wurde sie im Dashboard als gemessene 0 angezeigt, und
+  eine erfolgreiche Teilsumme konnte den Fehlschlag in einem anderen Namespace
+  verdecken. `cards.byPrimaryAgent[].cards` darf jetzt `null` sein und steht
+  für „unbekannt“; die Seite zeigt dort „Unavailable“ und behält die
+  Agenten-Kennung. Eine erfolgreich aufgezählte, leere Partition bleibt eine
+  echte 0. Die übrigen Zählgruppen behalten ihren Zahlen-Vertrag.
+
+- **Neo-Journale verlieren keine Datensätze mehr hinter Leerzeilen.** Der
+  Tail-Reader versprach die letzten nicht-leeren Zeilen, zählte aber rohe
+  Zeilenumbrüche. Ein Block Leerzeilen am Dateiende verbrauchte damit das
+  gesamte Budget, und die Funktion gab keine Datensätze zurück — zusammen mit
+  `capJsonl`, das dieses Ergebnis zurückschreibt, konnte das Datensätze
+  löschen. Jetzt werden vollständige, nicht-leere Segmente über Chunk-Grenzen
+  hinweg gezählt; bei erkannter Verkürzung während des Lesens bricht der
+  Reader sichtbar ab statt ein unvollständiges Ende zu liefern.
+
+- **Optionale Inferenz-Abhängigkeiten gepatcht (#150).** `sharp` 0.35.3 → 0.35.4
+  samt Plattformartefakten und `adm-zip` 0.6.0 → 0.6.1 über die bestehenden
+  overrides. Transformers bleibt bei 4.2.0, ONNX Runtime unverändert.
+  `npm audit` meldet inklusive der optionalen Pakete keine Funde mehr.
+
 ## [7.12.60] — 2026-09-17
 
 ### Geändert
