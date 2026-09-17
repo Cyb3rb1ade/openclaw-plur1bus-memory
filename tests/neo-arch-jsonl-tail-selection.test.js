@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { describe, it, mock } from "node:test";
 import { readJsonlTailLines } from "../lib/neo-arch.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 function withJournal(text, operation) {
-  const directory = fs.mkdtempSync(join(tmpdir(), "plur1bus-tail-selection-"));
+  const directory = makeTempDir("plur1bus-tail-selection-");
   const path = join(directory, "journal.jsonl");
   try {
     fs.writeFileSync(path, text);
