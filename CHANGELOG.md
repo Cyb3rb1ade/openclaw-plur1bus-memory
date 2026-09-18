@@ -7,6 +7,33 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.62] — 2026-09-18
+
+### Behoben
+
+- **Marker-Erkennung in `memory-fact-quality` trifft nur noch ganze Wörter.**
+  `containsPhrase()` baute die Regex ohne Wortgrenzen, deshalb lösten die
+  deutschen Marker „nie" und „immer" als Teilstring in gewöhnlichen Wörtern aus:
+  „Knie", „Zimmer", „Ingenieur", „Schimmer" oder der Name „Melanie" galten als
+  ausdrückliche Merk-Anweisung. `normalizeImportanceScore()` hob solche
+  Erinnerungen damit auf den Boden 0,70 — genau die Schwelle, ab der
+  `shouldPromoteMemory()` nach KNOWLEDGE.md befördert. Die Grenzen sind als
+  Lookarounds auf `\p{L}`/`\p{N}` gesetzt, weil `\b` Umlaute nicht als
+  Wortzeichen behandelt. Betrifft `DURABLE_MARKERS` und `TEMPORAL_MARKERS` an
+  allen fünf Aufrufstellen. Bestehende Zeilen behalten ihre falsch gesetzte
+  Importance; der Fix wirkt auf neu erfasste Erinnerungen.
+
+  Gefunden wurde der Fehler beim Lesen des Scorings während eines
+  LOCOMO-Laufs. Er erklärt dessen Ergebnis allerdings **nicht**: ein
+  vollständiger Neu-Ingest mit beiden Benchmarks nach dem Fix bewegt die Zahlen
+  nicht (LOCOMO 49,9 % statt 50,3 %, LongMemEval 83,8 % statt 85,2 %,
+  Evidenz-Trefferquote 61,9 % statt 62,3 % — alles im Rauschen). Beide
+  Datensätze sind englisch; nur 1,3 % ihrer Turns konnten den Teilstring-Treffer
+  überhaupt auslösen. Für den deutschsprachigen Betrieb ist der Fix erheblich,
+  für die Benchmark-Zahlen ist er es nicht. Deren Einbruch geht auf
+  `importanceBoost` zurück, das auf Rohdialog-Korpora nach einem Wert umreiht,
+  der dort nicht zwischen Evidenz und Beiwerk trennt.
+
 ## [7.12.61] — 2026-09-17
 
 ### Behoben
