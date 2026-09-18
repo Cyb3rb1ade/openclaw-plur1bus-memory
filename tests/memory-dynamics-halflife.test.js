@@ -36,20 +36,20 @@ describe("modulateHalfLifeDays", () => {
 describe("applyFlashbulbEncoding mit Basis-Halbwertszeit", () => {
   const flashbulbRow = { emotionalIntensity: 0.9, importance: 0.9, novelty: 0.5, userCorrection: 0 };
 
-  it("verkürzt lange Halbwertszeiten nicht mehr", () => {
+  it("verlängert Halbwertszeiten auf die Blitzlicht-Dauer", () => {
     const result = applyFlashbulbEncoding(flashbulbRow, Date.now(), 0.70, 600);
     assert.ok(result, "Flashbulb sollte greifen (Score >= 0.70)");
-    assert.strictEqual(result.halfLifeDays, 600);
+    assert.strictEqual(result.halfLifeDays, 3650);
   });
 
-  it("hebt kurze Halbwertszeiten auf mindestens 90 Tage", () => {
+  it("hebt kurze Halbwertszeiten auf mindestens 3650 Tage", () => {
     const result = applyFlashbulbEncoding(flashbulbRow, Date.now(), 0.70, 60);
-    assert.strictEqual(result.halfLifeDays, 90);
+    assert.strictEqual(result.halfLifeDays, 3650);
   });
 
-  it("Rückwärtskompatibilität: ohne Basis bleibt 90", () => {
+  it("Rückwärtskompatibilität: ohne Basis wird 3650", () => {
     const result = applyFlashbulbEncoding(flashbulbRow, Date.now());
-    assert.strictEqual(result.halfLifeDays, 90);
+    assert.strictEqual(result.halfLifeDays, 3650);
   });
 });
 
@@ -75,16 +75,17 @@ describe("applyDynamicsDefaults mit Intensitäts-Modulation", () => {
     const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.5, halfLifeDays: 42 };
     const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
     assert.strictEqual(out.memoryClass, "flashbulb");
-    assert.strictEqual(out.halfLifeDays, 90);
+    assert.strictEqual(out.halfLifeDays, 3650);
   });
 
-  it("Flashbulb-Memories erben die modulierte Basis statt fixer 90 Tage", () => {
+  it("Flashbulb-Memories erhalten die Blitzlicht-Halbwertszeit", () => {
     // Score: 0.9*0.5 + 0.9*0.5 = 0.90 >= 0.70 → Flashbulb.
-    // Kein Core (emotionalIntensity 0.9 < 0.95). Basis: 600 × (1 + 0.9) = 1140.
+    // Kein Core (emotionalIntensity 0.9 < 0.95). Basis: 600 × (1 + 0.9) = 1140,
+    // aber Flashbulb-Encoding nutzt max(1140, 3650) = 3650.
     const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.9 };
     const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
     assert.strictEqual(out.memoryClass, "flashbulb");
-    assert.strictEqual(out.halfLifeDays, 1140);
+    assert.strictEqual(out.halfLifeDays, 3650);
   });
 
   it("ohne opts bleibt das bisherige Verhalten (Faktor 1.0 Default, Intensität 0)", () => {
