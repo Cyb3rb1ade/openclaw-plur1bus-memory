@@ -1,6 +1,44 @@
-# Configuration — Recall, Runtime & Memory Settings
+# Konfiguration — PLUR1BUS 7.12.61
 
-Diese Datei dokumentiert die wichtigsten Konfigurationsfelder rund um **Recall**, **Embedding-Cache**, **Emotion** und **Obsidian-Graph-Links**.
+Codeabgleich: 18.09.2026, Commit `c381fd57fd80df193bc615f405704132dd89884e`.
+Diese Referenz beschreibt den untersuchten Stand. Quelle für akzeptierte Felder
+ist [openclaw.plugin.json](../openclaw.plugin.json); fehlende Werte werden durch
+[config-contract](../lib/setup/config-contract.js) ergänzt. Ein Schema-Default,
+ein explizites Safe/Recommended-Profil und eine bestehende Installation sind
+unterschiedliche Konfigurationszustände.
+
+## Konfigurationsebenen und Aktivierung
+
+`enabled`, `hooks` und die nativen `llm`-Trust-Bits gehören zum **Plugin-Entry**.
+Die folgenden fachlichen Einstellungen gehören unter dessen **config**. Die
+Beispiele für Embedding oder Reranker sind Teilkonfigurationen, kein Ersatz für
+die gesamte `openclaw.json`.
+
+| Schalter | Manifeststandard | Einordnung |
+| --- | --- | --- |
+| `autoCapture`, `autoRecall`, `neo.enabled` | `true` | Kernpfade aktiv; nutzbare Provider und Identität bleiben erforderlich |
+| `recall.queryRefinerEnabled` | `true` | Deterministischer Fallback bei leerer berechtigter Ergebnismenge |
+| `semanticLens.enabled` | `true` | Benötigt einen vorbereiteten Index |
+| `conversationReactivationRecall.enabled` | `false` | Zusätzlicher Reaktivierungsblock |
+| `reranker.enabled`, `merging.enabled`, `dailyConsolidation.enabled` | `false` | Zusätzliche Verarbeitung explizit einschalten |
+| `skillMiner.enabled`, `obsidianBridge.enabled` | `false` | Eigene Laufzeit- und Freigabebedingungen |
+| `criticalPush.enabled` | `true` | Flag allein provisioniert keinen Cron; Tageslimit-Befund beachten |
+| `security.allowModelDestructiveMemoryOps` | `true` | Modelltools für Vergessen und Wissensänderung zugelassen |
+
+`/plur1bus setup` listet Profile, `/plur1bus start` zeigt Status. Erst ein
+benanntes Profil wird angewendet. Safe schaltet die im Profil aufgeführten
+Zusatzmutatoren und Chat-LLM-Features aus; das normale Speichern/Abrufen bleibt
+aktiv. Recommended aktiviert zusätzliche Funktionen, hält aber unter anderem
+`merging.autoApply: false`, Vault-Bestätigung und Review-Status `pending_setup`
+bei. Vorhandene Opt-outs und die genaue Mergepolitik stehen in
+[feature-profiles](../lib/setup/feature-profiles.js).
+
+Feature-Crons verwenden **sourceConfig** für explizite Aktivierung und
+**runtimeConfig** für wirksame Agenten-/Zustellungsbindungen. Aus einem
+Manifest-Default folgt deshalb kein automatisch vorhandener Job. Die
+[vollständige Default-Liste](#vollständige-explizite-manifestdefaults) am Ende
+enthält nur im Schema tatsächlich gesetzte `default`-Werte; andere
+Code-Fallbacks sind davon getrennt.
 
 Die Recall-/Dedupe-Optionen liegen in `openclaw.json` unter
 `plugins.entries.memory-lancedb-namespaced.config.recall`. Runtime-Optionen
@@ -12,12 +50,12 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
-| `maxPromptMemories` | `number` | `12` | Maximale Anzahl Memories, die in den Prompt-Kontext aufgenommen werden |
+| `maxPromptMemories` | `number` | `12` | Gemeinsames Limit primärer Karten und kanonischer Abschnitte; Zusatzblöcke separat |
 | `candidateTopK` | `number` | `40` | Anzahl Kandidaten aus der initialen Vector-Search |
 | `importanceBoost` | `number` | `0.3` | Faktor des Importance-Boost vor dem Re-Rankings (0.0–1.0) |
-| `canonicalFirst` | `boolean` | `true` | Kanonische Repräsentanten vor nicht-kanonischen bevorzugen |
-| `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
-| `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
+| `canonicalFirst` | `boolean` | `true` | Schaltet kanonische KNOWLEDGE.md-Abschnittssuche im Caller ein |
+| `canonicalMinScore` | `number` | `0.30` | Mindestähnlichkeit für KNOWLEDGE.md-Abschnittstreffer |
+| `canonicalMaxItems` | `number` | `5` | Maximale kanonische Abschnittstreffer im gemeinsamen primären Limit |
 
 ---
 
@@ -28,7 +66,10 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 | `dedup` | `boolean` | `true` | Near-Duplicate-Erkennung aktivieren |
 | `dedupJaccard` | `number` | `0.78` | Jaccard-ähnlichkeits-Threshold für Near-Duplicates (0.0–1.0) |
 
-> **Hinweis:** Ein höherer `dedup`-Wert führt zu aggressiverer Entfernung. `0.78` bedeutet, dass Memories mit ≥78 % Token-Überlappung als Duplikate gelten.
+> **Hinweis:** `dedup` ist ein boolescher Schalter. Ein höherer
+> `dedupJaccard`-Schwellenwert verlangt mehr Wortmengen-Übereinstimmung und
+> entfernt deshalb tendenziell weniger ähnliche Treffer. Bekannte disjunkte
+> Gültigkeitsfenster verhindern das Zusammenwerfen bloß textgleicher Fakten.
 
 ---
 
@@ -76,19 +117,24 @@ Eine tatsächlich fehlende Legacy-Tabelle wird übersprungen; andere Init- oder
 Query-Fehler brechen den gesamten öffentlichen Recall ab, ohne Teilergebnis.
 Alle beteiligten Tabellen müssen zur konfigurierten Embedding-Dimension passen.
 
-Multi-Namespace-Recall bedeutet ausschließlich: derselbe validierte `agentId`
-wird in mehreren benannten Storage-Namespaces gelesen. Wenn mehrere existente
-Tabellen teilnehmen, werden die Ergebnisse global und stabil nach Score
-sortiert, nach ID beziehungsweise normalisiertem
-Canonical-Heading+Text dedupliziert und gemeinsam durch das Tool-`limit`
-beziehungsweise `maxPromptMemories`, `canonicalMaxItems` und die bestehenden
-Trace-Caps begrenzt; ein einzelner Tabellenpfad bleibt direkt. Das ist kein
-Cross-Agent-, Cross-Workspace- oder Cross-User-Sharing; diese ACL- und
-Sharing-Verträge bleiben B13 vorbehalten.
+Named-Namespace-Recall bedeutet ausschließlich: derselbe validierte `agentId`
+wird in mehreren benannten Storage-Namespaces gelesen. Die Runtime führt auch
+einen einzelnen Tabellenpfad durch die globale
+Zusammenführung. Sie sortiert nach Score, dedupliziert Karten und kanonische
+Abschnitte und begrenzt das gemeinsame Ergebnis. Ein aktivierter Reranker kann
+seine Reihenfolge dabei wieder verlieren; siehe
+[Recall-Architektur](recall-architecture.md). Named Namespaces teilen keine
+Daten mit fremden Agenten. Autorisierte Shared-Pools sind separate Quellen mit
+eigenen ACL-Regeln; ihr optionaler Fehlerpfad kann die Shared-Quelle auslassen,
+während erforderliche private Quellen den strikten Recall scheitern lassen.
+
+Auf Plattformen ohne die benötigten stabilen Verzeichnis-Capabilities werden
+bestimmte explizite Namespace-/Shared-Routen abgelehnt. Ein erfolgreicher Test
+im Flat-Layout beweist nicht die Verfügbarkeit aller benannten Routen.
 
 ---
 
-## Lokale E5-, Jina- und BGE-Modelle (7.5.0)
+## Lokale Embedding- und Reranker-Modelle
 
 Der freie Standard-Offline-Pfad verwendet E5. Zusaetzlich kann das
 mehrsprachige `jinaai/jina-embeddings-v3` als revisions- und hashgeprüfte
@@ -126,10 +172,10 @@ unvollständige Datei wird vor der Inferenz abgelehnt.
 }
 ```
 
-BGE ist der empfohlene lokale Reranker und die Vorgabe des Installers
-(mehrsprachig, auf MIRACL vor Jina v2, Apache 2.0, 8k Kontext). Wer stattdessen
-den halb so tiefen Jina-v2-Reranker will (schneller auf CPU, CC BY-NC 4.0),
-setzt ihn als `model`/`local.model` und BGE als kontrollierten Fallback:
+BGE ist ein unterstützter lokaler Reranker. Die Modelldefinitionen und
+Artefaktprüfungen stehen in [local-model-artifacts](../lib/providers/local-model-artifacts.js).
+Ein vorhandenes Modellprofil belegt keine höhere Qualität für die eigenen Daten.
+Das folgende Beispiel wählt Jina-v2 mit explizitem BGE-Fallback:
 
 ```json
 {
@@ -178,11 +224,9 @@ nicht benoetigt.
 
 Seit 7.11.0 ist zusaetzlich das Jina-v5-Text-Nano-Embedding gepinnt (Retrieval-
 Adapter in die Gewichte gemischt, EuroBERT-Encoder, 239M Parameter, 15
-europaeische Sprachen, Last-Token-Pooling). Seit 7.12.0 ist es die Vorgabe des
-Installers bei Neuinstallation (Labortest vom 05.09.2026: Rangqualitaet
-gleichauf mit v3, klarere Trennung vom Rauschen, dreifache
-Migrationsgeschwindigkeit, halber Speicher); Bestandsinstallationen wechseln
-nur ueber die Re-Embedding-Migration im Dashboard. `dimensions`
+europaeische Sprachen, Last-Token-Pooling). Der Installer kann dieses Profil für Neuinstallationen setzen; das ist
+kein universeller Schema-Default und keine Recall-Qualitätsgarantie.
+Bestandsinstallationen wechseln über die Re-Embedding-Migration im Dashboard. `dimensions`
 darf 32, 64, 128, 256, 512 oder 768 sein. Anfrage und Dokument werden ueber die
 veroeffentlichten Praefixe `Query: ` und `Document: ` unterschieden; der
 Provider verweigert abweichende Praefixe, damit ein kopierter v3-Block (leere
@@ -258,7 +302,8 @@ werden vor dem Umschalten durch eine echte Providerantwort validiert.
 ### Automatische Modellvorbereitung
 
 OpenClaw Config bietet unter `modelPreparation.profile` eine geschlossene
-Auswahl aus E5 384d und den sieben Jina-v3-Matryoshka-Profilen. Speichern der
+Auswahl aus E5 384d, sieben Jina-v3- und sechs Jina-v5-Nano-Dimensionsprofilen.
+Speichern der
 Auswahl startet im Gateway nur Download und SHA-256-Validierung. Fortschritt,
 Dateizahl, Revision und Ziel-Fingerprint werden dauerhaft unter dem
 PLUR1BUS-State gespeichert und nach einem erneuten Oeffnen der Operator-Seite
@@ -274,7 +319,7 @@ Vorbereitung teilen denselben In-Flight-Download.
 }
 ```
 
-Fuer jeden Jina-v3-Embedding-Pfad ist die ausdrueckliche Bestaetigung der
+Für die unterstützten Jina-Embedding-Pfade ist die ausdrueckliche Bestaetigung der
 nicht-kommerziellen CC-BY-NC-4.0-Lizenz erforderlich. Ohne sie werden weder
 Download noch Inferenz gestartet. Sobald
 alle Artefakte gueltig sind, vergleicht PLUR1BUS den Ziel-Fingerprint mit der
@@ -380,7 +425,7 @@ Health-Scan zeigt den neuen Speicherstand.
 
 ## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
 
-Der Skill Miner läuft wöchentlich je Agent, bündelt belastbare Erinnerungen
+Der Skill Miner läuft bei aktiver Funktion und eingerichteter Planung je Agent, bündelt belastbare Erinnerungen
 der letzten 30 Tage nach gemeinsamen Stichworten und lässt das Modell daraus
 wiederkehrende Abläufe als Skill formulieren (Titel, Beschreibung, Nutzen,
 Anleitung, Beispiele). Jeder Fund landet als Entwurf im OpenClaw Skill
@@ -405,7 +450,7 @@ Konfidenz, Nutzen und der Anleitung, der der Agent folgen würde. Mit
 - **Withdraw**: bereits angewandten Skill entfernen (Workshop-Verzeichnis des
   Skills wird gelöscht), Name sperren.
 
-Der Miner läuft **jede Nacht um 05:00** (je Agent +15 min), also nach dem
+Der Manifeststandard `skillMiner.cron` ist `0 5 * * *`: **täglich um 05:00** (je Agent +15 min), also nach dem
 Speicher-Management: Konsolidierung 04:00–04:30, Persona-Evolution
 04:15–04:25, GC 04:45, auto-accept-stale 04:50–04:54. Er bewertet damit genau
 die Erinnerungen, die diese Jobs zuvor angefasst haben.
@@ -504,7 +549,7 @@ credentials ändern sich dadurch nicht.
 | `runtime.embeddingCacheMaxEntries` | `number` | `128` | Maximale Anzahl im Memory-Cache; Legacy-Alias ist `embeddingCacheMaxEntries`. |
 | `runtime.embeddingCacheTtlMs` | `number` | `300000` | TTL eines Cache-Eintrags in Millisekunden (5 Minuten). |
 | `runtime.embeddingCachePersist` | `boolean` | `false` | SQLite-Persistenz nach `embeddingCacheScope` (`agent`/`shared`) aktivieren. |
-| `runtime.embeddingCachePersistDebug` | `boolean` | `false` | Persistenz-Debugs im Logger aktivieren. |
+| `runtime.embeddingCachePersistDebug` | `boolean` | `false` | Normalisierten Eingabetext in SQLite `debug_text` speichern; enthält bei Aktivierung Memory-Inhalte. |
 | `runtime.embeddingCacheCoalesce` | `boolean` | `true` | Identische Anfragen deduplizieren (ein Call statt N Calls). |
 | `runtime.embeddingCacheMetrics` | `boolean` | `false` | Metriken für Hits, Misses, Persist-Hits und Coalescing emitten. |
 | `runtime.embeddingCacheScope` | `"agent" \| "shared"` | `"agent"` | Scope-Kennung für den Cache-Key. `shared` teilt Cache-Scope pro Plugin. |
@@ -543,22 +588,11 @@ credentials ändern sich dadurch nicht.
 
 ## Chat-LLM-Routing über OpenClaw
 
-Ein nicht gesetztes Feature-Modell (`model` absent) verwendet das effective
-OpenClaw agent model des Ziel-Agenten. PLUR1BUS hat keinen globalen
-Chat-Modell-Default und erbt keine Route zwischen Features: `schicht15`,
-`criticalPush.hideTypes` (Liste aus `person`, `beziehung`, `geburtstag`,
-`geld_konto`, `gesundheit`, `zugang_passwort`) ergaenzt die Typen, deren Inhalt
-in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
-Seit 7.12.2 zeigt der Push fuer alle anderen Typen die bereinigte Vorschau, weil
-er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
-
-`schicht15.maxPromotionsPerRun` begrenzt die KNOWLEDGE.md-Uebernahmen je
-24-Stunden-Fenster (0 = unbegrenzt). Bis 7.12.2 wurde die lebenslange Zahl
-verglichen, was einen Workspace nach dem Erreichen des Limits dauerhaft
-blockierte.
-
-`skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
-`merging.model` noch dessen Endpoint, Credential oder Header.
+Ein nicht gesetztes Feature-Modell (`model` absent) verwendet das effective OpenClaw agent model.
+PLUR1BUS hat keinen globalen Chat-Modell-Default. `schicht15`, `skillMiner`,
+`criticalPush` und `emotion.t3` übernehmen weder `merging.model` noch dessen
+Endpoint, Credential oder Header. Embedding- und Reranker-Credentials sind
+separate Routen und schalten keine Chat-LLM-Funktion frei.
 
 Jeder aktivierte Chat-Aufruf löst genau einen von vier Route-Modi auf:
 
@@ -679,7 +713,11 @@ sicher; sonstige Hook- und Feature-Entscheidungen bleiben erhalten.
 
 ## Emotion Tier-Config
 
-Steuert die 3-Tier-Emotions-Inferenz beim Memory-Capture.
+Steuert Emotionsauswertung und nachgelagerte Verfeinerung. Capture verwendet
+standardmäßig Tier 1/2; `emotion.t3.mode: "deferred"` verschiebt LLM-Verfeinerung
+in den `emotion-refine`-Job. `inline` ist eine eigene Auswahl. Tier 2 ist am
+untersuchten Stand Keyword-Auswertung; der Dateiname `tier2-transformer.js`
+belegt kein geladenes ONNX-Emotionsmodell.
 
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
@@ -755,3 +793,328 @@ Diese Optionen steuern die wikilink-basierten Graph-Blöcke in Record-Notes und 
 | `topK` | `number` | `20` | Kandidaten-Fenster für die ANN-Suche |
 
 > Der semantische Link-Index wird nur geschrieben, wenn er explizit bestätigt (`confirm: true`) oder über einen internen Befehl mit Bestätigung angestoßen wird. Er wird nicht automatisch beim Recall angewendet.
+
+
+## Capture, Pflege und Aufrufgrenzen
+
+`captureMaxChars` ist optional; der automatische Capture-Pfad verwendet ohne
+Override einen Code-Fallback von 15.000 Zeichen. Es werden nicht beliebig viele
+Nachrichten vollständig archiviert. Zusammenfassung benötigt einen nutzbaren
+LLM-Pfad; andernfalls kann Text abgeschnitten werden.
+
+`criticalPush.hideTypes` ergänzt die Typen, deren Vorschau verborgen bleibt;
+`zugang_passwort` wird immer verborgen. Das Tagesbudget `criticalPush.maxPerDay`
+ist 3, hat aber am geprüften Stand einen Batch-Grenzfall: fünf passende Karten
+können fünf Push-Nachrichten erzeugen. Siehe [Known issues](known-issues.md).
+
+`schicht15.maxPromotionsPerRun` begrenzt Beförderungen im rollierenden
+24-Stunden-Fenster; 0 bedeutet unbegrenzt. Das ist kein lebenslanges Limit.
+Die vorhandene Historie und bereits kanonische Einträge werden separat geprüft.
+
+`recall.semanticCompression.enabled` ist standardmäßig false. Der Caller
+kürzt Text deterministisch; der Name bezeichnet hier keine LLM-Kompression.
+`recall.adaptiveBudget.enabled` ist ebenfalls false und schaltet die
+Tierverteilung der finalen Auswahl zu. Das spätere Zeichenbudget
+`recall.globalInjectMaxChars` (17.000) ist keine harte Grenze für den gesamten
+Hostprompt und keine exakte Tokenzählung.
+
+`security.allowedUserIds` und `security.allowedChatIds` regeln Chatpfade.
+Bei gesetzten Allowlists brauchen destruktive Chatbefehle die passende
+Userfreigabe; ein freigegebener Chat allein reicht nicht. Ohne Listen ist
+privater 1:1-Kontext anders behandelt als Gruppen/unklarer Kontext. Modelltools
+haben einen separaten Vertrag: `security.allowModelDestructiveMemoryOps` ist
+im Manifest true. Für menschliche Bestätigung jedes solchen Eingriffs ist das
+kein geeigneter impliziter Default.
+
+`dryRun` ist jeweils ein lokaler Funktionsvertrag. Insbesondere Reminder-Delivery
+und TTL-Purge sind am untersuchten Stand nicht durch jeden gleichnamigen
+Schalter vollständig unterbunden. Verwende keine allgemeinen Dry-run-Annahmen
+für produktive Fremdaufrufe; die konkreten Datenflüsse stehen in
+[Known issues](known-issues.md).
+
+## Vollständige explizite Manifestdefaults
+
+Aus `openclaw.plugin.json` / `configSchema` für 7.12.61 abgeleitet.
+Fehlende Schlüssel haben dort keinen `default`. Diese Tabelle beschreibt
+weder sämtliche konfigurierbaren Felder noch automatisch einen angewendeten
+Installer-/Recommended-/Safe-Zustand. Alle Pfade sind relativ zur Plugin-`config`.
+
+| Pfad | JSON-Default |
+| --- | --- |
+| `embeddingBatchSize` | `8` |
+| `language` | `"de"` |
+| `timezone` | `null` |
+| `replyOutcomeTracking.enabled` | `true` |
+| `replyOutcomeTracking.maxAgeMs` | `604800000` |
+| `replyOutcomeTracking.maxMemoryIds` | `12` |
+| `replyOutcomeTracking.maxReplyChars` | `4000` |
+| `replyOutcomeTracking.maxAssistantChars` | `4000` |
+| `replyOutcomeTracking.maxOutcomeLogEntries` | `5000` |
+| `replyOutcomeTracking.maxFeedbackLogEntries` | `5000` |
+| `dreaming.enabled` | `false` |
+| `dreaming.narrative.enabled` | `true` |
+| `dreaming.narrative.temperature` | `0.9` |
+| `dreaming.narrative.storeAsMemory` | `true` |
+| `dreaming.narrative.importanceMax` | `0.45` |
+| `dreaming.narrative.diary` | `true` |
+| `reminders.deliveryMode` | `"pending_only"` |
+| `neo.enabled` | `true` |
+| `neo.mode` | `"augment"` |
+| `neo.embeddingDrain.enabled` | `true` |
+| `neo.embeddingDrain.impact` | `"low"` |
+| `neo.embeddingDrain.maxItems` | `250` |
+| `autoCapture` | `true` |
+| `autoRecall` | `true` |
+| `runtime.recallTimeoutMs` | `45000` |
+| `runtime.captureTimeoutMs` | `60000` |
+| `runtime.maxConcurrentRecall` | `1` |
+| `runtime.maxConcurrentCapturePerAgent` | `1` |
+| `runtime.backgroundPriority` | `"low"` |
+| `runtime.recallCacheTtlMs` | `120000` |
+| `runtime.recallCacheMaxEntries` | `128` |
+| `runtime.maxQueueDepthRecall` | `20` |
+| `runtime.maxQueueDepthCapturePerAgent` | `10` |
+| `runtime.pressureGateEnabled` | `true` |
+| `runtime.rssWarningBytes` | `3221225472` |
+| `runtime.rssCriticalBytes` | `4831838208` |
+| `runtime.embeddingCacheEnabled` | `true` |
+| `runtime.embeddingCacheTtlMs` | `300000` |
+| `runtime.embeddingCacheMaxEntries` | `128` |
+| `runtime.embeddingCachePersist` | `false` |
+| `runtime.embeddingCachePersistDebug` | `false` |
+| `runtime.embeddingCacheCoalesce` | `true` |
+| `runtime.embeddingCacheMetrics` | `false` |
+| `runtime.embeddingCacheScope` | `"agent"` |
+| `runtime.llmResultCacheEnabled` | `true` |
+| `runtime.llmResultCacheTtlMs` | `86400000` |
+| `runtime.llmResultCacheMaxEntries` | `256` |
+| `runtime.llmResultCachePersist` | `false` |
+| `runtime.llmResultCacheMaxBytes` | `67108864` |
+| `runtime.llmResultCacheMetrics` | `true` |
+| `runtime.metricsDebounceMs` | `5000` |
+| `runtime.eventLoopLagResolutionMs` | `10` |
+| `temporalContext.enabled` | `true` |
+| `recallMinScore` | `0.15` |
+| `autoRecallMinScore` | `0.2` |
+| `duplicateThreshold` | `0.95` |
+| `forgetThreshold` | `0.3` |
+| `summaryMaxWords` | `150` |
+| `reranker.enabled` | `false` |
+| `reranker.timeoutMs` | `5000` |
+| `reranker.fallbackOnError` | `true` |
+| `merging.enabled` | `false` |
+| `merging.threshold` | `0.7` |
+| `merging.autoApply` | `false` |
+| `merging.autoApplyRisk` | `"low-only"` |
+| `merging.backupBeforeApply` | `true` |
+| `merging.auditLog` | `true` |
+| `merging.mode` | `"safe-versioned"` |
+| `schicht15.enabled` | `false` |
+| `schicht15.minImportance` | `0.7` |
+| `schicht15.maxPromotionsPerRun` | `0` |
+| `llmRouter.errorDiagnostics` | `false` |
+| `skillMiner.enabled` | `false` |
+| `skillMiner.cron` | `"0 5 * * *"` |
+| `skillMiner.timezone` | `"Europe/Berlin"` |
+| `skillMiner.maxPerRun` | `5` |
+| `skillMiner.minConfidence` | `0.6` |
+| `skillMiner.minEvidenceScore` | `3` |
+| `skillMiner.autoApply` | `"host"` |
+| `gc.enabled` | `true` |
+| `recall.importanceBoost` | `0.3` |
+| `recall.dedup` | `true` |
+| `recall.dedupJaccard` | `0.78` |
+| `recall.canonicalFirst` | `true` |
+| `recall.canonicalMinScore` | `0.3` |
+| `recall.canonicalMaxItems` | `5` |
+| `recall.maxPromptMemories` | `12` |
+| `recall.globalInjectMaxChars` | `17000` |
+| `recall.candidateTopK` | `40` |
+| `recall.queryRefinement.enabled` | `true` |
+| `recall.adaptiveBudget.enabled` | `false` |
+| `recall.adaptiveBudget.tokenBudgetPct` | `0.3` |
+| `recall.semanticCompression.enabled` | `false` |
+| `recall.semanticCompression.tokenBudget` | `240` |
+| `recall.softBudgetMs` | `35000` |
+| `recall.softBudgetFallback` | `true` |
+| `recall.eventLoopLagSnapshot` | `true` |
+| `recall.halfLifeDaysMap.transient` | `60` |
+| `recall.halfLifeDaysMap.episodic` | `180` |
+| `recall.halfLifeDaysMap.longContext` | `600` |
+| `recall.halfLifeDaysMap.project` | `600` |
+| `recall.decisionTrace.enabled` | `false` |
+| `recall.decisionTrace.includeInPrompt` | `false` |
+| `recall.decisionTrace.maxCandidates` | `50` |
+| `recall.decisionTrace.maxTextPreviewChars` | `160` |
+| `recall.decisionTrace.persist` | `false` |
+| `recall.decisionTrace.visibleHints` | `false` |
+| `recallHedging.enabled` | `true` |
+| `recallHedging.minSpread` | `0.1` |
+| `semanticLens.enabled` | `true` |
+| `semanticLens.maxLensMemories` | `3` |
+| `semanticLens.maxBridgeMemories` | `2` |
+| `semanticLens.maxFadedMemories` | `1` |
+| `semanticLens.maxCommunities` | `2` |
+| `semanticLens.timeoutMs` | `50` |
+| `semanticLens.cacheTtlMs` | `30000` |
+| `controlUi.writeActions` | `"off"` |
+| `continuityEngine.enabled` | `true` |
+| `continuityEngine.associativeRecall.enabled` | `true` |
+| `continuityEngine.associativeRecall.maxDepth` | `2` |
+| `continuityEngine.associativeRecall.maxNeighborsPerNode` | `8` |
+| `continuityEngine.associativeRecall.maxAssociatedResults` | `40` |
+| `continuityEngine.associativeRecall.minCumulativeRelevance` | `0.2` |
+| `continuityEngine.associativeRecall.graphHydrationRelevanceThreshold` | `0.25` |
+| `continuityEngine.associativeRecall.graphIndex.enabled` | `true` |
+| `continuityEngine.associativeRecall.assocThreshold` | `0.75` |
+| `continuityEngine.patternSurfacing.enabled` | `false` |
+| `continuityEngine.patternSurfacing.patternThreshold` | `0.7` |
+| `continuityEngine.patternSurfacing.maxPerSession` | `1` |
+| `continuityEngine.tasteGate.enabled` | `true` |
+| `continuityEngine.tasteGate.maxAssociationsPerSession` | `1` |
+| `continuityEngine.tasteGate.maxPatternsPerSession` | `1` |
+| `continuityEngine.overlays.enabled` | `true` |
+| `continuityEngine.overlays.autoCreateOnRecall` | `false` |
+| `continuityEngine.overlays.maxAgeDays` | `30` |
+| `continuityEngine.overlays.confidenceThreshold` | `0.7` |
+| `continuityEngine.overlays.maxPerSession` | `3` |
+| `continuityEngine.overlays.provisionalByDefault` | `true` |
+| `continuityEngine.overlays.autoResolveContradictions` | `false` |
+| `continuityEngine.contradictionDetection.enabled` | `false` |
+| `continuityEngine.contradictionDetection.maxPairsPerRecall` | `20` |
+| `continuityEngine.doctor.enabled` | `false` |
+| `continuityEngine.doctor.maxAgeDays` | `90` |
+| `conversationReactivationRecall.enabled` | `false` |
+| `conversationReactivationRecall.idleThresholdMinutes` | `45` |
+| `conversationReactivationRecall.cooldownMinutes` | `30` |
+| `conversationReactivationRecall.maxReactivationMemories` | `3` |
+| `conversationReactivationRecall.maxFadedReactivationMemories` | `1` |
+| `conversationReactivationRecall.maxOpenThreads` | `3` |
+| `conversationReactivationRecall.maxCommunities` | `2` |
+| `conversationReactivationRecall.timeoutMs` | `50` |
+| `conversationReactivationRecall.visibleHints` | `false` |
+| `obsidianBridge.enabled` | `false` |
+| `obsidianBridge.mode` | `"augment"` |
+| `obsidianBridge.vaultPath` | `null` |
+| `obsidianBridge.workspaceRoot` | `null` |
+| `obsidianBridge.reviewRoot` | `"plur1bus"` |
+| `obsidianBridge.requireUserApproval` | `true` |
+| `obsidianBridge.applyApprovedOnly` | `true` |
+| `obsidianBridge.writeManagedBlocks` | `true` |
+| `obsidianBridge.allowWrite` | `true` |
+| `obsidianBridge.allowDotObsidianWrite` | `false` |
+| `obsidianBridge.backupBeforeApply` | `true` |
+| `obsidianBridge.auditLog` | `true` |
+| `obsidianBridge.requireVaultPathConfirmation` | `true` |
+| `obsidianBridge.capabilityPack` | `"full"` |
+| `obsidianBridge.agents.include` | `["*"]` |
+| `obsidianBridge.agents.equalCapabilities` | `true` |
+| `obsidianBridge.agents.defaultProfiles` | `{"default":"standard"}` |
+| `obsidianBridge.morningReview.enabled` | `false` |
+| `obsidianBridge.morningReview.cron` | `"0 9 * * *"` |
+| `obsidianBridge.morningReview.timezone` | `"Europe/Berlin"` |
+| `obsidianBridge.morningReview.delivery` | `"announce"` |
+| `obsidianBridge.morningReview.session` | `"isolated"` |
+| `obsidianBridge.morningReview.writeReviewBundle` | `true` |
+| `obsidianBridge.morningReview.applyMode` | `"manual"` |
+| `obsidianBridge.morningReview.status` | `"pending_setup"` |
+| `obsidianBridge.eveningReview.enabled` | `false` |
+| `obsidianBridge.eveningReview.cron` | `"0 18 * * *"` |
+| `obsidianBridge.eveningReview.timezone` | `"Europe/Berlin"` |
+| `obsidianBridge.eveningReview.delivery` | `"announce"` |
+| `obsidianBridge.eveningReview.session` | `"isolated"` |
+| `obsidianBridge.eveningReview.applyMode` | `"manual"` |
+| `obsidianBridge.eveningReview.status` | `"pending_setup"` |
+| `obsidianBridge.maintenance.daily` | `"light"` |
+| `obsidianBridge.maintenance.weekly` | `"deep"` |
+| `obsidianBridge.adversarial.daily` | `"light"` |
+| `obsidianBridge.adversarial.weekly` | `"deep"` |
+| `obsidianBridge.optionalIntegrations.dataview` | `false` |
+| `obsidianBridge.optionalIntegrations.tasks` | `false` |
+| `obsidianBridge.optionalIntegrations.bases` | `false` |
+| `obsidianBridge.maxFileBytes` | `262144` |
+| `obsidianBridge.maxItems` | `200` |
+| `obsidianBridge.bundleCooldownMs` | `0` |
+| `obsidianBridge.staleBundleMaxAgeDays` | `7` |
+| `obsidianBridge.autoApplyLowRisk` | `false` |
+| `obsidianBridge.dryRun` | `true` |
+| `obsidianBridge.watch` | `false` |
+| `obsidianBridge.tombstoneOnDelete` | `true` |
+| `obsidianBridge.sourceOfTruth` | `"plur1bus-lancedb"` |
+| `obsidianBridge.recallAuthority` | `"lancedb-reranked-vector"` |
+| `obsidianBridge.dashboardLayer.enabled` | `true` |
+| `obsidianBridge.dashboardLayer.records` | `true` |
+| `obsidianBridge.dashboardLayer.markdownDashboards` | `true` |
+| `obsidianBridge.dashboardLayer.bases` | `false` |
+| `obsidianBridge.dashboardLayer.dataview` | `false` |
+| `obsidianBridge.dashboardLayer.tasks` | `false` |
+| `obsidianBridge.dashboardLayer.autoLinkSuggestions` | `true` |
+| `obsidianBridge.deepMaintenance.enabled` | `true` |
+| `obsidianBridge.deepMaintenance.archiveAfterDays` | `30` |
+| `obsidianBridge.deepMaintenance.staleDecisionAfterDays` | `45` |
+| `obsidianBridge.deepMaintenance.semanticDuplicateScan` | `true` |
+| `obsidianBridge.adversarialDeep.enabled` | `true` |
+| `obsidianBridge.adversarialDeep.semanticContradictionScan` | `true` |
+| `obsidianBridge.adversarialDeep.evidenceScoring` | `true` |
+| `obsidianBridge.adversarialDeep.llmClassifier` | `false` |
+| `obsidianBridge.adversarialDeep.fallbackOnError` | `true` |
+| `obsidianBridge.adversarialDeep.onlyWhenProviderAvailable` | `true` |
+| `obsidianBridge.semanticGraph.enabled` | `true` |
+| `obsidianBridge.semanticGraph.proposalOnly` | `true` |
+| `obsidianBridge.semanticGraph.writeDerivedEdges` | `true` |
+| `obsidianBridge.semanticGraph.mutateMemory` | `false` |
+| `obsidianBridge.provenanceGraph.enabled` | `true` |
+| `obsidianBridge.impactAnalysis.enabled` | `true` |
+| `obsidianBridge.impactAnalysis.proposalOnly` | `true` |
+| `obsidianBridge.graphLinks.maxPerNote` | `5` |
+| `obsidianBridge.graphLinks.includeSemantic` | `false` |
+| `obsidianBridge.graphLinks.semanticThreshold` | `0.78` |
+| `obsidianBridge.graphLinks.blockId` | `"graph-links"` |
+| `obsidianBridge.graphLinks.tiers` | `["explicit","type","semantic"]` |
+| `obsidianBridge.graphLinks.semanticDiscovery.enabled` | `false` |
+| `obsidianBridge.graphLinks.semanticDiscovery.maxPerRun` | `500` |
+| `obsidianBridge.graphLinks.semanticDiscovery.threshold` | `0.78` |
+| `obsidianBridge.graphLinks.semanticDiscovery.maxLinksPerRecord` | `5` |
+| `obsidianBridge.graphLinks.semanticDiscovery.topK` | `20` |
+| `obsidianBridge.weekly.enabled` | `true` |
+| `obsidianBridge.weekly.archive` | `true` |
+| `obsidianBridge.weekly.trendWindowWeeks` | `4` |
+| `obsidianBridge.soulPatch.enabled` | `true` |
+| `obsidianBridge.soulPatch.force` | `false` |
+| `obsidianBridge.soulPatch.migrateLegacy` | `false` |
+| `obsidianBridge.soulPatch.createIfMissing` | `true` |
+| `obsidianBridge.soulPatch.backup` | `true` |
+| `obsidianBridge.soulPatch.promptForLegacyMigration` | `true` |
+| `criticalPush.enabled` | `true` |
+| `criticalPush.maxPerDay` | `3` |
+| `criticalPush.hideTypes` | `[]` |
+| `dailyConsolidation.enabled` | `false` |
+| `styleDirective.timeOfDay` | `true` |
+| `styleDirective.opinion` | `true` |
+| `styleDirective.askBack` | `true` |
+| `dreamEcho.enabled` | `true` |
+| `personaVoice.enabled` | `true` |
+| `afterthought.enabled` | `true` |
+| `reactionNudge.enabled` | `"auto"` |
+| `contradictionDisclosure.enabled` | `true` |
+| `featureCronSetup.auto` | `true` |
+| `security.allowChatConfigCommands` | `true` |
+| `security.allowModelDestructiveMemoryOps` | `true` |
+| `security.allowedUserIds` | `[]` |
+| `security.allowedChatIds` | `[]` |
+| `featuresConfirmedAt` | `null` |
+| `metaCognition.enabled` | `true` |
+| `metaCognition.llmReport` | `false` |
+| `metaCognition.llmReportMode` | `"budgeted"` |
+| `metaCognition.fallbackOnError` | `true` |
+| `metaCognition.sessionThreshold` | `50` |
+| `metaCognition.intervalDays` | `7` |
+| `emotion.tier` | `"auto"` |
+| `emotion.t2.enabled` | `true` |
+| `emotion.t3.enabled` | `false` |
+| `emotion.t3.fallbackOnError` | `true` |
+| `emotion.t3.onlyWhenProviderAvailable` | `true` |
+| `emotion.t3.escalationConfidence` | `0.85` |
+| `emotion.t3.timeoutMs` | `4000` |
+| `emotion.moodInfluence` | `0.3` |
+| `emotion.intensityHalfLifeFactor` | `1` |

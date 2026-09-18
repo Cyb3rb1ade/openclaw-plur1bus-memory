@@ -4,13 +4,24 @@ This document supplements `README.md` with build steps, conventions, and agent-f
 
 ## Architecture Overview
 
-PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using:
+Documentation baseline: PLUR1BUS 7.12.61, reviewed 2026-09-18 at
+`c381fd57fd80df193bc615f405704132dd89884e`. Recheck package/manifest metadata and
+call sites before treating this baseline as a later release's behavior.
+
+PLUR1BUS is an OpenClaw memory-slot plugin that provides long-term memory using:
 
 - **LanceDB** — authoritative store, per-agent isolated tables (`{baseDbPath}/{agentId}/`)
-- **Obsidian Bridge** — human-readable Markdown vault mirror, bidirectional sync
+- **Neo** — turn/candidate journals, episodes, graph relationships and optional vector sidecar
+- **KNOWLEDGE.md** — curated knowledge with section retrieval
+- **Obsidian Bridge** — optional human-readable mirror and gated review/apply paths
 - **Memory Graph** — semantic, entity, emotional, and episode edges between memory cards
 - **Telegram/Chat Commands** — user-facing inspection and editing without leaving the chat
-- **Background Jobs** — daily consolidation, critical-push classification, skill mining, REM dreaming
+- **Background Jobs** — gated consolidation, classification, mining, REM and adaptive work
+
+The [recall reference](docs/recall-architecture.md) describes actual runtime
+order, including the global merge used for a single source. The
+[known-issues list](docs/known-issues.md) distinguishes reproduced findings from
+static boundaries. Do not infer feature activation from an exported helper.
 
 ## Embedding-Cache v2
 
@@ -45,7 +56,7 @@ These features sit **after** normal recall and only append results. They must ne
 
 - Loads precomputed `.plur1bus/semantic-lens-index.json` from the workspace.
 - Adds community/bridge/faded memories after normal recall; dedupes against base recall IDs.
-- Default `enabled: false`; caps `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
+- Manifest default `enabled: true`; a precomputed index is still required. Caps `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
 - Hard timeout 50 ms; fallback returns base recall unchanged.
 - No writes, no live graph recompute, no second recall path.
 
@@ -219,37 +230,45 @@ dedicated chat-command surface (e.g. `/correct`).
 
 ## Testing
 
-Run tests with:
+Use a supported Node runtime (package floor 22.22.3 and the selected host's
+requirements). Install dependencies without provisioning gateway jobs from a
+source checkout:
 
 ```bash
-node --test tests/*.test.js
+npm ci --ignore-scripts
+npm run lint
+npm test
 ```
 
-- Tests are unit-level and DB-free.
-- Every phase must add its own regression tests.
-- Current baseline: 3,609 tests (3,608 passing, 0 failing, 1 skipped), 630 suites.
+- `npm test` covers both `tests/*.test.js` and `test/*.test.js` and serializes the
+  test runner. Running only `tests/*.test.js` is not the complete package gate.
+- Coverage includes helpers, stubs, native LanceDB, filesystem/capability,
+  worker/IPC and host-contract checks. The suite is not DB-free.
+- Add regression coverage for behavior changes. Documentation-only corrections
+  should run the existing documentation contracts and validate links/examples;
+  they do not require tests that merely repeat prose.
+- Keep test data and `OPENCLAW_HOME` isolated from a production installation.
+- Record runtime version, pass/fail/skip counts and platform-dependent limits.
+  Skipped capability tests do not establish those routes work on that platform.
+- The dated 2026-09-18 macOS/Node 22.23.2 baseline had 4,684 passes, 0 failures,
+  76 skips and 849 suites. It is evidence for that commit, not a fixed target
+  count for future changes.
 
-## Dependency Audit
+## Dependency audit and distribution
 
-Last audit run: 2026-06-05
+Declared dependencies belong to `package.json`; exact resolved versions belong
+to `package-lock.json`. Optional local models have separately pinned artifact
+revisions, sizes and hashes in `lib/providers/local-model-artifacts.js`.
 
-- `npm audit`: **0 vulnerabilities**
-- `npm ci --ignore-scripts`: passes
+`npm audit --omit=dev` reported zero known advisories in the dated review. Run a
+fresh audit for a new assessment; this does not audit application behavior or
+unknown vulnerabilities. Do not copy historical dependency tables as current
+state. The current CI has informative audit/signature steps and does not enforce
+a coverage percentage as a pass threshold.
 
-### Runtime Dependencies
-
-| Package | Spec | Resolved | Pinned? |
-|---------|------|----------|---------|
-| `@lancedb/lancedb` | `^0.26.2` | `0.26.2` | No (`^`) — version fixed by `package-lock.json` |
-| `openai` | `^6.27.0` | `6.42.0` | No (`^`) — version fixed by `package-lock.json` |
-
-### Optional Dependencies
-
-| Package | Spec | Resolved | Pinned? |
-|---------|------|----------|---------|
-| `@huggingface/transformers` | `4.2.0` | `4.2.0` | Yes |
-
-All versions are effectively pinned at install time by `package-lock.json`. No critical CVEs were reported at the time of the last audit. Major upgrades require a separate plan.
+Use `npm pack --ignore-scripts --dry-run` to inspect distribution contents.
+Document source, tarball, installed plugin, CI and live runtime as separate
+states. Historical [audit records](docs/audits/) retain their original context.
 
 ## Backup / Restore
 

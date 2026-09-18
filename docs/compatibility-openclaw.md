@@ -1,5 +1,12 @@
 # OpenClaw compatibility contract
 
+> Documentation scope, reviewed 2026-09-18 for PLUR1BUS 7.12.61: package metadata
+> declares OpenClaw 2026.8.1 / plugin API >=2026.8.1 and uses 2026.8.2 as its
+> build/lockfile baseline. The source-suite review did not rerun the historical
+> host matrix below. Preserve the build/version/date associated with each piece
+> of evidence; "verified" below is not a new claim about every later release.
+> Current behavioral limits are listed in [known issues](known-issues.md).
+
 PLUR1BUS supports OpenClaw 2026.8.1 stable as its primary host target.
 OpenClaw 2026.9.1 stable is additionally supported and verified; it replaces
 2026.9.1-beta.1, which was only ever a source-verified forward-compatibility
@@ -51,9 +58,11 @@ OpenClaw suppresses its own pre-compaction memory flush for Incognito sessions,
 but still dispatches the generic plugin `agent_end` hook. Before automatic
 capture can schedule embedding or storage, PLUR1BUS therefore classifies the
 session through the public `isIncognitoSessionKey` routing export. Incognito
-sessions are skipped. A missing classifier, failed SDK import, missing session
-key, thrown classifier, or non-boolean result also skips capture fail-closed and
-emits a redacted warning; explicit memory tools remain subject to their normal
+sessions are skipped. With a present session key, a missing classifier, failed
+SDK import, thrown
+classifier, or non-boolean result skips capture fail-closed. A missing session
+key is a different path at 7.12.61: capture proceeds with a warning. Explicit
+memory tools remain subject to their normal
 authorization and are not silently reclassified as automatic capture.
 
 PLUR1BUS registers model preparation through an OpenClaw plugin service, so an
