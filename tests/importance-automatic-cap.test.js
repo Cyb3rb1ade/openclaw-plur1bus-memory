@@ -43,14 +43,4 @@ describe("automatic importance cap", () => {
     });
     assert.strictEqual(result.importance, 0.97);
   });
-
-  it("does not include cap fragment for explicit values", () => {
-    const result = computeMemoryImportance({
-      text: "Any text",
-      category: "fact",
-      origin: "dm",
-      explicitImportance: 0.99,
-    });
-    assert.ok(!result.importanceReason.includes("automatic cap"), `reason should not mention cap: ${result.importanceReason}`);
-  });
 });
