@@ -145,6 +145,7 @@ import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
+import { IMPORTANCE_STATUS, normalizeImportanceStatus } from "./lib/importance-status.js";
 import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
 import { createLocalModelGenerationLifecycle, registerGatewayShutdown, registerLocalModelOwnershipServiceAfterLifecycle, registerModelPreparationServiceAfterLifecycle, registerReembeddingRecoveryServiceAfterLifecycle, runtimeIfUsable, shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
@@ -1460,6 +1461,7 @@ class MemoryDB {
     if (normalized.emotionalDominant == null) normalized.emotionalDominant = "neutral";
     if (normalized.moodContextAtCapture == null) normalized.moodContextAtCapture = "";
     if (normalized.emotionStatus == null) normalized.emotionStatus = "final";
+    normalized.importanceStatus = normalizeImportanceStatus(normalized.importanceStatus);
     if (normalized.replayCount == null) normalized.replayCount = 0;
     if (normalized.lastReplayed == null) normalized.lastReplayed = 0;
     if (normalized.retrievalCount == null) normalized.retrievalCount = 0;
@@ -1598,6 +1600,9 @@ class MemoryDB {
             // 7.12.22: Bestand gilt als fertig klassifiziert; nur neue Zeilen
             // aus dem entkoppelten Capture stehen auf pending_t3.
             { name: 'emotionStatus', valueSql: "'final'" },
+            // Bestand gilt als geklaert; Phase 1 der Migration setzt ihn
+            // ausdruecklich auf pending_backfill.
+            { name: 'importanceStatus', valueSql: "'final'" },
             { name: 'replayCount', valueSql: '0' },
             { name: 'lastReplayed', valueSql: '0' },
             { name: 'retrievalCount', valueSql: '0' },
@@ -1703,6 +1708,7 @@ class MemoryDB {
             emotionalDominant: "neutral",
             moodContextAtCapture: "",
             emotionStatus: "final",
+            importanceStatus: "final",
             replayCount: 0,
             lastReplayed: 0,
             retrievalCount: 0,
