@@ -164,6 +164,7 @@ const TABLE_NAME = "memories";
         emotionalValence: "",
         moodContextAtCapture: "",
         emotionStatus: "final",
+        importanceStatus: "final",
         replayCount: 0,
         lastReplayed: 0,
         retrievalCount: 0,
