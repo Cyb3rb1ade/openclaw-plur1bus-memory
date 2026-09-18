@@ -40,7 +40,7 @@ describe("encoding llm", () => {
       return JSON.stringify({ importance: 0.7, intensity: 0.6, dominant: "trust", reason: "Zusage gemacht" });
     };
 
-    const result = await classifyEncoding("Wir treffen uns naechsten Dienstag.", {
+    const result = await classifyEncoding("Wir treffen uns nächsten Dienstag.", {
       agentId: "bernd",
       callLlm,
       signal: undefined,
@@ -55,7 +55,7 @@ describe("encoding llm", () => {
     assert.strictEqual(seenMessages.length, 2);
     assert.strictEqual(seenMessages[0].role, "system");
     assert.strictEqual(seenMessages[1].role, "user");
-    assert.match(seenMessages[1].content, /Wir treffen uns naechsten Dienstag/);
+    assert.match(seenMessages[1].content, /Wir treffen uns nächsten Dienstag/);
     assert.strictEqual(seenContext.agentId, "bernd");
   });
 
@@ -68,7 +68,7 @@ describe("encoding llm", () => {
     assert.strictEqual(result.ok, false);
   });
 
-  it("liefert ok:false, wenn kein callLlm uebergeben wird", async () => {
+  it("liefert ok:false, wenn kein callLlm übergeben wird", async () => {
     const result = await classifyEncoding("Irgendein Text.", { agentId: "bernd" });
     assert.strictEqual(result.ok, false);
   });
