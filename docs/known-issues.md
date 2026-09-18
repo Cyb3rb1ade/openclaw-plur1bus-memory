@@ -1,87 +1,156 @@
-# Known Issues — v7.5.0
+# Known issues and verification limits
 
-> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-08-26 (v7.5.0)
-> Release: v7.5.0 Current Baseline
+Baseline: **7.12.61**, reviewed at
+`c381fd57fd80df193bc615f405704132dd89884e` on 2026-09-18. This is the canonical
+current issue document; the root `KNOWN-ISSUES.md` points here.
 
----
+**Reproduced** means an isolated execution was performed during this review.
+**Static** means the behavior follows from the inspected code path but no
+production exploit or delivery was tested. **Coverage limit** identifies what
+the available evidence does not establish. None of the findings below is fixed
+by rewriting documentation.
 
-## 1. ~~Embedding-Cache noch nicht hot-verdrahtet~~ — ✅ Behoben in v6.2.1
+## Reranker order can be lost during global merge
 
-**Beschreibung (original):** Die Embedding-Cache-Implementierung war vollständig vorhanden, aber noch nicht in den Recall-Hot-Path eingebunden.
+**Status: reproduced.** The runtime wraps even one source in
+`runMergedNamespaceRecall`. The child pipeline accepts the reranker's ordering
+but retains the old numeric scores. `mergeNamespaceRecallResults` sorts by
+those scores, potentially restoring the original order.
 
-**Auflösung (v6.2.1):** `OpenAIEmbeddingProvider` verdrahtet den Cache direkt (`lib/providers/embedding-openai.js`). Seit v6.8.12 ist `runtime.embeddingCacheEnabled` im Full Experience Default auf `true` gesetzt. Der Cache läuft pro Plugin-Instanz im Speicher (LRU, configurable TTL/maxEntries).
+The isolated test used two synthetic, authorized cards and real pipeline/merge
+functions under Node 22.23.2. Their scores were approximately 0.9091 and 0.6667:
 
----
+```text
+Before reranking: A, B
+Stub reranker:    B, A
+Global merge:    A, B
+```
 
-## 2. ~~metricsDebounceMs hartcodiert~~ — ✅ Behoben in v6.2.x
+There was no external inference or real database. This confirms an ordering
+contract failure, not a measured universal decline in recall quality. The
+historical Jina sigmoid/ONNX fixes addressed provider scoring and do not resolve
+this later merge behavior. Do not treat "reranker executed" as proof of final
+order. Sources: [runtime wrapper](../index.js),
+[pipeline and merge](../lib/recall-pipeline.js).
 
-**Beschreibung (original):** Debounce-Wert für Telemetrie-Flush war hartcodiert auf 250 ms.
+## Critical-push batches can exceed the daily limit
 
-**Auflösung:** `lib/metrics-debounce.js` exportiert `createMetricsDebouncer({ debounceMs })` mit konfigurierbarem Default (5000 ms). Kein Hardcode mehr in `lib/recall-pipeline.js`.
+**Status: reproduced.** `runClassifier` evaluates several candidate cards
+against the same persisted daily count, then increments it in the later push
+loop. With five eligible synthetic user cards, a deterministic `person`
+classification and `maxPerDay: 3`, it produced five `pushMessages`.
 
----
+The test had no external sender: **zero messages were actually delivered**.
+The defect is in admission/accounting within a batch, not evidence that every
+real installation has delivered excess pushes. Do not rely on `maxPerDay` as a
+hard batch limit at this version. Disabling `criticalPush.enabled` and verifying
+that the corresponding job is inactive is an operational option until fixed.
 
-## 3. ~~Reranker-Scoring-Qualität~~ — ✅ Behoben in v7.5.0
+Sources: [job](../lib/jobs/critical-classifier.js),
+[push decision](../lib/critical-push-classifier.js),
+[counter](../lib/critical-push-state.js).
 
-**Beschreibung:** Ein bereits vor v7.1.0 bestehender Scoring-Fehler kann die
-Qualität bzw. Reihenfolge einzelner Reranker-Ergebnisse beeinträchtigen.
+## Dry-run does not uniformly suppress every side effect
 
-**Impact:** Recall bleibt funktionsfähig und fällt bei Provider-Fehlern oder
-Timeouts auf die ungerankte Reihenfolge zurück. Das Problem betrifft die
-Ranking-Qualität, nicht die ACL-, Speicher- oder Installationssicherheit.
+**Status: static, path-specific.**
 
-**Auflösung (v7.5.0):** Jina wird als validierter Ein-Label-
-XLM-RoBERTa-Classifier geladen und über Sigmoid statt einer konstanten
-Ein-Klassen-Softmax ausgewertet. Der freie BGE-Pfad verweist auf einen realen,
-revisionsgepinnten ONNX-Export. E5, Jina und BGE validieren vor dem Laden Größe
-und SHA-256 jedes erforderlichen Artefakts; Jina kann bei expliziter
-Konfiguration genau einmal auf BGE zurückfallen.
+- [Daily consolidation](../lib/jobs/daily-consolidation.js) calls `purgeExpired`
+  even when its `dryRun` option is true. A caller must not assume it only reads
+  the database.
+- [Reminder dispatch](../lib/jobs/reminder-dispatch.js) guards its queue-state
+  mutation with `dryRun`, but an explicitly provided webhook or host callback
+  can still deliver through the direct library path. The normal index wiring
+  does not pass this dry-run option; this is not a claim that the regular
+  command offers a safe delivery preview.
 
----
+These observations were not tested against real reminders, webhooks or cards.
+A repair should guard each effect, not merely rename a flag.
 
-## 4. Over-Exports in neo-arch.js / obsidian-*.js
+## Direct host card reads differ from recall
 
-**Beschreibung:** Mehr als 60 überflüssige Exports in `lib/neo-arch.js` und `lib/obsidian-*.js` führen zu Bundler-Warnungen und vergrößern die API-Oberfläche unnötig.
+**Status: static contract boundary.** The host memory search adapter uses a
+restricted private-agent search. Its direct card-read path uses `getCard`
+without reproducing all contextual ACL, lifecycle and epistemic gates from the
+recall pipeline. A prior search filter must not be described as a universal
+read guarantee. Exploitability depends on the host's exposure and identity
+contract; no cross-user production exploit was attempted.
 
-**Impact:** Reines Hygiene-Thema; keine Laufzeit-Auswirkungen.
+Source: [host adapter](../lib/setup/memory-host-runtime.js).
 
-**Status:** Offen — kein Fix-Zieldatum. Kein Produktionsrisiko.
+## Emotion Tier 2 is keyword-based
 
----
+**Status: implementation limit.** [tier2-transformer.js](../lib/tier2-transformer.js)
+currently implements keyword scoring rather than loading an emotion ONNX
+model. Tier 1 is lexical; Tier 3 can use an available chat-LLM route. The local
+transformer embedding/reranking providers elsewhere in the package are real
+and are a different feature. Emotion names and scores do not establish human
+feelings or calibrated psychological judgments.
 
-## 5. ~~atomic-json.js: Reentrancy-Deadlock bei nested Updates~~ — ✅ Behoben
+## Deletion, history and cross-store consistency
 
-**Beschreibung (original):** Verschachtelte `atomicJsonUpdate`-Aufrufe auf derselben Datei konnten zu einem Deadlock führen.
+**Status: designed boundaries and failure modes.**
 
-**Auflösung:** `lib/atomic-json.js` wirft jetzt sofort mit `"Nested atomicJsonUpdate for same file is not allowed"` bei erkannter Reentrancy. Kein Deadlock mehr — stattdessen ein sofortiger, erklärender Fehler der die Nutzung korrigiert.
+- Soft deletion plus tombstones prevents active recall and normalized identical
+  re-ingestion in the bound scope. It is not full erasure from Neo journals,
+  archives, exports, mirrors and backups, nor a paraphrase detector.
+- Safe version replacement writes the replacement first, then supersedes the
+  old row. LanceDB, JSONL journals, graph and vault do not share one transaction;
+  a partial failure can require reconciliation and leave repairable forks.
+- Missing versus corrupt tombstone state has deliberately different handling.
+  Corruption can block writes rather than silently permit resurrection.
+- Agent-private memories are agent-bound across workspaces. Automatic capture
+  must not be advertised as per-workspace isolation.
 
----
+Sources: [safe update](../lib/safe-update.js),
+[tombstones](../lib/tombstone.js), [database](../index.js),
+[ACL](../lib/acl-middleware.js).
 
-## 6. ~~Scope-Owner-Bindung für `scope: "user"`~~ — ✅ Behoben
+## Platform and runtime coverage
 
-**Beschreibung (original):** `user`-Scope-Records wurden teils wie private Inhalte behandelt, ohne den owner-bound Kontext explizit durch Authentifizierung/`userId` zu erzwingen.
+The dated macOS / Node 22.23.2 suite run completed with **4,684 passed,
+0 failed, 76 skipped** (4,760 tests, 849 suites; about 362.6 seconds).
+Syntax checks passed. `npm audit --omit=dev` reported zero known advisories
+at that time. These are results for the reviewed source, not evergreen claims.
 
-**Auflösung:** `acl-middleware` erzwingt für `scope: "user"` den Vergleich mit `ctx.userId` (`acl.user.not_authenticated`, `acl.user.missing_owner`, `acl.user.mismatch`) und nutzt dafür die gespeicherte `ownerUserId` im Datensatz.
+Most skips concerned stable directory-file-descriptor capabilities unavailable
+on that platform; others concerned a Bash-4 deployment prerequisite. Named
+namespace, shared-pool and migration paths that were skipped are not verified
+by a flat-layout test. A skip is not a pass and is not automatically a defect.
 
----
+The package declares OpenClaw >=2026.8.1 and builds against 2026.8.2. Dated
+compatibility records describe additional hosts. The review did not rerun every
+host matrix, live delivery, remote provider fallback, long-running shutdown,
+model migration, installed UI or personal production data. A health card alone
+is not proof of working inference: the host vector-availability probe currently
+uses a capability indicator rather than a live search.
 
-## Zusammenfassung
+Sources: [compatibility](compatibility-openclaw.md),
+[host adapter](../lib/setup/memory-host-runtime.js),
+[CI](../.github/workflows/ci.yml).
 
-| Issue | Schwere | Status | Behoben in |
-|-------|---------|--------|------------|
-| Embedding-Cache nicht hot-verdrahtet | Mittel | ✅ Behoben | v6.2.1 |
-| metricsDebounceMs hartcodiert | Niedrig | ✅ Behoben | v6.2.x |
-| Reranker-Scoring-Qualität | Mittel | ✅ Behoben | v7.5.0 |
-| 60+ Over-Exports | Niedrig | Offen | — |
-| atomic-json Reentrancy-Deadlock | Niedrig-Mittel | ✅ Behoben | v6.x |
-| user-scope owner-bound Zugriff | Niedrig-Mittel | ✅ Behoben | v6.8.11 |
+## Quality still requires an end-to-end evaluation
 
----
+Passing unit and integration contracts does not establish retrieval precision,
+recall coverage, truthful answers, prompt-injection resistance or beneficial
+long-term adaptation. Ranking combines heuristics from different retrieval
+paths. Logs and optional caches can contain query, memory or generated response
+text; prompt-free cache keys do not imply content-free storage or logging.
 
-## Verbleibende offene Punkte / Follow-ups (Low/Info)
+A useful evaluation separates capture coverage, authorized retrieval, temporal
+selection, final prompt inclusion, answer fidelity and delivery. Include
+conflicting dates, role attribution, negation, forgotten content and old
+instructions. Do not transfer historical latency measurements to a new machine
+or provider without measurement.
 
-Die folgenden Punkte sind als unkritische Folgearbeiten identifiziert und dokumentiert:
+## Historical findings and evidence
 
-1. **Staubiges Testverzeichnis aufräumen**: Das veraltete Testverzeichnis `plur1bus/tests/` archivieren bzw. entfernen (Entwicklung erfolgt ausschließlich unter `tests/` und `test/`).
-2. **Local-only Script-Anpassung**: Das lokale Hilfsskript `.openclaw/scripts/embed-promoted-memories.mjs` auf das neue Provider-Factory-Pattern (`lib/providers/factory.js`) umstellen.
-3. **Local PostToolUse Hook Warning**: Die Warnungen bezüglich des lokalen `PostToolUse`-Hooks beruhen auf einer Kimi/Claude-Lokalkonfiguration und betreffen nicht den Code des Repositories selbst.
+Earlier issue files mixed completed fixes, local deployment incidents and
+release-specific backlog. They remain available at the reviewed snapshot:
+
+- [Root backlog and laboratory observations](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/blob/c381fd57fd80df193bc615f405704132dd89884e/KNOWN-ISSUES.md).
+- [Older issue/fix list](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/blob/c381fd57fd80df193bc615f405704132dd89884e/docs/known-issues.md).
+- [Dated audit records](audits/) and [release history](../CHANGELOG.md).
+
+An older "fixed" label applies to that specific finding, not to every later
+code path with a similar name. Conversely, an old backlog item has not been
+silently declared fixed just because it is absent from the current reproductions.

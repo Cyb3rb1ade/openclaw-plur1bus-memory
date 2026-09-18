@@ -1,1171 +1,222 @@
 # PLUR1BUS — Memory plugin for OpenClaw
 
-PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
-
-**PLUR1BUS 7.12.8 — verified on OpenClaw 2026.8.x, 2026.9.1 and 2026.9.2**
-
-Current source version: **7.12.8**. PLUR1BUS 7.12.8 supports OpenClaw `2026.8.1`
-as its primary host target and is additionally verified against OpenClaw
-`2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
-API `>=2026.8.1`. The package is built and tested against the immutable build
-baseline `openclaw@2026.8.2`; see the
-[compatibility contract](docs/compatibility-openclaw.md) for the full runtime
-matrix and evidence. The upstream source base is the immutable official tag
-`v7.4.10`, commit `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`.
-
-### Web interface
-
-PLUR1BUS registers its own **"PLUR1BUS" tab in OpenClaw's Control UI**
-(`/plugins/memory-lancedb-namespaced/control`) — memory health, the workspace
-matrix, provider status, and migration progress, all in the browser. It rides
-on the OpenClaw Gateway's own port and authentication (no separate port, no
-separate login); reach it through however you already reach your Gateway
-(loopback, or a Tailscale/VPN front end), then open that tab.
-
-## What it does
-
-By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
-
-### New in v7.12.38 — the persona voice learns daily, from evidence
-
-Persona evolution used to run once a week, hand the model only the current
-profile and ask for "one small change"; the reply outcomes were merely a gate.
-Now it runs daily (04:15, staggered per agent, `personaVoice.cron`/`timezone`
-to override) with two brakes kept in `.adaptive-learning/persona-evolution-state.json`:
-at least `minDaysBetween` days (default 2) since the last change, and at
-least `minOutcomes` (default 10) new real reply outcomes since then, more than
-half of them positive. Heartbeat turns no longer count. The model sees the
-protected seed, the numbered learned lines, and up to six positive and six
-negative excerpts (question, answer, the user's reaction) and answers with
-`ADD: - …`, `REPLACE <n>: - …` or `NONE`. The managed block may hold 24 lines
-(`personaVoice.maxBullets`, was 12 including the seed) and the injected
-directive cap follows from that (lines × 130 + 80, default 3200 characters).
-Existing weekly jobs are migrated to the daily slot on the next setup run.
-
-
-Twenty-five releases in three days, all live-tested on a three-agent
-installation. The [changelog](CHANGELOG.md) has the details per version; the
-highlights:
-
-- **Prompt hook no longer waits on the database.** OpenClaw runs a plugin's
-  `before_prompt_build` handlers one after another, each with its own 15 s
-  timeout. Reply-outcome tracking ran first and waited for up to twelve
-  sequential LanceDB updates, so recall started only after that timeout. The
-  DB work now runs in a serial per-agent queue after the turn's recall
-  (7.12.30). A new `recall prelude` log line reports where the pre-recall
-  time goes; the query embedding runs under a budget (`neo.recall.global.embedTimeoutMs`).
-- **Hook identity works with OpenClaw 2026.9 session entries** (7.12.30,
-  7.12.32, 7.12.33). Session entries moved channel, account and target under
-  `entry.delivery`; the resolver reads both the old and the new shape. Voice
-  notes and photos without a caption now produce a dispatch ticket, and the
-  fallback warning names the exact step and reason.
-- **Neo store on a vector sidecar** (7.12.26). Embeddings live as raw
-  float32 in `vectors.<gen>.f32` with byte offsets in `vector-index.json`
-  instead of JSON number lists; a 200 MB candidate journal shrank to about
-  13 MB plus a 38 MB sidecar. Lossless; inline vectors keep being read.
-  `scripts/migrate-neo-vectors-sidecar.mjs` migrates existing stores.
-- **Global candidate search** (7.12.27, 7.12.28). Recall searches every
-  candidate of the workspace by cosine on the sidecar, with a recency
-  discount and de-duplication against injected LanceDB memories
-  (`neo.recall.global`). A metadata index (`candidate-index.jsonl`) keeps
-  the horizon independent of the journal cap and makes the search cost
-  60–140 ms after the first read.
-- **Nightly LanceDB compaction** (7.12.31, 7.12.33). Every row update creates
-  a fragment and a version; tables reached hundreds of one-row fragments and
-  thousands of versions, which made vector search and updates ten times
-  slower. `consolidate-daily` now runs `optimize()` per agent
-  (`dailyConsolidation.lancedbOptimize`, versions older than 24 h are pruned).
-- **Daily consolidation repaired** (7.12.24, 7.12.29). Graph edges whose
-  memories are gone are pruned; the memory-dynamics decay scans only the
-  agent's own partition instead of failing on the first foreign-scope row;
-  ACL denials carry a code, a reason and the row id.
-- **Emotion tier 3 moved to a cron** (7.12.22, 7.12.23). Capture runs tiers
-  1/2 only; the hourly `emotion-refine` job refines rows the fast tiers were
-  unsure about, and always rows with importance ≥ 0.9.
-- **Cold-start and worker fixes** (7.12.20, 7.12.21, 7.12.24, 7.12.25).
-  Stable turn identity for capture, a persisted cap-check watermark for the
-  journals (first append after a restart dropped from 17 s to under 1 s),
-  worker warm-up per plugin instance, worker timings in the capture log.
-- **Operator path for chat commands** (7.12.18, 7.12.19, 7.12.24).
-  `openclaw plur1bus-command --agent <id> --session <key> [--locale xx] "/…"`
-  runs any chat command as operator against the same Neo store the hooks use.
-- **Reminder nudge loop closed** (7.12.24): a presented reminder can no longer
-  be captured as a new reminder.
-
-### New in v7.12.8 — the KNOWLEDGE.md queue drops entries it can never promote
-
-- `knowledge_update` refuses to promote an invalidated memory into canonical
-  KNOWLEDGE.md, but afterwards removed only the keys it had actually
-  integrated. Anything unpromotable — invalidated (a soft delete sets both
-  `status="deleted"` and `epistemicStatus="invalidated"`) or gone from the
-  table — stayed queued forever in `.adaptive-learning/knowledge-pending.json`
-  and kept inflating `pendingCount`, so the maintenance nudge told the agent
-  that N insights were waiting when some of them no longer existed. The queue
-  now drops those entries on the next run, before the "nothing to integrate"
-  exit. Pruning is restricted to the ids the query actually asked for, so a
-  capped query or a failed fetch never drops pending work.
-
-### New in v7.12.7 — MEMORY.md and USER.md reach the session again, embedding calls time out
-
-- OpenClaw asks the memory-slot owner to classify `MEMORY.md` and `USER.md`
-  before injecting them (`classifyWorkspaceMemoryPaths`). PLUR1BUS did not
-  implement it, the host answered `unsupported`, logged "excluding automatic
-  memory context: selected memory runtime does not support provenance
-  classification" and left both files out of every session — the agent only
-  saw its curated memory when it read the file by hand. The runtime now
-  classifies workspace memory paths with the same rules as memory-core
-  (curated roots and `memory/**.md` → `agent`, dreams → `system`, anything
-  outside the workspace or non-memory → `untrusted`).
-- Remote embedding requests carry a per-request timeout
-  (`embedding.requestTimeoutMs`, default 15 s) and no SDK-side retries. The
-  OpenAI SDK default of ten minutes let a stalled request hold a recall until
-  the 20-second worker timeout (`started=yes elapsedMs=0` in the log).
-
-### New in v7.12.6 — recall returns memories again (BigInt expiry rows were treated as expired)
-
-- LanceDB returns Int64 columns (`expiresAt`, `validFrom`, `validUntil`,
-  `updatedAt`, `remindAt`, …) as JavaScript BigInt. The recall pipeline's
-  lifecycle gate accepted only numbers, so a BigInt `0n` expiry counted as
-  "expired" and **every** candidate was rejected before scoring, ACL and
-  reranking. Auto-recall injected zero memories on every turn and
-  `memory_recall` reported "no results" while the rows were in the table with
-  scores around 0.5. `projectRecallEntry` now coerces all Int64-backed fields
-  to safe numbers and `isRecallEntryLive` accepts BigInt input. Direct
-  `MemoryDB.search` was unaffected, which is why manual checks kept passing.
-
-### New in v7.12.5 — umlauts survive query refinement, recall timeouts name the slot state
-
-- The recall query refiner decomposed text with NFKD and then stripped the
-  combining marks, so every German query with ä, ö or ü was split apart
-  (`Gespräch` became `Gespra ch`, `läuft` became `la uft`) and umlaut
-  stopwords such as `über` or `für` never matched. Combining marks are kept
-  and the text is recomposed to NFC.
-- When a recall times out before it ever received a worker slot, the warning
-  now says so (`started=no`), reports the wait time, the active slot count and
-  `maxConcurrentRecall`, and the job is dropped from the queue instead of
-  running uselessly later. This is the signal to watch when
-  `runtime.maxConcurrentRecall` is too low for the host.
-
-### New in v7.12.4 — the transcript is undated, semantic-discover script imports homedir
-
-- The `<temporal-context>` block now states that transcript messages carry no
-  timestamps and compaction summaries no dates, and that no time or date may
-  be asserted for earlier conversation content unless it comes from the block,
-  a memory record's `created-at`/`age` attribute or a tool result. Agents had
-  been filling that gap with invented times (#133).
-- `scripts/run-semantic-discover-once.mjs` used `homedir()` without importing
-  it from `node:os` and crashed unless `PLUR1BUS_VAULT_PATH` and
-  `PLUR1BUS_DB_BASE` were set. The import is in place.
-
-### New in v7.12.3 — KNOWLEDGE.md promotes again, dreams reach the agent's workspace
-
-- `schicht15.maxPromotionsPerRun` compared the lifetime number of promoted
-  cards against the limit, so a workspace that had ever promoted that many
-  was blocked for good (a live install sat at "7/3" since June with
-  KNOWLEDGE.md frozen). The limit now counts a 24-hour window; promotions
-  recorded before timestamps existed do not count, so a stuck workspace
-  unblocks on the next run. Dedup of already promoted cards is unchanged.
-- The agent's own REM partition wrote its DREAMS.md diary, vault note, mood
-  and soul context into its Neo store directory instead of the agent
-  workspace, so the host's Dreams page never showed PLUR1BUS dreams and the
-  narrative ran without mood. The agent's own private partition now writes
-  to its workspace; other agents' partitions and user pools stay in their
-  store directory. Light dreams accepted only the scope spelling "agent" for
-  the diary while ACL bindings say "agent-private"; both are accepted now.
-
-### New in v7.12.2 — critical pushes show what they are about
-
-- A critical push for a health or finance card used to read "The content is
-  hidden for privacy reasons", leaving the owner to accept or reject a card
-  they could not see. The push goes to the owner's direct chat only and quotes
-  the owner's own statement, so the sanitized 160-character preview is now
-  shown for every type except credentials, which stay hidden. Operators who
-  want the old behaviour list the types under `criticalPush.hideTypes`
-  (for example `["gesundheit", "geld_konto"]`).
-
-### New in v7.12.1 — macOS portability for the scoped embedding owner and the test suite
-
-- The scoped embedding owner always bound a Linux abstract Unix socket, which
-  macOS rejects with `listen EINVAL` before the owner service starts. Linux
-  keeps its exact address; other Unix platforms elect the owner through a
-  deterministic exclusive loopback TCP claim that carries no data, while the
-  data plane stays the private filesystem socket with its 256-bit token. An
-  oversized macOS socket path (103 bytes) is diagnosed before any mutation.
-- Tests compare workspace and generation paths canonically (`/var` is
-  `/private/var` on macOS), skip the four shared-memory integration paths on
-  hosts without stable fd-backed directory routing with an explicit reason, and
-  assert that such hosts reject shared writes without creating a shared root.
-  Two focused macOS CI jobs run next to the unchanged Linux suite.
-- Also verified on OpenClaw 2026.9.2 (full suite against the 9.2 host: same
-  three deliberate baseline failures as on 9.1, nothing else).
-
-### New in v7.12.0 — Jina v5 Text Nano is the proposal for new installs
-
-- After the lab test (see the comparison below) the provider wizard and the
-  shell installer offer `jinaai/jina-embeddings-v5-text-nano-retrieval` as
-  option 1 and default; OpenAI is option 2, E5 the keyless fallback, Jina v3
-  stays selectable for existing installs. Non-interactive and dry runs need
-  `PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1` to accept CC BY-NC 4.0 and fall
-  back to E5 otherwise, rather than failing or acknowledging a license silently.
-- Existing installs are not touched. The dashboard's Embedding Dimension
-  Planner now recommends the migration to Nano when another embedding model is
-  active: prepare the target in Model Preparation, then run the re-embedding
-  migration (dry run, copy, separate switch); the old generation stays for
-  rollback.
-
-### New in v7.11.1 — long cards no longer drive the local Jina models into the OOM killer
-
-- Both pinned Jina models accept 8,192 tokens, and the ONNX runtime keeps the
-  attention working set of the longest text in a batch, times the batch size,
-  without ever returning it. In the 7.11.0 lab run the v3 process grew to 41 GB
-  and was killed at card 808 of 1,031; one batch of the eight longest cards
-  (up to 15,000 characters) took nano to +30 GB and 117 s. Both Jina runtimes
-  now cap every text at `embedding.local.maxTokens`, default 512 (32 to 8,192).
-  The same batch then costs +0.6 GB (nano) or +1.1 GB (v3) and 5 or 22 s.
-  Memory cards are summaries; raise the cap deliberately if long cards must be
-  embedded in full. The cap is part of the shared model pool identity.
-
-### New in v7.11.0 — Jina v5 Text Nano as a local embedding option
-
-- The published Q8 ONNX export of `jinaai/jina-embeddings-v5-text-nano-retrieval`
-  is pinned (five artifacts, about 265 MB, SHA-256 checked). A `jina-v5`
-  runtime branch validates the EuroBERT config, takes the graph's own
-  `sentence_embedding` (normalized last-token pooling) or pools over the
-  attention mask itself, truncates to 32 to 768 Matryoshka dimensions, and
-  distinguishes queries from documents by the published `Query: ` and
-  `Document: ` prefixes, refusing any other prefix. Targets `jina-v5-nano-*`
-  appear in the schema, the dimension planner, the dashboard switch (same
-  re-embedding migration), wizard option 4 and installer choice `jina5`, each
-  behind the CC BY-NC 4.0 acknowledgement. An option, not a proposal: the
-  default stays where it is until the PLUR1BUS lab test against v3 is in,
-  and existing configurations are untouched.
-
-### New in v7.10.0 — BGE is the recommended local reranker
-
-- The provider wizard and the shell installer now offer the local BGE reranker
-  as option 1 and the default; Cohere is option 2, Jina v2 stays under the
-  advanced options. The choice is selected by key, so the order can change
-  without shifting the branches. The reason is documented under
-  [Choosing embedding and reranking models](#choosing-embedding-and-reranking-models):
-  on the multilingual benchmarks that matter for memory cards BGE is ahead or
-  level, and it needs no license consent. Nothing changes for an existing
-  configuration; the runtime default was BGE already.
-
-### New in v7.9.2 — tombstoned cards are no longer classified or pushed
-
-- A card removed with `memory_forget` keeps `type = "memory"` while its
-  `status` becomes `deleted`. The classify-recent cron took such rows for
-  fresh candidates, typed them and pushed them as critical, while the review
-  path (which only reads active rows) never knew the references. Candidate
-  selection and the classifier now skip every row whose status is not
-  active; the run result reports them as `skippedInactive`.
-
-### New in v7.9.1 — the quoted reply is caught on the chat dispatch hook
-
-- 7.9.0 listened on `before_agent_reply` only, which the host does not fire
-  for a Telegram chat message; the message went to the agent. The handler now
-  also listens on `before_dispatch`, where the host hands over the quoted text.
-
-### New in v7.9.0 — accept or reject critical pushes in bulk, also by quoting
-
-- `/plur1bus critical accept all`, `reject all`, or several references in one
-  command handle every pending review of the authorized scope; unknown or
-  ambiguous references are reported, the rest is applied.
-- Quote a push in the chat and write "bitte alle akzeptieren", "alle
-  ablehnen", "accept all" (or, for a single quoted card, "akzeptieren" /
-  "nicht hervorheben"): PLUR1BUS answers before the agent, taking the
-  references from the quoted push and the decision from the reply, with the
-  same authorization as the command. Only a quote carrying the push's fixed
-  headline counts; anything unclear goes to the agent.
-
-### New in v7.8.11 — shared user partitions get names too
-
-- "Cards by user" now labels each pool after the agent, channel and account
-  whose allowed direct-message user owns it (`main.telegram.default`,
-  numbered when an account admits several users). The user id itself never
-  appears on the page.
-
-### New in v7.8.10 — shared partitions get names and an explanation
-
-- "Cards by workspace" showed pool hashes and zeros. The alias snapshot now
-  names each shared partition (`main`, and `main.dir` for the pre-alias
-  directory identity of the same workspace), and an all-zero list says that
-  the partitions exist but nothing has been shared into them yet. Paths stay
-  off the page.
-
-### New in v7.8.9 — the Obsidian operator CLI works
-
-- `openclaw plur1bus-obsidian detect|use|create|confirm --session <key>`
-  called the host's RPC helper as `(method, params)`; its signature is
-  `(method, opts, params, extra)`, so every method saw an empty request and
-  nothing was printed. The CLI now passes the parameters in the right slot,
-  with the method's scope, and writes the result as JSON.
-
-### New in v7.8.8 — scheduled discovery carries the right capability
-
-- 7.8.6 handed the discovery cron the bridge service's policy, which only
-  carries `vault_write`; the discovery also needs `semantic_index_write`,
-  granted by the `semantic-discovery confirm` plan with a confirmed action.
-  The scheduled run now counts as the operator's standing confirmation; the
-  vault receipt, `mode: apply` and `allowWrite` stay required.
-
-### New in v7.8.7 — the vault confirmation can be driven from the CLI
-
-- `plur1bus-obsidian use/confirm --session <key>` and the gateway methods
-  ended with `identity_binding_required`: the operator-side session resolver
-  produced only agent and workspace, no user or conversation identity. A
-  direct-chat session key now resolves to the same identity-bound context
-  that conversation's chat commands get, so the receipt binds to that
-  conversation's user. Other session kinds keep the plain agent context.
-
-### New in v7.8.6 — scheduled semantic-link discovery can write
-
-- The `discover-semantic-links` cron called the discoverer without a
-  mutation policy, which the policy layer reads as blocked, so scheduled
-  discovery never wrote a link. The handler now builds the same
-  receipt-bound policy per workspace that the bridge service uses. Without a
-  vault receipt it stays blocked by design.
-- The vault confirmation flow (`plur1bus-obsidian use/confirm`, gateway
-  methods `plur1bus.obsidian.prepare/confirm`) failed with "Invalid agent
-  ID": the handlers read the parameters off the host's method context object
-  and did not accept the CLI's `session` name. Both are handled now, and the
-  agent id falls back to the key's `agent:<id>:` prefix.
-
-### New in v7.8.5 — the Obsidian card sees every agent's vault
-
-- Without a configured `obsidianBridge.workspaces` list the target probe only
-  looked at `<OpenClaw home>/workspace`; the vaults in `workspace-<agent>`
-  stayed invisible. Every `workspace*` directory is probed now.
-- With `requireVaultPathConfirmation: false` the bridge acts without a
-  receipt, so a configured target now reads "ready" instead of "not yet
-  confirmed", and the card says how many targets are configured.
-- The bridge only knows vaults through `obsidianBridge.workspaces` (entries
-  with `id`, `agentId`, `path`) or `vaultPath`. The reviews work without it
-  through the host's agent workspace; semantic-link discovery and the target
-  card do not.
-
-### New in v7.8.4 — the dashboard buttons work inside the host tab
-
-- OpenClaw embeds the plugin tab in an iframe sandboxed with `allow-scripts`
-  only, so the browser silently blocked every native form submission there;
-  the 7.6.0 switches and the 7.8.0 Compact button only worked in a standalone
-  browser tab. A writable page now carries one nonce-bound script that posts
-  the form with `fetch` and reloads itself; the result shows up as the usual
-  banner. Read-only pages still carry no script. The script intercepts the
-  click on the submit button: a sandboxed frame refuses the submission before
-  it ever fires the `submit` event (7.8.1 listened there and never ran). The
-  action travels as a GET with the single-use token in the query, because the
-  host authenticates the frame's cookie for GET only and answers a POST from
-  the opaque origin with 401 (7.8.2 hit that). 7.8.4 routes the Compact
-  button through the db-adapter, which owns `optimizeTable`; 7.8.3 asked the
-  pool's raw store objects and failed.
-
-### New in v7.8.0 — a Compact button per partition, and an installer that reaches its plan
-
-- **Compact behind every LanceDB row.** With `controlUi.writeActions: "all"`,
-  each private partition under "Cards by agent" gets a button that runs
-  LanceDB's fragment compaction (`table.optimize()`) for that partition in
-  the background, one at a time. The adapter had the primitive since August;
-  nothing ever called it. The row shows progress and the result.
-- **The feature-cron installer no longer times out its own probe.** On large
-  installs `openclaw plur1bus-feature-cron --help` takes longer than the old
-  five-second budget, so every run took the fail-closed branch and
-  safety-disabled the direct jobs. Budget is 30 s now.
-- **Ownership rules fixed:** a disabled owned job no longer counts as
-  present for non-delivery features (it is re-enabled), operator-named
-  consolidations that run the shipped command are not duplicated, the
-  singleton collector is recognised on any agent, and `main` is the default
-  agent when the host flags none.
-- **Memory Health no longer reads "degraded" because of `_neo`.** Reserved
-  store directories are skipped by the health scan.
-
-### New in v7.7.0 — dreams on OpenClaw's own Dreams page
-
-- **PLUR1BUS dreams show up in Settings → Memory → Dreams.** Light and REM
-  narratives are written into the agent's `DREAMS.md`, in the host's entry
-  shape inside its managed diary block. Only the agent's private partition
-  writes there; shared partitions never do. `dreaming.narrative.diary` turns
-  it off. To give the diary one author, switch the host's own managed dreaming
-  off. The host reads that switch from the memory slot owner's entry, so it is
-  `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false`,
-  not memory-core's flag.
-- **The Memory page knows the engine.** PLUR1BUS now registers the memory
-  runtime the host expects from the slot owner, so Overview and Scene report
-  PLUR1BUS' provider, model, embedding state and card count instead of
-  "memory plugin unavailable". Host-side search runs through PLUR1BUS' recall
-  pipeline on the agent's private partition only.
-- Not reachable from a plugin: the counters under Advanced and the phase chips,
-  which read memory-core's internal short-term store and its managed cron.
-
-### New in v7.6.0 — switch providers from the dashboard
-
-The operator tab can now change two things, if you let it. `controlUi.writeActions`
-is `off` by default, so nothing changes for an existing install.
-
-- **`reranker`** makes the reranking choice switchable from the page: local BGE,
-  local JinaAI (both keyless), Cohere when a key is configured, or off. That is a
-  runtime choice with no data migration behind it.
-- **`all`** additionally exposes the embedding target and the re-embedding
-  migration: dry run, copy, and a separate switch. The confirmation token that
-  binds those steps stays inside the Gateway and never appears in the browser.
-
-Every change carries a single-use form token from the page render it was clicked
-on, because the tab cookie the host mints is `SameSite=None`. While
-`writeActions` is `off` the page renders no form, forbids form targets in its
-Content-Security-Policy, and refuses POST outright.
-
-Also fixed: the reranking card used to name `jina` as a `reranker.provider`
-value. The schema rejects it. Jina reranking is a local model, selected through
-`reranker.local.model`.
-
-### New in v7.5.6 — verified against OpenClaw 2026.9.1
-
-- **No code change was needed for the 2026.9.1 host.** PLUR1BUS was loaded
-  through that release's own plugin loader and the full suite was run against
-  it. The compatibility contract now names 2026.9.1 stable and drops the
-  2026.9.1-beta.1 wording, which described a beta nobody runs.
-
-### New in v7.5.5 — readiness agrees with the runtime
-
-- **Credential Readiness no longer calls a working embedding "missing".** The
-  runtime falls back to `OPENAI_API_KEY` (and `OPENAI_API_KEY_FALLBACK` for
-  the fallback embedder) when neither `apiKey` nor `apiKeyEnv` is set, which
-  is how a default install carries its key. The table now follows the same
-  rule, names the variable it found, and never reads its value. Keyless
-  providers show `not required`; an unconfigured optional fallback shows
-  `optional`.
-
-### New in v7.5.4 — the tab opens at once, and looks like the rest of the Control UI
-
-- **No more waiting for the health scan.** Opening the tab used to run a scan
-  over every partition table (2–21 s depending on gateway load) because the
-  snapshot cache lasted 10 s. The last snapshot is now served immediately and
-  refreshed in the background: once at gateway start, then every 10 minutes.
-  The page says how old the snapshot is.
-- **Host styling.** The page uses the Control UI's own colour, radius and type
-  tokens, dark by default and light when the operating system asks for it. The
-  tab runs in a sandboxed iframe that receives no theme message, so a
-  light/dark mode forced in the host cannot be followed, only the OS setting.
-
-### New in v7.5.3 — the tab registers, and a host route is not a defect
-
-- **The Control UI tab showed "Plugin panel unavailable".** OpenClaw 2026.8.2
-  exposes the descriptor registration flat on the api object; PLUR1BUS read only
-  the nested path, so no tab was ever registered.
-- **Host-routed capabilities no longer wear the `missing` badge.** They need no
-  key of their own, so the status says so instead of reading like a fault.
-
-### New in v7.5.2 — the readiness table points at the right line
-
-- **The config path shown is the one that holds the key.** A key in
-  `reranker.apiKeyEnv` was labelled `reranker.apiKey`, sending the reader to a
-  line that does not exist in their config.
-- **`host_route` is explained.** The source had no legend entry, and the
-  `missing` help text claimed the feature stays off — untrue for exactly the
-  capabilities that report it.
-
-### New in v7.5.1 — the operator dashboard tells the truth
-
-- **Continuity Engine, Semantic Lens and Query Refinement default to on.** The
-  tab states that an absent switch means on, but these three defaulted to off
-  in the manifest, so an untouched install contradicted the sentence printed
-  above the feature cards. An explicit `enabled: false` still turns them off.
-- **Credential readiness reads `apiKeyEnv` too.** A working Cohere reranker
-  configured through an environment variable was reported as missing. The five
-  capabilities that fall back to OpenClaw's own model route are now marked as
-  host-routed instead of looking unconfigured.
-- **A Reranking card.** Provider, model and revision of the active reranker,
-  plus how to switch between `cohere`, `jina` and the local BGE fallback.
-
-### New in v7.5.0 — native integration and verified local models
-
-- **No OpenClaw bundle patching.** Feature cron commands use OpenClaw's public
-  plugin registration and `gateway-runtime` dispatcher capabilities. Missing
-  capabilities fail closed; PLUR1BUS never rewrites OpenClaw source, dist, or
-  `node_modules` files.
-- **Exact 2026.8.x release contract.** Package metadata pins the tested host
-  and SDK identity to `2026.8.1`/`2026.8.2`, while runtime behavior is guarded
-  by feature detection rather than version-string branches. OpenClaw
-  `2026.9.1` stable is additionally verified (see the compatibility contract).
-- **Pinned local inference.** E5 embeddings, the optional multilingual Jina v3
-  embedding, Jina reranking, and the free BGE fallback use immutable Hugging
-  Face revisions with exact required-file sizes and SHA-256 verification before
-  Transformers.js loads them. Jina v3 embedding is offered separately because
-  its CC BY-NC 4.0 license does not permit commercial use without other terms.
-- **Activation-owned preparation.** Selecting a local-model preparation profile
-  stages no work during plugin discovery. The download begins only after
-  OpenClaw activates the PLUR1BUS service, and shutdown or replacement drains
-  it through the public service/runtime lifecycle.
-- **Lifecycle-owned Obsidian watcher.** OpenClaw starts the Bridge only after
-  registry activation and stops it before replacement. Periodic scans queue
-  inbound review candidates without starting a Memory write; an authorized
-  explicit apply remains required for durable inbound mutation.
-- **One local model across scoped registries.** OpenClaw's request-scoped
-  provider registries delegate local embedding inference to the activated
-  PLUR1BUS owner over a private, authenticated Unix socket below the PLUR1BUS
-  state directory. It is never published as a host port, binds exact model and
-  dimension identity, and closes before the activation-owned model.
-- **Deterministic regression timing.** CPU-bound performance contracts measure
-  process CPU time; repair diagnostics drain naturally before process exit.
-
-### New in v7.4.0 — evidence the agent can stand behind
-
-- **An epistemic status every write earns.** New user captures are recorded as
-  `observed`, every other new write as explicit `untrusted`; nothing invents
-  `trusted` any more. The skill miner clusters `observed | corroborated | trusted`
-  plus valid pre-cutoff legacy rows and no longer applies a 30-day lookback, so
-  an existing install keeps mining its history instead of reporting `scanned: 0`.
-  The cutoff marker is written once, at the first upgrade, before the first write.
-- **Skill approval survives a crash.** `SKILL.md` is written first (tmp + fsync +
-  rename), then the evidence transitions; a partial failure stays
-  `activation_partial` and can be re-applied idempotently.
-- **Forgotten stays forgotten.** Every reachable card re-insert — store, content
-  update, `updateCard`, compaction, auto-capture, light-dream rewrite — checks the
-  tombstone registry before `table.add`. Same-text replay by the user is still
-  allowed.
-- **A global inject budget** (`recall.globalInjectMaxChars`, default 17000) trims
-  memories before time and reminder context, so a large recall can no longer
-  crowd the rest of the prompt out.
-- **Two new curation commands.** `/plur1bus curation resolve <keep|drop>` ends a
-  neo `conflict` without any hard filter, and `/plur1bus curation drop-injected`
-  demotes only *injected* behaviour conflicts after a preview and a nonce —
-  genuine conflicts are never touched.
-- **Derived records carry visibility.** Pattern and dream writers stamp scope;
-  readers filter by requester. Legacy records without a stamp stay own-agent only.
-- **Legacy compatibility note.** The 7.4.0 release could opt out of its then
-  current dispatcher rewrite. Version 7.5.0 removes that rewrite completely.
-
-### New in v7.3.x — memory dynamics that actually fire
-
-Condensed summary of 7.3.0–7.3.5; see the [changelog](CHANGELOG.md) for detail.
-
-- **Valid-time and trust state** (7.3.0) — memories carry temporal validity, and
-  epistemic trust became a first-class field alongside a batch of audit fixes.
-- **Security and scope hardening** (7.3.1) — bound episode-graph endpoints,
-  ownership-partitioned compaction, fail-closed skill scans.
-- **The classifier stopped rejecting its own default** (7.3.2) — `fakt` was
-  missing from the type enum, so every classification run failed validation.
-- **GC got a trigger and a policy** (7.3.3) — an eighth feature cron at 04:45 plus
-  a configurable `maxMemoryCount`; before this, garbage collection had no
-  scheduler at all.
-- **`importance = 1.0` works again** (7.3.4) — the value is the agent's reserved
-  manual core marker; it was silently ignored because the core score also demanded
-  an emotional intensity the agent cannot set. Core scores are now normalised to
-  the features that actually exist.
-- **REM dreaming finds patterns again** (7.3.5) — similarity was compared on two
-  different scales, so even an identical vector fell below the threshold: zero
-  edges, zero clusters, ever. Feature crons are also staggered per agent now.
-
-### New in v7.2.0 — safer OpenClaw updates
-
-- **Complete, version-bound deploy verification** — repair checks cover all
-  static and literal dynamic runtime imports, bind package and manifest
-  identity to one immutable source snapshot, and roll back the complete
-  deployment if any copy or final validation fails.
-- **Safe promoted-memory reindex bridge** — the replacement maintenance CLI is
-  configuration-aware, namespace-aware, idempotent, dry-run by default, and
-  compatible with predecessor marker state without forwarding redacted
-  credentials.
-- **Staggered daily consolidation** — exact PLUR1BUS-owned per-agent jobs are
-  scheduled 15 minutes apart, avoiding simultaneous consolidation pressure;
-  custom or look-alike jobs remain untouched.
-- **Explicit recovery tooling** — deploy verification and repair accept an
-  expected release version and report missing source/preflight reasons instead
-  of producing a mixed installation.
-
-### New in v7.1.9 — lower background token usage
-
-- **Six high-frequency jobs reduced by about 83%** — Afterthought and Critical
-  Push now run every three hours instead of every 30 minutes.
-- **Safe schedule migration** — only PLUR1BUS's shipped 30-minute cadence is
-  migrated; custom operator intervals and delivery targets remain untouched.
-- **No active-memory recursion** — active-memory child sessions cannot trigger
-  another PLUR1BUS recall or capture pass.
-- **Agent-scoped semantic discovery** — scheduled discovery processes only the
-  triggering agent's configured Obsidian workspaces.
-
-### New in v7.1.8 — reliable feature-cron setup
-
-- **Slow healthy gateways no longer miss reconciliation** — the redacted
-  effective-config snapshot used by feature-cron setup now has a focused
-  30-second budget; live measurements were approximately 12.5–18 seconds.
-- **Narrow compatibility fix** — the fail-closed result contract, single
-  snapshot, shared CLI defaults, schedules, delivery, model routing, and
-  thinking policy remain unchanged.
-
-### New in v7.1.7 — model-free feature cron dispatch
-
-- **No outer carrier model for Afterthought or Critical Push** — exact internal
-  commands are finalized through OpenClaw's normal delivery path before the
-  carrier agent/model executor.
-- **Scoped fail-closed recovery** — if the host dispatcher is unavailable,
-  only exact PLUR1BUS-owned feature jobs are paused and marked; custom prompts
-  and unrelated jobs are never claimed.
-- **Schedules and delivery remain intact** — existing jobs migrate
-  idempotently while keeping their 30-minute cadence and validated targets.
-- **Native internal LLM policy** — actual Afterthought composition and
-  classification still inherit the target agent's OpenClaw model and thinking
-  policy; PLUR1BUS does not force `thinking: off`.
-
-### New in v7.1.0 — audited ownership, recall, and operations
-
-- **Complete high/medium audit remediation (B1–B15)** — durable memory writes, timeout settlement, cancellation barriers, diagnostics, installer paths, operational maintenance, Obsidian mutations, and background jobs were hardened and regression-tested.
-- **Strict memory ownership** — private, workspace, and user data use canonical agent/workspace/user request contexts. Sharing is explicit, confirmation-bound, owner-bound, and isolated in separate storage pools; unbound or conflicting rows fail closed.
-- **Recall and namespace closure** — B12 Core and B12-P add secure read-only legacy access, globally bounded multi-namespace recall, adaptive budgets, compression, decision traces, and strict graph/provider authorization.
-- **OpenClaw owns the LLM choice** — PLUR1BUS feature routes inherit the effective target agent model unless a feature has a complete explicit direct-provider override. Hard-coded chat-model defaults were removed.
-- **Exact LLM result cache** — deterministic internal transforms can reuse validated, bounded, agent-scoped results without leaking prompts or credentials.
-- **Dependency and runtime baseline** — patched transitive dependencies and `sharp@0.35.3` close the dependency audit; PLUR1BUS now requires Node.js 22.22 or newer.
-- **Release verification** — the release baseline contains 3,260 tests (3,259 passed, 0 failed, 1 skipped) and `npm audit` reports 0 vulnerabilities.
-
-### New in v6.9.10 — Maintenance progress and dedupe hardening
-
-- **Candidate status updates survive content dedupe** — promote/demote/prune/tombstone updates are append-preserved while ordinary candidate captures remain content-deduped.
-- **Capped memory dynamics are resumable** — retrieval-ledger caps store partial entry progress, and daily decay rotates with a persisted cursor instead of repeatedly touching the first rows.
-- **LanceDB vector wrappers normalize safely** — Arrow-style vector wrappers are converted before update writes to avoid schema failures during consolidation.
-
-### New in v6.9.x — Runtime fixes, cron provisioning, and emotional dynamics
-
-- **REM-Dream cron provisioning** — New installs provision `rem-dream` when `merging.enabled: true` is explicitly authored, instead of shipping an enabled handler without a scheduler binding.
-- **`/state` command fix** — The top-level status command no longer crashes on an out-of-scope `ctx` reference.
-- **Emotion config-schema sync** — The strict schema now accepts the documented emotional-dynamics keys used by 6.9.x configs.
-- **Generic temperament defaults** — Shipped defaults no longer bake in agent-specific personalities; per-agent temperament belongs in user config.
-- **Emotional dynamics** — Mood persistence, temperament presets, decay modulation, and stronger mood-congruent recall boosts landed in the 6.9.0 line.
-
-### New in v6.8.x — Code-review hardening
-
-- **i18n sync** — 752 missing translation keys added for new OpenClaw channel wizards (IRC, Feishu, NextcloudTalk, Google Chat).
-- **TypeScript optional dep** — `typescript` is now declared as an `optionalDependency` so the code-index feature works out of the box without forcing TS on all users.
-- **Installer fixes** — `buildInstallLogEvent` now correctly passes `featureMode` instead of hardcoding `"preserve"`; dry-run vs. remote-target warnings are properly distinguished; dead code removed.
-- **Installer performance** — 9 sequential `jq` subprocess calls consolidated into batch `eval`+`@sh` extracts.
-- **Neo worker drain** — Missing `await` on `drainEmbeddingQueue()` caused the unresolved Promise to be serialised as `{}` in `postMessage`; callers now receive correct drain results.
-- **Auto-capture robustness** — `statSync` race condition fixed (file deleted between `readdirSync` and `statSync`); `addQueryVector` null-return guard added.
-- **ts-source-indexer** — O(n) `symbols.find()` in AST visitor replaced with a `Map` for O(1) lookup.
-- **Manifest sync** — `openclaw.plugin.json` version aligned with `package.json`.
-- **Security hardening** — `scope: "user"` writes now require an authenticated user identity (`user` scope is owner-bound) and are filtered in recall/visibility checks.
-
-### New in v6.8.0 — Release readiness, code context, and runtime packaging
-
-- **Media diarization context** — Async diarization merge pipeline, manual speaker mapping, contextual speaker-name proposals, and no biometric enrollment.
-- **Emotional-state injector packaged** — Tracked `.openclaw/extensions/emotional-state-injector/` files are included in the npm tarball; runtime activation still requires the OpenClaw plugin entry/allow config and a gateway restart.
-- **Performance follow-up** — Legacy auto-capture duplicate checks are batched, duplicate lookup can use ANN multi-query search when available, JSON hot-path writes are queued asynchronously, and high-cost prompt work is narrowed.
-- **Optional code index** — Local JS/TS index generation writes `.plur1bus/code-index.json` and can render bounded `<code-context>` query output.
-
-### Experimental code index
-
-PLUR1BUS can build a local JS/TS code index without CocoIndex:
-
-```bash
-npm run code-index -- /path/to/workspace
-npm run code-index -- /path/to/workspace --query "/plur1bus code-index"
+PLUR1BUS gives an OpenClaw agent persistent memory across conversations. It
+captures selected conversation content, retrieves relevant evidence before a
+reply, and maintains that evidence through corrections, validity windows,
+consolidation and optional human review.
+
+**Documentation baseline: PLUR1BUS 7.12.61, checked 2026-09-18.** The implementation
+review used commit `c381fd57fd80df193bc615f405704132dd89884e`. Package metadata and
+[source configuration](openclaw.plugin.json) remain authoritative when versions
+change. Historical release notes and audits describe their own recorded builds.
+
+## Start here
+
+| Task | Documentation |
+| --- | --- |
+| Install and understand the main choices | This README |
+| Daily use, corrections and troubleshooting (Deutsch) | [User guide](how-to-memory.md) |
+| Understand storage, capture, lifecycle and security (Deutsch) | [System guide](how-to-memory-perfect.md) |
+| Configure providers, profiles and defaults (Deutsch) | [Configuration reference](docs/configuration.md) |
+| Follow the actual recall and ranking order | [Recall architecture](docs/recall-architecture.md) |
+| Check limitations and confirmed findings | [Known issues](docs/known-issues.md) |
+| Check host contracts and dated runtime evidence | [OpenClaw compatibility](docs/compatibility-openclaw.md) |
+| Develop or validate a change | [Agent development guide](AGENTS.md) |
+| Inspect release history | [Changelog](CHANGELOG.md) |
+
+## Architecture
+
+```mermaid
+flowchart TD
+  Host[OpenClaw: session, identity, model and delivery]
+  Capture[agent_end: capture and provenance]
+  Recall[before_prompt_build: retrieval and context selection]
+  Cards[(LanceDB memory cards)]
+  Neo[(Neo journals, candidates, episodes and vector sidecar)]
+  Knowledge[KNOWLEDGE.md: curated knowledge]
+  Maintenance[Background jobs and explicit corrections]
+  Vault[Optional Obsidian mirror and review]
+  Host --> Capture
+  Capture --> Cards
+  Capture --> Neo
+  Cards --> Recall
+  Neo --> Recall
+  Knowledge --> Recall
+  Recall --> Host
+  Cards --> Maintenance
+  Neo --> Maintenance
+  Maintenance --> Cards
+  Cards -->|controlled promotion| Knowledge
+  Cards -->|mirror| Vault
+  Vault -->|authorized apply| Cards
 ```
 
-The index is written to `.plur1bus/code-index.json` and contains normalized files, symbols, import/call/register edges, and symbol chunks. `--query` prints a bounded `<code-context>` block from the generated index. It uses the TypeScript Compiler API through the optional `typescript` dependency and keeps the PLUR1BUS schema independent of the parser implementation.
+- **LanceDB** is authoritative for durable memory cards. The default flat route
+  is `{baseDbPath}/{agentId}`. Named storage namespaces are an optional routing
+  feature for the same agent; shared pools have a separate authorization model.
+- **Neo** stores turn events, candidates, behavioral observations, episodes,
+  graph relationships and recall history. Candidate vectors can live in a
+  Float32 sidecar. Neo is not a second copy of the cards table.
+- **KNOWLEDGE.md** holds curated knowledge and is searched by section. A
+  successful promotion does not prove the factual truth of its content.
+- **Obsidian**, when enabled and configured, exposes memory and review records
+  to a person. Editing a mirror is not an unrestricted write to LanceDB.
 
-### New in v6.7.x — Multi-Namespace, Temporal Continuity & Source Sync
+Automatic capture is selective: the card path considers recent user and
+assistant content, prioritizes up to three user URL/attachment contributions
+and five text contributions, and prepares at most eight distinct texts. It is
+not a lossless transcript archive. Assistant output remains assistant-sourced
+material; stored content is not automatically verified fact.
 
-- **Multi-Namespace Pool** — One validated agent can opt into recall across named LanceDB storage namespaces; this never selects another agent and is not cross-agent sharing.
-- **Temporal Continuity Context** — Auto-injected time-anchor block lets the agent orient itself after gaps or compactions without hallucinating dates.
-- **Conflict Summary Management** — Contradiction detector now emits structured conflict summaries; `/plur1bus obsidian conflicts build` renders them as Obsidian pages.
-- **`/plur1bus start` onboarding** — Read-only status and onboarding guidance for feature profiles and vault setup.
-- **Auto-capture schema sync** — `scripts/auto-capture-lancedb.mjs` gains `workspaceKey` field; schema migration is backward-compatible and idempotent.
-- **Internal-turn skip guard** — `shouldSkipAutoRecallForInternalTurn` prevents feedback loops when the gateway injects synthetic cron messages.
+Recall has a Neo context path and a primary card/canonical-knowledge path.
+The primary path filters lifecycle and ACL eligibility, scores candidates,
+expands authorized graph neighbors, optionally reranks, and merges namespaces
+before final limits. Even a single namespace uses the merge wrapper. See the
+[actual sequence and current reranking limitation](docs/recall-architecture.md).
 
-### New in v6.6.0 — Meta-Cognition
+## Runtime requirements
 
-- **Self-reflection on recall quality** — Precision, Recall, F1 computed from user feedback (`/mf +/-/~`). Coverage-gap detection finds topics with few or weak memories.
-- **Threshold-based reflection trigger** — Auto-runs when `sessionThreshold` (default: 50) or `intervalDays` (default: 7) is reached. Optional LLM-generated natural-language report.
-- **Persistent state** — Reflection state stored in `_meta-cognition-state.json` per workspace.
+Use **Node.js 22.22 or newer**, with an exact package floor of **22.22.3**, and
+also satisfy the selected OpenClaw release's Node requirements. The declared
+OpenClaw floor is **2026.8.1 / plugin API >=2026.8.1**; the package and lockfile
+build/test baseline is **OpenClaw 2026.8.2**. This is not a claim that every newer
+host has passed a fresh end-to-end test.
 
-### New in v6.5.0 — Proactive Nudges
-
-- **Embedding-based pattern detection** — Clusters similar turns by cosine similarity over embedding centroids.
-- **Cluster persistence** — Clusters survive restarts, stored per workspace/agent.
-- **Cooldown mechanism** — Rate-limited to avoid spam (default: 24h per workspace).
-- **Configurable thresholds** — `minClusterSize`, `similarityThreshold`, `maxNudgesPerDay`.
-
-### New in v6.4.0 — Emotion Tier-Config
-
-- **Budget-Gate per tier** — Tier-1 (regex), Tier-2 (heuristic), Tier-3 (LLM) independently enable/disable.
-- **Configurable model per tier** — An absent model uses the effective OpenClaw agent model; `gpt-4o-mini` is only an explicit override example.
-- **Feature-Toggle** — Lock `emotionTier` to a specific tier or use `auto` for dynamic escalation.
-- **Graceful degradation** — Falls back from Tier-3 to Tier-2 when neither a native OpenClaw route nor a complete direct override is available.
-
-### New in v6.3.0 — Explainability & GC
-
-- **Explainability** (`--explain` flag for `/memory`) — Human-readable rationale per result: score breakdown, boost factors, temporal relevance.
-- **Garbage Collection job** — Background cleanup of expired/stale memories with configurable retention policies.
-- **Feedback Analyzer** — Background analysis of `/mf` feedback for recall-quality improvement.
-
-### New in v6.2.0 — Correction-as-Recall
-
-- **`/correct` treated as recall event** — After `safeUpdate()` inserts the corrected card, `applyRetrievalReinforcement` refreshes `lastRetrievedAt`, increments `retrievalCount`, and boosts `memoryStrength`.
-- **Null guard** — If `getById(newId)` races or fails, reinforcement is silently skipped; the correction itself is never rolled back.
-
-### New in v6.1.4 (Consolidation)
-
-- **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and recall pipeline filter by ACL. Unauthorized access is logged.
-- **Feedback loop (`/mf`)** — Thumbs-up/down/neutral feedback on any memory result. Persisted per workspace.
-- **Temporal reasoning** — Queries like "last month", "3 days ago", "Q2 2026" parsed to concrete date ranges before boost/rerank.
-- **Collaborative memory (`/share`)** — Copy any card into a workspace-shared pool with ACL protection.
-- **Query refinement** — Automatic query rewrite on poor first results, merged and deduplicated.
-
-### New in v6.1.2 (Engram — Recall Hardening)
-
-- **Recall hardening** — `maxPromptMemories` (default 12), dedup threshold 0.78, acronym recognition, `canonicalMaxItems` (default 5).
-- **Typ-based half-life** — `halfLifeDaysMap`: transient (60d), episodic (180d), longContext/project (600d).
-- **Performance** — LRU+TTL embedding cache, semantic recall compression, adaptive recall tiers, graph-index traversal, reinforcement loop.
-- **Security** — SQL-escaping, ACL hardening for destructive commands, path-traversal protection, filter-parser injection resistance.
-
-### New in v6 (Base)
-
-- **Semantic long-input handling** — `/memory`, `/forget`, `/correct` accept any length. >6k chars are semantically compressed; >100k chars prompts for file/vault source.
-- **Feature activation profiles** — On first start proposes a `recommended` profile (all features active, Obsidian/reviews marked `pending_setup`). Core memory works immediately; advanced features require explicit confirmation.
-- **Proposal-only merging** — Daily compaction detects duplicates, generates merge proposals in `merge-proposals.jsonl`, **never auto-applies**.
-- **Conflict resolver** — Scans for contradictions, emits `recommendation` (`review_only` or `apply_via_safe_reconsolidation`), **never modifies** memory directly.
-- **Reranker timeout & fallback** — Configurable timeout (default 5s) with automatic fallback to vector-only ranking.
-- **schicht15 deduplication** — KNOWLEDGE.md promotions tracked per workspace+agent. Double-promotion prevented via `memoryId` + optional `contentHash`.
-- **Obsidian bridge apply mode (safe)** — `mode: "apply"` creates per-file backups, manifest (beforeHash/afterHash), and audit-log entry. Vault path confirmation required before first write.
-- **Rate-limited background jobs** — Daily consolidation capped at 1×/day/agent; REM dreaming at 1×/week.
-
-## Recall boosters (additive)
-
-These features run **after** normal recall and only append results; they never replace the primary recall result and never write memory data.
-
-### Semantic Lens
-
-Reads a precomputed `.plur1bus/semantic-lens-index.json` from the workspace and adds a small number of community/bridge/faded memories that normal recall may have missed.
-
-- Default: `enabled: false` in schema.
-- Caps: `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
-- Hard timeout: 50 ms; fallback returns base recall unchanged.
-- No live graph recompute, no second recall path, no writes.
-
-### Conversation Reactivation Recall (CRR)
-
-MVP reactivation hook that appends a `<memory-reactivation>` block when a conversation appears to resume after an idle gap, a compaction, or a continuation signal.
-
-- Default: `enabled: false` in schema; `visibleHints: false`.
-- Triggers: idle threshold (45 min), continuation signal, first substantive message, or post-compaction gap.
-- Caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
-- Hard timeout: 50 ms; silent fallback on error.
-- State is module-level in-memory only; no writes to cards, tags, graph links, records, or quarantine.
-
-### Graph-link managed blocks / semanticDiscovery
-
-Record notes can contain an idempotent managed block (`id="graph-links"`) with wikilink edges. The block is regenerated, not appended, and conflicts with manual edits are reported.
-
-- Tiers: `explicit` (memoryIds/sourceRefs), `type` (type-based rules), `semantic` (precomputed link index).
-- Default semantic threshold: 0.78.
-- `semanticDiscovery` builds `.plur1bus/link-index.json` from memory mirrors + vectors behind a confirmation gate; it is not auto-applied.
-
-### Technical frontmatter tags
-
-Memory mirrors use technical filter tags, not semantic memory tags:
-
-- `plur1bus/memory`
-- `plur1bus/agent/<id>`
-- `plur1bus/workspace/<id>`
-- `plur1bus/category/<cat>`
-- `plur1bus/scope/<scope>`
-
-These tags are used for vault filtering and graph grouping; they do not carry semantic memory content.
-
-## User Commands
-
-| Command | What it does |
-| --- | --- |
-| `/state` | Status snapshot: memory card count, sync state, last plausibility run, any open issues with reason + fix hint. |
-| `/memory <query>` | Search the agent's memory via the recall pipeline. Accepts queries of any length. Add `--explain` for result rationale. |
-| `/forget <text>` | Forget a memory card. Archive-first guarantee — the card is JSON-archived before deletion. |
-| `/correct <old> zu <new>` | Update a memory card. Archive-first guarantee. Accepts ` zu `, `→`, or `->` as separator. |
-| `/mf <id> +` / `-` / `~` | Feedback on a memory result: 👍 positive, 👎 negative, ~ neutral. Persisted per workspace. |
-| `/share <id>` | Copy a memory card into the workspace-shared pool. ACL-protected. |
-| `/enable <feature>` | Turn on a whitelisted feature (`vaultSync`, `kritischPush`, `dailyConsolidation`). |
-| `/disable <feature>` | Turn off the same. Writes atomically into `openclaw.json`; gateway restart required. |
-| `/plur1bus setup` | List the available profile choices without changing configuration. |
-| `/plur1bus setup safe` | Explicitly apply the Safe profile; core capture/recall stays usable and additional mutators remain off. |
-| `/plur1bus setup recommended` | Explicitly apply Recommended while preserving existing opt-outs and write-safety gates. |
-| `/plur1bus start` | Show read-only status and onboarding guidance; it does not change configuration. |
-
-### `/plur1bus` subcommands
-
-| Command | What it does |
-| --- | --- |
-| `/plur1bus skills review` | Show open skill proposals. |
-| `/plur1bus skills approve <id>` | Approve a skill proposal. |
-| `/plur1bus skills reject <id>` | Reject a skill proposal. |
-| `/plur1bus skills list` | Show active skills. |
-| `/plur1bus skills show <id>` | Show proposal details. |
-| `/plur1bus reminders list` | List active reminders. |
-| `/plur1bus reminders cancel <id>` | Cancel a reminder. |
-| `/plur1bus obsidian dashboards build` | Build Obsidian dashboard pages. |
-| `/plur1bus obsidian conflicts build` | Build conflict report pages. |
-| `/plur1bus doctor` | Run diagnostics and show runtime status. |
-| `/plur1bus internal proactive-check` | Run proactive nudge detection manually. |
-| `/plur1bus internal meta-reflect` | Run meta-cognition reflection manually. |
-| `/plur1bus internal afterthought` | Run the delayed follow-up job manually (see below). |
-
-### Afterthoughts (delayed follow-ups)
-
-When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 3 hours, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command returns either a validated reply payload or OpenClaw's `NO_REPLY` suppression token. PLUR1BUS submits the exact allowlisted command through OpenClaw's public gateway-runtime dispatcher, so OpenClaw owns status finalization and at-most-once announce delivery without an outer carrier-model run. If the required native capability is unavailable, provisioning fails closed and leaves the feature job inactive. Custom prompts, surrounding whitespace, prefixes, and suffixes are never claimed.
-
-Setting this cron up is automatic when its raw feature gates are explicitly enabled — see below.
-
-#### Multi-agent feature-cron automation
-
-`node scripts/setup-feature-crons.mjs` verifies the public native command-dispatch capability first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to ten jobs per agent plus one install-wide GC job. It fails closed without normal cron planning when the capability is absent, the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. Custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
-
-The capability probe allows the host CLI 30 seconds per help call (7.8.0); a booting host with many plugins needs more than the former five. Ownership is by exact command: an operator-named job that runs `/plur1bus internal <feature>` for an agent is that agent's job, and only PLUR1BUS-named jobs are eligible for schedule migration. A non-delivery feature whose only owned jobs are disabled gets its best candidate re-enabled; the singleton collector is satisfied by a job on any agent; when `openclaw agents list` flags no default agent, `main` is treated as the default.
-
-The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
-
-- `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; daily 04:15 local time (7.12.38; before: Sunday), staggered five minutes per agent, overridable via `personaVoice.cron`/`personaVoice.timezone`; no delivery. The shipped weekly slots are migrated to daily on the next setup run; operator schedules stay.
-- `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 3 hours; exact-command announce delivery with a direct text/`NO_REPLY` result.
-- `consolidate-daily`: `dailyConsolidation.enabled`; daily 04:00 in `Europe/Berlin`; no delivery.
-- `classify-recent`: `criticalPush.enabled`; every 3 hours; safe announce delivery of approved pushes or `NO_REPLY`.
-- `rem-dream`: `merging.enabled`; daily 01:15 in `Europe/Berlin`; no delivery.
-- `skill-miner`: `skillMiner.enabled`; raw Croner-compatible cron/timezone after conservative syntax validation, defaulting to Sunday 03:00 in `Europe/Berlin` (`timezone: null` means local time). Invalid literals, descending ranges (including named month/day ranges), names, modifiers, or literal-step forms are ineligible.
-- `discover-semantic-links`: `obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled`; daily 02:00 in `Europe/Berlin`; no delivery.
-- `gc-run`: `gc.enabled`; daily 04:45 in `Europe/Berlin`, after `consolidate-daily` has produced the candidates; no delivery. This one is a **singleton** — `runGcJob` iterates over every agent database itself, so exactly one job is planned regardless of how many agents the install has.
-
-Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
-
-- **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`).
-- **Gateway startup (deferred bootstrap)** — runtime registration verifies the
-  public Gateway method, CLI, and command dispatcher exactly once. A
-  `gateway_start` handler schedules a bounded reconciliation after the gateway
-  becomes reachable. Missing capabilities or invalid config leave exact owned
-  feature jobs inactive; retries use bounded backoff. Disable provisioning with
-  `"featureCronSetup": { "auto": false }`.
-- **Manual** — `/plur1bus setup crons` (optionally `--agent <id>`/`--account <acct>` to force single-agent mode).
-
-The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-derived**, not "have we shown this before": it reads the marker file and only surfaces a hint when setup has never run, ran under an older plugin version, or ran but couldn't create everything it planned (some crons are still pending — e.g. no delivery target could be derived). It's silent once a current-version run reports nothing left to create.
-
-- **Bound-agent rule**: only agents with `bindings > 0` (i.e. an actual chat channel routes to them) get feature crons. Subagents (`bindings === 0` — researchers, deep-divers, and other internal-use-only agents) are deliberately excluded; they have no chat to receive an automatic persona evolution or an afterthought delivery, and running these jobs against them would be pure compute waste.
-- **One agent per workspace**: PLUR1BUS state for these jobs (persona voice, proactive-governor budget, afterthought dedup state, …) is keyed by workspace directory, not agent id. If two bound agents share a workspace, only one gets the crons (tiebreak: `isDefault` first, then most bindings, then alphabetically-first id) to avoid two crons double-firing against the same state files.
-- **Per-agent identity**: all per-agent canonical names use `plur1bus <feature> <agentId>`. An existing job is owned only by an exact, case-sensitive agent id plus either its exact canonical name or exact first command line; missing or different agents are untouched. Every exact owned duplicate is inspected and reconciled, even when another duplicate is already safe.
-- **Safe delivery**: outbound targets never come from `allowFrom`. Delivery-required jobs use only a conservatively validated Telegram binding `match.peer.id` (including `t.me/<handle>`) or effective account/root `defaultTo`. Every relevant non-ACP binding must agree on channel, and an account inherits only when `match.accountId` is truly absent. Omitted accounts resolve in order from an explicit valid `defaultAccount`, `accounts.default`, one sole named account, or a root account proven by configured `botToken`/`tokenFile`; routing fields alone never invent a root default account. Unsupported providers, wildcard, placeholder, redaction, zero-id, disabled-account, explicit empty/missing account, mixed-account, and conflicting target/channel/account states are rejected. Existing delivery seeds require exact `mode: "announce"`; case or whitespace variants are unsafe. A job without a validated target is created disabled with `--no-deliver`; every unsafe owned delivery job is disabled and stripped of delivery. Non-delivery jobs retain only missing delivery or exact `mode: "none"`; every other delivery object is removed.
-- **Agent discovery/input failure**: if `openclaw agents list --json` fails, is unparseable, or yields no bound agents, no cron is mutated. Passing a validated `--agent <id>` forces one explicit agent; missing, option-like, or invalid `--agent`/`--account` values fail closed, and `--account` without `--agent` is rejected.
+The built-in `node:sqlite` module is available throughout the supported Node.js runtime range.
+Optional local models require their own disk space, memory and model-license
+acceptance. Remote embedding, reranking and chat providers are separate routes.
 
 ## Installation
 
-PLUR1BUS 7.7.1 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
-On an older host the installer refuses the package instead of deploying it:
-`requires plugin API >=2026.8.1, but this OpenClaw runtime exposes <version>`.
-
-Install the published release through OpenClaw's package installer:
+Install a selected release through your configured registry, for example:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.5.3 \
-  --acknowledge-clawhub-risk --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.12.61 --pin
 ```
 
-The same release is on the npm-compatible registry, if your `@cyb3rb1ade`
-scope already points there:
+This registry command assumes that the selected version is available through
+your configured `@cyb3rb1ade` scope. A source version alone is not publication
+evidence. For a source build, install the generated package artifact:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.5.3 --pin
-```
-
-Or install the immutable GitHub Release tarball:
-
-```bash
-openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.5.3/cyb3rb1ade-plur1bus-memory-7.5.3.tgz
-```
-
-To build from this source checkout instead, produce a tarball and install that
-artifact rather than linking the directory; a source link is not an equivalent
-package-compatibility test:
-
-```bash
-npm ci
+npm ci --ignore-scripts
+npm run lint
 npm test
-npm pack
-openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.5.3.tgz --force
+npm pack --ignore-scripts
+openclaw plugins install npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.12.61.tgz --force
 ```
 
-Record the tarball's SHA-256 before transferring it. PLUR1BUS 7.5.3 never
-patches OpenClaw runtime files. Existing release artifacts remain unchanged and
-must not be relabelled as 7.5.0.
+`--ignore-scripts` here prevents the source checkout's `postinstall` cron
+provisioner from contacting an existing gateway. It is not an instruction to
+skip lifecycle work when installing OpenClaw itself. Keep the tarball and its
+SHA-256 with the deployment record. Back up existing memory before an upgrade;
+restart the gateway and verify the loaded plugin version afterward.
 
-Restart the gateway after installing, so the new plugin version is loaded.
-
-Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
-
-## Configuration
-
-Minimal config block in `openclaw.json`. This is an explicit override example:
-the named `gpt-4o-mini` value and its credential are illustrative user choices,
-not PLUR1BUS defaults.
+PLUR1BUS owns the host memory slot. Merge this entry into the existing host
+configuration rather than replacing other plugin entries:
 
 ```json
 {
-  "skills": {
-    "workshop": {
-      "autonomous": { "mode": "propose" }
-    }
-  },
   "plugins": {
-    "slots": {
-      "memory": "memory-lancedb-namespaced"
-    },
+    "slots": { "memory": "memory-lancedb-namespaced" },
     "entries": {
       "memory-lancedb-namespaced": {
         "enabled": true,
-        "hooks": {
-          "allowConversationAccess": true
-        },
-        "config": {
-          "baseDbPath": "~/.openclaw/memory/lancedb-namespaced",
-          "obsidianBridge": {
-            "enabled": true,
-            "mode": "augment",
-            "vaultPath": "~/.openclaw/vault",
-            "backupBeforeApply": true,
-            "auditLog": true,
-            "requireVaultPathConfirmation": true
-          },
-          "emotion": {
-            "tier": "auto",
-            "t2": { "enabled": true },
-            "t3": {
-              "enabled": true,
-              "model": "gpt-4o-mini",
-              "apiKey": "${OPENAI_API_KEY}",
-              "escalationConfidence": 0.85,
-              "timeoutMs": 4000
-            },
-            "moodInfluence": 0.3,
-            "intensityHalfLifeFactor": 1.0,
-            "temperaments": {
-              "bernhardine": { "preset": "warm", "baseline": { "joy": 0.35, "trust": 0.5 }, "sensitivity": 1.5, "decayMultiplier": 1.3 }
-            }
-          },
-          "dailyConsolidation": {
-            "enabled": true
-          },
-          "dreaming": {
-            "enabled": false,
-            "narrative": { "enabled": true, "storeAsMemory": true }
-          },
-          "merging": {
-            "enabled": true,
-            "mode": "safe-versioned",
-            "autoApply": false
-          },
-          "reranker": {
-            "enabled": true,
-            "timeoutMs": 5000,
-            "fallbackOnError": true
-          },
-          "security": {
-            "allowChatConfigCommands": true,
-            "allowModelDestructiveMemoryOps": true,
-            "allowedUserIds": [],
-            "allowedChatIds": []
-          },
-          "runtime": {
-            "embeddingCacheEnabled": true,
-            "embeddingCacheMaxEntries": 128,
-            "embeddingCacheTtlMs": 300000,
-            "embeddingCacheScope": "agent",
-            "llmResultCacheEnabled": true,
-            "llmResultCacheTtlMs": 86400000,
-            "llmResultCacheMaxEntries": 256,
-            "llmResultCachePersist": false,
-            "llmResultCacheMaxBytes": 67108864,
-            "llmResultCacheMetrics": true
-          }
-        }
+        "hooks": { "allowConversationAccess": true },
+        "config": { "autoCapture": true, "autoRecall": true }
       }
     }
   }
 }
 ```
 
-`dreaming.enabled: false` is the OpenClaw memory-core sidecar gate, not the
-PLUR1BUS narrative toggle. Keep it false when PLUR1BUS owns consolidation or
-REM; otherwise OpenClaw also loads `memory-core` dreaming. When `skillMiner` is
-enabled, use Skill Workshop autonomous `propose` or `off` so both learning
-systems share the governed proposal queue without independently applying
-overlapping skills.
+Conversation-hook access is mandatory: the `before_agent_reply` admission guard
+for direct feature crons needs it. Provider selection and credentials still need
+to be usable on the host; an enabled entry is not proof of working embeddings.
+See the [configuration reference](docs/configuration.md) for provider examples,
+namespace constraints and the full plugin-entry example.
 
-`hooks.allowConversationAccess: true` is mandatory for this trusted memory
-plugin. It authorizes the official typed `before_agent_reply` hook used for
-automatic recall and for the fail-closed admission boundary of exact feature
-commands; OpenClaw otherwise withholds the conversation body. The installer
-enforces this single permission even in preserve mode while keeping all
-unrelated hook and feature choices unchanged.
+## Defaults and explicit profiles
 
-All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
+Manifest defaults and an explicitly applied profile are different states.
+Existing installations can retain their own settings.
 
-### Choosing embedding and reranking models
+| Feature | Manifest default |
+| --- | --- |
+| Automatic capture / recall; Neo | Enabled |
+| Query refinement / Semantic Lens | Enabled; refinement is an empty-result fallback, lens needs its precomputed index |
+| Conversation Reactivation Recall | Disabled |
+| Reranker / merging / daily consolidation | Disabled |
+| Skill Miner / Obsidian Bridge | Disabled |
+| Critical push | Enabled flag; provisioning and delivery still require explicit gates and a valid route |
+| Persona / dream echo / afterthought | Enabled flags; execution still depends on data, routes and scheduling |
+| Model-facing destructive memory operations | Allowed; disable explicitly if unwanted |
 
-PLUR1BUS ships a keyless fallback for both stages and recommends something
-stronger for each. The two choices are not equal in weight: the embedding model
-decides how well recall separates hits from noise, the reranker only refines
-the candidates the embedding already found.
+- `/plur1bus setup` lists available profile choices without writing configuration.
+- `/plur1bus start` shows read-only status and onboarding guidance.
+- `/plur1bus setup safe` explicitly applies the Safe profile.
+- `/plur1bus setup recommended` explicitly enables additional features while
+  retaining the profile's write-safety gates and preserved opt-outs.
 
-**Embedding.** The fallback `intfloat/multilingual-e5-small` (fixed 384
-dimensions) packs its vectors into a narrow cone. Texts that have nothing to do
-with each other still land at a cosine similarity around 0.84, which is a recall
-score of roughly 0.86 on the `1 / (1 + distance)` scale PLUR1BUS uses. Hits and
-background noise sit so close together that neither the ranking nor a threshold
-can separate them cleanly, and the band 0.96 to 1.0 reserved for agent-marked
-cards as well as the duplicate threshold of 0.95 lose their meaning. This is
-exactly what the compatibility lab showed when it measured with E5 and no
-reranker. The recommended model spreads similarities much wider:
-`jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
-1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
-do their job. Since 7.12.0 the installer's first option is Jina v5 Text Nano
-(see the lab test below); OpenAI is the hosted alternative, Jina v3 stays
-selectable for existing installs, and E5 is only the small keyless fallback. The embedding model is switched from the PLUR1BUS tab
-as well (`controlUi.writeActions: "all"`): the button picks the target model,
-model preparation downloads and verifies it, and the re-embedding migration
-then runs from the same page with a dry run, a copy, and a separate switch.
-Unlike the reranker switch, every card is embedded again along the way, so
-it takes time and disk space, and the old generation stays available for
-rollback.
+Reranker timeout: default 5s, with fallback controlled by its configuration.
+`merging.autoApply` defaults to `false`; review and apply are separate actions.
+Obsidian starts disabled; enabled reviews marked `pending_setup` still require
+setup. Discovery of a vault does not confirm it. Skill auto-apply has its own
+`skillMiner.autoApply` policy and can follow the host's autonomous Workshop mode;
+not every generated proposal is necessarily manual-only.
 
-*Which dimension.* Jina v3 is trained with Matryoshka representation learning,
-so the vector can be cut to 32, 64, 128, 256, 512, 768 or 1024 dimensions. The
-Jina paper (table 7) reports retrieval nDCG@10 of 63.35 at 1024, 63.30 at 768,
-63.16 at 512, 62.72 at 256, 61.64 at 128, 58.54 at 64 and 52.54 at 32. Keep the
-PLUR1BUS default of **1024**: at memory scale the vectors are small anyway
-(50,000 cards are about 200 MB of float32 vectors), and the duplicate threshold
-of 0.95 and the reserved band above 0.96 are calibrated on full-width
-similarities. **512** is the economical choice for very large stores or weak
-hardware; it halves storage and ANN cost for a loss of 0.2 points. Do not go
-below 256: from 128 down the recall loss becomes visible and the similarity
-spread compresses, which moves every threshold. The dimension is baked into
-the table, so changing it later means another re-embedding run.
+An explicit override example for one internal chat feature is
+`emotion.t3.model: "gpt-4o-mini"`. That is an illustrative choice, not an inherited
+chat-model selection. The complete routing contract follows below.
 
-*Jina v5 Text Nano (7.11.0), an option with the lab test pending.* The
-EuroBERT-based nano model (239M parameters, 12 layers, 768 dimensions with
-Matryoshka down to 32, 15 European languages including German, CC BY-NC 4.0)
-runs as the upstream Q8 export at roughly a quarter of v3's compute and about
-265 MB on disk; on the reference machine one card embeds in about 0.45 s and
-the process grows by about 120 MB. Jina reports MMTEB 65.5 against 64.44 for
-v3. Queries and documents are told apart by the `Query: ` and `Document: `
-prefixes. Whether it becomes the proposal for new installs is decided by the
-PLUR1BUS lab test on real memory cards, not by the version number. That test
-ran on 5 September 2026 (OpenClaw 2026.9.1, Transformers.js 4.2.0, 12 cores
-shared with other work): 1,031 active cards of one agent, 72 real recall
-queries from the gateway log, the production ranking (OpenAI
-`text-embedding-3-large`, 3,072 dimensions) as reference, both models through
-the real provider with the 512-token cap, in separate processes, back to back.
+## Commands and model tools
 
-| | Jina v5 Text Nano, 768d | Jina v3, 1024d |
-|---|---|---|
-| Production top-1 found at rank 1 / within top 5 | 48.6 % / 70.8 % | 47.2 % / 73.6 % |
-| Overlap of the top 5 with production | 47.2 % | 46.1 % |
-| Median top-1 similarity / median noise band (ranks 11 to 50) | 0.615 / 0.333 | 0.721 / 0.541 |
-| Margin top hit over noise, median / 10th percentile | 0.242 / 0.132 | 0.153 / 0.100 |
-| Distinct-card pairs at or above 0.95 / 0.96 (production: 59 / 49) | 90 / 81 | 84 / 66 |
-| Model load | 5.1 s | 14.1 s |
-| One card in a batch of 8 (migration path) | 478 ms | 1,556 ms |
-| One card alone (capture path) | 313 ms | 416 ms |
-| One query (recall path) | 256 ms | 124 ms |
-| Process growth after load / peak | 444 MB / 1.2 GB | 1,120 MB / 2.3 GB |
+| Command | Purpose |
+| --- | --- |
+| `/state` | Inspect status and diagnostics |
+| `/memory <query>` | Search; `--explain` adds decision information |
+| `/forget <text>` | Authorized, archive-first forgetting workflow |
+| `/correct <old> zu <new>` | Authorized correction with a new embedding/version |
+| `/mf <id> +`, `-`, `~` | Record feedback on a memory result |
+| `/share <id>` | Confirm and copy to the workspace shared pool |
+| `/share <id> --user` | Confirm and copy to the authenticated user's shared pool |
+| `/enable <feature>` / `/disable <feature>` | Change supported feature settings |
+| `/plur1bus skills review` | Review skill proposals |
+| `/plur1bus reminders list` | Inspect reminder state |
+| `/plur1bus doctor` | Inspect diagnostic findings |
 
-Reading it: on ranking quality the two are level within the noise of 72
-queries. Nano separates hits from the noise band much more clearly (v3
-compresses similarities into a narrow band around 0.54, which is what makes
-thresholds hard to set), embeds cards three times faster in batches, loads in
-a third of the time and needs half the memory; v3 answers a single query
-twice as fast, which at a quarter of a second is not a user-visible
-difference. Both models push more distinct pairs above the 0.95 duplicate
-threshold than the production model, mostly genuine near-duplicates. On these
-numbers the maintainer made Nano the proposal for new installs in 7.12.0 and
-recommends existing installs the migration from the dashboard: prepare the
-Nano target in Model Preparation, run the dry run, copy, then switch; the old
-generation stays for rollback. Nothing migrates on its own.
+The model tools `memory_store`, `memory_recall`, `memory_search`, `memory_forget`
+and `knowledge_update` are separate entry points. Chat confirmations and chat
+allowlists must not be assumed to govern every tool. In particular,
+`security.allowModelDestructiveMemoryOps` defaults to `true`.
 
-**Reranking.** The reranker reviews the 40 candidates the vector search returns
-and removes the ANN noise. Two local models are pinned, both quantized ONNX
-through Transformers.js: `bge-reranker-v2-m3`, which the installer proposes
-and the runtime uses when nothing else is configured, and
-`jinaai/jina-reranker-v2-base-multilingual`, available under the wizard's
-advanced options and as a dashboard switch. Switching between them is a
-runtime choice without any data migration (see `controlUi.writeActions`). The
-two models differ in size and in what they are good at:
+Sharing is **copy, never move**. Pools use
+`.plur1bus-shared/workspaces/w-<62hex>` and
+`.plur1bus-shared/users/u-<62hex>`; authenticated context controls visibility.
+`workspace_shared legacy rows are not reinterpreted` automatically: the explicit
+migration path is documented in [configuration](docs/configuration.md).
 
-| | Jina reranker v2 | BGE reranker v2-m3 |
-|---|---|---|
-| Parameters, layers | 278M, 12 layers | 568M, 24 layers |
-| Context per query+document | 1,024 tokens | 8,192 tokens |
-| Quantized ONNX artifact | 280 MB | 570 MB |
-| License | CC BY-NC 4.0 | Apache 2.0 |
-| BEIR nDCG@10 (English) | 53.17 / 57.06 | 53.65 / 56.51 |
-| MKQA (26 languages) | 54.83 / 67.90 | 54.17 / 67.88 |
-| MIRACL nDCG@10 (18 languages) | 63.65 | 69.32 |
-| MLDR recall@10 (long documents) | 68.95 | 59.73 |
-| CodeSearchNet MRR@10 / CoIR nDCG@10 | 71.36 / 56.14 | 62.86 / 35.97 |
-| ToolBench recall@3 | 77.75 | 78.46 |
+## Background work and operator UI
 
-Where two numbers are given, the first comes from the Jina model card and the
-second from the jina-reranker-v3 paper; the two evaluations use different
-candidate sets, so compare within a column pair, not across. On English and on
-the 26-language MKQA set the two are level. BGE is clearly ahead on MIRACL,
-the broad multilingual retrieval benchmark, and slightly ahead on tool
-retrieval. Jina is clearly ahead on long documents and on code, and at half the
-depth it reranks noticeably faster on CPU; Jina quotes up to 15x the document
-throughput of BGE with flash attention on a GPU. For PLUR1BUS memory cards,
-which are short German or English summaries, multilingual ranking quality is
-what counts, and long documents and code do not occur. **The recommendation
-is therefore BGE**: ahead or level on the benchmarks that matter here, Apache
-2.0 without a license consent, at the price of roughly twice the CPU time per
-query, which is a fraction of a second for 40 short candidates on an ordinary
-server. Pick Jina only when a weak CPU runs into the reranker timeout of five
-seconds; the quality loss is small.
+The **PLUR1BUS** tab uses OpenClaw's gateway and authentication at
+`/plugins/memory-lancedb-namespaced/control`. It shows memory, provider, workspace,
+model-preparation and migration state. Write controls require both configured
+`controlUi.writeActions` and host operator permissions.
 
-Sources: [Jina model card](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual),
-[BGE model card](https://huggingface.co/BAAI/bge-reranker-v2-m3),
-[jina-reranker-v3 paper, table 2](https://arxiv.org/abs/2509.25085),
-[Jina Reranker v2 announcement](https://jina.ai/news/jina-reranker-v2-for-agentic-rag-ultra-fast-multilingual-function-calling-and-code-search/).
+The cron provisioner reads validated `config.get` source/runtime views and
+requires native command dispatch. Raw source settings gate provisioning;
+manifest defaults alone do not create jobs. Exact feature commands execute
+without an outer carrier-model turn. OpenClaw owns final delivery. Setup does
+not change the OpenClaw default LLM or per-agent credentials.
 
-Settings for both stages are described in
-[docs/configuration.md](docs/configuration.md); the installer offers the
-preparation profiles for the local models.
+`node scripts/setup-feature-crons.mjs` can create or update jobs. It is not a
+read-only status command, and its install-safe exit code does not prove that
+all jobs were provisioned. Inspect reported skips, the host's cron state and
+actual run results. Schedules and gates are explained in the
+[user guide](how-to-memory.md).
 
-### Named storage namespaces
+## OpenClaw chat-LLM routing
 
-Omitting `namespaces` preserves the legacy-flat layout exactly:
-`{baseDbPath}/{agentId}`. Named routing is enabled only by supplying the strict
-object explicitly:
-
-```json
-{
-  "baseDbPath": "~/.openclaw/memory",
-  "namespaces": {
-    "activeWriteNamespace": "lancedb-local",
-    "activeRecallNamespaces": ["lancedb-local"],
-    "legacyReadOnlyNamespaces": ["lancedb-namespaced"],
-    "crossNamespaceRecall": true
-  }
-}
-```
-
-An explicit `baseDbPath` may be the named root, as above, or the active writer
-leaf (`~/.openclaw/memory/lancedb-local`); both forms resolve to the same
-layout. Namespace identifiers must match
-`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. The writer must occur in active recall,
-and active namespaces must be disjoint from legacy read-only namespaces.
-Legacy namespaces participate only when `crossNamespaceRecall` is exactly
-`true`; they are opened without table creation, schema migration, or mutation.
-
-Every recalled table must use the configured embedding dimensions. Each table
-runs the existing recall pipeline. When multiple live tables participate,
-PLUR1BUS waits for all of them and performs one stable global score merge; the
-one-table path remains direct. Duplicate IDs and canonical
-heading/text are collapsed, canonical plus memory results share the configured
-output cap, and child decision traces are replayed through the existing trace
-caps. A namespace changes storage routing for the current agent only. Sharing
-between agents, workspaces, or users is separate ACL work owned by B13.
-
-### OpenClaw chat-LLM routing
 
 Chat models are selected per owning feature. If an optional feature `model` is
 absent, PLUR1BUS uses the effective OpenClaw agent model and sends no `model`
@@ -1199,170 +250,51 @@ bits.
 execute the configured model fallback array in the installed runtime. PLUR1BUS
 neither claims nor emulates a host fallback chain.
 
-### LLM result cache
+## Trust, deletion and current limits
 
-PLUR1BUS caches only exact, agent-scoped results from an explicit allowlist of deterministic internal LLM transformations. The default in-memory cache uses a 24-hour absolute TTL (`llmResultCacheTtlMs: 86400000`, clamped to 60 s–7 d) and holds 256 entries per plugin registration (`llmResultCacheMaxEntries`, clamped to at most 10,000). Optional prompt-free SQLite persistence is off by default; when enabled with `llmResultCachePersist`, it stores hashed keys, results, usage metadata, and timestamps under the memory database path without storing plaintext prompts, credentials, or headers. `llmResultCacheMaxBytes` defaults to 67,108,864 bytes and is clamped to at most 1 GiB; clamped values log a warning.
+Cards have independent lifecycle, epistemic and real-world-validity fields.
+`createdAt` is capture time; `validFrom` / `validUntil` describe when a claim
+holds; `expiresAt` controls technical expiry. Explicit `validAt` queries apply
+validity windows; omitting it does not mean "valid now".
 
-The six runtime settings are `llmResultCacheEnabled` (default `true`), `llmResultCacheTtlMs` (default `86400000`), `llmResultCacheMaxEntries` (default `256`), `llmResultCachePersist` (default `false`), `llmResultCacheMaxBytes` (default `67108864`), and `llmResultCacheMetrics` (default `true`). Missing values come from the manifest; an explicit `false` remains authoritative.
+Private cards belong to the agent and may be recalled across its workspaces.
+Workspace and user scopes need their corresponding context. High retrieval
+scores never confer access. Host search without a full session is restricted;
+its direct card-read adapter is a distinct path and does not inherit every
+recall filter.
 
-Operational notes:
+Forgetting prevents normal active use and exact normalized re-ingestion through
+tombstones. It does not erase all journals, archives, exports and backups.
+Memory evidence is escaped and framed as historical context, not a new command.
+These controls do not establish universal prompt-injection resistance.
 
-- Persistence uses the built-in `node:sqlite` module available throughout the supported Node.js runtime range; if SQLite initialization is unavailable, the cache falls back to memory-only.
-- Persistence stores LLM response text as plaintext (directory `0o700`, file `0o600` under the memory database path). Responses may contain condensed memory content — enable persistence only where that is acceptable.
-- Integrated call sites send `temperature: 0` for determinism, and `llm-call.js` now actually forwards `temperature` to the provider (previously the setting was silently ignored). Existing configs that set `temperature` therefore change their effective provider behavior.
+The reviewed source has two isolated reproductions: a global merge can undo a
+reranker's ordering, and a critical-classifier batch can exceed its configured
+daily push limit. There are also static dry-run contract limits. See
+[known issues](docs/known-issues.md) before relying on these behaviors.
 
-Non-goals and bypasses:
+## Development and verification
 
-- Ordinary main-chat/model responses and calls with a missing or unknown cache purpose always remain live. That includes weather requests such as `wie wird das Wetter morgen?`.
-- Live or creative wiki, critical classifier/push, dream narrative, dream echo, afterthought, persona voice, and overlay paths are not cached.
-- Direct Tier-3 API-client calls and emotion calls without a real agent scope are not cached.
-- The cache does not perform semantic matching, share results across agents, cache rejected upstream calls, or replace provider-side prompt caching.
-
-The `/state` status section reports cache hit rate, memory/persistent hits, persistence state, and avoided input/output tokens. It intentionally reports token counts, not money.
-
-**`emotion.t3`** — the tier-3 emotion classifier uses the effective OpenClaw
-agent model when its model is absent. A complete feature-local direct override
-may instead provide its own model and transport. If neither route is available,
-the classifier falls back to Tier-2 heuristics: it does **not** label cards, so
-it never poisons results by marking everything `fakt`.
-
-**`emotion.temperaments`** — per-agent emotional temperament. Ships with generic defaults only (`main` slightly more sensitive, everyone else balanced). Pick a preset via `/plur1bus temperament <preset>` (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`) — requires a gateway restart. Mood always derives from conversation content; the temperament only shapes how strongly and how long it swings. The current mood is written to `.emotional-state.json` (machine-readable, survives restarts) and `.current-mood.txt` (human-readable) in the agent workspace, injected as a mood line into the recall context, stamped on every memory card (`moodContextAtCapture`), and emotionally intense memories decay slower (`intensityHalfLifeFactor`).
-
-**`security.allowedUserIds` / `security.allowedChatIds`** — identity-aware authorization for commands and destructive flows.
-- If both lists are empty, non-destructive commands can run in private 1:1 contexts; destructive commands are denied in groups/unknown channels.
-- If either list is configured, destructive commands require `userId` membership in `allowedUserIds` (chatId alone is never sufficient), plus `allowedChatIds` when that list exists.
-- Whitelists remain stable with `/enable`, `/disable`, `/plur1bus setup`, `/forget`, `/correct` and confirmation flows.
-
-**`security.allowChatConfigCommands`** (default `true`) — disables operator-level config mutating commands (`/enable`, `/disable`, `/plur1bus setup`) when set to `false`. Use this in shared channels if you want a hard stop on chat-driven writes. Writes are still guarded by a file lock.
-
-**`security.allowModelDestructiveMemoryOps`** (default `true`) — keeps model-facing tools `memory_forget` and `knowledge_update` available unless you explicitly disable them.
-
-### Scope-sichere Speicherung
-
-`scope` values now support `agent-private` (default), `workspace` and `user`.
-- `agent-private` remains per-agent.
-- `workspace` shares by workspace.
-- `user` is owner-bound: der aufrufende `userId` wird gespeichert und bei Sichtbarkeit/Mutation geprüft.
-
-### Freigegebene Memory-Pools (B13)
-
-`/share <id>` kopiert eine sichtbare Karte nach bestätigter, an Benutzer und
-Chat gebundener Bestätigung in den Workspace-Pool. `/share <id> --user` nutzt
-dieselbe Bestätigung, erzeugt aber einen nur für denselben Kanal, Account und
-Benutzer sichtbaren User-Pool. Die Grammatik ist strikt: nur ein vollständiges
-UUID-`id`, optional genau `--user`, oder `/share confirm <nonce>` sind gültig;
-unbekannte oder doppelte Optionen werden vor jedem Store-, DB-, Embedding- oder
-Provider-Zugriff abgelehnt. Eine Freigabe ist **copy, never move**: die private
-Ursprungskarte bleibt unverändert, und die autorisierte Shared-Kopie enthält
-einen kanonischen Origin-Verweis. Recall darf die optionalen Shared-Quellen
-ergänzend lesen und dedupliziert den kanonischen Ursprung; sie ersetzen weder
-primären Recall noch dessen ACL.
-
-Physische Routen sind kein benutzergesteuerter Pfad: ihre Segmente sind höchstens
-64 Zeichen lang und werden als `.plur1bus-shared/workspaces/w-<62hex>` oder
-`.plur1bus-shared/users/u-<62hex>` abgelegt. Die Berechtigung bindet den
-kanonischen Workspace konfliktablehnend (keine versteckte Alias-Priorität) und
-den vollständigen Kanal+Account+Benutzer-Prinzipal. Fehlende oder abweichende
-Bindungen sind nicht sichtbar und nicht mutierbar; fehlend und verweigert
-werden gleich behandelt. `/memory` und `/share --user` verwenden den direkt
-vom Host gelieferten Account.
-
-Der aktuelle OpenClaw-Hook kann die optionale automatische User-Shared-Recall
-Quelle ausschließlich bei aktiviertem `autoRecall` verwenden. Er benötigt
-einen account-tragenden Session-Key, ein exaktes Host-Run-Ticket oder eine
-konservative default-only Account-Topologie. Native und Slash-Kommandos prägen
-absichtlich kein Route-Ticket, weil behandelte Kommandos den Prompt-Hook nicht
-erreichen. Bei mehrdeutigen benannten/multi-account Main-, Group- oder
-Channel-Turns wird nur diese optionale Quelle ausgelassen; andere Recall-Quellen
-bleiben unberührt. Ein zuletzt gespeicherter Session-Route-Wert ist kein
-turn-gebundener Account-Beweis.
-
-Legacy rows that used the old `workspace_shared` scope remain in their
-authoritative private table until an operator explicitly migrates them. Start
-with the non-mutating audit:
-
-```text
-/plur1bus migrate-legacy-shared
-```
-
-Use `--report <name.json>` for a fixed private report name, and resume a bounded
-dry run with the opaque `--cursor <token>` returned by the previous run. After
-reviewing the report, run `--apply` without a dry-run cursor; apply re-reads each
-source row, writes and verifies an idempotent workspace copy, and only then
-marks the legacy source. The command never deletes or re-scopes the source row:
-workspace_shared legacy rows are not reinterpreted. The operation is bounded
-per run to 250 rows, 4 MiB source bytes, 100 provider calls, and 60 seconds.
-The opaque cursor pins source versions and dry-run mode; an unavailable or
-changed pinned version, mode mismatch, checksum/binding failure, timeout, or
-uncertain commit aborts the run and requires the documented continuation or a
-restart without the cursor. Apply never accepts a dry-run cursor.
-It is operator-destructive, so it requires the same user authorization as
-`/forget`; cron identity does not bypass that gate. Reports are no-clobber
-`0600` JSON files below `.plur1bus/migrations/` and exclude memory content,
-vectors, evidence, and provenance.
-
-The migration runs only through the destructively authorized initialized runtime
-command; there is no standalone DB/config/credential bootstrap. Multi-Namespace,
-Neo/Obsidian aliases, Semantic Lens, CRR, the OpenClaw default LLM, and
-per-agent credentials do not change under sharing or migration.
-
-**`security.allowModelDestructiveMemoryOps`** (default `true`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state. Set this flag to `false` if you want a hard opt-out for model-driven destructive memory writes.
-
-### Feature profiles
-
-Core memory (capture, recall, search) works from manifest-safe defaults without profile confirmation. Argument-less setup only lists the choices, and start is read-only status/onboarding guidance:
+The package is ESM JavaScript with no compilation step for the plugin itself.
 
 ```bash
-# In Telegram
-/plur1bus setup
-/plur1bus start
+npm ci --ignore-scripts
+npm run lint
+npm test
 ```
 
-Apply a profile only by naming it explicitly:
+`npm test` includes both `tests/*.test.js` and `test/*.test.js`, serialized by the
+Node test runner. The suite includes pure helpers, mocked providers, native
+LanceDB, filesystem/capability checks, worker/IPC and host integration contracts;
+it is not DB-free. Platform prerequisites can cause skips.
 
-```bash
-/plur1bus setup safe
-/plur1bus setup recommended
-```
-
-An explicit selection records `setupProfile` and `featuresConfirmedAt`. Recommended enables additional features while retaining merge and Obsidian safety gates; vault discovery alone never counts as confirmation.
-
-## Architecture
-
-LanceDB is the authoritative store: every memory card lives there first, indexed per agent for isolation. The Obsidian bridge mirrors cards into a Markdown vault so the user can read, link, and edit them with normal tools; LanceDB stays the source of truth and the bridge re-syncs on changes.
-
-A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as the exact command `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The command handler converts returned `pushMessages` into a validated native command reply; OpenClaw's dispatcher owns finalization and delivery. Multiple push texts are combined in their original order; partial classifier failures are reported alongside successfully produced pushes. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
-
-The recall pipeline runs embedding → LanceDB vector search → optional query refinement → temporal filter → canonical `KNOWLEDGE.md` search → score/status processing → graph spread and hydration → budget allocation → optional rerank → deduplication → ACL filtering → finalization. The caller may then append bounded Semantic Lens and Conversation Reactivation Recall results; neither replaces the primary recall.
-
-## Development
-
-```bash
-npm install
-npm test              # full serialized Node test runner
-```
-
-No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.
-
-## Recall safety in v6
-
-Recalled memories are rendered as historical evidence, not as current user requests. A memory that contains an old imperative such as a download, send, write, delete, install, purchase, network action, or command must not trigger that action unless the current visible user turn asks for the same action.
-
-The recall block uses escaped metadata attributes and wraps recalled text in `quoted-evidence` elements, so prompt boundaries stay explicit even when old memory text contains tool-like markup.
-
-## Migration from 5.x
-
-Version 6.x is a major upgrade. If you ran 5.x:
-
-- **Schema migration** — LanceDB table schema is auto-migrated on first `init()`. New columns: `status`, `versionNumber`, `previousVersion`, `supersededBy`, `updateSource`, `updateEvidence`, `reconsolidationConfidence`, `versionCreatedAt`, `updatedAt`. Migration is idempotent and non-destructive.
-- **Explicit profile selection** — Missing values use manifest-safe defaults. Use `/plur1bus setup safe` or `/plur1bus setup recommended` only when you intentionally want to persist a profile; `/plur1bus setup` and `/plur1bus start` are non-mutating.
-- **Merging is proposal-only** — `merging.autoApply` defaults to `false`. Merge candidates are written to `merge-proposals.jsonl` instead of being applied automatically. Set `autoApply: true` to restore 5.x behavior.
-- **Obsidian bridge apply mode** — New `mode: "apply"` with safety gates (backups, audit log, vault path confirmation). Default is `mode: "augment"` (read-only). Confirm vault path explicitly before first write.
-- **Command input handling** — Hard length limits removed. Very long inputs are semantically compressed; beyond 100k chars use a file or vault source.
-- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `obsidianBridge.morningReview.status`, `obsidianBridge.eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`, `emotion.t3.escalationConfidence`, `emotion.t3.timeoutMs`, `emotion.moodInfluence`, `emotion.intensityHalfLifeFactor`, `emotion.temperaments.<agentId>`.
-
-See `v5_TO_v6_MIGRATION.md` for the full migration guide.
+At the reviewed commit, the 2026-09-18 macOS / Node 22.23.2 run completed with
+4,684 passes, 0 failures and 76 skips (4,760 tests, 849 suites). This is a dated
+source-suite result, not a production-installation or recall-quality benchmark.
+The production dependency audit reported no known vulnerabilities at that time;
+it is not a guarantee about future advisories or application security.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Plugin source: [MIT](LICENSE). Optional model artifacts have separate licenses;
+consult the pinned artifact definitions and model terms before selecting them.
