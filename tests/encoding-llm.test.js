@@ -31,6 +31,39 @@ describe("encoding llm", () => {
     }
   });
 
+  it("refuses coercible-aber-nicht-echte importance-Werte statt sie zu erraten", () => {
+    // Number(null) === 0, Number("") === 0, Number(true) === 1, Number([]) === 0 —
+    // alle würden Number.isFinite(...) bestehen, obwohl das Modell keine
+    // echte Zahl geliefert hat. Ein verweigertes Urteil darf nie als
+    // "völlig unwichtig" (0) durchgehen.
+    for (const bad of [null, "", true, []]) {
+      const parsed = parseEncodingResponse(JSON.stringify({ importance: bad, intensity: 0.5, dominant: "joy" }));
+      assert.strictEqual(parsed.ok, false, `importance=${JSON.stringify(bad)} muss ok:false liefern`);
+    }
+    // Fehlendes Feld ebenfalls.
+    const parsed = parseEncodingResponse(JSON.stringify({ intensity: 0.5, dominant: "joy" }));
+    assert.strictEqual(parsed.ok, false);
+  });
+
+  it("clamps importance in beide Richtungen", () => {
+    assert.strictEqual(
+      parseEncodingResponse(JSON.stringify({ importance: 5, intensity: 0.1, dominant: "joy" })).importance,
+      0.94,
+    );
+    assert.strictEqual(
+      parseEncodingResponse(JSON.stringify({ importance: -3.5, intensity: 0.1, dominant: "joy" })).importance,
+      0,
+    );
+  });
+
+  it("fällt bei kaputter intensity auf 0 zurück, ohne das ganze Urteil zu verwerfen", () => {
+    for (const bad of [null, "", true, [], "hoch"]) {
+      const parsed = parseEncodingResponse(JSON.stringify({ importance: 0.5, intensity: bad, dominant: "joy" }));
+      assert.strictEqual(parsed.ok, true, `importance bleibt gültig, intensity=${JSON.stringify(bad)}`);
+      assert.strictEqual(parsed.emotion.emotionalIntensity, 0);
+    }
+  });
+
   it("classifyEncoding baut Messages wie Tier 3 und liefert das geparste Urteil", async () => {
     let seenMessages = null;
     let seenContext = null;
