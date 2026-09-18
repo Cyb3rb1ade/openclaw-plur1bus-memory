@@ -64,7 +64,7 @@ describe("applyDynamicsDefaults mit Intensitäts-Modulation", () => {
 
   it("respektiert explizit gesetzte halfLifeDays", () => {
     // Bewusst unterhalb der Flashbulb-Schwelle: Flashbulb hebt die
-    // Halbwertszeit vertraglich auf mindestens 90 an (nur verlängern, nie
+    // Halbwertszeit vertraglich auf mindestens 3650 an (nur verlängern, nie
     // verkürzen) und würde eine explizite 42 damit legitim überschreiben.
     const entry = { id: "x", category: "project", emotionalIntensity: 0.3, importance: 0.5, halfLifeDays: 42 };
     const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
