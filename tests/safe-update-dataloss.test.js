@@ -148,6 +148,28 @@ describe("safeUpdate — supersede-after-store ordering", () => {
   });
 });
 
+describe("buildUpdateEntry — importanceStatus ueberlebt den Update-Pfad", () => {
+  // Eine Zeile, die auf ihre LLM-Bewertung wartet (pending/pending_backfill),
+  // darf durch einen inhaltsaendernden safeUpdate() nicht stillschweigend auf
+  // "final" zurueckfallen — sonst faellt sie aus der Importance-Queue, ohne
+  // je bewertet worden zu sein.
+  it("uebernimmt pending_backfill von der alten Zeile in die neue Version", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importanceStatus: "pending_backfill",
+    }, PATCH, EVIDENCE);
+    assert.strictEqual(next.importanceStatus, "pending_backfill");
+  });
+
+  it("normalisiert einen kaputten Altwert genauso wie normalizeEntryForTable", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importanceStatus: "quatsch",
+    }, PATCH, EVIDENCE);
+    assert.strictEqual(next.importanceStatus, "final");
+  });
+});
+
 describe("buildUpdateEntry — Int64-Spalten kommen als BigInt", () => {
   // Live-Zeile vom 09.09.2026: LanceDB liefert versionNumber, retrievalCount,
   // Zeitstempel usw. als BigInt; `1n + 1` warf und kein /correct kam je durch.
