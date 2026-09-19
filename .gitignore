@@ -42,6 +42,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/repair-tombstones.mjs
 !scripts/reapply-tombstones.mjs
 !scripts/backfill-manual-core-markers.mjs
+!scripts/importance-phase1-reset.mjs
 !scripts/verify-workspace-writer.mjs
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs
