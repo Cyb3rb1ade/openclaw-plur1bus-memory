@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { parseEncodingResponse, buildEncodingPrompt, classifyEncoding } from "../lib/encoding-llm.js";
+import { parseEncodingResponse, buildEncodingPrompt, classifyEncoding, truncateForPrompt } from "../lib/encoding-llm.js";
 import { EMOTION_DIMENSIONS } from "../lib/emotion.js";
 
 describe("encoding llm", () => {
@@ -216,5 +216,56 @@ describe("encoding llm — volle Emotions-Label-Map (Abschluss-Review, Important
       emotions: { fear: 0.2 },
     }));
     assert.strictEqual(parsed.emotion.fear, 0.9);
+  });
+});
+
+/**
+ * Live am 19.09.2026 im Bestands-Backfill aufgeschlagen: eine von 22.000
+ * Zeilen bei bernhardine (e4790655…) traegt an UTF-16-Position 1999 ein 🎙
+ * (U+1F399). `slice(0, 2000)` schneidet zwischen die beiden Code-Einheiten
+ * des Surrogatpaars und laesst eine halbe uebrig.
+ *
+ * Der Fehler ist still: JSON.stringify schreibt bereitwillig "\ud83c", und in
+ * JavaScript ueberlebt das sogar JSON.parse. Erst beim Kodieren des
+ * HTTP-Koerpers als UTF-8 gibt es dafuer keine Darstellung — die Route
+ * antwortete mit HTTP 400 ("unexpected end of hex escape"), die Zeile blieb
+ * unbewertet. Gegenprobe am selben Text auf Codepoint-Grenze geschnitten:
+ * HTTP 200.
+ */
+describe("prompt truncation", () => {
+  const MIC = "\u{1F399}"; // zwei UTF-16-Code-Einheiten
+
+  it("schneidet nie mitten durch ein Surrogatpaar", () => {
+    const text = "a".repeat(1999) + MIC + "b".repeat(50);
+    const cut = truncateForPrompt(text, 2000);
+    assert.ok(cut.length <= 2000);
+    const last = cut.charCodeAt(cut.length - 1);
+    assert.ok(!(last >= 0xD800 && last <= 0xDBFF), "kein einsames High-Surrogat am Ende");
+    assert.strictEqual(Buffer.from(cut, "utf8").toString("utf8"), cut, "muss als UTF-8 rundtrip-fest sein");
+  });
+
+  it("raeumt ein bereits abgetrenntes halbes Zeichen weg", () => {
+    // Genau der Fall aus index.js: der Aufrufer hat schon geschnitten.
+    const schonKaputt = ("a".repeat(1999) + MIC).slice(0, 2000);
+    assert.strictEqual(Buffer.from(schonKaputt, "utf8").toString("utf8") === schonKaputt, false,
+      "Vorbedingung: der Eingabetext ist wirklich kaputt");
+    const cut = truncateForPrompt(schonKaputt, 2000);
+    assert.strictEqual(Buffer.from(cut, "utf8").toString("utf8"), cut);
+  });
+
+  it("laesst ein vollstaendiges Paar am Ende stehen", () => {
+    const text = "a".repeat(1998) + MIC;
+    assert.strictEqual(truncateForPrompt(text, 2000), text);
+  });
+
+  it("laesst kurze Texte unveraendert", () => {
+    assert.strictEqual(truncateForPrompt("kurz", 2000), "kurz");
+    assert.strictEqual(truncateForPrompt("", 2000), "");
+    assert.strictEqual(truncateForPrompt(null, 2000), "");
+  });
+
+  it("der Prompt selbst ist als UTF-8 transportierbar", () => {
+    const prompt = buildEncodingPrompt("a".repeat(1999) + MIC + "b".repeat(50));
+    assert.strictEqual(Buffer.from(prompt, "utf8").toString("utf8"), prompt);
   });
 });
