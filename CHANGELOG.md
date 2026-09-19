@@ -7,6 +7,35 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.67] — 2026-09-19
+
+### Hinzugefügt
+
+- **`lib/memory-chunking.js` — Bibliothek zum Aufteilen mehrteiliger
+  Erinnerungen.** Eine Erinnerung wird als ein Vektor eingebettet; enthält sie
+  mehrere unabhängige Aussagen, ist dieser Vektor deren Schwerpunkt und liegt
+  von jeder einzelnen weiter entfernt als nötig. Gemessen am Produktivbestand:
+  Median 5 Sätze je Zeile, 90. Perzentil 31, Maximum 334 Sätze in 15.000
+  Zeichen — zugleich sind 99,7 % der im Benchmark gesuchten Belege vorhanden,
+  aber nur 75,8 % werden gefunden. Es fehlt also nichts, es wird nur nicht
+  gefunden. `planChunks` entscheidet ohne Modellaufruf, wo Struktur vorhanden
+  ist (46–50 % der Zeilen), und verlangt ein Modell nur bei langem, ungegliedertem
+  Text (1–6 %). **Noch nirgends verdrahtet.**
+- **Deckel für Teilstücke derselben Nachricht im Recall.** Passen mehrere
+  Teile einer Nachricht auf eine Frage, belegen sie sonst mehrere der Plätze
+  mit zusammengehörigem Inhalt. Der Gruppenschlüssel ist `chunkGroupId`,
+  ersatzweise das vorhandene `sourceTurnId`. Ohne beides bleibt alles wie
+  bisher.
+
+### Behoben
+
+- **Eine Ladegrenze statt vier.** Die Wartungsskripte luden den Store mit
+  100.000, 200.000 bzw. 500.000 Zeilen Obergrenze. LanceDB schneidet dort
+  klaglos ab: Oberhalb der Grenze hätte Phase 1 die Hälfte des Bestands
+  übergangen und „fertig" gemeldet. `STORE_SCAN_LIMIT` steht jetzt einmal in
+  `lib/store-limits.js`; ein Test verhindert, dass eine zweite Grenze
+  entsteht.
+
 ## [7.12.66] — 2026-09-19
 
 ### Geändert
