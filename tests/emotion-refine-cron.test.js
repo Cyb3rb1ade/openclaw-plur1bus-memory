@@ -305,6 +305,14 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   assert.equal(payload.failed, 0);
   assert.equal(payload.pending, 0);
   assert.equal(calls.length, 1);
+  // Maxtokens-Fix (19.09.2026): completeFeatureLlm reicht maxTokens 1:1 als
+  // params.maxTokens an runtimeLlm.complete durch (lib/llm-router.js) — hier
+  // also der tatsächlich beim (gemockten) Provider ankommende Wert, nicht
+  // nur eine isolierte Berechnung. Vorher stand hier 300; bei der seit
+  // diesem Branch deutlich längeren Encoding-Antwort (acht Emotions-
+  // dimensionen + Freitext-Grund) schnitten echte Provider-Antworten dabei
+  // mit finish_reason "length" ab, und der Parser verwarf sie stumm.
+  assert.equal(calls[0].maxTokens, 1500, "encodingCallLlm muss das neue 1500er-Budget an den Provider durchreichen");
 
   const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
   assert.equal(row.emotionStatus, "final");
