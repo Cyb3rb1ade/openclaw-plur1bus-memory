@@ -309,7 +309,7 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
   assert.equal(row.emotionStatus, "final");
   assert.equal(row.emotionalDominant, "joy");
-  assert.ok(Number(row.emotionalIntensity) > 0.2);
+  assert.strictEqual(Number(row.emotionalIntensity), 0.3);
   assert.match(String(row.emotionalValence), /joy:0\.30/);
   assert.equal(Number(row.importance), 0.8);
   assert.equal(row.importanceStatus, "final");

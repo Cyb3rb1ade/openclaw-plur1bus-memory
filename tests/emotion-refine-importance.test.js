@@ -34,4 +34,26 @@ describe("refine patch", () => {
   it("returns null when the model failed", () => {
     assert.strictEqual(buildRefinePatch({ id: "d" }, { ok: false }, now), null);
   });
+
+  it("never overwrites importance or halfLifeDays in the agent's own band", () => {
+    const patch = buildRefinePatch(
+      { id: "e", memoryStrength: 0.9, halfLifeDays: 36500, importance: 0.97, importanceStatus: "pending" },
+      { ok: true, importance: 0.3, emotion: { emotionalDominant: "neutral", emotionalIntensity: 0.1 }, reason: "Kein Grund" },
+      now,
+    );
+    assert.strictEqual("importance" in patch, false);
+    assert.strictEqual("halfLifeDays" in patch, false);
+    assert.strictEqual(patch.importanceStatus, IMPORTANCE_STATUS.FINAL);
+    assert.strictEqual(patch.emotionStatus, "final");
+  });
+
+  it("still writes importance and halfLifeDays just below the agent band", () => {
+    const patch = buildRefinePatch(
+      { id: "f", memoryStrength: 0.9, halfLifeDays: 180, importance: 0.94, importanceStatus: "pending" },
+      { ok: true, importance: 0.3, emotion: { emotionalDominant: "neutral", emotionalIntensity: 0.1 }, reason: "" },
+      now,
+    );
+    assert.strictEqual(patch.importance, 0.3);
+    assert.strictEqual(patch.halfLifeDays, 30);
+  });
 });
