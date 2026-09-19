@@ -14,13 +14,15 @@ describe("refine patch", () => {
     assert.strictEqual(patch.emotionalDominant, "trust");
     assert.strictEqual(patch.importanceStatus, IMPORTANCE_STATUS.FINAL);
     assert.strictEqual(patch.emotionStatus, "final");
-    // Abschluss-Review, Important 5b: das Freitext-Urteil des Modells landet
-    // in updateEvidence/updateSource, nicht in coreMemoryReason — dieses Feld
-    // ist ein enger Provenienz-Marker (siehe applyCoreMemoryEncoding), kein
-    // Freitext-Eimer.
-    assert.strictEqual(patch.updateSource, "emotion-refine");
-    assert.match(patch.updateEvidence, /Projektfakt/);
-    assert.strictEqual(Object.hasOwn(patch, "coreMemoryReason"), false);
+    // Koordinator-Korrektur zum Abschluss-Review, Important 5b:
+    // updateSource/updateEvidence sind der Rollback-Kanal des
+    // Phase-2-Backfills (importance-v2 protokolliert dort den vorherigen
+    // Wert) — ein Cron, der sie routinemäßig überschreibt, zerstört diese
+    // Provenienz. Das Freitext-Urteil des Modells landet deshalb in
+    // coreMemoryReason.
+    assert.match(patch.coreMemoryReason, /Projektfakt/);
+    assert.strictEqual(Object.hasOwn(patch, "updateSource"), false);
+    assert.strictEqual(Object.hasOwn(patch, "updateEvidence"), false);
     assert.strictEqual(patch.halfLifeDays, 600);
   });
 
@@ -102,7 +104,6 @@ describe("refine patch", () => {
     );
     assert.strictEqual(patch.importance, 0.3);
     assert.strictEqual(patch.halfLifeDays, 30);
-    assert.strictEqual(patch.updateSource, "emotion-refine");
-    assert.strictEqual(patch.updateEvidence, "");
+    assert.strictEqual(patch.coreMemoryReason, "");
   });
 });

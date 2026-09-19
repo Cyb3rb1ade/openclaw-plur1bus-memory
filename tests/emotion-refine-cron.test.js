@@ -314,16 +314,61 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   assert.equal(Number(row.importance), 0.8);
   assert.equal(row.importanceStatus, "final");
   assert.equal(Number(row.halfLifeDays), 600);
-  // Abschluss-Review, Important 5b: das Freitext-Urteil landet in
-  // updateEvidence/updateSource, nicht in coreMemoryReason (enger
-  // Provenienz-Marker, siehe applyCoreMemoryEncoding).
-  assert.match(String(row.updateEvidence), /Umzug/);
-  assert.equal(row.updateSource, "emotion-refine");
+  // Koordinator-Korrektur zum Abschluss-Review, Important 5b:
+  // updateSource/updateEvidence sind der Rollback-Kanal des
+  // Phase-2-Backfills — der Cron darf sie nicht überschreiben. Das
+  // Freitext-Urteil landet in coreMemoryReason.
+  assert.match(String(row.coreMemoryReason), /Umzug/);
 
   const superseded = await readRow(pluginModule, baseDbPath, agentId, "44444444-4444-4444-8444-444444444444");
   assert.equal(superseded.emotionStatus, "final");
   assert.equal(superseded.importanceStatus, "final", "importanceStatus must close too, or the OR clause would rescan it forever");
   assert.equal(superseded.emotionalDominant, "neutral", "no LLM call means the seeded neutral value is untouched");
+});
+
+// Koordinator-Korrektur zum Abschluss-Review, Important 5b: updateSource/
+// updateEvidence sind der Rollback-Kanal des Phase-2-Backfills (importance-v2
+// protokolliert dort den vorherigen Wert, damit jede geänderte Zeile einzeln
+// rückrollbar bleibt). Ein stündlicher Cron, der diese Felder routinemäßig
+// überschreibt, zerstört genau diese Provenienz — deshalb darf der Refine-Job
+// sie nicht anfassen, selbst wenn er die Zeile inhaltlich klärt.
+test("internal emotion-refine never touches a pre-existing rollback provenance (updateSource/updateEvidence)", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-provenance-agent";
+  const runtimeLlm = {
+    async complete(params) {
+      return { text: ENCODING_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
+    },
+  };
+  const pluginModule = await loadFreshPlugin();
+  await seedPending(pluginModule, baseDbPath, agentId);
+  // Simuliert einen vorherigen Phase-2-Backfill-Rollback-Eintrag auf derselben Zeile.
+  const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
+  try {
+    await db.init();
+    await db.update(MEMORY_ID, { updateSource: "importance-v2", updateEvidence: "previous importance: 0.5" });
+  } finally {
+    await db.shutdown();
+  }
+
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler({
+    args: "internal emotion-refine",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    runtimeContext: { llm: runtimeLlm },
+  });
+  const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
+  assert.equal(payload.refined, 1);
+
+  const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
+  assert.equal(row.importanceStatus, "final", "die Zeile wurde inhaltlich geklärt");
+  assert.equal(row.updateSource, "importance-v2", "der Rollback-Kanal darf nicht überschrieben werden");
+  assert.equal(row.updateEvidence, "previous importance: 0.5", "der Rollback-Kanal darf nicht überschrieben werden");
+  assert.match(String(row.coreMemoryReason), /Umzug/, "das Freitext-Urteil landet stattdessen hier");
 });
 
 test("internal emotion-refine leaves rows pending when the provider fails", async (t) => {
