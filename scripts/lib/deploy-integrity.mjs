@@ -91,6 +91,8 @@ export const DEPLOY_FILES = [
   "lib/retroactive-interference.js",
   "lib/safe-update.js",
   "lib/importance-status.js",
+  "lib/store-limits.js",
+  "lib/memory-chunking.js",
   "lib/encoding-llm.js",
   "lib/score.js",
   "lib/semantic-input.js",

@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { AUTOMATIC_IMPORTANCE_MAX } from "../lib/memory-fact-quality.js";
+import { STORE_SCAN_LIMIT } from "../lib/store-limits.js";
 import { IMPORTANCE_STATUS } from "../lib/importance-status.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 
@@ -175,7 +176,7 @@ async function main() {
       continue;
     }
 
-    const rows = await table.query().limit(100000).toArray();
+    const rows = await table.query().limit(STORE_SCAN_LIMIT).toArray();
     const active = rows.filter((r) => String(r.status ?? "active") === "active");
     const legacy = selectLegacyBandRows(rows);
     const duplicateIds = findDuplicateActiveIds(rows);
