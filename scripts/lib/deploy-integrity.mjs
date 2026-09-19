@@ -324,6 +324,7 @@ export const DEPLOY_FILES = [
   "scripts/repair-installed-plugin.mjs",
   "scripts/backfill-manual-core-markers.mjs",
   "scripts/importance-phase1-reset.mjs",
+  "scripts/importance-metrics.mjs",
   "scripts/repair-tombstones.mjs",
   "scripts/reapply-tombstones.mjs",
   "scripts/run-graph-links-once.mjs",
