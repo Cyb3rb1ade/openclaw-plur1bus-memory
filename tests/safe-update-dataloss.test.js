@@ -168,6 +168,32 @@ describe("buildUpdateEntry — importanceStatus ueberlebt den Update-Pfad", () =
     }, PATCH, EVIDENCE);
     assert.strictEqual(next.importanceStatus, "final");
   });
+
+  // Abschluss-Review, Important 3: setzt der Agent bewusst patch.importance
+  // auf einer noch pending Zeile, wird die alte pending-Vererbung zur Falle —
+  // die Zeile bleibt pending, und der stündliche emotion-refine-Cron
+  // überschreibt das bewusste Urteil innerhalb der nächsten Stunde mit einem
+  // eigenen, unter Umständen niedrigeren Wert. Ein explizit gesetzter Wert
+  // ist per Definition nicht mehr pending.
+  it("schließt eine pending Zeile ab, wenn der Patch ein importance trägt", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importance: 0.5,
+      importanceStatus: "pending",
+    }, { ...PATCH, importance: 0.85 }, EVIDENCE);
+    assert.strictEqual(next.importance, 0.85);
+    assert.strictEqual(next.importanceStatus, "final");
+  });
+
+  it("vererbt pending weiterhin, wenn der Patch kein importance trägt", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importance: 0.5,
+      importanceStatus: "pending",
+    }, PATCH, EVIDENCE);
+    assert.strictEqual(next.importance, 0.5);
+    assert.strictEqual(next.importanceStatus, "pending");
+  });
 });
 
 describe("buildUpdateEntry — Int64-Spalten kommen als BigInt", () => {
