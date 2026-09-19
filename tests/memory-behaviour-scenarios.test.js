@@ -89,14 +89,13 @@ describe("memory behaves like memory", () => {
    * gehalten", sondern ein einzelner Lernmoment mit anschließendem
    * Vergessen. Gebrauch heißt: über das Jahr verteilt.
    *
-   * OFFENER BEFUND: Das Gleichgewicht liegt niedrig. Eine Tatsache mit
-   * 30 Tagen Halbwertszeit, alle achtzehn Tage abgerufen, pendelt sich bei
-   * rund 0.11 ein — sie überlebt, aber schwach. Der Grund ist, dass ein
-   * Abruf die Stärke anhebt (`0.15 / (1 + log1p(count))`, mit der Zahl der
-   * Abrufe fallend), die Halbwertszeit aber NICHT verlängert. Menschen
-   * dehnen durch Wiederholung die Behaltensdauer, nicht nur die momentane
-   * Verfügbarkeit. Die Schwelle unten ist deshalb ein Boden gegen
-   * Regression, kein Zielwert.
+   * BEHOBEN am 19.09.2026: Bis dahin lag das Gleichgewicht bei 0,11 — die
+   * Tatsache überlebte, aber schwach. Ein Abruf hob die Stärke, verlängerte
+   * die Halbwertszeit aber nicht; die Erinnerung zerfiel danach exakt so
+   * schnell wie zuvor. Seit `RETRIEVAL_HALF_LIFE_FACTOR` dehnt ein zeitlich
+   * abgesetzter Abruf auch die Behaltensdauer (gedeckelt bei 600 Tagen), und
+   * derselbe Ablauf endet bei 0,50. Siehe
+   * tests/retrieval-halflife-extension.test.js.
    */
   it("hält eine langweilige Tatsache durch Gebrauch am Leben", () => {
     const halfLifeDays = resolveHalfLifeFromEncoding(0.3);
@@ -110,7 +109,7 @@ describe("memory behaves like memory", () => {
       now + 365 * DAY,
     );
 
-    assert.ok(genutzt.memoryStrength >= 0.10, `genutzte Tatsache nach einem Jahr nur ${genutzt.memoryStrength.toFixed(4)}`);
+    assert.ok(genutzt.memoryStrength >= 0.45, `genutzte Tatsache nach einem Jahr nur ${genutzt.memoryStrength.toFixed(4)}`);
     assert.ok(genutzt.memoryStrength >= 10 * ungenutzt, `Gebrauch trägt zu wenig: ${genutzt.memoryStrength.toFixed(4)} gegen ${ungenutzt.toFixed(4)}`);
   });
 });
