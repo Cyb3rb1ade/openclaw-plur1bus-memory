@@ -29,6 +29,26 @@ describe("encoding llm", () => {
     assert.notStrictEqual(parsed.emotion.emotionalDominant, "neutral");
   });
 
+  // A/B/A-Lauf 19.09.26 (/root/plur1bus-bench/emotion-format-ab): der Prompt,
+  // der eine Zahl je Dimension verlangte, bekam eine ausgefuellte Tabelle
+  // zurueck — sekundaere Werte mit Median 0,10, 77 % davon <= 0,2. Bedeutung
+  // und dominante Dimension aenderten sich dadurch nicht (Formateffekt lag
+  // auf dem Rauschboden zweier identischer Laeufe), die Scheinsignale schon:
+  // die "wichtige Lektion"-Regel in computeRecallBoost feuerte bei 32-38 %
+  // aller Erinnerungen. Der Prompt fragt deshalb nur noch nach den
+  // Dimensionen, die tatsaechlich mitschwingen. Der Parser bleibt
+  // unveraendert — fehlende Dimensionen fuellt er ohnehin mit 0, und
+  // serializeEmotionalValence speichert Nullen schon immer nicht.
+  it("verlangt nur die tatsaechlich mitschwingenden Dimensionen", () => {
+    const prompt = buildEncodingPrompt("Testtext");
+    const line = prompt.split("\n").find((l) => l.trim().startsWith("emotions:"));
+    assert.ok(line, "Prompt muss eine emotions-Zeile enthalten");
+    assert.match(line, /weglassen/i, "der Prompt muss das Weglassen nicht mitschwingender Dimensionen verlangen");
+    assert.doesNotMatch(line, /je Dimension/i, "der Prompt darf keinen Wert je Dimension mehr verlangen");
+    // Die acht Dimensionen bleiben angeboten — nur die Pflicht faellt weg.
+    for (const dim of EMOTION_DIMENSIONS) assert.ok(line.includes(dim), `${dim} muss weiterhin angeboten werden`);
+  });
+
   it("asks for both judgements in one prompt", () => {
     const prompt = buildEncodingPrompt("Mein Hund ist heute eingeschlaefert worden.");
     assert.match(prompt, /importance/i);
