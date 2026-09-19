@@ -10563,16 +10563,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 throwIfCaptureAborted();
                 const categoryResult = categorizeMemoryWithReason(p.text);
                 const category = categoryResult.category;
-                const categoryReason = categoryResult.reason;
-                const captureImportanceResult = computeMemoryImportance({
-                  text: p.text,
-                  category,
-                  categoryReason,
-                  origin: captureOrigin,
-                });
+                // Bis der stündliche Cron geurteilt hat, zählt die neutrale
+                // 0.5. Ein geschätzter Zwischenwert wäre wieder die
+                // Heuristik, die hier abgelöst wird. In derselben Session
+                // steht die Erinnerung in dieser Zeit ohnehin noch im
+                // Kontextfenster.
+                const importance = 0.5;
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal, importance: captureImportanceResult.importance });
+                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal, importance });
                 throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
@@ -10584,7 +10583,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   summary,
                   origin: captureOrigin,
                   vector: p.vector,
-                  importance: captureImportanceResult.importance,
+                  importance,
+                  importanceStatus: IMPORTANCE_STATUS.PENDING,
                   category,
                   createdAt: captureTimestamp,
                   mergedFrom: "[]",
