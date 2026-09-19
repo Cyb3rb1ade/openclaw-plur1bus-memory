@@ -14,7 +14,13 @@ describe("refine patch", () => {
     assert.strictEqual(patch.emotionalDominant, "trust");
     assert.strictEqual(patch.importanceStatus, IMPORTANCE_STATUS.FINAL);
     assert.strictEqual(patch.emotionStatus, "final");
-    assert.match(patch.coreMemoryReason, /Projektfakt/);
+    // Abschluss-Review, Important 5b: das Freitext-Urteil des Modells landet
+    // in updateEvidence/updateSource, nicht in coreMemoryReason — dieses Feld
+    // ist ein enger Provenienz-Marker (siehe applyCoreMemoryEncoding), kein
+    // Freitext-Eimer.
+    assert.strictEqual(patch.updateSource, "emotion-refine");
+    assert.match(patch.updateEvidence, /Projektfakt/);
+    assert.strictEqual(Object.hasOwn(patch, "coreMemoryReason"), false);
     assert.strictEqual(patch.halfLifeDays, 600);
   });
 
@@ -63,6 +69,29 @@ describe("refine patch", () => {
     assert.strictEqual("halfLifeDays" in patch, false);
     assert.strictEqual(patch.importanceStatus, IMPORTANCE_STATUS.FINAL);
     assert.strictEqual(patch.emotionStatus, "final");
+    // Abschluss-Review, Important 5b: eine Agentenband-Zeile darf auch ihr
+    // coreMemoryReason (Provenienz-Marker) nicht verlieren, und das
+    // automatische Freitext-Urteil darf hier gar nicht erst geschrieben
+    // werden — sonst wird eine bewusste Setzung des Agenten stillschweigend
+    // mit einer automatischen Begründung überschrieben.
+    assert.strictEqual(Object.hasOwn(patch, "coreMemoryReason"), false);
+    assert.strictEqual(Object.hasOwn(patch, "updateSource"), false);
+    assert.strictEqual(Object.hasOwn(patch, "updateEvidence"), false);
+  });
+
+  it("never touches an agent-band core memory's provenance marker", () => {
+    // Genau der beschriebene Fehler: eine Agentenband-Core-Memory, deren
+    // coreMemoryReason ein Provenienz-Marker ist (nicht Freitext), darf ihn
+    // durch diesen Cron nicht verlieren.
+    const patch = buildRefinePatch(
+      {
+        id: "g", memoryStrength: 1.0, halfLifeDays: 36500, importance: 1.0,
+        memoryClass: "core", coreMemoryReason: "manual_importance_marker",
+      },
+      { ok: true, importance: 0.4, emotion: { emotionalDominant: "joy", emotionalIntensity: 0.6 }, reason: "Automatische Begründung" },
+      now,
+    );
+    assert.strictEqual(Object.hasOwn(patch, "coreMemoryReason"), false);
   });
 
   it("still writes importance and halfLifeDays just below the agent band", () => {
@@ -73,5 +102,7 @@ describe("refine patch", () => {
     );
     assert.strictEqual(patch.importance, 0.3);
     assert.strictEqual(patch.halfLifeDays, 30);
+    assert.strictEqual(patch.updateSource, "emotion-refine");
+    assert.strictEqual(patch.updateEvidence, "");
   });
 });

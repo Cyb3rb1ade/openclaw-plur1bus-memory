@@ -314,7 +314,11 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   assert.equal(Number(row.importance), 0.8);
   assert.equal(row.importanceStatus, "final");
   assert.equal(Number(row.halfLifeDays), 600);
-  assert.match(String(row.coreMemoryReason), /Umzug/);
+  // Abschluss-Review, Important 5b: das Freitext-Urteil landet in
+  // updateEvidence/updateSource, nicht in coreMemoryReason (enger
+  // Provenienz-Marker, siehe applyCoreMemoryEncoding).
+  assert.match(String(row.updateEvidence), /Umzug/);
+  assert.equal(row.updateSource, "emotion-refine");
 
   const superseded = await readRow(pluginModule, baseDbPath, agentId, "44444444-4444-4444-8444-444444444444");
   assert.equal(superseded.emotionStatus, "final");

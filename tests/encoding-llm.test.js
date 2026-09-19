@@ -132,3 +132,69 @@ describe("encoding llm", () => {
     assert.strictEqual(result.ok, false);
   });
 });
+
+describe("encoding llm — volle Emotions-Label-Map (Abschluss-Review, Important 5a)", () => {
+  // Der alte Refine-Pfad speicherte {[dominant]: intensity} — ein One-Hot-
+  // Vektor. computeRecallBoost (lib/emotional-state.js) prüft
+  // (anger>0.5||fear>0.5) && (trust>0.3||importance>0.7) für die "wichtige
+  // Lektion"-Regel; bei nur einer gesetzten Dimension können trust und fear
+  // nie gleichzeitig > 0 sein. Die volle Map behebt das.
+  it("parst mehrere gleichzeitig gesetzte Dimensionen statt nur der dominanten", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.6, intensity: 0.8, dominant: "fear",
+      emotions: { fear: 0.8, trust: 0.4, joy: 0.1 },
+      reason: "Warnung mit Vertrauensvorschuss",
+    }));
+    assert.strictEqual(parsed.ok, true);
+    assert.strictEqual(parsed.emotion.fear, 0.8);
+    assert.strictEqual(parsed.emotion.trust, 0.4);
+    assert.strictEqual(parsed.emotion.joy, 0.1);
+    // Beide gleichzeitig > 0 — genau das, was der One-Hot-Vektor verhinderte.
+    assert.ok(parsed.emotion.fear > 0.5 && parsed.emotion.trust > 0.3);
+  });
+
+  it("clampt jede Dimension einzeln auf [0,1]", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.5, intensity: 0.5, dominant: "joy",
+      emotions: { joy: 5, sadness: -3, anger: 0.4 },
+    }));
+    assert.strictEqual(parsed.emotion.joy, 1);
+    assert.strictEqual(parsed.emotion.sadness, 0);
+    assert.strictEqual(parsed.emotion.anger, 0.4);
+  });
+
+  it("erfindet keinen Wert für eine fehlende oder kaputte Einzeldimension — bleibt bei 0", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.5, intensity: 0.5, dominant: "neutral",
+      emotions: { joy: "hoch", trust: null, anger: 0.3 },
+    }));
+    assert.strictEqual(parsed.emotion.joy, 0);
+    assert.strictEqual(parsed.emotion.trust, 0);
+    assert.strictEqual(parsed.emotion.anger, 0.3);
+  });
+
+  it("eine komplett fehlende oder kaputte Map erfindet nichts — alle Dimensionen bleiben 0 außer der dominanten", () => {
+    const missing = parseEncodingResponse(JSON.stringify({ importance: 0.5, intensity: 0.7, dominant: "sadness" }));
+    assert.strictEqual(missing.ok, true);
+    for (const dim of EMOTION_DIMENSIONS) {
+      if (dim === "sadness") continue;
+      assert.strictEqual(missing.emotion[dim], 0, `${dim} darf nicht erfunden werden`);
+    }
+    assert.strictEqual(missing.emotion.sadness, 0.7, "dominante Dimension bekommt mindestens die Intensität");
+
+    const brokenType = parseEncodingResponse(JSON.stringify({ importance: 0.5, intensity: 0.6, dominant: "joy", emotions: "viel" }));
+    assert.strictEqual(brokenType.ok, true);
+    for (const dim of EMOTION_DIMENSIONS) {
+      if (dim === "joy") continue;
+      assert.strictEqual(brokenType.emotion[dim], 0);
+    }
+  });
+
+  it("hebt die dominante Dimension mindestens auf die Gesamt-Intensität an, auch wenn die Map sie niedriger angibt", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.5, intensity: 0.9, dominant: "fear",
+      emotions: { fear: 0.2 },
+    }));
+    assert.strictEqual(parsed.emotion.fear, 0.9);
+  });
+});
