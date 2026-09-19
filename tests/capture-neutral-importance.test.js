@@ -20,6 +20,7 @@ describe("capture writes a neutral importance", () => {
     // Toleriert sowohl "importance: 0.5" als auch ein lokales
     // "const importance = 0.5;" mit Leerzeichen um das Gleichheitszeichen —
     // die Assertion soll den Wert festnageln, nicht die gewählte Syntax.
-    assert.match(captureBlock, /importance\s*[:=]\s*0\.5/);
+    // (?!\d) verhindert, dass 0.55, 0.51 oder 0.500 als Treffer durchrutschen.
+    assert.match(captureBlock, /importance\s*[:=]\s*0\.5(?!\d)/);
   });
 });
