@@ -452,18 +452,66 @@ test("internal emotion-refine still trips the breaker on a genuinely dead route"
   assert.equal(payload.poisoned, 0);
 });
 
-test("internal emotion-refine is skipped when tier 3 is disabled", async (t) => {
+// Abschluss-Review, Important 6: emotion.t3 und die Importance-Klärung
+// dieses Crons sind entkoppelt. "emotion.t3 aus" allein darf die
+// Importance-Klärung nicht mehr für immer einfrieren — nur "wirklich kein
+// Provider vorhanden" darf das, und dann sichtbar (Warnung + Pending-Zahl),
+// nicht still.
+test("internal emotion-refine skips with a warning and the pending count when truly no LLM route exists", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-no-route-agent";
   const pluginModule = await loadFreshPlugin();
+  await seedPending(pluginModule, baseDbPath, agentId);
+  // Bewusst ohne runtimeLlm — weder emotion.t3 noch der Encoding-Call haben
+  // hier eine Route.
   const api = createApi(baseDbPath, { emotion: { t3: { enabled: false } } });
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const result = await findCommand(api).handler({
     args: "internal emotion-refine",
-    agentId: "emotion-refine-off",
+    agentId,
     channel: "cron",
     workspaceDir,
   });
   const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
   assert.equal(payload.skipped, true);
-  assert.equal(payload.reason, "emotion_t3_disabled");
+  assert.equal(payload.reason, "no_llm_route");
+  assert.equal(payload.pending, 1, "der Rückstand muss im Payload sichtbar sein, nicht nur im Log");
+
+  const warnLogs = api._logs.filter(([level]) => level === "warn");
+  assert.ok(
+    warnLogs.some(([, msg]) => String(msg).includes("emotion-refine")),
+    "eine wachsende Pending-Warteschlange ohne Route muss eine Warnung loggen, kein reines info",
+  );
+
+  const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
+  assert.equal(row.emotionStatus, "pending_t3", "ohne Route wird nichts geschrieben — die Zeile bleibt unangetastet");
+});
+
+test("internal emotion-refine still clears importance when tier 3 is disabled but a provider exists", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-t3-off-provider-agent";
+  const runtimeLlm = {
+    async complete(params) {
+      return { text: ENCODING_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
+    },
+  };
+  const pluginModule = await loadFreshPlugin();
+  await seedPending(pluginModule, baseDbPath, agentId);
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: false } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler({
+    args: "internal emotion-refine",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    runtimeContext: { llm: runtimeLlm },
+  });
+  const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
+  assert.notEqual(payload.skipped, true, "eine vorhandene Route darf die Importance-Klärung nicht überspringen, nur weil emotion.t3 aus ist");
+  assert.equal(payload.refined, 1);
+
+  const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
+  assert.equal(row.importanceStatus, "final");
+  assert.equal(Number(row.importance), 0.8);
 });

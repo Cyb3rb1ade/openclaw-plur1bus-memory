@@ -4850,9 +4850,14 @@ const plugin = {
     // Tier 3: enabled if wanted AND its feature-local route is available.
     // onlyWhenProviderAvailable (default: true) makes T3 soft-skip instead of error when no provider.
     const emotionT3WantsEnabled = emotionCfg.t3?.enabled !== false;
-    const emotionT3LlmCfg = emotionT3WantsEnabled
-      ? createFeatureRoute("emotionT3", emotionCfg.t3 || {})
-      : null;
+    // Abschluss-Review, Important 6: die Route wird jetzt IMMER aufgelöst,
+    // unabhängig von emotionT3WantsEnabled — sonst friert eine Abschaltung
+    // von emotion.t3 (oder ein Provider-Ausfall bei der Registrierung) auch
+    // die Importance-Klärung im emotion-refine-Cron für immer ein, obwohl der
+    // Encoding-Call (lib/encoding-llm.js) davon konzeptionell unabhängig ist.
+    // emotionT3WantsEnabled bleibt das alleinige Tor für die eigentliche
+    // Tier-3-Emotionsklassifikation (setEmotionConfig, Capture-Pfad unten).
+    const emotionT3LlmCfg = createFeatureRoute("emotionT3", emotionCfg.t3 || {});
     const emotionT3HasProvider = Boolean(
       emotionT3LlmCfg
       && (emotionT3LlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
@@ -4900,6 +4905,42 @@ const plugin = {
     } else if (emotionT3WantsEnabled && !emotionT3HasProvider) {
       api.logger.info("memory-lancedb-namespaced: emotion tier-3 deferred — no LLM provider configured (onlyWhenProviderAvailable)");
     }
+    // Abschluss-Review, Important 6: eigene Call-Funktion für den
+    // emotion-refine-Cron (lib/encoding-llm.js), unabhängig von
+    // emotionT3Enabled — verfügbar, sobald irgendein Provider existiert,
+    // selbst wenn der Operator emotion.t3 selbst abgeschaltet hat. Sonst
+    // friert eine Abschaltung von emotion.t3 (oder ein Provider-Ausfall bei
+    // der Registrierung) auch die Importance-Klärung für immer ein, obwohl
+    // der Encoding-Call davon konzeptionell unabhängig ist. Gleicher Aufbau
+    // wie emotionT3CallLlm oben, bewusst nicht als gemeinsame Hilfsfunktion
+    // extrahiert, damit dessen bestehende Scoping-Verträge unangetastet
+    // bleiben.
+    const encodingCallLlm = emotionT3HasProvider
+      ? (messages, context = {}) => {
+          const emotionLlmCfg = withLlmCallContext(
+            {
+              ...emotionT3LlmCfg,
+              maxTokens: 300,
+              disableThinking: true,
+            },
+            context.agentId,
+            LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+            { runtimeLlm: context.runtimeLlm, signal: context.signal },
+          );
+          return context.agentId
+            ? callLlm(messages, withLlmCallContext(
+                withLlmResultCacheContext(
+                  { ...emotionLlmCfg },
+                  context.agentId,
+                  LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                ),
+                context.agentId,
+                LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                { runtimeLlm: context.runtimeLlm, signal: context.signal },
+              ))
+            : callLlm(messages, emotionLlmCfg);
+        }
+      : null;
     // Emotionale Dynamik (Spec 2026-07-01): aggressive T3-Eskalation,
     // Timeout-Schutz, Recall-Gewicht und Decay-Kopplung.
     const emotionT3EscalationConfidence = emotionCfg.t3?.escalationConfidence ?? 0.85;
@@ -8003,9 +8044,18 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 return formatJsonCommandResult({ job: "embedding-drain", ...result });
               }
               if (subKey === "emotion-refine") {
-                if (!emotionT3Enabled) {
-                  return formatJsonCommandResult({ job: "emotion-refine", skipped: true, reason: "emotion_t3_disabled" });
-                }
+                // Abschluss-Review, Important 6: emotion.t3 (die eigentliche
+                // Tier-3-Emotionsklassifikation) und die Importance-Klärung
+                // dieses Crons sind jetzt entkoppelt — beide teilen sich nur
+                // den LLM-Call (lib/encoding-llm.js), nicht das Feature-Flag.
+                // Ein abgeschaltetes emotion.t3 (oder ein zur
+                // Registrierungszeit fehlender Provider unter
+                // onlyWhenProviderAvailable) darf die Importance-Klärung
+                // nicht mehr für immer einfrieren, solange irgendeine
+                // nutzbare Route für den Encoding-Call existiert
+                // (encodingCallLlm). Nur wenn wirklich kein Provider da ist,
+                // wird übersprungen — dann aber mit Warnung und Pending-Zahl,
+                // statt still.
                 const refineStartedAt = Date.now();
                 const result = await pool.withDb(internalAgent, async (agentDb) => {
                   if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
@@ -8020,6 +8070,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     .where(`emotionStatus = 'pending_t3' OR importanceStatus = '${IMPORTANCE_STATUS.PENDING}'`)
                     .limit(EMOTION_REFINE_MAX_ROWS + 1)
                     .toArray();
+                  if (!encodingCallLlm) {
+                    counts.pending = rows.length;
+                    return { ...counts, skipped: true, reason: "no_llm_route" };
+                  }
                   counts.scanned = Math.min(rows.length, EMOTION_REFINE_MAX_ROWS);
                   let consecutiveFailures = 0;
                   for (const row of rows.slice(0, EMOTION_REFINE_MAX_ROWS)) {
@@ -8041,7 +8095,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     // siehe lib/encoding-llm.js).
                     const encoding = await classifyEncoding(String(row.text || "").slice(0, 2000), {
                       agentId: internalAgent,
-                      callLlm: emotionT3CallLlm,
+                      callLlm: encodingCallLlm,
                     });
                     const patch = buildRefinePatch(row, encoding, Date.now(), { flashbulbEncodingEnabled });
                     if (!patch) {
@@ -8076,7 +8130,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   counts.ms = Date.now() - refineStartedAt;
                   return counts;
                 });
-                api.logger?.info?.(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
+                if (result.reason === "no_llm_route") {
+                  // Sichtbar statt still (Important 6): eine wachsende Pending-
+                  // Warteschlange ohne LLM-Route ist sonst nur an einer
+                  // "importance: 0.5 für alles" über Wochen zu erahnen.
+                  api.logger?.warn?.(`plur1bus internal emotion-refine[${internalAgent}]: kein LLM-Provider verfügbar — ${result.pending} Zeile(n) bleiben ohne Importance-Klärung pending`);
+                } else {
+                  api.logger?.info?.(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
+                }
                 return formatJsonCommandResult({ job: "emotion-refine", ...result });
               }
               if (subKey === "feedback-report") {
