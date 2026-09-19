@@ -44,6 +44,16 @@ const T3_RESPONSE = JSON.stringify({
   confidence: 0.92,
 });
 
+// Seit 7.12.x klärt der Cron Emotion und Bedeutung in einem Call (lib/encoding-llm.js);
+// das ist ein anderes Antwortformat als das der Tier-3-Emotionsanalyse oben, die
+// weiterhin für inferEmotionalValenceAsync direkt (ohne den Cron) genutzt wird.
+const ENCODING_RESPONSE = JSON.stringify({
+  importance: 0.8,
+  intensity: 0.3,
+  dominant: "joy",
+  reason: "Freudige Nachricht über den Umzug",
+});
+
 function makeVector(offset = 0) {
   const vector = Array(VECTOR_DIM).fill(0.1);
   vector[0] = 0.1 + offset;
@@ -130,6 +140,7 @@ async function seedPending(pluginModule, baseDbPath, agentId, overrides = {}) {
       emotionalIntensity: 0,
       emotionalDominant: "neutral",
       emotionStatus: overrides.emotionStatus || "pending_t3",
+      importanceStatus: overrides.importanceStatus || "final",
     });
   } finally {
     await db.shutdown();
@@ -261,15 +272,21 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   const runtimeLlm = {
     async complete(params) {
       calls.push(params);
-      return { text: T3_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
+      return { text: ENCODING_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
     },
   };
   const pluginModule = await loadFreshPlugin();
   await seedPending(pluginModule, baseDbPath, agentId);
+  // Eine bereits überholte Zeile, ausschließlich über importanceStatus='pending'
+  // gefunden (emotionStatus steht schon auf 'final') — belegt, dass das OR in der
+  // where-Klausel sie erfasst und der Finalize-Zweig BEIDE Statusspalten schließt,
+  // statt sie über importanceStatus endlos weiter zu scannen (13.09.2026-Bug).
   await seedPending(pluginModule, baseDbPath, agentId, {
     id: "44444444-4444-4444-8444-444444444444",
     text: "Alte Version, bereits ueberholt.",
     status: "superseded",
+    emotionStatus: "final",
+    importanceStatus: "pending",
   });
   const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
@@ -292,11 +309,17 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
   assert.equal(row.emotionStatus, "final");
   assert.equal(row.emotionalDominant, "joy");
-  assert.ok(Number(row.emotionalIntensity) > 0.6);
-  assert.match(String(row.emotionalValence), /joy:0\.9/);
+  assert.ok(Number(row.emotionalIntensity) > 0.2);
+  assert.match(String(row.emotionalValence), /joy:0\.30/);
+  assert.equal(Number(row.importance), 0.8);
+  assert.equal(row.importanceStatus, "final");
+  assert.equal(Number(row.halfLifeDays), 600);
+  assert.match(String(row.coreMemoryReason), /Umzug/);
+
   const superseded = await readRow(pluginModule, baseDbPath, agentId, "44444444-4444-4444-8444-444444444444");
   assert.equal(superseded.emotionStatus, "final");
-  assert.equal(superseded.emotionalDominant, "neutral");
+  assert.equal(superseded.importanceStatus, "final", "importanceStatus must close too, or the OR clause would rescan it forever");
+  assert.equal(superseded.emotionalDominant, "neutral", "no LLM call means the seeded neutral value is untouched");
 });
 
 test("internal emotion-refine leaves rows pending when the provider fails", async (t) => {

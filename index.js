@@ -41,6 +41,7 @@ import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as li
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
 import { IMPORTANCE_STATUS, normalizeImportanceStatus } from "./lib/importance-status.js";
+import { classifyEncoding, buildRefinePatch } from "./lib/encoding-llm.js";
 import {
   hasMeaningfulDifference,
   isSafeDuplicate,
@@ -7996,15 +7997,17 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   return formatJsonCommandResult({ job: "emotion-refine", skipped: true, reason: "emotion_t3_disabled" });
                 }
                 const refineStartedAt = Date.now();
-                const runtimeLlm = commandCtx?.runtimeContext?.llm;
                 const result = await pool.withDb(internalAgent, async (agentDb) => {
                   if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
                   const counts = { refined: 0, finalized: 0, failed: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
-                  if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus")) {
+                  if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus") || !agentDb.schemaFieldNames?.has("importanceStatus")) {
                     return { ...counts, skipped: true, reason: "no_emotion_status_column" };
                   }
+                  // pending_backfill bewusst ausgeschlossen: die rund 23.000 Bestandszeilen
+                  // gehören einem eigenen Batch-Skript, nicht diesem stündlichen Cron —
+                  // sonst entstünde eine LanceDB-Version je Zeile (siehe 13.09.2026).
                   const rows = await agentDb.table.query()
-                    .where("emotionStatus = 'pending_t3'")
+                    .where(`emotionStatus = 'pending_t3' OR importanceStatus = '${IMPORTANCE_STATUS.PENDING}'`)
                     .limit(EMOTION_REFINE_MAX_ROWS + 1)
                     .toArray();
                   counts.scanned = Math.min(rows.length, EMOTION_REFINE_MAX_ROWS);
@@ -8017,38 +8020,31 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const status = String(row.status || "active");
                     if (status !== "active") {
                       // Ueberholte oder geloeschte Zeilen brauchen keinen LLM-Lauf,
-                      // sollen aber nicht bei jedem Lauf erneut gescannt werden.
-                      await agentDb.update(row.id, { emotionStatus: "final" });
+                      // sollen aber nicht bei jedem Lauf erneut gescannt werden — auf
+                      // beiden Statusspalten, sonst hängt die Zeile über die
+                      // importanceStatus-Bedingung des OR weiter im Scan.
+                      await agentDb.update(row.id, { emotionStatus: "final", importanceStatus: IMPORTANCE_STATUS.FINAL });
                       counts.finalized++;
                       continue;
                     }
-                    const refined = await inferEmotionalValenceAsync(
-                      String(row.text || "").slice(0, 2000),
-                      "user",
-                      3,
-                      { agentId: internalAgent, runtimeLlm },
-                    );
-                    // Ein Provider-Ausfall kommt als neutraler Tier-3-Fallback
-                    // mit Konfidenz 0 zurueck (lib/tier3-llm.js), nie als Wurf.
-                    const refineFailed = refined?.tierUsed !== 3
-                      || (!(Number(refined.confidence) > 0)
-                        && refined.emotionalDominant === "neutral"
-                        && !(Number(refined.emotionalIntensity) > 0));
-                    if (refineFailed) {
-                      // Provider-Ausfall: Zeile bleibt pending, naechster Lauf
-                      // versucht es erneut. Mehrere Fehlschlaege am Stueck =
-                      // Route tot, Lauf abbrechen statt Zeitbudget verheizen.
+                    // Ein Call klärt Emotion UND Bedeutung (Tier 3 ohnehin gelesen,
+                    // siehe lib/encoding-llm.js).
+                    const encoding = await classifyEncoding(String(row.text || "").slice(0, 2000), {
+                      agentId: internalAgent,
+                      callLlm: emotionT3CallLlm,
+                    });
+                    const patch = buildRefinePatch(row, encoding, Date.now());
+                    if (!patch) {
+                      // Provider-Ausfall oder unparsbare Antwort liefert ok:false, nie
+                      // einen geratenen Wert: Zeile bleibt pending, nächster Lauf
+                      // versucht es erneut. Mehrere Fehlschläge am Stück = Route
+                      // tot, Lauf abbrechen statt Zeitbudget verheizen.
                       counts.failed++;
                       if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
                       continue;
                     }
                     consecutiveFailures = 0;
-                    await agentDb.update(row.id, {
-                      emotionalValence: serializeEmotionalValence(refined),
-                      emotionalIntensity: Number(refined.emotionalIntensity) || 0,
-                      emotionalDominant: refined.emotionalDominant || "neutral",
-                      emotionStatus: "final",
-                    });
+                    await agentDb.update(row.id, patch);
                     counts.refined++;
                   }
                   counts.pending = Math.max(0, rows.length - counts.refined - counts.finalized);
