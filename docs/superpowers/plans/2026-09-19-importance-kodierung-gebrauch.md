@@ -19,6 +19,8 @@
 - Tests laufen zweigeteilt, weil `tests/auto-capture-batch.test.js` unter Last unbegrenzt hängt:
   `node --test --test-concurrency=1 $(ls tests/*.test.js | grep -v 'auto-capture-batch') test/*.test.js`, danach `node --test tests/auto-capture-batch.test.js`.
 - Sechs Tests in `tests/local-inference-*.test.js` schlagen unabhängig von diesen Änderungen fehl (adm-zip, sharp). Das ist der Stand von `v7.12.61` und kein Regress.
+- **Nur die eigene Aufgabe anfassen.** Kein `git revert`, `git reset`, `git rebase` oder `--amend` auf fremden Commits, keine Arbeit an anderen Tasks. Liegt im Baum bereits etwas, das nach der eigenen Aufgabe aussieht: anhalten und berichten, nicht aufräumen.
+- **Keine Claude-Attribution in Commit-Nachrichten.** Kein `Co-Authored-By: Claude…`, keine `Claude-Session:`-Zeile. Stehende Regel des Betreibers für dieses Repo.
 - Halbwertszeiten der Kodierungsbänder, freigegeben: unter 0,4 → 30 Tage; 0,4 bis 0,7 → 180; 0,7 bis 0,94 → 600; Blitzlicht → 3.650; ab 0,95 → 36.500.
 
 ---

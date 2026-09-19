@@ -290,6 +290,22 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     assert.strictEqual(parseFloat(m[1]), 0.3);
   });
 
+  it("index.js: importanceBoost is resolved for validation only, never forwarded to a recall call (entfernt 19.09.2026, Fix-Runde 1)", () => {
+    // Seit Task 8 liest die Pipeline diesen Wert nicht mehr. index.js darf ihn
+    // zur Config-Validierung auflösen (die const-Zeile oben), aber nirgendwo
+    // mehr als Objekt-Property in einen runRecallPipeline-/
+    // runMergedNamespaceRecall-Aufruf einschleusen — weder als Shorthand
+    // (`importanceBoost,`) noch explizit (`importanceBoost: …`). Die
+    // const-Deklaration selbst steht nie am Zeilenanfang (ihr geht `const `
+    // voraus), daher trifft dieses Muster sie nicht.
+    const forwarded = indexSrc.match(/^\s*importanceBoost\s*[,:]/m) || [];
+    assert.strictEqual(
+      forwarded.length,
+      0,
+      `importanceBoost re-appeared as a forwarded property in a recall call: ${JSON.stringify(forwarded)}`
+    );
+  });
+
   it("index.js: summaryMaxWords fallback = 150", () => {
     const m = indexSrc.match(/const\s+summaryMaxWords\s*=\s*cfg\.summaryMaxWords\s*\?\?\s*([0-9.]+)/);
     assert.ok(m, "summaryMaxWords fallback nicht gefunden");

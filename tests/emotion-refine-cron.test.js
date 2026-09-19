@@ -44,6 +44,16 @@ const T3_RESPONSE = JSON.stringify({
   confidence: 0.92,
 });
 
+// Seit 7.12.x klärt der Cron Emotion und Bedeutung in einem Call (lib/encoding-llm.js);
+// das ist ein anderes Antwortformat als das der Tier-3-Emotionsanalyse oben, die
+// weiterhin für inferEmotionalValenceAsync direkt (ohne den Cron) genutzt wird.
+const ENCODING_RESPONSE = JSON.stringify({
+  importance: 0.8,
+  intensity: 0.3,
+  dominant: "joy",
+  reason: "Freudige Nachricht über den Umzug",
+});
+
 function makeVector(offset = 0) {
   const vector = Array(VECTOR_DIM).fill(0.1);
   vector[0] = 0.1 + offset;
@@ -130,6 +140,7 @@ async function seedPending(pluginModule, baseDbPath, agentId, overrides = {}) {
       emotionalIntensity: 0,
       emotionalDominant: "neutral",
       emotionStatus: overrides.emotionStatus || "pending_t3",
+      importanceStatus: overrides.importanceStatus || "final",
     });
   } finally {
     await db.shutdown();
@@ -261,15 +272,21 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   const runtimeLlm = {
     async complete(params) {
       calls.push(params);
-      return { text: T3_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
+      return { text: ENCODING_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
     },
   };
   const pluginModule = await loadFreshPlugin();
   await seedPending(pluginModule, baseDbPath, agentId);
+  // Eine bereits überholte Zeile, ausschließlich über importanceStatus='pending'
+  // gefunden (emotionStatus steht schon auf 'final') — belegt, dass das OR in der
+  // where-Klausel sie erfasst und der Finalize-Zweig BEIDE Statusspalten schließt,
+  // statt sie über importanceStatus endlos weiter zu scannen (13.09.2026-Bug).
   await seedPending(pluginModule, baseDbPath, agentId, {
     id: "44444444-4444-4444-8444-444444444444",
     text: "Alte Version, bereits ueberholt.",
     status: "superseded",
+    emotionStatus: "final",
+    importanceStatus: "pending",
   });
   const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
@@ -292,11 +309,66 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
   assert.equal(row.emotionStatus, "final");
   assert.equal(row.emotionalDominant, "joy");
-  assert.ok(Number(row.emotionalIntensity) > 0.6);
-  assert.match(String(row.emotionalValence), /joy:0\.9/);
+  assert.strictEqual(Number(row.emotionalIntensity), 0.3);
+  assert.match(String(row.emotionalValence), /joy:0\.30/);
+  assert.equal(Number(row.importance), 0.8);
+  assert.equal(row.importanceStatus, "final");
+  assert.equal(Number(row.halfLifeDays), 600);
+  // Koordinator-Korrektur zum Abschluss-Review, Important 5b:
+  // updateSource/updateEvidence sind der Rollback-Kanal des
+  // Phase-2-Backfills — der Cron darf sie nicht überschreiben. Das
+  // Freitext-Urteil landet in coreMemoryReason.
+  assert.match(String(row.coreMemoryReason), /Umzug/);
+
   const superseded = await readRow(pluginModule, baseDbPath, agentId, "44444444-4444-4444-8444-444444444444");
   assert.equal(superseded.emotionStatus, "final");
-  assert.equal(superseded.emotionalDominant, "neutral");
+  assert.equal(superseded.importanceStatus, "final", "importanceStatus must close too, or the OR clause would rescan it forever");
+  assert.equal(superseded.emotionalDominant, "neutral", "no LLM call means the seeded neutral value is untouched");
+});
+
+// Koordinator-Korrektur zum Abschluss-Review, Important 5b: updateSource/
+// updateEvidence sind der Rollback-Kanal des Phase-2-Backfills (importance-v2
+// protokolliert dort den vorherigen Wert, damit jede geänderte Zeile einzeln
+// rückrollbar bleibt). Ein stündlicher Cron, der diese Felder routinemäßig
+// überschreibt, zerstört genau diese Provenienz — deshalb darf der Refine-Job
+// sie nicht anfassen, selbst wenn er die Zeile inhaltlich klärt.
+test("internal emotion-refine never touches a pre-existing rollback provenance (updateSource/updateEvidence)", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-provenance-agent";
+  const runtimeLlm = {
+    async complete(params) {
+      return { text: ENCODING_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
+    },
+  };
+  const pluginModule = await loadFreshPlugin();
+  await seedPending(pluginModule, baseDbPath, agentId);
+  // Simuliert einen vorherigen Phase-2-Backfill-Rollback-Eintrag auf derselben Zeile.
+  const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
+  try {
+    await db.init();
+    await db.update(MEMORY_ID, { updateSource: "importance-v2", updateEvidence: "previous importance: 0.5" });
+  } finally {
+    await db.shutdown();
+  }
+
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler({
+    args: "internal emotion-refine",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    runtimeContext: { llm: runtimeLlm },
+  });
+  const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
+  assert.equal(payload.refined, 1);
+
+  const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
+  assert.equal(row.importanceStatus, "final", "die Zeile wurde inhaltlich geklärt");
+  assert.equal(row.updateSource, "importance-v2", "der Rollback-Kanal darf nicht überschrieben werden");
+  assert.equal(row.updateEvidence, "previous importance: 0.5", "der Rollback-Kanal darf nicht überschrieben werden");
+  assert.match(String(row.coreMemoryReason), /Umzug/, "das Freitext-Urteil landet stattdessen hier");
 });
 
 test("internal emotion-refine leaves rows pending when the provider fails", async (t) => {
@@ -328,18 +400,163 @@ test("internal emotion-refine leaves rows pending when the provider fails", asyn
   assert.equal(row.emotionStatus, "pending_t3");
 });
 
-test("internal emotion-refine is skipped when tier 3 is disabled", async (t) => {
+// Abschluss-Review, Important 4: "die Route ist tot" und "diese Zeile ist
+// vergiftet" sind verschiedene Zustände. Drei Zeilen, deren Text das Modell
+// zur Verweigerung bringt (eine tatsächlich erhaltene, aber unparsbare
+// Antwort — kein Wurf, kein leerer Call), dürfen den
+// Consecutive-Failure-Breaker nicht auslösen, sonst wird nichts hinter ihnen
+// je wieder bewertet.
+test("internal emotion-refine counts poisoned rows separately and does not trip the breaker", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-poison-agent";
+  const POISON_MARKER = "POISON_MARKER_TEXT";
+  const runtimeLlm = {
+    async complete(params) {
+      const isPoison = (params.messages || []).some(
+        (m) => typeof m.content === "string" && m.content.includes(POISON_MARKER),
+      );
+      return {
+        // Eine echte, aber unparsbare Antwort — kein Wurf, keine leere
+        // Antwort — genau der Fall, den ein verweigerndes Modell erzeugt.
+        text: isPoison ? "Ich kann diese Anfrage leider nicht bewerten." : ENCODING_RESPONSE,
+        provider: "fake", model: "fake", agentId, usage: {},
+      };
+    },
+  };
   const pluginModule = await loadFreshPlugin();
+  const poisonIds = [
+    "55555555-5555-4555-8555-555555555001",
+    "55555555-5555-4555-8555-555555555002",
+    "55555555-5555-4555-8555-555555555003",
+  ];
+  for (const id of poisonIds) {
+    await seedPending(pluginModule, baseDbPath, agentId, { id, text: `${POISON_MARKER} verweigerter Text` });
+  }
+  await seedPending(pluginModule, baseDbPath, agentId, {
+    id: "55555555-5555-4555-8555-555555555004",
+    text: "Ein ganz normaler, gut bewertbarer Satz.",
+  });
+
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler({
+    args: "internal emotion-refine",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    runtimeContext: { llm: runtimeLlm },
+  });
+  const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
+  assert.equal(payload.poisoned, 3, "alle drei vergifteten Zeilen werden separat gezählt");
+  assert.equal(payload.failed, 0, "eine erhaltene, unparsbare Antwort ist kein Route-Fehler");
+  assert.equal(payload.refined, 1, "die gute Zeile hinter den drei vergifteten wird trotzdem erreicht");
+  assert.equal(payload.pending, 3);
+
+  const refinedRow = await readRow(pluginModule, baseDbPath, agentId, "55555555-5555-4555-8555-555555555004");
+  assert.equal(refinedRow.importanceStatus, "final");
+
+  for (const id of poisonIds) {
+    const poisonRow = await readRow(pluginModule, baseDbPath, agentId, id);
+    assert.equal(poisonRow.importanceStatus, "final", "seedPending default — unverändert von diesem Lauf");
+    assert.equal(poisonRow.emotionStatus, "pending_t3", "vergiftete Zeile bleibt für den nächsten Lauf offen");
+  }
+});
+
+// Die Kehrseite: eine tatsächlich tote Route (werfendes callLlm) muss den
+// Breaker weiterhin auslösen, sonst verheizt ein permanenter Ausfall das
+// ganze Zeitbudget des Laufs.
+test("internal emotion-refine still trips the breaker on a genuinely dead route", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-dead-route-agent";
+  const runtimeLlm = {
+    async complete() {
+      throw new Error("provider down");
+    },
+  };
+  const pluginModule = await loadFreshPlugin();
+  for (let i = 0; i < 5; i++) {
+    await seedPending(pluginModule, baseDbPath, agentId, {
+      id: `66666666-6666-4666-8666-66666666600${i}`,
+      text: `Zeile Nummer ${i}, jede davon triggert einen Provider-Ausfall.`,
+    });
+  }
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler({
+    args: "internal emotion-refine",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    runtimeContext: { llm: runtimeLlm },
+  });
+  const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
+  assert.equal(payload.failed, 3, "der Breaker bricht nach drei Fehlschlägen in Folge ab, statt alle fünf zu versuchen");
+  assert.equal(payload.refined, 0);
+  assert.equal(payload.poisoned, 0);
+});
+
+// Abschluss-Review, Important 6: emotion.t3 und die Importance-Klärung
+// dieses Crons sind entkoppelt. "emotion.t3 aus" allein darf die
+// Importance-Klärung nicht mehr für immer einfrieren — nur "wirklich kein
+// Provider vorhanden" darf das, und dann sichtbar (Warnung + Pending-Zahl),
+// nicht still.
+test("internal emotion-refine skips with a warning and the pending count when truly no LLM route exists", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-no-route-agent";
+  const pluginModule = await loadFreshPlugin();
+  await seedPending(pluginModule, baseDbPath, agentId);
+  // Bewusst ohne runtimeLlm — weder emotion.t3 noch der Encoding-Call haben
+  // hier eine Route.
   const api = createApi(baseDbPath, { emotion: { t3: { enabled: false } } });
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const result = await findCommand(api).handler({
     args: "internal emotion-refine",
-    agentId: "emotion-refine-off",
+    agentId,
     channel: "cron",
     workspaceDir,
   });
   const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
   assert.equal(payload.skipped, true);
-  assert.equal(payload.reason, "emotion_t3_disabled");
+  assert.equal(payload.reason, "no_llm_route");
+  assert.equal(payload.pending, 1, "der Rückstand muss im Payload sichtbar sein, nicht nur im Log");
+
+  const warnLogs = api._logs.filter(([level]) => level === "warn");
+  assert.ok(
+    warnLogs.some(([, msg]) => String(msg).includes("emotion-refine")),
+    "eine wachsende Pending-Warteschlange ohne Route muss eine Warnung loggen, kein reines info",
+  );
+
+  const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
+  assert.equal(row.emotionStatus, "pending_t3", "ohne Route wird nichts geschrieben — die Zeile bleibt unangetastet");
+});
+
+test("internal emotion-refine still clears importance when tier 3 is disabled but a provider exists", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "emotion-refine-t3-off-provider-agent";
+  const runtimeLlm = {
+    async complete(params) {
+      return { text: ENCODING_RESPONSE, provider: "fake", model: "fake", agentId, usage: {} };
+    },
+  };
+  const pluginModule = await loadFreshPlugin();
+  await seedPending(pluginModule, baseDbPath, agentId);
+  const api = createApi(baseDbPath, { emotion: { t3: { enabled: false } } }, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler({
+    args: "internal emotion-refine",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    runtimeContext: { llm: runtimeLlm },
+  });
+  const payload = JSON.parse(result.text.replace(/^[^{]*/, ""));
+  assert.notEqual(payload.skipped, true, "eine vorhandene Route darf die Importance-Klärung nicht überspringen, nur weil emotion.t3 aus ist");
+  assert.equal(payload.refined, 1);
+
+  const row = await readRow(pluginModule, baseDbPath, agentId, MEMORY_ID);
+  assert.equal(row.importanceStatus, "final");
+  assert.equal(Number(row.importance), 0.8);
 });

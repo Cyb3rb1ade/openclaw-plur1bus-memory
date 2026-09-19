@@ -148,6 +148,97 @@ describe("safeUpdate — supersede-after-store ordering", () => {
   });
 });
 
+describe("buildUpdateEntry — importanceStatus ueberlebt den Update-Pfad", () => {
+  // Eine Zeile, die auf ihre LLM-Bewertung wartet (pending/pending_backfill),
+  // darf durch einen inhaltsaendernden safeUpdate() nicht stillschweigend auf
+  // "final" zurueckfallen — sonst faellt sie aus der Importance-Queue, ohne
+  // je bewertet worden zu sein.
+  it("uebernimmt pending_backfill von der alten Zeile in die neue Version", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importanceStatus: "pending_backfill",
+    }, PATCH, EVIDENCE);
+    assert.strictEqual(next.importanceStatus, "pending_backfill");
+  });
+
+  it("normalisiert einen kaputten Altwert genauso wie normalizeEntryForTable", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importanceStatus: "quatsch",
+    }, PATCH, EVIDENCE);
+    assert.strictEqual(next.importanceStatus, "final");
+  });
+
+  // Abschluss-Review, Important 3: setzt der Agent bewusst patch.importance
+  // auf einer noch pending Zeile, wird die alte pending-Vererbung zur Falle —
+  // die Zeile bleibt pending, und der stündliche emotion-refine-Cron
+  // überschreibt das bewusste Urteil innerhalb der nächsten Stunde mit einem
+  // eigenen, unter Umständen niedrigeren Wert. Ein explizit gesetzter Wert
+  // ist per Definition nicht mehr pending.
+  it("schließt eine pending Zeile ab, wenn der Patch ein importance trägt", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importance: 0.5,
+      importanceStatus: "pending",
+    }, { ...PATCH, importance: 0.85 }, EVIDENCE);
+    assert.strictEqual(next.importance, 0.85);
+    assert.strictEqual(next.importanceStatus, "final");
+  });
+
+  it("vererbt pending weiterhin, wenn der Patch kein importance trägt", () => {
+    const next = buildUpdateEntry({
+      ...OLD_ROW,
+      importance: 0.5,
+      importanceStatus: "pending",
+    }, PATCH, EVIDENCE);
+    assert.strictEqual(next.importance, 0.5);
+    assert.strictEqual(next.importanceStatus, "pending");
+  });
+});
+
+// Koordinator-Korrektur 19.09.2026: dieselbe Regel gilt auch für den
+// Metadata-only-Zweig von safeUpdate() selbst (Schritt 6, inlinePatch) — der
+// vermutlich häufigere Agentenpfad, weil er ohne Text-/Summary-Änderung
+// auskommt. buildUpdateEntry allein deckt ihn nicht ab: ein Patch, der nur
+// importance (kein text/summary) trägt, nimmt gar nicht den
+// buildUpdateEntry-Pfad, sondern das inline db.update() weiter unten.
+describe("safeUpdate — importanceStatus auf dem Metadata-only-Pfad (inlinePatch)", () => {
+  it("schließt eine pending Zeile ab, wenn der Metadata-only-Patch ein importance trägt", async () => {
+    const updateCalls = [];
+    const db = {
+      getById: async () => ({ ...OLD_ROW, importance: 0.5, importanceStatus: "pending" }),
+      update: async (...args) => updateCalls.push(args),
+      store: async () => { throw new Error("darf für einen Metadata-only-Patch nicht aufgerufen werden"); },
+    };
+
+    const result = await safeUpdate(db, OLD_ROW.id, { importance: 0.85 }, {}, {});
+
+    assert.strictEqual(result.inline, true);
+    assert.strictEqual(updateCalls.length, 1);
+    const [updatedId, inlinePatch] = updateCalls[0];
+    assert.strictEqual(updatedId, OLD_ROW.id);
+    assert.strictEqual(inlinePatch.importance, 0.85);
+    assert.strictEqual(inlinePatch.importanceStatus, "final");
+  });
+
+  it("lässt importanceStatus unangetastet, wenn der Metadata-only-Patch kein importance trägt", async () => {
+    const updateCalls = [];
+    const db = {
+      getById: async () => ({ ...OLD_ROW, importance: 0.5, importanceStatus: "pending" }),
+      update: async (...args) => updateCalls.push(args),
+      store: async () => { throw new Error("darf für einen Metadata-only-Patch nicht aufgerufen werden"); },
+    };
+
+    const result = await safeUpdate(db, OLD_ROW.id, { category: "project" }, {}, {});
+
+    assert.strictEqual(result.inline, true);
+    assert.strictEqual(updateCalls.length, 1);
+    const [, inlinePatch] = updateCalls[0];
+    assert.strictEqual(inlinePatch.category, "project");
+    assert.strictEqual(Object.hasOwn(inlinePatch, "importanceStatus"), false);
+  });
+});
+
 describe("buildUpdateEntry — Int64-Spalten kommen als BigInt", () => {
   // Live-Zeile vom 09.09.2026: LanceDB liefert versionNumber, retrievalCount,
   // Zeitstempel usw. als BigInt; `1n + 1` warf und kein /correct kam je durch.

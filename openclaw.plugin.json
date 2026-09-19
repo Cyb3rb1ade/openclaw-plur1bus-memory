@@ -2486,6 +2486,17 @@
             }
           }
         }
+      },
+      "memoryDynamics": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "flashbulbEncoding": {
+            "type": "boolean",
+            "default": false,
+            "description": "Flashbulb encoding (memoryStrength 0.95, half-life floor 3650 days instead of the pre-branch 90; the emotion-refine path additionally marks memoryClass 'flashbulb'). Reserved for Phase 3, after a pilot run calibrates the 0.70 threshold against a real importance distribution. Default off keeps the deploy behaviour-neutral on both call sites."
+          }
+        }
       }
     }
   }
