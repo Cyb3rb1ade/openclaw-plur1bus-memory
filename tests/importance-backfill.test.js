@@ -138,6 +138,20 @@ describe("kimi encoding call", () => {
     });
     assert.strictEqual(await call([{ role: "user", content: "x" }], {}), "");
   });
+
+  // Ohne eigenen Zaehler sieht ein abgebrochener Lauf gleich aus, egal ob das
+  // Modell Unsinn geantwortet hat oder die Route mit 429 dichtgemacht hat —
+  // und genau daran haengt, ob die Breite 8 traegt.
+  it("reports http errors separately from unusable answers", async () => {
+    const seen = [];
+    const call = createEncodingCall({
+      apiKey: "sk-test", model: "m", maxTokens: 100,
+      onHttpError: (status) => seen.push(status),
+      fetchImpl: async () => ({ ok: false, status: 429, text: async () => "rate limited" }),
+    });
+    await call([{ role: "user", content: "x" }], {});
+    assert.deepStrictEqual(seen, [429]);
+  });
 });
 
 describe("backfill arguments", () => {

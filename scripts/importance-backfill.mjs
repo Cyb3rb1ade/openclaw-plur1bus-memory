@@ -27,6 +27,11 @@ import { homedir } from "node:os";
 
 import { buildRefinePatch, classifyEncoding } from "../lib/encoding-llm.js";
 import { IMPORTANCE_STATUS } from "../lib/importance-status.js";
+// Gleiche Gefahr wie in Phase 1: whenMatchedUpdateAll() ersetzt bei doppelten
+// ids BEIDE Zielzeilen durch die eine Quellzeile — ein Tombstone wird damit
+// wieder aktiv, lautlos. Phase 1 laeuft vorher und wuerde selbst abbrechen,
+// aber der Backfill darf sich darauf nicht verlassen.
+import { findDuplicateActiveIds } from "./importance-phase1-reset.mjs";
 
 export const BATCH_SIZE = 500;
 export const CONCURRENCY = 8;
@@ -118,6 +123,7 @@ export function createEncodingCall({
   maxTokens = DEFAULT_MAX_TOKENS,
   fetchImpl = globalThis.fetch,
   onTruncation = () => {},
+  onHttpError = () => {},
 } = {}) {
   return async function callLlm(messages, { signal } = {}) {
     const attempt = async (budget) => {
@@ -131,7 +137,10 @@ export function createEncodingCall({
         body: JSON.stringify({ model, max_tokens: budget, messages }),
         ...(signal ? { signal } : {}),
       });
-      if (!res?.ok) return { content: "", finishReason: "http_error" };
+      if (!res?.ok) {
+        onHttpError(res?.status ?? 0);
+        return { content: "", finishReason: "http_error" };
+      }
       const body = await res.json();
       const choice = body?.choices?.[0];
       return { content: choice?.message?.content || "", finishReason: choice?.finish_reason || null };
@@ -204,6 +213,7 @@ async function main() {
     console.log("Nutzung: node scripts/importance-backfill.mjs <agentId> [...] [--apply]");
     console.log("         [--limit N] [--model <id>] [--batch-size N] [--concurrency N] [--base-db-path <pfad>]");
     console.log(`Standard: Dry-Run, Modell ${DEFAULT_MODEL}, Stapel ${BATCH_SIZE}, Breite ${CONCURRENCY}.`);
+    console.log("ACHTUNG: ein Dry-Run bezahlt jedes Urteil und schreibt keines — nur mit --limit sinnvoll.");
     console.log("Schlüssel über die Umgebungsvariable KIMI_CODING_API_KEY.");
     return 1;
   }
@@ -232,12 +242,24 @@ async function main() {
     console.log(`${agentId}: ${queue.length} Zeilen in der Warteschlange (von ${all.length} insgesamt)`);
     if (queue.length === 0) continue;
 
+    const duplicates = findDuplicateActiveIds(all);
+    if (duplicates.length > 0) {
+      console.log(
+        `   ABBRUCH: ${duplicates.length} doppelte aktive ids — mergeInsert("id") wuerde Tombstones reaktivieren.`
+        + " Zuerst scripts/dedupe-memory-ids.mjs --apply laufen lassen.",
+      );
+      failed += 1;
+      continue;
+    }
+
     let truncated = 0;
+    const httpErrors = new Map();
     const callLlm = createEncodingCall({
       apiKey,
       model: args.model,
       maxTokens: DEFAULT_MAX_TOKENS,
       onTruncation: () => { truncated += 1; },
+      onHttpError: (status) => { httpErrors.set(status, (httpErrors.get(status) || 0) + 1); },
     });
 
     let judged = 0;
@@ -272,7 +294,10 @@ async function main() {
       }
     }
 
-    console.log(`${agentId}: ${judged} bewertet, ${unresolved} ohne Urteil (bleiben pending_backfill), ${truncated} Antworten nachgefordert`);
+    const httpSummary = httpErrors.size > 0
+      ? ` | HTTP-Fehler: ${[...httpErrors.entries()].map(([s, n]) => `${s}x${n}`).join(", ")}`
+      : "";
+    console.log(`${agentId}: ${judged} bewertet, ${unresolved} ohne Urteil (bleiben pending_backfill), ${truncated} Antworten nachgefordert${httpSummary}`);
     if (!args.apply) console.log(`${agentId}: Dry-Run — mit --apply ausführen`);
   }
 
