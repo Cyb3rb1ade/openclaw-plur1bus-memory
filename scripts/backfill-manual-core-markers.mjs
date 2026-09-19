@@ -16,7 +16,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-import { CORE_MEMORY_HALF_LIFE_DAYS, MANUAL_CORE_IMPORTANCE } from "../lib/memory-dynamics.js";
+import { CORE_MEMORY_HALF_LIFE_DAYS, MANUAL_CORE_IMPORTANCE, isLiveRow } from "../lib/memory-dynamics.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 
 /**
@@ -26,8 +26,9 @@ import { safeAgentId } from "../lib/sql-safety.js";
 export function selectManualCoreRows(rows = []) {
   return (Array.isArray(rows) ? rows : []).filter((row) => {
     if (!row) return false;
-    const status = String(row.status ?? "");
-    if (status === "deleted" || status === "archived") return false;
+    // 19.09.2026: vorher wurden nur "deleted" und "archived" ausgeschlossen,
+    // wodurch "review" durchrutschte — siehe isLiveRow in lib/memory-dynamics.js.
+    if (!isLiveRow(row)) return false;
     if (Number(row.importance) < MANUAL_CORE_IMPORTANCE) return false;
     if (String(row.memoryClass ?? "") === "core") return false;
     return Number(row.neverForget ?? 0) === 0;

@@ -33,6 +33,7 @@ import {
   computeCoreMemoryScore,
   computeFlashbulbScore,
   isCoreMemory,
+  isLiveRow,
   isManualCoreMarker,
 } from "../lib/memory-dynamics.js";
 import { AUTOMATIC_IMPORTANCE_MAX } from "../lib/memory-fact-quality.js";
@@ -158,5 +159,27 @@ describe("Agentenband ab 0.95 traegt den Kern-Schutz", () => {
 
   it("laesst 0.94 unberuehrt", () => {
     assert.strictEqual(applyCoreMemoryEncoding({ importance: 0.94, emotionalIntensity: 0 }), null);
+  });
+});
+
+describe("isLiveRow als gemeinsamer Begriff", () => {
+  it("fehlender Status gilt als aktiv, leerer String nicht", () => {
+    assert.strictEqual(isLiveRow({}), true);
+    assert.strictEqual(isLiveRow({ status: "active" }), true);
+    assert.strictEqual(isLiveRow({ status: "" }), false);
+    assert.strictEqual(isLiveRow({ status: "review" }), false);
+    assert.strictEqual(isLiveRow({ status: "superseded" }), false);
+    assert.strictEqual(isLiveRow({ status: "deleted" }), false);
+    assert.strictEqual(isLiveRow({ status: "archived" }), false);
+  });
+
+  // Der Begriff muss mit dem uebereinstimmen, den Phase 1 und
+  // dedupe-memory-ids seit jeher benutzen — sonst entsteht die Luecke neu.
+  it("stimmt mit dem Ausdruck der Schwesterskripte ueberein", () => {
+    const wieBisher = (row) => String(row.status ?? "active") === "active";
+    for (const status of [undefined, "active", "", "review", "superseded", "deleted", "archived", "irgendwas"]) {
+      const row = status === undefined ? {} : { status };
+      assert.strictEqual(isLiveRow(row), wieBisher(row), `Abweichung bei status=${JSON.stringify(status)}`);
+    }
   });
 });
