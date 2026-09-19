@@ -8009,7 +8009,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const refineStartedAt = Date.now();
                 const result = await pool.withDb(internalAgent, async (agentDb) => {
                   if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
-                  const counts = { refined: 0, finalized: 0, failed: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
+                  const counts = { refined: 0, finalized: 0, failed: 0, poisoned: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
                   if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus") || !agentDb.schemaFieldNames?.has("importanceStatus")) {
                     return { ...counts, skipped: true, reason: "no_emotion_status_column" };
                   }
@@ -8047,10 +8047,25 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     if (!patch) {
                       // Provider-Ausfall oder unparsbare Antwort liefert ok:false, nie
                       // einen geratenen Wert: Zeile bleibt pending, nächster Lauf
-                      // versucht es erneut. Mehrere Fehlschläge am Stück = Route
-                      // tot, Lauf abbrechen statt Zeitbudget verheizen.
-                      counts.failed++;
-                      if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
+                      // versucht es erneut.
+                      //
+                      // Abschluss-Review, Important 4: "die Route ist tot" und "diese
+                      // Zeile ist vergiftet" sind verschiedene Zustände. Nur ein
+                      // werfendes/leeres callLlm zählt zum Consecutive-Failure-Breaker
+                      // (Route tot, Lauf abbrechen statt Zeitbudget verheizen). Eine
+                      // Zeile, die das Modell zur Verweigerung bringt (unparsbare, aber
+                      // tatsächlich erhaltene Antwort), scheitert deterministisch und
+                      // dauerhaft an derselben Stelle — drei solcher Zeilen am Kopf der
+                      // Warteschlange dürfen den Breaker nicht auslösen, sonst wird
+                      // nichts dahinter je wieder bewertet. Sie wird einfach
+                      // übersprungen, separat gezählt, und beim nächsten Lauf erneut
+                      // versucht.
+                      if (encoding?.callFailed) {
+                        counts.failed++;
+                        if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
+                      } else {
+                        counts.poisoned++;
+                      }
                       continue;
                     }
                     consecutiveFailures = 0;
