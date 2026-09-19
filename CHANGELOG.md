@@ -7,6 +7,38 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.65] — 2026-09-19
+
+### Geändert
+
+- **Das Agentenband ab 0,95 trägt jetzt den Kern-Schutz.** Bis hierher stand
+  die Schwelle auf 1,0 — das Band 0,95 bis 1,00 war damit eine Verabredung
+  ohne Wirkung: nur der exakte Wert 1,0 löste den Schutz aus, alles darunter
+  zerfiel wie eine beliebige Zeile. Gemessen am Produktivbestand: 51 Zeilen im
+  Band, alle im Gespräch gesetzt, davon 43 auf genau 0,95 mit einer
+  Halbwertszeit von 30 Tagen. Bestehende Zeilen bekommen den Schutz nicht von
+  selbst — dafür läuft `scripts/backfill-manual-core-markers.mjs` einmal nach.
+
+### Behoben
+
+- **Die Kürzung des Beurteilungs-Prompts zerteilte Zeichen jenseits von
+  U+FFFF.** `slice()` zählt UTF-16-Code-Einheiten, nicht Zeichen; steht ein
+  Emoji genau auf der 2000er-Grenze, blieb eine halbe Einheit stehen. Der
+  Fehler war still: in JavaScript übersteht das sogar einen JSON-Rundtrip,
+  erst beim Kodieren des HTTP-Körpers als UTF-8 lehnt die Gegenstelle mit 400
+  ab und die Zeile bleibt unbewertet. `truncateForPrompt` schneidet nur noch
+  auf Zeichengrenzen und räumt auch eine Hälfte weg, die ein Aufrufer schon
+  abgetrennt hat.
+
+### Hinzugefügt
+
+- **`scripts/importance-backfill.mjs`** arbeitet den Bestand in Stapeln auf:
+  ein `mergeInsert` je Stapel statt einer LanceDB-Version je Zeile, aus 22.000
+  Versionen werden rund 45. Anbieter wählbar (`--provider deepseek|kimi`),
+  Trockenlauf als Vorgabe, Wiederaufnahme eingebaut, vorheriger Zustand je
+  Zeile in `updateEvidence`. Ein Wächter bricht ab, wenn doppelte IDs einen
+  sicheren `mergeInsert` verhindern.
+
 ## [7.12.64] — 2026-09-19
 
 ### Geändert
