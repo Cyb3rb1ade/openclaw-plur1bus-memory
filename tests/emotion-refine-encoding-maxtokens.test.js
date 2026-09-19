@@ -69,7 +69,11 @@ describe("emotion-refine encoding maxTokens — Auflösung des Konfigurationswer
   });
 
   it("Unsinnswerte fallen auf den Default 1500 zurück", () => {
-    for (const bad of ["banana", null, undefined, 0, -5, Infinity, -Infinity, NaN, "", [], {}]) {
+    // 0.5 gehört hier ausdrücklich dazu: Math.floor(0.5) wäre 0, ein
+    // maxTokens von 0 darf aber nie beim Provider ankommen (der Provider
+    // bekäme dann effektiv gar kein Budget). Die Untergrenze muss deshalb
+    // VOR dem Runden greifen (>= 1), nicht erst danach (> 0).
+    for (const bad of ["banana", null, undefined, 0, 0.5, -5, Infinity, -Infinity, NaN, "", [], {}]) {
       assert.strictEqual(resolve({ t3: { encodingMaxTokens: bad } }), 1500, `encodingMaxTokens=${JSON.stringify(bad)}`);
     }
   });

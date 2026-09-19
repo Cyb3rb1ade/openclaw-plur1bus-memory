@@ -5183,7 +5183,10 @@ const plugin = {
     // Antwortformat und bleibt deshalb unverändert bei 300 maxTokens.
     const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT = 1500;
     const emotionT3EncodingMaxTokensRaw = Number(emotionCfg.t3?.encodingMaxTokens);
-    const EMOTION_REFINE_ENCODING_MAX_TOKENS = Number.isFinite(emotionT3EncodingMaxTokensRaw) && emotionT3EncodingMaxTokensRaw > 0
+    // Untergrenze VOR dem Runden prüfen (>= 1, nicht > 0): sonst würde ein
+    // Wert wie 0,5 die Prüfung noch bestehen und erst Math.floor() ihn auf 0
+    // bringen — ein maxTokens von 0 darf aber nie beim Provider ankommen.
+    const EMOTION_REFINE_ENCODING_MAX_TOKENS = Number.isFinite(emotionT3EncodingMaxTokensRaw) && emotionT3EncodingMaxTokensRaw >= 1
       ? Math.floor(emotionT3EncodingMaxTokensRaw)
       : EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT;
     // Hook-Drain: Marge fuer den laufenden Embed-Aufruf (die 7 s zwischen
