@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { safeAgentId } from "../lib/sql-safety.js";
+import { STORE_SCAN_LIMIT } from "../lib/store-limits.js";
 
 /**
  * Kennzahlen der Importance-Verteilung über die aktiven Zeilen: Gesamtzahl,
@@ -94,7 +95,7 @@ async function main() {
       continue;
     }
 
-    const rows = await table.query().limit(100000).toArray();
+    const rows = await table.query().limit(STORE_SCAN_LIMIT).toArray();
     const s = summarizeImportance(rows);
     console.log(
       `${agentId.padEnd(14)} n=${String(s.total).padStart(6)} häufigster ${s.topValue} (${(100 * s.topShare).toFixed(1)}%)`

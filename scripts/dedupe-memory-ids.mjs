@@ -56,6 +56,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { safeAgentId, sqlString } from "../lib/sql-safety.js";
+import { STORE_SCAN_LIMIT } from "../lib/store-limits.js";
 import { toPlainRow } from "./importance-phase1-reset.mjs";
 
 /**
@@ -400,7 +401,7 @@ async function main() {
       continue;
     }
 
-    const rows = await table.query().limit(200000).toArray();
+    const rows = await table.query().limit(STORE_SCAN_LIMIT).toArray();
     const plan = buildDedupePlan(rows);
 
     if (plan.groupCount === 0) {

@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { buildRefinePatch, classifyEncoding } from "../lib/encoding-llm.js";
+import { STORE_SCAN_LIMIT } from "../lib/store-limits.js";
 import { IMPORTANCE_STATUS } from "../lib/importance-status.js";
 // Gleiche Gefahr wie in Phase 1: whenMatchedUpdateAll() ersetzt bei doppelten
 // ids BEIDE Zielzeilen durch die eine Quellzeile — ein Tombstone wird damit
@@ -35,17 +36,46 @@ import { findDuplicateActiveIds } from "./importance-phase1-reset.mjs";
 
 export const BATCH_SIZE = 500;
 export const CONCURRENCY = 8;
-/**
- * Kimis Code-Highspeed-Route. Gemessen am 19.09.2026 gegen die sechs längsten
- * echten Erinnerungen (2.879–11.151 Zeichen): alle sechs `finish_reason: stop`
- * und sauber geparst, 365–881 Completion-Tokens.
- */
-export const DEFAULT_MODEL = "kimi-for-coding-highspeed";
 export const DEFAULT_MAX_TOKENS = 1500;
-export const KIMI_ENDPOINT = "https://api.kimi.com/coding/v1/chat/completions";
-/** Ohne diesen Header antwortet die Route "Invalid Authentication" trotz gültigem Key. */
-export const KIMI_USER_AGENT = "gsd/2.77.0";
 export const UPDATE_SOURCE = "importance-v2";
+
+/**
+ * Beide Anbieter sprechen dasselbe OpenAI-Format; sie unterscheiden sich nur
+ * in Endpunkt, Modellnamen, Schlüsselvariable und einem Pflicht-Header.
+ *
+ * DeepSeek ist der Standard. Vergleich am 19.09.2026 über 20 echte Zeilen
+ * gegen die gespeicherten Kimi-Urteile (/root/plur1bus-bench/deepseek-compare):
+ * |dImportance| 0,064 und dominante Emotion gleich in 95,0 % — beides besser
+ * als Kimis eigener Rauschboden aus zwei identischen Läufen (0,079 und
+ * 76,8 %). Die beiden Modelle sind für diese Aufgabe austauschbar, ohne
+ * systematischen Versatz (mittlere Importance 0,319 gegen 0,297).
+ */
+export const PROVIDERS = {
+  deepseek: {
+    endpoint: "https://api.deepseek.com/chat/completions",
+    model: "deepseek-flash",
+    keyEnv: "DEEPSEEK_API_KEY",
+    headers: {},
+  },
+  kimi: {
+    endpoint: "https://api.kimi.com/coding/v1/chat/completions",
+    model: "kimi-for-coding-highspeed",
+    keyEnv: "KIMI_CODING_API_KEY",
+    // Ohne diesen Header antwortet die Route "Invalid Authentication" trotz
+    // gültigem Schlüssel. DeepSeek braucht ihn nicht.
+    headers: { "User-Agent": "gsd/2.77.0" },
+  },
+};
+export const DEFAULT_PROVIDER = "deepseek";
+
+/** Löst Anbieter und Modell auf; ein unbekannter Name wirft, statt zu raten. */
+export function resolveProvider(name = DEFAULT_PROVIDER, model = null) {
+  const provider = PROVIDERS[name];
+  if (!provider) {
+    throw new Error(`Unbekannter Anbieter "${name}" — bekannt sind ${Object.keys(PROVIDERS).join(", ")}.`);
+  }
+  return { ...provider, model: model || provider.model };
+}
 
 export function chunk(rows = [], size = BATCH_SIZE) {
   const out = [];
@@ -103,10 +133,11 @@ export function buildBackfillRow(row, encoding, now = Date.now()) {
 /**
  * Baut die `callLlm`-Funktion, die `classifyEncoding` injiziert bekommt.
  *
- * Zwei Eigenheiten der Route, beide am 19.09.2026 gemessen:
+ * Zwei Eigenheiten, beide am 19.09.2026 gemessen:
  *
- * - `temperature` darf NICHT mitgeschickt werden: jede Angabe außer 1 wird mit
- *   "invalid temperature: only 1 is allowed for this model" abgelehnt.
+ * - `temperature` wird gar nicht mitgeschickt: Kimi lehnt jede Angabe außer 1
+ *   mit "invalid temperature: only 1 is allowed for this model" ab, und für
+ *   DeepSeek gibt es keinen Grund, davon abzuweichen.
  * - Thinking ist auf diesem Pfad standardmäßig AN und zählt gegen `max_tokens`.
  *   Der Cron schaltet es ab (`disableThinking: true`), hier geht das nicht —
  *   deshalb der eine Wiederholungsversuch mit doppeltem Budget, wenn die
@@ -119,22 +150,24 @@ export function buildBackfillRow(row, encoding, now = Date.now()) {
  */
 export function createEncodingCall({
   apiKey,
-  model = DEFAULT_MODEL,
+  provider = DEFAULT_PROVIDER,
+  model = null,
   maxTokens = DEFAULT_MAX_TOKENS,
   fetchImpl = globalThis.fetch,
   onTruncation = () => {},
   onHttpError = () => {},
 } = {}) {
+  const route = resolveProvider(provider, model);
   return async function callLlm(messages, { signal } = {}) {
     const attempt = async (budget) => {
-      const res = await fetchImpl(KIMI_ENDPOINT, {
+      const res = await fetchImpl(route.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
-          "User-Agent": KIMI_USER_AGENT,
+          ...route.headers,
         },
-        body: JSON.stringify({ model, max_tokens: budget, messages }),
+        body: JSON.stringify({ model: route.model, max_tokens: budget, messages }),
         ...(signal ? { signal } : {}),
       });
       if (!res?.ok) {
@@ -163,7 +196,8 @@ export function parseArgs(argv = []) {
     agents: [],
     apply: false,
     limit: Infinity,
-    model: DEFAULT_MODEL,
+    provider: DEFAULT_PROVIDER,
+    model: null,
     batchSize: BATCH_SIZE,
     concurrency: CONCURRENCY,
     baseDbPath: null,
@@ -172,6 +206,7 @@ export function parseArgs(argv = []) {
     const arg = argv[i];
     if (arg === "--apply") args.apply = true;
     else if (arg === "--limit") args.limit = Number(argv[++i]);
+    else if (arg === "--provider") args.provider = String(argv[++i]);
     else if (arg === "--model") args.model = String(argv[++i]);
     else if (arg === "--batch-size") args.batchSize = Number(argv[++i]);
     else if (arg === "--concurrency") args.concurrency = Number(argv[++i]);
@@ -199,10 +234,10 @@ function openclawHome() {
   return process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
 }
 
-function readApiKey() {
-  const key = process.env.KIMI_CODING_API_KEY;
+function readApiKey(route) {
+  const key = process.env[route.keyEnv];
   if (!key) {
-    throw new Error("KIMI_CODING_API_KEY ist nicht gesetzt — das Skript fragt keinen Schlüssel aus Dateien ab.");
+    throw new Error(`${route.keyEnv} ist nicht gesetzt — das Skript fragt keinen Schlüssel aus Dateien ab.`);
   }
   return key;
 }
@@ -211,14 +246,16 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.agents.length === 0) {
     console.log("Nutzung: node scripts/importance-backfill.mjs <agentId> [...] [--apply]");
-    console.log("         [--limit N] [--model <id>] [--batch-size N] [--concurrency N] [--base-db-path <pfad>]");
-    console.log(`Standard: Dry-Run, Modell ${DEFAULT_MODEL}, Stapel ${BATCH_SIZE}, Breite ${CONCURRENCY}.`);
+    console.log("         [--limit N] [--provider deepseek|kimi] [--model <id>] [--batch-size N] [--concurrency N] [--base-db-path <pfad>]");
+    console.log(`Standard: Dry-Run, Anbieter ${DEFAULT_PROVIDER} (${PROVIDERS[DEFAULT_PROVIDER].model}), Stapel ${BATCH_SIZE}, Breite ${CONCURRENCY}.`);
     console.log("ACHTUNG: ein Dry-Run bezahlt jedes Urteil und schreibt keines — nur mit --limit sinnvoll.");
-    console.log("Schlüssel über die Umgebungsvariable KIMI_CODING_API_KEY.");
+    console.log(`Schlüssel über die Umgebungsvariable je Anbieter: ${Object.values(PROVIDERS).map((p) => p.keyEnv).join(", ")}.`);
     return 1;
   }
 
-  const apiKey = readApiKey();
+  const route = resolveProvider(args.provider, args.model);
+  const apiKey = readApiKey(route);
+  console.log(`Anbieter ${args.provider} (${route.model})`);
   const baseDbPath = args.baseDbPath || join(openclawHome(), "memory", "lancedb-namespaced");
   const lancedb = await import("@lancedb/lancedb");
   let failed = 0;
@@ -234,7 +271,7 @@ async function main() {
       continue;
     }
 
-    const all = await table.query().limit(500000).toArray();
+    const all = await table.query().limit(STORE_SCAN_LIMIT).toArray();
     const queue = all
       .filter((row) => row.importanceStatus === IMPORTANCE_STATUS.PENDING_BACKFILL)
       .slice(0, Number.isFinite(args.limit) ? args.limit : undefined);
@@ -256,6 +293,7 @@ async function main() {
     const httpErrors = new Map();
     const callLlm = createEncodingCall({
       apiKey,
+      provider: args.provider,
       model: args.model,
       maxTokens: DEFAULT_MAX_TOKENS,
       onTruncation: () => { truncated += 1; },

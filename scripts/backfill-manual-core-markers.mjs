@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { CORE_MEMORY_HALF_LIFE_DAYS, MANUAL_CORE_IMPORTANCE, isLiveRow } from "../lib/memory-dynamics.js";
+import { STORE_SCAN_LIMIT } from "../lib/store-limits.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 
 /**
@@ -82,7 +83,7 @@ async function main() {
 
     const rows = await table.query()
       .select(["id", "importance", "neverForget", "memoryClass", "status", "text"])
-      .limit(200000)
+      .limit(STORE_SCAN_LIMIT)
       .toArray();
     const treffer = selectManualCoreRows(rows);
     if (treffer.length === 0) continue;
