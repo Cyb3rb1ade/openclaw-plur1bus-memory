@@ -97,12 +97,26 @@ describe("Verhalten: je oefter erinnert, desto praesenter", () => {
     return Number(row.memoryStrength);
   };
 
-  it("haeufiger erinnert heisst praesenter", () => {
-    const oft = ueberEinJahr(3);
-    const gelegentlich = ueberEinJahr(18);
+  // Haeufiger abgerufen heisst nie schwaecher. Bis etwa alle achtzehn Tage
+  // saettigt die Staerke an ihrer Decke von 0.99 — das ist erwartetes
+  // Verhalten, nicht Gleichstand aus Versehen: praesenter als "voll
+  // verfuegbar" gibt es nicht. Unterhalb der Saettigung muss die Reihenfolge
+  // streng sein.
+  it("haeufiger erinnert heisst nie schwaecher", () => {
+    const abstaende = [3, 7, 18, 30, 60, 90, 120];
+    const werte = abstaende.map(ueberEinJahr);
+    for (let i = 1; i < werte.length; i += 1) {
+      assert.ok(werte[i] <= werte[i - 1] + 1e-9,
+        `alle ${abstaende[i]} Tage (${werte[i].toFixed(4)}) darf nicht ueber alle ${abstaende[i - 1]} Tage (${werte[i - 1].toFixed(4)}) liegen`);
+    }
+  });
+
+  it("unterscheidet streng, sobald die Saettigung verlassen ist", () => {
+    const gelegentlich = ueberEinJahr(30);
     const selten = ueberEinJahr(60);
-    assert.ok(oft > gelegentlich, `${oft.toFixed(4)} muss ueber ${gelegentlich.toFixed(4)} liegen`);
+    const ganzSelten = ueberEinJahr(120);
     assert.ok(gelegentlich > selten, `${gelegentlich.toFixed(4)} muss ueber ${selten.toFixed(4)} liegen`);
+    assert.ok(selten > ganzSelten, `${selten.toFixed(4)} muss ueber ${ganzSelten.toFixed(4)} liegen`);
   });
 
   it("regelmaessiger Gebrauch haelt eine langweilige Tatsache wirklich praesent", () => {
@@ -114,5 +128,44 @@ describe("Verhalten: je oefter erinnert, desto praesenter", () => {
   it("und ungenutzt zerfaellt sie weiterhin", () => {
     const ungenutzt = computeDecayedStrength({ memoryStrength: 0.5, halfLifeDays, lastDynamicsAt: now }, now + 365 * DAY);
     assert.ok(ungenutzt <= 0.02, `ungenutzt zu stark bei ${ungenutzt.toFixed(4)}`);
+  });
+});
+
+/**
+ * Der Zuschlag je Abruf lautete `0.15 / (1 + log1p(retrievalCount))` und
+ * schrumpfte damit mit der Zahl der bisherigen Abrufe: der erste Abruf trug
+ * +0,089 bei, der hundertste nur noch +0,027. Je öfter man sich an etwas
+ * erinnerte, desto weniger trug jedes einzelne Erinnern bei — das Gegenteil
+ * dessen, was Wiederholung tun soll, und die zweite Hälfte desselben Fehlers
+ * wie bei der Behaltensdauer.
+ *
+ * Die Sättigung braucht diesen Term nicht: die Stärke ist ohnehin bei 0,99
+ * gedeckelt, und zwischen zwei Abrufen zerfällt sie. Wer häufig abruft,
+ * landet an der Decke; wer selten abruft, holt jedes Mal denselben Betrag
+ * gegen einen tieferen Ausgangswert.
+ */
+describe("der Zuschlag je Abruf schrumpft nicht mit der Zahl der Abrufe", () => {
+  it("traegt beim hundertsten Abruf so viel bei wie beim ersten", () => {
+    const basis = { memoryStrength: 0.3, halfLifeDays: 30, lastDynamicsAt: now };
+    const ersterAbruf = applyRetrievalReinforcement({ ...basis, retrievalCount: 0 }, now);
+    const hundertster = applyRetrievalReinforcement({ ...basis, retrievalCount: 99 }, now);
+    assert.strictEqual(
+      Number(hundertster.memoryStrength.toFixed(10)),
+      Number(ersterAbruf.memoryStrength.toFixed(10)),
+      `erster ${ersterAbruf.memoryStrength} gegen hundertsten ${hundertster.memoryStrength}`,
+    );
+  });
+
+  it("haengt allein vom aktuellen Zerfall ab, nicht von der Historie", () => {
+    const schwach = applyRetrievalReinforcement({ memoryStrength: 0.2, halfLifeDays: 30, retrievalCount: 50, lastDynamicsAt: now }, now);
+    const stark = applyRetrievalReinforcement({ memoryStrength: 0.8, halfLifeDays: 30, retrievalCount: 50, lastDynamicsAt: now }, now);
+    assert.ok(stark.memoryStrength > schwach.memoryStrength);
+    assert.ok(Math.abs((stark.memoryStrength - 0.8) - (schwach.memoryStrength - 0.2)) < 1e-9,
+      "beide muessen denselben Betrag gewinnen");
+  });
+
+  it("bleibt bei 0.99 gedeckelt", () => {
+    const patch = applyRetrievalReinforcement({ memoryStrength: 0.98, halfLifeDays: 30, retrievalCount: 5, lastDynamicsAt: now }, now);
+    assert.ok(patch.memoryStrength <= 0.99);
   });
 });
