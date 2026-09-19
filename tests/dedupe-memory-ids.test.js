@@ -10,6 +10,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import { makeTempDir } from "./helpers/temp-dir.js";
 import {
@@ -21,6 +23,10 @@ import {
   buildDedupePlan,
   verifyRepair,
   repairGroup,
+  toJsonSafeRow,
+  buildExportLines,
+  buildExportPath,
+  writeExport,
 } from "../scripts/dedupe-memory-ids.mjs";
 
 describe("selectSurvivingRow — reine Auswahlregel", () => {
@@ -267,5 +273,128 @@ describe("repairGroup / verifyRepair — echte Wegwerf-LanceDB-Tabelle (RED→GR
     assert.equal(result.decidedBy, null);
     const after = await table.query().where(`id = '${id}'`).toArray();
     assert.equal(after[0].text, "zuerst");
+  });
+});
+
+describe("Export vor --apply: JSONL, BigInt- und Vector-Rundtrip", () => {
+  it("toJsonSafeRow wandelt BigInt-Spalten in Dezimal-Strings, die exakt zu BigInt zurückkonvertierbar sind", () => {
+    // Reale Int64-Spalten aus dem main-Schema (2026-09-19), live geprüft:
+    // LanceDB liefert sie aus toArray() als JS BigInt zurück.
+    const row = { id: "x", lastDynamicsAt: 1788364069566n, halfLifeDays: 78n, retrievalCount: 0n };
+    const safe = toJsonSafeRow(row);
+    assert.equal(typeof safe.lastDynamicsAt, "string");
+    assert.equal(safe.lastDynamicsAt, "1788364069566");
+    assert.equal(safe.halfLifeDays, "78");
+    assert.equal(safe.retrievalCount, "0");
+    // Rundtrip über JSON UND zurück zu BigInt — nicht nur über den String.
+    const roundTripped = JSON.parse(JSON.stringify(safe));
+    assert.equal(BigInt(roundTripped.lastDynamicsAt), 1788364069566n);
+    assert.equal(BigInt(roundTripped.halfLifeDays), 78n);
+    assert.equal(BigInt(roundTripped.retrievalCount), 0n);
+  });
+
+  it("JSON.stringify wirft auf einer rohen Zeile mit BigInt-Spalte — toJsonSafeRow ist deshalb zwingend", () => {
+    const row = { id: "x", lastDynamicsAt: 5n };
+    assert.throws(() => JSON.stringify(row), /BigInt/);
+    assert.doesNotThrow(() => JSON.stringify(toJsonSafeRow(row)));
+  });
+
+  it("ein echter 3072-dimensionaler Float32-Vektor übersteht den JSON-Rundtrip elementweise exakt", () => {
+    // Zufällige, auf Float32-Präzision "eingerastete" Werte (Math.fround) —
+    // nicht nur Wiederholungen von 0.1 — wie sie aus einer echten
+    // FixedSizeList[3072]<Float32>-Spalte kommen (main-Schema, 2026-09-19).
+    const dim = 3072;
+    const vector = Array.from({ length: dim }, () => Math.fround(Math.random() * 2 - 1));
+    const safe = toJsonSafeRow({ id: "vec-test", vector });
+    const parsed = JSON.parse(JSON.stringify(safe));
+    assert.equal(parsed.vector.length, dim);
+    for (let i = 0; i < dim; i += 1) {
+      assert.equal(parsed.vector[i], vector[i], `vector[${i}] weicht ab: ${parsed.vector[i]} vs ${vector[i]}`);
+    }
+  });
+
+  it("verpackt ein Arrow-artiges iterierbares Vector-Objekt korrekt (wie es table.query() zurückliefert)", () => {
+    const arrowLike = {
+      [Symbol.iterator]: function* () { yield Math.fround(0.123456); yield Math.fround(-0.987654); },
+    };
+    const safe = toJsonSafeRow({ id: "x", vector: arrowLike });
+    assert.deepEqual(safe.vector, [Math.fround(0.123456), Math.fround(-0.987654)]);
+  });
+
+  it("lässt normale Werte (string, number, null) unverändert", () => {
+    const row = { id: "x", text: "hallo", importance: 0.7, mergedFrom: null };
+    assert.deepEqual(toJsonSafeRow(row), row);
+  });
+
+  it("buildExportLines schreibt genau zwei Zeilen je Gruppe (survivor + discarded), je eine valide JSON-Zeile", () => {
+    const decisions = [
+      { id: "g1", survivor: { id: "g1", text: "neu" }, discarded: { id: "g1", text: "alt" }, decidedBy: "createdAt", arbitrary: false },
+      { id: "g2", survivor: { id: "g2", text: "a" }, discarded: { id: "g2", text: "b" }, decidedBy: null, arbitrary: true },
+    ];
+    const lines = buildExportLines(decisions);
+    assert.equal(lines.length, 4);
+    for (const line of lines) assert.doesNotThrow(() => JSON.parse(line));
+    const objs = lines.map((l) => JSON.parse(l));
+    assert.equal(objs[0].meta.id, "g1");
+    assert.equal(objs[0].meta.role, "survivor");
+    assert.equal(objs[0].meta.decidedBy, "createdAt");
+    assert.equal(objs[0].row.text, "neu");
+    assert.equal(objs[1].meta.role, "discarded");
+    assert.equal(objs[1].row.text, "alt");
+    assert.equal(objs[2].meta.arbitrary, true);
+  });
+
+  it("buildExportPath ist dateisystemsicher (keine Doppelpunkte/Punkte) und deterministisch aus dem übergebenen Zeitpunkt", () => {
+    const p = buildExportPath({ exportDir: "/tmp/x", agentId: "main", now: new Date("2026-09-19T15:30:00.123Z") });
+    assert.equal(p.includes(":"), false);
+    assert.match(p, /main-2026-09-19T15-30-00-123Z\.jsonl$/);
+  });
+
+  it("writeExport schreibt eine echte JSONL-Datei mit BigInt- und Vector-Feldern, lesbar per JSON.parse Zeile für Zeile", () => {
+    const dir = makeTempDir("dedupe-export-");
+    const decisions = [
+      {
+        id: "g1",
+        survivor: { id: "g1", text: "neu", vector: [0.1, 0.2, 0.3], lastDynamicsAt: 5n, createdAt: 200 },
+        discarded: { id: "g1", text: "alt", vector: [0.4, 0.5, 0.6], lastDynamicsAt: 1n, createdAt: 100 },
+        decidedBy: "lastDynamicsAt",
+        arbitrary: false,
+      },
+    ];
+    const path = writeExport({ exportDir: dir, agentId: "testagent", decisions, now: new Date("2026-09-19T15:30:00.000Z") });
+    assert.equal(path, join(dir, "testagent-2026-09-19T15-30-00-000Z.jsonl"));
+    assert.ok(existsSync(path));
+    const lines = readFileSync(path, "utf8").trim().split("\n");
+    assert.equal(lines.length, 2);
+    const first = JSON.parse(lines[0]);
+    assert.equal(first.row.lastDynamicsAt, "5", "BigInt als Dezimal-String exportiert");
+    assert.deepEqual(first.row.vector, [0.1, 0.2, 0.3]);
+  });
+
+  it("writeExport verweigert, eine bestehende Export-Datei zu überschreiben", () => {
+    const dir = makeTempDir("dedupe-export-overwrite-");
+    const decisions = [
+      { id: "g1", survivor: { id: "g1", text: "neu" }, discarded: { id: "g1", text: "alt" }, decidedBy: "createdAt", arbitrary: false },
+    ];
+    const now = new Date("2026-09-19T15:30:00.000Z");
+    const firstPath = writeExport({ exportDir: dir, agentId: "testagent", decisions, now });
+    const before = readFileSync(firstPath, "utf8");
+    assert.throws(
+      () => writeExport({ exportDir: dir, agentId: "testagent", decisions, now }),
+      /Export-Datei existiert bereits/,
+    );
+    // Die Datei des ersten Laufs wurde nicht stillschweigend ersetzt.
+    assert.equal(readFileSync(firstPath, "utf8"), before);
+  });
+
+  it("writeExport legt das Export-Verzeichnis bei Bedarf an", () => {
+    const parent = makeTempDir("dedupe-export-mkdir-");
+    const dir = join(parent, "nested", "export-dir");
+    assert.equal(existsSync(dir), false);
+    const decisions = [
+      { id: "g1", survivor: { id: "g1", text: "neu" }, discarded: { id: "g1", text: "alt" }, decidedBy: "createdAt", arbitrary: false },
+    ];
+    const path = writeExport({ exportDir: dir, agentId: "testagent", decisions, now: new Date("2026-09-19T15:30:00.000Z") });
+    assert.ok(existsSync(path));
   });
 });

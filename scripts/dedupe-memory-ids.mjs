@@ -40,9 +40,18 @@
  * abbrechen, laut melden, keinen zweiten Versuch unternehmen.
  *
  * Dry-Run ist Standard. `--apply` muss ausdrücklich gesetzt werden.
+ *
+ * Vor der ersten Reparatur (nur bei `--apply`) schreibt der Lauf einen
+ * JSONL-Export jeder betroffenen Zeile (beide Zwillinge, alle Spalten
+ * inklusive vollem vector) — ein zusätzliches Sicherheitsnetz neben dem
+ * Verzeichnis-Backup der Kontrolle. Ein Verzeichnis-Backup einer laufenden
+ * LanceDB kann einen halb geschriebenen Zustand einfangen und stellt nur
+ * alles-oder-nichts wieder her; dieser Export liest über die Tabellen-API
+ * einen konsistenten Snapshot und lässt jede einzelne betroffene Zeile für
+ * sich rekonstruieren.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -155,6 +164,88 @@ export function buildDedupePlan(rows) {
 }
 
 /**
+ * Macht eine Zeile JSON-sicher, ohne ihre Bedeutung zu verändern.
+ * LanceDB liefert Int64-Spalten aus `toArray()` als JS BigInt zurück —
+ * `JSON.stringify` wirft darauf (`Do not know how to serialize a BigInt`,
+ * live am eigenen Inspektionsskript gesehen). Und die Vektorspalte kommt als
+ * iterierbares Arrow-Objekt, nicht als Array (dieselbe Eigenart, die
+ * `toPlainRow` in importance-phase1-reset.mjs vor dem Zurückschreiben
+ * entpackt). Beides wird hier in eine rundtrip-feste Form überführt: BigInt
+ * → Dezimal-String (welche Spalten im heutigen Schema betroffen sind, steht
+ * im Bericht — die Erkennung selbst ist schema-unabhängig, sie prüft den
+ * Laufzeittyp, nicht den Spaltennamen), jedes andere iterierbare
+ * Nicht-Array (der vector) → echtes Array. Ein Float32-Wert, der als Array
+ * von JS-Zahlen (Float64) durch `JSON.stringify`/`JSON.parse` läuft, kommt
+ * bitgenau zurück — JS' Number-zu-String-Konvertierung ist rundtrip-treu,
+ * und die Aufweitung Float32→Float64 beim Lesen ist verlustfrei.
+ */
+export function toJsonSafeRow(row) {
+  const out = {};
+  for (const [key, value] of Object.entries(row ?? {})) {
+    if (typeof value === "bigint") {
+      out[key] = value.toString();
+    } else if (value && typeof value !== "string" && !Array.isArray(value) && typeof value[Symbol.iterator] === "function") {
+      out[key] = Array.from(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+/**
+ * JSONL-Zeilen für den Export: zwei Zeilen je Gruppe (Überlebende und
+ * Verworfene), je eine valide JSON-Zeile mit Metadaten (id, Rolle,
+ * Entscheidungsgrund) plus der vollständigen Original-Zeile.
+ */
+export function buildExportLines(decisions) {
+  const lines = [];
+  for (const d of Array.isArray(decisions) ? decisions : []) {
+    for (const [role, row] of [["survivor", d.survivor], ["discarded", d.discarded]]) {
+      lines.push(JSON.stringify({
+        meta: { id: d.id, role, decidedBy: d.decidedBy, arbitrary: d.arbitrary },
+        row: toJsonSafeRow(row),
+      }));
+    }
+  }
+  return lines;
+}
+
+/** ISO-Zeitstempel ohne Doppelpunkte/Punkte — dateisystemsicher auf allen Plattformen. */
+function safeTimestampForFilename(date) {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+/**
+ * Pfad der Export-Datei für einen Agenten. `now` ist injizierbar (Tests,
+ * deterministische Dry-Run-Vorschau).
+ */
+export function buildExportPath({ exportDir, agentId, now = new Date() }) {
+  return join(exportDir, `${agentId}-${safeTimestampForFilename(now)}.jsonl`);
+}
+
+/**
+ * Schreibt den Export — einmalig, bevor irgendetwas repariert wird.
+ * Verweigert, eine bestehende Export-Datei zu überschreiben: ein zweiter
+ * Lauf darf nie stillschweigend das Sicherheitsnetz eines vorherigen Laufs
+ * ersetzen. Schreibt nichts und wirft, wenn die Datei schon existiert —
+ * der Aufrufer muss das als Abbruchgrund für den GESAMTEN Lauf behandeln,
+ * nicht nur für diesen Agenten.
+ */
+export function writeExport({ exportDir, agentId, decisions, now = new Date() }) {
+  const path = buildExportPath({ exportDir, agentId, now });
+  if (existsSync(path)) {
+    throw new Error(
+      `Export-Datei existiert bereits: ${path} — vorheriger Lauf? Nichts geschrieben, nichts repariert.`,
+    );
+  }
+  mkdirSync(exportDir, { recursive: true });
+  const lines = buildExportLines(decisions);
+  writeFileSync(path, lines.length > 0 ? `${lines.join("\n")}\n` : "", "utf8");
+  return path;
+}
+
+/**
  * Liest die Gruppe direkt nach dem Schreiben aus der Tabelle zurück — kein
  * Vertrauen auf die bloße Abwesenheit einer Exception. Erwartet genau eine
  * Zeile mit dieser id, deren text und vector zur beabsichtigten
@@ -248,10 +339,11 @@ function discoverAgents(baseDbPath) {
 }
 
 function parseArgs(argv) {
-  const args = { apply: false, baseDbPath: null, agents: [] };
+  const args = { apply: false, baseDbPath: null, exportDir: null, agents: [] };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--apply") args.apply = true;
     else if (argv[i] === "--base-db-path" && argv[i + 1]) args.baseDbPath = argv[++i];
+    else if (argv[i] === "--export-dir" && argv[i + 1]) args.exportDir = argv[++i];
     else if (!argv[i].startsWith("--")) args.agents.push(argv[i]);
   }
   return args;
@@ -260,10 +352,14 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const baseDbPath = args.baseDbPath || join(openclawHome(), "memory", "lancedb-namespaced");
+  const exportDir = args.exportDir || join(process.cwd(), "dedupe-exports");
   const agentIds = args.agents.length > 0 ? args.agents : discoverAgents(baseDbPath);
 
   if (agentIds.length === 0) {
-    console.log("Nutzung: node scripts/dedupe-memory-ids.mjs [<agentId> ...] [--apply] [--base-db-path <pfad>]");
+    console.log(
+      "Nutzung: node scripts/dedupe-memory-ids.mjs [<agentId> ...] [--apply] [--base-db-path <pfad>] "
+      + "[--export-dir <pfad>]",
+    );
     console.log(`Keine Agent-IDs übergeben und keine Stores unter ${baseDbPath} gefunden.`);
     return 1;
   }
@@ -322,9 +418,30 @@ async function main() {
     }
 
     if (!args.apply) {
+      const previewPath = buildExportPath({ exportDir, agentId });
+      console.log(
+        `   Export würde geschrieben nach: ${previewPath} (${plan.decisions.length * 2} Zeilen — `
+        + "Zeitstempel wird beim echten Lauf neu gesetzt, kein Schreibzugriff im Dry-Run)",
+      );
       console.log("   Dry-Run — mit --apply ausführen");
       continue;
     }
+
+    // Export ZUERST, vor jeder Reparatur — beide Zwillinge jeder betroffenen
+    // Gruppe, alle Spalten, als konsistenter Snapshot über die Tabellen-API
+    // (kein Verzeichnis-Backup, das einen halb geschriebenen Zustand
+    // einfangen könnte). Schlägt der Export fehl (z. B. weil die Datei schon
+    // existiert), wird für diesen Agenten und den Rest des Laufs nichts
+    // repariert.
+    let exportPath;
+    try {
+      exportPath = writeExport({ exportDir, agentId, decisions: plan.decisions });
+    } catch (err) {
+      console.log(`   FEHLER beim Export: ${err?.message || err}`);
+      console.log(`   ABBRUCH: kein Export geschrieben, keine Gruppe für ${agentId} angefasst.`);
+      return 1;
+    }
+    console.log(`   Export geschrieben: ${exportPath} (${plan.decisions.length * 2} Zeilen)`);
 
     let repaired = 0;
     for (const d of plan.decisions) {
