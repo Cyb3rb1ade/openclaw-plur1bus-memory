@@ -7,6 +7,49 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.66] — 2026-09-19
+
+### Geändert
+
+- **Ein zeitlich abgesetzter Abruf verlängert jetzt auch die Behaltensdauer,
+  nicht nur die momentane Stärke.** Bis hierher zerfiel eine Erinnerung nach
+  einem Abruf exakt so schnell wie zuvor — man schöpfte Wasser in einen Eimer,
+  ohne das Loch zu stopfen. Eine Tatsache mit 30 Tagen Halbwertszeit, alle drei
+  Tage abgerufen, stand nach einem Jahr bei 0,395; eine intensiv kodierte
+  Erinnerung, an die nie wieder jemand dachte, bei 0,886. Wiederholung war
+  schwächer als einmalige Intensität. Der Deckel liegt beim obersten
+  automatischen Band (600 Tage): bloße Wiederholung erreicht nie, was der
+  Intensität oder der ausdrücklichen Entscheidung des Agenten vorbehalten ist.
+  Ein Mindestabstand von einem Tag verhindert, dass eine Salve im selben
+  Augenblick die Dauer aufbläst.
+- **Der Zuschlag je Abruf schrumpft nicht mehr mit der Zahl der Abrufe.**
+  `0.15 / (1 + log1p(retrievalCount))` ließ den ersten Abruf 0,089 beitragen
+  und den hundertsten nur noch 0,027 — je öfter man sich erinnerte, desto
+  weniger trug jedes Erinnern bei. Die Sättigung übernimmt die Obergrenze von
+  0,99 und der Zerfall zwischen zwei Abrufen.
+
+### Behoben
+
+- **Der Zeitdruck-Notausgang im Recall wertet die Gedächtnisstärke mit.**
+  `maybeSoftBudgetFallback` kehrte an vier von neun Stellen vor dem
+  Scoring-Block zurück und rangierte dann allein nach Ähnlichkeit: eine seit
+  Monaten unbenutzte Zeile stand gleichauf mit einer täglich gebrauchten. Die
+  Gewichtung passiert jetzt vor dem Zuschneiden auf die Trefferzahl, damit
+  schon die Auswahl stimmt und nicht nur deren Reihenfolge. Ein Merker
+  verhindert die Doppelanwendung an den fünf Stellen danach.
+- **Ein gemeinsamer Begriff für eine lebendige Zeile** (`isLiveRow`). Drei
+  Wartungswerkzeuge hatten drei Auslegungen; `review` fiel in die Lücke.
+  Folge: die Kernmarker-Nachrüstung hätte zwei Altlasten aus der
+  MEMORY.md-Migration dauerhaft unsterblich gemacht, die Phase 1 aus genau
+  diesem Grund hätte räumen sollen und wegen desselben Unterschieds nicht sah.
+
+### Hinzugefügt
+
+- **Drei Verhaltenstests als Abnahme des Vorhabens** (Frühstück von vorgestern,
+  einschneidendes Ereignis über zehn Jahre, langweilige Tatsache durch
+  Gebrauch) sowie ein Test über die ganze Kette aus Bedeutung, Gebrauch und
+  Recall-Gewichtung.
+
 ## [7.12.65] — 2026-09-19
 
 ### Geändert
