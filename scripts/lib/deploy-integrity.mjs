@@ -326,6 +326,7 @@ export const DEPLOY_FILES = [
   "scripts/importance-phase1-reset.mjs",
   "scripts/importance-metrics.mjs",
   "scripts/dedupe-memory-ids.mjs",
+  "scripts/importance-backfill.mjs",
   "scripts/repair-tombstones.mjs",
   "scripts/reapply-tombstones.mjs",
   "scripts/run-graph-links-once.mjs",

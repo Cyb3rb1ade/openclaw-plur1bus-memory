@@ -26,9 +26,21 @@ describe("selectManualCoreRows", () => {
     assert.deepEqual(selectManualCoreRows(rows), []);
   });
 
+  // Task 10 (19.09.2026): die Reservierung beginnt jetzt bei 0.95 statt 1.0,
+  // also liegt 0.99 IM Band und wird nachgeruestet. Die Grenze wandert, die
+  // Absicht nicht: unterhalb des Bands bleibt alles liegen.
   it("lässt alles unterhalb der Reservierung liegen", () => {
-    const rows = [{ id: "a", importance: 0.99, neverForget: 0, memoryClass: "standard", status: "active" }];
+    const rows = [{ id: "a", importance: 0.94, neverForget: 0, memoryClass: "standard", status: "active" }];
     assert.deepEqual(selectManualCoreRows(rows), []);
+  });
+
+  it("ruestet das ganze Agentenband nach, nicht nur den Wert 1.0", () => {
+    const rows = [
+      { id: "a", importance: 0.95, neverForget: 0, memoryClass: "standard", status: "active" },
+      { id: "b", importance: 0.98, neverForget: 0, memoryClass: "standard", status: "active" },
+      { id: "c", importance: 1.0, neverForget: 0, memoryClass: "standard", status: "active" },
+    ];
+    assert.deepEqual(selectManualCoreRows(rows).map((r) => r.id), ["a", "b", "c"]);
   });
 
   it("rührt gelöschte und archivierte Zeilen nicht an", () => {
