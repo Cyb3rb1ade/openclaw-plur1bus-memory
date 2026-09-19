@@ -7,6 +7,72 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.63] — 2026-09-19
+
+### Geändert
+
+- **Die Importance einer Erinnerung kommt nicht mehr aus Schlüsselwortlisten.**
+  Frisch erfasste Erinnerungen tragen eine neutrale 0,5 und den neuen Status
+  `importanceStatus: pending`; der stündliche `emotion-refine`-Cron klärt
+  Emotion und Bedeutung danach in einem einzigen LLM-Aufruf und leitet daraus
+  die Halbwertszeit ab. Anlass war eine Messung am Produktivbestand: 71 % aller
+  aktiven Erinnerungen bei `main` und `bernhardine` standen auf exakt 0,70 —
+  die Skala trennte nichts mehr.
+- **Importance verlässt das Recall-Ranking.** Bedeutung wirkt künftig über die
+  Stärke, die sie bei der Kodierung gesetzt hat, nicht als zweiter Aufschlag.
+  Die Stärke war ohnehin der schärfste Term; `applyImportanceBoost` bleibt
+  exportiert, wird aber nicht mehr aufgerufen.
+- **Automatische Werte sind auf 0,94 gedeckelt.** Der Bereich 0,95 bis 1,00
+  bleibt der ausdrücklichen Entscheidung des Agenten vorbehalten, und der
+  Refine-Cron fasst Importance und Halbwertszeit einer Zeile in diesem Band
+  nicht an.
+
+### Hinzugefügt
+
+- Spalte `importanceStatus` mit drei Zuständen: `pending` für frische Zeilen
+  (stündlicher Cron), `pending_backfill` für den Bestand (nur Stapel-Skript),
+  `final`. Die Trennung verhindert, dass der Cron rund 23.000 Bestandszeilen
+  einzeln abarbeitet und dabei je Zeile eine LanceDB-Version erzeugt.
+- `lib/encoding-llm.js` mit `classifyEncoding` und `buildRefinePatch`. Eine
+  fehlgeschlagene oder unparsbare Modellantwort liefert `{ ok: false }` und
+  schreibt nichts — eine ungeklärte Zeile bleibt ungeklärt und wird später
+  erneut versucht, statt mit einem geratenen Wert zu landen.
+- Konfigurationsflag `memoryDynamics.flashbulbEncoding`, **Standard aus**.
+  Angeschaltet hebt es die Blitzlicht-Halbwertszeit von 90 auf 3.650 Tage und
+  aktiviert den Blitzlicht-Pfad im Refine-Cron. Vorgesehen für Phase 3, nachdem
+  ein Pilotlauf die Schwelle gegen eine echte Importance-Verteilung kalibriert
+  hat.
+
+### Behoben
+
+- `importanceStatus` überlebt beide Aktualisierungspfade in `lib/safe-update.js`
+  (versioniert und Metadaten-only). Ohne das hätte eine Aktualisierung den
+  Wartezustand still auf `final` gesetzt und die Zeile wäre nie bewertet
+  worden — und ein vom Agenten gesetzter Wert wäre binnen einer Stunde vom Cron
+  überschrieben worden.
+- `lib/encoding-llm.js` benutzt die kanonische Acht-Dimensionen-Liste aus
+  `lib/emotion.js`. Zuvor fehlte `disgust`: Das Modell bekam die Dimension nie
+  angeboten, und antwortete es trotzdem so, entstand `neutral` mit leerer
+  Valenz bei echter Intensität — ein falscher Endzustand, einmal geschrieben.
+- Eine Zeile, deren Text das Modell dauerhaft ablehnt, blockiert die
+  Warteschlange nicht mehr. Nur ein toter LLM-Pfad zählt auf den
+  Abbruchzähler; eine unparsbare Antwort wird getrennt gezählt und übersprungen.
+- Die Importance-Klärung hängt nicht mehr am Schalter `emotion.t3.enabled`.
+  Fehlt jede LLM-Route, meldet der Job das mit Warnung und der Zahl der
+  wartenden Zeilen, statt still einzufrieren.
+- `lib/importance-status.js` und `lib/encoding-llm.js` stehen im Deploy-Manifest
+  (`DEPLOY_FILES`). Ohne den Eintrag hätte der ExecStartPre-Repair sie nicht in
+  die Live-Extension kopiert und der Gateway wäre am fehlenden Modul nicht
+  gestartet.
+
+### Nicht enthalten
+
+Die Migration des Bestands. `MANUAL_CORE_IMPORTANCE` bleibt bei 1,0, die rund
+23.000 vorhandenen Zeilen behalten ihre Werte und ihren Status `final`. Phase 1
+(Agentenband räumen), die Absenkung der Kernschwelle und der Backfill in
+Stapeln folgen als eigene Schritte, in dieser Reihenfolge.
+
+
 ## [7.12.62] — 2026-09-18
 
 ### Behoben
