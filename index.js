@@ -4920,7 +4920,12 @@ const plugin = {
           const emotionLlmCfg = withLlmCallContext(
             {
               ...emotionT3LlmCfg,
-              maxTokens: 300,
+              // Messung + Begründung bei der Konstante
+              // EMOTION_REFINE_ENCODING_MAX_TOKENS weiter unten (voller
+              // Vorwärtsverweis: diese Funktion wird erst vom
+              // emotion-refine-Cron aufgerufen, lange nachdem die
+              // Konstante beim Registrieren initialisiert wurde).
+              maxTokens: EMOTION_REFINE_ENCODING_MAX_TOKENS,
               disableThinking: true,
             },
             context.agentId,
@@ -5161,6 +5166,29 @@ const plugin = {
     const EMOTION_REFINE_MAX_ROWS = 100;
     const EMOTION_REFINE_DEADLINE_MS = 240000;
     const EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES = 3;
+    // EMOTION_REFINE_ENCODING_MAX_TOKENS (19.09.2026): encodingCallLlm oben
+    // (lib/encoding-llm.js) fragt seit der Acht-Dimensionen-Emotions-Label-
+    // Map + Freitext-Grund eine deutlich längere Antwort ab als vorher — die
+    // alten 300 Tokens reichten dafür nicht mehr. Gemessen an einem echten
+    // Provider mit einem echten deutschen Erinnerungstext:
+    //   max_tokens  400 -> 400 Tokens verbraucht, finish_reason "length"
+    //                      (abgeschnittenes JSON, der Parser verwirft es)
+    //   max_tokens  800 -> 800 Tokens verbraucht, finish_reason "length" (dito)
+    //   max_tokens 1500 -> nur 345 Tokens verbraucht, finish_reason "stop"
+    //                      (parst sauber)
+    // Der Fehler blieb dabei stumm: HTTP 200, plausibel aussehendes JSON,
+    // aber keine schließende Klammer — die Zeile bleibt unbewertet, ohne
+    // dass irgendetwas außer einem Zähler das meldet. Der
+    // Tier-3-Emotionsaufruf (emotionT3CallLlm oben) bekommt kein längeres
+    // Antwortformat und bleibt deshalb unverändert bei 300 maxTokens.
+    const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT = 1500;
+    const emotionT3EncodingMaxTokensRaw = Number(emotionCfg.t3?.encodingMaxTokens);
+    // Untergrenze VOR dem Runden prüfen (>= 1, nicht > 0): sonst würde ein
+    // Wert wie 0,5 die Prüfung noch bestehen und erst Math.floor() ihn auf 0
+    // bringen — ein maxTokens von 0 darf aber nie beim Provider ankommen.
+    const EMOTION_REFINE_ENCODING_MAX_TOKENS = Number.isFinite(emotionT3EncodingMaxTokensRaw) && emotionT3EncodingMaxTokensRaw >= 1
+      ? Math.floor(emotionT3EncodingMaxTokensRaw)
+      : EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT;
     // Hook-Drain: Marge fuer den laufenden Embed-Aufruf (die 7 s zwischen
     // Worker-Abbruch und Rueckkehr waren genau der) und Mindestrest, unter
     // dem sich ein Start nicht lohnt.

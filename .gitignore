@@ -9,6 +9,9 @@ node_modules/
 .DS_Store
 *.log
 .embed-promotions-state/
+# Zeilen-Export von scripts/dedupe-memory-ids.mjs --apply — Sicherheitsnetz
+# für den Operator, kein Repo-Inhalt.
+dedupe-exports/
 docs/**
 !docs/audits/
 !docs/audits/**
@@ -42,6 +45,9 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/repair-tombstones.mjs
 !scripts/reapply-tombstones.mjs
 !scripts/backfill-manual-core-markers.mjs
+!scripts/importance-phase1-reset.mjs
+!scripts/importance-metrics.mjs
+!scripts/dedupe-memory-ids.mjs
 !scripts/verify-workspace-writer.mjs
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs

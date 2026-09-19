@@ -2395,6 +2395,11 @@
                 "type": "number",
                 "minimum": 0,
                 "description": "In deferred mode, memories with importance at or above this value are always refined by the emotion-refine cron, even when tier 1/2 is confident. Default 0.9; values above 1 disable the rule."
+              },
+              "encodingMaxTokens": {
+                "type": "number",
+                "minimum": 1,
+                "description": "Output token budget for the combined emotion+meaning encoding call (lib/encoding-llm.js) run by the emotion-refine cron. Its answer carries the full eight-dimension emotion label map plus a free-text reason and needs more room than the tier-3 emotion classification call, which stays at 300. Default 1500 (measured: 400/800 truncate with finish_reason \"length\"; 1500 completes at ~345 tokens with finish_reason \"stop\"). Values < 1 or non-finite fall back to the default."
               }
             }
           },
