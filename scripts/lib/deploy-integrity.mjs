@@ -90,6 +90,8 @@ export const DEPLOY_FILES = [
   "lib/recall-phase-timer.js",
   "lib/retroactive-interference.js",
   "lib/safe-update.js",
+  "lib/importance-status.js",
+  "lib/encoding-llm.js",
   "lib/score.js",
   "lib/semantic-input.js",
   "lib/semantic-lens-index.js",
