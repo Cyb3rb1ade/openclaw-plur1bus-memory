@@ -9,6 +9,9 @@ node_modules/
 .DS_Store
 *.log
 .embed-promotions-state/
+# Zeilen-Export von scripts/dedupe-memory-ids.mjs --apply — Sicherheitsnetz
+# für den Operator, kein Repo-Inhalt.
+dedupe-exports/
 docs/**
 !docs/audits/
 !docs/audits/**

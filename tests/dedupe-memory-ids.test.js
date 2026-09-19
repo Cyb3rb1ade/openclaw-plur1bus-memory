@@ -299,6 +299,46 @@ describe("Export vor --apply: JSONL, BigInt- und Vector-Rundtrip", () => {
     assert.doesNotThrow(() => JSON.stringify(toJsonSafeRow(row)));
   });
 
+  it("wirft statt still zu null zu degradieren, wenn ein Skalarfeld NaN oder Infinity ist", () => {
+    // JSON.stringify(NaN) und JSON.stringify(Infinity) liefern beide klanglos
+    // "null" — für ein Backup, das jede Zeile exakt reproduzieren soll, wäre
+    // das ein unbemerkter Datenverlust. toJsonSafeRow muss das verhindern,
+    // nicht nur den Vektor, auch gewöhnliche Skalarfelder.
+    assert.throws(() => toJsonSafeRow({ id: "x", memoryStrength: NaN }), /nicht-endlicher Wert.*memoryStrength/);
+    assert.throws(() => toJsonSafeRow({ id: "x", importance: Infinity }), /nicht-endlicher Wert.*importance/);
+    assert.throws(() => toJsonSafeRow({ id: "x", coreMemoryScore: -Infinity }), /nicht-endlicher Wert.*coreMemoryScore/);
+  });
+
+  it("wirft, wenn ein einzelnes Element im vector NaN oder Infinity ist (genau die Stelle, an der table.add später ablehnen würde)", () => {
+    const dim = 8;
+    const vector = Array.from({ length: dim }, () => 0.5);
+    vector[3] = NaN;
+    assert.throws(() => toJsonSafeRow({ id: "x", vector }), /nicht-endlicher Wert.*vector\[3\]/);
+
+    const vector2 = Array.from({ length: dim }, () => 0.5);
+    vector2[7] = Infinity;
+    assert.throws(() => toJsonSafeRow({ id: "x", vector: vector2 }), /nicht-endlicher Wert.*vector\[7\]/);
+  });
+
+  it("writeExport schreibt keine Datei, wenn eine der Zeilen einen nicht-endlichen Wert enthält", () => {
+    const dir = makeTempDir("dedupe-export-nonfinite-");
+    const decisions = [
+      {
+        id: "g1",
+        survivor: { id: "g1", text: "ok", memoryStrength: 1 },
+        discarded: { id: "g1", text: "kaputt", memoryStrength: NaN },
+        decidedBy: "createdAt",
+        arbitrary: false,
+      },
+    ];
+    assert.throws(
+      () => writeExport({ exportDir: dir, agentId: "testagent", decisions, now: new Date("2026-09-19T15:30:00.000Z") }),
+      /nicht-endlicher Wert/,
+    );
+    const path = buildExportPath({ exportDir: dir, agentId: "testagent", now: new Date("2026-09-19T15:30:00.000Z") });
+    assert.equal(existsSync(path), false, "keine Datei mit halbem/kaputtem Inhalt zurückgelassen");
+  });
+
   it("ein echter 3072-dimensionaler Float32-Vektor übersteht den JSON-Rundtrip elementweise exakt", () => {
     // Zufällige, auf Float32-Präzision "eingerastete" Werte (Math.fround) —
     // nicht nur Wiederholungen von 0.1 — wie sie aus einer echten

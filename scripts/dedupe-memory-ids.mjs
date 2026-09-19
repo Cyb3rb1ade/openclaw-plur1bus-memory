@@ -178,14 +178,35 @@ export function buildDedupePlan(rows) {
  * von JS-Zahlen (Float64) durch `JSON.stringify`/`JSON.parse` läuft, kommt
  * bitgenau zurück — JS' Number-zu-String-Konvertierung ist rundtrip-treu,
  * und die Aufweitung Float32→Float64 beim Lesen ist verlustfrei.
+ *
+ * Eine Zahl darf NIE still zu `null` werden: `JSON.stringify(NaN)` und
+ * `JSON.stringify(Infinity)` liefern beide klanglos `null` — für ein
+ * Skalarfeld (memoryStrength, importance, ...) genauso wie für ein Element
+ * mitten in einem 3072-dimensionalen vector, wo genau dieses `null` später
+ * beim Zurückschreiben abgelehnt würde. Deshalb wirft diese Funktion, statt
+ * eine Backup-Datei auszuliefern, die genau die Werte verschluckt, die sie
+ * schützen soll — geprüft für jeden Skalar UND jedes Vektor-Element.
  */
 export function toJsonSafeRow(row) {
+  const assertFinite = (key, n) => {
+    if (!Number.isFinite(n)) {
+      throw new Error(`toJsonSafeRow: nicht-endlicher Wert in Spalte "${key}" (${n}) — Export abgebrochen, nichts geschrieben.`);
+    }
+    return n;
+  };
   const out = {};
   for (const [key, value] of Object.entries(row ?? {})) {
     if (typeof value === "bigint") {
       out[key] = value.toString();
-    } else if (value && typeof value !== "string" && !Array.isArray(value) && typeof value[Symbol.iterator] === "function") {
-      out[key] = Array.from(value);
+    } else if (typeof value === "number") {
+      out[key] = assertFinite(key, value);
+    } else if (Array.isArray(value)) {
+      // Bereits ein Array (z. B. eine Überlebende, deren vector schon vor
+      // dem Export entpackt wurde) — trotzdem elementweise prüfen, nicht
+      // nur den Arrow-Zweig unten.
+      out[key] = value.map((v, i) => (typeof v === "number" ? assertFinite(`${key}[${i}]`, v) : v));
+    } else if (value && typeof value !== "string" && typeof value[Symbol.iterator] === "function") {
+      out[key] = Array.from(value).map((v, i) => (typeof v === "number" ? assertFinite(`${key}[${i}]`, v) : v));
     } else {
       out[key] = value;
     }
