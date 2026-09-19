@@ -189,7 +189,12 @@ describe("recall-pipeline soft-budget fallback", () => {
         throw new Error("reranker should not be called under soft-budget fallback");
       },
     };
-    const phaseTimer = makeTimerThatExceedsAfter("budget");
+    // Seit dem 20.09.2026 liegt die Budget-Kappung HINTER dem Reranking
+    // (vorher davor). Der Notausgang, der das Reranking ueberspringen soll,
+    // sitzt damit nach "graph_hydration" — vorher war es "budget". Die
+    // Absicht des Tests bleibt: ist das Zeitbudget vor dem Rerank erschoepft,
+    // wird nicht mehr rerankt.
+    const phaseTimer = makeTimerThatExceedsAfter("graph_hydration");
 
     const result = await runRecallPipeline({
       query: "alpha beta gamma",
