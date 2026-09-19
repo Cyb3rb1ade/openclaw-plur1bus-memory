@@ -4469,7 +4469,6 @@ const plugin = {
               budget: resolveRuntimeRecallBudget(query, limit, adaptiveBudgetCfg),
               adaptiveBudget: adaptiveBudgetCfg,
               recallMinScore,
-              importanceBoost,
               dedupEnabled,
               dedupJaccard,
               canonicalEnabled: false,
@@ -4676,6 +4675,9 @@ const plugin = {
 
     // v1.8.0 — Recall-Quality knobs (declared early because runtime scheduler consumes eventLoopLagSnapshot)
     const recallCfg = cfg.recall || {};
+    // Seit 19.09.2026 nur noch zur Config-Validierung aufgelöst — die Pipeline
+    // liest diesen Wert nicht mehr, darum wird er an keinen
+    // runRecallPipeline/runMergedNamespaceRecall-Aufruf mehr weitergereicht.
     const importanceBoost  = recallCfg.importanceBoost  ?? 0.3;
     const dedupEnabled     = recallCfg.dedup            !== false; // default on
     const dedupJaccard     = recallCfg.dedupJaccard     ?? 0.78;
@@ -11219,7 +11221,6 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 budget: recallBudget,
                 adaptiveBudget: adaptiveBudgetCfg,
                 recallMinScore,
-                importanceBoost,
                 dedupEnabled,
                 dedupJaccard,
                 canonicalEnabled,
@@ -12386,7 +12387,6 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             budget: resolveRuntimeRecallBudget(event.prompt, maxPromptMemories, adaptiveBudgetCfg),
             adaptiveBudget: adaptiveBudgetCfg,
             recallMinScore: autoRecallMinScore,
-            importanceBoost,
             dedupEnabled,
             dedupJaccard,
             canonicalEnabled,
