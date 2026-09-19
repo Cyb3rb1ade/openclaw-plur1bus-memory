@@ -1,8 +1,34 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { parseEncodingResponse, buildEncodingPrompt, classifyEncoding } from "../lib/encoding-llm.js";
+import { EMOTION_DIMENSIONS } from "../lib/emotion.js";
 
 describe("encoding llm", () => {
+  // R17 (Abschluss-Review, Critical 2): eine lokale Sieben-Elemente-Liste in
+  // encoding-llm.js hatte `disgust` vergessen. Das Modell bekam die
+  // Dimension nie angeboten, und antwortete es trotzdem so, wurde daraus
+  // `neutral` mit leerer Valenz geschrieben — ein falscher Endzustand, nie
+  // wieder angefasst. Die Divergenz selbst ist der Defekt, nicht nur die
+  // Anwesenheit des Strings — deshalb hier gegen die im Prompt tatsächlich
+  // angebotene Liste prüfen, nicht gegen eine erneut hartkodierte Kopie.
+  it("bietet dem Modell exakt die kanonischen acht Emotionsdimensionen an", () => {
+    const prompt = buildEncodingPrompt("Testtext");
+    const match = prompt.match(/dominant: eine von (.+) oder neutral\./);
+    assert.ok(match, "Prompt muss die dominant-Zeile enthalten");
+    const offeredDimensions = match[1].split(", ");
+    assert.deepStrictEqual([...offeredDimensions].sort(), [...EMOTION_DIMENSIONS].sort());
+    assert.ok(offeredDimensions.includes("disgust"), "disgust darf nicht fehlen");
+  });
+
+  it("akzeptiert disgust als dominant, statt es zu neutral zu machen", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.6, intensity: 0.9, dominant: "disgust", reason: "Ekel vor Verdorbenem",
+    }));
+    assert.strictEqual(parsed.ok, true);
+    assert.strictEqual(parsed.emotion.emotionalDominant, "disgust");
+    assert.notStrictEqual(parsed.emotion.emotionalDominant, "neutral");
+  });
+
   it("asks for both judgements in one prompt", () => {
     const prompt = buildEncodingPrompt("Mein Hund ist heute eingeschlaefert worden.");
     assert.match(prompt, /importance/i);
