@@ -48,6 +48,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/importance-phase1-reset.mjs
 !scripts/importance-metrics.mjs
 !scripts/dedupe-memory-ids.mjs
+!scripts/importance-backfill.mjs
 !scripts/verify-workspace-writer.mjs
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs
