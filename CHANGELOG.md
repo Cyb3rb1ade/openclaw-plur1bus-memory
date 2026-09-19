@@ -7,6 +7,33 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.64] — 2026-09-19
+
+### Geändert
+
+- **Die Emotionskarte fragt nur noch nach den Dimensionen, die tatsächlich
+  mitschwingen.** Der bisherige Prompt verlangte einen Wert je Dimension und
+  bekam eine ausgefüllte Tabelle zurück: in einem A/B/A-Lauf über 60 echte
+  Erinnerungen im Schnitt 3,27 belegte Dimensionen, sekundäre Werte mit Median
+  0,10 und 77 % davon bei höchstens 0,2. Bedeutung und dominante Emotion
+  ändern sich dadurch nicht — der Formateffekt liegt auf dem Rauschboden zweier
+  identischer Läufe. Die Scheinsignale verschwinden dagegen: die Regel für eine
+  „wichtige Lektion" im Recall-Boost (Vertrauen zusammen mit Furcht oder Zorn)
+  traf zuvor 32–38 % aller Erinnerungen, danach 3,4 %. Gespeichert wird
+  unverändert nur, was von null verschieden ist.
+- **Der Encoding-Aufruf bekommt ein eigenes, konfigurierbares Tokenbudget**
+  (Vorgabe 1500 statt 300). Mit 300 Tokens brach die Antwort im neuen Format
+  stumm mitten im JSON ab — HTTP 200, kein Parse, Zeile blieb unbewertet. Der
+  Emotions-Aufruf der dritten Stufe bleibt bei 300.
+
+### Hinzugefügt
+
+- **Migrationswerkzeuge für den Bestand:** `scripts/importance-metrics.mjs`
+  (Kennzahlen der Importance-Verteilung), `scripts/importance-phase1-reset.mjs`
+  (räumt das Agentenband) und `scripts/dedupe-memory-ids.mjs` (entfernt
+  id-Duplikate aus dem inzwischen toten Legacy-Update-Pfad, mit Zeilen-Export
+  vor der ersten Reparatur).
+
 ## [7.12.63] — 2026-09-19
 
 ### Geändert
