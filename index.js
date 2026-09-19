@@ -4906,6 +4906,14 @@ const plugin = {
     const emotionT3TimeoutMs = emotionCfg.t3?.timeoutMs ?? 4000;
     const emotionMoodInfluence = emotionCfg.moodInfluence ?? 0.3;
     const emotionIntensityHalfLifeFactor = emotionCfg.intensityHalfLifeFactor ?? 1.0;
+    // R16 (Abschluss-Review 19.09.2026, Critical 1): Blitzlicht-Kodierung ist
+    // erst für Phase 3 vorgesehen, nach einem Pilotlauf, der die
+    // 0,70-Schwelle an einer echten Importance-Verteilung kalibriert. Default
+    // aus hält sowohl den Capture-Pfad (90-Tage-Boden, memory-dynamics.js)
+    // als auch den neuen Refine-Pfad (kein Blitzlicht, encoding-llm.js) exakt
+    // auf dem Verhalten von vor diesem Branch.
+    const memoryDynamicsCfg = cfg.memoryDynamics || {};
+    const flashbulbEncodingEnabled = memoryDynamicsCfg.flashbulbEncoding === true;
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
@@ -8035,7 +8043,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       agentId: internalAgent,
                       callLlm: emotionT3CallLlm,
                     });
-                    const patch = buildRefinePatch(row, encoding, Date.now());
+                    const patch = buildRefinePatch(row, encoding, Date.now(), { flashbulbEncodingEnabled });
                     if (!patch) {
                       // Provider-Ausfall oder unparsbare Antwort liefert ok:false, nie
                       // einen geratenen Wert: Zeile bleibt pending, nächster Lauf
@@ -10613,7 +10621,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   entities: graphSignals.entities,
                   people: graphSignals.people,
                   projects: graphSignals.projects,
-                }, captureTimestamp, halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
+                }, captureTimestamp, halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
                 await db.store(row);
                 storedMemoryRows.push(row);
                 stored++;

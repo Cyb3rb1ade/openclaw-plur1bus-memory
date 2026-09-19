@@ -18,17 +18,35 @@ describe("refine patch", () => {
     assert.strictEqual(patch.halfLifeDays, 600);
   });
 
-  it("burns in an intense single event", () => {
+  it("burns in an intense single event (flag on)", () => {
     const patch = buildRefinePatch({ id: "b", memoryStrength: 0.9, halfLifeDays: 180 },
-      { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" }, now);
+      { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" },
+      now, { flashbulbEncodingEnabled: true });
     assert.strictEqual(patch.halfLifeDays, FLASHBULB_HALF_LIFE_DAYS);
     assert.strictEqual(patch.memoryStrength, 0.95);
+    assert.strictEqual(patch.memoryClass, "flashbulb");
   });
 
-  it("never lowers an existing strength", () => {
+  it("never lowers an existing strength (flag on)", () => {
     const patch = buildRefinePatch({ id: "c", memoryStrength: 1.0, halfLifeDays: 180 },
-      { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" }, now);
+      { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" },
+      now, { flashbulbEncodingEnabled: true });
     assert.strictEqual(patch.memoryStrength, 1.0);
+  });
+
+  // R16 (Abschluss-Review, Critical 1): ohne das Flag — der Deploy-Default —
+  // wendet der Refine-Pfad gar kein Blitzlicht an, selbst bei derselben
+  // hochintensiven Eingabe wie oben. Fällt der Default versehentlich auf
+  // "an" um, bekommt memoryStrength hier einen Wert (0.95) statt undefined
+  // zu bleiben, und der Test schlägt fehl.
+  it("applies no flashbulb at all without the flag (deploy default)", () => {
+    const patch = buildRefinePatch({ id: "b2", memoryStrength: 0.9, halfLifeDays: 180 },
+      { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" }, now);
+    assert.strictEqual(Object.hasOwn(patch, "memoryStrength"), false);
+    assert.strictEqual(Object.hasOwn(patch, "memoryClass"), false);
+    // Ohne Blitzlicht kommt die Halbwertszeit rein aus dem Band (0.7–0.94 → 600),
+    // nicht aus FLASHBULB_HALF_LIFE_DAYS.
+    assert.strictEqual(patch.halfLifeDays, 600);
   });
 
   it("returns null when the model failed", () => {

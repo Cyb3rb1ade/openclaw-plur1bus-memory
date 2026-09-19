@@ -71,21 +71,34 @@ describe("applyDynamicsDefaults mit Intensitäts-Modulation", () => {
     assert.strictEqual(out.halfLifeDays, 42);
   });
 
-  it("eine Flashbulb-Erinnerung hebt eine kürzere explizite Halbwertszeit an", () => {
+  it("eine Flashbulb-Erinnerung hebt eine kürzere explizite Halbwertszeit an (Flag an)", () => {
     const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.5, halfLifeDays: 42 };
-    const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
+    const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0, flashbulbEncodingEnabled: true });
     assert.strictEqual(out.memoryClass, "flashbulb");
     assert.strictEqual(out.halfLifeDays, 3650);
   });
 
-  it("Flashbulb-Memories erhalten die Blitzlicht-Halbwertszeit", () => {
+  it("Flashbulb-Memories erhalten die Blitzlicht-Halbwertszeit (Flag an)", () => {
     // Score: 0.9*0.5 + 0.9*0.5 = 0.90 >= 0.70 → Flashbulb.
     // Kein Core (emotionalIntensity 0.9 < 0.95). Basis: 600 × (1 + 0.9) = 1140,
     // aber Flashbulb-Encoding nutzt max(1140, 3650) = 3650.
     const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.9 };
-    const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
+    const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0, flashbulbEncodingEnabled: true });
     assert.strictEqual(out.memoryClass, "flashbulb");
     assert.strictEqual(out.halfLifeDays, 3650);
+  });
+
+  // R16 (Abschluss-Review, Critical 1): ohne das Flag — und das ist der
+  // Deploy-Default — feuert Flashbulb weiterhin (wie vor diesem Branch),
+  // hebt eine kurze explizite Halbwertszeit aber nur auf den historischen
+  // 90-Tage-Boden an, nicht auf die Zehnjahres-Dauer. Fällt der Default
+  // versehentlich auf "an" um, wird hier 3650 statt 90 gemessen und der Test
+  // schlägt fehl.
+  it("Flashbulb-Memories bekommen ohne das Flag weiterhin nur den 90-Tage-Boden", () => {
+    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.5, halfLifeDays: 42 };
+    const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
+    assert.strictEqual(out.memoryClass, "flashbulb");
+    assert.strictEqual(out.halfLifeDays, 90);
   });
 
   it("ohne opts bleibt das bisherige Verhalten (Faktor 1.0 Default, Intensität 0)", () => {
