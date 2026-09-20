@@ -3,11 +3,13 @@ import assert from "node:assert";
 import {
   BATCH_SIZE,
   CONCURRENCY,
-  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  PROVIDERS,
   buildBackfillRow,
   chunk,
   createEncodingCall,
   parseArgs,
+  resolveProvider,
 } from "../scripts/importance-backfill.mjs";
 import { AGENT_BAND_MIN } from "../lib/memory-dynamics.js";
 import { IMPORTANCE_STATUS } from "../lib/importance-status.js";
@@ -88,7 +90,7 @@ describe("kimi encoding call", () => {
   it("sends the configured model and budget, and no temperature", async () => {
     const seen = [];
     const call = createEncodingCall({
-      apiKey: "sk-test", model: "kimi-for-coding-highspeed", maxTokens: 1500,
+      apiKey: "sk-test", provider: "kimi", model: "kimi-for-coding-highspeed", maxTokens: 1500,
       fetchImpl: async (url, init) => { seen.push({ url, body: JSON.parse(init.body), headers: init.headers }); return okBody("{}"); },
     });
     await call([{ role: "user", content: "x" }], {});
@@ -154,24 +156,58 @@ describe("kimi encoding call", () => {
   });
 });
 
+describe("provider routing", () => {
+  it("knows deepseek and kimi and defaults to deepseek", () => {
+    assert.strictEqual(DEFAULT_PROVIDER, "deepseek");
+    assert.deepStrictEqual(Object.keys(PROVIDERS).sort(), ["deepseek", "kimi"]);
+    assert.strictEqual(resolveProvider("deepseek").endpoint, "https://api.deepseek.com/chat/completions");
+    assert.strictEqual(resolveProvider("deepseek").model, "deepseek-flash");
+    assert.strictEqual(resolveProvider("kimi").model, "kimi-for-coding-highspeed");
+  });
+
+  it("names the env var per provider so no key is read from a file", () => {
+    assert.strictEqual(resolveProvider("deepseek").keyEnv, "DEEPSEEK_API_KEY");
+    assert.strictEqual(resolveProvider("kimi").keyEnv, "KIMI_CODING_API_KEY");
+  });
+
+  it("refuses an unknown provider instead of guessing an endpoint", () => {
+    assert.throws(() => resolveProvider("gibtsnicht"), /gibtsnicht/);
+  });
+
+  // Der User-Agent ist eine Kimi-Eigenheit ("Invalid Authentication" ohne ihn)
+  // und hat bei DeepSeek nichts verloren.
+  it("sends the kimi user agent only to kimi", async () => {
+    const seen = [];
+    const fetchImpl = async (url, init) => { seen.push({ url, headers: init.headers }); return { ok: true, json: async () => ({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }) }; };
+    await createEncodingCall({ apiKey: "k", provider: "deepseek", fetchImpl })([{ role: "user", content: "x" }], {});
+    await createEncodingCall({ apiKey: "k", provider: "kimi", fetchImpl })([{ role: "user", content: "x" }], {});
+    assert.match(seen[0].url, /api\.deepseek\.com/);
+    assert.ok(!("User-Agent" in seen[0].headers), "DeepSeek braucht keinen User-Agent");
+    assert.strictEqual(seen[1].headers["User-Agent"], "gsd/2.77.0");
+  });
+});
+
 describe("backfill arguments", () => {
   it("is a dry run unless --apply is given", () => {
     assert.strictEqual(parseArgs([]).apply, false);
     assert.strictEqual(parseArgs(["--apply"]).apply, true);
   });
 
-  it("takes agents, limit, model and batch size", () => {
-    const args = parseArgs(["main", "bernhardine", "--limit", "50", "--model", "k3", "--batch-size", "200"]);
+  it("takes agents, limit, provider, model and batch size", () => {
+    const args = parseArgs(["main", "bernhardine", "--limit", "50", "--provider", "kimi", "--model", "k3", "--batch-size", "200"]);
     assert.deepStrictEqual(args.agents, ["main", "bernhardine"]);
     assert.strictEqual(args.limit, 50);
+    assert.strictEqual(args.provider, "kimi");
     assert.strictEqual(args.model, "k3");
     assert.strictEqual(args.batchSize, 200);
   });
 
-  it("defaults to kimi highspeed and the plan's batching", () => {
+  it("defaults to the provider default model, not a hardcoded one", () => {
     const args = parseArgs([]);
-    assert.strictEqual(args.model, DEFAULT_MODEL);
-    assert.strictEqual(DEFAULT_MODEL, "kimi-for-coding-highspeed");
+    assert.strictEqual(args.provider, DEFAULT_PROVIDER);
+    assert.strictEqual(args.model, null, "ohne --model entscheidet der Anbieter");
+    assert.strictEqual(resolveProvider(args.provider, args.model).model, "deepseek-flash");
+    assert.strictEqual(resolveProvider("kimi", "k3").model, "k3");
     assert.strictEqual(args.batchSize, BATCH_SIZE);
     assert.strictEqual(BATCH_SIZE, 500);
     assert.strictEqual(CONCURRENCY, 8);
