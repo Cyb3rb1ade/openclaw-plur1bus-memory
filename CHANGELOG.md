@@ -7,6 +7,34 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.68] — 2026-09-20
+
+### Behoben
+
+- **Die Budget-Kappung liegt jetzt hinter dem Reranking.** Die Pipeline kappte
+  auf `topN`, *bevor* der Reranker lief — der durfte damit nur umsortieren,
+  was die Kappung übrig ließ, und konnte eine Erinnerung von Platz 16 nicht
+  mehr hereinholen, obwohl genau das seine Aufgabe ist. Gemessen an 80
+  Benchmark-Fragen mit verfehltem Beleg: Kappung nach dem Reranking findet 65
+  davon (81 %), Kappung davor 11 (14 %). Im vollen LOCOMO-Lauf steigt die
+  Belegquote von 68,0 auf 91,3 Prozent und die Trefferquote von 46,8 auf
+  60,9 — ohne andere Einbettung, anderes Modell oder größeren Kontext.
+
+  Produktiv lief bereits die bessere Variante, weil `index.js` beim Recall
+  `deferFinalCap` setzt und selbst kappt; jeder Direktaufruf der Pipeline
+  bekam stillschweigend die schwächere. Die Kappung zu verschieben statt nur
+  die Vorgabe umzudrehen hält den Vertrag intakt: die Funktion liefert
+  weiterhin höchstens `topN`, kein Aufrufer muss etwas ändern.
+
+### Hinzugefügt
+
+- **`bench/` — der Messstand für LOCOMO und LongMemEval** liegt nicht mehr
+  unversioniert neben dem Repo. Enthalten sind die Skripte, zwei Analysen und
+  die Ergebnisdateien der aussagekräftigen Läufe; die Datensätze Dritter, die
+  LanceDB-Stores und alles mit echten Erinnerungen bleiben per `.gitignore`
+  draußen. `bench/` steht nicht in der `files`-Whitelist und wird nicht
+  mit ausgeliefert.
+
 ## [7.12.67] — 2026-09-19
 
 ### Hinzugefügt
