@@ -35,7 +35,7 @@ class Encoding769Tests(unittest.TestCase):
         self.assertEqual([payload["max_tokens"] for payload in seen], [1500, 300])
 
     def test_strict_judgment_and_sparse_emotions(self):
-        for invalid in (None, True, "0.8", float("nan"), [], {}):
+        for invalid in (None, True, "0.8", float("nan"), 10**400, [], {}):
             self.assertIsNone(refine_patch({}, {"importance": invalid}, 42))
         patch = refine_patch({}, {"importance": 1, "intensity": 0.8, "dominant": "disgust"}, 42)
         self.assertEqual(patch["importance"], 0.94)

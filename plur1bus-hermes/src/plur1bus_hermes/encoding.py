@@ -36,7 +36,10 @@ def encoding_prompt(text: str) -> str:
 
 
 def _number(value: Any) -> bool:
-    return type(value) in (int, float) and math.isfinite(value)
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def refine_patch(row: dict[str, Any], judgment: Any, now: int, *, flashbulb: bool = False) -> dict[str, Any] | None:
