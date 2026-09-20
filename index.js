@@ -40,6 +40,8 @@ import { flushMetrics } from "./lib/metrics.js";
 import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary, compressMemorySlotsForPrompt } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
+import { IMPORTANCE_STATUS, normalizeImportanceStatus } from "./lib/importance-status.js";
+import { classifyEncoding, buildRefinePatch } from "./lib/encoding-llm.js";
 import {
   hasMeaningfulDifference,
   isSafeDuplicate,
@@ -1460,6 +1462,7 @@ class MemoryDB {
     if (normalized.emotionalDominant == null) normalized.emotionalDominant = "neutral";
     if (normalized.moodContextAtCapture == null) normalized.moodContextAtCapture = "";
     if (normalized.emotionStatus == null) normalized.emotionStatus = "final";
+    normalized.importanceStatus = normalizeImportanceStatus(normalized.importanceStatus);
     if (normalized.replayCount == null) normalized.replayCount = 0;
     if (normalized.lastReplayed == null) normalized.lastReplayed = 0;
     if (normalized.retrievalCount == null) normalized.retrievalCount = 0;
@@ -1598,6 +1601,9 @@ class MemoryDB {
             // 7.12.22: Bestand gilt als fertig klassifiziert; nur neue Zeilen
             // aus dem entkoppelten Capture stehen auf pending_t3.
             { name: 'emotionStatus', valueSql: "'final'" },
+            // Bestand gilt als geklaert; Phase 1 der Migration setzt ihn
+            // ausdruecklich auf pending_backfill.
+            { name: 'importanceStatus', valueSql: "'final'" },
             { name: 'replayCount', valueSql: '0' },
             { name: 'lastReplayed', valueSql: '0' },
             { name: 'retrievalCount', valueSql: '0' },
@@ -1703,6 +1709,7 @@ class MemoryDB {
             emotionalDominant: "neutral",
             moodContextAtCapture: "",
             emotionStatus: "final",
+            importanceStatus: "final",
             replayCount: 0,
             lastReplayed: 0,
             retrievalCount: 0,
@@ -4462,7 +4469,6 @@ const plugin = {
               budget: resolveRuntimeRecallBudget(query, limit, adaptiveBudgetCfg),
               adaptiveBudget: adaptiveBudgetCfg,
               recallMinScore,
-              importanceBoost,
               dedupEnabled,
               dedupJaccard,
               canonicalEnabled: false,
@@ -4669,6 +4675,9 @@ const plugin = {
 
     // v1.8.0 — Recall-Quality knobs (declared early because runtime scheduler consumes eventLoopLagSnapshot)
     const recallCfg = cfg.recall || {};
+    // Seit 19.09.2026 nur noch zur Config-Validierung aufgelöst — die Pipeline
+    // liest diesen Wert nicht mehr, darum wird er an keinen
+    // runRecallPipeline/runMergedNamespaceRecall-Aufruf mehr weitergereicht.
     const importanceBoost  = recallCfg.importanceBoost  ?? 0.3;
     const dedupEnabled     = recallCfg.dedup            !== false; // default on
     const dedupJaccard     = recallCfg.dedupJaccard     ?? 0.78;
@@ -4841,9 +4850,14 @@ const plugin = {
     // Tier 3: enabled if wanted AND its feature-local route is available.
     // onlyWhenProviderAvailable (default: true) makes T3 soft-skip instead of error when no provider.
     const emotionT3WantsEnabled = emotionCfg.t3?.enabled !== false;
-    const emotionT3LlmCfg = emotionT3WantsEnabled
-      ? createFeatureRoute("emotionT3", emotionCfg.t3 || {})
-      : null;
+    // Abschluss-Review, Important 6: die Route wird jetzt IMMER aufgelöst,
+    // unabhängig von emotionT3WantsEnabled — sonst friert eine Abschaltung
+    // von emotion.t3 (oder ein Provider-Ausfall bei der Registrierung) auch
+    // die Importance-Klärung im emotion-refine-Cron für immer ein, obwohl der
+    // Encoding-Call (lib/encoding-llm.js) davon konzeptionell unabhängig ist.
+    // emotionT3WantsEnabled bleibt das alleinige Tor für die eigentliche
+    // Tier-3-Emotionsklassifikation (setEmotionConfig, Capture-Pfad unten).
+    const emotionT3LlmCfg = createFeatureRoute("emotionT3", emotionCfg.t3 || {});
     const emotionT3HasProvider = Boolean(
       emotionT3LlmCfg
       && (emotionT3LlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
@@ -4891,12 +4905,61 @@ const plugin = {
     } else if (emotionT3WantsEnabled && !emotionT3HasProvider) {
       api.logger.info("memory-lancedb-namespaced: emotion tier-3 deferred — no LLM provider configured (onlyWhenProviderAvailable)");
     }
+    // Abschluss-Review, Important 6: eigene Call-Funktion für den
+    // emotion-refine-Cron (lib/encoding-llm.js), unabhängig von
+    // emotionT3Enabled — verfügbar, sobald irgendein Provider existiert,
+    // selbst wenn der Operator emotion.t3 selbst abgeschaltet hat. Sonst
+    // friert eine Abschaltung von emotion.t3 (oder ein Provider-Ausfall bei
+    // der Registrierung) auch die Importance-Klärung für immer ein, obwohl
+    // der Encoding-Call davon konzeptionell unabhängig ist. Gleicher Aufbau
+    // wie emotionT3CallLlm oben, bewusst nicht als gemeinsame Hilfsfunktion
+    // extrahiert, damit dessen bestehende Scoping-Verträge unangetastet
+    // bleiben.
+    const encodingCallLlm = emotionT3HasProvider
+      ? (messages, context = {}) => {
+          const emotionLlmCfg = withLlmCallContext(
+            {
+              ...emotionT3LlmCfg,
+              // Messung + Begründung bei der Konstante
+              // EMOTION_REFINE_ENCODING_MAX_TOKENS weiter unten (voller
+              // Vorwärtsverweis: diese Funktion wird erst vom
+              // emotion-refine-Cron aufgerufen, lange nachdem die
+              // Konstante beim Registrieren initialisiert wurde).
+              maxTokens: EMOTION_REFINE_ENCODING_MAX_TOKENS,
+              disableThinking: true,
+            },
+            context.agentId,
+            LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+            { runtimeLlm: context.runtimeLlm, signal: context.signal },
+          );
+          return context.agentId
+            ? callLlm(messages, withLlmCallContext(
+                withLlmResultCacheContext(
+                  { ...emotionLlmCfg },
+                  context.agentId,
+                  LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                ),
+                context.agentId,
+                LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                { runtimeLlm: context.runtimeLlm, signal: context.signal },
+              ))
+            : callLlm(messages, emotionLlmCfg);
+        }
+      : null;
     // Emotionale Dynamik (Spec 2026-07-01): aggressive T3-Eskalation,
     // Timeout-Schutz, Recall-Gewicht und Decay-Kopplung.
     const emotionT3EscalationConfidence = emotionCfg.t3?.escalationConfidence ?? 0.85;
     const emotionT3TimeoutMs = emotionCfg.t3?.timeoutMs ?? 4000;
     const emotionMoodInfluence = emotionCfg.moodInfluence ?? 0.3;
     const emotionIntensityHalfLifeFactor = emotionCfg.intensityHalfLifeFactor ?? 1.0;
+    // R16 (Abschluss-Review 19.09.2026, Critical 1): Blitzlicht-Kodierung ist
+    // erst für Phase 3 vorgesehen, nach einem Pilotlauf, der die
+    // 0,70-Schwelle an einer echten Importance-Verteilung kalibriert. Default
+    // aus hält sowohl den Capture-Pfad (90-Tage-Boden, memory-dynamics.js)
+    // als auch den neuen Refine-Pfad (kein Blitzlicht, encoding-llm.js) exakt
+    // auf dem Verhalten von vor diesem Branch.
+    const memoryDynamicsCfg = cfg.memoryDynamics || {};
+    const flashbulbEncodingEnabled = memoryDynamicsCfg.flashbulbEncoding === true;
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
@@ -5103,6 +5166,29 @@ const plugin = {
     const EMOTION_REFINE_MAX_ROWS = 100;
     const EMOTION_REFINE_DEADLINE_MS = 240000;
     const EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES = 3;
+    // EMOTION_REFINE_ENCODING_MAX_TOKENS (19.09.2026): encodingCallLlm oben
+    // (lib/encoding-llm.js) fragt seit der Acht-Dimensionen-Emotions-Label-
+    // Map + Freitext-Grund eine deutlich längere Antwort ab als vorher — die
+    // alten 300 Tokens reichten dafür nicht mehr. Gemessen an einem echten
+    // Provider mit einem echten deutschen Erinnerungstext:
+    //   max_tokens  400 -> 400 Tokens verbraucht, finish_reason "length"
+    //                      (abgeschnittenes JSON, der Parser verwirft es)
+    //   max_tokens  800 -> 800 Tokens verbraucht, finish_reason "length" (dito)
+    //   max_tokens 1500 -> nur 345 Tokens verbraucht, finish_reason "stop"
+    //                      (parst sauber)
+    // Der Fehler blieb dabei stumm: HTTP 200, plausibel aussehendes JSON,
+    // aber keine schließende Klammer — die Zeile bleibt unbewertet, ohne
+    // dass irgendetwas außer einem Zähler das meldet. Der
+    // Tier-3-Emotionsaufruf (emotionT3CallLlm oben) bekommt kein längeres
+    // Antwortformat und bleibt deshalb unverändert bei 300 maxTokens.
+    const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT = 1500;
+    const emotionT3EncodingMaxTokensRaw = Number(emotionCfg.t3?.encodingMaxTokens);
+    // Untergrenze VOR dem Runden prüfen (>= 1, nicht > 0): sonst würde ein
+    // Wert wie 0,5 die Prüfung noch bestehen und erst Math.floor() ihn auf 0
+    // bringen — ein maxTokens von 0 darf aber nie beim Provider ankommen.
+    const EMOTION_REFINE_ENCODING_MAX_TOKENS = Number.isFinite(emotionT3EncodingMaxTokensRaw) && emotionT3EncodingMaxTokensRaw >= 1
+      ? Math.floor(emotionT3EncodingMaxTokensRaw)
+      : EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT;
     // Hook-Drain: Marge fuer den laufenden Embed-Aufruf (die 7 s zwischen
     // Worker-Abbruch und Rueckkehr waren genau der) und Mindestrest, unter
     // dem sich ein Start nicht lohnt.
@@ -6792,7 +6878,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
                 const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
-                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides);
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
                 return { mergedEntry, mergeResult, mergedImportance };
               },
             });
@@ -6818,7 +6904,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -7986,21 +8072,36 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 return formatJsonCommandResult({ job: "embedding-drain", ...result });
               }
               if (subKey === "emotion-refine") {
-                if (!emotionT3Enabled) {
-                  return formatJsonCommandResult({ job: "emotion-refine", skipped: true, reason: "emotion_t3_disabled" });
-                }
+                // Abschluss-Review, Important 6: emotion.t3 (die eigentliche
+                // Tier-3-Emotionsklassifikation) und die Importance-Klärung
+                // dieses Crons sind jetzt entkoppelt — beide teilen sich nur
+                // den LLM-Call (lib/encoding-llm.js), nicht das Feature-Flag.
+                // Ein abgeschaltetes emotion.t3 (oder ein zur
+                // Registrierungszeit fehlender Provider unter
+                // onlyWhenProviderAvailable) darf die Importance-Klärung
+                // nicht mehr für immer einfrieren, solange irgendeine
+                // nutzbare Route für den Encoding-Call existiert
+                // (encodingCallLlm). Nur wenn wirklich kein Provider da ist,
+                // wird übersprungen — dann aber mit Warnung und Pending-Zahl,
+                // statt still.
                 const refineStartedAt = Date.now();
-                const runtimeLlm = commandCtx?.runtimeContext?.llm;
                 const result = await pool.withDb(internalAgent, async (agentDb) => {
                   if (!agentDb?.table && typeof agentDb?.init === "function") await agentDb.init();
-                  const counts = { refined: 0, finalized: 0, failed: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
-                  if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus")) {
+                  const counts = { refined: 0, finalized: 0, failed: 0, poisoned: 0, pending: 0, scanned: 0, deadlineHit: false, ms: 0 };
+                  if (!agentDb?.table || !agentDb.schemaFieldNames?.has("emotionStatus") || !agentDb.schemaFieldNames?.has("importanceStatus")) {
                     return { ...counts, skipped: true, reason: "no_emotion_status_column" };
                   }
+                  // pending_backfill bewusst ausgeschlossen: die rund 23.000 Bestandszeilen
+                  // gehören einem eigenen Batch-Skript, nicht diesem stündlichen Cron —
+                  // sonst entstünde eine LanceDB-Version je Zeile (siehe 13.09.2026).
                   const rows = await agentDb.table.query()
-                    .where("emotionStatus = 'pending_t3'")
+                    .where(`emotionStatus = 'pending_t3' OR importanceStatus = '${IMPORTANCE_STATUS.PENDING}'`)
                     .limit(EMOTION_REFINE_MAX_ROWS + 1)
                     .toArray();
+                  if (!encodingCallLlm) {
+                    counts.pending = rows.length;
+                    return { ...counts, skipped: true, reason: "no_llm_route" };
+                  }
                   counts.scanned = Math.min(rows.length, EMOTION_REFINE_MAX_ROWS);
                   let consecutiveFailures = 0;
                   for (const row of rows.slice(0, EMOTION_REFINE_MAX_ROWS)) {
@@ -8011,45 +8112,60 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const status = String(row.status || "active");
                     if (status !== "active") {
                       // Ueberholte oder geloeschte Zeilen brauchen keinen LLM-Lauf,
-                      // sollen aber nicht bei jedem Lauf erneut gescannt werden.
-                      await agentDb.update(row.id, { emotionStatus: "final" });
+                      // sollen aber nicht bei jedem Lauf erneut gescannt werden — auf
+                      // beiden Statusspalten, sonst hängt die Zeile über die
+                      // importanceStatus-Bedingung des OR weiter im Scan.
+                      await agentDb.update(row.id, { emotionStatus: "final", importanceStatus: IMPORTANCE_STATUS.FINAL });
                       counts.finalized++;
                       continue;
                     }
-                    const refined = await inferEmotionalValenceAsync(
-                      String(row.text || "").slice(0, 2000),
-                      "user",
-                      3,
-                      { agentId: internalAgent, runtimeLlm },
-                    );
-                    // Ein Provider-Ausfall kommt als neutraler Tier-3-Fallback
-                    // mit Konfidenz 0 zurueck (lib/tier3-llm.js), nie als Wurf.
-                    const refineFailed = refined?.tierUsed !== 3
-                      || (!(Number(refined.confidence) > 0)
-                        && refined.emotionalDominant === "neutral"
-                        && !(Number(refined.emotionalIntensity) > 0));
-                    if (refineFailed) {
-                      // Provider-Ausfall: Zeile bleibt pending, naechster Lauf
-                      // versucht es erneut. Mehrere Fehlschlaege am Stueck =
-                      // Route tot, Lauf abbrechen statt Zeitbudget verheizen.
-                      counts.failed++;
-                      if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
+                    // Ein Call klärt Emotion UND Bedeutung (Tier 3 ohnehin gelesen,
+                    // siehe lib/encoding-llm.js).
+                    const encoding = await classifyEncoding(String(row.text || "").slice(0, 2000), {
+                      agentId: internalAgent,
+                      callLlm: encodingCallLlm,
+                    });
+                    const patch = buildRefinePatch(row, encoding, Date.now(), { flashbulbEncodingEnabled });
+                    if (!patch) {
+                      // Provider-Ausfall oder unparsbare Antwort liefert ok:false, nie
+                      // einen geratenen Wert: Zeile bleibt pending, nächster Lauf
+                      // versucht es erneut.
+                      //
+                      // Abschluss-Review, Important 4: "die Route ist tot" und "diese
+                      // Zeile ist vergiftet" sind verschiedene Zustände. Nur ein
+                      // werfendes/leeres callLlm zählt zum Consecutive-Failure-Breaker
+                      // (Route tot, Lauf abbrechen statt Zeitbudget verheizen). Eine
+                      // Zeile, die das Modell zur Verweigerung bringt (unparsbare, aber
+                      // tatsächlich erhaltene Antwort), scheitert deterministisch und
+                      // dauerhaft an derselben Stelle — drei solcher Zeilen am Kopf der
+                      // Warteschlange dürfen den Breaker nicht auslösen, sonst wird
+                      // nichts dahinter je wieder bewertet. Sie wird einfach
+                      // übersprungen, separat gezählt, und beim nächsten Lauf erneut
+                      // versucht.
+                      if (encoding?.callFailed) {
+                        counts.failed++;
+                        if (++consecutiveFailures >= EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES) break;
+                      } else {
+                        counts.poisoned++;
+                      }
                       continue;
                     }
                     consecutiveFailures = 0;
-                    await agentDb.update(row.id, {
-                      emotionalValence: serializeEmotionalValence(refined),
-                      emotionalIntensity: Number(refined.emotionalIntensity) || 0,
-                      emotionalDominant: refined.emotionalDominant || "neutral",
-                      emotionStatus: "final",
-                    });
+                    await agentDb.update(row.id, patch);
                     counts.refined++;
                   }
                   counts.pending = Math.max(0, rows.length - counts.refined - counts.finalized);
                   counts.ms = Date.now() - refineStartedAt;
                   return counts;
                 });
-                api.logger?.info?.(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
+                if (result.reason === "no_llm_route") {
+                  // Sichtbar statt still (Important 6): eine wachsende Pending-
+                  // Warteschlange ohne LLM-Route ist sonst nur an einer
+                  // "importance: 0.5 für alles" über Wochen zu erahnen.
+                  api.logger?.warn?.(`plur1bus internal emotion-refine[${internalAgent}]: kein LLM-Provider verfügbar — ${result.pending} Zeile(n) bleiben ohne Importance-Klärung pending`);
+                } else {
+                  api.logger?.info?.(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
+                }
                 return formatJsonCommandResult({ job: "emotion-refine", ...result });
               }
               if (subKey === "feedback-report") {
@@ -10561,16 +10677,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 throwIfCaptureAborted();
                 const categoryResult = categorizeMemoryWithReason(p.text);
                 const category = categoryResult.category;
-                const categoryReason = categoryResult.reason;
-                const captureImportanceResult = computeMemoryImportance({
-                  text: p.text,
-                  category,
-                  categoryReason,
-                  origin: captureOrigin,
-                });
+                // Bis der stündliche Cron geurteilt hat, zählt die neutrale
+                // 0.5. Ein geschätzter Zwischenwert wäre wieder die
+                // Heuristik, die hier abgelöst wird. In derselben Session
+                // steht die Erinnerung in dieser Zeit ohnehin noch im
+                // Kontextfenster.
+                const importance = 0.5;
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal, importance: captureImportanceResult.importance });
+                const { emotion: captureEmotion, emotionStatus: captureEmotionStatus } = await classifyEmotionForStore(p.text, { agentId, signal, importance });
                 throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
@@ -10582,7 +10697,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   summary,
                   origin: captureOrigin,
                   vector: p.vector,
-                  importance: captureImportanceResult.importance,
+                  importance,
+                  importanceStatus: IMPORTANCE_STATUS.PENDING,
                   category,
                   createdAt: captureTimestamp,
                   mergedFrom: "[]",
@@ -10609,7 +10725,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   entities: graphSignals.entities,
                   people: graphSignals.people,
                   projects: graphSignals.projects,
-                }, captureTimestamp, halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
+                }, captureTimestamp, halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
                 await db.store(row);
                 storedMemoryRows.push(row);
                 stored++;
@@ -11217,7 +11333,6 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 budget: recallBudget,
                 adaptiveBudget: adaptiveBudgetCfg,
                 recallMinScore,
-                importanceBoost,
                 dedupEnabled,
                 dedupJaccard,
                 canonicalEnabled,
@@ -11516,7 +11631,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
                         emotionStatus: mergedEmotionStatus,
                         validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
-                      }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
+                      }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
                       return { mergedEntry, mergeResult, mergedImportance };
                     },
                   });
@@ -11556,7 +11671,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
                 emotionStatus,
                 validFrom: capturedValidFrom, validUntil: capturedValidUntil,
-              }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
+              }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor, flashbulbEncodingEnabled });
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && shouldPromoteMemory(category, importance, importanceResult.factQuality, schicht15MinImportance)) {
@@ -12384,7 +12499,6 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             budget: resolveRuntimeRecallBudget(event.prompt, maxPromptMemories, adaptiveBudgetCfg),
             adaptiveBudget: adaptiveBudgetCfg,
             recallMinScore: autoRecallMinScore,
-            importanceBoost,
             dedupEnabled,
             dedupJaccard,
             canonicalEnabled,

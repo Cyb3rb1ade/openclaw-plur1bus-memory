@@ -1,0 +1,10 @@
+ARME
+arm    n  parseFail trunc  nonZeroDims  antwortTok  complTok  latenz_ms  importance  lektionsRate
+full   60         4     4        3.268         159       633       3877       0.389         32.1%
+short  60         2     2        0.517          81       608       3905       0.406          3.4%
+full2  60         0     0        3.383         155       690       4001       0.406         38.3%
+
+PAARE (full2 vs full = Rauschboden, short vs full = Formateffekt)
+paar            n  |dImportance|  max    dominantGleich  L1(Vektor)  |dIntensity|
+full2 vs full   56         0.079  0.400           76.8%       0.412         0.092
+short vs full   55         0.087  0.350           80.0%       0.473         0.079

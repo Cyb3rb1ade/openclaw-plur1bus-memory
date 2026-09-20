@@ -1,0 +1,271 @@
+import { describe, it } from "node:test";
+import assert from "node:assert";
+import { parseEncodingResponse, buildEncodingPrompt, classifyEncoding, truncateForPrompt } from "../lib/encoding-llm.js";
+import { EMOTION_DIMENSIONS } from "../lib/emotion.js";
+
+describe("encoding llm", () => {
+  // R17 (Abschluss-Review, Critical 2): eine lokale Sieben-Elemente-Liste in
+  // encoding-llm.js hatte `disgust` vergessen. Das Modell bekam die
+  // Dimension nie angeboten, und antwortete es trotzdem so, wurde daraus
+  // `neutral` mit leerer Valenz geschrieben — ein falscher Endzustand, nie
+  // wieder angefasst. Die Divergenz selbst ist der Defekt, nicht nur die
+  // Anwesenheit des Strings — deshalb hier gegen die im Prompt tatsächlich
+  // angebotene Liste prüfen, nicht gegen eine erneut hartkodierte Kopie.
+  it("bietet dem Modell exakt die kanonischen acht Emotionsdimensionen an", () => {
+    const prompt = buildEncodingPrompt("Testtext");
+    const match = prompt.match(/dominant: eine von (.+) oder neutral\./);
+    assert.ok(match, "Prompt muss die dominant-Zeile enthalten");
+    const offeredDimensions = match[1].split(", ");
+    assert.deepStrictEqual([...offeredDimensions].sort(), [...EMOTION_DIMENSIONS].sort());
+    assert.ok(offeredDimensions.includes("disgust"), "disgust darf nicht fehlen");
+  });
+
+  it("akzeptiert disgust als dominant, statt es zu neutral zu machen", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.6, intensity: 0.9, dominant: "disgust", reason: "Ekel vor Verdorbenem",
+    }));
+    assert.strictEqual(parsed.ok, true);
+    assert.strictEqual(parsed.emotion.emotionalDominant, "disgust");
+    assert.notStrictEqual(parsed.emotion.emotionalDominant, "neutral");
+  });
+
+  // A/B/A-Lauf 19.09.26 (/root/plur1bus-bench/emotion-format-ab): der Prompt,
+  // der eine Zahl je Dimension verlangte, bekam eine ausgefuellte Tabelle
+  // zurueck — sekundaere Werte mit Median 0,10, 77 % davon <= 0,2. Bedeutung
+  // und dominante Dimension aenderten sich dadurch nicht (Formateffekt lag
+  // auf dem Rauschboden zweier identischer Laeufe), die Scheinsignale schon:
+  // die "wichtige Lektion"-Regel in computeRecallBoost feuerte bei 32-38 %
+  // aller Erinnerungen. Der Prompt fragt deshalb nur noch nach den
+  // Dimensionen, die tatsaechlich mitschwingen. Der Parser bleibt
+  // unveraendert — fehlende Dimensionen fuellt er ohnehin mit 0, und
+  // serializeEmotionalValence speichert Nullen schon immer nicht.
+  it("verlangt nur die tatsaechlich mitschwingenden Dimensionen", () => {
+    const prompt = buildEncodingPrompt("Testtext");
+    const line = prompt.split("\n").find((l) => l.trim().startsWith("emotions:"));
+    assert.ok(line, "Prompt muss eine emotions-Zeile enthalten");
+    assert.match(line, /weglassen/i, "der Prompt muss das Weglassen nicht mitschwingender Dimensionen verlangen");
+    assert.doesNotMatch(line, /je Dimension/i, "der Prompt darf keinen Wert je Dimension mehr verlangen");
+    // Die acht Dimensionen bleiben angeboten — nur die Pflicht faellt weg.
+    for (const dim of EMOTION_DIMENSIONS) assert.ok(line.includes(dim), `${dim} muss weiterhin angeboten werden`);
+  });
+
+  it("asks for both judgements in one prompt", () => {
+    const prompt = buildEncodingPrompt("Mein Hund ist heute eingeschlaefert worden.");
+    assert.match(prompt, /importance/i);
+    assert.match(prompt, /intensity/i);
+    assert.match(prompt, /Mein Hund/);
+  });
+
+  it("parses a well formed answer", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.88, intensity: 0.9, dominant: "sadness", reason: "Verlust eines Haustiers",
+    }));
+    assert.strictEqual(parsed.ok, true);
+    assert.strictEqual(parsed.importance, 0.88);
+    assert.strictEqual(parsed.emotion.emotionalDominant, "sadness");
+    assert.strictEqual(parsed.reason, "Verlust eines Haustiers");
+  });
+
+  it("caps the model at the automatic ceiling", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({ importance: 0.99, intensity: 0.4, dominant: "joy" }));
+    assert.strictEqual(parsed.importance, 0.94);
+  });
+
+  it("refuses garbage instead of inventing a value", () => {
+    for (const raw of ["", "kein json", JSON.stringify({ intensity: 0.5 })]) {
+      assert.strictEqual(parseEncodingResponse(raw).ok, false);
+    }
+  });
+
+  it("refuses coercible-aber-nicht-echte importance-Werte statt sie zu erraten", () => {
+    // Number(null) === 0, Number("") === 0, Number(true) === 1, Number([]) === 0 —
+    // alle würden Number.isFinite(...) bestehen, obwohl das Modell keine
+    // echte Zahl geliefert hat. Ein verweigertes Urteil darf nie als
+    // "völlig unwichtig" (0) durchgehen.
+    for (const bad of [null, "", true, []]) {
+      const parsed = parseEncodingResponse(JSON.stringify({ importance: bad, intensity: 0.5, dominant: "joy" }));
+      assert.strictEqual(parsed.ok, false, `importance=${JSON.stringify(bad)} muss ok:false liefern`);
+    }
+    // Fehlendes Feld ebenfalls.
+    const parsed = parseEncodingResponse(JSON.stringify({ intensity: 0.5, dominant: "joy" }));
+    assert.strictEqual(parsed.ok, false);
+  });
+
+  it("clamps importance in beide Richtungen", () => {
+    assert.strictEqual(
+      parseEncodingResponse(JSON.stringify({ importance: 5, intensity: 0.1, dominant: "joy" })).importance,
+      0.94,
+    );
+    assert.strictEqual(
+      parseEncodingResponse(JSON.stringify({ importance: -3.5, intensity: 0.1, dominant: "joy" })).importance,
+      0,
+    );
+  });
+
+  it("fällt bei kaputter intensity auf 0 zurück, ohne das ganze Urteil zu verwerfen", () => {
+    for (const bad of [null, "", true, [], "hoch"]) {
+      const parsed = parseEncodingResponse(JSON.stringify({ importance: 0.5, intensity: bad, dominant: "joy" }));
+      assert.strictEqual(parsed.ok, true, `importance bleibt gültig, intensity=${JSON.stringify(bad)}`);
+      assert.strictEqual(parsed.emotion.emotionalIntensity, 0);
+    }
+  });
+
+  it("classifyEncoding baut Messages wie Tier 3 und liefert das geparste Urteil", async () => {
+    let seenMessages = null;
+    let seenContext = null;
+    const callLlm = async (messages, context) => {
+      seenMessages = messages;
+      seenContext = context;
+      return JSON.stringify({ importance: 0.7, intensity: 0.6, dominant: "trust", reason: "Zusage gemacht" });
+    };
+
+    const result = await classifyEncoding("Wir treffen uns nächsten Dienstag.", {
+      agentId: "bernd",
+      callLlm,
+      signal: undefined,
+    });
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.importance, 0.7);
+    assert.strictEqual(result.emotion.emotionalDominant, "trust");
+
+    // Aufbau folgt lib/tier3-llm.js: [{role:"system",...},{role:"user",...}]
+    assert.strictEqual(Array.isArray(seenMessages), true);
+    assert.strictEqual(seenMessages.length, 2);
+    assert.strictEqual(seenMessages[0].role, "system");
+    assert.strictEqual(seenMessages[1].role, "user");
+    assert.match(seenMessages[1].content, /Wir treffen uns nächsten Dienstag/);
+    assert.strictEqual(seenContext.agentId, "bernd");
+  });
+
+  it("liefert ok:false statt eines geratenen Werts, wenn callLlm wirft", async () => {
+    const callLlm = async () => {
+      throw new Error("Provider nicht erreichbar");
+    };
+
+    const result = await classifyEncoding("Irgendein Text.", { agentId: "bernd", callLlm });
+    assert.strictEqual(result.ok, false);
+  });
+
+  it("liefert ok:false, wenn kein callLlm übergeben wird", async () => {
+    const result = await classifyEncoding("Irgendein Text.", { agentId: "bernd" });
+    assert.strictEqual(result.ok, false);
+  });
+});
+
+describe("encoding llm — volle Emotions-Label-Map (Abschluss-Review, Important 5a)", () => {
+  // Der alte Refine-Pfad speicherte {[dominant]: intensity} — ein One-Hot-
+  // Vektor. computeRecallBoost (lib/emotional-state.js) prüft
+  // (anger>0.5||fear>0.5) && (trust>0.3||importance>0.7) für die "wichtige
+  // Lektion"-Regel; bei nur einer gesetzten Dimension können trust und fear
+  // nie gleichzeitig > 0 sein. Die volle Map behebt das.
+  it("parst mehrere gleichzeitig gesetzte Dimensionen statt nur der dominanten", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.6, intensity: 0.8, dominant: "fear",
+      emotions: { fear: 0.8, trust: 0.4, joy: 0.1 },
+      reason: "Warnung mit Vertrauensvorschuss",
+    }));
+    assert.strictEqual(parsed.ok, true);
+    assert.strictEqual(parsed.emotion.fear, 0.8);
+    assert.strictEqual(parsed.emotion.trust, 0.4);
+    assert.strictEqual(parsed.emotion.joy, 0.1);
+    // Beide gleichzeitig > 0 — genau das, was der One-Hot-Vektor verhinderte.
+    assert.ok(parsed.emotion.fear > 0.5 && parsed.emotion.trust > 0.3);
+  });
+
+  it("clampt jede Dimension einzeln auf [0,1]", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.5, intensity: 0.5, dominant: "joy",
+      emotions: { joy: 5, sadness: -3, anger: 0.4 },
+    }));
+    assert.strictEqual(parsed.emotion.joy, 1);
+    assert.strictEqual(parsed.emotion.sadness, 0);
+    assert.strictEqual(parsed.emotion.anger, 0.4);
+  });
+
+  it("erfindet keinen Wert für eine fehlende oder kaputte Einzeldimension — bleibt bei 0", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.5, intensity: 0.5, dominant: "neutral",
+      emotions: { joy: "hoch", trust: null, anger: 0.3 },
+    }));
+    assert.strictEqual(parsed.emotion.joy, 0);
+    assert.strictEqual(parsed.emotion.trust, 0);
+    assert.strictEqual(parsed.emotion.anger, 0.3);
+  });
+
+  it("eine komplett fehlende oder kaputte Map erfindet nichts — alle Dimensionen bleiben 0 außer der dominanten", () => {
+    const missing = parseEncodingResponse(JSON.stringify({ importance: 0.5, intensity: 0.7, dominant: "sadness" }));
+    assert.strictEqual(missing.ok, true);
+    for (const dim of EMOTION_DIMENSIONS) {
+      if (dim === "sadness") continue;
+      assert.strictEqual(missing.emotion[dim], 0, `${dim} darf nicht erfunden werden`);
+    }
+    assert.strictEqual(missing.emotion.sadness, 0.7, "dominante Dimension bekommt mindestens die Intensität");
+
+    const brokenType = parseEncodingResponse(JSON.stringify({ importance: 0.5, intensity: 0.6, dominant: "joy", emotions: "viel" }));
+    assert.strictEqual(brokenType.ok, true);
+    for (const dim of EMOTION_DIMENSIONS) {
+      if (dim === "joy") continue;
+      assert.strictEqual(brokenType.emotion[dim], 0);
+    }
+  });
+
+  it("hebt die dominante Dimension mindestens auf die Gesamt-Intensität an, auch wenn die Map sie niedriger angibt", () => {
+    const parsed = parseEncodingResponse(JSON.stringify({
+      importance: 0.5, intensity: 0.9, dominant: "fear",
+      emotions: { fear: 0.2 },
+    }));
+    assert.strictEqual(parsed.emotion.fear, 0.9);
+  });
+});
+
+/**
+ * Live am 19.09.2026 im Bestands-Backfill aufgeschlagen: eine von 22.000
+ * Zeilen bei bernhardine (e4790655…) traegt an UTF-16-Position 1999 ein 🎙
+ * (U+1F399). `slice(0, 2000)` schneidet zwischen die beiden Code-Einheiten
+ * des Surrogatpaars und laesst eine halbe uebrig.
+ *
+ * Der Fehler ist still: JSON.stringify schreibt bereitwillig "\ud83c", und in
+ * JavaScript ueberlebt das sogar JSON.parse. Erst beim Kodieren des
+ * HTTP-Koerpers als UTF-8 gibt es dafuer keine Darstellung — die Route
+ * antwortete mit HTTP 400 ("unexpected end of hex escape"), die Zeile blieb
+ * unbewertet. Gegenprobe am selben Text auf Codepoint-Grenze geschnitten:
+ * HTTP 200.
+ */
+describe("prompt truncation", () => {
+  const MIC = "\u{1F399}"; // zwei UTF-16-Code-Einheiten
+
+  it("schneidet nie mitten durch ein Surrogatpaar", () => {
+    const text = "a".repeat(1999) + MIC + "b".repeat(50);
+    const cut = truncateForPrompt(text, 2000);
+    assert.ok(cut.length <= 2000);
+    const last = cut.charCodeAt(cut.length - 1);
+    assert.ok(!(last >= 0xD800 && last <= 0xDBFF), "kein einsames High-Surrogat am Ende");
+    assert.strictEqual(Buffer.from(cut, "utf8").toString("utf8"), cut, "muss als UTF-8 rundtrip-fest sein");
+  });
+
+  it("raeumt ein bereits abgetrenntes halbes Zeichen weg", () => {
+    // Genau der Fall aus index.js: der Aufrufer hat schon geschnitten.
+    const schonKaputt = ("a".repeat(1999) + MIC).slice(0, 2000);
+    assert.strictEqual(Buffer.from(schonKaputt, "utf8").toString("utf8") === schonKaputt, false,
+      "Vorbedingung: der Eingabetext ist wirklich kaputt");
+    const cut = truncateForPrompt(schonKaputt, 2000);
+    assert.strictEqual(Buffer.from(cut, "utf8").toString("utf8"), cut);
+  });
+
+  it("laesst ein vollstaendiges Paar am Ende stehen", () => {
+    const text = "a".repeat(1998) + MIC;
+    assert.strictEqual(truncateForPrompt(text, 2000), text);
+  });
+
+  it("laesst kurze Texte unveraendert", () => {
+    assert.strictEqual(truncateForPrompt("kurz", 2000), "kurz");
+    assert.strictEqual(truncateForPrompt("", 2000), "");
+    assert.strictEqual(truncateForPrompt(null, 2000), "");
+  });
+
+  it("der Prompt selbst ist als UTF-8 transportierbar", () => {
+    const prompt = buildEncodingPrompt("a".repeat(1999) + MIC + "b".repeat(50));
+    assert.strictEqual(Buffer.from(prompt, "utf8").toString("utf8"), prompt);
+  });
+});
