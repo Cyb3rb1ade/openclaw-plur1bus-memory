@@ -53,11 +53,13 @@ import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/
 import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
+import { featureModelOverrides } from "./lib/featureModels.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
 import {
   createConfirmationStore,
   createEmbeddingProfileMutator,
+  createFeatureModelMutator,
   createFormTokenStore,
   createRerankerMutator,
   applyControlUiWriteAction,
@@ -752,7 +754,7 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, call
         agentId,
         LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       ),
-      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+      callContext?.agentId || agentId,
       LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
@@ -789,7 +791,7 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
         agentId,
         LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
       ),
-      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+      callContext?.agentId || agentId,
       LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
       { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
@@ -3858,7 +3860,7 @@ async function callLlm(messages, llmCfg) {
 function withDeterministicLlmContext(llmCfg, agentId, purpose, overrides = {}, callContext = {}) {
   return withLlmCallContext(
     withLlmResultCacheContext({ ...llmCfg, ...overrides }, agentId, purpose),
-    callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+    callContext?.agentId || agentId,
     purpose,
     { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
   );
@@ -4590,6 +4592,7 @@ const plugin = {
       }
       const route = resolveFeatureLlmRoute(routeConfig, {
         feature,
+        agentModels: featureModelOverrides(cfg, feature),
         runtimeLlm: runtimeIfUsable(api)?.llm,
         logger: api.logger,
         resultCache: llmResultCache,
@@ -4924,11 +4927,14 @@ const plugin = {
     // wie emotionT3CallLlm oben, bewusst nicht als gemeinsame Hilfsfunktion
     // extrahiert, damit dessen bestehende Scoping-Verträge unangetastet
     // bleiben.
-    const encodingCallLlm = emotionT3HasProvider
+    const encodingLlmCfg = createFeatureRoute("emotion-encoding", emotionCfg.t3 || {});
+    const encodingHasProvider = Boolean(encodingLlmCfg && (encodingLlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
+      || typeof runtimeIfUsable(api)?.llm?.complete === "function"));
+    const encodingCallLlm = encodingHasProvider
       ? (messages, context = {}) => {
           const emotionLlmCfg = withLlmCallContext(
             {
-              ...emotionT3LlmCfg,
+              ...encodingLlmCfg,
               // Messung + Begründung bei der Konstante
               // EMOTION_REFINE_ENCODING_MAX_TOKENS weiter unten (voller
               // Vorwärtsverweis: diese Funktion wird erst vom
@@ -7516,13 +7522,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         workspaceKey: dailyPartition.workspaceIdentity || dailyPartition.ownerUserId || dailyPartition.agentId,
                         compactionLlmCfg: mergingEnabled ? withLlmCallContext(
                           memoryCompactionLlmCfg,
-                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          internalAgent,
                           "memory-compaction",
                           { runtimeLlm: sessionRuntime },
                         ) : null,
                         conflictLlmCfg: mergingEnabled ? withLlmCallContext(
                           conflictResolutionLlmCfg,
-                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          internalAgent,
                           "conflict-resolution",
                           { runtimeLlm: sessionRuntime },
                         ) : null,
@@ -7642,6 +7648,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const callContext = typeof sessionRuntime?.complete === "function"
                       ? {
                           runtimeLlm: sessionRuntime,
+                          agentId: internalAgent,
                           purpose: "critical-push-classification",
                         }
                       : {
@@ -7682,7 +7689,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const commandRoute = (route, purpose) => withLlmCallContext(
                   route,
-                  typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                  internalAgent,
                   purpose,
                   { runtimeLlm: sessionRuntime },
                 );
@@ -7885,7 +7892,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   ledgerDirs: skillLedgerDirsFor(memoryCtx),
                   llmCfg: withLlmCallContext(
                     skillMinerLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    internalAgent,
                     LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -7912,7 +7919,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   agentId: internalAgent,
                   llmCfg: withLlmCallContext(
                     afterthoughtLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    internalAgent,
                     "afterthought",
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -7944,7 +7951,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   minOutcomes: personaEvolveMinOutcomes,
                   llmCfg: withLlmCallContext(
                     personaVoiceLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    internalAgent,
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -7989,7 +7996,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const rebuildLlmCfg = mergingEnabled ? withLlmCallContext(
                   episodeExtractionLlmCfg,
-                  typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                  internalAgent,
                   "episode-extraction",
                   { runtimeLlm: sessionRuntime },
                 ) : null;
@@ -8350,7 +8357,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   lang,
                   llmCfg: withLlmCallContext(
                     personaVoiceLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : personaAgentId,
+                    personaAgentId,
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -8914,7 +8921,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   callLlm,
                   overlayAuditLlmCfg: mergingEnabled ? withLlmCallContext(
                     overlayAuditLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : auditAgentId,
+                    auditAgentId,
                     "overlay-audit-contradiction",
                     { runtimeLlm: sessionRuntime },
                   ) : null,
@@ -9368,6 +9375,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
         const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
           const confirmations = createConfirmationStore();
+          const setFeatureModel = createFeatureModelMutator({ api });
           const setReranker = createRerankerMutator({ api });
           const setEmbeddingProfile = createEmbeddingProfileMutator({ api });
           const keyConfigured = () => rerankerKeyConfigured(cfg, process.env);
@@ -9404,6 +9412,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 logger: api.logger,
                 confirmations,
                 setReranker,
+                setFeatureModel,
                 setEmbeddingProfile,
                 rerankerKeyConfigured: keyConfigured,
                 preparedTarget: () => {
@@ -9483,6 +9492,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               })();
               return buildControlPlaneProjection({
                 config: cfg,
+                hostConfig: api.config,
                 obsidianVault: {
                   configured: configuredObsidianWorkspaces.length > 0,
                   configuredCount: configuredObsidianWorkspaces.length,
@@ -10271,7 +10281,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               workspaceAliases: memoryWorkspaceAliases,
               llmCfg: mergingEnabled ? withLlmCallContext(
                 wikiLlmCfg,
-                typeof sessionRuntime?.complete === "function" ? undefined : wikiAgentId,
+                wikiAgentId,
                 "wiki",
                 { runtimeLlm: sessionRuntime },
               ) : null,

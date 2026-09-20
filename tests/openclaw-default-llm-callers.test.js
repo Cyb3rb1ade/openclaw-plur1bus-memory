@@ -229,7 +229,7 @@ test("the router seam prefers the call-local scheduler signal", () => {
   );
 });
 
-test("long /memory query uses its session runtime and recall-query owner route", async (t) => {
+for (const selectedModel of [null, "anthropic/haiku"]) test(`long /memory query uses its session runtime with ${selectedModel || "the unchanged default"}`, async (t) => {
   const baseDbPath = makeTempDir("plur1bus-owner-query-");
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
@@ -243,6 +243,7 @@ test("long /memory query uses its session runtime and recall-query owner route",
   const pluginModule = await loadFreshPlugin();
   const api = createApi(baseDbPath, {
     merging: { enabled: true, model: "blocked/merging-model" },
+    ...(selectedModel ? { llmRouter: { agentModels: { "query-session-agent": { "recall-query-summary": selectedModel } } } } : {}),
     emotion: { t3: { enabled: false } },
   }, {
     async complete(params) {
@@ -271,7 +272,7 @@ test("long /memory query uses its session runtime and recall-query owner route",
   assert.equal(sessionCalls.length, 1, JSON.stringify(response));
   assert.equal(sessionCalls[0].purpose, "recall-query-summary");
   assert.equal(Object.hasOwn(sessionCalls[0], "agentId"), false);
-  assert.equal(Object.hasOwn(sessionCalls[0], "model"), false);
+  assert.equal(sessionCalls[0].model, selectedModel || undefined);
 
   const memoryAlias = api._commands.find((command) => command.name === "plur1bus_memory");
   assert.ok(memoryAlias);

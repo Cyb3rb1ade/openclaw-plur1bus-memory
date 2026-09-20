@@ -39,6 +39,7 @@ export const DEPLOY_FILES = [
   "lib/llm-call.js",
   "lib/llm-failure.js",
   "lib/llm-router.js",
+  "lib/featureModels.js",
   "lib/llm-result-cache.js",
   "lib/runtime-pressure-gate.js",
   "lib/control-plane-health.js",

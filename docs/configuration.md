@@ -328,7 +328,7 @@ Der PLUR1BUS-Reiter in OpenClaws Control UI ist standardmaessig rein lesend.
 | --- | --- |
 | `off` (Standard) | Die Seite aendert nichts und fordert nur `operator.read` an. |
 | `reranker` | Die Reranking-Wahl ist von der Seite aus umschaltbar. |
-| `all` | Zusaetzlich Embedding-Zielprofil, die Schritte der Re-Embedding-Migration und der Compact-Knopf je Partition (7.8.0). |
+| `all` | Zusaetzlich Modellwahl pro Agent und LLM-Aufgabe, Embedding-Zielprofil, die Schritte der Re-Embedding-Migration und der Compact-Knopf je Partition (7.8.0). |
 
 ```json
 {
@@ -549,9 +549,79 @@ credentials ändern sich dadurch nicht.
 
 ## Chat-LLM-Routing über OpenClaw
 
-Ein nicht gesetztes Feature-Modell (`model` absent) verwendet das effective
-OpenClaw agent model des Ziel-Agenten. PLUR1BUS hat keinen globalen
-Chat-Modell-Default und erbt keine Route zwischen Features: `schicht15`,
+Im PLUR1BUS-Reiter stehen bei den LLM-gestützten Features Auswahlfelder je
+Agent und Aufgabe. Die Liste enthält die Modelle aus
+`agents.defaults.models` und den agenteneigenen `models`, einschließlich des
+primären Modells und der konfigurierten Fallbacks. Aliase werden mit angezeigt.
+Ohne explizite Agentenliste verwendet OpenClaw den Agenten `main`.
+
+Die Auswahl wird unter
+`llmRouter.agentModels.<agentId>.<Aufgabe>` gespeichert. Beispiel:
+
+```json
+{
+  "llmRouter": {
+    "agentModels": {
+      "main": {
+        "merging": "openai/gpt-5.4",
+        "criticalPush": "anthropic/claude-haiku-4-5"
+      }
+    }
+  }
+}
+```
+
+Die Modellnamen sind Beispiele; auswählbar sind die tatsächlich hinterlegten
+Modelle. Für Änderungen im Reiter gilt `controlUi.writeActions: "all"`.
+Beim Speichern wird die Liste erneut gegen die aktuelle OpenClaw-Konfiguration
+geprüft. Entfernte Modelle bleiben als bisherige Auswahl sichtbar, können aber
+nicht erneut gespeichert werden. Eine andere Auswahl oder „Use default“ ist
+weiterhin möglich.
+
+Eine ausdrücklich gespeicherte Auswahl nutzt die native OpenClaw-Route. Wenn
+die Plugin-Berechtigungen das Modell noch sperren, kennzeichnet die Liste das
+mit „grants PLUR1BUS access“. Speichern aktiviert dann `llm.allowModelOverride`
+am Plugin-Eintrag und ergänzt genau dieses Modell in vorhandenen begrenzten
+`allowedModels`- und `allowedCompletionModels`-Listen. Andere Berechtigungen
+bleiben erhalten. Beim erstmaligen Aktivieren ohne bestehende Override-Liste
+wird nur das gewählte Modell freigegeben. „Use default“ entfernt die
+Aufgabenüberschreibung; es entzieht keine Freigabe, die andere Aufgaben nutzen
+könnten. Änderungen laufen durch OpenClaws reguläres Neuladen der Konfiguration;
+bereits laufende Jobs behalten ihre bisherigen Einstellungen.
+
+**Updates übernehmen die bestehenden Einstellungen unverändert.** Es gibt
+keine Migration der Modellwerte und keine neue automatische Modellauswahl.
+Ohne gespeicherte Aufgabenüberschreibung gilt weiterhin: zuerst die bestehende
+feature-eigene Modell-/Transportkonfiguration, danach `llmRouter.defaultModel`
+für Aufgaben ohne eigenen Transport, danach das effektive OpenClaw-Modell.
+Eigene Endpunkte, Zugangsdaten und Header werden durch die Auswahl weder
+überschrieben noch gelöscht. „Use default“ stellt diese bisherige Route wieder
+her. Auch Berechtigungen werden durch ein Update nicht erweitert.
+
+Die Aufgaben sind:
+
+| Feature | Aufgabenkennungen |
+| --- | --- |
+| Capture | `capture-summary`, `episode-extraction` |
+| Recall | `recall-query-summary` |
+| Merging | `merging` |
+| Daily Consolidation | `memory-compaction`, `conflict-resolution` |
+| REM / Neo | `rem-pattern-analysis`, `dream-narrative`, `conversation-insights` |
+| Dream Echo | `dream-echo` |
+| Emotion / nachträgliche Bewertung | `emotionT3`, `emotion-encoding` |
+| Knowledge Promotion | `schicht15` |
+| Skill Miner | `skillMiner` |
+| Critical Push | `criticalPush` |
+| Afterthought / Persona | `afterthought`, `persona-voice` |
+| Obsidian-Wiki | `wiki` |
+| Continuity | `continuity-overlay`, `overlay-audit-contradiction` |
+| Widerspruchsprüfung | `memory-text-contradiction` |
+
+`emotion-encoding` übernimmt ohne eigene Auswahl weiterhin die bisherigen
+Einstellungen aus `emotion.t3`. Features ohne LLM-Aufruf erhalten kein
+Chat-Modellauswahlfeld. Embedding und Reranking behalten ihre eigenen
+Modell-Einstellungen.
+
 `criticalPush.hideTypes` (Liste aus `person`, `beziehung`, `geburtstag`,
 `geld_konto`, `gesundheit`, `zugang_passwort`) ergaenzt die Typen, deren Inhalt
 in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
@@ -563,7 +633,7 @@ er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
 verglichen, was einen Workspace nach dem Erreichen des Limits dauerhaft
 blockierte.
 
-`skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
+`schicht15`, `skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
 `merging.model` noch dessen Endpoint, Credential oder Header.
 
 Jeder aktivierte Chat-Aufruf löst genau einen von vier Route-Modi auf:
@@ -588,14 +658,13 @@ nutzt seinen bestehenden Skip-/Fallbackpfad, ohne einen zweiten Modellversuch.
 
 ### Agentenbindung und Trust
 
-A session-bound command capability omits `agentId`, weil sie bereits an die
-aktive Session gebunden ist. Global hook, tool, and background calls senden den
-Ziel-Agenten und benötigen am Plugin-Entry
-`llm.allowAgentIdOverride:true`. A model-only native override requires
-`llm.allowModelOverride:true` und muss gegebenenfalls in `allowedModels`
-zugelassen sein. Eine Policy-Ablehnung bleibt fail-soft; PLUR1BUS wiederholt
-den Request nicht ohne Agent oder Modell. Installer `preserve` never grants LLM
-trust; Safe und Recommended setzen ebenfalls keine dieser Entry-Level-Bits.
+Die Agentenkennung bleibt innerhalb von PLUR1BUS für die Modellwahl erhalten.
+Der native Aufruf übergibt keinen `agentId`-Override an OpenClaw; der Host
+bestimmt die Bindung seiner LLM-Verbindung. Ein Modell-Override benötigt
+`llm.allowModelOverride:true` und muss gegebenenfalls in `allowedModels` und
+`allowedCompletionModels` zugelassen sein. Eine Policy-Ablehnung bleibt
+fail-soft; PLUR1BUS wiederholt den Request nicht ohne Modell. Installer
+`preserve`, Safe und Recommended erweitern diese Berechtigungen nicht.
 
 `runtime.llm.complete` resolves the effective primary selection and does not
 execute the configured model fallback array in the installed Runtime. Die

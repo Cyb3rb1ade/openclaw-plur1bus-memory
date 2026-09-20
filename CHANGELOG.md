@@ -7,6 +7,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- Modellwahl pro Agent und LLM-Aufgabe im Operator-Dashboard, aus den in
+  OpenClaw hinterlegten Modellen. Auch Capture-Zusammenfassung, Episoden,
+  Verdichtung und Traumverarbeitung lassen sich einzeln einstellen.
+  Emotionsanalyse und nachträgliche Erinnerungsbewertung haben getrennte
+  Auswahlfelder. Speichern gibt bei Bedarf gezielt das gewählte Modell für
+  PLUR1BUS frei; die Oberfläche kennzeichnet das vorab.
+- Updates behalten sämtliche bisherigen Modell- und Transport-Einstellungen
+  sowie Modellberechtigungen bei. Neue Aufgabenüberschreibungen sind optional;
+  „Use default“ stellt die bisherige Route wieder her.
+
 ## [7.13.0] — 2026-09-20
 
 ### Behoben

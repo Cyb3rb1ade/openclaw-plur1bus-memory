@@ -265,7 +265,7 @@ test("refineImportanceMin above 1 disables the core-memory rule", async (t) => {
   assert.equal(core.emotionStatus, "final");
 });
 
-test("internal emotion-refine refines pending rows with tier 3 and marks them final", async (t) => {
+for (const selectedModel of [null, "anthropic/haiku"]) test(`emotion-refine uses ${selectedModel || "the existing emotion model"} and finalizes pending rows`, async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = "emotion-refine-agent";
   const calls = [];
@@ -288,7 +288,10 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
     emotionStatus: "final",
     importanceStatus: "pending",
   });
-  const api = createApi(baseDbPath, { emotion: { t3: { enabled: true } } }, runtimeLlm);
+  const api = createApi(baseDbPath, {
+    emotion: { t3: { enabled: true, model: "openai/emotion" } },
+    ...(selectedModel ? { llmRouter: { agentModels: { [agentId]: { "emotion-encoding": selectedModel, emotionT3: "other/emotion" } } } } : {}),
+  }, runtimeLlm);
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const result = await findCommand(api).handler({
@@ -305,6 +308,7 @@ test("internal emotion-refine refines pending rows with tier 3 and marks them fi
   assert.equal(payload.failed, 0);
   assert.equal(payload.pending, 0);
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, selectedModel || "openai/emotion");
   // Maxtokens-Fix (19.09.2026): completeFeatureLlm reicht maxTokens 1:1 als
   // params.maxTokens an runtimeLlm.complete durch (lib/llm-router.js) — hier
   // also der tatsächlich beim (gemockten) Provider ankommende Wert, nicht
