@@ -5,6 +5,40 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Hinzugefügt
+
+- **Schalter und Betriebsentscheidungen auf den Feature-Karten.** Jede Karte
+  trägt jetzt ihren Feature-Schalter und die Entscheidungen, die zu ihr
+  gehören — als eine Zeile je Einstellung mit Auswahl- oder Zahlenfeld und
+  Speichern-Knopf, gleiche Mechanik wie der Speicherweisen-Schalter. Die
+  geschlossene Liste steht in `lib/dashboard-settings.js`: 29 Schalter (alle
+  Features außer dem memory-core-Sidecar) und 20 Entscheidungen, darunter
+  `schicht15.maxPromotionsPerRun`, `skillMiner.autoApply`,
+  `merging.autoApply`, `gc.maxMemoryCount`, `criticalPush.maxPerDay`,
+  `llmRouter.errorDiagnostics`, die drei `styleDirective`-Schalter, die sechs
+  Unterschalter der Continuity Engine, drei `dreaming.narrative`-Schalter und
+  `memoryDynamics.flashbulbEncoding`. Schwellenwerte bleiben bewusst in der
+  Konfigurationsdatei.
+- **Standardmodell für alle Agenten** (`llmRouter.defaultModel`) im Panel
+  „LLM Tasks", geprüft gegen den Modellkatalog des Hosts und mit derselben
+  Freigabe wie eine Aufgabenwahl.
+- **Fünf neue Karten:** Reactivation Recall, Reaction Nudge, Morning Review,
+  Evening Review (bisher ohne Karte, obwohl schaltbar) und Style Directive
+  (drei Einstellungen, kein Schalter).
+
+### Sicherheit
+
+- Jede Einstellung wird vor dem Schreiben gegen das Schema geprüft
+  (`resolveEffectiveConfig` auf dem Ergebnis); ein abgelehnter Wert erreicht
+  `openclaw.json` nie. `gc.maxMemoryCount` wird abgewiesen, wenn er unter den
+  größten laufenden Bestand eines Agenten fiele — ein Tippfehler dort würde
+  sonst in der nächsten Nacht Zehntausende Zeilen archivieren.
+- `security.*`, `controlUi.writeActions`, `featureCronSetup.auto` und der
+  Sidecar-Schalter `dreaming.enabled` sind aus dem Web grundsätzlich nicht
+  schreibbar.
+
 ## [7.14.0] — 2026-09-20
 
 ### Hinzugefügt

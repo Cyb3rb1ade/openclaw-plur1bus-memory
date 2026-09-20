@@ -315,20 +315,22 @@ test("task cells stay collapsed until they hold a choice or are opened with ?edi
   const host = entriesHost();
   const config = { llmRouter: { agentModels: { alice: { merging: "openai/base" } } } };
   const projection = buildControlPlaneProjection({ config, hostConfig: host });
-  const options = (html) => (html.match(/<option/g) || []).length;
+  // Only the matrix selects count; the settings rows on the cards carry their own.
+  const selects = (html) => (html.match(/<select[^>]*name="model"/g) || []).length;
+  const options = (html) => (html.match(/<select[^>]*name="model"[\s\S]*?<\/select>/g) || []).reduce((n, block) => n + (block.match(/<option/g) || []).length, 0);
   const plain = await render(projection, true);
   const perSelect = projection.featureModels.agents[0].models.length + 1;
-  assert.equal((plain.match(/<select/g) || []).length, 2, "the default row plus the one saved task choice");
+  assert.equal(selects(plain), 2, "the default row plus the one saved task choice");
   assert.equal(options(plain), 2 * perSelect);
   assert.match(plain, /class="cell-edit" href="\?edit=alice\.capture-summary#llm-tasks-title"/);
   const opened = await render(projection, true, "?edit=alice.capture-summary");
-  assert.equal((opened.match(/<select/g) || []).length, 3);
+  assert.equal(selects(opened), 3);
   assert.match(opened, /name="feature" value="capture-summary"/);
   assert.match(opened, /<details class="matrix-tasks" open>/);
   for (const bad of ["?edit=alice", "?edit=../x", "?edit=alice.capture-summary.extra", "?edit=" + "a".repeat(70) + ".merging"]) {
-    assert.equal((await render(projection, true, bad).then((h) => (h.match(/<select/g) || []).length)), 2, `ignores ${bad}`);
+    assert.equal(selects(await render(projection, true, bad)), 2, `ignores ${bad}`);
   }
   const readonly = await render(projection, false, "?edit=alice.capture-summary");
   assert.doesNotMatch(readonly, /class="cell-edit"/);
-  assert.equal((readonly.match(/<select/g) || []).length, 2, "read-only never opens extra cells");
+  assert.equal(selects(readonly), 2, "read-only never opens extra cells");
 });
