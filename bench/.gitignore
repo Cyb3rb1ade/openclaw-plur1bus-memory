@@ -1,0 +1,19 @@
+# Datensätze von Dritten — nicht unser Material, 18 MB
+data/
+
+# LanceDB-Stores, zusammen mehrere hundert Megabyte. Werden aus data/
+# neu aufgebaut: node ingest-capture.mjs locomo
+db/
+db-capture*/
+
+# Probeläufe und Rauchtests
+results/*probe*
+results/*smoke*
+
+# Alles, was Produktiverinnerungen enthält — NIEMALS einchecken.
+# Die Stichproben der Emotions-Analyse tragen echte Texte aus den Stores
+# (medizinische Daten, persönliche Geschichte).
+analysis/**/sample.jsonl
+analysis/**/results.jsonl
+analysis/**/snapshots/
+review-twins/
