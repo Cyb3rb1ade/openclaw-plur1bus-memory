@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.69] — 2026-09-20
+
+### Behoben
+
+- **Der Test zur Anbieter-Auswahl im Bestands-Backfill zog nicht nach.**
+  `scripts/importance-backfill.mjs` bekam mit dem Wechsel auf DeepSeek eine
+  Anbieter-Karte statt der Konstante `DEFAULT_MODEL`; die Skriptänderung ging
+  versehentlich mit einem anderen Commit mit, der passende Test blieb
+  uncommittet liegen. Lokal fiel das nicht auf, weil der Arbeitsbaum beide
+  Hälften hatte — die CI sah nur eine und brach mit
+  `does not provide an export named 'DEFAULT_MODEL'` ab. Das ausgelieferte
+  Paket war nie betroffen: `tests/` steht nicht in der `files`-Whitelist.
+
 ## [7.12.68] — 2026-09-20
 
 ### Behoben
