@@ -1,6 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -8,9 +7,11 @@ import { projectOperations, readGcReport } from "../lib/dashboard-operations.js"
 import { buildControlPlaneProjection } from "../lib/control-plane-projection.js";
 import { resolveEffectiveConfig } from "../lib/setup/config-contract.js";
 import { createControlUiHttpHandler } from "../lib/setup/control-ui-plugin-runtime.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
+// makeTempDir tracks and removes the directory itself; no rmSync here.
 function workspaceWith(report) {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-ops-"));
+  const dir = makeTempDir("plur1bus-ops-");
   if (report !== undefined) {
     mkdirSync(join(dir, ".adaptive-learning"), { recursive: true });
     writeFileSync(join(dir, ".adaptive-learning", "gc-report.json"), typeof report === "string" ? report : JSON.stringify(report));
@@ -26,8 +27,7 @@ const health = {
 const healthWithBadId = { ...health, cards: { ...health.cards, byAgent: [...health.cards.byAgent, { id: "bad id!", cards: 5 }] } };
 
 test("liest den letzten GC-Lauf und übergeht fehlende oder kaputte Reports", () => {
-  const dirs = [];
-  try {
+  {
     const good = workspaceWith({ runs: [
       { timestamp: "2026-09-19T02:45:00.000Z", totalArchived: 3, totalSkipped: 0, agents: [] },
       { timestamp: "2026-09-20T02:45:02.809Z", totalArchived: 0, totalSkipped: 2, agents: [
@@ -36,7 +36,6 @@ test("liest den letzten GC-Lauf und übergeht fehlende oder kaputte Reports", ()
         { agentId: "_neo", ok: true, archived: 0, skipped: 0, dbSizeMb: 0, memoryCount: 0 },
       ] },
     ] });
-    dirs.push(good);
     const report = readGcReport(good);
     assert.equal(report.runs, 2);
     assert.equal(report.lastRun.at, Date.parse("2026-09-20T02:45:02.809Z"));
@@ -44,13 +43,10 @@ test("liest den letzten GC-Lauf und übergeht fehlende oder kaputte Reports", ()
     assert.deepEqual(report.lastRun.agents.map((a) => a.agentId), ["main", "_neo"], "unsichere Kennungen fallen raus");
     assert.equal(report.lastRun.agents[0].memoryCount, 31990);
     for (const broken of [workspaceWith(undefined), workspaceWith("{not json"), workspaceWith({ runs: [] }), workspaceWith({ runs: [{ nope: 1 }] })]) {
-      dirs.push(broken);
       assert.equal(readGcReport(broken), null);
     }
     assert.equal(readGcReport(null), null);
     assert.equal(readGcReport(""), null);
-  } finally {
-    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   }
 });
 
