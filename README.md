@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.13.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.14.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.13.0**, running in production on OpenClaw
+Current source version: **7.14.0**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,25 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.14.0 — model choice per agent, from the operator tab
+
+The **LLM Tasks** panel is a matrix: one column per agent, one row per
+background task, and a **Default for all tasks** row on top. Pick a model
+there and every PLUR1BUS task of that agent uses it unless the task has its
+own choice; a task choice beats the agent default, and both beat whatever
+the config file would have routed. Agents come from `agents.entries` —
+OpenClaw's current form — with the legacy `agents.list` as a fallback;
+columns are the standing agents (those with a heartbeat) plus any agent
+with a saved choice, or exactly the ids in `llmRouter.dashboardAgents`.
+Cells without a choice show only what they inherit and a **Change** link
+that opens that one cell, so the page stays small on hosts with a large
+model catalogue. Saving a model that the plugin's model permissions do not
+yet allow grants exactly that model.
+
+Also in this release: the storage-mode switch on the Capture card (see
+"Choosing the storage mode" above), a sticky jump bar over the panels, and
+readable sizes in Memory Health.
 
 ### New in v7.13.0 — the split now actually happens, and the whole row is kept
 
