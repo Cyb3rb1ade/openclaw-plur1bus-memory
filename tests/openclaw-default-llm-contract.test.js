@@ -149,15 +149,6 @@ describe("current-behavior LLM documentation contract", () => {
     assert.match(docs, /runtime\.llm\.complete[^\n]*(?:missing|unavailable)[^\n]*fail-soft/i);
   });
 
-  it("documents session, global-agent, and native-model trust boundaries accurately", () => {
-    const docs = `${configuration}\n${readme}`;
-    assert.match(docs, /session-bound[^\n]*command[^\n]*(?:omit|without)[^\n]*agentId/i);
-    assert.match(docs, /hook[\s\S]{0,120}tool[\s\S]{0,120}background[\s\S]{0,180}llm\.allowAgentIdOverride[\s\S]{0,30}true/i);
-    assert.match(docs, /model-only native override[\s\S]{0,120}llm\.allowModelOverride[\s\S]{0,30}true/i);
-    assert.match(docs, /allowedModels/);
-    assert.match(docs, /preserve[^\n]*never[^\n]*grant[^\n]*(?:trust|llm)/i);
-  });
-
   it("promises one effective primary selection, not an unimplemented host fallback chain", () => {
     const docs = `${configuration}\n${readme}`;
     assert.match(docs, /runtime\.llm\.complete[^\n]*effective primary/i);

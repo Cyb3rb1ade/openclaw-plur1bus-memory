@@ -34,7 +34,230 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
-## [Unreleased]
+## [7.15.0] — 2026-09-20
+
+### Hinzugefügt
+
+- **Schalter und Betriebsentscheidungen auf den Feature-Karten.** Jede Karte
+  trägt jetzt ihren Feature-Schalter und die Entscheidungen, die zu ihr
+  gehören — als eine Zeile je Einstellung mit Auswahl- oder Zahlenfeld und
+  Speichern-Knopf, gleiche Mechanik wie der Speicherweisen-Schalter. Die
+  geschlossene Liste steht in `lib/dashboard-settings.js`: 29 Schalter (alle
+  Features außer dem memory-core-Sidecar) und 20 Entscheidungen, darunter
+  `schicht15.maxPromotionsPerRun`, `skillMiner.autoApply`,
+  `merging.autoApply`, `gc.maxMemoryCount`, `criticalPush.maxPerDay`,
+  `llmRouter.errorDiagnostics`, die drei `styleDirective`-Schalter, die sechs
+  Unterschalter der Continuity Engine, drei `dreaming.narrative`-Schalter und
+  `memoryDynamics.flashbulbEncoding`. Schwellenwerte bleiben bewusst in der
+  Konfigurationsdatei.
+- **Standardmodell für alle Agenten** (`llmRouter.defaultModel`) im Panel
+  „LLM Tasks", geprüft gegen den Modellkatalog des Hosts und mit derselben
+  Freigabe wie eine Aufgabenwahl.
+- **Fünf neue Karten:** Reactivation Recall, Reaction Nudge, Morning Review,
+  Evening Review (bisher ohne Karte, obwohl schaltbar) und Style Directive
+  (drei Einstellungen, kein Schalter).
+- **Panel „Capacity & Runtime"** (lesend): Füllstand je Agent gegen
+  `gc.maxMemoryCount` mit Balken, letzter GC-Lauf aus dem Report des
+  Hauptagenten (archiviert, übersprungen, geprüfte Agenten), aktueller
+  Speicherdruck des Gateway-Prozesses gegen die `runtime`-Schwellen, und die
+  wirksamen Laufzeitgrenzen — die Fragen „warum ist Recall langsam" und
+  „wo sind die Zeilen hin", bevor jemand ein Log öffnen muss.
+
+### Sicherheit
+
+- Jede Einstellung wird vor dem Schreiben gegen das Schema geprüft
+  (`resolveEffectiveConfig` auf dem Ergebnis); ein abgelehnter Wert erreicht
+  `openclaw.json` nie. `gc.maxMemoryCount` wird abgewiesen, wenn er unter den
+  größten laufenden Bestand eines Agenten fiele — ein Tippfehler dort würde
+  sonst in der nächsten Nacht Zehntausende Zeilen archivieren.
+- `security.*`, `controlUi.writeActions`, `featureCronSetup.auto` und der
+  Sidecar-Schalter `dreaming.enabled` sind aus dem Web grundsätzlich nicht
+  schreibbar.
+
+## [7.14.0] — 2026-09-20
+
+### Hinzugefügt
+
+- **Standardmodell je Agent** im Operator-Dashboard: die Zeile „Default for
+  all tasks" der neuen Matrix schreibt `llmRouter.agentModels.<agent>.*`.
+  Rangfolge Aufgabenwahl > Agentenstandard > bisherige Route.
+- **LLM Tasks als Matrix** (Spalte je Agent, Zeile je Aufgabe) statt
+  Auswahlfeldern in jeder Feature-Karte. Aufgabenzeilen liegen hinter einem
+  Aufklapper; Zellen ohne Wahl zeigen nur den ererbten Wert und einen
+  Change-Link (`?edit=<agent>.<Aufgabe>`), der genau diese Zelle öffnet —
+  ohne Skript. Auf einem Host mit drei Agenten und 71 Katalogmodellen
+  schrumpft die Seite damit von 495 KB auf 78 KB.
+- `llmRouter.dashboardAgents` legt fest, welche Agenten Spalten bekommen.
+- Sprungleiste über den Panels (haftend, ein Anker je Abschnitt).
+
+### Behoben
+
+- Die Modellwahl las nur die Altform `agents.list` und zeigte auf Hosts mit
+  `agents.entries` — OpenClaws aktueller Form — nur `main`. Jetzt `entries`
+  zuerst, `list` als Rückfall. Spalten bekommen die stehenden Agenten (mit
+  `heartbeat`) plus jeder mit gespeicherter Wahl, nicht alle Subagenten.
+- Der Speicherweisen-Schalter brach in der schmalen Capture-Karte um
+  (Erklärtext als schmale Spalte, Beschriftung zweizeilig); er ist dort jetzt
+  gestapelt.
+- Speichergrößen im Reiter sind lesbar („9.3 GB" statt „9,300,000,000 B");
+  der exakte Wert steht im Tooltip.
+
+- Auswahlschalter für die drei Speicherweisen beim Aufteilen auf der
+  Capture-Karte des Operator-Dashboards: **Both** (Ursprungszeile und Teile),
+  **Parts only** (nur die Teile) und **Whole** (gar nicht aufteilen). Er
+  schreibt `captureChunking` und `captureChunkingMode` über OpenClaws
+  Konfigurationsschreiber und braucht `controlUi.writeActions: "all"`; ohne
+  dieses Recht zeigt die Karte die Weisen samt Messwerten, aber kein Formular.
+  Zurück von **Whole** stellt die zuvor gewählte geteilte Weise wieder her. Die
+  Umstellung gilt für neu erfasste Turns; bereits gespeicherte Zeilen bleiben.
+
+- Modellwahl pro Agent und LLM-Aufgabe im Operator-Dashboard, aus den in
+  OpenClaw hinterlegten Modellen. Auch Capture-Zusammenfassung, Episoden,
+  Verdichtung und Traumverarbeitung lassen sich einzeln einstellen.
+  Emotionsanalyse und nachträgliche Erinnerungsbewertung haben getrennte
+  Auswahlfelder. Speichern gibt bei Bedarf gezielt das gewählte Modell für
+  PLUR1BUS frei; die Oberfläche kennzeichnet das vorab.
+- Updates behalten sämtliche bisherigen Modell- und Transport-Einstellungen
+  sowie Modellberechtigungen bei. Neue Aufgabenüberschreibungen sind optional;
+  „Use default“ stellt die bisherige Route wieder her.
+
+## [7.13.0] — 2026-09-20
+
+### Behoben
+
+- **Die Aufteilung war in 7.12.70 wirkungslos — gleich zweifach.** `planChunks`
+  teilte ausschließlich bei gefundener Struktur (Aufzählung, Überschrift,
+  Absatz); Fließtext und Sprachtranskripte setzten nur `needsLlm` und liefen
+  ungeteilt durch. An 90 echten Zeilen nachgemessen: `whole` 20,
+  `structural` **0**, `llm` 70 — **keine einzige** wäre aufgeteilt worden.
+  Unabhängig davon verlor Phase 1c des Capture-Pfads die `chunkGroupId`: Sie
+  baute ein frisches Objekt aus nur `{ it, text, vector, ok }`, und der
+  Zeilenbau las anschließend immer `""`. Selbst eine geglückte Aufteilung wäre
+  also ohne Gruppenkennzeichen in der Datenbank gelandet.
+
+### Geändert
+
+- **Fließtext wird satzweise aufgeteilt, ohne Modellaufruf.** Der Modus `llm`
+  heißt jetzt `sentence` und schneidet an Satzgrenzen — dieselbe Segmentierung,
+  mit der der Messstand gemessen hat. Dezimalzahlen und Versionsnummern
+  bleiben zusammen (`3.5 mmol/l` ist kein Satzende). `needsLlm` bleibt als
+  Kennzeichen erhalten: Ein Modellschnitt *wäre* hier denkbar, gewartet wird
+  darauf nicht mehr. Texte mit 4–7 Sätzen ohne Struktur bleiben bewusst ganz.
+
+- **Gespeichert wird jetzt „beides": die Ursprungszeile UND ihre Teile.** An
+  100 gezielt ausgewählten harten Fällen gemessen (echte Daten, Antwortmodell
+  und Judge): ungeteilt 36 %, nur geteilt 49 %, **beides 64 %**. Reines
+  Aufteilen gewinnt Treffer, verliert aber Zusammenhang — die Ursprungszeile
+  fängt das ab. Abschaltbar über `keepWhole: false`.
+
+  Die Ursprungszeile behält dabei **bewusst** ihre leere `chunkGroupId` und
+  fällt auf `sourceTurnId` zurück. Bekäme sie dieselbe Gruppe wie die Teile,
+  griffe der Deckel `DEFAULT_MAX_PER_GROUP = 2` über alles zusammen und ließe
+  höchstens zwei Zeilen je Nachricht durch statt „Ganzes und bis zu zwei
+  Teile" — was etwas anderes wäre als das Gemessene.
+
+### Hinzugefügt
+
+- **`captureChunkingMode` — die Speicherweise ist jetzt wählbar.** Drei
+  Möglichkeiten, über zwei Schalter: `captureChunking: false` speichert die
+  Nachricht ganz (36 %); `captureChunkingMode: "beides"` behält die
+  Ursprungszeile und legt die Teile daneben (64 %, Vorgabe);
+  `captureChunkingMode: "geteilt"` speichert nur die Teile (49 %) und spart
+  rund eine Zeile je geteilter Nachricht. Der Schlüssel steht im
+  `configSchema` — das läuft auf `additionalProperties: false`, ein fehlender
+  Eintrag dort machte jeden Schalter unerreichbar.
+
+### Hinweis zum Wachstum
+
+Nach vorn kostet eine Nachricht künftig im Mittel **3,86 Zeilen** statt einer
+(davon 3,17 bereits durch 7.12.70, dessen strukturelle Aufteilung wirkte).
+Bestandszeilen werden **nicht** nachträglich geteilt. Die GC-Kappe
+`maxMemoryCount` gilt **je Agent** und steht bereits auf 150.000; sie bleibt
+damit ein Sicherheitsnetz und wird kein Routine-Beschneider. Bei bernhardine
+(12.461 aktive Zeilen, ~1.774 neue Erinnerungen im Monat) wäre die frühere
+Kappe von 50.000 unter dem neuen Wachstum in gut fünf Monaten erreicht
+gewesen, 150.000 wird es in rund zwanzig — derselbe Horizont, für den die
+Kappe ursprünglich ausgelegt war. Es besteht kein Anpassungsbedarf.
+
+
+## [7.12.70] — 2026-09-20
+
+### Geändert
+
+- **Node 24 als Untergrenze, wie beim Host.** Das Paket verlangte `>=22.22.3`,
+  und die CI prüfte auf Node `22.22.3` und `22`. OpenClaw 2026.9.5 verlangt
+  aber `>=24.16.0 <25 || >=26.1.0` — unter Node 22 startet der Host gar nicht.
+  Geprüft wurde also eine Kombination, die es nicht geben kann, während die
+  tatsächlich benutzte (Node 24) in keinem Lauf vorkam. PLUR1BUS läuft im
+  Prozess des Gateways; eine eigene, ältere Untergrenze ist keine zusätzliche
+  Verträglichkeit, sondern eine Falschaussage. `engines` spiegelt jetzt den
+  Host, die drei Workflows fahren Node 24, und ein Test hält beides zusammen,
+  damit es nicht wieder auseinanderläuft.
+
+### Hinzugefügt
+
+- **Mehrteilige Nachrichten werden als mehrere Vektoren gespeichert.** Die
+  Bibliothek `lib/memory-chunking.js` lag seit 7.12.67 unbenutzt im Paket;
+  jetzt hängt sie im regulären Capture. Enthält eine Nachricht mehrere
+  unabhängige Aussagen, ist ein gemeinsamer Vektor deren Schwerpunkt und liegt
+  von jeder einzelnen weiter entfernt als nötig — die Zeile wird dann nicht
+  gefunden, obwohl die Information darin steht. Gemessen am Bestand: 99,7 % der
+  im LOCOMO-Benchmark gesuchten Belege sind als Zeile vorhanden, aber nur
+  75,8 % werden gefunden.
+
+  Die Aufteilung geschieht **vor** der Einbettung — nur dann bekommt jedes
+  Teilstück einen eigenen Vektor. Geteilt wird ausschließlich, wo das Regelwerk
+  sicher ist (Aufzählungen, Absätze): rund 46 % der Zeilen. Vier bis sieben
+  Sätze ohne Struktur bleiben ganz, weil fünf Sätze über ein Thema zu
+  zerschneiden schlechter ist als sie zusammenzulassen. Fälle, die ein Modell
+  bräuchten, werden nur gezählt, nicht auf Verdacht geschnitten.
+
+  **Folgen, die man kennen sollte:** Der Bestand wächst. Ungedeckelt gemessen
+  ging main von 9.379 auf 32.066 Zeilen; mit dem Deckel von 20 Teilstücken je
+  Nachricht ist es weniger, aber deutlich mehr als vorher. Jede Zeile kostet im
+  stündlichen Emotions-Cron, im Importance-Cron, in der GC (`maxMemoryCount`)
+  und in der LanceDB-Fragmentierung. Abschaltbar über `captureChunking: false`
+  in der Plugin-Konfiguration, ohne neues Deploy. Bestandszeilen werden **nicht**
+  nachträglich aufgeteilt.
+
+- **Neue Spalte `chunkGroupId`.** Teilstücke derselben Nachricht hängen darüber
+  zusammen; die Recall-Seite deckelt seit 7.12.68 darüber, wie viele Teile
+  derselben Nachricht in eine Trefferliste dürfen (`DEFAULT_MAX_PER_GROUP`).
+  Bisher fiel sie mangels Schreiber immer auf `sourceTurnId` zurück. Die
+  Migration läuft beim Öffnen jeder Agenten-Tabelle, also für jeden Agenten
+  einzeln und idempotent. Leer heißt „nicht aufgeteilt".
+
+- **`captureChunking` im Konfigurationsschema.** Das Schema des Plugins steht auf
+  `additionalProperties: false` — ein Schalter, der dort fehlt, wird vom Host
+  abgelehnt und der Code dahinter ist nie erreichbar. Beim Schreiben der
+  Dokumentation aufgefallen und nachgetragen, mitsamt Test.
+
+### Behoben
+
+- **Eine gewöhnliche Klassifikation verjüngte die Erinnerung.** `buildRefinePatch`
+  setzte `lastDynamicsAt` auf jetzt, ohne den verstrichenen Verfall anzuwenden:
+  eine 30 Tage alte Stärke von 0,8 blieb bei 30 Tagen Halbwertszeit 0,8 statt
+  auf 0,4 zu fallen. Die Uhr wurde vorgestellt, die vergangene Zeit aber nie
+  verrechnet. Eine Klassifikation ist keine Auffrischung; der Zeitstempel wandert
+  jetzt nur noch bei echter Verstärkung. (PR #165)
+
+- **Die automatische Emotionsverfeinerung konnte den Kernschutz entfernen.** Bei
+  aktivem `flashbulbEncoding` stellte sie eine explizit ins Agent-Band gehobene
+  Zeile auf `memoryClass=flashbulb` um — und `isCoreMemory` gilt nur für `core`.
+  Die von Hand gesetzten Zeilen hätten ihren Schutz beim nächsten Cron-Lauf
+  verlieren können. Die explizite Einstufung schlägt jetzt die automatische.
+  (PR #165)
+
+- **Jeder Schreibpfad hätte an der neuen Spalte scheitern können.** LanceDB lehnt
+  einen Append ab, dem ein Feld des Tabellenschemas fehlt
+  (`Append with different schema: missing=[chunkGroupId]`). Acht Stellen bauen
+  Zeilen aus expliziten Feldlisten statt per Spread; `/correct` verschluckte den
+  Fehler zu „internal error; details were logged". Der Standardwert sitzt deshalb
+  zentral in `store(entry)`, an derselben Stelle, an der schon `epistemicStatus`
+  nachgezogen wird. `safe-update` führt die Gruppe zusätzlich explizit über
+  Versionsgrenzen weiter — ein bloßer Standardwert würde sie bei jeder Korrektur
+  verlieren.
+
 
 ### Hermes 7.12.56-hermes.0
 

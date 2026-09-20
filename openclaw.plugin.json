@@ -2,14 +2,34 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.70-hermes.0",
+  "version": "7.15.0-hermes.0",
   "kind": "memory",
   "cliCommands": [
-    { "name": "plur1bus-command", "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session", "hasSubcommands": false },
-    { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
-    { "name": "plur1bus-obsidian", "description": "Detect, adopt, or create the Obsidian vault PLUR1BUS mirrors into", "hasSubcommands": false },
-    { "name": "plur1bus-reembedding", "description": "Run the PLUR1BUS copy-on-write re-embedding workflow", "hasSubcommands": false },
-    { "name": "plur1bus-workspace", "description": "Read or change PLUR1BUS policy for a session workspace", "hasSubcommands": false }
+    {
+      "name": "plur1bus-command",
+      "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session",
+      "hasSubcommands": false
+    },
+    {
+      "name": "plur1bus-feature-cron",
+      "description": "Run one PLUR1BUS feature cron without an agent/model turn",
+      "hasSubcommands": false
+    },
+    {
+      "name": "plur1bus-obsidian",
+      "description": "Detect, adopt, or create the Obsidian vault PLUR1BUS mirrors into",
+      "hasSubcommands": false
+    },
+    {
+      "name": "plur1bus-reembedding",
+      "description": "Run the PLUR1BUS copy-on-write re-embedding workflow",
+      "hasSubcommands": false
+    },
+    {
+      "name": "plur1bus-workspace",
+      "description": "Read or change PLUR1BUS policy for a session workspace",
+      "hasSubcommands": false
+    }
   ],
   "contracts": {
     "embeddingProviders": [
@@ -28,47 +48,165 @@
   "configContracts": {
     "secretInputs": {
       "paths": [
-        { "path": "embedding.apiKey", "expected": "string" },
-        { "path": "embedding.fallback.apiKey", "expected": "string" },
-        { "path": "reranker.apiKey", "expected": "string" },
-        { "path": "merging.apiKey", "expected": "string" },
-        { "path": "schicht15.apiKey", "expected": "string" },
-        { "path": "skillMiner.apiKey", "expected": "string" },
-        { "path": "criticalPush.apiKey", "expected": "string" },
-        { "path": "emotion.t3.apiKey", "expected": "string" }
+        {
+          "path": "embedding.apiKey",
+          "expected": "string"
+        },
+        {
+          "path": "embedding.fallback.apiKey",
+          "expected": "string"
+        },
+        {
+          "path": "reranker.apiKey",
+          "expected": "string"
+        },
+        {
+          "path": "merging.apiKey",
+          "expected": "string"
+        },
+        {
+          "path": "schicht15.apiKey",
+          "expected": "string"
+        },
+        {
+          "path": "skillMiner.apiKey",
+          "expected": "string"
+        },
+        {
+          "path": "criticalPush.apiKey",
+          "expected": "string"
+        },
+        {
+          "path": "emotion.t3.apiKey",
+          "expected": "string"
+        }
       ]
     }
   },
   "uiHints": {
-    "embedding.apiKey": { "label": "Embedding API Key", "sensitive": true, "advanced": true, "help": "Use OpenClaw Secrets with an env, store, file, or exec SecretRef." },
-    "embedding.fallback.apiKey": { "label": "Fallback Embedding API Key", "sensitive": true, "advanced": true, "help": "Credential for the configured fallback embedding provider." },
-    "reranker.apiKey": { "label": "Reranker API Key", "sensitive": true, "advanced": true, "help": "Credential for a remote reranker; local Jina/BGE does not require one." },
-    "merging.apiKey": { "label": "Merging API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
-    "schicht15.apiKey": { "label": "Knowledge Promotion API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
-    "skillMiner.apiKey": { "label": "Skill Miner API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential used with Skill Workshop." },
-    "criticalPush.apiKey": { "label": "Critical Push API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
-    "emotion.t3.apiKey": { "label": "Emotion Tier 3 API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
-    "autoCapture": { "label": "Automatic Capture", "help": "Capture durable memory from eligible conversations." },
-    "autoRecall": { "label": "Automatic Recall", "help": "Inject relevant durable memory before an eligible turn." },
-    "skillMiner.enabled": { "label": "Skill Miner", "help": "Mine skills from memory evidence into the OpenClaw Skill Workshop; applied automatically when self-learning is on (skillMiner.autoApply)." },
-    "featureCronSetup.auto": { "label": "Automatic Feature Cron Setup", "advanced": true, "help": "Create OpenClaw-native PLUR1BUS feature cron jobs." },
-    "modelPreparation.profile": { "label": "Prepare Local Embedding Model", "help": "Selecting a pinned model/dimension profile downloads and hash-validates it automatically. It only creates a dry-run recommendation; it never switches the active embedding generation." },
-    "modelPreparation.acceptNonCommercialLicense": { "label": "Accept Jina CC BY-NC 4.0", "advanced": true, "help": "Required before downloading the optional Jina v3 embedding. This profile is not licensed for commercial use." },
-    "reembedding.activeGeneration": { "label": "Active Embedding Generation", "advanced": true, "help": "Coordinator-managed immutable LanceDB generation. Do not edit without a validated migration." },
-    "reembedding.fingerprintId": { "label": "Active Embedding Fingerprint", "advanced": true, "help": "Coordinator-managed SHA-256 identity of the active vector space." },
-    "reembedding.dimensions": { "label": "Active Generation Dimensions", "advanced": true, "help": "Coordinator-managed vector dimension bound to the selected generation." }
+    "embedding.apiKey": {
+      "label": "Embedding API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Use OpenClaw Secrets with an env, store, file, or exec SecretRef."
+    },
+    "embedding.fallback.apiKey": {
+      "label": "Fallback Embedding API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Credential for the configured fallback embedding provider."
+    },
+    "reranker.apiKey": {
+      "label": "Reranker API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Credential for a remote reranker; local Jina/BGE does not require one."
+    },
+    "merging.apiKey": {
+      "label": "Merging API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Optional feature-local model credential."
+    },
+    "schicht15.apiKey": {
+      "label": "Knowledge Promotion API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Optional feature-local model credential."
+    },
+    "skillMiner.apiKey": {
+      "label": "Skill Miner API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Optional feature-local model credential used with Skill Workshop."
+    },
+    "criticalPush.apiKey": {
+      "label": "Critical Push API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Optional feature-local model credential."
+    },
+    "emotion.t3.apiKey": {
+      "label": "Emotion Tier 3 API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Optional feature-local model credential."
+    },
+    "autoCapture": {
+      "label": "Automatic Capture",
+      "help": "Capture durable memory from eligible conversations."
+    },
+    "autoRecall": {
+      "label": "Automatic Recall",
+      "help": "Inject relevant durable memory before an eligible turn."
+    },
+    "skillMiner.enabled": {
+      "label": "Skill Miner",
+      "help": "Mine skills from memory evidence into the OpenClaw Skill Workshop; applied automatically when self-learning is on (skillMiner.autoApply)."
+    },
+    "featureCronSetup.auto": {
+      "label": "Automatic Feature Cron Setup",
+      "advanced": true,
+      "help": "Create OpenClaw-native PLUR1BUS feature cron jobs."
+    },
+    "modelPreparation.profile": {
+      "label": "Prepare Local Embedding Model",
+      "help": "Selecting a pinned model/dimension profile downloads and hash-validates it automatically. It only creates a dry-run recommendation; it never switches the active embedding generation."
+    },
+    "modelPreparation.acceptNonCommercialLicense": {
+      "label": "Accept Jina CC BY-NC 4.0",
+      "advanced": true,
+      "help": "Required before downloading the optional Jina v3 embedding. This profile is not licensed for commercial use."
+    },
+    "reembedding.activeGeneration": {
+      "label": "Active Embedding Generation",
+      "advanced": true,
+      "help": "Coordinator-managed immutable LanceDB generation. Do not edit without a validated migration."
+    },
+    "reembedding.fingerprintId": {
+      "label": "Active Embedding Fingerprint",
+      "advanced": true,
+      "help": "Coordinator-managed SHA-256 identity of the active vector space."
+    },
+    "reembedding.dimensions": {
+      "label": "Active Generation Dimensions",
+      "advanced": true,
+      "help": "Coordinator-managed vector dimension bound to the selected generation."
+    }
   },
   "configSchema": {
     "$defs": {
       "secretInput": {
-        "type": ["string", "object"],
+        "type": [
+          "string",
+          "object"
+        ],
         "minLength": 1,
         "additionalProperties": false,
-        "required": ["source", "provider", "id"],
+        "required": [
+          "source",
+          "provider",
+          "id"
+        ],
         "properties": {
-          "source": { "type": "string", "enum": ["env", "store", "file", "exec"] },
-          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
-          "id": { "type": "string", "minLength": 1, "maxLength": 256 }
+          "source": {
+            "type": "string",
+            "enum": [
+              "env",
+              "store",
+              "file",
+              "exec"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
         }
       }
     },
@@ -191,7 +329,9 @@
       "modelPreparation": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["profile"],
+        "required": [
+          "profile"
+        ],
         "properties": {
           "profile": {
             "type": "string",
@@ -220,7 +360,11 @@
       "reembedding": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["activeGeneration", "fingerprintId", "dimensions"],
+        "required": [
+          "activeGeneration",
+          "fingerprintId",
+          "dimensions"
+        ],
         "properties": {
           "activeGeneration": {
             "type": "string",
@@ -260,8 +404,14 @@
             "type": "boolean",
             "default": true
           },
-          "dynamicsMaxBacklog": { "type": "number", "minimum": 1 },
-          "dynamicsFallbackDelayMs": { "type": "number", "minimum": 0 },
+          "dynamicsMaxBacklog": {
+            "type": "number",
+            "minimum": 1
+          },
+          "dynamicsFallbackDelayMs": {
+            "type": "number",
+            "minimum": 0
+          },
           "maxAgeMs": {
             "type": "number",
             "minimum": 0,
@@ -489,13 +639,36 @@
                 "additionalProperties": false,
                 "description": "Search over all Neo candidates (not only the recent window) by cosine similarity on the vector sidecar. Defaults: enabled, topK 30, minSimilarity 0.35, halfLifeDays 30, maxCandidates 20000, dedupeThreshold 0.8.",
                 "properties": {
-                  "enabled": { "type": "boolean" },
-                  "topK": { "type": "number", "minimum": 1, "maximum": 200 },
-                  "minSimilarity": { "type": "number", "minimum": 0, "maximum": 1 },
-                  "halfLifeDays": { "type": "number", "minimum": 1 },
-                  "maxCandidates": { "type": "number", "minimum": 100 },
-                  "dedupeThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
-                  "embedTimeoutMs": { "type": "number", "minimum": 500 }
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "topK": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 200
+                  },
+                  "minSimilarity": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "halfLifeDays": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "maxCandidates": {
+                    "type": "number",
+                    "minimum": 100
+                  },
+                  "dedupeThreshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "embedTimeoutMs": {
+                    "type": "number",
+                    "minimum": 500
+                  }
                 }
               }
             }
@@ -505,6 +678,20 @@
       "autoCapture": {
         "type": "boolean",
         "default": true
+      },
+      "captureChunking": {
+        "type": "boolean",
+        "default": true,
+        "description": "Teilt eine Nachricht mit mehreren unabhängigen Aussagen beim Erfassen in mehrere Erinnerungen auf, jede mit eigenem Vektor. Ohne Aufteilung ist der eine Vektor der Schwerpunkt aller Aussagen und liegt von jeder einzelnen weiter entfernt als nötig — die Zeile wird dann nicht gefunden, obwohl die Information darin steht. Geteilt wird an Struktur (Aufzählungen, Überschriften, Absätze) und, seit 7.13.0, bei Fließtext ab acht Sätzen auch an Satzgrenzen; Texte mit vier bis sieben Sätzen ohne Struktur bleiben bewusst ganz. Höchstens 20 Teile, Bestandszeilen bleiben unberührt. Auf false setzen, wenn der Zuwachs des Bestands stört: jede Zeile kostet erneut im stündlichen Emotions-Cron, im Importance-Cron und in der Bereinigung."
+      },
+      "captureChunkingMode": {
+        "type": "string",
+        "enum": [
+          "beides",
+          "geteilt"
+        ],
+        "default": "beides",
+        "description": "Was beim Aufteilen gespeichert wird. \"beides\" behält die Ursprungszeile UND legt ihre Teile daneben; \"geteilt\" speichert nur die Teile. An 100 gezielt ausgewählten schweren Fällen aus echten Daten gemessen (Abruf, Antwortmodell, Judge): ungeteilt 36 %, nur geteilt 49 %, beides 64 %. Reines Aufteilen findet mehr, verliert aber den Zusammenhang — die Ursprungszeile fängt das ab. \"geteilt\" spart dafür rund eine Zeile je geteilter Nachricht. Wirkt nur, wenn captureChunking an ist; auf false gesetzt wird gar nicht geteilt und die Nachricht bleibt ganz."
       },
       "autoRecall": {
         "type": "boolean",
@@ -854,6 +1041,159 @@
             "type": "boolean",
             "default": false,
             "description": "Schreibt die redigierte Fehlermeldung eines gescheiterten Modellaufrufs nach <baseDbPath>/llm-router-errors.log. Nur zur Fehlersuche einschalten: die Meldung des Fremdsystems kann Bruchstücke des Prompts enthalten, deshalb steht sie nie im normalen Log."
+          },
+          "agentModels": {
+            "type": "object",
+            "description": "Optional model overrides per OpenClaw agent and LLM task. Missing entries preserve the existing feature-local model/transport, then llmRouter.defaultModel, then the host default. Dashboard choices use the OpenClaw route; existing direct credentials are preserved for resetting.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "merging": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "capture-summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "recall-query-summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "memory-compaction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "conflict-resolution": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "rem-pattern-analysis": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "conversation-insights": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "dream-narrative": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "dream-echo": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "episode-extraction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "afterthought": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "persona-voice": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "wiki": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "continuity-overlay": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "overlay-audit-contradiction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "memory-text-contradiction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "emotionT3": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "emotion-encoding": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "schicht15": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "skillMiner": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "criticalPush": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "*": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$",
+                  "description": "Standardmodell des Agenten für alle Aufgaben ohne eigene Wahl. Eine Aufgabenwahl hat Vorrang; der Standard hat Vorrang vor jeder Route aus der Konfigurationsdatei, genau wie eine Aufgabenwahl."
+                }
+              }
+            }
+          },
+          "dashboardAgents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Welche Agenten im Reiter eine Spalte in der Modell-Matrix bekommen. Leer oder fehlend: die stehenden Agenten (mit heartbeat) plus jeder Agent mit gespeicherter Wahl; gibt es keine, alle bekannten. Unbekannte Kennungen werden übergangen."
           }
         }
       },
@@ -890,7 +1230,11 @@
           },
           "autoApply": {
             "type": "string",
-            "enum": ["host", "on", "off"],
+            "enum": [
+              "host",
+              "on",
+              "off"
+            ],
             "default": "host",
             "description": "Apply mined skills through the OpenClaw Skill Workshop without a manual review: \"host\" follows skills.workshop.autonomous.mode (auto applies, propose/off leaves drafts pending), \"on\" always applies, \"off\" always waits for approval in the PLUR1BUS dashboard or /plur1bus skills."
           },
@@ -1159,7 +1503,11 @@
         "properties": {
           "writeActions": {
             "type": "string",
-            "enum": ["off", "reranker", "all"],
+            "enum": [
+              "off",
+              "reranker",
+              "all"
+            ],
             "default": "off",
             "description": "off: the dashboard changes nothing and asks for read scope only. reranker: the reranking choice becomes switchable from the tab. all: additionally exposes the embedding target and the re-embedding migration steps. Anything but off gives the tab operator.write authority."
           }
@@ -2005,7 +2353,14 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["person", "beziehung", "geburtstag", "geld_konto", "gesundheit", "zugang_passwort"]
+              "enum": [
+                "person",
+                "beziehung",
+                "geburtstag",
+                "geld_konto",
+                "gesundheit",
+                "zugang_passwort"
+              ]
             },
             "default": [],
             "description": "Critical types whose content is hidden in the push card in addition to zugang_passwort, which is always hidden. Pushes go to the owner's direct chat only; before 7.12.2 gesundheit and geld_konto were hidden as well."
@@ -2043,12 +2398,26 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean" },
-              "keepVersionsHours": { "type": "number", "minimum": 1 },
-              "timeoutMs": { "type": "number", "minimum": 10000 }
+              "enabled": {
+                "type": "boolean"
+              },
+              "keepVersionsHours": {
+                "type": "number",
+                "minimum": 1
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 10000
+              }
             }
           },
-          "decayMode": { "type": "string", "enum": ["batch", "rows"] }
+          "decayMode": {
+            "type": "string",
+            "enum": [
+              "batch",
+              "rows"
+            ]
+          }
         }
       },
       "styleDirective": {
@@ -2093,12 +2462,31 @@
             "type": "boolean",
             "default": true
           },
-          "maxDirectiveChars": { "type": "number", "minimum": 200 },
-          "maxBullets": { "type": "number", "minimum": 6 },
-          "minDaysBetween": { "type": "number", "minimum": 0 },
-          "minOutcomes": { "type": "number", "minimum": 1 },
-          "cron": { "type": "string" },
-          "timezone": { "type": ["string", "null"] }
+          "maxDirectiveChars": {
+            "type": "number",
+            "minimum": 200
+          },
+          "maxBullets": {
+            "type": "number",
+            "minimum": 6
+          },
+          "minDaysBetween": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minOutcomes": {
+            "type": "number",
+            "minimum": 1
+          },
+          "cron": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "afterthought": {
@@ -2388,7 +2776,10 @@
               },
               "captureMode": {
                 "type": "string",
-                "enum": ["deferred", "inline"],
+                "enum": [
+                  "deferred",
+                  "inline"
+                ],
                 "description": "Where tier-3 runs for newly captured memories: deferred (default) stores the lexical tier-1/2 score in the hook and lets the emotion-refine cron refine low-confidence rows; inline keeps the LLM call in the agent_end hook."
               },
               "refineImportanceMin": {

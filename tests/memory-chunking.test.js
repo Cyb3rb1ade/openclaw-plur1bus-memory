@@ -105,13 +105,25 @@ describe("Aufteilung planen", () => {
     assert.strictEqual(plan.needsLlm, false);
   });
 
-  it("verlangt das Modell nur bei langem Fliesstext", () => {
+  it("teilt langen Fliesstext satzweise, statt auf ein Modell zu warten", () => {
     const text = Array.from({ length: 12 }, (_, i) => `Aussage ${i} ueber ein jeweils anderes Thema.`).join(" ");
     const plan = planChunks(text);
-    assert.strictEqual(plan.mode, "llm");
+    // Bis 7.12.70 war das mode "llm" mit parts === [text] — der Fall wurde
+    // gezaehlt und durchgelassen. An 90 echten Zeilen gemessen fielen ALLE
+    // hierher: die Aufteilung war ausgeliefert, aber wirkungslos. Seit
+    // 7.13.0 schneidet das Regelwerk an Satzgrenzen; needsLlm bleibt als
+    // Kennzeichen stehen, dass hier ein Modellschnitt denkbar waere.
+    assert.strictEqual(plan.mode, "sentence");
     assert.strictEqual(plan.needsLlm, true);
-    // Bis das Modell geantwortet hat, bleibt der Text vollstaendig — eine
-    // Aufteilung wird nie geraten.
+    assert.strictEqual(plan.parts.length, 12);
+    assert.ok(plan.parts.every((t) => !t.includes("Aussage 0") || t.startsWith("Aussage 0")));
+  });
+
+  it("bleibt bei 4 bis 7 Saetzen ohne Struktur ganz", () => {
+    const text = Array.from({ length: 6 }, (_, i) => `Aussage ${i} ueber ein jeweils anderes Thema.`).join(" ");
+    const plan = planChunks(text);
+    assert.strictEqual(plan.mode, "whole");
+    assert.strictEqual(plan.needsLlm, false);
     assert.deepStrictEqual(plan.parts, [text]);
   });
 

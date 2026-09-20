@@ -328,7 +328,7 @@ Der PLUR1BUS-Reiter in OpenClaws Control UI ist standardmaessig rein lesend.
 | --- | --- |
 | `off` (Standard) | Die Seite aendert nichts und fordert nur `operator.read` an. |
 | `reranker` | Die Reranking-Wahl ist von der Seite aus umschaltbar. |
-| `all` | Zusaetzlich Embedding-Zielprofil, die Schritte der Re-Embedding-Migration und der Compact-Knopf je Partition (7.8.0). |
+| `all` | Zusaetzlich Modellwahl pro Agent und LLM-Aufgabe, Embedding-Zielprofil, die Schritte der Re-Embedding-Migration und der Compact-Knopf je Partition (7.8.0). |
 
 ```json
 {
@@ -547,11 +547,135 @@ credentials ändern sich dadurch nicht.
 
 ---
 
+## Schalter und Entscheidungen im Reiter
+
+Mit `controlUi.writeActions: "all"` trägt jede Feature-Karte ihren Schalter
+und die Betriebsentscheidungen, die zu ihr gehören — eine Zeile je
+Einstellung mit Auswahl- oder Zahlenfeld. Was angeboten wird, steht als
+geschlossene Liste in `lib/dashboard-settings.js`; die Seite kann nichts
+schreiben, was dort nicht steht, gleich was ein Formular behauptet.
+
+| Karte | Einstellungen |
+| --- | --- |
+| jede Feature-Karte | der Feature-Schalter (`<feature>.enabled` bzw. `autoCapture`, `autoRecall`) |
+| Knowledge Promotion | `schicht15.maxPromotionsPerRun` |
+| Skill Miner | `skillMiner.autoApply` |
+| Merging | `merging.autoApply` |
+| Garbage Collection | `gc.maxMemoryCount` — abgewiesen unter dem größten laufenden Bestand |
+| Critical Push | `criticalPush.maxPerDay` |
+| Neo Layer | `llmRouter.errorDiagnostics` |
+| Continuity Engine | `associativeRecall`, `patternSurfacing`, `tasteGate`, `overlays`, `contradictionDetection`, `doctor` (je `.enabled`) |
+| REM | `dreaming.narrative.enabled`, `.diary`, `.storeAsMemory` |
+| Emotion Engine (T3) | `memoryDynamics.flashbulbEncoding` |
+| Style Directive | `styleDirective.timeOfDay`, `.opinion`, `.askBack` |
+| LLM Tasks | `llmRouter.defaultModel` |
+
+Der Abschnitt **Capacity & Runtime** darunter ist rein lesend: Füllstand je
+Agent gegen `gc.maxMemoryCount`, der letzte GC-Lauf aus
+`<Workspace des Hauptagenten>/.adaptive-learning/gc-report.json`, der
+aktuelle Speicherdruck des Gateway-Prozesses gegen `runtime.rssWarningBytes`
+und `runtime.rssCriticalBytes`, und zwölf wirksame `runtime`-Grenzen.
+
+Nicht schreibbar aus dem Reiter: `security.*`, `controlUi.writeActions`,
+`featureCronSetup.auto`, `dreaming.enabled` (Sidecar) und alle Schwellenwerte.
+Jede Einstellung wird vor dem Schreiben gegen das Schema geprüft; ein
+abgelehnter Wert erreicht `openclaw.json` nie. Änderungen gehen durch
+OpenClaws reguläres Neuladen der Konfiguration.
+
 ## Chat-LLM-Routing über OpenClaw
 
-Ein nicht gesetztes Feature-Modell (`model` absent) verwendet das effective
-OpenClaw agent model des Ziel-Agenten. PLUR1BUS hat keinen globalen
-Chat-Modell-Default und erbt keine Route zwischen Features: `schicht15`,
+Der Abschnitt **LLM Tasks** im PLUR1BUS-Reiter ist eine Matrix: eine Spalte
+je Agent, eine Zeile je Aufgabe, darüber die Zeile **Default for all tasks**.
+Die Liste je Zelle enthält die Modelle aus `agents.defaults.models` und den
+agenteneigenen `models`, einschließlich des primären Modells und der
+konfigurierten Fallbacks. Aliase werden angezeigt.
+
+Die Agenten kommen aus `agents.entries` (OpenClaws aktuelle Form, ein Objekt
+je Kennung oder ein Array); fehlt es, aus der Altform `agents.list`; fehlt
+beides, ist es der Agent `main`. **Spalten bekommen nicht alle Agenten**,
+sondern die stehenden (mit `heartbeat`) plus jeder mit gespeicherter Wahl —
+ein Host mit einem Hauptagenten und dreißig Subagenten zeigt sonst dreißig
+Spalten. `llmRouter.dashboardAgents` legt die Spalten ausdrücklich fest;
+gibt es weder stehende noch gewählte, erscheinen alle bekannten.
+
+Die Aufgabenzeilen liegen hinter einem Aufklapper, und eine Zelle ohne Wahl
+zeigt nur den ererbten Wert mit einem **Change**-Link (`?edit=<agent>.<Aufgabe>`),
+der genau diese Zelle als Auswahlfeld rendert — ohne Skript, damit die Seite
+nicht mit Hunderten von Auswahllisten je Katalogmodell wächst.
+
+Die Auswahl wird unter `llmRouter.agentModels.<agentId>.<Aufgabe>`
+gespeichert; der Agentenstandard unter dem Schlüssel `*`. Rangfolge:
+**Aufgabenwahl > Agentenstandard > bisherige Route**. Der Agentenstandard
+verdrängt also, genau wie eine Aufgabenwahl, auch eine feature-eigene direkte
+Route; die Matrix kennzeichnet solche Zellen mit „replaces direct route".
+Beispiel:
+
+```json
+{
+  "llmRouter": {
+    "dashboardAgents": ["main", "bernhardine"],
+    "agentModels": {
+      "main": {
+        "*": "anthropic/claude-haiku-4-5",
+        "merging": "openai/gpt-5.4"
+      }
+    }
+  }
+}
+```
+
+Die Modellnamen sind Beispiele; auswählbar sind die tatsächlich hinterlegten
+Modelle. Für Änderungen im Reiter gilt `controlUi.writeActions: "all"`.
+Beim Speichern wird die Liste erneut gegen die aktuelle OpenClaw-Konfiguration
+geprüft. Entfernte Modelle bleiben als bisherige Auswahl sichtbar, können aber
+nicht erneut gespeichert werden. Eine andere Auswahl oder „Use default“ ist
+weiterhin möglich.
+
+Eine ausdrücklich gespeicherte Auswahl nutzt die native OpenClaw-Route. Wenn
+die Plugin-Berechtigungen das Modell noch sperren, kennzeichnet die Liste das
+mit „†“. Speichern aktiviert dann `llm.allowModelOverride`
+am Plugin-Eintrag und ergänzt genau dieses Modell in vorhandenen begrenzten
+`allowedModels`- und `allowedCompletionModels`-Listen. Andere Berechtigungen
+bleiben erhalten. Beim erstmaligen Aktivieren ohne bestehende Override-Liste
+wird nur das gewählte Modell freigegeben. „Use default“ entfernt die
+Aufgabenüberschreibung; es entzieht keine Freigabe, die andere Aufgaben nutzen
+könnten. „Use default“ heißt in der Matrix **Inherit** und zeigt dahinter,
+was dann läuft. Änderungen laufen durch OpenClaws reguläres Neuladen der Konfiguration;
+bereits laufende Jobs behalten ihre bisherigen Einstellungen.
+
+**Updates übernehmen die bestehenden Einstellungen unverändert.** Es gibt
+keine Migration der Modellwerte und keine neue automatische Modellauswahl.
+Ohne gespeicherte Aufgabenüberschreibung gilt weiterhin: zuerst die bestehende
+feature-eigene Modell-/Transportkonfiguration, danach `llmRouter.defaultModel`
+für Aufgaben ohne eigenen Transport, danach das effektive OpenClaw-Modell.
+Eigene Endpunkte, Zugangsdaten und Header werden durch die Auswahl weder
+überschrieben noch gelöscht. „Use default“ stellt diese bisherige Route wieder
+her. Auch Berechtigungen werden durch ein Update nicht erweitert.
+
+Die Aufgaben sind:
+
+| Feature | Aufgabenkennungen |
+| --- | --- |
+| Capture | `capture-summary`, `episode-extraction` |
+| Recall | `recall-query-summary` |
+| Merging | `merging` |
+| Daily Consolidation | `memory-compaction`, `conflict-resolution` |
+| REM / Neo | `rem-pattern-analysis`, `dream-narrative`, `conversation-insights` |
+| Dream Echo | `dream-echo` |
+| Emotion / nachträgliche Bewertung | `emotionT3`, `emotion-encoding` |
+| Knowledge Promotion | `schicht15` |
+| Skill Miner | `skillMiner` |
+| Critical Push | `criticalPush` |
+| Afterthought / Persona | `afterthought`, `persona-voice` |
+| Obsidian-Wiki | `wiki` |
+| Continuity | `continuity-overlay`, `overlay-audit-contradiction` |
+| Widerspruchsprüfung | `memory-text-contradiction` |
+
+`emotion-encoding` übernimmt ohne eigene Auswahl weiterhin die bisherigen
+Einstellungen aus `emotion.t3`. Features ohne LLM-Aufruf erhalten kein
+Chat-Modellauswahlfeld. Embedding und Reranking behalten ihre eigenen
+Modell-Einstellungen.
+
 `criticalPush.hideTypes` (Liste aus `person`, `beziehung`, `geburtstag`,
 `geld_konto`, `gesundheit`, `zugang_passwort`) ergaenzt die Typen, deren Inhalt
 in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
@@ -563,7 +687,7 @@ er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
 verglichen, was einen Workspace nach dem Erreichen des Limits dauerhaft
 blockierte.
 
-`skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
+`schicht15`, `skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
 `merging.model` noch dessen Endpoint, Credential oder Header.
 
 Jeder aktivierte Chat-Aufruf löst genau einen von vier Route-Modi auf:
@@ -588,14 +712,13 @@ nutzt seinen bestehenden Skip-/Fallbackpfad, ohne einen zweiten Modellversuch.
 
 ### Agentenbindung und Trust
 
-A session-bound command capability omits `agentId`, weil sie bereits an die
-aktive Session gebunden ist. Global hook, tool, and background calls senden den
-Ziel-Agenten und benötigen am Plugin-Entry
-`llm.allowAgentIdOverride:true`. A model-only native override requires
-`llm.allowModelOverride:true` und muss gegebenenfalls in `allowedModels`
-zugelassen sein. Eine Policy-Ablehnung bleibt fail-soft; PLUR1BUS wiederholt
-den Request nicht ohne Agent oder Modell. Installer `preserve` never grants LLM
-trust; Safe und Recommended setzen ebenfalls keine dieser Entry-Level-Bits.
+Die Agentenkennung bleibt innerhalb von PLUR1BUS für die Modellwahl erhalten.
+Der native Aufruf übergibt keinen `agentId`-Override an OpenClaw; der Host
+bestimmt die Bindung seiner LLM-Verbindung. Ein Modell-Override benötigt
+`llm.allowModelOverride:true` und muss gegebenenfalls in `allowedModels` und
+`allowedCompletionModels` zugelassen sein. Eine Policy-Ablehnung bleibt
+fail-soft; PLUR1BUS wiederholt den Request nicht ohne Modell. Installer
+`preserve`, Safe und Recommended erweitern diese Berechtigungen nicht.
 
 `runtime.llm.complete` resolves the effective primary selection and does not
 execute the configured model fallback array in the installed Runtime. Die

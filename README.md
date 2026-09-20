@@ -2,11 +2,11 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.70-hermes.0 — Hermes build candidate**
+**PLUR1BUS 7.15.0-hermes.0 — Hermes port in progress**
 
-Source version: **7.12.70-hermes.0** (Python distributions:
-**7.12.70**). It integrates the pinned upstream commit
-`784e900541fddb1d13a75104b6570e52051fd82c` while retaining the native Hermes
+Source version: **7.15.0-hermes.0** (Python distributions:
+**7.15.0**). It integrates the pinned upstream commit
+`8c29aeab9e03691d3a07e31756b3f23addf9bba1` while retaining the native Hermes
 payload. See the [Hermes delta review](docs/audits/hermes-7.12.69-delta-review.md)
 and [platform installation guide](distribution/INSTALLATION.de.md).
 This candidate is not yet published. Build receipts and checksums identify
@@ -28,6 +28,179 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.15.0 — switches and decisions on the cards, capacity at a glance
+
+Every feature card now carries its own switch and the operating decisions
+that belong to it — one row per setting with a select or number field and a
+Save button. What is offered is a closed list in `lib/dashboard-settings.js`:
+27 switches and 20 decisions (`schicht15.maxPromotionsPerRun`,
+`skillMiner.autoApply`, `merging.autoApply`, `gc.maxMemoryCount`,
+`criticalPush.maxPerDay`, the Continuity Engine sub-switches, the dream
+narrative switches, and more); thresholds deliberately stay in the config
+file. Each change is validated against the schema **before** it reaches
+`openclaw.json`, and the gc cap is refused below the largest current store.
+`llmRouter.defaultModel` — the model every task falls back to — sits in the
+LLM Tasks panel. Five cards are new: Reactivation Recall, Reaction Nudge,
+Morning Review, Evening Review, and Style Directive.
+
+The new **Capacity & Runtime** panel is read-only: how full each store is
+against the cap, what the last garbage-collection run did, whether the
+gateway process is under memory pressure, and which runtime limits apply.
+
+### New in v7.14.0 — model choice per agent, from the operator tab
+
+The **LLM Tasks** panel is a matrix: one column per agent, one row per
+background task, and a **Default for all tasks** row on top. Pick a model
+there and every PLUR1BUS task of that agent uses it unless the task has its
+own choice; a task choice beats the agent default, and both beat whatever
+the config file would have routed. Agents come from `agents.entries` —
+OpenClaw's current form — with the legacy `agents.list` as a fallback;
+columns are the standing agents (those with a heartbeat) plus any agent
+with a saved choice, or exactly the ids in `llmRouter.dashboardAgents`.
+Cells without a choice show only what they inherit and a **Change** link
+that opens that one cell, so the page stays small on hosts with a large
+model catalogue. Saving a model that the plugin's model permissions do not
+yet allow grants exactly that model.
+
+Also in this release: the storage-mode switch on the Capture card (see
+"Choosing the storage mode" above), a sticky jump bar over the panels, and
+readable sizes in Memory Health.
+
+### New in v7.13.0 — the split now actually happens, and the whole row is kept
+
+7.12.70 wired the split into capture, but it only ever fired on *structured*
+text — bullet lists, headings, paragraphs. Prose and voice transcripts merely
+set a `needsLlm` flag and passed through untouched. Measured against 90 real
+rows: `whole` 20, `structural` **0**, `llm` 70. Not a single one would have
+been split. A second defect compounded it: the capture path rebuilt its items
+as `{ it, text, vector, ok }` and dropped the `chunkGroupId` on the way, so
+even a successful split would have reached the database without its group key.
+
+Both are fixed. Prose of eight sentences or more is now split at sentence
+boundaries by rule — no model call, decimals and version numbers left intact.
+Texts of four to seven sentences without structure are still kept whole on
+purpose: cutting five sentences about one subject is worse than leaving them
+together, and no rule can tell the two apart.
+
+The second change is what to store. Measured on 100 deliberately hard cases
+from real data, end to end (recall → answer model → judge):
+
+| stored as | answered correctly |
+|---|---|
+| whole row only | 36 % |
+| parts only | 49 % |
+| **whole row *and* parts** | **64 %** |
+
+Splitting alone wins retrieval but loses context; keeping the original row
+alongside its parts recovers most of that loss without any model call. That is
+now the default (`keepWhole`). The original row deliberately keeps an empty
+`chunkGroupId` so it falls back to `sourceTurnId` — sharing the parts' group
+would make the group cap of two apply across all of them and let at most two
+rows per message survive, which is not what was measured.
+
+**Cost.** Going forward a message costs about **3.86 rows** instead of one.
+Existing rows are never split retroactively. The GC cap `maxMemoryCount` is
+per agent and already stands at 150,000, which keeps it a safety net rather
+than a routine pruner under the new growth rate — no adjustment needed.
+
+### New in v7.12.70 — a message with several statements is stored as several vectors
+
+A memory is embedded as **one** vector. When a single message carries several
+independent statements, that vector is their centre of gravity and sits further
+from each individual statement than it needs to — the row is not found, even
+though the information is in it.
+
+This is measurable. Across the production store, the median row holds 5
+sentences, the 75th percentile 14, the 90th 31. In the LOCOMO benchmark 99.7 %
+of the evidence being looked for **exists** as a row, but only 75.8 % of it is
+retrieved. Nothing is missing; it is simply not found.
+
+Capture now splits such a message **before** embedding — only then does each
+part get its own vector. The split is deliberately conservative:
+
+| Shape | Share of rows | What happens |
+| --- | --- | --- |
+| Fewer than 4 sentences | ~35 % | left whole |
+| 4+ sentences with structure (bullets, paragraphs) | ~48 % | split by rule, no model call |
+| 4–7 sentences without structure | ~13 % | left whole |
+| 8+ sentences without structure | ~4 % | counted, not split |
+
+Five sentences about one topic are worse cut apart than left together, and
+without a model the one case cannot be told from the other — so the middle group
+stays whole, and cases that would need a model are counted rather than guessed
+at. A message never yields more than 20 parts; beyond that they are bundled, not
+truncated, so no content is lost.
+
+Parts of one message are linked by a new `chunkGroupId` column, and recall caps
+how many parts of the same message may occupy one result list (two) — otherwise
+a single verbose message would crowd out the diversity the split is meant to
+win. The column is added to each agent's table when it is opened: idempotent,
+per agent, and empty means "not split".
+
+**What this costs.** The store grows. Measured without the cap, one agent went
+from 9,379 to 32,066 rows; with the cap it is less, but still noticeably more
+than before. Every row costs again in the hourly emotion job, the importance
+job, garbage collection, and LanceDB fragmentation. Set `captureChunking: false`
+to turn it off without redeploying. Existing rows are **not** split
+retroactively.
+
+**Choosing the storage mode.** The **Capture** card in the operator tab offers
+the three modes directly, once `controlUi.writeActions` is `all`:
+
+- **Both** — whole message *and* its parts. The measured default.
+- **Parts only** — parts without the original row. About one row less per split
+  message, at the cost of the context the whole row carries.
+- **Whole** — no splitting at all (`captureChunking: false`).
+
+Measured on 100 deliberately hard cases from real data on 2026-09-20 (recall,
+answering model, judge): whole 36 %, parts only 49 %, both 64 %. Switching
+back from **Whole** restores the split mode that was selected before. A switch
+applies to newly captured turns; rows already stored are untouched.
+
+Also fixed in this release: an ordinary classification used to move the decay
+clock forward without applying the elapsed decay, so a 30-day-old strength of
+0.8 stayed 0.8 instead of falling to 0.4 — a classification is not
+reinforcement. And automatic flashbulb encoding could reclassify a row that had
+been explicitly raised into the agent band, removing the core-memory exemption
+it was given on purpose; the explicit classification now wins.
+
+### New in v7.12.39 – v7.12.69 — importance from encoding, and a bench that measures the real pipeline
+
+A condensed summary of the releases between the two sections below.
+
+**Importance stopped coming from keyword lists** (7.12.63). A memory's
+importance is now a judgement made when it is encoded, by the model, in the
+hourly job — not a score derived from whether the text happened to contain a
+word from a list. The stock of existing rows was re-judged afterwards: the
+cluster of rows sitting at exactly 0.70 fell from 71 % to 11 %, spread over 55
+distinct values. The emotion map now asks only about dimensions that are
+actually populated (7.12.64), which shortens the prompt without changing what is
+stored.
+
+**Retrieval extends how long a memory is kept** (7.12.65, 7.12.66). A recall that
+is separated in time from the last one now lengthens the half-life, not just the
+strength — which is what makes a painful or often-revisited memory stay present
+instead of decaying on schedule. The per-recall bonus no longer shrinks with the
+number of recalls. Rows at 0.95 and above form an explicit **agent band** that
+carries core protection, so a memory deliberately raised by the agent and the
+user together is not quietly decayed away.
+
+**The retrieval budget moved behind the reranker** (7.12.68). The pipeline used
+to cut the candidate list to its final size *before* reranking, so the reranker
+only ever saw what a cheaper stage had already chosen. Swapping the two stages
+raised the share of runs where the sought evidence actually reached the answer
+from 68.0 % to 91.3 %, and LOCOMO categories 1–4 from 46.8 % to 60.9 % —
+without touching storage, embeddings, or the model.
+
+**`bench/` — the measurement stand** (7.12.68) is now in the repository: LOCOMO
+and LongMemEval harnesses that exercise the recall pipeline directly rather than
+through the Gateway. It was the bench that exposed the budget-ordering defect
+above, after three earlier explanations for the same gap turned out to be wrong.
+
+**`lib/memory-chunking.js`** shipped in 7.12.67 as a library only, deliberately
+unwired, so the split could be measured against real data before it was switched
+on. It was wired into capture in 7.12.70 and made effective in 7.13.0 (above).
 
 ### New in v7.12.38 — the persona voice learns daily, from evidence
 

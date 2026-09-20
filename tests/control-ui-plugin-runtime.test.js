@@ -160,7 +160,7 @@ describe("PLUR1BUS OpenClaw Control UI runtime", () => {
     assert.match(response.body, /Re-Embedding Workflow/);
     assert.match(response.body, /Embedding Dimension Planner/);
     assert.match(response.body, /Model Preparation/);
-    assert.match(response.body, /400 B of 1,000 B/);
+    assert.match(response.body, /400 B of <span title="1,000 B">1 kB<\/span>/);
     assert.match(response.body, /<progress[^>]+aria-label="Local model download progress"[^>]+value="400"[^>]+max="1000"/);
     assert.match(response.body, /downloaded and hash-validated automatically/i);
     assert.match(response.body, /<select[^>]+aria-label="Dimensions for intfloat\/multilingual-e5-small"/);

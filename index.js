@@ -53,11 +53,18 @@ import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/
 import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
+import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
+import { readGcReport } from "./lib/dashboard-operations.js";
+import { checkRuntimePressure } from "./lib/runtime-pressure-gate.js";
+import { resolveAgentWorkspaceDir } from "./lib/setup/memory-host-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
 import {
+  createCaptureChunkingMutator,
   createConfirmationStore,
+  createSettingMutator,
   createEmbeddingProfileMutator,
+  createFeatureModelMutator,
   createFormTokenStore,
   createRerankerMutator,
   applyControlUiWriteAction,
@@ -354,6 +361,7 @@ import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessag
 import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
+import { expandForCapture } from "./lib/memory-chunking.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
 import { planReminderExtraction } from "./lib/reminder-extraction.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
@@ -751,7 +759,7 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, call
         agentId,
         LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       ),
-      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+      callContext?.agentId || agentId,
       LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
@@ -788,7 +796,7 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
         agentId,
         LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
       ),
-      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+      callContext?.agentId || agentId,
       LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
       { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
@@ -1806,6 +1814,14 @@ class MemoryDB {
     if (entry && (entry.epistemicStatus == null || entry.epistemicStatus === "")) {
       entry.epistemicStatus = coerceNewWriteEpistemicStatus(entry.epistemicStatus);
     }
+    // Seit 7.12.70 fuehrt die Tabelle die Spalte chunkGroupId. Fehlt sie in
+    // einer geschriebenen Zeile, weicht der Append vom Schema ab und LanceDB
+    // lehnt ihn ab ("Append with different schema: missing=[chunkGroupId]") —
+    // und zwar fuer JEDEN Schreiber, nicht nur fuer das Capture. Acht Stellen
+    // bauen Zeilen aus expliziten Feldlisten; der Standardwert gehoert deshalb
+    // hierher, an dieselbe Stelle, an der schon epistemicStatus nachgezogen
+    // wird. Leer heisst "nicht aufgeteilt"; wer eine Gruppe hat, behaelt sie.
+    if (entry && entry.chunkGroupId == null) entry.chunkGroupId = "";
     const { baseDbPath, agentId } = splitAgentDbPath(this.dbPath);
     const cutoffState = readEpistemicCutoff(baseDbPath);
     if (
@@ -3849,7 +3865,7 @@ async function callLlm(messages, llmCfg) {
 function withDeterministicLlmContext(llmCfg, agentId, purpose, overrides = {}, callContext = {}) {
   return withLlmCallContext(
     withLlmResultCacheContext({ ...llmCfg, ...overrides }, agentId, purpose),
-    callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+    callContext?.agentId || agentId,
     purpose,
     { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
   );
@@ -4581,6 +4597,7 @@ const plugin = {
       }
       const route = resolveFeatureLlmRoute(routeConfig, {
         feature,
+        agentModels: featureModelOverrides(cfg, feature),
         runtimeLlm: runtimeIfUsable(api)?.llm,
         logger: api.logger,
         resultCache: llmResultCache,
@@ -4915,11 +4932,14 @@ const plugin = {
     // wie emotionT3CallLlm oben, bewusst nicht als gemeinsame Hilfsfunktion
     // extrahiert, damit dessen bestehende Scoping-Verträge unangetastet
     // bleiben.
-    const encodingCallLlm = emotionT3HasProvider
+    const encodingLlmCfg = createFeatureRoute("emotion-encoding", emotionCfg.t3 || {});
+    const encodingHasProvider = Boolean(encodingLlmCfg && (encodingLlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
+      || typeof runtimeIfUsable(api)?.llm?.complete === "function"));
+    const encodingCallLlm = encodingHasProvider
       ? (messages, context = {}) => {
           const emotionLlmCfg = withLlmCallContext(
             {
-              ...emotionT3LlmCfg,
+              ...encodingLlmCfg,
               // Messung + Begründung bei der Konstante
               // EMOTION_REFINE_ENCODING_MAX_TOKENS weiter unten (voller
               // Vorwärtsverweis: diese Funktion wird erst vom
@@ -7507,13 +7527,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         workspaceKey: dailyPartition.workspaceIdentity || dailyPartition.ownerUserId || dailyPartition.agentId,
                         compactionLlmCfg: mergingEnabled ? withLlmCallContext(
                           memoryCompactionLlmCfg,
-                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          internalAgent,
                           "memory-compaction",
                           { runtimeLlm: sessionRuntime },
                         ) : null,
                         conflictLlmCfg: mergingEnabled ? withLlmCallContext(
                           conflictResolutionLlmCfg,
-                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          internalAgent,
                           "conflict-resolution",
                           { runtimeLlm: sessionRuntime },
                         ) : null,
@@ -7633,6 +7653,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const callContext = typeof sessionRuntime?.complete === "function"
                       ? {
                           runtimeLlm: sessionRuntime,
+                          agentId: internalAgent,
                           purpose: "critical-push-classification",
                         }
                       : {
@@ -7673,7 +7694,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const commandRoute = (route, purpose) => withLlmCallContext(
                   route,
-                  typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                  internalAgent,
                   purpose,
                   { runtimeLlm: sessionRuntime },
                 );
@@ -7876,7 +7897,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   ledgerDirs: skillLedgerDirsFor(memoryCtx),
                   llmCfg: withLlmCallContext(
                     skillMinerLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    internalAgent,
                     LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -7903,7 +7924,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   agentId: internalAgent,
                   llmCfg: withLlmCallContext(
                     afterthoughtLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    internalAgent,
                     "afterthought",
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -7935,7 +7956,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   minOutcomes: personaEvolveMinOutcomes,
                   llmCfg: withLlmCallContext(
                     personaVoiceLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    internalAgent,
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -7980,7 +8001,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const rebuildLlmCfg = mergingEnabled ? withLlmCallContext(
                   episodeExtractionLlmCfg,
-                  typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                  internalAgent,
                   "episode-extraction",
                   { runtimeLlm: sessionRuntime },
                 ) : null;
@@ -8341,7 +8362,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   lang,
                   llmCfg: withLlmCallContext(
                     personaVoiceLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : personaAgentId,
+                    personaAgentId,
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
@@ -8905,7 +8926,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   callLlm,
                   overlayAuditLlmCfg: mergingEnabled ? withLlmCallContext(
                     overlayAuditLlmCfg,
-                    typeof sessionRuntime?.complete === "function" ? undefined : auditAgentId,
+                    auditAgentId,
                     "overlay-audit-contradiction",
                     { runtimeLlm: sessionRuntime },
                   ) : null,
@@ -9359,6 +9380,21 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
         const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
           const confirmations = createConfirmationStore();
+          const setFeatureModel = createFeatureModelMutator({ api });
+          const setCaptureChunking = createCaptureChunkingMutator({ api });
+          const setSetting = createSettingMutator({
+            api,
+            validate: resolveEffectiveConfig,
+            // The gc cap may never drop below what an agent currently holds;
+            // the health snapshot is the same count the dashboard shows.
+            maxAgentCards: async () => {
+              const snapshot = await controlHealth.snapshot();
+              const counts = (snapshot?.cards?.byAgent || []).map((entry) => Number(entry?.cards)).filter(Number.isFinite);
+              return counts.length ? Math.max(...counts) : null;
+            },
+            modelCatalog: catalogModelIds,
+            grantModel: grantModelPermission,
+          });
           const setReranker = createRerankerMutator({ api });
           const setEmbeddingProfile = createEmbeddingProfileMutator({ api });
           const keyConfigured = () => rerankerKeyConfigured(cfg, process.env);
@@ -9395,6 +9431,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 logger: api.logger,
                 confirmations,
                 setReranker,
+                setFeatureModel,
+                setCaptureChunking,
+                setSetting,
                 setEmbeddingProfile,
                 rerankerKeyConfigured: keyConfigured,
                 preparedTarget: () => {
@@ -9474,6 +9513,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               })();
               return buildControlPlaneProjection({
                 config: cfg,
+                hostConfig: api.config,
                 obsidianVault: {
                   configured: configuredObsidianWorkspaces.length > 0,
                   configuredCount: configuredObsidianWorkspaces.length,
@@ -9529,6 +9569,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 workspacePolicies,
                 skillWorkshop: collectSkillWorkshopDashboard(),
                 health: await controlHealth.snapshot(),
+                // The gc job runs from the main agent and reports on every agent.
+                gcReport: readGcReport(resolveAgentWorkspaceDir(api.config, "main")),
+                pressure: checkRuntimePressure(cfg.runtime || {}),
                 env: process.env,
               });
             },
@@ -10262,7 +10305,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               workspaceAliases: memoryWorkspaceAliases,
               llmCfg: mergingEnabled ? withLlmCallContext(
                 wikiLlmCfg,
-                typeof sessionRuntime?.complete === "function" ? undefined : wikiAgentId,
+                wikiAgentId,
                 "wiki",
                 { runtimeLlm: sessionRuntime },
               ) : null,
@@ -10616,7 +10659,27 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
             // Phase 1b: Batch-Embedding, falls der Provider es unterstützt.
             const batchSize = cfg.embeddingBatchSize || 8;
-            const validPreps = textPrep.filter((p) => p.ok);
+            // Aufteilung VOR der Einbettung: nur so bekommt jedes Teilstueck
+            // einen eigenen Vektor. Enthaelt eine Nachricht mehrere
+            // unabhaengige Aussagen, ist ein gemeinsamer Vektor deren
+            // Schwerpunkt und liegt von jeder einzelnen weiter entfernt als
+            // noetig — die Zeile wird dann nicht gefunden, obwohl die
+            // Information darin steht. Abschaltbar ueber captureChunking.
+            const preppedOk = textPrep.filter((p) => p.ok);
+            // Drei Speicherweisen, im configSchema als zwei Schalter:
+            //   captureChunking: false                     -> ganz
+            //   true + captureChunkingMode "beides" (Vorgabe) -> Ganzes und Teile
+            //   true + captureChunkingMode "geteilt"       -> nur die Teile
+            // Gemessen an 100 schweren Faellen: 36 % / 64 % / 49 %.
+            const chunkPlan = expandForCapture(preppedOk, {
+              enabled: cfg.captureChunking !== false,
+              keepWhole: cfg.captureChunkingMode !== "geteilt",
+              makeGroupId: randomUUID,
+            });
+            const validPreps = chunkPlan.items;
+            if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0) {
+              api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model for agent=${agentId}`);
+            }
             const textToVector = new Map();
             if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {
               const textsToEmbed = validPreps.map((p) => p.text);
@@ -10639,6 +10702,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             throwIfCaptureAborted();
 
             // Phase 1c: Einzel-Embedding-Fallback für nicht gebatchte/fehlgeschlagene Items.
+            // chunkGroupId MUSS hier mitgereicht werden. Bis 7.12.70 baute diese
+            // Phase ein frisches Objekt aus nur { it, text, vector, ok } und warf
+            // das von expandForCapture gesetzte Gruppenkennzeichen weg — der
+            // Zeilenbau weiter unten las `p.chunkGroupId` und bekam immer "".
+            // Folge: Ganzes und Teile fielen beide auf denselben sourceTurnId
+            // zurueck (alle Zeilen eines Capture-Laufs teilen ihn), landeten in
+            // EINER Dedup-Gruppe, und DEFAULT_MAX_PER_GROUP = 2 haette hoechstens
+            // zwei davon durchgelassen statt "Ganzes und bis zu zwei Teile".
             const prepared = await Promise.all(validPreps.map(async (p) => {
               let vector = textToVector.get(p.text);
               if (!vector) {
@@ -10646,10 +10717,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   vector = await embeddings.embed(p.text, { agentId });
                 } catch (err) {
                   api.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
-                  return { it: p.it, text: p.text, vector: null, ok: false };
+                  return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector: null, ok: false };
                 }
               }
-              return { it: p.it, text: p.text, vector, ok: true };
+              return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector, ok: true };
             }));
             throwIfCaptureAborted();
 
@@ -10705,6 +10776,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   expiresAt: 0,
                   storedBy: agentId,
                   sourceTurnId: turnId || "",
+                  // Leer, wenn nicht aufgeteilt — die Recall-Seite faellt dann
+                  // auf sourceTurnId zurueck (lib/recall-pipeline.js).
+                  chunkGroupId: p.chunkGroupId || "",
                   sourceMessageRole: p.it.role || "",
                   epistemicStatus: decideEpistemicStatusForCapture({
                     text: p.text,
