@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.14.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.15.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.14.0**, running in production on OpenClaw
+Current source version: **7.15.0**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,25 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.15.0 — switches and decisions on the cards, capacity at a glance
+
+Every feature card now carries its own switch and the operating decisions
+that belong to it — one row per setting with a select or number field and a
+Save button. What is offered is a closed list in `lib/dashboard-settings.js`:
+27 switches and 20 decisions (`schicht15.maxPromotionsPerRun`,
+`skillMiner.autoApply`, `merging.autoApply`, `gc.maxMemoryCount`,
+`criticalPush.maxPerDay`, the Continuity Engine sub-switches, the dream
+narrative switches, and more); thresholds deliberately stay in the config
+file. Each change is validated against the schema **before** it reaches
+`openclaw.json`, and the gc cap is refused below the largest current store.
+`llmRouter.defaultModel` — the model every task falls back to — sits in the
+LLM Tasks panel. Five cards are new: Reactivation Recall, Reaction Nudge,
+Morning Review, Evening Review, and Style Directive.
+
+The new **Capacity & Runtime** panel is read-only: how full each store is
+against the cap, what the last garbage-collection run did, whether the
+gateway process is under memory pressure, and which runtime limits apply.
 
 ### New in v7.14.0 — model choice per agent, from the operator tab
 
