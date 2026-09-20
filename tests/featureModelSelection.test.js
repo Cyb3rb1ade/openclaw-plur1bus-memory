@@ -182,20 +182,105 @@ test("model action enforces write mode and forwards complete validated form fiel
   assert.equal(requests.length, 1);
 });
 
-test("dashboard renders escaped model dropdowns on feature cards and keeps unavailable saved models visible", async () => {
+test("dashboard renders the model matrix with escaped labels and keeps unavailable saved models visible", async () => {
   const host = hostConfig();
   const config = host.plugins.entries[pluginId].config;
   config.llmRouter.agentModels = { alice: { merging: "removed/model" } };
   const projection = buildControlPlaneProjection({ config, hostConfig: host });
   const html = await render(projection, true);
+  assert.match(html, /<h2 id="llm-tasks-title">LLM Tasks<\/h2>/);
   assert.match(html, /name="action" value="feature.model"/);
   assert.match(html, /<select[^>]*name="model"/);
   assert.match(html, /Fast &lt;model&gt;/);
   assert.match(html, /value="removed\/model"[^>]*selected/);
-  assert.match(html, /Use default/);
+  assert.match(html, /Inherit — /);
+  assert.match(html, /name="feature" value="\*"/, "the default row writes the agent default");
+  assert.doesNotMatch(html, /class="feature-models"><legend>alice/, "no per-card fieldsets any more");
   assert.doesNotMatch(html, /SECRET|private\.invalid/);
   const readonly = await render(projection, false);
   assert.doesNotMatch(readonly, /name="action" value="feature.model"/);
+  assert.match(readonly, /<select[^>]*name="model"[^>]*disabled/);
+});
+
+test("dashboard carries a jump bar with one anchor per section and stacks the storage switch", async () => {
+  const html = await render(buildControlPlaneProjection({ hostConfig: hostConfig() }), true);
+  const ids = [...html.matchAll(/aria-labelledby="([a-z-]+)"/g)].map((m) => m[1]);
+  assert.ok(ids.length >= 9);
+  for (const id of ids) assert.match(html, new RegExp(`<nav class="jump"[^>]*>(?:.*?)<a href="#${id}">`), `anchor for ${id}`);
+  assert.match(html, /<ul class="switch-list switch-stack">/);
+});
+
+function entriesHost() {
+  const host = hostConfig();
+  // OpenClaw's current form: an object keyed by agent id; sub-agents have no heartbeat.
+  host.agents.entries = {
+    alice: { name: "Alice", heartbeat: { every: "6h" }, models: { "openai/extra": {} } },
+    "alice-helper": { name: "Helper" },
+    bob: { model: "anthropic/haiku" },
+  };
+  delete host.agents.list;
+  return host;
+}
+
+test("agents come from agents.entries first and the matrix shows only standing agents by default", () => {
+  const host = entriesHost();
+  const projection = buildControlPlaneProjection({ hostConfig: host });
+  assert.deepEqual(projection.featureModels.agents.map((a) => a.id), ["alice"], "only the agent with a heartbeat");
+  assert.equal(projection.featureModels.selection, "standing");
+  assert.equal(projection.featureModels.agents[0].label, "Alice");
+  assert.ok(projection.featureModels.agents[0].models.some((m) => m.id === "openai/extra"), "agent-local models are read from entries");
+  // A saved choice keeps its agent visible even without a heartbeat.
+  const withChoice = buildControlPlaneProjection({ hostConfig: host, config: { llmRouter: { agentModels: { bob: { merging: "openai/base" } } } } });
+  assert.deepEqual(withChoice.featureModels.agents.map((a) => a.id), ["alice", "bob"]);
+  // An explicit list wins; unknown ids are ignored.
+  const explicit = buildControlPlaneProjection({ hostConfig: host, config: { llmRouter: { dashboardAgents: ["bob", "ghost"] } } });
+  assert.deepEqual(explicit.featureModels.agents.map((a) => a.id), ["bob"]);
+  assert.equal(explicit.featureModels.selection, "configured");
+  // Nothing standing and nothing saved: every known agent.
+  delete host.agents.entries.alice.heartbeat;
+  assert.deepEqual(buildControlPlaneProjection({ hostConfig: host }).featureModels.agents.map((a) => a.id), ["alice", "alice-helper", "bob"]);
+  // Legacy agents.list still works when entries is absent.
+  const legacy = hostConfig();
+  assert.deepEqual(buildControlPlaneProjection({ hostConfig: legacy }).featureModels.agents.map((a) => a.id), ["alice", "bob"]);
+});
+
+test("the agent default applies to every task without its own choice and a task choice beats it", async () => {
+  const { featureModelOverrides } = await import("../lib/featureModels.js");
+  const config = { llmRouter: { agentModels: { alice: { "*": "anthropic/haiku", merging: "openai/extra" }, bob: { "*": "openai/base" } } } };
+  assert.deepEqual(featureModelOverrides(config, "merging"), { alice: "openai/extra", bob: "openai/base" });
+  assert.deepEqual(featureModelOverrides(config, "capture-summary"), { alice: "anthropic/haiku", bob: "openai/base" });
+  assert.deepEqual(featureModelOverrides({ llmRouter: { agentModels: { alice: { "*": "not a model" } } } }, "merging"), {});
+  const route = resolveFeatureLlmRoute({ model: "legacy", apiKey: "SECRET", baseUrl: "https://private.invalid" }, {
+    feature: "capture-summary", agentModels: featureModelOverrides(config, "capture-summary"),
+    runtimeLlm: { async complete(p) { return p.model; } },
+  });
+  assert.equal((await completeFeatureLlm([], route, { agentId: "alice" })).text, "anthropic/haiku", "the agent default reroutes a direct feature too");
+  const host = entriesHost();
+  const projection = buildControlPlaneProjection({ hostConfig: host, config: { ...config, merging: { model: "legacy", apiKey: "SECRET", baseUrl: "https://private.invalid" } } });
+  const alice = projection.featureModels.agents.find((a) => a.id === "alice");
+  assert.equal(alice.agentDefault, "anthropic/haiku");
+  assert.equal(alice.features.find((f) => f.id === "merging").model, "openai/extra");
+  assert.equal(alice.features.find((f) => f.id === "merging").inheritedModel, "anthropic/haiku", "what runs after resetting the task choice");
+  assert.equal(alice.features.find((f) => f.id === "merging").direct, true);
+  assert.equal(alice.features.find((f) => f.id === "capture-summary").inheritedModel, "anthropic/haiku");
+});
+
+test("the agent default is written and reset like a task choice and stays schema-valid", async () => {
+  const draft = entriesHost();
+  const mutate = writes.createFeatureModelMutator({ api: { runtime: { config: { async mutateConfigFile(request) { return request.mutate(draft); } } } } });
+  await mutate({ agentId: "alice", feature: "*", model: "anthropic/haiku" });
+  const saved = draft.plugins.entries[pluginId].config;
+  assert.equal(saved.llmRouter.agentModels.alice["*"], "anthropic/haiku");
+  assert.doesNotThrow(() => resolveEffectiveConfig({ ...saved, llmRouter: { ...saved.llmRouter, dashboardAgents: ["alice"] } }));
+  await assert.rejects(() => mutate({ agentId: "alice-helper", feature: "*", model: "openai/extra" }), /no longer configured/, "another agent's private model");
+  await assert.rejects(() => mutate({ agentId: "ghost", feature: "*", model: "openai/base" }));
+  await mutate({ agentId: "alice", feature: "*", model: "" });
+  // The mutator replaces entry.config; read the fresh object, not the one from before the reset.
+  assert.equal(draft.plugins.entries[pluginId].config.llmRouter.agentModels.alice, undefined);
+  const form = new URLSearchParams({ agent: "alice", feature: "*", model: "openai/base" });
+  const requests = [];
+  assert.equal((await writes.applyControlUiWriteAction({ action: "feature.model", form, mode: "all", deps: { setFeatureModel: async (r) => requests.push(r) } })).ok, true);
+  assert.deepEqual(requests, [{ agentId: "alice", feature: "*", model: "openai/base" }]);
 });
 
 test("HTTP model writes require a fresh single-use form token", async () => {
@@ -219,9 +304,31 @@ test("HTTP model writes require a fresh single-use form token", async () => {
   assert.equal(saved.length, 1, "replaying a token must not execute another model write");
 });
 
-async function render(projection, writable) {
+async function render(projection, writable, query = "") {
   const handler = createControlUiHttpHandler({ getProjection: async () => projection, write: writable ? { mode: "all", tokens: writes.createFormTokenStore(), applyAction: async () => ({ ok: true }) } : null });
   const response = { setHeader() {}, end(body) { this.body = body; } };
-  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "localhost" } }, response);
+  await handler({ method: "GET", url: `/plugins/memory-lancedb-namespaced/control${query}`, headers: { host: "localhost" } }, response);
   return response.body;
 }
+
+test("task cells stay collapsed until they hold a choice or are opened with ?edit, so the page stays small", async () => {
+  const host = entriesHost();
+  const config = { llmRouter: { agentModels: { alice: { merging: "openai/base" } } } };
+  const projection = buildControlPlaneProjection({ config, hostConfig: host });
+  const options = (html) => (html.match(/<option/g) || []).length;
+  const plain = await render(projection, true);
+  const perSelect = projection.featureModels.agents[0].models.length + 1;
+  assert.equal((plain.match(/<select/g) || []).length, 2, "the default row plus the one saved task choice");
+  assert.equal(options(plain), 2 * perSelect);
+  assert.match(plain, /class="cell-edit" href="\?edit=alice\.capture-summary#llm-tasks-title"/);
+  const opened = await render(projection, true, "?edit=alice.capture-summary");
+  assert.equal((opened.match(/<select/g) || []).length, 3);
+  assert.match(opened, /name="feature" value="capture-summary"/);
+  assert.match(opened, /<details class="matrix-tasks" open>/);
+  for (const bad of ["?edit=alice", "?edit=../x", "?edit=alice.capture-summary.extra", "?edit=" + "a".repeat(70) + ".merging"]) {
+    assert.equal((await render(projection, true, bad).then((h) => (h.match(/<select/g) || []).length)), 2, `ignores ${bad}`);
+  }
+  const readonly = await render(projection, false, "?edit=alice.capture-summary");
+  assert.doesNotMatch(readonly, /class="cell-edit"/);
+  assert.equal((readonly.match(/<select/g) || []).length, 2, "read-only never opens extra cells");
+});

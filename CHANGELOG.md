@@ -9,6 +9,30 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- **Standardmodell je Agent** im Operator-Dashboard: die Zeile „Default for
+  all tasks" der neuen Matrix schreibt `llmRouter.agentModels.<agent>.*`.
+  Rangfolge Aufgabenwahl > Agentenstandard > bisherige Route.
+- **LLM Tasks als Matrix** (Spalte je Agent, Zeile je Aufgabe) statt
+  Auswahlfeldern in jeder Feature-Karte. Aufgabenzeilen liegen hinter einem
+  Aufklapper; Zellen ohne Wahl zeigen nur den ererbten Wert und einen
+  Change-Link (`?edit=<agent>.<Aufgabe>`), der genau diese Zelle öffnet —
+  ohne Skript. Auf einem Host mit drei Agenten und 71 Katalogmodellen
+  schrumpft die Seite damit von 495 KB auf 78 KB.
+- `llmRouter.dashboardAgents` legt fest, welche Agenten Spalten bekommen.
+- Sprungleiste über den Panels (haftend, ein Anker je Abschnitt).
+
+### Behoben
+
+- Die Modellwahl las nur die Altform `agents.list` und zeigte auf Hosts mit
+  `agents.entries` — OpenClaws aktueller Form — nur `main`. Jetzt `entries`
+  zuerst, `list` als Rückfall. Spalten bekommen die stehenden Agenten (mit
+  `heartbeat`) plus jeder mit gespeicherter Wahl, nicht alle Subagenten.
+- Der Speicherweisen-Schalter brach in der schmalen Capture-Karte um
+  (Erklärtext als schmale Spalte, Beschriftung zweizeilig); er ist dort jetzt
+  gestapelt.
+- Speichergrößen im Reiter sind lesbar („9.3 GB" statt „9,300,000,000 B");
+  der exakte Wert steht im Tooltip.
+
 - Auswahlschalter für die drei Speicherweisen beim Aufteilen auf der
   Capture-Karte des Operator-Dashboards: **Both** (Ursprungszeile und Teile),
   **Parts only** (nur die Teile) und **Whole** (gar nicht aufteilen). Er
