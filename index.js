@@ -55,6 +55,7 @@ import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plu
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
 import { readGcReport } from "./lib/dashboard-operations.js";
+import { readPluginConfigFile } from "./lib/dashboard-settings.js";
 import { checkRuntimePressure } from "./lib/runtime-pressure-gate.js";
 import { resolveAgentWorkspaceDir } from "./lib/setup/memory-host-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
@@ -9572,6 +9573,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 // The gc job runs from the main agent and reports on every agent.
                 gcReport: readGcReport(resolveAgentWorkspaceDir(api.config, "main")),
                 pressure: checkRuntimePressure(cfg.runtime || {}),
+                // Saved-vs-running marker: the file may be ahead of this plugin instance.
+                fileConfig: readPluginConfigFile({ env: process.env }),
                 env: process.env,
               });
             },
