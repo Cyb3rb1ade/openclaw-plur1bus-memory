@@ -5,6 +5,47 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Behoben
+
+- **Gespeichert ist nicht gleich laufend — die Seite sagt es jetzt.** Ein
+  Dashboard-Klick landet sofort in `openclaw.json`, wirkt aber erst nach dem
+  Plugin-Reload des Hosts (rund eine Minute) — und der kann scheitern und
+  zurückrollen. Bisher rendete die Seite stumm den alten Wert weiter, sodass
+  ein Klick wirkungslos aussah. Jetzt vergleicht sie die Datei mit der
+  laufenden Konfiguration, zeigt oben „N gespeicherte Änderungen laufen noch
+  nicht" und markiert jede betroffene Zeile mit **pending**. Nach drei
+  Minuten ohne Wirkung sagt sie stattdessen, dass der Reload vermutlich
+  gescheitert ist und ein Neustart ihn anwendet. Verglichen wird nur, was
+  das Dashboard selbst schreiben darf; aus der Datei verlässt keine einzige
+  Einstellung die Funktion.
+- **Aufteilung: Text vor dem ersten Listenpunkt und kurze Aussagen bleiben
+  erhalten** (#175). In `captureChunkingMode: "geteilt"` gingen Einleitungen
+  und Stücke unter acht Zeichen („Nein.", „Ja.") verloren. Kurze Stücke
+  hängen jetzt an ihrem **vorigen** Satz — eine Antwort gehört zu ihrer
+  Frage, nicht zur nächsten Aussage.
+- **Re-Embedding:** Der Schritt „Dry run" trug im Ruhezustand die Marke
+  `current`, direkt über der Zeile „No active re-embedding migration". Er
+  heißt dort jetzt `next`.
+
+### Geändert
+
+- **Memory Health erklärt seinen Zustand.** Neben dem Badge steht, was
+  fehlschlug (etwa „eine Partition konnte nicht gezählt werden — meist eine
+  kalte LanceDB direkt nach einem Plugin-Reload"), wann der Schnappschuss
+  entstand und wann der nächste läuft. War der Größenscan unvollständig,
+  sagt die Karte, dass **Storage** eine Untergrenze ist.
+- **LLM Tasks: Hintergrundmodell statt Chatmodell als Bezugspunkt.** Das
+  Standardmodell für alle Agenten steht als eigener Kasten über der Tabelle;
+  die Spaltenköpfe nennen zuerst das Hintergrund-Standardmodell und erst
+  danach das Chatmodell als letzte Rückfallstufe. Der ererbte Wert steht als
+  eigene Zeile unter dem Auswahlfeld statt abgeschnitten in der Option.
+- **Ab fünf Agenten ein Agent je Ansicht.** Die Matrix gab jeder Spalte rund
+  100 px, sobald mehr als vier Agenten Spalten bekamen. Jetzt wählt eine
+  Reiterleiste den Agenten (`?agent=<id>`, reiner Ansichtsparameter, wirkt
+  auch ohne Schreibrecht); bis vier Agenten bleibt die Matrix wie bisher.
+
 ## [7.15.0] — 2026-09-20
 
 ### Hinzugefügt
