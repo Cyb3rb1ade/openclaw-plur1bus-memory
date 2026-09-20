@@ -127,7 +127,9 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         # The pre-7.4.0 table gained the column exactly once, idempotently.
         self.assertEqual(fake_table.added_columns[0], {"epistemicStatus": "''"})
         self.assertEqual(fake_table.added_columns[1], {"mergedFrom": "'[]'"})
-        self.assertEqual(set(fake_table.added_columns[2].names), {
+        self.assertEqual(fake_table.added_columns[2], {"sourceTurnId": "''"})
+        self.assertEqual(fake_table.added_columns[3], {"chunkGroupId": "''"})
+        self.assertEqual(set(fake_table.added_columns[4].names), {
             "scopeType",
             "ownerKey",
             "workspaceIdentity",
@@ -136,7 +138,7 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
             "chatScope",
             "aclBindings",
         })
-        self.assertEqual(len(fake_table.added_columns), 3)
+        self.assertEqual(len(fake_table.added_columns), 5)
 
     def test_broken_cutoff_downgrades_user_capture(self) -> None:
         with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:

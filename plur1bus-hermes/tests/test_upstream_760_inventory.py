@@ -22,7 +22,7 @@ class Upstream760InventoryTests(unittest.TestCase):
                 self.assertIn("`" + path + "`", review)
         whitespace_only = "tests/db-adapter-timeouts.test.js"
         runtime = [path for path in paths if (path.startswith(("lib/", "tests/")) or path == "index.js") and path != whitespace_only]
-        successor = "784e900541fddb1d13a75104b6570e52051fd82c"
+        successor = "8c29aeab9e03691d3a07e31756b3f23addf9bba1"
         successor_paths = set(subprocess.check_output(
             ["git", "diff", "--name-only", TARGET, successor], cwd=ROOT, text=True).splitlines())
         for path in runtime:

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import copy
+import os
 import logging
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
 from .llm_diagnostics import LlmErrorReporter
+from .feature_models import configured_routes, resolve_feature_route
 
 
 # Native names keep their validation/logging semantics; only the cache key is
@@ -34,6 +37,7 @@ class InternalLlmBackend:
         scope_key: str | None = None,
     ) -> None:
         self.config = dict(config.get("llm") or {})
+        self._routing_config = copy.deepcopy(config)
         encoding_budget = ((config.get("emotion") or {}).get("t3") or {}).get("encodingMaxTokens", 1500)
         try:
             parsed_budget = int(encoding_budget)
@@ -55,7 +59,7 @@ class InternalLlmBackend:
         self._errors = LlmErrorReporter(config, agent_id, data_dir=data_dir, scope_key=scope_key)
 
     def available(self) -> bool:
-        return bool(self.config.get("model"))
+        return bool(self.config.get("model") or configured_routes(self._routing_config))
 
     def complete_json(
         self,
@@ -75,14 +79,15 @@ class InternalLlmBackend:
     def _complete_json(self, purpose: str, system: str, user: str) -> dict[str, Any]:
         if not self.available():
             raise RuntimeError("internal LLM model is not configured")
-        provider = str(self.config.get("provider") or "omlx").lower()
-        base_url = str(self.config.get("baseUrl") or "").rstrip("/")
+        route = resolve_feature_route(self._routing_config, self.config, self.agent_id, purpose)
+        provider = str(route.get("provider") or "omlx").lower()
+        base_url = str(route.get("baseUrl") or "").rstrip("/")
         if not base_url and provider == "omlx":
             base_url = "http://127.0.0.1:8000/v1"
         if not base_url:
             raise RuntimeError("internal LLM baseUrl is not configured")
         payload = {
-            "model": str(self.config["model"]),
+            "model": str(route["model"]),
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -104,11 +109,12 @@ class InternalLlmBackend:
         # budget thinking first blows the timeout below before emitting any
         # JSON. Callers cannot reach this payload, so the escape hatch has to
         # come from configuration.
-        extra = self.config.get("requestExtra")
+        extra = route.get("requestExtra")
         if isinstance(extra, dict):
-            payload.update(extra)
+            payload.update({key: value for key, value in extra.items()
+                            if key not in {"model", "messages"}})
         headers = {"Content-Type": "application/json"}
-        api_key = str(self.config.get("apiKey") or "")
+        api_key = str(os.environ.get(str(route.get("apiKeyEnv") or "")) or route.get("apiKey") or "")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(
@@ -117,7 +123,7 @@ class InternalLlmBackend:
             headers=headers,
             method="POST",
         )
-        timeout = max(0.1, min(float(self.config.get("timeoutSeconds") or 4), 30))
+        timeout = max(0.1, min(float(route.get("timeoutSeconds") or 4), 30))
         cache_request = {
             "purpose": _CACHE_PURPOSES.get(purpose, purpose), "scopeId": self.agent_id,
             "endpoint": request.full_url, "credential": api_key,

@@ -220,6 +220,8 @@ class HermesApi710Tests(unittest.TestCase):
             provider = Plur1busMemoryProvider({"autoCapture": True})
             runtime = type("Runtime", (), {
                 "_domain": domain, "scope_binding": binding,
+                "config": {}, "agent_id": "main", "scope_key": binding.scope_key,
+                "data_dir": Path(directory), "request_scope": {}, "_epistemic_cutoff": {"ok": True},
                 "_remember": lambda *_args, **_kwargs: None,
                 "shutdown": lambda _self: None,
             })()

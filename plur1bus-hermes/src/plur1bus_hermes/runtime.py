@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .cache import EmbeddingCache
+from .chunking import capture_options, capture_rows
 from .domain import Plur1busDomain
 from .epistemic import (
     decide_epistemic_status_for_capture,
@@ -64,6 +65,7 @@ from .turn_identity import (
     canonical_capture_id,
     canonical_captured_at,
     mint_capture_identity,
+    turn_record_id,
 )
 from .capture_journal import receipt_path
 
@@ -687,7 +689,8 @@ class Plur1busRuntime:
         self._submit_capture(
             {"user": user, "assistant": assistant, "sessionId": session_id, "importance": importance,
              "validFrom": valid_from, "validUntil": valid_until, "expiresAt": expires_at, "ttl": ttl,
-             "captureId": capture_id, "capturedAt": captured_at},
+             "captureId": capture_id, "capturedAt": captured_at,
+             "chunkingPlan": capture_options(self.config)},
             attempts=0,
         )
 
@@ -1669,6 +1672,8 @@ class Plur1busRuntime:
             valid_from=rows[0].get("validFrom"),
             valid_until=rows[0].get("validUntil"),
             expires_at=rows[0].get("expiresAt"),
+            chunk_group_id=str(rows[0].get("chunkGroupId") or ""),
+            source_turn_id=str(rows[0].get("sourceTurnId") or ""),
         )
         if not replacement_id:
             return False
@@ -1847,6 +1852,14 @@ class Plur1busRuntime:
                       captured_at: str | None = None,
                       receipt_required: bool = False,
                       capture_payload: dict[str, Any] | None = None) -> None:
+        if capture_id is None:
+            capture_id, default_at = mint_capture_identity()
+            captured_at = captured_at or default_at
+        payload = capture_payload if capture_payload is not None else {}
+        options = payload.setdefault("chunkingPlan", capture_options(self.config))
+        planned = [(role, text, capture_rows(text, capture_id=capture_id,
+                    agent_id=self.agent_id, scope_key=self.scope_key, role=role, options=options))
+                   for role, text in (("user", user), ("assistant", assistant))]
         self._domain.on_turn(
             user,
             assistant,
@@ -1860,25 +1873,42 @@ class Plur1busRuntime:
                 if capture_payload is not None else None
             ),
         )
-        temporal = any(value is not None for value in (valid_from, valid_until, expires_at, ttl))
-        if importance is None and not temporal:
-            self._remember(user, session_id, "user")
-        elif importance is None:
-            self._remember(user, session_id, "user", valid_from=valid_from,
-                           valid_until=valid_until, expires_at=expires_at, ttl=ttl)
-        elif not temporal:
-            self._remember(user, session_id, "user", importance=importance)
-        else:
-            self._remember(user, session_id, "user", importance=importance,
-                           valid_from=valid_from, valid_until=valid_until,
-                           expires_at=expires_at, ttl=ttl)
-        self._remember(assistant, session_id, "assistant")
+        for role, original, rows in planned:
+            from .tombstone import find_blocking_tombstone_for_capture
+            blocked = find_blocking_tombstone_for_capture(self.data_dir, {
+                "agentId": self.agent_id, "text": original.strip(),
+                "scope": self.scope_binding.scope_type, "scopeKey": self.scope_key,
+                "workspaceIdentity": str(self.request_scope.get("workspace") or ""),
+                "userPrincipal": str(self.request_scope.get("user") or ""),
+                "platform": str(self.request_scope.get("platform") or ""),
+                "chat": str(self.request_scope.get("chat") or ""),
+            }) if original.strip() else None
+            if blocked is not None:
+                self._log_capture_error(RuntimeError("tombstone_blocked (chunk parent)"))
+                continue
+            parent_trust = decide_epistemic_status_for_capture(
+                text=original, source_message_role=role,
+                cutoff_failed=not self._epistemic_cutoff["ok"],
+            )
+            for row in rows:
+                kwargs = {"record_id": row["id"] or None,
+                          "chunk_group_id": row["chunkGroupId"],
+                          "source_turn_id": turn_record_id(capture_id, self.agent_id,
+                              self.scope_key, session_id, role),
+                          "force_untrusted": parent_trust != "observed"}
+                if role == "user":
+                    kwargs.update(importance=importance, valid_from=valid_from,
+                                  valid_until=valid_until, expires_at=expires_at, ttl=ttl,
+                                  ttl_reference=captured_at)
+                self._remember(row["content"], session_id, role, **kwargs)
 
     @serialized_memory_write
     def _remember(self, content: str, session_id: str, source_role: str, *,
                   importance: float | None = None, valid_from: Any = None,
                   valid_until: Any = None, expires_at: Any = None, ttl: Any = None,
-                  record_id: str | None = None, merged_from: list[str] | None = None) -> str | None:
+                  record_id: str | None = None, merged_from: list[str] | None = None,
+                  chunk_group_id: str = "", source_turn_id: str = "",
+                  force_untrusted: bool = False, ttl_reference: str | None = None) -> str | None:
         if record_id is not None:
             record_id = safe_memory_id(record_id)
         content = content.strip()
@@ -1905,12 +1935,14 @@ class Plur1busRuntime:
             return None
         valid_from_ms, valid_until_ms = normalize_validity_window(valid_from, valid_until)
         expiry_ms = normalize_timestamp(expires_at)
+        expiry_reference = (datetime.fromisoformat(canonical_captured_at(ttl_reference))
+                            if ttl_reference is not None else datetime.now(tz=timezone.utc))
         # ttl is deliberately duration-only; an absolute expiresAt wins.  A
         # malformed/negative duration becomes the no-expiry sentinel rather
         # than a guessed deadline.
         if not expiry_ms and isinstance(ttl, str) and ttl in {"session", "short"}:
             duration = 86_400_000 if ttl == "session" else 14 * 86_400_000
-            expiry_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) + duration
+            expiry_ms = int(expiry_reference.timestamp() * 1000) + duration
         elif not expiry_ms and isinstance(ttl, (int, float)) and not isinstance(ttl, bool):
             try:
                 duration = int(ttl)
@@ -1918,7 +1950,7 @@ class Plur1busRuntime:
                 LOGGER.warning("invalid capture ttl ignored")
                 duration = 0
             if 0 < duration <= 3650 * 24 * 60 * 60 * 1000:
-                expiry_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000) + duration
+                expiry_ms = int(expiry_reference.timestamp() * 1000) + duration
         if record_id is not None:
             existing_table, _ = self._table(create=False)
             if existing_table is not None:
@@ -1930,13 +1962,15 @@ class Plur1busRuntime:
                     if (not self._card_matches_scope(row) or row.get("status") != "active"
                         or row.get("content") != content or row.get("sourceRole") != source_role
                         or row.get("sessionId") != session_id
+                        or (row.get("chunkGroupId") or "") != chunk_group_id
+                        or (row.get("sourceTurnId") or "") != source_turn_id
                         or normalize_validity_window(row.get("validFrom"), row.get("validUntil")) != (valid_from_ms, valid_until_ms)
                         or normalize_timestamp(row.get("expiresAt")) != expiry_ms
                         or json.loads(row.get("mergedFrom") or "[]") != (merged_from or [])):
                         raise ValueError("stable memory identifier conflicts with existing record")
                     return record_id
         vector = self._embedding.embed(content)
-        if record_id is None and merged_from is None and importance is None:
+        if record_id is None and merged_from is None and importance is None and not chunk_group_id:
             from .automatic_merge import try_store_merge
             replacement = try_store_merge(self, {
                 "content": content, "sessionId": session_id, "sourceRole": source_role,
@@ -1956,6 +1990,8 @@ class Plur1busRuntime:
             "chatScope": self.scope_binding.chat,
             "aclBindings": self.scope_binding.as_dict(),
             "sessionId": session_id,
+            "sourceTurnId": source_turn_id,
+            "chunkGroupId": chunk_group_id,
             "content": content,
             "status": "active",
             "type": "observation",
@@ -1974,7 +2010,7 @@ class Plur1busRuntime:
             "epistemicStatus": decide_epistemic_status_for_capture(
                 text=content,
                 source_message_role=source_role,
-                cutoff_failed=not self._epistemic_cutoff["ok"],
+                cutoff_failed=force_untrusted or not self._epistemic_cutoff["ok"],
             ),
         }
         table, inserted = self._table(create=True, first_record=record)
@@ -2183,6 +2219,10 @@ class Plur1busRuntime:
         if "mergedFrom" not in names:
             add_columns({"mergedFrom": "'[]'"})
             names.add("mergedFrom")
+        for column in ("sourceTurnId", "chunkGroupId"):
+            if column not in names:
+                add_columns({column: "''"})
+                names.add(column)
         try:
             import pyarrow as pa
         except ImportError as error:  # pragma: no cover - LanceDB supplies PyArrow

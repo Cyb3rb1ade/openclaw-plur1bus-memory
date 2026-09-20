@@ -224,12 +224,20 @@ class ScopeJobSecurityTests(unittest.TestCase):
             "agent-a", {"scopeType": "user", "platform": "telegram", "userId": "u-1"}
         )
         runtime = object.__new__(Plur1busRuntime)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        runtime.config = {}
+        runtime.agent_id = "agent-a"
+        runtime.scope_key = binding.scope_key
+        runtime.data_dir = Path(temporary.name)
+        runtime.request_scope = {}
+        runtime._epistemic_cutoff = {"ok": True}
         calls = []
         runtime.scope_binding = binding
         runtime._domain = type("Domain", (), {
             "on_turn": lambda _self, *args, **kwargs: calls.append((args, kwargs)),
         })()
-        runtime._remember = lambda *args: None
+        runtime._remember = lambda *args, **kwargs: None
 
         runtime._capture_turn("hello", "world", "session")
 

@@ -129,6 +129,8 @@ def _workspace_card(
         "status": normalize_legacy_status(row.get("status")),
         "type": memory_type,
         "sourceRole": "workspace-migration",
+        "sourceTurnId": str(row.get("sourceTurnId") or ""),
+        "chunkGroupId": str(row.get("chunkGroupId") or ""),
         "createdAt": str(row.get("createdAt", row.get("created_at", _utcnow()))),
         "vector": vector,
     }
@@ -334,6 +336,9 @@ def _stage_agents(
             if table is None:
                 table = lancedb.connect(str(agent_dir)).create_table("memories", data=cards)
             else:
+                for column in ("sourceTurnId", "chunkGroupId"):
+                    if column not in table.schema.names:
+                        table.add_columns({column: "''"})
                 table.add(cards)
             completed_rows += len(cards)
             progress = {

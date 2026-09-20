@@ -7,7 +7,7 @@ PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolate
 Source version: **7.15.0-hermes.0** (Python distributions:
 **7.15.0**). It integrates the pinned upstream commit
 `8c29aeab9e03691d3a07e31756b3f23addf9bba1` while retaining the native Hermes
-payload. See the [Hermes delta review](docs/audits/hermes-7.12.69-delta-review.md)
+payload. See the [Hermes delta review](docs/audits/hermes-7.15.0-delta-review.md)
 and [platform installation guide](distribution/INSTALLATION.de.md).
 This candidate is not yet published. Build receipts and checksums identify
 the tested artifacts. Source availability alone does not establish

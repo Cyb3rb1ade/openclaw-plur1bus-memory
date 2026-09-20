@@ -23,8 +23,10 @@ class Upstream756InventoryTests(unittest.TestCase):
 
     def test_accepted_upstream_runtime_fixes_match_exactly(self):
         subprocess.run(["git", "diff", "--exit-code", TARGET, "--",
-                        "lib/episodes.js", "lib/llm-router.js",
+                        "lib/episodes.js",
                         "tests/episodes-skip-episoded.test.js"],
+                       cwd=ROOT, check=True)
+        subprocess.run(["git", "diff", "--exit-code", "v7.15.0", "--", "lib/llm-router.js"],
                        cwd=ROOT, check=True)
         # .58 legitimately adds common-background-model cases to this test.
         # Pin its updated complete contents rather than drop the parity gate.

@@ -108,6 +108,8 @@ def _card_from_legacy(row: dict[str, Any], target_agent: str) -> dict[str, Any]:
         "status": status,
         "type": memory_type,
         "sourceRole": "migration",
+        "sourceTurnId": str(row.get("sourceTurnId") or ""),
+        "chunkGroupId": str(row.get("chunkGroupId") or ""),
         "createdAt": str(row.get("createdAt", row.get("created_at", _utcnow()))),
         "vector": vector,
     }

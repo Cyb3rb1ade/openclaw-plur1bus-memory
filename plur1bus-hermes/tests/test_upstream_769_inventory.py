@@ -24,16 +24,7 @@ class Upstream769InventoryTests(unittest.TestCase):
                 if path == "tests/release-750-compat.test.js":
                     continue
                 if path.startswith(("lib/", "tests/", "scripts/")) or path == "index.js":
-                    expected = git("show", TARGET + ":" + path)
-                    if path == "lib/encoding-llm.js":
-                        # PR #165: keep only these reviewed changes, not a broad exemption.
-                        expected = expected.replace('    lastDynamicsAt: now,\n', '')
-                        expected = expected.replace('    emotionalDominant: encoding.emotion?.emotionalDominant || "neutral",\n',
-                            '    emotionalDominant: encoding.emotion?.emotionalDominant || "neutral",\n'
-                            '    // Ordinary classification is not reinforcement: moving lastDynamicsAt\n'
-                            '    // without applying elapsed decay would rejuvenate the unchanged strength.\n')
-                        expected = expected.replace('  if (flash) {',
-                            '  // Explicit agent-band protection takes precedence over automatic flashbulb.\n  if (flash && !isAgentBand) {')
-                        expected = expected.replace('    patch.lastStrengthenedAt = now;\n',
-                            '    patch.lastStrengthenedAt = now;\n    patch.lastDynamicsAt = now;\n')
+                    expected = git("show", "v7.15.0:" + path)
+                    if path == "lib/memory-chunking.js":
+                        expected = git("show", "139e0b60:" + path)
                     self.assertEqual((ROOT / path).read_text(encoding="utf-8"), expected)
