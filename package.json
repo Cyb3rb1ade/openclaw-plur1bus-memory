@@ -52,7 +52,7 @@
     "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },
   "engines": {
-    "node": ">=22.22.3"
+    "node": ">=24.16.0 <25 || >=26.1.0"
   },
   "repository": {
     "type": "git",

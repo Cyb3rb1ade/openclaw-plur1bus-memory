@@ -12,7 +12,9 @@ before it is installed, so a host change that breaks an internal anchor is
 caught before the Gateway restarts rather than after. See the
 [compatibility contract](docs/compatibility-openclaw.md) for the runtime matrix
 and evidence. The upstream source base is the immutable official tag `v7.4.10`,
-commit `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`.
+commit `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`. PLUR1BUS runs inside the
+Gateway process, so it requires the same Node as its host:
+`>=24.16.0 <25 || >=26.1.0`.
 
 ### Web interface
 
