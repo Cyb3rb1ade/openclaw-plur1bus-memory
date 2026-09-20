@@ -1,5 +1,15 @@
 # Changelog — PLUR1BUS Memory
 
+## 7.12.69-hermes.0 — build candidate
+
+- Upstream .62–.69 merged, including encoding, retrieval and migration tools.
+- Native neutral/pending capture, bounded scoped hourly encoding, explicit
+  0.95–1.00 core protection, opt-in flashbulb and spaced usage reinforcement.
+- Reranking precedes deduplication/group limits; zero-strength and scope guards
+  remain intact. Legacy metadata is not automatically reset or reclassified.
+- Encoding decay-clock/core-classification fixes submitted separately upstream.
+- No productive installation or publication implied by this candidate.
+
 ## 7.12.61-hermes.0 — 2026-09-18
 
 - Merge des veröffentlichten Upstream-Tags v7.12.61 inklusive Dashboard-,
@@ -221,6 +231,271 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
   Delta zu 7.12: `docs/audits/hermes-7.12.0-contract-delta.md`.
 ## Upstream source history
+## [7.12.69] — 2026-09-20
+
+### Behoben
+
+- **Der Test zur Anbieter-Auswahl im Bestands-Backfill zog nicht nach.**
+  `scripts/importance-backfill.mjs` bekam mit dem Wechsel auf DeepSeek eine
+  Anbieter-Karte statt der Konstante `DEFAULT_MODEL`; die Skriptänderung ging
+  versehentlich mit einem anderen Commit mit, der passende Test blieb
+  uncommittet liegen. Lokal fiel das nicht auf, weil der Arbeitsbaum beide
+  Hälften hatte — die CI sah nur eine und brach mit
+  `does not provide an export named 'DEFAULT_MODEL'` ab. Das ausgelieferte
+  Paket war nie betroffen: `tests/` steht nicht in der `files`-Whitelist.
+
+## [7.12.68] — 2026-09-20
+
+### Behoben
+
+- **Die Budget-Kappung liegt jetzt hinter dem Reranking.** Die Pipeline kappte
+  auf `topN`, *bevor* der Reranker lief — der durfte damit nur umsortieren,
+  was die Kappung übrig ließ, und konnte eine Erinnerung von Platz 16 nicht
+  mehr hereinholen, obwohl genau das seine Aufgabe ist. Gemessen an 80
+  Benchmark-Fragen mit verfehltem Beleg: Kappung nach dem Reranking findet 65
+  davon (81 %), Kappung davor 11 (14 %). Im vollen LOCOMO-Lauf steigt die
+  Belegquote von 68,0 auf 91,3 Prozent und die Trefferquote von 46,8 auf
+  60,9 — ohne andere Einbettung, anderes Modell oder größeren Kontext.
+
+  Produktiv lief bereits die bessere Variante, weil `index.js` beim Recall
+  `deferFinalCap` setzt und selbst kappt; jeder Direktaufruf der Pipeline
+  bekam stillschweigend die schwächere. Die Kappung zu verschieben statt nur
+  die Vorgabe umzudrehen hält den Vertrag intakt: die Funktion liefert
+  weiterhin höchstens `topN`, kein Aufrufer muss etwas ändern.
+
+### Hinzugefügt
+
+- **`bench/` — der Messstand für LOCOMO und LongMemEval** liegt nicht mehr
+  unversioniert neben dem Repo. Enthalten sind die Skripte, zwei Analysen und
+  die Ergebnisdateien der aussagekräftigen Läufe; die Datensätze Dritter, die
+  LanceDB-Stores und alles mit echten Erinnerungen bleiben per `.gitignore`
+  draußen. `bench/` steht nicht in der `files`-Whitelist und wird nicht
+  mit ausgeliefert.
+
+## [7.12.67] — 2026-09-19
+
+### Hinzugefügt
+
+- **`lib/memory-chunking.js` — Bibliothek zum Aufteilen mehrteiliger
+  Erinnerungen.** Eine Erinnerung wird als ein Vektor eingebettet; enthält sie
+  mehrere unabhängige Aussagen, ist dieser Vektor deren Schwerpunkt und liegt
+  von jeder einzelnen weiter entfernt als nötig. Gemessen am Produktivbestand:
+  Median 5 Sätze je Zeile, 90. Perzentil 31, Maximum 334 Sätze in 15.000
+  Zeichen — zugleich sind 99,7 % der im Benchmark gesuchten Belege vorhanden,
+  aber nur 75,8 % werden gefunden. Es fehlt also nichts, es wird nur nicht
+  gefunden. `planChunks` entscheidet ohne Modellaufruf, wo Struktur vorhanden
+  ist (46–50 % der Zeilen), und verlangt ein Modell nur bei langem, ungegliedertem
+  Text (1–6 %). **Noch nirgends verdrahtet.**
+- **Deckel für Teilstücke derselben Nachricht im Recall.** Passen mehrere
+  Teile einer Nachricht auf eine Frage, belegen sie sonst mehrere der Plätze
+  mit zusammengehörigem Inhalt. Der Gruppenschlüssel ist `chunkGroupId`,
+  ersatzweise das vorhandene `sourceTurnId`. Ohne beides bleibt alles wie
+  bisher.
+
+### Behoben
+
+- **Eine Ladegrenze statt vier.** Die Wartungsskripte luden den Store mit
+  100.000, 200.000 bzw. 500.000 Zeilen Obergrenze. LanceDB schneidet dort
+  klaglos ab: Oberhalb der Grenze hätte Phase 1 die Hälfte des Bestands
+  übergangen und „fertig" gemeldet. `STORE_SCAN_LIMIT` steht jetzt einmal in
+  `lib/store-limits.js`; ein Test verhindert, dass eine zweite Grenze
+  entsteht.
+
+## [7.12.66] — 2026-09-19
+
+### Geändert
+
+- **Ein zeitlich abgesetzter Abruf verlängert jetzt auch die Behaltensdauer,
+  nicht nur die momentane Stärke.** Bis hierher zerfiel eine Erinnerung nach
+  einem Abruf exakt so schnell wie zuvor — man schöpfte Wasser in einen Eimer,
+  ohne das Loch zu stopfen. Eine Tatsache mit 30 Tagen Halbwertszeit, alle drei
+  Tage abgerufen, stand nach einem Jahr bei 0,395; eine intensiv kodierte
+  Erinnerung, an die nie wieder jemand dachte, bei 0,886. Wiederholung war
+  schwächer als einmalige Intensität. Der Deckel liegt beim obersten
+  automatischen Band (600 Tage): bloße Wiederholung erreicht nie, was der
+  Intensität oder der ausdrücklichen Entscheidung des Agenten vorbehalten ist.
+  Ein Mindestabstand von einem Tag verhindert, dass eine Salve im selben
+  Augenblick die Dauer aufbläst.
+- **Der Zuschlag je Abruf schrumpft nicht mehr mit der Zahl der Abrufe.**
+  `0.15 / (1 + log1p(retrievalCount))` ließ den ersten Abruf 0,089 beitragen
+  und den hundertsten nur noch 0,027 — je öfter man sich erinnerte, desto
+  weniger trug jedes Erinnern bei. Die Sättigung übernimmt die Obergrenze von
+  0,99 und der Zerfall zwischen zwei Abrufen.
+
+### Behoben
+
+- **Der Zeitdruck-Notausgang im Recall wertet die Gedächtnisstärke mit.**
+  `maybeSoftBudgetFallback` kehrte an vier von neun Stellen vor dem
+  Scoring-Block zurück und rangierte dann allein nach Ähnlichkeit: eine seit
+  Monaten unbenutzte Zeile stand gleichauf mit einer täglich gebrauchten. Die
+  Gewichtung passiert jetzt vor dem Zuschneiden auf die Trefferzahl, damit
+  schon die Auswahl stimmt und nicht nur deren Reihenfolge. Ein Merker
+  verhindert die Doppelanwendung an den fünf Stellen danach.
+- **Ein gemeinsamer Begriff für eine lebendige Zeile** (`isLiveRow`). Drei
+  Wartungswerkzeuge hatten drei Auslegungen; `review` fiel in die Lücke.
+  Folge: die Kernmarker-Nachrüstung hätte zwei Altlasten aus der
+  MEMORY.md-Migration dauerhaft unsterblich gemacht, die Phase 1 aus genau
+  diesem Grund hätte räumen sollen und wegen desselben Unterschieds nicht sah.
+
+### Hinzugefügt
+
+- **Drei Verhaltenstests als Abnahme des Vorhabens** (Frühstück von vorgestern,
+  einschneidendes Ereignis über zehn Jahre, langweilige Tatsache durch
+  Gebrauch) sowie ein Test über die ganze Kette aus Bedeutung, Gebrauch und
+  Recall-Gewichtung.
+
+## [7.12.65] — 2026-09-19
+
+### Geändert
+
+- **Das Agentenband ab 0,95 trägt jetzt den Kern-Schutz.** Bis hierher stand
+  die Schwelle auf 1,0 — das Band 0,95 bis 1,00 war damit eine Verabredung
+  ohne Wirkung: nur der exakte Wert 1,0 löste den Schutz aus, alles darunter
+  zerfiel wie eine beliebige Zeile. Gemessen am Produktivbestand: 51 Zeilen im
+  Band, alle im Gespräch gesetzt, davon 43 auf genau 0,95 mit einer
+  Halbwertszeit von 30 Tagen. Bestehende Zeilen bekommen den Schutz nicht von
+  selbst — dafür läuft `scripts/backfill-manual-core-markers.mjs` einmal nach.
+
+### Behoben
+
+- **Die Kürzung des Beurteilungs-Prompts zerteilte Zeichen jenseits von
+  U+FFFF.** `slice()` zählt UTF-16-Code-Einheiten, nicht Zeichen; steht ein
+  Emoji genau auf der 2000er-Grenze, blieb eine halbe Einheit stehen. Der
+  Fehler war still: in JavaScript übersteht das sogar einen JSON-Rundtrip,
+  erst beim Kodieren des HTTP-Körpers als UTF-8 lehnt die Gegenstelle mit 400
+  ab und die Zeile bleibt unbewertet. `truncateForPrompt` schneidet nur noch
+  auf Zeichengrenzen und räumt auch eine Hälfte weg, die ein Aufrufer schon
+  abgetrennt hat.
+
+### Hinzugefügt
+
+- **`scripts/importance-backfill.mjs`** arbeitet den Bestand in Stapeln auf:
+  ein `mergeInsert` je Stapel statt einer LanceDB-Version je Zeile, aus 22.000
+  Versionen werden rund 45. Anbieter wählbar (`--provider deepseek|kimi`),
+  Trockenlauf als Vorgabe, Wiederaufnahme eingebaut, vorheriger Zustand je
+  Zeile in `updateEvidence`. Ein Wächter bricht ab, wenn doppelte IDs einen
+  sicheren `mergeInsert` verhindern.
+
+## [7.12.64] — 2026-09-19
+
+### Geändert
+
+- **Die Emotionskarte fragt nur noch nach den Dimensionen, die tatsächlich
+  mitschwingen.** Der bisherige Prompt verlangte einen Wert je Dimension und
+  bekam eine ausgefüllte Tabelle zurück: in einem A/B/A-Lauf über 60 echte
+  Erinnerungen im Schnitt 3,27 belegte Dimensionen, sekundäre Werte mit Median
+  0,10 und 77 % davon bei höchstens 0,2. Bedeutung und dominante Emotion
+  ändern sich dadurch nicht — der Formateffekt liegt auf dem Rauschboden zweier
+  identischer Läufe. Die Scheinsignale verschwinden dagegen: die Regel für eine
+  „wichtige Lektion" im Recall-Boost (Vertrauen zusammen mit Furcht oder Zorn)
+  traf zuvor 32–38 % aller Erinnerungen, danach 3,4 %. Gespeichert wird
+  unverändert nur, was von null verschieden ist.
+- **Der Encoding-Aufruf bekommt ein eigenes, konfigurierbares Tokenbudget**
+  (Vorgabe 1500 statt 300). Mit 300 Tokens brach die Antwort im neuen Format
+  stumm mitten im JSON ab — HTTP 200, kein Parse, Zeile blieb unbewertet. Der
+  Emotions-Aufruf der dritten Stufe bleibt bei 300.
+
+### Hinzugefügt
+
+- **Migrationswerkzeuge für den Bestand:** `scripts/importance-metrics.mjs`
+  (Kennzahlen der Importance-Verteilung), `scripts/importance-phase1-reset.mjs`
+  (räumt das Agentenband) und `scripts/dedupe-memory-ids.mjs` (entfernt
+  id-Duplikate aus dem inzwischen toten Legacy-Update-Pfad, mit Zeilen-Export
+  vor der ersten Reparatur).
+
+## [7.12.63] — 2026-09-19
+
+### Geändert
+
+- **Die Importance einer Erinnerung kommt nicht mehr aus Schlüsselwortlisten.**
+  Frisch erfasste Erinnerungen tragen eine neutrale 0,5 und den neuen Status
+  `importanceStatus: pending`; der stündliche `emotion-refine`-Cron klärt
+  Emotion und Bedeutung danach in einem einzigen LLM-Aufruf und leitet daraus
+  die Halbwertszeit ab. Anlass war eine Messung am Produktivbestand: 71 % aller
+  aktiven Erinnerungen bei `main` und `bernhardine` standen auf exakt 0,70 —
+  die Skala trennte nichts mehr.
+- **Importance verlässt das Recall-Ranking.** Bedeutung wirkt künftig über die
+  Stärke, die sie bei der Kodierung gesetzt hat, nicht als zweiter Aufschlag.
+  Die Stärke war ohnehin der schärfste Term; `applyImportanceBoost` bleibt
+  exportiert, wird aber nicht mehr aufgerufen.
+- **Automatische Werte sind auf 0,94 gedeckelt.** Der Bereich 0,95 bis 1,00
+  bleibt der ausdrücklichen Entscheidung des Agenten vorbehalten, und der
+  Refine-Cron fasst Importance und Halbwertszeit einer Zeile in diesem Band
+  nicht an.
+
+### Hinzugefügt
+
+- Spalte `importanceStatus` mit drei Zuständen: `pending` für frische Zeilen
+  (stündlicher Cron), `pending_backfill` für den Bestand (nur Stapel-Skript),
+  `final`. Die Trennung verhindert, dass der Cron rund 23.000 Bestandszeilen
+  einzeln abarbeitet und dabei je Zeile eine LanceDB-Version erzeugt.
+- `lib/encoding-llm.js` mit `classifyEncoding` und `buildRefinePatch`. Eine
+  fehlgeschlagene oder unparsbare Modellantwort liefert `{ ok: false }` und
+  schreibt nichts — eine ungeklärte Zeile bleibt ungeklärt und wird später
+  erneut versucht, statt mit einem geratenen Wert zu landen.
+- Konfigurationsflag `memoryDynamics.flashbulbEncoding`, **Standard aus**.
+  Angeschaltet hebt es die Blitzlicht-Halbwertszeit von 90 auf 3.650 Tage und
+  aktiviert den Blitzlicht-Pfad im Refine-Cron. Vorgesehen für Phase 3, nachdem
+  ein Pilotlauf die Schwelle gegen eine echte Importance-Verteilung kalibriert
+  hat.
+
+### Behoben
+
+- `importanceStatus` überlebt beide Aktualisierungspfade in `lib/safe-update.js`
+  (versioniert und Metadaten-only). Ohne das hätte eine Aktualisierung den
+  Wartezustand still auf `final` gesetzt und die Zeile wäre nie bewertet
+  worden — und ein vom Agenten gesetzter Wert wäre binnen einer Stunde vom Cron
+  überschrieben worden.
+- `lib/encoding-llm.js` benutzt die kanonische Acht-Dimensionen-Liste aus
+  `lib/emotion.js`. Zuvor fehlte `disgust`: Das Modell bekam die Dimension nie
+  angeboten, und antwortete es trotzdem so, entstand `neutral` mit leerer
+  Valenz bei echter Intensität — ein falscher Endzustand, einmal geschrieben.
+- Eine Zeile, deren Text das Modell dauerhaft ablehnt, blockiert die
+  Warteschlange nicht mehr. Nur ein toter LLM-Pfad zählt auf den
+  Abbruchzähler; eine unparsbare Antwort wird getrennt gezählt und übersprungen.
+- Die Importance-Klärung hängt nicht mehr am Schalter `emotion.t3.enabled`.
+  Fehlt jede LLM-Route, meldet der Job das mit Warnung und der Zahl der
+  wartenden Zeilen, statt still einzufrieren.
+- `lib/importance-status.js` und `lib/encoding-llm.js` stehen im Deploy-Manifest
+  (`DEPLOY_FILES`). Ohne den Eintrag hätte der ExecStartPre-Repair sie nicht in
+  die Live-Extension kopiert und der Gateway wäre am fehlenden Modul nicht
+  gestartet.
+
+### Nicht enthalten
+
+Die Migration des Bestands. `MANUAL_CORE_IMPORTANCE` bleibt bei 1,0, die rund
+23.000 vorhandenen Zeilen behalten ihre Werte und ihren Status `final`. Phase 1
+(Agentenband räumen), die Absenkung der Kernschwelle und der Backfill in
+Stapeln folgen als eigene Schritte, in dieser Reihenfolge.
+
+
+## [7.12.62] — 2026-09-18
+
+### Behoben
+
+- **Marker-Erkennung in `memory-fact-quality` trifft nur noch ganze Wörter.**
+  `containsPhrase()` baute die Regex ohne Wortgrenzen, deshalb lösten die
+  deutschen Marker „nie" und „immer" als Teilstring in gewöhnlichen Wörtern aus:
+  „Knie", „Zimmer", „Ingenieur", „Schimmer" oder der Name „Melanie" galten als
+  ausdrückliche Merk-Anweisung. `normalizeImportanceScore()` hob solche
+  Erinnerungen damit auf den Boden 0,70 — genau die Schwelle, ab der
+  `shouldPromoteMemory()` nach KNOWLEDGE.md befördert. Die Grenzen sind als
+  Lookarounds auf `\p{L}`/`\p{N}` gesetzt, weil `\b` Umlaute nicht als
+  Wortzeichen behandelt. Betrifft `DURABLE_MARKERS` und `TEMPORAL_MARKERS` an
+  allen fünf Aufrufstellen. Bestehende Zeilen behalten ihre falsch gesetzte
+  Importance; der Fix wirkt auf neu erfasste Erinnerungen.
+
+  Gefunden wurde der Fehler beim Lesen des Scorings während eines
+  LOCOMO-Laufs. Er erklärt dessen Ergebnis allerdings **nicht**: ein
+  vollständiger Neu-Ingest mit beiden Benchmarks nach dem Fix bewegt die Zahlen
+  nicht (LOCOMO 49,9 % statt 50,3 %, LongMemEval 83,8 % statt 85,2 %,
+  Evidenz-Trefferquote 61,9 % statt 62,3 % — alles im Rauschen). Beide
+  Datensätze sind englisch; nur 1,3 % ihrer Turns konnten den Teilstring-Treffer
+  überhaupt auslösen. Für den deutschsprachigen Betrieb ist der Fix erheblich,
+  für die Benchmark-Zahlen ist er es nicht. Deren Einbruch geht auf
+  `importanceBoost` zurück, das auf Rohdialog-Korpora nach einem Wert umreiht,
+  der dort nicht zwischen Evidenz und Beiwerk trennt.
+
 ## [7.12.61] — 2026-09-17
 
 ### Behoben

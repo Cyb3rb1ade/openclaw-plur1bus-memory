@@ -122,6 +122,62 @@ describe("recall-pipeline soft-budget fallback", () => {
     assert.ok(result.trace.guards.some((guard) => guard.name === "soft-budget"));
   });
 
+  /**
+   * Der Notausgang kehrte vor dem Scoring-Block zurueck (Zeile 1797) und
+   * ignorierte damit Zerfall und Gebrauch vollstaendig — unter Zeitdruck
+   * rangierte er allein nach Aehnlichkeit. Eine seit Monaten unbenutzte Zeile
+   * stand dann gleichauf mit einer taeglich gebrauchten. Der Hauptweg wertet
+   * die Staerke (recall-pipeline.js:1833), der Notausgang tat es nicht: zwei
+   * Wege, zwei Regeln.
+   */
+  it("wertet die Gedaechtnisstaerke auch im Notausgang", async () => {
+    const rows = [
+      makeRow({ id: "verblasst", text: "alte Notiz", memoryStrength: 0.05 }),
+      makeRow({ id: "praesent", text: "alte Notiz", memoryStrength: 0.95 }),
+    ];
+    const phaseTimer = makeTimerThatExceedsAfter("vector_search");
+    const result = await runRecallPipeline({
+      query: "alte Notiz",
+      dbTable: mockTable({ vectorRows: rows }),
+      embeddings: makeEmbeddings(),
+      topN: 1,
+      recallMinScore: 0.1,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      dedupEnabled: false,
+      phaseTimer,
+      softBudgetFallback: true,
+    });
+    assert.deepEqual(result.memories.map((item) => item.entry.id), ["praesent"]);
+  });
+
+  it("wendet die Staerke im Notausgang nicht doppelt an", async () => {
+    const rows = [
+      makeRow({ id: "a", text: "notiz", memoryStrength: 0.5 }),
+      makeRow({ id: "b", text: "notiz", memoryStrength: 0.4 }),
+    ];
+    // Notausgang NACH dem Scoring: die Staerke ist dort bereits verrechnet.
+    const phaseTimer = makeTimerThatExceedsAfter("scoring");
+    const result = await runRecallPipeline({
+      query: "notiz",
+      dbTable: mockTable({ vectorRows: rows }),
+      embeddings: makeEmbeddings(),
+      topN: 2,
+      recallMinScore: -5,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      dedupEnabled: false,
+      phaseTimer,
+      softBudgetFallback: true,
+    });
+    const a = result.memories.find((item) => item.entry.id === "a");
+    assert.ok(a, "Zeile a muss enthalten sein");
+    // Einmal angewandt: score = Rohwert + (0.5 - 1). Zweimal waere -1.0.
+    assert.ok(a.score > -1, `Staerke doppelt angewandt: score ${a.score}`);
+  });
+
   it("skips slow rerank and returns boosted/deduped results", async () => {
     const rows = [
       makeRow({ id: "a", text: "alpha", summary: "alpha summary", _distance: 0.1 }),
@@ -133,7 +189,12 @@ describe("recall-pipeline soft-budget fallback", () => {
         throw new Error("reranker should not be called under soft-budget fallback");
       },
     };
-    const phaseTimer = makeTimerThatExceedsAfter("budget");
+    // Seit dem 20.09.2026 liegt die Budget-Kappung HINTER dem Reranking
+    // (vorher davor). Der Notausgang, der das Reranking ueberspringen soll,
+    // sitzt damit nach "graph_hydration" — vorher war es "budget". Die
+    // Absicht des Tests bleibt: ist das Zeitbudget vor dem Rerank erschoepft,
+    // wird nicht mehr rerankt.
+    const phaseTimer = makeTimerThatExceedsAfter("graph_hydration");
 
     const result = await runRecallPipeline({
       query: "alpha beta gamma",

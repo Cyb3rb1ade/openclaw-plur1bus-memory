@@ -14,6 +14,9 @@ distribution-artifacts/
 .DS_Store
 *.log
 .embed-promotions-state/
+# Zeilen-Export von scripts/dedupe-memory-ids.mjs --apply — Sicherheitsnetz
+# für den Operator, kein Repo-Inhalt.
+dedupe-exports/
 docs/**
 !docs/audits/
 !docs/audits/**
@@ -47,6 +50,10 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/repair-tombstones.mjs
 !scripts/reapply-tombstones.mjs
 !scripts/backfill-manual-core-markers.mjs
+!scripts/importance-phase1-reset.mjs
+!scripts/importance-metrics.mjs
+!scripts/dedupe-memory-ids.mjs
+!scripts/importance-backfill.mjs
 !scripts/verify-workspace-writer.mjs
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs
@@ -67,3 +74,8 @@ BREAKING_CHANGE_AUDIT.md
 !.openclaw/extensions/emotional-state-injector/
 !.openclaw/extensions/emotional-state-injector/**
 .worktrees/
+
+# Plan und Spezifikation zum Importance-Umbau bleiben lokal: sie enthalten
+# Klarnamen und medizinische Beispiele aus dem Produktivbestand.
+docs/superpowers/plans/2026-09-19-importance-kodierung-gebrauch.md
+docs/superpowers/specs/2026-09-19-importance-kodierung-gebrauch-design.md

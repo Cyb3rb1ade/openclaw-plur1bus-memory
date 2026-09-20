@@ -35,6 +35,7 @@ from .critical_review import (
 from .dreaming import build_rem_dream
 from .dream_diary import append_dream_diary_entry
 from .dynamics import index_feedback_events, transform_metadata
+from .encoding import AGENT_BAND_MIN
 from .writer_lock import serialized_memory_write, writer_lock
 from .epistemic import is_recallable_epistemic
 from .generation import effective_generation_config
@@ -4154,11 +4155,12 @@ class Plur1busDomain:
         is_correction = str(record.get("sourceRole") or "") == "correction"
         emotion, intensity = self._emotion(content)
         importance_value = self._importance(content, str(record.get("sourceRole") or "")) if importance is None else max(0.0, min(1.0, float(importance)))
-        manual_core = importance is not None and importance_value >= 1.0
+        manual_core = importance is not None and importance_value >= AGENT_BAND_MIN
         metadata = {
             "text": content,
             "summary": content[:500],
             "importance": importance_value,
+            "importanceStatus": "pending" if importance is None else "final",
             "category": "conversation",
             "scope": str(record.get("scopeType") or "agent-private"),
             "scopeKey": str(record.get("scopeKey") or ""),
@@ -4545,11 +4547,8 @@ class Plur1busDomain:
 
     @staticmethod
     def _importance(content: str, role: str) -> float:
-        score = 0.7 if role == "user" else 0.5
-        lower = content.lower()
-        if any(token in lower for token in ("remember", "merke", "wichtig", "never forget", "nie vergessen")):
-            score += 0.2
-        return min(1.0, score)
+        # .63: automatic capture is unresolved, not a keyword-based judgment.
+        return 0.5
 
     @staticmethod
     def _emotion(content: str) -> tuple[str, float]:

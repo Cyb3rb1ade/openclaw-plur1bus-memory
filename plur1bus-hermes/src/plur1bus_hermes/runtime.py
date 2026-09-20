@@ -1238,8 +1238,9 @@ class Plur1busRuntime:
             if using_heuristic:
                 refined_rows = heuristic_rows(refined_rows)
             rows.extend(lifecycle_rows(refined_rows))
-        rows = self._reranker.rerank(semantic_query, rows)[:adaptive_limit]
+        rows = self._reranker.rerank(semantic_query, rows)
         deduplicated = []
+        groups: dict[str, int] = {}
         seen_content: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             canonical = " ".join(
@@ -1250,8 +1251,15 @@ class Plur1busRuntime:
             # they describe non-overlapping periods.
             if not canonical or any(not has_disjoint_validity_windows(row, old) for old in prior):
                 continue
+            group = str(row.get("chunkGroupId") or row.get("sourceTurnId") or "").strip()
+            if group and groups.get(group, 0) >= 2:
+                continue
+            if group:
+                groups[group] = groups.get(group, 0) + 1
             seen_content.setdefault(canonical, []).append(row)
             deduplicated.append(row)
+            if len(deduplicated) >= adaptive_limit:
+                break
         session_options = {"session_id": session_id, "reactivation_query": semantic_query} if session_id else {}
         boosted = (
             self._boost_recall_with_deadline(
@@ -1305,7 +1313,7 @@ class Plur1busRuntime:
         )
         if max_chars is None:
             max_chars = 17_000
-        return apply_global_inject_budget(
+        output = apply_global_inject_budget(
             blocks=[
                 {"name": "memories", "text": recalled, "droppable": True},
                 {"name": "overlay", "text": overlay, "droppable": True},
@@ -1315,6 +1323,18 @@ class Plur1busRuntime:
             ],
             max_chars=max_chars,
         )
+        # Credit only primary rows whose complete rendered line survived the
+        # global budget. A full worker queue never delays or breaks recall.
+        eligible = [row for row in deduplicated if row.get("content") and
+                    (str(row["content"]) if full_text else str(row["content"])[:2000]) in output]
+        if eligible:
+            from .encoding_job import reinforce_recall
+            try:
+                self._executor.submit(reinforce_recall, self._domain, eligible,
+                                      acl_bindings=self.scope_binding.as_dict())
+            except Exception as error:
+                LOGGER.debug("usage reinforcement not queued: %s", type(error).__name__)
+        return output
 
     @staticmethod
     def _search_recall_rows(table: Any, vector: list[float], where_clause: str,

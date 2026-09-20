@@ -157,6 +157,10 @@ def run_jobs(
                 "dynamics", 3_600, lambda: scoped_call(domain.run_dynamics)
             )
             if mode in {"hourly", "all"}:
+                from .encoding_job import run_encoding
+                results["encoding"] = gate.run(
+                    "encoding", 3_600, lambda: run_encoding(domain, table, **scope_kwargs)
+                )
                 if (config.get("obsidianBridge") or {}).get("watch") is True:
                     from .obsidian_sync import watch_obsidian
                     results["obsidianWatch"] = gate.run("obsidian-watch", 3600, lambda: watch_obsidian(runtime))

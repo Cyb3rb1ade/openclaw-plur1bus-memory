@@ -115,6 +115,8 @@ const TABLE_NAME = "memories";
     assert.strictEqual(oldRow.emotionalValence, "", "default emotionalValence = empty");
     assert.strictEqual(oldRow.emotionalDominant, "neutral", "default emotionalDominant = neutral");
     assert.strictEqual(oldRow.emotionalIntensity, 0.0, "default emotionalIntensity = 0.0");
+    assert.strictEqual(oldRow.emotionStatus, "final", "default emotionStatus = final (Bestand gilt als geklaert)");
+    assert.strictEqual(oldRow.importanceStatus, "final", "default importanceStatus = final (Bestand gilt als geklaert)");
     assert.ok(oldRow.halfLifeDays == 30, "default halfLifeDays = 30");
     assert.strictEqual(oldRow.memoryClass, "standard", "default memoryClass = standard");
     assert.ok(oldRow.neverForget == 0, "default neverForget = 0");
@@ -164,6 +166,7 @@ const TABLE_NAME = "memories";
         emotionalValence: "",
         moodContextAtCapture: "",
         emotionStatus: "final",
+        importanceStatus: "final",
         replayCount: 0,
         lastReplayed: 0,
         retrievalCount: 0,

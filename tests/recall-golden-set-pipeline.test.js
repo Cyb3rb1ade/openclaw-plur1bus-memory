@@ -83,7 +83,7 @@ describe("Golden-Set: runRecallPipeline ranking", () => {
     expectOrderedIds(result.memories, ["above"]);
   });
 
-  it("importance boost keeps ranking stable when relevance gap is large", async () => {
+  it("importance no longer moves the score, even when a caller still passes importanceBoost (entfernt seit 19.09.2026)", async () => {
     const rows = [
       makeRow({ id: "relevant", text: "very relevant", distance: 0.1, importance: 0.5 }),
       makeRow({ id: "important", text: "less relevant but important", distance: 1.5, importance: 1.0 }),
@@ -94,7 +94,7 @@ describe("Golden-Set: runRecallPipeline ranking", () => {
       embeddings: makeEmbeddings(),
       topN: 5,
       recallMinScore: 0.1,
-      importanceBoost: 0.3,
+      importanceBoost: 0.3, // wird von der Pipeline ignoriert — kein additiver Term mehr
       canonicalEnabled: false,
       associativeEnabled: false,
       logger: silence(),
@@ -103,7 +103,8 @@ describe("Golden-Set: runRecallPipeline ranking", () => {
     const relevant = result.memories.find(r => r.entry.id === "relevant");
     const important = result.memories.find(r => r.entry.id === "important");
     expectScore(relevant.score, distanceToScore(0.1));
-    expectScore(important.score, distanceToScore(1.5) + 0.5 * 0.3);
+    // Kein "+ 0.5 * 0.3" mehr: importance=1.0 bringt "important" keinen Vorteil.
+    expectScore(important.score, distanceToScore(1.5));
   });
 
   it("emotional boost is clamped to +/-10%", async () => {

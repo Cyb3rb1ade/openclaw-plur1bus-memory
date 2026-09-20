@@ -41,6 +41,32 @@ describe("manifest-derived configuration contract", () => {
     assert.equal(cfg.runtime.recallCacheMaxEntries, 128);
   });
 
+  // R16 (Abschluss-Review, Critical 1): das Flag muss den Config-Vertrag
+  // tatsächlich durchlaufen — der Root-Schema-Knoten hat
+  // additionalProperties:false, ein unregistrierter Top-Level-Key würde
+  // sonst entweder beim Validieren geworfen (auf einer echten Deploy-Config)
+  // oder beim Materialisieren stillschweigend verworfen, je nachdem wo er
+  // auftaucht. Beides macht das in lib/memory-dynamics.js/index.js gelesene
+  // Flag zu totem Code.
+  it("registers memoryDynamics.flashbulbEncoding in the config contract, default off", () => {
+    assert.equal(manifestConfigDefaults().memoryDynamics.flashbulbEncoding, false);
+    assert.equal(resolveEffectiveConfig({}).memoryDynamics.flashbulbEncoding, false);
+    assert.equal(
+      resolveEffectiveConfig({ memoryDynamics: { flashbulbEncoding: true } }).memoryDynamics.flashbulbEncoding,
+      true,
+    );
+    assertConfigError(
+      () => validatePluginConfig({ memoryDynamics: { flashbulbEncoding: "yes" } }),
+      `${PLUGIN_CONFIG_PATH}.memoryDynamics.flashbulbEncoding`,
+      /boolean/,
+    );
+    assertConfigError(
+      () => validatePluginConfig({ memoryDynamics: { unexpectedKey: true } }),
+      `${PLUGIN_CONFIG_PATH}.memoryDynamics.unexpectedKey`,
+      /unknown/,
+    );
+  });
+
   it("preserves explicit values and never mutates the raw input", () => {
     const raw = {
       baseDbPath: "/custom/db",

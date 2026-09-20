@@ -38,8 +38,11 @@ class Upstream761InventoryTests(unittest.TestCase):
         paths = git("ls-tree", "-r", "--name-only", HERMES_BASE, "plur1bus-hermes/src",
                     "plur1bus-controls/src", "hermes-dashboard/plur1bus", "distribution").splitlines()
         metadata = {"__init__.py", "plugin.yaml", "manifest.json", "README.md", "INSTALLATION.de.md", "ACCEPTANCE.md"}
+        # Explicitly reviewed .69 behavior ports, covered by test_encoding_769.
+        changed_769 = {"plur1bus-hermes/src/plur1bus_hermes/" + name for name in
+                       ("domain.py", "dynamics.py", "runtime.py", "jobs.py", "llm_backend.py")}
         for path in paths:
-            if Path(path).name in metadata:
+            if Path(path).name in metadata or path in changed_769:
                 continue
             with self.subTest(path=path):
                 # Compare canonical Git blobs, applying this checkout's clean

@@ -402,4 +402,60 @@ describe("auto-recall decision trace integration", () => {
       "trace summary should include totalCandidates"
     );
   });
+
+  // Integrationsabsicherung zu Task 8 (19.09.2026) über den echten Plugin-Pfad
+  // (kein Gateway nötig): selbst ein aggressiv hoher importanceBoost=1.0 darf
+  // den finalen Score zweier sonst identisch relevanter Erinnerungen mit
+  // stark unterschiedlicher importance nicht mehr auseinanderziehen. Wichtig:
+  // dieser Test bleibt grün, ob index.js importanceBoost an die Pipeline
+  // weiterreicht oder nicht — die Pipeline ignoriert den Wert bereits seit
+  // Task 8 selbst. Er sichert also die Scoring-Änderung end-to-end ab, nicht
+  // die index.js-Weiterleitung aus Fix-Runde 1 (dafür siehe
+  // tests/config-audit.test.js: "importanceBoost is resolved for validation
+  // only …", die strukturelle Prüfung, die speziell dafür rot wird).
+  it("cfg.recall.importanceBoost no longer moves per-memory scores through the real auto-recall path", async () => {
+    const agentId = `${AGENT_PREFIX}-dead-importance-knob`;
+    const db = new MemoryDB(join(basePath, agentId), VECTOR_DIM);
+    // Gleicher Vektor wie die gemockte Query-Embedding → identischer
+    // Vektor-Score für beide Zeilen; nur importance unterscheidet sich.
+    await db.store({
+      id: "low-importance",
+      text: "User dislikes early morning stand-up meetings on Mondays.",
+      vector: makeVector(),
+      category: "preference",
+      importance: 0.05,
+      createdAt: Date.now(),
+      storedBy: agentId,
+    });
+    await db.store({
+      id: "high-importance",
+      text: "The quarterly budget review deadline moved to next Friday afternoon.",
+      vector: makeVector(),
+      category: "fact",
+      importance: 0.99,
+      createdAt: Date.now(),
+      storedBy: agentId,
+    });
+
+    const result = await runRecallFor(agentId, "team schedule", true, true, {
+      pluginConfig: {
+        recall: {
+          importanceBoost: 1.0, // absichtlich weit über dem alten Default — wäre die
+          // Weiterleitung noch da, müsste sich das im Score sofort zeigen.
+          decisionTrace: { enabled: true, includeInPrompt: true, persist: false },
+        },
+      },
+    });
+
+    assert.ok(result?.prependContext, "prependContext should be present");
+    const lowMatch = result.prependContext.match(/id="low-importance"[^>]*score="([\d.]+)"/);
+    const highMatch = result.prependContext.match(/id="high-importance"[^>]*score="([\d.]+)"/);
+    assert.ok(lowMatch, `expected a score attribute on low-importance record: ${result.prependContext}`);
+    assert.ok(highMatch, `expected a score attribute on high-importance record: ${result.prependContext}`);
+    assert.strictEqual(
+      lowMatch[1],
+      highMatch[1],
+      `importance still moves the real score: low=${lowMatch[1]} high=${highMatch[1]}`
+    );
+  });
 });

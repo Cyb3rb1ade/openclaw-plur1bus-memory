@@ -30,6 +30,11 @@ class InternalLlmBackend:
         scope_key: str | None = None,
     ) -> None:
         self.config = dict(config.get("llm") or {})
+        encoding_budget = ((config.get("emotion") or {}).get("t3") or {}).get("encodingMaxTokens", 1500)
+        try:
+            self.encoding_max_tokens = max(1, min(16000, int(encoding_budget)))
+        except (TypeError, ValueError, OverflowError):
+            self.encoding_max_tokens = 1500
         # Hermes already has a shared internal transport (`llm`), independent
         # of the chat model. The upstream default is a fallback on that route,
         # never permission to replace an explicitly selected native model.
@@ -76,7 +81,7 @@ class InternalLlmBackend:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "max_tokens": 300,
+            "max_tokens": self.encoding_max_tokens if purpose == "memory-encoding" else 300,
             "response_format": {"type": "json_object"},
         }
         # No hardcoded temperature: every complete_json() call hits this raw

@@ -26,9 +26,45 @@ describe("selectManualCoreRows", () => {
     assert.deepEqual(selectManualCoreRows(rows), []);
   });
 
+  // Task 10 (19.09.2026): die Reservierung beginnt jetzt bei 0.95 statt 1.0,
+  // also liegt 0.99 IM Band und wird nachgeruestet. Die Grenze wandert, die
+  // Absicht nicht: unterhalb des Bands bleibt alles liegen.
   it("lässt alles unterhalb der Reservierung liegen", () => {
-    const rows = [{ id: "a", importance: 0.99, neverForget: 0, memoryClass: "standard", status: "active" }];
+    const rows = [{ id: "a", importance: 0.94, neverForget: 0, memoryClass: "standard", status: "active" }];
     assert.deepEqual(selectManualCoreRows(rows), []);
+  });
+
+  it("ruestet das ganze Agentenband nach, nicht nur den Wert 1.0", () => {
+    const rows = [
+      { id: "a", importance: 0.95, neverForget: 0, memoryClass: "standard", status: "active" },
+      { id: "b", importance: 0.98, neverForget: 0, memoryClass: "standard", status: "active" },
+      { id: "c", importance: 1.0, neverForget: 0, memoryClass: "standard", status: "active" },
+    ];
+    assert.deepEqual(selectManualCoreRows(rows).map((r) => r.id), ["a", "b", "c"]);
+  });
+
+  /**
+   * Live am 19.09.2026 aufgeschlagen: die Nachruestung fand 65 Kandidaten,
+   * darunter ZWEI mit `status: "review"` und `origin: "memory-md-migration"`
+   * — ein Blutzucker-Statusbericht vom April und eine Notizsammlung. Beide
+   * haetten `neverForget: 1` und 36.500 Tage bekommen.
+   *
+   * Ursache war ein Begriffsunterschied: Phase 1 und dedupe-memory-ids
+   * definieren "lebendige Zeile" als `status ?? "active" === "active"`, dieses
+   * Skript schloss dagegen nur `deleted` und `archived` aus. `review` fiel in
+   * die Luecke — Phase 1 hatte die beiden deshalb nie geraeumt, und hier
+   * wurden sie dann eingesammelt. Genau der Fall, den die Reihenfolge-
+   * Bedingung des Plans verhindern sollte.
+   */
+  it("fasst nur lebendige Zeilen an — review ist keine", () => {
+    const rows = [
+      { id: "aktiv", importance: 0.95, neverForget: 0, memoryClass: "standard", status: "active" },
+      { id: "ohne-status", importance: 0.95, neverForget: 0, memoryClass: "standard" },
+      { id: "review", importance: 0.95, neverForget: 0, memoryClass: "standard", status: "review" },
+      { id: "superseded", importance: 0.95, neverForget: 0, memoryClass: "standard", status: "superseded" },
+      { id: "leer", importance: 0.95, neverForget: 0, memoryClass: "standard", status: "" },
+    ];
+    assert.deepEqual(selectManualCoreRows(rows).map((r) => r.id), ["aktiv", "ohne-status"]);
   });
 
   it("rührt gelöschte und archivierte Zeilen nicht an", () => {

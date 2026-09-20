@@ -494,6 +494,12 @@ credentials ändern sich dadurch nicht.
 
 > Alte, globale `halfLifeDays`-Werte bleiben erhalten, werden aber nur als Fallback verwendet, wenn kein Typ-Mapping existiert.
 
+### Blitzlicht-Kodierung (`memoryDynamics.flashbulbEncoding`)
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `memoryDynamics.flashbulbEncoding` | `boolean` | `false` | Blitzlicht-Kodierung scharf schalten: `memoryStrength` auf 0.95, Halbwertszeit-Boden auf 3650 Tage (statt 90) — der Refine-Pfad markiert zusätzlich `memoryClass: "flashbulb"`. Für Phase 3 vorgesehen, nach einem Pilotlauf, der die 0,70-Schwelle an einer echten Importance-Verteilung kalibriert. Default aus hält den Deploy auf beiden Aufrufstellen verhaltensneutral. |
+
 ---
 
 ## Embedding-Cache
