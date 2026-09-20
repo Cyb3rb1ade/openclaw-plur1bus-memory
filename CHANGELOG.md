@@ -7,6 +7,73 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.70] — 2026-09-20
+
+### Hinzugefügt
+
+- **Mehrteilige Nachrichten werden als mehrere Vektoren gespeichert.** Die
+  Bibliothek `lib/memory-chunking.js` lag seit 7.12.67 unbenutzt im Paket;
+  jetzt hängt sie im regulären Capture. Enthält eine Nachricht mehrere
+  unabhängige Aussagen, ist ein gemeinsamer Vektor deren Schwerpunkt und liegt
+  von jeder einzelnen weiter entfernt als nötig — die Zeile wird dann nicht
+  gefunden, obwohl die Information darin steht. Gemessen am Bestand: 99,7 % der
+  im LOCOMO-Benchmark gesuchten Belege sind als Zeile vorhanden, aber nur
+  75,8 % werden gefunden.
+
+  Die Aufteilung geschieht **vor** der Einbettung — nur dann bekommt jedes
+  Teilstück einen eigenen Vektor. Geteilt wird ausschließlich, wo das Regelwerk
+  sicher ist (Aufzählungen, Absätze): rund 46 % der Zeilen. Vier bis sieben
+  Sätze ohne Struktur bleiben ganz, weil fünf Sätze über ein Thema zu
+  zerschneiden schlechter ist als sie zusammenzulassen. Fälle, die ein Modell
+  bräuchten, werden nur gezählt, nicht auf Verdacht geschnitten.
+
+  **Folgen, die man kennen sollte:** Der Bestand wächst. Ungedeckelt gemessen
+  ging main von 9.379 auf 32.066 Zeilen; mit dem Deckel von 20 Teilstücken je
+  Nachricht ist es weniger, aber deutlich mehr als vorher. Jede Zeile kostet im
+  stündlichen Emotions-Cron, im Importance-Cron, in der GC (`maxMemoryCount`)
+  und in der LanceDB-Fragmentierung. Abschaltbar über `captureChunking: false`
+  in der Plugin-Konfiguration, ohne neues Deploy. Bestandszeilen werden **nicht**
+  nachträglich aufgeteilt.
+
+- **Neue Spalte `chunkGroupId`.** Teilstücke derselben Nachricht hängen darüber
+  zusammen; die Recall-Seite deckelt seit 7.12.68 darüber, wie viele Teile
+  derselben Nachricht in eine Trefferliste dürfen (`DEFAULT_MAX_PER_GROUP`).
+  Bisher fiel sie mangels Schreiber immer auf `sourceTurnId` zurück. Die
+  Migration läuft beim Öffnen jeder Agenten-Tabelle, also für jeden Agenten
+  einzeln und idempotent. Leer heißt „nicht aufgeteilt".
+
+- **`captureChunking` im Konfigurationsschema.** Das Schema des Plugins steht auf
+  `additionalProperties: false` — ein Schalter, der dort fehlt, wird vom Host
+  abgelehnt und der Code dahinter ist nie erreichbar. Beim Schreiben der
+  Dokumentation aufgefallen und nachgetragen, mitsamt Test.
+
+### Behoben
+
+- **Eine gewöhnliche Klassifikation verjüngte die Erinnerung.** `buildRefinePatch`
+  setzte `lastDynamicsAt` auf jetzt, ohne den verstrichenen Verfall anzuwenden:
+  eine 30 Tage alte Stärke von 0,8 blieb bei 30 Tagen Halbwertszeit 0,8 statt
+  auf 0,4 zu fallen. Die Uhr wurde vorgestellt, die vergangene Zeit aber nie
+  verrechnet. Eine Klassifikation ist keine Auffrischung; der Zeitstempel wandert
+  jetzt nur noch bei echter Verstärkung. (PR #165)
+
+- **Die automatische Emotionsverfeinerung konnte den Kernschutz entfernen.** Bei
+  aktivem `flashbulbEncoding` stellte sie eine explizit ins Agent-Band gehobene
+  Zeile auf `memoryClass=flashbulb` um — und `isCoreMemory` gilt nur für `core`.
+  Die von Hand gesetzten Zeilen hätten ihren Schutz beim nächsten Cron-Lauf
+  verlieren können. Die explizite Einstufung schlägt jetzt die automatische.
+  (PR #165)
+
+- **Jeder Schreibpfad hätte an der neuen Spalte scheitern können.** LanceDB lehnt
+  einen Append ab, dem ein Feld des Tabellenschemas fehlt
+  (`Append with different schema: missing=[chunkGroupId]`). Acht Stellen bauen
+  Zeilen aus expliziten Feldlisten statt per Spread; `/correct` verschluckte den
+  Fehler zu „internal error; details were logged". Der Standardwert sitzt deshalb
+  zentral in `store(entry)`, an derselben Stelle, an der schon `epistemicStatus`
+  nachgezogen wird. `safe-update` führt die Gruppe zusätzlich explizit über
+  Versionsgrenzen weiter — ein bloßer Standardwert würde sie bei jeder Korrektur
+  verlieren.
+
+
 ## [7.12.69] — 2026-09-20
 
 ### Behoben

@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.12.69",
+  "version": "7.12.70",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-command", "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session", "hasSubcommands": false },
@@ -505,6 +505,11 @@
       "autoCapture": {
         "type": "boolean",
         "default": true
+      },
+      "captureChunking": {
+        "type": "boolean",
+        "default": true,
+        "description": "Teilt eine Nachricht mit mehreren unabhängigen Aussagen beim Erfassen in mehrere Erinnerungen auf, jede mit eigenem Vektor. Ohne Aufteilung ist der eine Vektor der Schwerpunkt aller Aussagen und liegt von jeder einzelnen weiter entfernt als nötig — die Zeile wird dann nicht gefunden, obwohl die Information darin steht. Geteilt wird nur, wo die Struktur es hergibt (Aufzählungen, Absätze), höchstens in 20 Teile, und Bestandszeilen bleiben unberührt. Auf false setzen, wenn der Zuwachs des Bestands stört: jede Zeile kostet erneut im stündlichen Emotions-Cron, im Importance-Cron und in der Bereinigung."
       },
       "autoRecall": {
         "type": "boolean",
