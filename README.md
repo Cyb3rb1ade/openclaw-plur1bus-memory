@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.15.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.15.1 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.15.0**, running in production on OpenClaw
+Current source version: **7.15.1**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,25 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.15.1 — saved versus running, and a tab that fits more agents
+
+A dashboard click reaches `openclaw.json` at once but only takes effect after
+the host reloads the plugin — about a minute, and the reload can fail. The tab
+now compares the file against the running config: it says how many saved
+changes are not yet running, marks each affected row **pending**, and after
+three minutes says the reload probably failed and a restart applies it. Only
+the plugin's own config subtree is read, and only identifiers leave it.
+
+Also: Memory Health explains its badge in words; the background default model
+sits in its own box above the matrix, with column headers naming it before the
+agent's chat model (which is only the last resort); the inherited model is a
+line under each field instead of a truncated option; above four agents the
+panel shows one agent at a time behind a tab bar; and an idle re-embedding
+workflow marks "Dry run" as **next** rather than **current**.
+
+Capture splitting no longer drops the text before the first list item or
+statements shorter than eight characters (#175).
 
 ### New in v7.15.0 — switches and decisions on the cards, capacity at a glance
 
