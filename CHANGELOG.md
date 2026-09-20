@@ -9,6 +9,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [7.12.70] — 2026-09-20
 
+### Geändert
+
+- **Node 24 als Untergrenze, wie beim Host.** Das Paket verlangte `>=22.22.3`,
+  und die CI prüfte auf Node `22.22.3` und `22`. OpenClaw 2026.9.5 verlangt
+  aber `>=24.16.0 <25 || >=26.1.0` — unter Node 22 startet der Host gar nicht.
+  Geprüft wurde also eine Kombination, die es nicht geben kann, während die
+  tatsächlich benutzte (Node 24) in keinem Lauf vorkam. PLUR1BUS läuft im
+  Prozess des Gateways; eine eigene, ältere Untergrenze ist keine zusätzliche
+  Verträglichkeit, sondern eine Falschaussage. `engines` spiegelt jetzt den
+  Host, die drei Workflows fahren Node 24, und ein Test hält beides zusammen,
+  damit es nicht wieder auseinanderläuft.
+
 ### Hinzugefügt
 
 - **Mehrteilige Nachrichten werden als mehrere Vektoren gespeichert.** Die
