@@ -9,6 +9,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- Auswahlschalter für die drei Speicherweisen beim Aufteilen auf der
+  Capture-Karte des Operator-Dashboards: **Both** (Ursprungszeile und Teile),
+  **Parts only** (nur die Teile) und **Whole** (gar nicht aufteilen). Er
+  schreibt `captureChunking` und `captureChunkingMode` über OpenClaws
+  Konfigurationsschreiber und braucht `controlUi.writeActions: "all"`; ohne
+  dieses Recht zeigt die Karte die Weisen samt Messwerten, aber kein Formular.
+  Zurück von **Whole** stellt die zuvor gewählte geteilte Weise wieder her. Die
+  Umstellung gilt für neu erfasste Turns; bereits gespeicherte Zeilen bleiben.
+
 - Modellwahl pro Agent und LLM-Aufgabe im Operator-Dashboard, aus den in
   OpenClaw hinterlegten Modellen. Auch Capture-Zusammenfassung, Episoden,
   Verdichtung und Traumverarbeitung lassen sich einzeln einstellen.

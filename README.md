@@ -107,6 +107,19 @@ job, garbage collection, and LanceDB fragmentation. Set `captureChunking: false`
 to turn it off without redeploying. Existing rows are **not** split
 retroactively.
 
+**Choosing the storage mode.** The **Capture** card in the operator tab offers
+the three modes directly, once `controlUi.writeActions` is `all`:
+
+- **Both** — whole message *and* its parts. The measured default.
+- **Parts only** — parts without the original row. About one row less per split
+  message, at the cost of the context the whole row carries.
+- **Whole** — no splitting at all (`captureChunking: false`).
+
+Measured on 100 deliberately hard cases from real data on 2026-09-20 (recall,
+answering model, judge): whole 36 %, parts only 49 %, both 64 %. Switching
+back from **Whole** restores the split mode that was selected before. A switch
+applies to newly captured turns; rows already stored are untouched.
+
 Also fixed in this release: an ordinary classification used to move the decay
 clock forward without applying the elapsed decay, so a 30-day-old strength of
 0.8 stayed 0.8 instead of falling to 0.4 — a classification is not

@@ -57,6 +57,7 @@ import { featureModelOverrides } from "./lib/featureModels.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
 import {
+  createCaptureChunkingMutator,
   createConfirmationStore,
   createEmbeddingProfileMutator,
   createFeatureModelMutator,
@@ -9376,6 +9377,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
           const confirmations = createConfirmationStore();
           const setFeatureModel = createFeatureModelMutator({ api });
+          const setCaptureChunking = createCaptureChunkingMutator({ api });
           const setReranker = createRerankerMutator({ api });
           const setEmbeddingProfile = createEmbeddingProfileMutator({ api });
           const keyConfigured = () => rerankerKeyConfigured(cfg, process.env);
@@ -9413,6 +9415,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 confirmations,
                 setReranker,
                 setFeatureModel,
+                setCaptureChunking,
                 setEmbeddingProfile,
                 rerankerKeyConfigured: keyConfigured,
                 preparedTarget: () => {
