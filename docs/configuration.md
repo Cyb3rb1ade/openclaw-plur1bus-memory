@@ -547,6 +547,41 @@ credentials ändern sich dadurch nicht.
 
 ---
 
+## Schalter und Entscheidungen im Reiter
+
+Mit `controlUi.writeActions: "all"` trägt jede Feature-Karte ihren Schalter
+und die Betriebsentscheidungen, die zu ihr gehören — eine Zeile je
+Einstellung mit Auswahl- oder Zahlenfeld. Was angeboten wird, steht als
+geschlossene Liste in `lib/dashboard-settings.js`; die Seite kann nichts
+schreiben, was dort nicht steht, gleich was ein Formular behauptet.
+
+| Karte | Einstellungen |
+| --- | --- |
+| jede Feature-Karte | der Feature-Schalter (`<feature>.enabled` bzw. `autoCapture`, `autoRecall`) |
+| Knowledge Promotion | `schicht15.maxPromotionsPerRun` |
+| Skill Miner | `skillMiner.autoApply` |
+| Merging | `merging.autoApply` |
+| Garbage Collection | `gc.maxMemoryCount` — abgewiesen unter dem größten laufenden Bestand |
+| Critical Push | `criticalPush.maxPerDay` |
+| Neo Layer | `llmRouter.errorDiagnostics` |
+| Continuity Engine | `associativeRecall`, `patternSurfacing`, `tasteGate`, `overlays`, `contradictionDetection`, `doctor` (je `.enabled`) |
+| REM | `dreaming.narrative.enabled`, `.diary`, `.storeAsMemory` |
+| Emotion Engine (T3) | `memoryDynamics.flashbulbEncoding` |
+| Style Directive | `styleDirective.timeOfDay`, `.opinion`, `.askBack` |
+| LLM Tasks | `llmRouter.defaultModel` |
+
+Der Abschnitt **Capacity & Runtime** darunter ist rein lesend: Füllstand je
+Agent gegen `gc.maxMemoryCount`, der letzte GC-Lauf aus
+`<Workspace des Hauptagenten>/.adaptive-learning/gc-report.json`, der
+aktuelle Speicherdruck des Gateway-Prozesses gegen `runtime.rssWarningBytes`
+und `runtime.rssCriticalBytes`, und zwölf wirksame `runtime`-Grenzen.
+
+Nicht schreibbar aus dem Reiter: `security.*`, `controlUi.writeActions`,
+`featureCronSetup.auto`, `dreaming.enabled` (Sidecar) und alle Schwellenwerte.
+Jede Einstellung wird vor dem Schreiben gegen das Schema geprüft; ein
+abgelehnter Wert erreicht `openclaw.json` nie. Änderungen gehen durch
+OpenClaws reguläres Neuladen der Konfiguration.
+
 ## Chat-LLM-Routing über OpenClaw
 
 Der Abschnitt **LLM Tasks** im PLUR1BUS-Reiter ist eine Matrix: eine Spalte
