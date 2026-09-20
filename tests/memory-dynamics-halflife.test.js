@@ -72,14 +72,16 @@ describe("applyDynamicsDefaults mit Intensitäts-Modulation", () => {
   });
 
   it("eine Flashbulb-Erinnerung hebt eine kürzere explizite Halbwertszeit an (Flag an)", () => {
-    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.5, halfLifeDays: 42 };
+    // Score 0.9*0.5 + 0.7*0.5 = 0.80 — genau die Schwelle aus Phase 3.
+    // Mit den alten 0,5 Wichtigkeit läge der Wert bei 0.70 und feuerte nicht mehr.
+    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.7, halfLifeDays: 42 };
     const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0, flashbulbEncodingEnabled: true });
     assert.strictEqual(out.memoryClass, "flashbulb");
     assert.strictEqual(out.halfLifeDays, 3650);
   });
 
   it("Flashbulb-Memories erhalten die Blitzlicht-Halbwertszeit (Flag an)", () => {
-    // Score: 0.9*0.5 + 0.9*0.5 = 0.90 >= 0.70 → Flashbulb.
+    // Score: 0.9*0.5 + 0.9*0.5 = 0.90 >= FLASHBULB_THRESHOLD (0.80) → Flashbulb.
     // Kein Core (emotionalIntensity 0.9 < 0.95). Basis: 600 × (1 + 0.9) = 1140,
     // aber Flashbulb-Encoding nutzt max(1140, 3650) = 3650.
     const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.9 };
@@ -95,7 +97,9 @@ describe("applyDynamicsDefaults mit Intensitäts-Modulation", () => {
   // versehentlich auf "an" um, wird hier 3650 statt 90 gemessen und der Test
   // schlägt fehl.
   it("Flashbulb-Memories bekommen ohne das Flag weiterhin nur den 90-Tage-Boden", () => {
-    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.5, halfLifeDays: 42 };
+    // Score 0.80 — genau die Schwelle, damit dieser Test den Boden prüft und
+    // nicht versehentlich die Schwelle selbst.
+    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.7, halfLifeDays: 42 };
     const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
     assert.strictEqual(out.memoryClass, "flashbulb");
     assert.strictEqual(out.halfLifeDays, 90);
