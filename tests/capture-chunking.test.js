@@ -11,7 +11,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { expandForCapture } from "../lib/memory-chunking.js";
+import { expandForCapture, planChunks, findSentenceParts } from "../lib/memory-chunking.js";
 
 const mehrteilig = [
   "- Erik hat seit Montag einen neuen Sensor",
@@ -23,16 +23,25 @@ const mehrteilig = [
 const einteilig = "Wir haben heute ueber den Sensor gesprochen.";
 
 describe("expandForCapture", () => {
-  it("teilt eine strukturierte Nachricht in mehrere Eintraege", () => {
+  it("teilt eine strukturierte Nachricht und behaelt die Ursprungszeile", () => {
     const { items, split, parts } = expandForCapture([{ it: { role: "user" }, text: mehrteilig }]);
     assert.equal(split, 1);
-    assert.equal(parts, items.length);
-    assert.ok(items.length >= 4, `erwartet >= 4 Teile, bekommen ${items.length}`);
+    // Seit 7.13.0 ist die Speicherweise "beides": Ganzes PLUS Teile.
+    assert.equal(items.length, parts + 1);
+    assert.ok(parts >= 4, `erwartet >= 4 Teile, bekommen ${parts}`);
+    const ganze = items.filter((i) => i.text === mehrteilig);
+    assert.equal(ganze.length, 1, "die Ursprungszeile muss genau einmal erhalten bleiben");
   });
 
-  it("gibt allen Teilen denselben Gruppenschluessel", () => {
+  it("laesst die Ursprungszeile OHNE Gruppe — sonst greift der Gruppendeckel ueber alles", () => {
     const { items } = expandForCapture([{ it: {}, text: mehrteilig }], { makeGroupId: () => "G1" });
-    assert.deepEqual([...new Set(items.map((i) => i.chunkGroupId))], ["G1"]);
+    const ganz = items.find((i) => i.text === mehrteilig);
+    const teile = items.filter((i) => i.text !== mehrteilig);
+    // chunkGroupKey faellt bei leerer Gruppe auf sourceTurnId zurueck. Traege
+    // das Ganze dieselbe Gruppe wie die Teile, liesse DEFAULT_MAX_PER_GROUP = 2
+    // hoechstens zwei Zeilen je Nachricht durch statt "Ganzes und zwei Teile".
+    assert.equal(ganz.chunkGroupId, undefined);
+    assert.deepEqual([...new Set(teile.map((i) => i.chunkGroupId))], ["G1"]);
   });
 
   it("vergibt je Ursprungsnachricht einen eigenen Schluessel", () => {
@@ -41,12 +50,18 @@ describe("expandForCapture", () => {
       [{ it: {}, text: mehrteilig }, { it: {}, text: mehrteilig }],
       { makeGroupId: () => `G${++n}` },
     );
-    const gruppen = new Set(items.map((i) => i.chunkGroupId));
+    const gruppen = new Set(items.filter((i) => i.chunkGroupId).map((i) => i.chunkGroupId));
     assert.equal(gruppen.size, 2, "zwei Nachrichten duerfen nicht in eine Gruppe fallen");
   });
 
+  it("kann die Ursprungszeile auf Wunsch weglassen (reines Aufteilen)", () => {
+    const { items, parts } = expandForCapture([{ it: {}, text: mehrteilig }], { keepWhole: false });
+    assert.equal(items.length, parts);
+    assert.equal(items.filter((i) => i.text === mehrteilig).length, 0);
+  });
+
   it("laesst die Teiltexte verschieden — sonst waere nichts gewonnen", () => {
-    const { items } = expandForCapture([{ it: {}, text: mehrteilig }]);
+    const { items } = expandForCapture([{ it: {}, text: mehrteilig }], { keepWhole: false });
     assert.equal(new Set(items.map((i) => i.text)).size, items.length);
   });
 
@@ -74,12 +89,35 @@ describe("expandForCapture", () => {
     }
   });
 
-  it("zaehlt Modellfaelle, teilt sie aber nicht auf Verdacht", () => {
+  it("teilt Fliesstext ohne Struktur satzweise auf", () => {
+    // Bis 7.12.70 blieb dieser Fall ungeteilt und wartete auf ein Modell. An
+    // 90 echten Zeilen gemessen fielen ALLE in diesen Zweig — die Aufteilung
+    // war ausgeliefert, aber wirkungslos.
     const ohneStruktur = Array.from({ length: 9 }, (_, i) => `Satz Nummer ${i} ohne jede Struktur.`).join(" ");
-    const { items, split, needsLlm } = expandForCapture([{ it: {}, text: ohneStruktur }]);
-    assert.equal(needsLlm, 1);
-    assert.equal(split, 0);
+    const { items, split, parts, needsLlm } = expandForCapture([{ it: {}, text: ohneStruktur }]);
+    assert.equal(needsLlm, 1, "der Fall bleibt als Modellkandidat gekennzeichnet");
+    assert.equal(split, 1);
+    assert.equal(parts, 9);
+    assert.equal(items.length, 10, "neun Saetze plus die Ursprungszeile");
+  });
+
+  it("laesst 4 bis 7 Saetze ohne Struktur bewusst ganz", () => {
+    const fuenf = Array.from({ length: 5 }, (_, i) => `Satz Nummer ${i} ohne jede Struktur.`).join(" ");
+    const { items, split } = expandForCapture([{ it: {}, text: fuenf }]);
+    assert.equal(split, 0, "fuenf Saetze ueber EIN Thema zu zerschneiden ist schlechter");
     assert.equal(items.length, 1);
+  });
+
+  it("bricht Dezimalzahlen und Versionsnummern nicht auf", () => {
+    const text = "Der Wert lag bei 3.5 mmol/l. " + Array.from({ length: 8 }, (_, i) => `Weiterer Satz ${i}.`).join(" ");
+    const teile = findSentenceParts(text);
+    assert.ok(teile.some((t) => t.includes("3.5 mmol/l")), "3.5 darf kein Satzende sein");
+  });
+
+  it("planChunks meldet den Satzmodus", () => {
+    const neun = Array.from({ length: 9 }, (_, i) => `Satz Nummer ${i} ohne jede Struktur.`).join(" ");
+    assert.equal(planChunks(neun).mode, "sentence");
+    assert.equal(planChunks("Kurz. Und knapp.").mode, "whole");
   });
 
   it("ist abschaltbar", () => {
@@ -110,12 +148,36 @@ describe("Verdrahtung im Capture-Pfad", () => {
     assert.ok(aufteilung < einbettung, "die Aufteilung muss vor dem Einbetten stehen");
   });
 
+  it("reicht den Gruppenschluessel durch die Einbettungsphase durch", () => {
+    // In 7.12.70 baute Phase 1c ein frisches Objekt aus nur
+    // { it, text, vector, ok } und verlor dabei die chunkGroupId. Der
+    // Zeilenbau las danach immer "" — das Merkmal war wirkungslos, und
+    // Ganzes wie Teile fielen in dieselbe Dedup-Gruppe zurueck.
+    const block = quelle.slice(
+      quelle.indexOf("Phase 1c"),
+      quelle.indexOf("// Phase 2: Dedup-Checks"),
+    );
+    assert.ok(block.length > 0, "Phase 1c nicht gefunden");
+    const rueckgaben = block.match(/return \{ it: p\.it[^}]*\}/g) || [];
+    assert.ok(rueckgaben.length >= 2, `erwartet >= 2 Rueckgaben, gefunden ${rueckgaben.length}`);
+    for (const r of rueckgaben) {
+      assert.match(r, /chunkGroupId/, `Rueckgabe ohne chunkGroupId: ${r}`);
+    }
+  });
+
   it("schreibt den Gruppenschluessel in die Zeile", () => {
     const block = quelle.slice(
       quelle.indexOf("const categoryResult = categorizeMemoryWithReason(p.text)"),
       quelle.indexOf("await db.store(row)"),
     );
     assert.match(block, /chunkGroupId: p\.chunkGroupId \|\| ""/);
+  });
+
+  it("verdrahtet die Speicherweise aus der Konfiguration", () => {
+    // Ohne Eintrag im configSchema (additionalProperties: false) waere der
+    // Schalter im Webinterface nicht erreichbar — siehe "Der Abschalter ist
+    // wirklich erreichbar" weiter unten.
+    assert.match(quelle, /keepWhole: cfg\.captureChunkingMode !== "geteilt"/);
   });
 
   it("laesst sich abschalten", () => {
@@ -159,5 +221,14 @@ describe("Der Abschalter ist wirklich erreichbar", () => {
     assert.equal(manifest.configSchema.additionalProperties, false);
     assert.equal(manifest.configSchema.properties.captureChunking?.type, "boolean");
     assert.equal(manifest.configSchema.properties.captureChunking?.default, true);
+  });
+
+  it("bietet die drei Speicherweisen an", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
+    const modus = manifest.configSchema.properties.captureChunkingMode;
+    // ganz = captureChunking:false, beides/geteilt = dieser Schluessel.
+    assert.equal(modus?.type, "string");
+    assert.deepEqual(modus?.enum, ["beides", "geteilt"]);
+    assert.equal(modus?.default, "beides", "die gemessen beste Variante ist die Vorgabe");
   });
 });

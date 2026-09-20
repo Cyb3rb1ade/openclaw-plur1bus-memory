@@ -10632,8 +10632,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // noetig — die Zeile wird dann nicht gefunden, obwohl die
             // Information darin steht. Abschaltbar ueber captureChunking.
             const preppedOk = textPrep.filter((p) => p.ok);
+            // Drei Speicherweisen, im configSchema als zwei Schalter:
+            //   captureChunking: false                     -> ganz
+            //   true + captureChunkingMode "beides" (Vorgabe) -> Ganzes und Teile
+            //   true + captureChunkingMode "geteilt"       -> nur die Teile
+            // Gemessen an 100 schweren Faellen: 36 % / 64 % / 49 %.
             const chunkPlan = expandForCapture(preppedOk, {
               enabled: cfg.captureChunking !== false,
+              keepWhole: cfg.captureChunkingMode !== "geteilt",
               makeGroupId: randomUUID,
             });
             const validPreps = chunkPlan.items;
@@ -10662,6 +10668,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             throwIfCaptureAborted();
 
             // Phase 1c: Einzel-Embedding-Fallback für nicht gebatchte/fehlgeschlagene Items.
+            // chunkGroupId MUSS hier mitgereicht werden. Bis 7.12.70 baute diese
+            // Phase ein frisches Objekt aus nur { it, text, vector, ok } und warf
+            // das von expandForCapture gesetzte Gruppenkennzeichen weg — der
+            // Zeilenbau weiter unten las `p.chunkGroupId` und bekam immer "".
+            // Folge: Ganzes und Teile fielen beide auf denselben sourceTurnId
+            // zurueck (alle Zeilen eines Capture-Laufs teilen ihn), landeten in
+            // EINER Dedup-Gruppe, und DEFAULT_MAX_PER_GROUP = 2 haette hoechstens
+            // zwei davon durchgelassen statt "Ganzes und bis zu zwei Teile".
             const prepared = await Promise.all(validPreps.map(async (p) => {
               let vector = textToVector.get(p.text);
               if (!vector) {
@@ -10669,10 +10683,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   vector = await embeddings.embed(p.text, { agentId });
                 } catch (err) {
                   api.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
-                  return { it: p.it, text: p.text, vector: null, ok: false };
+                  return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector: null, ok: false };
                 }
               }
-              return { it: p.it, text: p.text, vector, ok: true };
+              return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector, ok: true };
             }));
             throwIfCaptureAborted();
 
