@@ -82,7 +82,7 @@ describe("Struktur erkennen", () => {
 
 describe("Aufteilung planen", () => {
   it("laesst kurze Erinnerungen unangetastet", () => {
-    const plan = planChunks("Eva mag Tee. Christian nicht.");
+    const plan = planChunks("Die Nutzerin mag Tee. Ihr Partner nicht.");
     assert.strictEqual(plan.mode, "whole");
     assert.deepStrictEqual(plan.parts.length, 1);
     assert.strictEqual(plan.needsLlm, false);

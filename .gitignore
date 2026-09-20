@@ -69,3 +69,8 @@ BREAKING_CHANGE_AUDIT.md
 !.openclaw/extensions/emotional-state-injector/
 !.openclaw/extensions/emotional-state-injector/**
 .worktrees/
+
+# Plan und Spezifikation zum Importance-Umbau bleiben lokal: sie enthalten
+# Klarnamen und medizinische Beispiele aus dem Produktivbestand.
+docs/superpowers/plans/2026-09-19-importance-kodierung-gebrauch.md
+docs/superpowers/specs/2026-09-19-importance-kodierung-gebrauch-design.md
