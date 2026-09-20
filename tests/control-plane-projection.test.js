@@ -327,6 +327,8 @@ describe("legacy dreaming sidecar compatibility switch", () => {
     const rem = FEATURE_CARD_DEFINITIONS.find((card) => card.id === "rem");
     assert.equal(rem.feature, "neo");
     for (const card of FEATURE_CARD_DEFINITIONS) {
+      // A settings-only card (Style Directive) has no feature switch of its own.
+      if (card.feature === null) continue;
       assert.ok(
         FEATURE_DEFINITIONS.some((entry) => entry.name === card.feature),
         `card ${card.id} points at unknown feature ${card.feature}`,
@@ -335,9 +337,12 @@ describe("legacy dreaming sidecar compatibility switch", () => {
   });
 
   it("keeps every other feature on by default", () => {
+    // Opt-in by their own schema defaults: these three are off until switched
+    // on, and the dashboard says so on their cards.
+    const optIn = new Set(["conversationReactivationRecall", "morningReview", "eveningReview"]);
     for (const entry of FEATURE_DEFINITIONS) {
       if (entry.name === "dreamingSidecarCompat") continue;
-      assert.equal(entry.defaultValue, true, `${entry.name} must stay on by default`);
+      assert.equal(entry.defaultValue, optIn.has(entry.name) ? false : true, `${entry.name} default`);
     }
   });
 });
