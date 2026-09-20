@@ -354,6 +354,7 @@ import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessag
 import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
+import { expandForCapture } from "./lib/memory-chunking.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
 import { planReminderExtraction } from "./lib/reminder-extraction.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
@@ -1806,6 +1807,14 @@ class MemoryDB {
     if (entry && (entry.epistemicStatus == null || entry.epistemicStatus === "")) {
       entry.epistemicStatus = coerceNewWriteEpistemicStatus(entry.epistemicStatus);
     }
+    // Seit 7.12.70 fuehrt die Tabelle die Spalte chunkGroupId. Fehlt sie in
+    // einer geschriebenen Zeile, weicht der Append vom Schema ab und LanceDB
+    // lehnt ihn ab ("Append with different schema: missing=[chunkGroupId]") —
+    // und zwar fuer JEDEN Schreiber, nicht nur fuer das Capture. Acht Stellen
+    // bauen Zeilen aus expliziten Feldlisten; der Standardwert gehoert deshalb
+    // hierher, an dieselbe Stelle, an der schon epistemicStatus nachgezogen
+    // wird. Leer heisst "nicht aufgeteilt"; wer eine Gruppe hat, behaelt sie.
+    if (entry && entry.chunkGroupId == null) entry.chunkGroupId = "";
     const { baseDbPath, agentId } = splitAgentDbPath(this.dbPath);
     const cutoffState = readEpistemicCutoff(baseDbPath);
     if (
@@ -10616,7 +10625,21 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
             // Phase 1b: Batch-Embedding, falls der Provider es unterstützt.
             const batchSize = cfg.embeddingBatchSize || 8;
-            const validPreps = textPrep.filter((p) => p.ok);
+            // Aufteilung VOR der Einbettung: nur so bekommt jedes Teilstueck
+            // einen eigenen Vektor. Enthaelt eine Nachricht mehrere
+            // unabhaengige Aussagen, ist ein gemeinsamer Vektor deren
+            // Schwerpunkt und liegt von jeder einzelnen weiter entfernt als
+            // noetig — die Zeile wird dann nicht gefunden, obwohl die
+            // Information darin steht. Abschaltbar ueber captureChunking.
+            const preppedOk = textPrep.filter((p) => p.ok);
+            const chunkPlan = expandForCapture(preppedOk, {
+              enabled: cfg.captureChunking !== false,
+              makeGroupId: randomUUID,
+            });
+            const validPreps = chunkPlan.items;
+            if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0) {
+              api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model for agent=${agentId}`);
+            }
             const textToVector = new Map();
             if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {
               const textsToEmbed = validPreps.map((p) => p.text);
@@ -10705,6 +10728,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   expiresAt: 0,
                   storedBy: agentId,
                   sourceTurnId: turnId || "",
+                  // Leer, wenn nicht aufgeteilt — die Recall-Seite faellt dann
+                  // auf sourceTurnId zurueck (lib/recall-pipeline.js).
+                  chunkGroupId: p.chunkGroupId || "",
                   sourceMessageRole: p.it.role || "",
                   epistemicStatus: decideEpistemicStatusForCapture({
                     text: p.text,
