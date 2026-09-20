@@ -42,6 +42,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Migration läuft beim Öffnen jeder Agenten-Tabelle, also für jeden Agenten
   einzeln und idempotent. Leer heißt „nicht aufgeteilt".
 
+- **`captureChunking` im Konfigurationsschema.** Das Schema des Plugins steht auf
+  `additionalProperties: false` — ein Schalter, der dort fehlt, wird vom Host
+  abgelehnt und der Code dahinter ist nie erreichbar. Beim Schreiben der
+  Dokumentation aufgefallen und nachgetragen, mitsamt Test.
+
 ### Behoben
 
 - **Eine gewöhnliche Klassifikation verjüngte die Erinnerung.** `buildRefinePatch`

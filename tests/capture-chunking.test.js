@@ -150,3 +150,14 @@ describe("Schreibpfade vertragen die neue Spalte", () => {
     assert.match(safeUpdate, /chunkGroupId: oldRow\.chunkGroupId \|\| ""/);
   });
 });
+
+describe("Der Abschalter ist wirklich erreichbar", () => {
+  it("steht im Konfigurationsschema des Plugins", async () => {
+    // additionalProperties ist false — ein Schalter, der hier fehlt, wird vom
+    // Host abgelehnt, und der Code dahinter waere nie erreichbar.
+    const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
+    assert.equal(manifest.configSchema.additionalProperties, false);
+    assert.equal(manifest.configSchema.properties.captureChunking?.type, "boolean");
+    assert.equal(manifest.configSchema.properties.captureChunking?.default, true);
+  });
+});

@@ -506,6 +506,11 @@
         "type": "boolean",
         "default": true
       },
+      "captureChunking": {
+        "type": "boolean",
+        "default": true,
+        "description": "Teilt eine Nachricht mit mehreren unabhängigen Aussagen beim Erfassen in mehrere Erinnerungen auf, jede mit eigenem Vektor. Ohne Aufteilung ist der eine Vektor der Schwerpunkt aller Aussagen und liegt von jeder einzelnen weiter entfernt als nötig — die Zeile wird dann nicht gefunden, obwohl die Information darin steht. Geteilt wird nur, wo die Struktur es hergibt (Aufzählungen, Absätze), höchstens in 20 Teile, und Bestandszeilen bleiben unberührt. Auf false setzen, wenn der Zuwachs des Bestands stört: jede Zeile kostet erneut im stündlichen Emotions-Cron, im Importance-Cron und in der Bereinigung."
+      },
       "autoRecall": {
         "type": "boolean",
         "default": true
