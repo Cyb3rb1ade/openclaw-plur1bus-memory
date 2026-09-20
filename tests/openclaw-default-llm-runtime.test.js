@@ -643,7 +643,7 @@ test("an unresolved feature-local credential makes no native or direct request",
   assert.doesNotMatch(logs, /missing-credential\.invalid/);
 });
 
-test("critical classifier command prefers its session-bound runtime and does not inherit merging.model", async (t) => {
+for (const selectedModel of [null, "anthropic/haiku"]) test(`critical classifier uses the session runtime with ${selectedModel || "the unchanged default"}`, async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = `critical-session-${randomUUID()}`;
   cleanCriticalPushTestState(t, agentId);
@@ -670,6 +670,7 @@ test("critical classifier command prefers its session-bound runtime and does not
   const api = createApi(baseDbPath, {
     merging: { enabled: true, model: "foreign/merging-model" },
     criticalPush: { enabled: true },
+    ...(selectedModel ? { llmRouter: { agentModels: { [agentId]: { criticalPush: selectedModel } } } } : {}),
     emotion: { t3: { enabled: false } },
   }, globalRuntime);
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
@@ -688,7 +689,7 @@ test("critical classifier command prefers its session-bound runtime and does not
   assert.equal(globalCalls.length, 0);
   assert.equal(sessionCalls.length, 1);
   assert.equal(Object.hasOwn(sessionCalls[0], "agentId"), false);
-  assert.equal(Object.hasOwn(sessionCalls[0], "model"), false);
+  assert.equal(sessionCalls[0].model, selectedModel || undefined);
   assert.equal(sessionCalls[0].purpose, "critical-push-classification");
 });
 

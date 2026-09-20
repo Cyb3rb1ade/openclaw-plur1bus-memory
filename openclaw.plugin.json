@@ -1041,6 +1041,142 @@
             "type": "boolean",
             "default": false,
             "description": "Schreibt die redigierte Fehlermeldung eines gescheiterten Modellaufrufs nach <baseDbPath>/llm-router-errors.log. Nur zur Fehlersuche einschalten: die Meldung des Fremdsystems kann Bruchstücke des Prompts enthalten, deshalb steht sie nie im normalen Log."
+          },
+          "agentModels": {
+            "type": "object",
+            "description": "Optional model overrides per OpenClaw agent and LLM task. Missing entries preserve the existing feature-local model/transport, then llmRouter.defaultModel, then the host default. Dashboard choices use the OpenClaw route; existing direct credentials are preserved for resetting.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "merging": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "capture-summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "recall-query-summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "memory-compaction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "conflict-resolution": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "rem-pattern-analysis": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "conversation-insights": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "dream-narrative": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "dream-echo": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "episode-extraction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "afterthought": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "persona-voice": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "wiki": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "continuity-overlay": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "overlay-audit-contradiction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "memory-text-contradiction": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "emotionT3": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "emotion-encoding": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "schicht15": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "skillMiner": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "criticalPush": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                }
+              }
+            }
           }
         }
       },
