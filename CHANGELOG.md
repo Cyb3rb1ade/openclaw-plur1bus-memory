@@ -7,6 +7,65 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.13.0] — 2026-09-20
+
+### Behoben
+
+- **Die Aufteilung war in 7.12.70 wirkungslos — gleich zweifach.** `planChunks`
+  teilte ausschließlich bei gefundener Struktur (Aufzählung, Überschrift,
+  Absatz); Fließtext und Sprachtranskripte setzten nur `needsLlm` und liefen
+  ungeteilt durch. An 90 echten Zeilen nachgemessen: `whole` 20,
+  `structural` **0**, `llm` 70 — **keine einzige** wäre aufgeteilt worden.
+  Unabhängig davon verlor Phase 1c des Capture-Pfads die `chunkGroupId`: Sie
+  baute ein frisches Objekt aus nur `{ it, text, vector, ok }`, und der
+  Zeilenbau las anschließend immer `""`. Selbst eine geglückte Aufteilung wäre
+  also ohne Gruppenkennzeichen in der Datenbank gelandet.
+
+### Geändert
+
+- **Fließtext wird satzweise aufgeteilt, ohne Modellaufruf.** Der Modus `llm`
+  heißt jetzt `sentence` und schneidet an Satzgrenzen — dieselbe Segmentierung,
+  mit der der Messstand gemessen hat. Dezimalzahlen und Versionsnummern
+  bleiben zusammen (`3.5 mmol/l` ist kein Satzende). `needsLlm` bleibt als
+  Kennzeichen erhalten: Ein Modellschnitt *wäre* hier denkbar, gewartet wird
+  darauf nicht mehr. Texte mit 4–7 Sätzen ohne Struktur bleiben bewusst ganz.
+
+- **Gespeichert wird jetzt „beides": die Ursprungszeile UND ihre Teile.** An
+  100 gezielt ausgewählten harten Fällen gemessen (echte Daten, Antwortmodell
+  und Judge): ungeteilt 36 %, nur geteilt 49 %, **beides 64 %**. Reines
+  Aufteilen gewinnt Treffer, verliert aber Zusammenhang — die Ursprungszeile
+  fängt das ab. Abschaltbar über `keepWhole: false`.
+
+  Die Ursprungszeile behält dabei **bewusst** ihre leere `chunkGroupId` und
+  fällt auf `sourceTurnId` zurück. Bekäme sie dieselbe Gruppe wie die Teile,
+  griffe der Deckel `DEFAULT_MAX_PER_GROUP = 2` über alles zusammen und ließe
+  höchstens zwei Zeilen je Nachricht durch statt „Ganzes und bis zu zwei
+  Teile" — was etwas anderes wäre als das Gemessene.
+
+### Hinzugefügt
+
+- **`captureChunkingMode` — die Speicherweise ist jetzt wählbar.** Drei
+  Möglichkeiten, über zwei Schalter: `captureChunking: false` speichert die
+  Nachricht ganz (36 %); `captureChunkingMode: "beides"` behält die
+  Ursprungszeile und legt die Teile daneben (64 %, Vorgabe);
+  `captureChunkingMode: "geteilt"` speichert nur die Teile (49 %) und spart
+  rund eine Zeile je geteilter Nachricht. Der Schlüssel steht im
+  `configSchema` — das läuft auf `additionalProperties: false`, ein fehlender
+  Eintrag dort machte jeden Schalter unerreichbar.
+
+### Hinweis zum Wachstum
+
+Nach vorn kostet eine Nachricht künftig im Mittel **3,86 Zeilen** statt einer
+(davon 3,17 bereits durch 7.12.70, dessen strukturelle Aufteilung wirkte).
+Bestandszeilen werden **nicht** nachträglich geteilt. Die GC-Kappe
+`maxMemoryCount` gilt **je Agent** und steht bereits auf 150.000; sie bleibt
+damit ein Sicherheitsnetz und wird kein Routine-Beschneider. Bei bernhardine
+(12.461 aktive Zeilen, ~1.774 neue Erinnerungen im Monat) wäre die frühere
+Kappe von 50.000 unter dem neuen Wachstum in gut fünf Monaten erreicht
+gewesen, 150.000 wird es in rund zwanzig — derselbe Horizont, für den die
+Kappe ursprünglich ausgelegt war. Es besteht kein Anpassungsbedarf.
+
+
 ## [7.12.70] — 2026-09-20
 
 ### Geändert

@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.12.70 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.13.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.12.70**, running in production on OpenClaw
+Current source version: **7.13.0**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,43 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.13.0 — the split now actually happens, and the whole row is kept
+
+7.12.70 wired the split into capture, but it only ever fired on *structured*
+text — bullet lists, headings, paragraphs. Prose and voice transcripts merely
+set a `needsLlm` flag and passed through untouched. Measured against 90 real
+rows: `whole` 20, `structural` **0**, `llm` 70. Not a single one would have
+been split. A second defect compounded it: the capture path rebuilt its items
+as `{ it, text, vector, ok }` and dropped the `chunkGroupId` on the way, so
+even a successful split would have reached the database without its group key.
+
+Both are fixed. Prose of eight sentences or more is now split at sentence
+boundaries by rule — no model call, decimals and version numbers left intact.
+Texts of four to seven sentences without structure are still kept whole on
+purpose: cutting five sentences about one subject is worse than leaving them
+together, and no rule can tell the two apart.
+
+The second change is what to store. Measured on 100 deliberately hard cases
+from real data, end to end (recall → answer model → judge):
+
+| stored as | answered correctly |
+|---|---|
+| whole row only | 36 % |
+| parts only | 49 % |
+| **whole row *and* parts** | **64 %** |
+
+Splitting alone wins retrieval but loses context; keeping the original row
+alongside its parts recovers most of that loss without any model call. That is
+now the default (`keepWhole`). The original row deliberately keeps an empty
+`chunkGroupId` so it falls back to `sourceTurnId` — sharing the parts' group
+would make the group cap of two apply across all of them and let at most two
+rows per message survive, which is not what was measured.
+
+**Cost.** Going forward a message costs about **3.86 rows** instead of one.
+Existing rows are never split retroactively. The GC cap `maxMemoryCount` is
+per agent and already stands at 150,000, which keeps it a safety net rather
+than a routine pruner under the new growth rate — no adjustment needed.
 
 ### New in v7.12.70 — a message with several statements is stored as several vectors
 
@@ -112,7 +149,7 @@ above, after three earlier explanations for the same gap turned out to be wrong.
 
 **`lib/memory-chunking.js`** shipped in 7.12.67 as a library only, deliberately
 unwired, so the split could be measured against real data before it was switched
-on. It is wired into capture in 7.12.70 (above).
+on. It was wired into capture in 7.12.70 and made effective in 7.13.0 (above).
 
 ### New in v7.12.38 — the persona voice learns daily, from evidence
 
