@@ -28,12 +28,12 @@ class ManualCoreMarkerTests(unittest.TestCase):
         self.assertEqual(metadata["coreMemoryReason"], "manual_importance_marker")
         self.assertEqual(metadata["halfLifeDays"], 36500)
 
-    def test_values_below_one_remain_standard(self) -> None:
+    def test_values_below_agent_band_remain_standard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             domain = Plur1busDomain(Path(directory), "main")
             metadata = domain._metadata_for(
                 {"content": "Normale Notiz.", "sourceRole": "user"},
-                importance=0.99,
+                importance=0.94,
             )
 
         self.assertFalse(metadata["neverForget"])

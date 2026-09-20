@@ -1060,6 +1060,11 @@ class Plur1busRuntime:
             LOGGER.warning("additive recall booster failed; retaining primary recall (%s)", type(error).__name__)
             return []
 
+    def _reinforce_recall(self, rows: list[dict[str, Any]]) -> None:
+        """Retain this runtime's generation lease until admitted usage work drains."""
+        from .encoding_job import reinforce_recall
+        reinforce_recall(self._domain, rows, acl_bindings=self.scope_binding.as_dict())
+
     def _boost_recall_with_deadline(self, rows, table, limit, session_options):
         """Wait at most the 50-ms budget; busy workers never queue more work.
 
@@ -1327,11 +1332,10 @@ class Plur1busRuntime:
         # global budget. A full worker queue never delays or breaks recall.
         eligible = [row for row in deduplicated if row.get("content") and
                     (str(row["content"]) if full_text else str(row["content"])[:2000]) in output]
-        if eligible:
-            from .encoding_job import reinforce_recall
+        metadata_path = getattr(self._domain, "_metadata_path", None)
+        if eligible and isinstance(metadata_path, Path) and (metadata_path / "metadata.lance").is_dir():
             try:
-                self._executor.submit(reinforce_recall, self._domain, eligible,
-                                      acl_bindings=self.scope_binding.as_dict())
+                self._executor.submit(self._reinforce_recall, eligible)
             except Exception as error:
                 LOGGER.debug("usage reinforcement not queued: %s", type(error).__name__)
         return output

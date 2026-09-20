@@ -1,5 +1,12 @@
 # Distribution acceptance history
 
+## 7.12.70-hermes.0 — candidate, not published
+
+Includes v7.12.69 plus PR #165 and native encoding/usage adaptations.
+See `docs/audits/hermes-7.12.69-delta-review.md`. Earlier platform receipts
+below are historical and do not certify this candidate. No productive memory
+migration, model change, installation or publication has been performed.
+
 ## 7.12.61-hermes.0 — release evidence boundary
 
 Source incorporates upstream `039329d0c74525448190b0bd2ec3ef3551ed168f`.

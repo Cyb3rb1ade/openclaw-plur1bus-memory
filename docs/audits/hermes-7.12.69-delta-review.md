@@ -1,5 +1,9 @@
 # Hermes 7.12.69 delta review
 
+Package version advanced at the owner's request to **7.12.70-hermes.0** (Python
+7.12.70): this delta plus PR #165. An as-yet-unpublished .70 upstream tag is
+not claimed as an ancestor; reconcile it when available before final delivery.
+
 Base: upstream 039329d0c74525448190b0bd2ec3ef3551ed168f; Hermes 100dfa660dfd828d6baa1eb3a35806599b200145.
 Target: 784e900541fddb1d13a75104b6570e52051fd82c (v7.12.69).
 All 76 changed paths are inventoried below; source merge alone is not native parity.

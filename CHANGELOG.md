@@ -1,6 +1,6 @@
 # Changelog — PLUR1BUS Memory
 
-## 7.12.69-hermes.0 — build candidate
+## 7.12.70-hermes.0 — build candidate
 
 - Upstream .62–.69 merged, including encoding, retrieval and migration tools.
 - Native neutral/pending capture, bounded scoped hourly encoding, explicit

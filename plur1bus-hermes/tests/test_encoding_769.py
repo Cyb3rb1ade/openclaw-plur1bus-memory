@@ -10,11 +10,30 @@ import lancedb
 from plur1bus_hermes.domain import Plur1busDomain
 from plur1bus_hermes.dynamics import DAY_MS, reinforce_metadata, transform_metadata
 from plur1bus_hermes.encoding import encoding_prompt, half_life_from_encoding, refine_patch
-from plur1bus_hermes.encoding_job import run_encoding
+from plur1bus_hermes.encoding_job import run_encoding, reinforce_recall
+from plur1bus_hermes.llm_backend import InternalLlmBackend, InvalidLlmResponse
 from plur1bus_hermes.namespaces import binding_from_scope
 
 
 class Encoding769Tests(unittest.TestCase):
+    def test_encoding_budget_is_independent_of_disabled_emotion_tier(self):
+        seen = []
+        class Response:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return json.dumps({"choices": [{"message": {"content": '{"importance":0.8}'}}]}).encode()
+        def opener(request, **kwargs):
+            seen.append(json.loads(request.data))
+            return Response()
+        backend = InternalLlmBackend({"llm": {"model": "test", "baseUrl": "https://example.invalid/v1"},
+            "emotion": {"t3": {"enabled": False, "encodingMaxTokens": 0}}}, "main", opener=opener)
+        backend.complete_json("memory-encoding", "s", "u")
+        backend.complete_json("other", "s", "u")
+        self.assertEqual([payload["max_tokens"] for payload in seen], [1500, 300])
+
     def test_strict_judgment_and_sparse_emotions(self):
         for invalid in (None, True, "0.8", float("nan"), [], {}):
             self.assertIsNone(refine_patch({}, {"importance": invalid}, 42))
@@ -97,3 +116,35 @@ class Encoding769Tests(unittest.TestCase):
             for state in ("pending_backfill", "final", "unknown"):
                 self.assertEqual(values[state]["importance"], 0.5)
             self.assertEqual(run_encoding(domain, memories)["refined"], 0)
+            # Delayed usage never strengthens a deleted canonical card, even
+            # when its old materialized metadata still says active.
+            memory_id = cards[0]["id"]
+            memories.update(where=f"id = '{memory_id}'", values={"status": "deleted"})
+            reinforce_recall(domain, cards[:1])
+            current = database.open_table("metadata").search().where(f"id = '{memory_id}'").to_list()[0]
+            self.assertNotIn("retrievalCount", json.loads(current["metadataJson"]))
+
+    def test_concurrent_agent_edit_wins_over_hourly_judgment(self):
+        with tempfile.TemporaryDirectory() as root:
+            domain = Plur1busDomain(Path(root), "main")
+            binding = binding_from_scope("main")
+            database = lancedb.connect(str(Path(root) / "lancedb/main"))
+            memory_id = str(uuid.uuid4())
+            metadata = {"text": "memo", "importance": 0.5, "importanceStatus": "pending", "scopeKey": binding.scope_key}
+            table = database.create_table("metadata", data=[{"id": memory_id, "agentId": "main",
+                "scopeKey": binding.scope_key, "metadataJson": json.dumps(metadata)}])
+            memories = database.create_table("memories", data=[{"id": memory_id, "agentId": "main",
+                "scopeKey": binding.scope_key, "status": "active", "content": "memo"}])
+            class Backend:
+                def available(self):
+                    return True
+                def complete_json(self, *args):
+                    table.update(where=f"id = '{memory_id}'", values={"metadataJson": json.dumps({**metadata,
+                        "importance": 0.97, "importanceStatus": "final", "coreMemoryReason": "manual_importance_marker"})})
+                    return {"importance": 0.2}
+            domain.set_llm_backend(Backend())
+            result = run_encoding(domain, memories)
+            self.assertEqual(result["refined"], 0)
+            self.assertEqual(result["conflicts"], 1)
+            row = database.open_table("metadata").to_arrow().to_pylist()[0]
+            self.assertEqual(json.loads(row["metadataJson"])["importance"], 0.97)

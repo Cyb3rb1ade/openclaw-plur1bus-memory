@@ -16,6 +16,10 @@ from .llm_diagnostics import LlmErrorReporter
 _CACHE_PURPOSES = {"skill-workshop-mining": "skill-extraction", "episode-extraction": "episode-analysis"}
 
 
+class InvalidLlmResponse(RuntimeError):
+    """A received but unusable judgment, distinct from an unavailable route."""
+
+
 class InternalLlmBackend:
     """Execute explicitly configured internal JSON transformations."""
 
@@ -32,7 +36,8 @@ class InternalLlmBackend:
         self.config = dict(config.get("llm") or {})
         encoding_budget = ((config.get("emotion") or {}).get("t3") or {}).get("encodingMaxTokens", 1500)
         try:
-            self.encoding_max_tokens = max(1, min(16000, int(encoding_budget)))
+            parsed_budget = int(encoding_budget)
+            self.encoding_max_tokens = min(16000, parsed_budget) if parsed_budget > 0 else 1500
         except (TypeError, ValueError, OverflowError):
             self.encoding_max_tokens = 1500
         # Hermes already has a shared internal transport (`llm`), independent
@@ -64,7 +69,8 @@ class InternalLlmBackend:
             fields = self._errors.report(error, purpose)
             # Neither callers nor traceback logging receive upstream text,
             # endpoint URLs, arbitrary exception class names or chained errors.
-            raise RuntimeError(f"internal LLM failed: {fields['errorHint']}") from None
+            error_type = InvalidLlmResponse if isinstance(error, InvalidLlmResponse) else RuntimeError
+            raise error_type(f"internal LLM failed: {fields['errorHint']}") from None
 
     def _complete_json(self, purpose: str, system: str, user: str) -> dict[str, Any]:
         if not self.available():
@@ -134,7 +140,7 @@ class InternalLlmBackend:
                 raise ValueError("cached query is invalid")
         except (TypeError, ValueError, KeyError) as error:
             if not result.get("cached"):
-                raise RuntimeError("internal LLM returned invalid JSON") from error
+                raise InvalidLlmResponse("internal LLM returned invalid JSON") from error
             logging.getLogger(__name__).warning("Invalid cached LLM object bypassed")
             text, usage = compute()
             value = json.loads(text)
@@ -143,7 +149,7 @@ class InternalLlmBackend:
             except Exception:
                 logging.getLogger(__name__).warning("LLM cache repair bypassed")
         if not isinstance(value, dict):
-            raise RuntimeError("internal LLM JSON result must be an object")
+            raise InvalidLlmResponse("internal LLM JSON result must be an object")
         return value
 
     def _request_json(self, request: Any, timeout: float, purpose: str) -> tuple[str, dict[str, Any]]:
@@ -152,14 +158,14 @@ class InternalLlmBackend:
             try:
                 body = json.loads(response.read().decode("utf-8"))
             except ValueError as error:
-                raise RuntimeError("internal LLM returned invalid JSON") from error
+                raise InvalidLlmResponse("internal LLM returned invalid JSON") from error
         try:
             content = body["choices"][0]["message"]["content"]
             value = json.loads(content)
         except (TypeError, ValueError, KeyError, IndexError) as error:
-            raise RuntimeError("internal LLM returned invalid JSON") from error
+            raise InvalidLlmResponse("internal LLM returned invalid JSON") from error
         if not isinstance(value, dict):
-            raise RuntimeError("internal LLM JSON result must be an object")
+            raise InvalidLlmResponse("internal LLM JSON result must be an object")
         if purpose == "query-refinement":
             query = value.get("query")
             if not isinstance(query, str) or not 1 <= len(query.strip()) <= 2048:
