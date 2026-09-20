@@ -570,6 +570,12 @@ schreiben, was dort nicht steht, gleich was ein Formular behauptet.
 | Style Directive | `styleDirective.timeOfDay`, `.opinion`, `.askBack` |
 | LLM Tasks | `llmRouter.defaultModel` |
 
+Der Abschnitt **Capacity & Runtime** darunter ist rein lesend: Füllstand je
+Agent gegen `gc.maxMemoryCount`, der letzte GC-Lauf aus
+`<Workspace des Hauptagenten>/.adaptive-learning/gc-report.json`, der
+aktuelle Speicherdruck des Gateway-Prozesses gegen `runtime.rssWarningBytes`
+und `runtime.rssCriticalBytes`, und zwölf wirksame `runtime`-Grenzen.
+
 Nicht schreibbar aus dem Reiter: `security.*`, `controlUi.writeActions`,
 `featureCronSetup.auto`, `dreaming.enabled` (Sidecar) und alle Schwellenwerte.
 Jede Einstellung wird vor dem Schreiben gegen das Schema geprüft; ein

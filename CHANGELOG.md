@@ -27,6 +27,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **Fünf neue Karten:** Reactivation Recall, Reaction Nudge, Morning Review,
   Evening Review (bisher ohne Karte, obwohl schaltbar) und Style Directive
   (drei Einstellungen, kein Schalter).
+- **Panel „Capacity & Runtime"** (lesend): Füllstand je Agent gegen
+  `gc.maxMemoryCount` mit Balken, letzter GC-Lauf aus dem Report des
+  Hauptagenten (archiviert, übersprungen, geprüfte Agenten), aktueller
+  Speicherdruck des Gateway-Prozesses gegen die `runtime`-Schwellen, und die
+  wirksamen Laufzeitgrenzen — die Fragen „warum ist Recall langsam" und
+  „wo sind die Zeilen hin", bevor jemand ein Log öffnen muss.
 
 ### Sicherheit
 

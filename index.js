@@ -54,6 +54,9 @@ import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plug
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
+import { readGcReport } from "./lib/dashboard-operations.js";
+import { checkRuntimePressure } from "./lib/runtime-pressure-gate.js";
+import { resolveAgentWorkspaceDir } from "./lib/setup/memory-host-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
 import {
@@ -9566,6 +9569,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 workspacePolicies,
                 skillWorkshop: collectSkillWorkshopDashboard(),
                 health: await controlHealth.snapshot(),
+                // The gc job runs from the main agent and reports on every agent.
+                gcReport: readGcReport(resolveAgentWorkspaceDir(api.config, "main")),
+                pressure: checkRuntimePressure(cfg.runtime || {}),
                 env: process.env,
               });
             },
