@@ -26,20 +26,30 @@ describe("refine patch", () => {
     assert.strictEqual(patch.halfLifeDays, 600);
   });
 
-  it("burns in an intense single event (flag on)", () => {
+  // Phase 3 (21.09.2026): Dieser Cron brennt nicht mehr ein, auch nicht mit
+  // Flag. Er lief stündlich über den ganzen Bestand und entschied jedes Mal
+  // neu — im Pilotlauf hätte er 10,3 % aller Zeilen rückwirkend auf zehn Jahre
+  // Halbwertszeit gesetzt. Einbrennen gehört in den Capture-Pfad, einmal je
+  // neuer Zeile; dieser Cron bewertet nur.
+  it("brennt auch bei hoher Intensität nicht ein (Flag an)", () => {
     const patch = buildRefinePatch({ id: "b", memoryStrength: 0.9, halfLifeDays: 180 },
       { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" },
       now, { flashbulbEncodingEnabled: true });
-    assert.strictEqual(patch.halfLifeDays, FLASHBULB_HALF_LIFE_DAYS);
-    assert.strictEqual(patch.memoryStrength, 0.95);
-    assert.strictEqual(patch.memoryClass, "flashbulb");
+    assert.notStrictEqual(patch.halfLifeDays, FLASHBULB_HALF_LIFE_DAYS);
+    assert.strictEqual(patch.halfLifeDays, 600, "die Halbwertszeit kommt aus dem Importance-Band");
+    assert.strictEqual(Object.hasOwn(patch, "memoryStrength"), false, "die Stärke bleibt unberührt");
+    assert.strictEqual(Object.hasOwn(patch, "memoryClass"), false);
+    assert.strictEqual(Object.hasOwn(patch, "lastDynamicsAt"), false, "kein neuer Kodierungszeitpunkt");
   });
 
-  it("never lowers an existing strength (flag on)", () => {
+  it("bewertet weiter Emotion und Wichtigkeit (Flag an)", () => {
     const patch = buildRefinePatch({ id: "c", memoryStrength: 1.0, halfLifeDays: 180 },
-      { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" },
+      { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "Vorfall" },
       now, { flashbulbEncodingEnabled: true });
-    assert.strictEqual(patch.memoryStrength, 1.0);
+    assert.strictEqual(patch.importance, 0.8);
+    assert.strictEqual(patch.emotionalIntensity, 0.95);
+    assert.strictEqual(patch.emotionalDominant, "fear");
+    assert.match(patch.coreMemoryReason, /Vorfall/);
   });
 
   // R16 (Abschluss-Review, Critical 1): ohne das Flag — der Deploy-Default —

@@ -5,6 +5,28 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Geändert
+
+- **Blitzlicht-Schwelle von 0,70 auf 0,80** (`FLASHBULB_THRESHOLD`), nach dem
+  Phase-3-Pilotlauf über 24.509 aktive Zeilen aller Agenten. Die alte Schwelle
+  hätte **10,3 % des Bestands** und **6,4 % der Zeilen der letzten 30 Tage**
+  eingebrannt; die Zielgröße in `scripts/importance-metrics.mjs` lautet „unter
+  2 % der neuen Erinnerungen", und die erreicht 0,80 mit 1,8 %. Maßstab sind
+  die neuen Zeilen, nicht der Bestand: Der enthält vier Jahre Altlasten aus
+  drei Bewertungsregeln. Die 0,70 stammten aus einer Zeit, als `novelty` und
+  `userCorrection` noch 30 % zum Wert beitragen sollten — als die Gewichte auf
+  die zwei vorhandenen Merkmale normiert wurden, blieb die Schwelle stehen.
+- **Der stündliche Emotions-Cron brennt nicht mehr ein.** `buildRefinePatch`
+  lief über den gesamten Bestand und entschied bei jedem Lauf neu, ob eine
+  Zeile Gedächtnisstärke 0,95, zehn Jahre Halbwertszeit und die Klasse
+  `flashbulb` bekommt — rückwirkend, für Zeilen, die niemand je als wichtig
+  markiert hat. Einbrennen ist eine Entscheidung beim Erleben, nicht beim
+  Nachsortieren: Sie bleibt im Capture-Pfad, einmal je neuer Zeile. Der Cron
+  bewertet weiter Emotion und Wichtigkeit und setzt die Halbwertszeit aus dem
+  Importance-Band.
+
 ## [7.15.1] — 2026-09-21
 
 ### Behoben
