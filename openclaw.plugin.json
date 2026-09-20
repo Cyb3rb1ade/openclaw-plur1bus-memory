@@ -1174,9 +1174,26 @@
                   "minLength": 1,
                   "maxLength": 256,
                   "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+                },
+                "*": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$",
+                  "description": "Standardmodell des Agenten für alle Aufgaben ohne eigene Wahl. Eine Aufgabenwahl hat Vorrang; der Standard hat Vorrang vor jeder Route aus der Konfigurationsdatei, genau wie eine Aufgabenwahl."
                 }
               }
             }
+          },
+          "dashboardAgents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            },
+            "description": "Welche Agenten im Reiter eine Spalte in der Modell-Matrix bekommen. Leer oder fehlend: die stehenden Agenten (mit heartbeat) plus jeder Agent mit gespeicherter Wahl; gibt es keine, alle bekannten. Unbekannte Kennungen werden übergangen."
           }
         }
       },

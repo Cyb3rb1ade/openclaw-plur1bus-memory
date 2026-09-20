@@ -549,22 +549,40 @@ credentials ändern sich dadurch nicht.
 
 ## Chat-LLM-Routing über OpenClaw
 
-Im PLUR1BUS-Reiter stehen bei den LLM-gestützten Features Auswahlfelder je
-Agent und Aufgabe. Die Liste enthält die Modelle aus
-`agents.defaults.models` und den agenteneigenen `models`, einschließlich des
-primären Modells und der konfigurierten Fallbacks. Aliase werden mit angezeigt.
-Ohne explizite Agentenliste verwendet OpenClaw den Agenten `main`.
+Der Abschnitt **LLM Tasks** im PLUR1BUS-Reiter ist eine Matrix: eine Spalte
+je Agent, eine Zeile je Aufgabe, darüber die Zeile **Default for all tasks**.
+Die Liste je Zelle enthält die Modelle aus `agents.defaults.models` und den
+agenteneigenen `models`, einschließlich des primären Modells und der
+konfigurierten Fallbacks. Aliase werden angezeigt.
 
-Die Auswahl wird unter
-`llmRouter.agentModels.<agentId>.<Aufgabe>` gespeichert. Beispiel:
+Die Agenten kommen aus `agents.entries` (OpenClaws aktuelle Form, ein Objekt
+je Kennung oder ein Array); fehlt es, aus der Altform `agents.list`; fehlt
+beides, ist es der Agent `main`. **Spalten bekommen nicht alle Agenten**,
+sondern die stehenden (mit `heartbeat`) plus jeder mit gespeicherter Wahl —
+ein Host mit einem Hauptagenten und dreißig Subagenten zeigt sonst dreißig
+Spalten. `llmRouter.dashboardAgents` legt die Spalten ausdrücklich fest;
+gibt es weder stehende noch gewählte, erscheinen alle bekannten.
+
+Die Aufgabenzeilen liegen hinter einem Aufklapper, und eine Zelle ohne Wahl
+zeigt nur den ererbten Wert mit einem **Change**-Link (`?edit=<agent>.<Aufgabe>`),
+der genau diese Zelle als Auswahlfeld rendert — ohne Skript, damit die Seite
+nicht mit Hunderten von Auswahllisten je Katalogmodell wächst.
+
+Die Auswahl wird unter `llmRouter.agentModels.<agentId>.<Aufgabe>`
+gespeichert; der Agentenstandard unter dem Schlüssel `*`. Rangfolge:
+**Aufgabenwahl > Agentenstandard > bisherige Route**. Der Agentenstandard
+verdrängt also, genau wie eine Aufgabenwahl, auch eine feature-eigene direkte
+Route; die Matrix kennzeichnet solche Zellen mit „replaces direct route".
+Beispiel:
 
 ```json
 {
   "llmRouter": {
+    "dashboardAgents": ["main", "bernhardine"],
     "agentModels": {
       "main": {
-        "merging": "openai/gpt-5.4",
-        "criticalPush": "anthropic/claude-haiku-4-5"
+        "*": "anthropic/claude-haiku-4-5",
+        "merging": "openai/gpt-5.4"
       }
     }
   }
@@ -580,13 +598,14 @@ weiterhin möglich.
 
 Eine ausdrücklich gespeicherte Auswahl nutzt die native OpenClaw-Route. Wenn
 die Plugin-Berechtigungen das Modell noch sperren, kennzeichnet die Liste das
-mit „grants PLUR1BUS access“. Speichern aktiviert dann `llm.allowModelOverride`
+mit „†“. Speichern aktiviert dann `llm.allowModelOverride`
 am Plugin-Eintrag und ergänzt genau dieses Modell in vorhandenen begrenzten
 `allowedModels`- und `allowedCompletionModels`-Listen. Andere Berechtigungen
 bleiben erhalten. Beim erstmaligen Aktivieren ohne bestehende Override-Liste
 wird nur das gewählte Modell freigegeben. „Use default“ entfernt die
 Aufgabenüberschreibung; es entzieht keine Freigabe, die andere Aufgaben nutzen
-könnten. Änderungen laufen durch OpenClaws reguläres Neuladen der Konfiguration;
+könnten. „Use default“ heißt in der Matrix **Inherit** und zeigt dahinter,
+was dann läuft. Änderungen laufen durch OpenClaws reguläres Neuladen der Konfiguration;
 bereits laufende Jobs behalten ihre bisherigen Einstellungen.
 
 **Updates übernehmen die bestehenden Einstellungen unverändert.** Es gibt
