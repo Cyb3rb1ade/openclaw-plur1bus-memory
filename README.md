@@ -2,12 +2,12 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.15.0-hermes.0 — Hermes port in progress**
+**PLUR1BUS 7.15.3-hermes.0 — Hermes port in progress**
 
-Source version: **7.15.0-hermes.0** (Python distributions:
-**7.15.0**). It integrates the pinned upstream commit
+Source version: **7.15.3-hermes.0** (Python distributions:
+**7.15.3**). It integrates the pinned upstream commit
 `8c29aeab9e03691d3a07e31756b3f23addf9bba1` while retaining the native Hermes
-payload. See the [Hermes delta review](docs/audits/hermes-7.15.0-delta-review.md)
+payload. See the [Hermes delta review](docs/audits/hermes-7.15.3-delta-review.md)
 and [platform installation guide](distribution/INSTALLATION.de.md).
 This candidate is not yet published. Build receipts and checksums identify
 the tested artifacts. Source availability alone does not establish
@@ -28,6 +28,54 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.15.3 — the burn-in decision is back where it belongs
+
+7.15.2 removed flashbulb encoding from the emotion-refine path on the premise
+that the cron re-decides hourly over the whole store. It does not: its query
+reads only rows with `emotionStatus = 'pending_t3' OR importanceStatus =
+'pending'` and sets both to `final` afterwards, so a row leaves the queue for
+good — 15 of 24,509 active rows were in it when measured. The decision was
+always made exactly once per row.
+
+Without that path nothing burned in at all: the capture path only has the
+tier-2 heuristic, which reaches at most 0.60 intensity on real text, so the
+0.80 threshold was never met — 0.00 per day measured against 1.14 per day with
+the model's judgement. The threshold itself stays at 0.80.
+
+### New in v7.15.2 — flashbulb encoding, calibrated
+
+The pilot run the schema comment had been waiting for is done: 24,509 active
+rows across every agent. The old threshold of 0.70 would have burned in
+**10.3 % of the store** and **6.4 % of the rows from the last 30 days**; the
+target in `scripts/importance-metrics.mjs` is under 2 % of new memories, and
+0.80 meets it at 1.8 %. The threshold is now `FLASHBULB_THRESHOLD`, in one
+place.
+
+Burning in is a decision made when something happens, not when it is sorted
+afterwards: the hourly emotion-refine cron no longer does it. It ran over the
+whole store and decided anew every hour, so a four-year-old row could be given
+a ten-year half-life retroactively. It still scores emotion and importance and
+sets the half-life from the importance band.
+
+### New in v7.15.1 — saved versus running, and a tab that fits more agents
+
+A dashboard click reaches `openclaw.json` at once but only takes effect after
+the host reloads the plugin — about a minute, and the reload can fail. The tab
+now compares the file against the running config: it says how many saved
+changes are not yet running, marks each affected row **pending**, and after
+three minutes says the reload probably failed and a restart applies it. Only
+the plugin's own config subtree is read, and only identifiers leave it.
+
+Also: Memory Health explains its badge in words; the background default model
+sits in its own box above the matrix, with column headers naming it before the
+agent's chat model (which is only the last resort); the inherited model is a
+line under each field instead of a truncated option; above four agents the
+panel shows one agent at a time behind a tab bar; and an idle re-embedding
+workflow marks "Dry run" as **next** rather than **current**.
+
+Capture splitting no longer drops the text before the first list item or
+statements shorter than eight characters (#175).
 
 ### New in v7.15.0 — switches and decisions on the cards, capacity at a glance
 

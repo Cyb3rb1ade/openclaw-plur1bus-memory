@@ -34,6 +34,90 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.15.3] — 2026-09-21
+
+### Behoben
+
+- **Das Einbrennen im emotion-refine-Pfad ist zurück** — seine Entfernung in
+  7.15.2 beruhte auf einer falschen Annahme. Der Cron läuft **nicht** stündlich
+  über den gesamten Bestand: Seine Abfrage liest ausschließlich Zeilen mit
+  `emotionStatus = 'pending_t3' OR importanceStatus = 'pending'` und setzt beide
+  Felder danach auf `final`, womit die Zeile die Warteschlange dauerhaft
+  verlässt. Live nachgemessen: von 24.509 aktiven Zeilen standen **15** darin
+  (0,06 %). Die Entscheidung fiel dort also immer schon genau einmal je Zeile.
+- **Ohne diesen Pfad brannte gar nichts mehr ein.** Der Capture-Pfad entscheidet
+  mit der Tier-2-Heuristik, und die erreicht auf echten Texten höchstens 0,60
+  Intensität (Median 0,00, 90. Perzentil 0,57); für die Schwelle 0,80 bräuchte
+  es bei maximaler automatischer Wichtigkeit 0,66. In einer Woche mit 903 neuen
+  Zeilen kam diese Kombination kein einziges Mal vor — gemessen 0,00 pro Tag
+  gegenüber 1,14 pro Tag mit dem Modellurteil. Das Merkmal war damit wirkungslos.
+
+Die Schwelle **0,80** aus 7.15.2 bleibt: Sie stützt sich auf die gemessene
+Verteilung und ist von der falschen Annahme unberührt.
+
+## [7.15.2] — 2026-09-21
+
+### Geändert
+
+- **Blitzlicht-Schwelle von 0,70 auf 0,80** (`FLASHBULB_THRESHOLD`), nach dem
+  Phase-3-Pilotlauf über 24.509 aktive Zeilen aller Agenten. Die alte Schwelle
+  hätte **10,3 % des Bestands** und **6,4 % der Zeilen der letzten 30 Tage**
+  eingebrannt; die Zielgröße in `scripts/importance-metrics.mjs` lautet „unter
+  2 % der neuen Erinnerungen", und die erreicht 0,80 mit 1,8 %. Maßstab sind
+  die neuen Zeilen, nicht der Bestand: Der enthält vier Jahre Altlasten aus
+  drei Bewertungsregeln. Die 0,70 stammten aus einer Zeit, als `novelty` und
+  `userCorrection` noch 30 % zum Wert beitragen sollten — als die Gewichte auf
+  die zwei vorhandenen Merkmale normiert wurden, blieb die Schwelle stehen.
+- **Der stündliche Emotions-Cron brennt nicht mehr ein.** `buildRefinePatch`
+  lief über den gesamten Bestand und entschied bei jedem Lauf neu, ob eine
+  Zeile Gedächtnisstärke 0,95, zehn Jahre Halbwertszeit und die Klasse
+  `flashbulb` bekommt — rückwirkend, für Zeilen, die niemand je als wichtig
+  markiert hat. Einbrennen ist eine Entscheidung beim Erleben, nicht beim
+  Nachsortieren: Sie bleibt im Capture-Pfad, einmal je neuer Zeile. Der Cron
+  bewertet weiter Emotion und Wichtigkeit und setzt die Halbwertszeit aus dem
+  Importance-Band.
+
+## [7.15.1] — 2026-09-21
+
+### Behoben
+
+- **Gespeichert ist nicht gleich laufend — die Seite sagt es jetzt.** Ein
+  Dashboard-Klick landet sofort in `openclaw.json`, wirkt aber erst nach dem
+  Plugin-Reload des Hosts (rund eine Minute) — und der kann scheitern und
+  zurückrollen. Bisher rendete die Seite stumm den alten Wert weiter, sodass
+  ein Klick wirkungslos aussah. Jetzt vergleicht sie die Datei mit der
+  laufenden Konfiguration, zeigt oben „N gespeicherte Änderungen laufen noch
+  nicht" und markiert jede betroffene Zeile mit **pending**. Nach drei
+  Minuten ohne Wirkung sagt sie stattdessen, dass der Reload vermutlich
+  gescheitert ist und ein Neustart ihn anwendet. Verglichen wird nur, was
+  das Dashboard selbst schreiben darf; aus der Datei verlässt keine einzige
+  Einstellung die Funktion.
+- **Aufteilung: Text vor dem ersten Listenpunkt und kurze Aussagen bleiben
+  erhalten** (#175). In `captureChunkingMode: "geteilt"` gingen Einleitungen
+  und Stücke unter acht Zeichen („Nein.", „Ja.") verloren. Kurze Stücke
+  hängen jetzt an ihrem **vorigen** Satz — eine Antwort gehört zu ihrer
+  Frage, nicht zur nächsten Aussage.
+- **Re-Embedding:** Der Schritt „Dry run" trug im Ruhezustand die Marke
+  `current`, direkt über der Zeile „No active re-embedding migration". Er
+  heißt dort jetzt `next`.
+
+### Geändert
+
+- **Memory Health erklärt seinen Zustand.** Neben dem Badge steht, was
+  fehlschlug (etwa „eine Partition konnte nicht gezählt werden — meist eine
+  kalte LanceDB direkt nach einem Plugin-Reload"), wann der Schnappschuss
+  entstand und wann der nächste läuft. War der Größenscan unvollständig,
+  sagt die Karte, dass **Storage** eine Untergrenze ist.
+- **LLM Tasks: Hintergrundmodell statt Chatmodell als Bezugspunkt.** Das
+  Standardmodell für alle Agenten steht als eigener Kasten über der Tabelle;
+  die Spaltenköpfe nennen zuerst das Hintergrund-Standardmodell und erst
+  danach das Chatmodell als letzte Rückfallstufe. Der ererbte Wert steht als
+  eigene Zeile unter dem Auswahlfeld statt abgeschnitten in der Option.
+- **Ab fünf Agenten ein Agent je Ansicht.** Die Matrix gab jeder Spalte rund
+  100 px, sobald mehr als vier Agenten Spalten bekamen. Jetzt wählt eine
+  Reiterleiste den Agenten (`?agent=<id>`, reiner Ansichtsparameter, wirkt
+  auch ohne Schreibrecht); bis vier Agenten bleibt die Matrix wie bisher.
+
 ## [7.15.0] — 2026-09-20
 
 ### Hinzugefügt

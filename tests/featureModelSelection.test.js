@@ -193,7 +193,7 @@ test("dashboard renders the model matrix with escaped labels and keeps unavailab
   assert.match(html, /<select[^>]*name="model"/);
   assert.match(html, /Fast &lt;model&gt;/);
   assert.match(html, /value="removed\/model"[^>]*selected/);
-  assert.match(html, /Inherit — /);
+  assert.match(html, /<span class="inherit">Inherits /, "der ererbte Wert steht als Zeile unter dem Feld");
   assert.match(html, /name="feature" value="\*"/, "the default row writes the agent default");
   assert.doesNotMatch(html, /class="feature-models"><legend>alice/, "no per-card fieldsets any more");
   assert.doesNotMatch(html, /SECRET|private\.invalid/);

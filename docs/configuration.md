@@ -576,6 +576,16 @@ Agent gegen `gc.maxMemoryCount`, der letzte GC-Lauf aus
 aktuelle Speicherdruck des Gateway-Prozesses gegen `runtime.rssWarningBytes`
 und `runtime.rssCriticalBytes`, und zwölf wirksame `runtime`-Grenzen.
 
+**Gespeichert ist nicht gleich laufend.** Eine Änderung steht sofort in
+`openclaw.json`, wirkt aber erst nach dem Plugin-Reload des Hosts — rund eine
+Minute. Bis dahin zeigt die Seite weiter den laufenden Wert und markiert die
+gespeicherte Zeile mit **pending**; oben steht, wie viele Änderungen betroffen
+sind. Bleibt es länger als drei Minuten dabei, ist der Reload vermutlich
+gescheitert (auf diesem Host etwa, wenn ein anderes Plugin beim Neustart in
+sein Zeitlimit läuft) — dann hilft ein Gateway-Neustart. Verglichen wird nur
+die Liste oben plus Speicherweise und Modellwahlen; gelesen wird ausschließlich
+`plugins.entries.memory-lancedb-namespaced.config`.
+
 Nicht schreibbar aus dem Reiter: `security.*`, `controlUi.writeActions`,
 `featureCronSetup.auto`, `dreaming.enabled` (Sidecar) und alle Schwellenwerte.
 Jede Einstellung wird vor dem Schreiben gegen das Schema geprüft; ein
@@ -586,6 +596,14 @@ OpenClaws reguläres Neuladen der Konfiguration.
 
 Der Abschnitt **LLM Tasks** im PLUR1BUS-Reiter ist eine Matrix: eine Spalte
 je Agent, eine Zeile je Aufgabe, darüber die Zeile **Default for all tasks**.
+Bei **mehr als vier Agenten** wird daraus eine Ansicht je Agent mit
+Reiterleiste (`?agent=<id>`; reiner Ansichtsparameter, wirkt auch ohne
+Schreibrecht) — zehn Spalten ließen von jedem Auswahlfeld nur den Pfeil übrig.
+Ganz oben steht als eigener Kasten das **Hintergrund-Standardmodell**
+(`llmRouter.defaultModel`); die Spaltenköpfe nennen es je Agent zuerst und
+erst danach das Chatmodell des Agenten als letzte Rückfallstufe. Diese
+Aufgaben sind Hintergrundarbeit: Das Chatmodell greift nur, wenn weder
+Aufgabe noch Agent noch Hintergrund-Standard etwas vorgeben.
 Die Liste je Zelle enthält die Modelle aus `agents.defaults.models` und den
 agenteneigenen `models`, einschließlich des primären Modells und der
 konfigurierten Fallbacks. Aliase werden angezeigt.

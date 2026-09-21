@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.15.0-hermes.0",
+  "version": "7.15.3-hermes.0",
   "kind": "memory",
   "cliCommands": [
     {
@@ -2890,7 +2890,7 @@
           "flashbulbEncoding": {
             "type": "boolean",
             "default": false,
-            "description": "Flashbulb encoding (memoryStrength 0.95, half-life floor 3650 days instead of the pre-branch 90; the emotion-refine path additionally marks memoryClass 'flashbulb'). Reserved for Phase 3, after a pilot run calibrates the 0.70 threshold against a real importance distribution. Default off keeps the deploy behaviour-neutral on both call sites."
+            "description": "Blitzlicht-Kodierung: Eine Erinnerung, deren Blitzlicht-Wert (0,5 · emotionale Intensität + 0,5 · Wichtigkeit) die Schwelle 0,80 erreicht, bekommt Gedächtnisstärke 0,95, eine Mindest-Halbwertszeit von 3650 Tagen statt 90 und die Klasse 'flashbulb'. Die Schwelle stammt aus dem Phase-3-Pilotlauf vom 21.09.2026 über 24.509 aktive Zeilen: 0,80 trifft 1,8 % der Zeilen der letzten 30 Tage (Zielgröße laut scripts/importance-metrics.mjs: unter 2 %), die vorherigen 0,70 hätten 6,4 % getroffen. Entschieden wird einmal je Zeile, wenn das Modellurteil aus Tier 3 zum ersten Mal vorliegt — der emotion-refine-Cron liest nur Zeilen mit pending-Status und setzt sie danach auf final, sie verlassen die Warteschlange dauerhaft. Der Capture-Pfad selbst brennt praktisch nie ein: Dort liegt nur die Tier-2-Heuristik vor, die auf echten Texten höchstens 0,60 Intensität erreicht. Bestandszeilen auf 'final' werden nie nachträglich eingebrannt. Vorgabe aus, weil die Wirkung praktisch unumkehrbar ist: Eine Halbwertszeit von zehn Jahren nimmt der Bereinigung jeden Zugriff."
           }
         }
       }

@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { applyFlashbulbEncoding, FLASHBULB_HALF_LIFE_DAYS } from "../lib/memory-dynamics.js";
+import { readFileSync } from "node:fs";
+import { applyDynamicsDefaults, applyFlashbulbEncoding, FLASHBULB_HALF_LIFE_DAYS, FLASHBULB_THRESHOLD } from "../lib/memory-dynamics.js";
 
 describe("flashbulb encoding", () => {
   const now = Date.UTC(2026, 8, 19);
@@ -24,5 +25,31 @@ describe("flashbulb encoding", () => {
   it("never shortens an existing longer half-life", () => {
     const patch = applyFlashbulbEncoding({ emotionalIntensity: 0.9, importance: 0.8 }, now, 0.7, 36500);
     assert.strictEqual(patch.halfLifeDays, 36500);
+  });
+});
+
+describe("Blitzlicht-Schwelle (Phase 3)", () => {
+  it("steht auf 0,80 und wird als Vorgabe benutzt, nicht als Zahl im Aufruf", () => {
+    assert.strictEqual(FLASHBULB_THRESHOLD, 0.80);
+    const now = Date.now();
+    // Genau an der Schwelle feuert es, knapp darunter nicht.
+    assert.ok(applyFlashbulbEncoding({ emotionalIntensity: 0.9, importance: 0.7 }, now, undefined, 180));
+    assert.strictEqual(applyFlashbulbEncoding({ emotionalIntensity: 0.9, importance: 0.69 }, now, undefined, 180), null);
+    // Der Capture-Pfad nimmt dieselbe Konstante: 0,70 feuerte frueher, jetzt nicht mehr.
+    const unter = applyDynamicsDefaults({ id: "u", category: "project", emotionalIntensity: 0.9, importance: 0.5 }, now, {}, { flashbulbEncodingEnabled: true });
+    assert.notStrictEqual(unter.memoryClass, "flashbulb");
+    const drueber = applyDynamicsDefaults({ id: "d", category: "project", emotionalIntensity: 0.9, importance: 0.7 }, now, {}, { flashbulbEncodingEnabled: true });
+    assert.strictEqual(drueber.memoryClass, "flashbulb");
+  });
+
+  it("das Schema nennt Schwelle und Herkunft", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
+    const text = manifest.configSchema.properties.memoryDynamics.properties.flashbulbEncoding.description;
+    assert.match(text, /0,80/);
+    assert.match(text, /Phase-3-Pilotlauf/);
+    // 7.15.3: Entschieden wird einmal je Zeile im Refine-Pfad, nicht beim
+    // Erfassen — der Capture-Pfad erreicht die Schwelle mit Tier 2 nie.
+    assert.match(text, /einmal je Zeile/);
+    assert.match(text, /nie nachträglich eingebrannt/);
   });
 });
