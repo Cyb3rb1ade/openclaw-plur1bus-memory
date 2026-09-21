@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.15.2 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.15.3 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.15.2**, running in production on OpenClaw
+Current source version: **7.15.3**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,20 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.15.3 — the burn-in decision is back where it belongs
+
+7.15.2 removed flashbulb encoding from the emotion-refine path on the premise
+that the cron re-decides hourly over the whole store. It does not: its query
+reads only rows with `emotionStatus = 'pending_t3' OR importanceStatus =
+'pending'` and sets both to `final` afterwards, so a row leaves the queue for
+good — 15 of 24,509 active rows were in it when measured. The decision was
+always made exactly once per row.
+
+Without that path nothing burned in at all: the capture path only has the
+tier-2 heuristic, which reaches at most 0.60 intensity on real text, so the
+0.80 threshold was never met — 0.00 per day measured against 1.14 per day with
+the model's judgement. The threshold itself stays at 0.80.
 
 ### New in v7.15.2 — flashbulb encoding, calibrated
 
