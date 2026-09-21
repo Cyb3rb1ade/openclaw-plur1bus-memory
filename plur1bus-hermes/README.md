@@ -2,7 +2,7 @@
 
 This directory contains the installable Hermes memory-provider package for PLUR1BUS.
 
-Hermes build candidate: **7.15.4-hermes.0**, Python **7.15.4**.
+Hermes build candidate: **7.15.4-hermes.1**, Python **7.15.4**.
 Recent feature/fix coverage and intentional host differences are documented in
 [the .61–.69 delta review and follow-up fixes](../docs/audits/hermes-7.12.69-delta-review.md).
 The retained historical contract matrices describe earlier implementation stages;
