@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.15.3 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.15.4 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.15.3**, running in production on OpenClaw
+Current source version: **7.15.4**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,27 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.15.4 — the health scan vouches for the agent inventory
+
+The gc cap may never drop below the largest store an agent currently holds, and
+the dashboard checks a proposed cap against `cards.byAgent`. But a partition
+whose row count failed was *removed* from that list rather than reported as
+unknown, and a directory name the public-id contract rejects never entered it.
+The list looked complete while the largest store could be the missing one, so
+the guard compared against too small a number and let a destructive cap
+through. The scan now carries `cards.agentCountsComplete`, and the guard refuses
+unless it is explicitly `true` — a layer that drops the flag refuses rather than
+permits. This is deliberately separate from `agentListingsComplete`, which
+answers a different question for `byPrimaryAgent` (are the ids known?) and stays
+exact there.
+
+Refusing with a reason: that case used to surface as `denied_value` ("outside
+the allowed range"), which is not what happened. It has its own code,
+`denied_unknown_count`, and its own message.
+
+Known limit: the capacity table still omits an agent whose count failed instead
+of showing it as unknown. That is cosmetic and predates this release.
 
 ### New in v7.15.3 — the burn-in decision is back where it belongs
 

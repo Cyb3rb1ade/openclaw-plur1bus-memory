@@ -5,6 +5,32 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.15.4] — 2026-09-21
+
+### Behoben
+
+- **Der Gesundheitsscan bürgt jetzt für den Agent-Bestand.** Die Obergrenze der
+  Speicherbereinigung darf nie unter den größten laufenden Bestand fallen; sie
+  prüft das gegen `cards.byAgent`. Scheiterte dort die Zählung einer Partition
+  (`partition_count_failed`, `partition_limit_reached`) oder verwarf der Scan
+  einen Verzeichnisnamen, den der Kennungsvertrag ablehnt
+  (`partition_id_unsupported`), fiel der betroffene Agent **spurlos** aus der
+  Liste — kein `null`, keine Zeile. Die Liste sah vollständig aus, und der
+  Wächter rechnete gegen ein zu niedriges Maximum. Genau der größte Speicher
+  konnte der fehlende sein. Der Scan trägt das Wissen jetzt als
+  `cards.agentCountsComplete` mit; der Wächter verweigert, solange es nicht
+  ausdrücklich `true` ist. Unabhängig von `agentListingsComplete`, das für
+  `byPrimaryAgent` eine andere Frage beantwortet (kennen wir die Kennungen?)
+  und dort exakt bleibt.
+- **Die Oberfläche nennt den echten Grund.** Die Absage bei unbekanntem Bestand
+  lief unter `denied_value` und wurde als „außerhalb des erlaubten Bereichs"
+  erklärt — im Fenster nach jedem Neustart also mit einer falschen Begründung.
+  Sie hat mit `denied_unknown_count` einen eigenen Code und einen eigenen Text.
+
+Auf diesem Host nachgemessen: 58 Agent-Partitionen, alle Kennungen gültig, 70
+von 128 Partitionen geprüft, `agentCountsComplete: true` — die Steuerung bleibt
+bedienbar.
+
 ## [7.15.3] — 2026-09-21
 
 ### Behoben

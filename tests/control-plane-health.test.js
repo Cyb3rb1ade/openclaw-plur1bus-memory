@@ -42,6 +42,9 @@ describe("PLUR1BUS control-plane health inspector", () => {
       status: "ready",
       namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 7 }],
       cards: {
+        // The hand-written scan result above does not vouch for its inventory,
+        // so the normalizer reports it as incomplete rather than assuming it.
+        agentCountsComplete: false,
         byAgent: [{ id: "agent-a", cards: 5 }],
         byWorkspace: [{ id: "workspace:v1:alpha", cards: 2 }],
         byUser: [{ id: "user:v1:alpha", cards: 1 }],
@@ -208,7 +211,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
     assert.deepStrictEqual(snapshot, {
       status: "degraded",
       namespaces: [],
-      cards: { byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
+      cards: { agentCountsComplete: false, byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
       storage: { bytes: null, complete: false },
       lastError: { component: "health", code: "health_scan_failed" },
       observedAt: 99,
@@ -251,6 +254,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
         { id: "shared-users", dimensions: 768, rows: 1 },
       ],
       cards: {
+        agentCountsComplete: true,
         byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
         byWorkspace: [{ id: "workspace:v1:alpha", cards: 2 }],
         byUser: [{ id: "u-0123456789abcdef", cards: 1 }],
@@ -292,7 +296,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
     assert.deepStrictEqual(await inspector.snapshot(), {
       status: "degraded",
       namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 0 }],
-      cards: { byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
+      cards: { agentCountsComplete: true, byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
       storage: { bytes: null, complete: false },
       lastError: { component: "storage", code: "storage_measure_failed" },
       observedAt: 77,
@@ -327,6 +331,9 @@ describe("PLUR1BUS control-plane health inspector", () => {
         { id: "shared-users", dimensions: 768, rows: 1 },
       ],
       cards: {
+        // The dropped id "55736530" sits in the user root; the agent listing is
+        // untouched, so the agent inventory is still vouched for.
+        agentCountsComplete: true,
         byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
         byWorkspace: [],
         byUser: [{ id: "u-0123456789abcdef", cards: 1 }],
@@ -335,6 +342,35 @@ describe("PLUR1BUS control-plane health inspector", () => {
       storage: { bytes: 9_876, complete: true },
       lastError: { component: "health", code: "partition_id_unsupported" },
     });
+  });
+
+  // Beides entfernt den Agenten *spurlos* aus byAgent — kein null, keine Zeile.
+  // Wer den Bestand als Ganzes braucht (die GC-Obergrenze tut das), kann eine
+  // Abwesenheit nicht sehen; deshalb sagt der Scan es hier ausdruecklich.
+  it("withdraws its vouch when an agent partition is dropped or cannot be counted", async () => {
+    const scanWith = (overrides) => createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      maxPartitions: 8,
+      listPartitions: async () => ["agent-a", "agent-b"],
+      inspectRows: async () => 3,
+      measureStorage: async () => ({ bytes: 1, complete: true }),
+      ...overrides,
+    });
+
+    const dropped = await scanWith({ listPartitions: async () => ["agent-a", "55736530"] })();
+    assert.equal(dropped.cards.agentCountsComplete, false, "verworfene Kennung");
+    assert.deepStrictEqual(dropped.cards.byAgent, [{ id: "agent-a", cards: 3 }], "der Rest wird weiter gezaehlt");
+
+    const uncounted = await scanWith({
+      inspectRows: async ({ partitionId }) => { if (partitionId === "agent-b") throw new Error("lance is busy"); return 3; },
+    })();
+    assert.equal(uncounted.cards.agentCountsComplete, false, "gescheiterte Zaehlung");
+    assert.deepStrictEqual(uncounted.cards.byAgent, [{ id: "agent-a", cards: 3 }], "agent-b fehlt spurlos");
+
+    const limited = await scanWith({ maxPartitions: 1 })();
+    assert.equal(limited.cards.agentCountsComplete, false, "Partitionsgrenze erreicht");
+
+    assert.equal((await scanWith({})()).cards.agentCountsComplete, true, "vollstaendiger Lauf buergt");
   });
 });
 
