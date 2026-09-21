@@ -234,3 +234,40 @@ test("die Karten zeigen ihre Einstellungen; ohne Schreibrecht ohne Formular", as
   assert.doesNotMatch(readonly, /value="setting\.set"/);
   assert.match(readonly, /<select[^>]*name="value"[^>]*disabled/);
 });
+
+// Die zwei Recall-Regler. Belegt sind sie nicht: die LOCOMO-Laeufe vom
+// 20.09.2026 massen 89,2 % Belegquote bei topN 15 mit 40 Kandidaten, aber
+// nie einen anderen Punkt im Feld. Der Bereich zwischen 40 und 100
+// Kandidaten ist unbetreten, und genau dafuer sind die Regler da.
+test("die Recall-Regler liegen auf der Recall-Karte und spiegeln den Code-Standard", () => {
+  for (const id of ["recall.candidateTopK", "recall.maxPromptMemories"]) {
+    const setting = dashboardSetting(id);
+    assert.ok(setting, `${id} fehlt in der Tabelle`);
+    assert.equal(setting.card, "recall", `${id} gehoert auf die Recall-Karte`);
+    assert.equal(setting.type, "number");
+    assert.equal(setting.min, 5, `${id}: Untergrenze`);
+    assert.equal(setting.max, 100, `${id}: Obergrenze, die harte Klemme der Pipeline`);
+    assert.equal(setting.integer, true, `${id}: nur ganze Zahlen`);
+    // Sonst zeigt die unkonfigurierte Karte eine andere Zahl an, als die
+    // Pipeline rechnet.
+    assert.equal(setting.defaultValue, schemaNode(setting.path).default, `${id}: Vorgabe weicht vom Schema-Standard ab`);
+  }
+});
+
+test("die Recall-Regler nehmen 5 bis 100 und sonst nichts", () => {
+  for (const id of ["recall.candidateTopK", "recall.maxPromptMemories"]) {
+    const setting = dashboardSetting(id);
+    for (const bad of ["4", "101", "0", "-1", "12.5", "abc", ""]) {
+      assert.equal(parseSettingValue(setting, bad).ok, false, `${id}: ${bad} haette abgelehnt werden muessen`);
+    }
+    for (const good of ["5", "40", "100"]) {
+      assert.equal(parseSettingValue(setting, good).ok, true, `${id}: ${good} haette angenommen werden muessen`);
+    }
+  }
+});
+
+test("beide Recall-Regler erscheinen als Formular im Webinterface", async () => {
+  const html = await render({ recall: { candidateTopK: 70, maxPromptMemories: 15 } }, true);
+  assert.match(html, /name="setting" value="recall\.candidateTopK"[\s\S]*?<input type="number"[^>]*value="70"[^>]*min="5"[^>]*max="100"/);
+  assert.match(html, /name="setting" value="recall\.maxPromptMemories"[\s\S]*?<input type="number"[^>]*value="15"[^>]*min="5"[^>]*max="100"/);
+});
