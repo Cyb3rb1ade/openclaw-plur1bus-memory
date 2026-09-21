@@ -108,3 +108,39 @@ def test_parent_trust_and_tombstone_apply_to_every_child(tmp_path):
         assert table.count_rows() == before
     finally:
         runtime.shutdown()
+
+
+@pytest.mark.parametrize("component", ["_store_metadata", "_write_obsidian_note", "_build_graph_edges",
+                                        "_classify_materialized_memory"])
+def test_retry_repairs_materialization_after_canonical_insert(tmp_path, monkeypatch, component):
+    from plur1bus_hermes.runtime import Plur1busRuntime
+    from plur1bus_hermes.turn_identity import mint_capture_identity
+    runtime = Plur1busRuntime(tmp_path, {
+        "embedding": {"provider": "omlx", "model": "x", "dimensions": 4}}, "main")
+    runtime._embedding.embed = lambda text: [0.1, 0.2, 0.3, 0.4]
+    original = getattr(runtime._domain, component)
+    def fail(*args, **kwargs):
+        raise RuntimeError("materialization interrupted")
+    monkeypatch.setattr(runtime._domain, component, fail)
+    capture_id, captured_at = mint_capture_identity()
+    kwargs = dict(capture_id=capture_id, captured_at=captured_at,
+                  capture_payload={"chunkingPlan": capture_options(runtime.config)})
+    text = "\n".join(f"- Durable independent statement number {i}." for i in range(4))
+    try:
+        with pytest.raises(RuntimeError, match="materialization interrupted"):
+            runtime._capture_turn(text, "", "s", **kwargs)
+        table, _ = runtime._table(create=False)
+        assert table.count_rows() == 1
+        monkeypatch.setattr(runtime._domain, component, original)
+        runtime._capture_turn(text, "", "s", **kwargs)
+        runtime._capture_turn(text, "", "s", **kwargs)
+        table, _ = runtime._table(create=False)
+        assert table.count_rows() == 5
+        row = table.to_arrow().to_pylist()[0]
+        selector = runtime._domain._scope_selector(record=row)
+        assert len([r for r in runtime._domain._metadata_rows_for_scope(selector)
+                    if r.get("id") == row["id"]]) == 1
+        assert (runtime._domain._scope_workspace_dir(selector) /
+                "plur1bus/memories" / (row["id"] + ".md")).is_file()
+    finally:
+        runtime.shutdown()

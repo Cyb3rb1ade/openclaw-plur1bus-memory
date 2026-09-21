@@ -23,6 +23,11 @@ Status: **not release-ready**; no productive profile changed, no public release.
   profile no longer changes other profiles through root-config inheritance.
   Unrelated nested defaults and later credential rotation remain inherited;
   explicitly supplied runtime configuration retains precedence.
+- Stable segmented-capture retries now repair missing metadata, mirrors and
+  graph materialization before acknowledgement. Four injected component-boundary
+  failures recover without duplicate canonical rows. Conflicting materializations
+  remain fail-closed; the legacy unsplit capture path and intra-journal crash
+  boundaries still need separate review.
 
 ## Verification
 

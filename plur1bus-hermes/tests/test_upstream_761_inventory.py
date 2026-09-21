@@ -42,7 +42,7 @@ class Upstream761InventoryTests(unittest.TestCase):
         changed_769 = {"plur1bus-hermes/src/plur1bus_hermes/" + name for name in
                        ("domain.py", "dynamics.py", "runtime.py", "jobs.py", "llm_backend.py")}
         changed_715 = {"plur1bus-hermes/src/plur1bus_hermes/" + name for name in
-                       ("migrate.py", "workspace_migrate.py", "provider.py")}
+                       ("migrate.py", "workspace_migrate.py", "provider.py", "materialization_repair.py")}
         changed_715.update({"hermes-dashboard/plur1bus/dashboard/plugin_api.py",
                             "hermes-dashboard/plur1bus/dashboard/dist/index.js",
                             "hermes-dashboard/plur1bus/desktop/plugin.js"})

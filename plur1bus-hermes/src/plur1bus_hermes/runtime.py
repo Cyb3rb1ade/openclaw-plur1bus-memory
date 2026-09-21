@@ -1968,6 +1968,14 @@ class Plur1busRuntime:
                         or normalize_timestamp(row.get("expiresAt")) != expiry_ms
                         or json.loads(row.get("mergedFrom") or "[]") != (merged_from or [])):
                         raise ValueError("stable memory identifier conflicts with existing record")
+                    # A previous attempt can have committed the canonical row
+                    # before metadata/mirror/graph materialization failed. Do
+                    # not acknowledge that retry merely because its ID exists.
+                    from .materialization_repair import repair_materialization
+                    repaired = repair_materialization(self._domain, row, existing_table,
+                                                       importance=importance)
+                    if not repaired.get("complete"):
+                        raise ValueError("stable memory materialization requires review")
                     return record_id
         vector = self._embedding.embed(content)
         if record_id is None and merged_from is None and importance is None and not chunk_group_id:

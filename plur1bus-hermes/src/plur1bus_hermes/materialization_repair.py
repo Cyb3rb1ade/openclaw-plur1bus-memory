@@ -11,7 +11,8 @@ from .validation import safe_memory_id, resolve_inside
 from .writer_lock import writer_lock
 
 
-def repair_materialization(domain: Any, record: dict[str, Any], table: Any) -> dict[str, Any]:
+def repair_materialization(domain: Any, record: dict[str, Any], table: Any,
+                           *, importance: float | None = None) -> dict[str, Any]:
     """Fill missing scoped metadata, mirror and graph entries without overwrites."""
     report = {"complete": False, "repaired": [], "conflicts": []}
     identifier = safe_memory_id(record.get("id"))
@@ -26,7 +27,7 @@ def repair_materialization(domain: Any, record: dict[str, Any], table: Any) -> d
             report["conflicts"].append("metadata")
             return report
         if not rows:
-            domain._store_metadata(record)
+            domain._store_metadata(record, importance=importance)
             report["repaired"].append("metadata")
         workspace = domain._scope_workspace_dir(selector)
         raw_note = workspace / "plur1bus" / "memories" / f"{identifier}.md"
