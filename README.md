@@ -16,6 +16,10 @@ Existing host compatibility evidence is retained in the
 [compatibility contract](docs/compatibility-openclaw.md), but is not fresh
 release verification.
 
+The bundled OpenClaw JavaScript plugin requires the same Node as its host:
+`>=24.16.0 <25 || >=26.1.0`. The native Hermes memory provider runs in Python;
+this Node floor applies to the npm package and JavaScript verification tools.
+
 ### Web interface
 
 PLUR1BUS registers its own **"PLUR1BUS" tab in OpenClaw's Control UI**
