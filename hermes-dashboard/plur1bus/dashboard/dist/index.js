@@ -37,6 +37,53 @@
         React.createElement("button", { disabled: busy || !review.files.length, onClick: confirm }, "Import reviewed notes")) : null);
   }
 
+  function SettingsPanel() {
+    const [data, setData] = React.useState(null), [review, setReview] = React.useState(null);
+    const [notice, setNotice] = React.useState(""), [busy, setBusy] = React.useState(false);
+    async function load() {
+      try { setData(await json("/settings")); }
+      catch (_error) { setNotice("Settings unavailable for this authenticated profile."); }
+    }
+    React.useEffect(function () { load(); }, []);
+    async function preview(identifier, value) {
+      if (!data || busy) return;
+      setBusy(true); setReview(null); setNotice("");
+      try {
+        setReview(await json("/settings/preview", { method: "POST",
+          headers: { "Content-Type": "application/json", "X-Plur1bus-Confirm": "settings-preview" },
+          body: JSON.stringify({ identifier, value, revision: data.revision }) }));
+      } catch (_error) { setNotice("Setting changed or unavailable. Refresh before reviewing again."); }
+      finally { setBusy(false); }
+    }
+    async function save() {
+      if (!review || busy) return;
+      setBusy(true);
+      try {
+        await json("/settings", { method: "POST",
+          headers: { "Content-Type": "application/json", "X-Plur1bus-Confirm": "settings" },
+          body: JSON.stringify({ identifier: review.identifier, value: review.value,
+            revision: review.revision, nonce: review.nonce }) });
+        setNotice("Saved. Restart the Hermes gateway to activate; running state is not yet verified.");
+        await load();
+      } catch (_error) { setNotice("Save rejected. Review the setting again."); }
+      finally { setReview(null); setBusy(false); }
+    }
+    return React.createElement("section", { className: "pb-workshop" },
+      React.createElement("h2", null, "Features, storage mode & task models"),
+      React.createElement("p", null, "Saved settings for the active profile — not a live gateway status. Empty model selection inherits the default."),
+      notice ? React.createElement("p", { role: "status" }, notice) : null,
+      data ? React.createElement("div", null, data.settings.map(setting => React.createElement("label", { key: setting.id },
+        setting.id + " ", React.createElement("select", { disabled: busy, value: String(setting.choices.indexOf(setting.value)),
+          onChange: event => preview(setting.id, setting.choices[Number(event.target.value)]) },
+        setting.choices.map((value, index) => React.createElement("option", { key: index, value: String(index) },
+          value === "" ? "Inherit default" : String(value))))))) : null,
+      review ? React.createElement("div", { className: "pb-review" },
+        React.createElement("p", null, "Agent " + review.agentId + ": " + review.identifier + " → " + String(review.value)),
+        React.createElement("p", null, "Requires a gateway restart. No memory records will be migrated or deleted."),
+        React.createElement("button", { disabled: busy, onClick: () => setReview(null) }, "Cancel"),
+        React.createElement("button", { disabled: busy, onClick: save }, "Confirm save")) : null);
+  }
+
   function StatusPage() {
     const d = React.useState(null), data = d[0], setData = d[1];
     const p = React.useState([]), proposals = p[0], setProposals = p[1];
@@ -102,6 +149,7 @@
 
       reviewed ? React.createElement(Panel, { className: "pb-review" }, React.createElement(Content, null, React.createElement("h2", null, ({ publish: "Review profile-wide publication", approve: "Review approval", reject: "Reject proposal", withdraw: "Withdraw generated skill", inspect: "Mined skill" })[review.verb]), review.warning ? React.createElement("p", { className: "pb-warning" }, review.warning) : null, React.createElement("dl", null, field("Skill", reviewed.skillName), field("Status", reviewed.status), field("Evidence records", Array.isArray(reviewed.evidence) ? reviewed.evidence.length : 0)), React.createElement("h3", null, reviewed.title || "Untitled proposal"), React.createElement("p", null, reviewed.description || "No description"), React.createElement("p", null, reviewed.benefit || ""), React.createElement("pre", { className: "pb-instructions" }, reviewed.instructions || "No instructions"), React.createElement("div", { className: "pb-actions" }, React.createElement(Button, { onClick: function () { setReview(null); }, disabled: busy }, "Cancel"), review.verb !== "inspect" ? React.createElement(Button, { onClick: confirm, disabled: busy }, busy ? "Submitting…" : ({ publish: "Confirm publish", approve: "Confirm approval", reject: "Confirm rejection", withdraw: "Confirm withdrawal" })[review.verb]) : null))) : null,
       data ? React.createElement(ObsidianPanel) : null,
+      data ? React.createElement(SettingsPanel) : null,
       loading ? React.createElement("p", { className: "pb-loading" }, "Reading active memory status…") : null);
   }
   registry.register("plur1bus", StatusPage);

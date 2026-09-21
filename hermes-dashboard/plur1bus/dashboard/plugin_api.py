@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import hmac
 import re
 import secrets
@@ -172,6 +173,71 @@ class _RetrievalPreview(BaseModel):
     kind: str = Field(pattern="^(embedding|reranker|reranker-prepare|activate)$")
     target: dict = Field(default_factory=dict, max_length=20)
     job: str = Field(default="", max_length=64)
+
+
+class _SettingChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    identifier: str = Field(max_length=100)
+    value: bool | str
+    revision: str = Field(pattern="^[a-f0-9]{64}$")
+    nonce: str = Field(default="", max_length=128)
+
+
+def _settings_context(view):
+    return {"profile": view.profile, "agentId": view.agent_id,
+            "home": str(view.hermes_home), "scopeKey": view.scope_binding.scope_key}
+
+
+def _settings_actor(request, verb=None):
+    if "/desktop/settings" in request.url.path:
+        return _desktop_actor(request)
+    actor = _actor(request)
+    if verb:
+        _same_origin_confirmation(request, verb)
+    return actor
+
+
+@router.get("/settings")
+@router.get("/desktop/settings")
+def settings_options(request: Request):
+    _settings_actor(request)
+    from plur1bus_hermes.settings_admin import public_settings
+    return public_settings(_active_runtime_view())
+
+
+@router.post("/settings/preview")
+@router.post("/desktop/settings/preview")
+def settings_preview(body: _SettingChange, request: Request):
+    actor = _settings_actor(request, "settings-preview")
+    from plur1bus_hermes.settings_admin import validate_change
+    from plur1bus_hermes.retrieval_admin import context_revision
+    view = _active_runtime_view()
+    if context_revision(view) != body.revision:
+        raise HTTPException(409, "settings_changed")
+    try:
+        validate_change(view, body.identifier, body.value)
+    except ValueError:
+        raise HTTPException(400, "invalid_setting") from None
+    digest = hashlib.sha256(json.dumps([body.identifier, body.value], sort_keys=True).encode()).hexdigest()
+    nonce = _issue_nonce(actor=actor, context=_settings_context(view), verb="settings",
+                         proposal_id=digest, revision=body.revision)
+    return {"nonce": nonce, "agentId": view.agent_id, "identifier": body.identifier,
+            "value": body.value, "revision": body.revision, "restartRequired": True}
+
+
+@router.post("/settings")
+@router.post("/desktop/settings")
+def settings_commit(body: _SettingChange, request: Request):
+    actor = _settings_actor(request, "settings")
+    from plur1bus_hermes.settings_admin import save_setting
+    view = _active_runtime_view()
+    digest = hashlib.sha256(json.dumps([body.identifier, body.value], sort_keys=True).encode()).hexdigest()
+    _consume_nonce(nonce=body.nonce, actor=actor, context=_settings_context(view), verb="settings",
+                   proposal_id=digest, revision=body.revision)
+    try:
+        return save_setting(view, body.identifier, body.value, body.revision)
+    except (ValueError, OSError):
+        raise HTTPException(409, "settings_save_failed") from None
 
 
 class _RetrievalCommit(BaseModel):

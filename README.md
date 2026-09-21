@@ -6,7 +6,7 @@ PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolate
 
 Source version: **7.15.3-hermes.0** (Python distributions:
 **7.15.3**). It integrates the pinned upstream commit
-`8c29aeab9e03691d3a07e31756b3f23addf9bba1` while retaining the native Hermes
+`51c49a52ae001ed6ea5440e625bbf77ae2115af7` while retaining the native Hermes
 payload. See the [Hermes delta review](docs/audits/hermes-7.15.3-delta-review.md)
 and [platform installation guide](distribution/INSTALLATION.de.md).
 This candidate is not yet published. Build receipts and checksums identify
@@ -77,7 +77,7 @@ workflow marks "Dry run" as **next** rather than **current**.
 Capture splitting no longer drops the text before the first list item or
 statements shorter than eight characters (#175).
 
-### New in v7.15.0 — switches and decisions on the cards, capacity at a glance
+### New in v7.15.3 — switches and decisions on the cards, capacity at a glance
 
 Every feature card now carries its own switch and the operating decisions
 that belong to it — one row per setting with a select or number field and a

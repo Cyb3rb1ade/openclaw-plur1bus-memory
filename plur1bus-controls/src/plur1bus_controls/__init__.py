@@ -3,6 +3,6 @@
 from .plugin import Plur1busControlsPlugin, register
 from .service import PLUR1BUS_CONTROLS_CONTAINER
 
-__version__ = "7.15.0"
+__version__ = "7.15.3"
 
 __all__ = ["PLUR1BUS_CONTROLS_CONTAINER", "Plur1busControlsPlugin", "register", "__version__"]

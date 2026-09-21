@@ -25,10 +25,10 @@ class Upstream761InventoryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("`" + path + "`", review)
                 if path.startswith(("lib/", "tests/")) and path != "tests/release-750-compat.test.js":
-                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.15.0:" + path))
+                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.15.3:" + path))
 
     def test_dependency_graph_matches_official_release(self):
-        upstream = json.loads(git("show", "v7.15.0:package-lock.json"))
+        upstream = json.loads(git("show", "v7.15.3:package-lock.json"))
         current = json.loads((ROOT / "package-lock.json").read_text())
         current["version"] = upstream["version"]
         current["packages"][""]["version"] = upstream["packages"][""]["version"]
@@ -43,6 +43,9 @@ class Upstream761InventoryTests(unittest.TestCase):
                        ("domain.py", "dynamics.py", "runtime.py", "jobs.py", "llm_backend.py")}
         changed_715 = {"plur1bus-hermes/src/plur1bus_hermes/" + name for name in
                        ("migrate.py", "workspace_migrate.py")}
+        changed_715.update({"hermes-dashboard/plur1bus/dashboard/plugin_api.py",
+                            "hermes-dashboard/plur1bus/dashboard/dist/index.js",
+                            "hermes-dashboard/plur1bus/desktop/plugin.js"})
         for path in paths:
             if Path(path).name in metadata or path in changed_769 or path in changed_715:
                 continue

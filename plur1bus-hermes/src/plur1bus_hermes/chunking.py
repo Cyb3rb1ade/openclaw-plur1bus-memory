@@ -19,13 +19,17 @@ _BOUNDARY = re.compile(r"(?<=[.!?…])\s+(?!\d)")
 MAX_PARTS = 20
 
 
-def _bundle_short(parts: list[str]) -> list[str]:
+def _bundle_short(parts: list[str], version: int = 2) -> list[str]:
     result: list[str] = []
     pending = ""
     for part in parts:
         part = (pending + "\n" + part).strip() if pending else part.strip()
         if len(part) < 8:
-            pending = part
+            if version >= 2 and result:
+                result[-1] += "\n" + part
+                pending = ""
+            else:
+                pending = part
         else:
             result.append(part)
             pending = ""
@@ -37,7 +41,7 @@ def _bundle_short(parts: list[str]) -> list[str]:
     return result
 
 
-def _structured(text: str, pattern: re.Pattern[str]) -> list[str]:
+def _structured(text: str, pattern: re.Pattern[str], version: int) -> list[str]:
     # Retain the original marker and prefix: both can carry semantics.
     groups: list[list[str]] = [[]]
     hits = 0
@@ -47,10 +51,10 @@ def _structured(text: str, pattern: re.Pattern[str]) -> list[str]:
             if groups[-1]:
                 groups.append([])
         groups[-1].append(line)
-    return _bundle_short(["\n".join(group) for group in groups]) if hits >= 2 else []
+    return _bundle_short(["\n".join(group) for group in groups], version) if hits >= 2 else []
 
 
-def plan_chunks(text: str) -> list[str]:
+def plan_chunks(text: str, version: int = 2) -> list[str]:
     """Return at most twenty ordered parts, preserving every non-whitespace token."""
     value = text.strip()
     paragraphs = [p for p in re.split(r"\n\s*\n", value) if p.strip()]
@@ -58,11 +62,11 @@ def plan_chunks(text: str) -> list[str]:
                     sum(bool(_LIST.match(line) or _HEADING.match(line)) for line in value.splitlines()))
     if sentences < 4:
         return [value]
-    parts = _structured(value, _LIST)
+    parts = _structured(value, _LIST, version)
     if len(parts) < 2:
-        parts = _structured(value, _HEADING)
+        parts = _structured(value, _HEADING, version)
     if len(parts) < 2:
-        parts = _bundle_short(paragraphs)
+        parts = _bundle_short(paragraphs, version)
     if len(parts) < 2 and sentences >= 8:
         # Match the upstream decimal/version boundary exclusion without a
         # variable-width Python lookbehind.
@@ -76,7 +80,7 @@ def plan_chunks(text: str) -> list[str]:
                 parts.append(line[start:pos])
                 start = match.end()
             parts.append(line[start:])
-        parts = _bundle_short(parts)
+        parts = _bundle_short(parts, version)
     if len(parts) < 2:
         return [value]
     step = max(1, math.ceil(len(parts) / MAX_PARTS))
@@ -85,7 +89,7 @@ def plan_chunks(text: str) -> list[str]:
 
 def capture_options(config: dict[str, Any]) -> dict[str, Any]:
     """Snapshot the splitting mode at admission, not when a delayed retry runs."""
-    return {"version": 1, "enabled": config.get("captureChunking") is not False,
+    return {"version": 2, "enabled": config.get("captureChunking") is not False,
             "keepWhole": config.get("captureChunkingMode") != "geteilt"}
 
 
@@ -93,12 +97,12 @@ def capture_rows(text: str, *, capture_id: str, agent_id: str, scope_key: str,
                  role: str, options: dict[str, Any]) -> list[dict[str, str]]:
     """Derive stable child identities using a validated versioned retry mode."""
     if (not isinstance(options, dict) or set(options) != {"version", "enabled", "keepWhole"}
-            or type(options["version"]) is not int or options["version"] != 1
+            or type(options["version"]) is not int or options["version"] not in {1, 2}
             or type(options["enabled"]) is not bool or type(options["keepWhole"]) is not bool):
         raise ValueError("invalid capture chunking plan")
     namespace = uuid.UUID(capture_id)
     origin = str(uuid.uuid5(namespace, f"{agent_id}:{scope_key}:{role}"))
-    parts = plan_chunks(text) if options["enabled"] else [text.strip()]
+    parts = plan_chunks(text, options["version"]) if options["enabled"] else [text.strip()]
     if len(parts) < 2:
         return [{"content": text.strip(), "sourceTurnId": origin, "chunkGroupId": "", "id": ""}]
     rows = []

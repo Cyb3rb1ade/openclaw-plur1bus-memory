@@ -6,6 +6,7 @@ from typing import Any
 
 DIMENSIONS = ("joy", "trust", "fear", "surprise", "sadness", "disgust", "anger", "anticipation")
 AGENT_BAND_MIN = 0.95
+FLASHBULB_THRESHOLD = 0.80
 
 
 def normalize_importance_status(value: Any) -> str:
@@ -57,7 +58,7 @@ def refine_patch(row: dict[str, Any], judgment: Any, now: int, *, flashbulb: boo
     patch = {"importanceStatus": "final", "emotionStatus": "final", "emotionalValence": emotions,
              "emotionalDominant": dominant, "emotionalIntensity": intensity}
     agent_band = _number(row.get("importance")) and row["importance"] >= AGENT_BAND_MIN
-    flash = flashbulb and (intensity + importance) * 0.5 >= 0.7
+    flash = flashbulb and (intensity + importance) * 0.5 >= FLASHBULB_THRESHOLD
     if not agent_band:
         patch.update(importance=importance, halfLifeDays=half_life_from_encoding(importance, flashbulb=flash),
                      coreMemoryReason=str(judgment.get("reason") or "")[:200])

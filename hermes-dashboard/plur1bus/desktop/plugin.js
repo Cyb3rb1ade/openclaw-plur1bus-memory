@@ -400,6 +400,53 @@ export function retrievalDefaults(provider, kind) {
     ...(provider === 'local-transformers' ? { localFilesOnly: true } : { baseUrl: '', apiKeyEnv: '' }) };
 }
 
+function FeatureSettings({ rest }) {
+  const request = useRequests(rest);
+  const [settings, setSettings] = React.useState(null), [review, setReview] = React.useState(null);
+  const [busy, setBusy] = React.useState(false), [notice, setNotice] = React.useState('');
+  React.useEffect(() => { setSettings(null); setReview(null); setNotice(''); }, [rest]);
+  async function load() {
+    setBusy(true); setReview(null);
+    const result = await request.current?.run('/desktop/settings');
+    setBusy(false);
+    if (!result || result.stale) return;
+    if (result.error) setNotice('Einstellungen sind nicht verfügbar.');
+    else setSettings(result.value);
+  }
+  async function preview(identifier, value) {
+    if (!settings || busy) return;
+    setBusy(true); setReview(null);
+    const result = await request.current?.run('/desktop/settings/preview', { method: 'POST',
+      body: { identifier, value, revision: settings.revision } });
+    setBusy(false);
+    if (!result || result.stale) return;
+    if (result.error) setNotice('Bitte Einstellungen neu laden und erneut prüfen.');
+    else setReview(result.value);
+  }
+  async function save() {
+    if (!review || busy) return;
+    setBusy(true);
+    const result = await request.current?.run('/desktop/settings', { method: 'POST', body: {
+      identifier: review.identifier, value: review.value, revision: review.revision, nonce: review.nonce } });
+    setBusy(false); setReview(null);
+    if (!result || result.stale) return;
+    setNotice(result.error ? 'Speichern abgelehnt; erneut prüfen.' :
+      'Gespeichert. Hermes-Gateway zum Aktivieren neu starten. Laufender Zustand noch nicht bestätigt.');
+    if (!result.error) await load();
+  }
+  return h('section', null, h('h2', null, 'Features, Speicherweise und Aufgabenmodelle'),
+    h('p', null, 'Gespeicherte Einstellungen des aktiven Profils, keine Bestätigung der laufenden Gateway-Konfiguration.'),
+    h('button', { disabled: busy, onClick: () => { void load(); } }, 'Einstellungen laden'),
+    notice ? h('p', { role: 'status' }, notice) : null,
+    ...(settings?.settings || []).map(setting => h('label', { key: setting.id }, setting.id + ' ',
+      h('select', { disabled: busy, value: String(setting.choices.indexOf(setting.value)),
+        onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
+      setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : String(value)))))),
+    review ? h('div', null, h('p', null, `${review.agentId}: ${review.identifier} → ${String(review.value)}`),
+      h('button', { disabled: busy, onClick: () => setReview(null) }, 'Abbrechen'),
+      h('button', { disabled: busy, onClick: () => { void save(); } }, 'Speichern bestätigen')) : null);
+}
+
 function RetrievalSettings({ rest }) {
   const request = useRequests(rest);
   const [settings, setSettings] = React.useState(null);
@@ -569,6 +616,7 @@ function Partition({ rest, profile }) {
         h('section', null, h('h2', null, 'Reranking'), h('dl', null,
           field('Provider', reranker.provider), field('Modell', reranker.model))))) : null,
     s ? h(RetrievalSettings, { rest }) : null,
+    s ? h(FeatureSettings, { rest }) : null,
     s ? h(MemoryBrowser, { rest }) : null,
     s ? h(Obsidian, { rest, refresh: () => { void reader.current?.load(); } }) : null,
     s ? h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,
