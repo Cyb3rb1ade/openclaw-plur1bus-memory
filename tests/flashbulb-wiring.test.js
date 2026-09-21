@@ -47,6 +47,9 @@ describe("Blitzlicht-Schwelle (Phase 3)", () => {
     const text = manifest.configSchema.properties.memoryDynamics.properties.flashbulbEncoding.description;
     assert.match(text, /0,80/);
     assert.match(text, /Phase-3-Pilotlauf/);
-    assert.match(text, /ausschließlich beim Erfassen/);
+    // 7.15.3: Entschieden wird einmal je Zeile im Refine-Pfad, nicht beim
+    // Erfassen — der Capture-Pfad erreicht die Schwelle mit Tier 2 nie.
+    assert.match(text, /einmal je Zeile/);
+    assert.match(text, /nie nachträglich eingebrannt/);
   });
 });

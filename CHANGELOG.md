@@ -5,6 +5,27 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Behoben
+
+- **Das Einbrennen im emotion-refine-Pfad ist zurück** — seine Entfernung in
+  7.15.2 beruhte auf einer falschen Annahme. Der Cron läuft **nicht** stündlich
+  über den gesamten Bestand: Seine Abfrage liest ausschließlich Zeilen mit
+  `emotionStatus = 'pending_t3' OR importanceStatus = 'pending'` und setzt beide
+  Felder danach auf `final`, womit die Zeile die Warteschlange dauerhaft
+  verlässt. Live nachgemessen: von 24.509 aktiven Zeilen standen **15** darin
+  (0,06 %). Die Entscheidung fiel dort also immer schon genau einmal je Zeile.
+- **Ohne diesen Pfad brannte gar nichts mehr ein.** Der Capture-Pfad entscheidet
+  mit der Tier-2-Heuristik, und die erreicht auf echten Texten höchstens 0,60
+  Intensität (Median 0,00, 90. Perzentil 0,57); für die Schwelle 0,80 bräuchte
+  es bei maximaler automatischer Wichtigkeit 0,66. In einer Woche mit 903 neuen
+  Zeilen kam diese Kombination kein einziges Mal vor — gemessen 0,00 pro Tag
+  gegenüber 1,14 pro Tag mit dem Modellurteil. Das Merkmal war damit wirkungslos.
+
+Die Schwelle **0,80** aus 7.15.2 bleibt: Sie stützt sich auf die gemessene
+Verteilung und ist von der falschen Annahme unberührt.
+
 ## [7.15.2] — 2026-09-21
 
 ### Geändert
