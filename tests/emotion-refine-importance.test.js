@@ -26,29 +26,38 @@ describe("refine patch", () => {
     assert.strictEqual(patch.halfLifeDays, 600);
   });
 
-  // Phase 3 (21.09.2026): Dieser Cron brennt nicht mehr ein, auch nicht mit
-  // Flag. Er lief stündlich über den ganzen Bestand und entschied jedes Mal
-  // neu — im Pilotlauf hätte er 10,3 % aller Zeilen rückwirkend auf zehn Jahre
-  // Halbwertszeit gesetzt. Einbrennen gehört in den Capture-Pfad, einmal je
-  // neuer Zeile; dieser Cron bewertet nur.
-  it("brennt auch bei hoher Intensität nicht ein (Flag an)", () => {
+  // 7.15.3: Hier faellt die Blitzlicht-Entscheidung, und hier faellt sie genau
+  // einmal — der Cron liest nur Zeilen mit pending-Status und setzt sie danach
+  // auf final. 7.15.2 hatte das Einbrennen hier entfernt, in der falschen
+  // Annahme, der Cron laufe stuendlich ueber den ganzen Bestand; gemessen am
+  // 21.09. standen 15 von 24.509 Zeilen in der Warteschlange (0,06 %). Ohne
+  // diesen Pfad brennt gar nichts mehr ein: Der Capture-Pfad hat nur die
+  // Tier-2-Heuristik (Maximum 0,60) und erreicht die Schwelle 0,80 nie.
+  it("brennt bei hoher Intensität ein (Flag an), Wert 0,875 >= 0,80", () => {
     const patch = buildRefinePatch({ id: "b", memoryStrength: 0.9, halfLifeDays: 180 },
       { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "" },
       now, { flashbulbEncodingEnabled: true });
-    assert.notStrictEqual(patch.halfLifeDays, FLASHBULB_HALF_LIFE_DAYS);
-    assert.strictEqual(patch.halfLifeDays, 600, "die Halbwertszeit kommt aus dem Importance-Band");
-    assert.strictEqual(Object.hasOwn(patch, "memoryStrength"), false, "die Stärke bleibt unberührt");
-    assert.strictEqual(Object.hasOwn(patch, "memoryClass"), false);
-    assert.strictEqual(Object.hasOwn(patch, "lastDynamicsAt"), false, "kein neuer Kodierungszeitpunkt");
+    assert.strictEqual(patch.halfLifeDays, FLASHBULB_HALF_LIFE_DAYS);
+    assert.strictEqual(patch.memoryStrength, 0.95);
+    assert.strictEqual(patch.memoryClass, "flashbulb");
   });
 
-  it("bewertet weiter Emotion und Wichtigkeit (Flag an)", () => {
+  it("brennt unterhalb der Schwelle nicht ein (Flag an), Wert 0,75 < 0,80", () => {
+    // Genau die vier Zeilen, die in der Nacht zum 21.09. unter 0,70 noch
+    // gebrannt haetten: 0,5*0,7 + 0,5*0,8 = 0,75.
+    const patch = buildRefinePatch({ id: "b3", memoryStrength: 0.9, halfLifeDays: 180 },
+      { ok: true, importance: 0.8, emotion: { emotionalDominant: "joy", emotionalIntensity: 0.7 }, reason: "" },
+      now, { flashbulbEncodingEnabled: true });
+    assert.strictEqual(patch.halfLifeDays, 600, "Halbwertszeit aus dem Importance-Band");
+    assert.strictEqual(Object.hasOwn(patch, "memoryClass"), false);
+    assert.strictEqual(Object.hasOwn(patch, "memoryStrength"), false);
+  });
+
+  it("senkt eine vorhandene Stärke nie (Flag an)", () => {
     const patch = buildRefinePatch({ id: "c", memoryStrength: 1.0, halfLifeDays: 180 },
       { ok: true, importance: 0.8, emotion: { emotionalDominant: "fear", emotionalIntensity: 0.95 }, reason: "Vorfall" },
       now, { flashbulbEncodingEnabled: true });
-    assert.strictEqual(patch.importance, 0.8);
-    assert.strictEqual(patch.emotionalIntensity, 0.95);
-    assert.strictEqual(patch.emotionalDominant, "fear");
+    assert.strictEqual(patch.memoryStrength, 1.0);
     assert.match(patch.coreMemoryReason, /Vorfall/);
   });
 
