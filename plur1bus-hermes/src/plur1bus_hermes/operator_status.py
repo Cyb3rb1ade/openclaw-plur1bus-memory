@@ -186,7 +186,10 @@ def read_operator_status(
         if binding is None:
             raise ValueError("runtime scope binding is unavailable")
         cards = table.count_rows(scope_where_clause(binding))
-        if not isinstance(cards, int) or cards < 0:
+        # Match the browser/upstream count contract. In Python bool is an int;
+        # neither booleans nor integers losing precision in JSON consumers are
+        # evidence of a successfully measured memory count.
+        if type(cards) is not int or not 0 <= cards <= 2**53 - 1:
             raise ValueError("invalid table row count")
         projection["storage"] = {"status": "ready", "cards": cards}
         projection["configured"] = bool(projection["embedding"]["configured"])

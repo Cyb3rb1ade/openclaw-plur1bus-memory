@@ -37,6 +37,22 @@ class _Database:
 
 
 class OperatorStatusTests(unittest.TestCase):
+    def test_7154_invalid_counts_stay_unknown_and_measured_empty_stays_zero(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            table = _Table()
+            runtime, connect = self._runtime(Path(temporary), table)
+            runtime.profile = "Coder"
+            for count in (True, False, -1, 1.5, "7", None, float("nan"), float("inf"), 2**53):
+                with self.subTest(count=count), patch.object(table, "count_rows", return_value=count):
+                    result = read_operator_status(runtime, connect=connect)
+                    self.assertIsNone(result["storage"]["cards"])
+                    self.assertIsNone(result["cards"]["byPrimaryAgent"][0]["cards"])
+            for count in (0, 7, 2**53 - 1):
+                with self.subTest(count=count), patch.object(table, "count_rows", return_value=count):
+                    result = read_operator_status(runtime, connect=connect)
+                    self.assertEqual(result["storage"]["cards"], count)
+                    self.assertEqual(result["storage"]["status"], "ready")
+
     def test_retry_budget_and_generation_revalidation_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             table = _Table()
