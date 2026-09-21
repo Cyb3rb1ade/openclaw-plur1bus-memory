@@ -46,6 +46,11 @@ class Upstream761InventoryTests(unittest.TestCase):
         changed_715.update({"hermes-dashboard/plur1bus/dashboard/plugin_api.py",
                             "hermes-dashboard/plur1bus/dashboard/dist/index.js",
                             "hermes-dashboard/plur1bus/desktop/plugin.js"})
+        # Reviewed native configuration redesign; both distributed UI harnesses
+        # exercise grouped controls, help associations and version placement.
+        # Keep every other historical artifact byte-exact.
+        changed_715.update({"hermes-dashboard/plur1bus/dashboard/dist/style.css",
+                            "hermes-dashboard/plur1bus/desktop/test-harness.mjs"})
         for path in paths:
             if Path(path).name in metadata or path in changed_769 or path in changed_715:
                 continue
