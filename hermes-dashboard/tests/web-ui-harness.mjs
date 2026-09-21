@@ -17,9 +17,9 @@ const context = vm.createContext({ window: {
   __HERMES_PLUGINS__: { register(name, page) { assert.equal(name, 'plur1bus'); component = page; } },
 } });
 vm.runInContext(await readFile(new URL('../plur1bus/dashboard/dist/index.js', import.meta.url), 'utf8'), context);
-function render(count, scopeType = 'agent-private') {
+function render(count, scopeType = 'agent-private', version) {
   cursor = 0;
-  data = { agentId: 'Coder', scopeType, storage: {}, cards: { byPrimaryAgent: [
+  data = { agentId: 'Coder', scopeType, version, storage: {}, cards: { byPrimaryAgent: [
     { id: 'Coder', profile: 'Coder', cards: count }, { id: 'foreign', profile: 'secret-profile', cards: 999 },
   ] } };
   return component();
@@ -40,4 +40,12 @@ for (const count of [0, 4, null, -1, '99']) {
   assert.match(text(tree), /Skill Workshop/, 'existing Workshop remains rendered');
 }
 assert.match(text(render(4, 'chat')), /No private primary-agent count available/);
+assert.match(text(render(4)), /Version unavailable/);
+assert.match(text(render(4, 'agent-private', '7.15.4')), /PLUR1BUS 7.15.4/);
+assert.equal(render(4, 'agent-private', '7.15.4').children.at(-1).type, 'footer');
+const settingsNode = render(4).children.find(node => typeof node?.type === 'function' && node.type.name === 'SettingsPanel');
+cursor = 0;
+data = { settings: [{ id: 'autoCapture', label: 'Automatisch speichern', group: 'Speicherung', value: true, choices: [true, false] }] };
+const settingsTree = settingsNode.type();
+assert.match(text(settingsTree), /Speicherung.*Automatisch speichern.*Enabled.*Disabled/);
 console.log('Distributed web UI renders scoped primary-agent counts, unknowns and retained Workshop.');

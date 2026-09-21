@@ -37,6 +37,13 @@ class _Database:
 
 
 class OperatorStatusTests(unittest.TestCase):
+    def test_version_is_loaded_backend_version_even_without_storage(self):
+        from plur1bus_hermes import __version__
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime, _ = self._runtime(Path(temporary), _Table())
+            result = read_operator_status(runtime, connect=lambda _: (_ for _ in ()).throw(OSError('offline')))
+            self.assertEqual(result['version'], __version__)
+
     def test_7154_invalid_counts_stay_unknown_and_measured_empty_stays_zero(self):
         with tempfile.TemporaryDirectory() as temporary:
             table = _Table()

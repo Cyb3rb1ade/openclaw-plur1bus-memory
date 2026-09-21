@@ -72,11 +72,15 @@
       React.createElement("h2", null, "Features, storage mode & task models"),
       React.createElement("p", null, "Saved settings for the active profile — not a live gateway status. Empty model selection inherits the default."),
       notice ? React.createElement("p", { role: "status" }, notice) : null,
-      data ? React.createElement("div", null, data.settings.map(setting => React.createElement("label", { key: setting.id },
-        setting.id + " ", React.createElement("select", { disabled: busy, value: String(setting.choices.indexOf(setting.value)),
+      data ? React.createElement("div", null, [...new Set(data.settings.map(setting => setting.group || "Features"))].map(group =>
+        React.createElement("details", { key: group, className: "pb-setting-group", open: group === "Speicherung" }, React.createElement("summary", null, group),
+        data.settings.filter(setting => (setting.group || "Features") === group).map(setting => React.createElement("div", { key: setting.id, className: "pb-setting-row" },
+        React.createElement("div", null, React.createElement("label", { htmlFor: "pb-" + setting.id }, setting.label || setting.id),
+          React.createElement("p", { id: "pb-help-" + setting.id, className: "pb-setting-help" }, setting.description || "Setting for the active profile.")),
+        React.createElement("select", { id: "pb-" + setting.id, "aria-describedby": "pb-help-" + setting.id, disabled: busy, value: String(setting.choices.indexOf(setting.value)),
           onChange: event => preview(setting.id, setting.choices[Number(event.target.value)]) },
         setting.choices.map((value, index) => React.createElement("option", { key: index, value: String(index) },
-          value === "" ? "Inherit default" : String(value))))))) : null,
+          value === "" ? "Inherit default" : value === true ? "Enabled" : value === false ? "Disabled" : setting.choiceLabels?.[value] || String(value))))))))) : null,
       review ? React.createElement("div", { className: "pb-review" },
         React.createElement("p", null, "Agent " + review.agentId + ": " + review.identifier + " → " + String(review.value)),
         React.createElement("p", null, "Requires a gateway restart. No memory records will be migrated or deleted."),
@@ -150,7 +154,8 @@
       reviewed ? React.createElement(Panel, { className: "pb-review" }, React.createElement(Content, null, React.createElement("h2", null, ({ publish: "Review profile-wide publication", approve: "Review approval", reject: "Reject proposal", withdraw: "Withdraw generated skill", inspect: "Mined skill" })[review.verb]), review.warning ? React.createElement("p", { className: "pb-warning" }, review.warning) : null, React.createElement("dl", null, field("Skill", reviewed.skillName), field("Status", reviewed.status), field("Evidence records", Array.isArray(reviewed.evidence) ? reviewed.evidence.length : 0)), React.createElement("h3", null, reviewed.title || "Untitled proposal"), React.createElement("p", null, reviewed.description || "No description"), React.createElement("p", null, reviewed.benefit || ""), React.createElement("pre", { className: "pb-instructions" }, reviewed.instructions || "No instructions"), React.createElement("div", { className: "pb-actions" }, React.createElement(Button, { onClick: function () { setReview(null); }, disabled: busy }, "Cancel"), review.verb !== "inspect" ? React.createElement(Button, { onClick: confirm, disabled: busy }, busy ? "Submitting…" : ({ publish: "Confirm publish", approve: "Confirm approval", reject: "Confirm rejection", withdraw: "Confirm withdrawal" })[review.verb]) : null))) : null,
       data ? React.createElement(ObsidianPanel) : null,
       data ? React.createElement(SettingsPanel) : null,
-      loading ? React.createElement("p", { className: "pb-loading" }, "Reading active memory status…") : null);
+      loading ? React.createElement("p", { className: "pb-loading" }, "Reading active memory status…") : null,
+      React.createElement("footer", { "aria-label": "PLUR1BUS version" }, data?.version ? "PLUR1BUS " + data.version + " · Hermes" : "PLUR1BUS · Version unavailable"));
   }
   registry.register("plur1bus", StatusPage);
 })();

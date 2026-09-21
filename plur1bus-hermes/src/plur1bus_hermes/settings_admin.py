@@ -18,7 +18,48 @@ BOOLEANS = {
     "conversationReactivationRecall.enabled": False, "dreamEcho.enabled": False,
     "personaVoice.enabled": False, "continuityEngine.enabled": True,
     "memoryDynamics.flashbulbEncoding": False,
+    "emotion.t3.enabled": False, "recall.queryRefinement.enabled": True,
+    "metaCognition.enabled": False, "contradictionDisclosure.enabled": True,
 }
+LABELS = {
+    "autoCapture": "Automatisch speichern", "autoRecall": "Automatisch erinnern",
+    "merging.enabled": "Ähnliche Erinnerungen zusammenführen", "gc.enabled": "Speicherbereinigung",
+    "obsidianBridge.watch": "Obsidian-Änderungen beobachten", "skillWorkshop.enabled": "Skill Workshop",
+    "schicht15.enabled": "Schicht 15", "semanticLens.enabled": "Semantic Lens",
+    "conversationReactivationRecall.enabled": "Gesprächsreaktivierung", "dreamEcho.enabled": "Dream Echo",
+    "personaVoice.enabled": "Persona Voice", "continuityEngine.enabled": "Kontinuität",
+    "memoryDynamics.flashbulbEncoding": "Flashbulb-Erinnerungen", "emotion.t3.enabled": "Emotionserkennung mit LLM (T3)",
+    "recall.queryRefinement.enabled": "Suchanfragen verfeinern", "metaCognition.enabled": "Meta-Kognition",
+    "contradictionDisclosure.enabled": "Widersprüche anzeigen", "capture.mode": "Speicherweise",
+    "dailyConsolidation.decayMode": "Konsolidierung: Verfallsberechnung",
+}
+ENUMS = {"dailyConsolidation.decayMode": ("batch", "rows")}
+HELP = {
+    "autoCapture": "Neue Gesprächsinhalte automatisch für das Langzeitgedächtnis verarbeiten. Manuelles Speichern bleibt davon unabhängig.",
+    "autoRecall": "Passende Erinnerungen automatisch in den Gesprächskontext einfügen. Abschalten löscht keine gespeicherten Inhalte.",
+    "merging.enabled": "Inhaltlich verwandte Erinnerungen auf eine Zusammenführung prüfen. Die bestehenden Sicherheits- und Freigaberegeln gelten weiter.",
+    "gc.enabled": "Die konfigurierte Speicherbereinigung aktivieren. Ein globales Kartenlimit lässt sich in dieser Hermes-Version noch nicht über die Oberfläche festlegen.",
+    "obsidianBridge.watch": "Änderungen im konfigurierten Obsidian-Workspace beobachten. Ohne eingerichteten Workspace gibt es nichts zu synchronisieren.",
+    "skillWorkshop.enabled": "Wiederkehrende Abläufe als Skill-Vorschläge aufbereiten. Prüfen und Veröffentlichen erfolgt im Bereich Erinnerungen.",
+    "schicht15.enabled": "Zusätzliche kognitive Verarbeitung aktivieren. Verfügbarkeit und LLM-Nutzung hängen von den eingerichteten Funktionen ab.",
+    "semanticLens.enabled": "Vorbereitete semantische Verbindungen als Ergänzung zum normalen Recall nutzen. Ersetzt weder die Suche noch ihren Trefferbestand.",
+    "conversationReactivationRecall.enabled": "Nach Gesprächspausen passende Erinnerungen und offene Themen ergänzen, damit der Wiedereinstieg leichter fällt.",
+    "dreamEcho.enabled": "Passende Ergebnisse der Hintergrundverarbeitung in den Recall einbeziehen. Dafür müssen entsprechende Ergebnisse vorhanden sein.",
+    "personaVoice.enabled": "Die konfigurierte Persona bei dafür vorgesehenen internen Verarbeitungsschritten berücksichtigen. Ändert nicht das Chat-Modell.",
+    "continuityEngine.enabled": "Zusammenhänge und offene Gesprächsfäden über einzelne Nachrichten hinweg berücksichtigen.",
+    "memoryDynamics.flashbulbEncoding": "Besonders wichtige oder emotional intensive Erinnerungen bei der Verarbeitung hervorheben und länger gewichten.",
+    "emotion.t3.enabled": "Ein LLM für die zusätzliche Emotionseinschätzung verwenden. Benötigt ein verfügbares Aufgabenmodell und kann zusätzliche Tokens verbrauchen.",
+    "recall.queryRefinement.enabled": "Bei schwachen ersten Suchtreffern eine verfeinerte Anfrage versuchen. Kann zusätzliche Embedding-Arbeit auslösen.",
+    "metaCognition.enabled": "Lokale Feedback-Metriken mit einem LLM reflektieren. Die Reflexion ändert keine Einstellungen automatisch und kann Tokens verbrauchen.",
+    "contradictionDisclosure.enabled": "Erkannte Widersprüche beim Erinnern sichtbar machen. Gegensätzliche Aussagen werden dadurch nicht automatisch gelöscht.",
+    "capture.mode": "Ganz speichert den vollständigen Text, geteilt speichert Segmente, beides behält Volltext und Segmente. Die Auswahl gilt für neue Captures, nicht rückwirkend.",
+    "dailyConsolidation.decayMode": "Batch berechnet die Verfallsverarbeitung gebündelt; Einzelzeilen verwendet den zeilenweisen Pfad. Die Einstellung gilt für die nächste Konsolidierung.",
+}
+MODEL_LABELS = {"*": "Standard für interne Aufgaben", "conversation-insights": "Gesprächserkenntnisse",
+    "emotion-encoding": "Emotionale Einordnung", "emotionT3": "Emotionserkennung (T3)",
+    "episode-extraction": "Episoden erkennen", "merging": "Erinnerungen zusammenführen",
+    "persona-voice": "Persona-Stimme", "recall-query-summary": "Suchanfrage zusammenfassen",
+    "rem-pattern-analysis": "Muster im Hintergrund analysieren", "skillMiner": "Skills ableiten"}
 MODEL_TASKS = sorted(set(PURPOSE_FEATURE.values()) | {"episode-extraction", "persona-voice", "*"})
 
 
@@ -48,6 +89,9 @@ def public_settings(view):
     mode = ("ganz" if view.config.get("captureChunking") is False else
             "geteilt" if view.config.get("captureChunkingMode") == "geteilt" else "beides")
     settings.append({"id": "capture.mode", "value": mode, "choices": ["ganz", "beides", "geteilt"]})
+    for key, choices in ENUMS.items():
+        value = _get(view.config, key, choices[0])
+        settings.append({"id": key, "value": value if value in choices else choices[0], "choices": list(choices)})
     router = view.config.get("llmRouter") or {}
     overrides = (router.get("agentModels") or {}).get(view.agent_id) or {}
     catalog = configured_routes(view.config)
@@ -55,6 +99,14 @@ def public_settings(view):
         selected = overrides.get(task, "")
         settings.append({"id": "model." + task, "value": selected if isinstance(selected, str) and selected in catalog else "",
                          "choices": ["", *catalog]})
+    for setting in settings:
+        key = setting["id"]
+        task = key.removeprefix("model.")
+        setting["label"] = LABELS.get(key, MODEL_LABELS.get(task, task))
+        setting["description"] = HELP.get(key, "Modell für diese interne Aufgabe im aktiven Profil. Standard erben verwendet die bestehende Modellzuordnung; das Chat-Modell bleibt unverändert.")
+        setting["choiceLabels"] = ({"ganz": "Volltext", "geteilt": "Segmente", "beides": "Volltext und Segmente"} if key == "capture.mode"
+            else {"batch": "Gebündelt (Batch)", "rows": "Einzelzeilen"} if key in ENUMS else {})
+        setting["group"] = "Aufgabenmodelle" if key.startswith("model.") else "Speicherung" if key in {"capture.mode", "autoCapture", "merging.enabled", "gc.enabled", "dailyConsolidation.decayMode"} else "Gedächtnisfunktionen"
     return {"agentId": view.agent_id, "profile": view.profile,
             "revision": context_revision(view), "settings": settings,
             "activation": "unknown", "restartRequiredAfterSave": True,
@@ -66,6 +118,8 @@ def validate_change(view, identifier, value):
     if identifier in BOOLEANS and type(value) is bool:
         return
     if identifier == "capture.mode" and isinstance(value, str) and value in {"ganz", "beides", "geteilt"}:
+        return
+    if identifier in ENUMS and isinstance(value, str) and value in ENUMS[identifier]:
         return
     if isinstance(identifier, str) and identifier.startswith("model."):
         task = identifier[6:]

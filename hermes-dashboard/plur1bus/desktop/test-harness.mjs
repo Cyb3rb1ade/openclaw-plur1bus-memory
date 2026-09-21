@@ -12,18 +12,40 @@ const values = {
 const sdk = new vm.SyntheticModule(Object.keys(values), function () {
   for (const [key, value] of Object.entries(values)) this.setExport(key, value);
 });
+let hookValues = [], hookCursor = 0;
 const react = new vm.SyntheticModule(['default'], function () {
-  this.setExport('default', { createElement: (...args) => args });
+  this.setExport('default', { createElement: (...args) => args,
+    useState: initial => [hookCursor < hookValues.length ? hookValues[hookCursor++] : initial, () => {}],
+    useRef: value => ({ current: value }), useEffect() {} });
 });
 // Execute the actual distributed ESM, with only its documented host imports injected.
 const source = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-const plugin = new vm.SourceTextModule(source);
+const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition };');
 await plugin.link(name => {
   if (name === 'react') return react;
   if (name === '@hermes/plugin-sdk') return sdk;
   throw new Error(`Unexpected external import: ${name}`);
 });
 await plugin.evaluate();
+const plainText = tree => Array.isArray(tree) ? tree.slice(2).map(plainText).join(' ') : typeof tree === 'string' ? tree : '';
+hookValues = [{ settings: [{ id: 'autoCapture', value: true, choices: [true, false],
+  label: 'Automatisch speichern', description: 'Neue Gesprächsinhalte automatisch verarbeiten.', group: 'Speicherung' }] }];
+hookCursor = 0;
+const featureTree = plugin.namespace.FeatureSettings({ rest: async () => ({}) });
+assert.match(plainText(featureTree), /Neue Gesprächsinhalte automatisch verarbeiten/);
+function elements(tree, type) {
+  if (!Array.isArray(tree)) return [];
+  return [...(tree[0] === type ? [tree] : []), ...tree.slice(2).flatMap(child => elements(child, type))];
+}
+const toggle = elements(featureTree, 'input')[0];
+assert.equal(toggle[1].role, 'switch');
+assert.equal(toggle[1]['aria-describedby'], 'pb-help-autoCapture');
+hookValues = ['settings', { loading: false, status: { version: '7.15.4' }, proposals: [] }];
+hookCursor = 0;
+const pageTree = plugin.namespace.Partition({ rest: async () => ({}), profile: 'alpha' });
+assert.match(plainText(pageTree), /Einstellungen.*Modelle & Speicher.*Erinnerungen.*Diagnose/);
+assert.equal(pageTree.at(-1)[0], 'footer');
+assert.match(plainText(pageTree.at(-1)), /PLUR1BUS 7.15.4/);
 const { primaryAgentRows } = plugin.namespace;
 const counts = { scopeType: 'agent-private', agentId: 'alpha', cards: { byPrimaryAgent: [
   { id: 'alpha', profile: 'alpha', cards: 0 }, { id: 'beta', profile: 'beta', cards: 88 },

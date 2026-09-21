@@ -1,4 +1,12 @@
 .pb-page { max-width: 900px; margin: 0 auto; padding: 2.25rem 1.5rem 4rem; color: var(--text-primary, #e5e7eb); }
+.pb-page .pb-setting-group { border-top: 1px solid var(--border, #30343b); margin-top: 20px; }
+.pb-page .pb-setting-group summary { cursor: pointer; padding: 16px 0; font-weight: 600; }
+.pb-page .pb-setting-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 210px); gap: 24px; align-items: center; padding: 16px 0; }
+.pb-page .pb-setting-row label { font-weight: 550; }
+.pb-page .pb-setting-help { color: var(--text-secondary, #a9b1bd); font-size: 13px; line-height: 1.6; margin: 5px 0 0; max-width: 64ch; }
+.pb-page .pb-setting-row select { width: 100%; padding: 9px; border: 1px solid var(--border, #30343b); border-radius: 6px; color: inherit; background: var(--background, #20232a); }
+.pb-page footer { margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--border, #30343b); color: var(--text-secondary, #a9b1bd); font-size: 12px; }
+@media (max-width: 640px) { .pb-page .pb-setting-row { grid-template-columns: 1fr; gap: 10px; } }
 .pb-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; border-bottom: 1px solid var(--border, #30343b); padding-bottom: 1.4rem; }
 .pb-header h1 { margin: 0; font-size: clamp(1.8rem, 3vw, 2.7rem); letter-spacing: -.035em; }
 .pb-header p { max-width: 38rem; margin: .5rem 0 0; color: var(--text-secondary, #a9b1bd); line-height: 1.55; }

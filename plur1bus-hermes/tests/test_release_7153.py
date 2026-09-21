@@ -19,6 +19,31 @@ def test_flashbulb_threshold_and_refine_remain_live():
     assert "memoryClass" not in refine_patch({"importance": .97}, {"importance": .9, "intensity": 1}, 123, flashbulb=True)
 
 
+@pytest.mark.parametrize('identifier,value', [
+    ('emotion.t3.enabled', True), ('recall.queryRefinement.enabled', False),
+    ('metaCognition.enabled', True), ('contradictionDisclosure.enabled', False),
+    ('dailyConsolidation.decayMode', 'rows'),
+])
+def test_config_cards_save_supported_native_controls(tmp_path, identifier, value):
+    view = SimpleNamespace(hermes_home=tmp_path, profile='Coder', agent_id='main',
+        data_dir=tmp_path / 'data', config={}, scope_binding=binding_from_scope('main'),
+        _writer_route=SimpleNamespace(path=tmp_path / 'db'))
+    public = public_settings(view)
+    item = next(item for item in public['settings'] if item['id'] == identifier)
+    assert item['label'] and item['group'] and value in item['choices']
+    assert len(item['description']) > 30
+    assert all(entry['description'] and entry['label'] for entry in public['settings'])
+    save_setting(view, identifier, value, public['revision'])
+    saved = json.loads((tmp_path / 'plugins/plur1bus/config.json').read_text())
+    assert set(saved) == {'profileSettings'}
+    node = saved['profileSettings']['Coder']
+    for key in identifier.split('.'):
+        node = node[key]
+    assert node == value
+    with pytest.raises(ValueError):
+        validate_change(view, identifier, 'invalid')
+
+
 def test_short_answers_follow_previous_sentence_but_old_retries_do_not_drift():
     parts = ["An adequately long question?", "Nein.", "A different long question?"]
     assert _bundle_short(parts, 2) == [parts[0] + "\nNein.", parts[2]]

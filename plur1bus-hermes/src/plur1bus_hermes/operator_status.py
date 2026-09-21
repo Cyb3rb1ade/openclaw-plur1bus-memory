@@ -167,9 +167,12 @@ def read_operator_status(
     runtime: Any, *, connect: Callable[[str], Any] | None = None
 ) -> dict[str, Any]:
     """Return aggregate state for runtime's writer table without exposing paths."""
+    from . import __version__
+
     agent_id = safe_agent_id(getattr(runtime, "agent_id"))
     projection = {
         "schemaVersion": 1,
+        "version": __version__,
         "agentId": agent_id,
         "scopeType": str(
             getattr(getattr(runtime, "scope_binding", None), "scope_type", "agent-private")

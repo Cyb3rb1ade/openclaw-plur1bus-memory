@@ -381,6 +381,27 @@ const css = `
 .plur1bus-desktop pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;padding:12px;background:var(--muted,#222)}
 .plur1bus-desktop summary{cursor:pointer;padding:8px 0}.plur1bus-desktop .pb-review{padding:18px;border:1px solid var(--border,#555)}
 .plur1bus-desktop .pb-check{display:flex;gap:10px;align-items:center;margin:12px 0}.plur1bus-desktop .pb-check input{display:inline-block}
+.plur1bus-desktop{max-width:1080px;padding:28px 32px;--pb-line:var(--border,#3f4148);--pb-soft:var(--muted-foreground,#a9adb8);--pb-accent:var(--primary,#9692f5)}
+.plur1bus-desktop h1{font-size:26px;letter-spacing:-.6px;margin:0}.plur1bus-desktop header p{color:var(--pb-soft);font-size:13px}
+.plur1bus-desktop .pb-nav{display:flex;gap:6px;border-bottom:1px solid var(--pb-line);margin-bottom:24px;padding-bottom:10px;flex-wrap:wrap}
+.plur1bus-desktop .pb-nav button{border:0;background:transparent;color:var(--pb-soft);padding:10px 14px}
+.plur1bus-desktop .pb-nav button[aria-pressed=true]{color:var(--foreground);background:var(--muted,#26262e);box-shadow:inset 0 -2px var(--pb-accent)}
+.plur1bus-desktop .pb-settings{border:0;padding:0}.plur1bus-desktop .pb-settings h2{font-size:20px;margin:0 0 6px}
+.plur1bus-desktop .pb-intro{color:var(--pb-soft);max-width:70ch;font-size:13px;line-height:1.6}
+.plur1bus-desktop .pb-setting-group{border-top:1px solid var(--pb-line);margin-top:24px}
+.plur1bus-desktop .pb-setting-group summary{font-size:15px;font-weight:600;padding:18px 0}
+.plur1bus-desktop .pb-setting-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(140px,210px);gap:24px;align-items:center;padding:16px 0;border-top:1px solid var(--pb-line)}
+.plur1bus-desktop .pb-setting-row:first-of-type{border-top:0}.plur1bus-desktop .pb-setting-row label{font-weight:550;font-size:14px}
+.plur1bus-desktop .pb-setting-help{color:var(--pb-soft);font-size:12px;line-height:1.6;max-width:64ch;margin:5px 0 0}
+.plur1bus-desktop .pb-setting-control{justify-self:end;width:100%;font-size:13px}
+.plur1bus-desktop .pb-toggle{display:flex;justify-content:flex-end;align-items:center;gap:10px;font-size:12px;color:var(--pb-soft)}
+.plur1bus-desktop .pb-toggle input{appearance:none;width:36px;height:21px;padding:2px;border-radius:20px;background:var(--muted,#34343d);cursor:pointer;flex-shrink:0}
+.plur1bus-desktop .pb-toggle input:before{content:'';display:block;width:15px;height:15px;border-radius:50%;background:var(--pb-soft)}
+.plur1bus-desktop .pb-toggle input:checked{background:var(--pb-accent)}.plur1bus-desktop .pb-toggle input:checked:before{transform:translateX(14px);background:var(--background,#fff)}
+.plur1bus-desktop :is(button,input,select,summary):focus-visible{outline:2px solid var(--pb-accent);outline-offset:3px}
+.plur1bus-desktop .pb-review{position:sticky;bottom:0;background:var(--background,#18181c);border-radius:8px;box-shadow:0 -4px 18px #0002;z-index:2}
+.plur1bus-desktop footer{margin-top:32px;padding:18px 0;border-top:1px solid var(--pb-line);font-size:12px;color:var(--pb-soft)}
+@media(max-width:680px){.plur1bus-desktop{padding:20px 16px}.plur1bus-desktop .pb-setting-row{grid-template-columns:1fr;gap:10px}.plur1bus-desktop .pb-toggle{justify-content:flex-start}.plur1bus-desktop .pb-setting-control{justify-self:start}}
 `;
 
 /** Build a provider form target without carrying stale credentials/model options across providers.
@@ -404,7 +425,7 @@ function FeatureSettings({ rest }) {
   const request = useRequests(rest);
   const [settings, setSettings] = React.useState(null), [review, setReview] = React.useState(null);
   const [busy, setBusy] = React.useState(false), [notice, setNotice] = React.useState('');
-  React.useEffect(() => { setSettings(null); setReview(null); setNotice(''); }, [rest]);
+  React.useEffect(() => { setSettings(null); setReview(null); setNotice(''); void load(); }, [rest]);
   async function load() {
     setBusy(true); setReview(null);
     const result = await request.current?.run('/desktop/settings');
@@ -434,15 +455,24 @@ function FeatureSettings({ rest }) {
       'Gespeichert. Hermes-Gateway zum Aktivieren neu starten. Laufender Zustand noch nicht bestätigt.');
     if (!result.error) await load();
   }
-  return h('section', null, h('h2', null, 'Features, Speicherweise und Aufgabenmodelle'),
-    h('p', null, 'Gespeicherte Einstellungen des aktiven Profils, keine Bestätigung der laufenden Gateway-Konfiguration.'),
-    h('button', { disabled: busy, onClick: () => { void load(); } }, 'Einstellungen laden'),
+  return h('section', { className: 'pb-settings' }, h('h2', null, 'So arbeitet dein Gedächtnis'),
+    h('p', { className: 'pb-intro' }, 'Diese Einstellungen gelten nur für das aktive Profil. Änderungen werden zuerst zur Prüfung angezeigt und erst nach deiner Bestätigung gespeichert. Zum Aktivieren ist ein Gateway-Neustart nötig.'),
+    h('button', { disabled: busy, onClick: () => { void load(); } }, busy ? 'Lädt…' : 'Werte neu laden'),
     notice ? h('p', { role: 'status' }, notice) : null,
-    ...(settings?.settings || []).map(setting => h('label', { key: setting.id }, setting.id + ' ',
-      h('select', { disabled: busy, value: String(setting.choices.indexOf(setting.value)),
+    ...[...new Set((settings?.settings || []).map(setting => setting.group || 'Features'))].map(group =>
+      h('details', { key: group, className: 'pb-setting-group', open: group === 'Speicherung' }, h('summary', null, group),
+      ...(settings?.settings || []).filter(setting => (setting.group || 'Features') === group).map(setting => h('div', { key: setting.id, className: 'pb-setting-row' },
+      h('div', null, h('label', { htmlFor: `pb-${setting.id}` }, setting.label || setting.id),
+        h('p', { id: `pb-help-${setting.id}`, className: 'pb-setting-help' }, setting.description || 'Einstellung des aktiven Profils.')),
+      typeof setting.value === 'boolean' ? h('div', { className: 'pb-toggle' }, setting.value ? 'An' : 'Aus',
+        h('input', { id: `pb-${setting.id}`, type: 'checkbox', role: 'switch', checked: setting.value, disabled: busy,
+          'aria-describedby': `pb-help-${setting.id}`, onChange: event => { void preview(setting.id, event.target.checked); } })) :
+      h('select', { id: `pb-${setting.id}`, className: 'pb-setting-control', 'aria-describedby': `pb-help-${setting.id}`, disabled: busy, value: String(setting.choices.indexOf(setting.value)),
         onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
-      setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : String(value)))))),
-    review ? h('div', null, h('p', null, `${review.agentId}: ${review.identifier} → ${String(review.value)}`),
+      setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))))))),
+    review ? h('div', { className: 'pb-review', role: 'region', 'aria-label': 'Änderung prüfen' },
+      h('h3', null, 'Änderung prüfen'), h('p', null, `${settings?.settings.find(item => item.id === review.identifier)?.label || review.identifier}: ${review.value === true ? 'Aktivieren' : review.value === false ? 'Deaktivieren' : String(review.value)}`),
+      h('p', { className: 'pb-intro' }, 'Gilt für dieses Profil. Deine gespeicherten Erinnerungen werden durch diesen Einstellungswechsel nicht migriert. Nach dem Speichern ist ein Gateway-Neustart erforderlich.'),
       h('button', { disabled: busy, onClick: () => setReview(null) }, 'Abbrechen'),
       h('button', { disabled: busy, onClick: () => { void save(); } }, 'Speichern bestätigen')) : null);
 }
@@ -582,6 +612,7 @@ function RetrievalSettings({ rest }) {
 }
 
 function Partition({ rest, profile }) {
+  const [panel, setPanel] = React.useState('settings');
   const [view, setView] = React.useState({ loading: true, status: null, proposals: [], error: '', workshopError: '' });
   const reader = React.useRef(null);
   React.useEffect(() => {
@@ -598,9 +629,12 @@ function Partition({ rest, profile }) {
     h('button', { type: 'button', disabled: view.loading, onClick: () => { void reader.current?.load(); } },
       view.loading ? 'Wird geladen…' : 'Aktualisieren')),
     view.error ? h('p', { role: 'alert', className: 'pb-error' }, view.error) : null,
-    h(HostCompatibility, { key: scopeKey() }),
+    h('nav', { className: 'pb-nav', 'aria-label': 'PLUR1BUS-Bereiche' },
+      ...[['settings', 'Einstellungen'], ['models', 'Modelle & Speicher'], ['memories', 'Erinnerungen'], ['diagnostics', 'Diagnose']].map(([id, label]) =>
+        h('button', { key: id, type: 'button', 'aria-pressed': panel === id, onClick: () => setPanel(id) }, label))),
+    panel === 'diagnostics' ? h(HostCompatibility, { key: scopeKey() }) : null,
     view.loading ? h('p', { role: 'status' }, 'Aktive Memory-Partition wird gelesen…') : null,
-    s ? h(React.Fragment, null,
+    s && panel === 'diagnostics' ? h(React.Fragment, null,
       h('p', { role: 'status' }, s.configured && s.storage?.status === 'ready'
         ? 'Memory-Partition konfiguriert und erreichbar.' : 'Memory-Partition benötigt Aufmerksamkeit.'),
       h('div', { className: 'pb-grid' },
@@ -615,13 +649,15 @@ function Partition({ rest, profile }) {
           field('Provider', embedding.provider), field('Modell', embedding.model), field('Dimensionen', embedding.dimensions))),
         h('section', null, h('h2', null, 'Reranking'), h('dl', null,
           field('Provider', reranker.provider), field('Modell', reranker.model))))) : null,
-    s ? h(RetrievalSettings, { rest }) : null,
-    s ? h(FeatureSettings, { rest }) : null,
-    s ? h(MemoryBrowser, { rest }) : null,
-    s ? h(Obsidian, { rest, refresh: () => { void reader.current?.load(); } }) : null,
-    s ? h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,
+    s && panel === 'models' ? h(React.Fragment, null,
+      h('p', { className: 'pb-intro' }, `Embeddings: ${embedding.model || 'Nicht konfiguriert'} (${embedding.dimensions || '—'} Dimensionen). Reranking: ${reranker.model || 'Nicht konfiguriert'}.`),
+      h(RetrievalSettings, { rest })) : null,
+    s && panel === 'settings' ? h(FeatureSettings, { rest }) : null,
+    s && panel === 'memories' ? h(MemoryBrowser, { rest }) : null,
+    s && panel === 'memories' ? h(Obsidian, { rest, refresh: () => { void reader.current?.load(); } }) : null,
+    s && panel === 'memories' ? h(Workshop, { rest, proposals: view.proposals, error: view.workshopError, loading: view.loading,
       refresh: () => { void reader.current?.load(); } }) : null,
-    h('p', null, 'Verwendet den bestehenden Hermes-Backendprozess. Kein separater Webserver erforderlich.'));
+    h('footer', { 'aria-label': 'PLUR1BUS-Version' }, s?.version ? `PLUR1BUS ${s.version} · Hermes` : 'PLUR1BUS · Version nicht verfügbar'));
 }
 
 /** Keep navigation scoped to authoritative activation; stale probes cannot change another profile.
