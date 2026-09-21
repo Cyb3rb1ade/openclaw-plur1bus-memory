@@ -5,6 +5,29 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.0] — 2026-09-22
+
+### Hinzugefügt
+
+- **Die Recall-Breite ist im Dashboard einstellbar.** Zwei Regler auf der
+  Recall-Karte: `recall.candidateTopK` bestimmt, wie viele Zeilen die
+  Vektorsuche vor dem Ranking holt, `recall.maxPromptMemories`, wie viele
+  Erinnerungen danach in den Prompt gehen. Beide nehmen 5 bis 100, ganzzahlig.
+
+  Die Obergrenze ist keine gewählte Zahl, sondern die Klemme der Pipeline
+  selbst (`hardCandidateLimit` in `lib/recall-pipeline.js` deckelt auf 100):
+  Ein höherer Wert erreichte die Vektorsuche gar nicht und hätte eine
+  Einstellung vorgetäuscht, die nirgends ankommt. Die Vorgaben 40 und 12
+  spiegeln die Schema-Standards, damit die unkonfigurierte Karte keine andere
+  Zahl anzeigt, als die Pipeline rechnet.
+
+  Beide sind Betriebsentscheidungen, keine gemessenen Schwellwerte — die
+  Grenze, die der Kommentarkopf von `lib/dashboard-settings.js` zieht. Anlass
+  sind die LOCOMO-Läufe vom 20.09.2026: 89,2 % Belegquote bei 15 Erinnerungen
+  aus 40 Kandidaten, und kein zweiter gemessener Punkt im Feld. Der Bereich
+  zwischen 40 und 100 Kandidaten ist unbetreten; der Reranker wählt dort aus
+  einem breiteren Feld, was Ranking-Zeit kostet und keinen Kontext.
+
 ## [7.15.4] — 2026-09-21
 
 ### Behoben
