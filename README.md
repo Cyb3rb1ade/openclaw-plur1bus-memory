@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.15.1 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.15.2 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.15.1**, running in production on OpenClaw
+Current source version: **7.15.2**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,21 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.15.2 — flashbulb encoding, calibrated
+
+The pilot run the schema comment had been waiting for is done: 24,509 active
+rows across every agent. The old threshold of 0.70 would have burned in
+**10.3 % of the store** and **6.4 % of the rows from the last 30 days**; the
+target in `scripts/importance-metrics.mjs` is under 2 % of new memories, and
+0.80 meets it at 1.8 %. The threshold is now `FLASHBULB_THRESHOLD`, in one
+place.
+
+Burning in is a decision made when something happens, not when it is sorted
+afterwards: the hourly emotion-refine cron no longer does it. It ran over the
+whole store and decided anew every hour, so a four-year-old row could be given
+a ten-year half-life retroactively. It still scores emotion and importance and
+sets the half-life from the importance band.
 
 ### New in v7.15.1 — saved versus running, and a tab that fits more agents
 
