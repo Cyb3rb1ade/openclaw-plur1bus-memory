@@ -60,6 +60,8 @@ def test_reviewed_settings_do_not_leak_across_profiles(tmp_path, profile):
 
     root = tmp_path / "plugins/plur1bus/config.json"
     root.parent.mkdir(parents=True)
+    if profile != "default":
+        (tmp_path / "profiles" / profile).mkdir(parents=True)
     original = {"autoCapture": True, "gc": {"enabled": False, "batchSize": 17},
                 "llmRouter": {"modelRoutes": {"private": {"model": "x", "baseUrl": "https://example.invalid/v1", "apiKey": "secret"}}}}
     root.write_text(json.dumps(original))
@@ -91,5 +93,10 @@ def test_reviewed_settings_do_not_leak_across_profiles(tmp_path, profile):
     assert refreshed["gc"] == {"enabled": True, "batchSize": 23}
     assert refreshed["llmRouter"]["modelRoutes"]["private"]["apiKey"] == "rotated"
     assert refreshed["llmRouter"]["agentModels"][profile]["*"] == "private"
+    from plur1bus_hermes.jobs import _bind_profile_home
+    scheduled = _bind_profile_home(json.loads(config_path(view).read_text()), config_path(view))
+    assert scheduled["autoCapture"] is False
+    assert scheduled["gc"] == refreshed["gc"]
+    assert scheduled["llmRouter"] == refreshed["llmRouter"]
     provider._supplied_config = {"autoCapture": True}
     assert provider._runtime_config(profile)["autoCapture"] is True

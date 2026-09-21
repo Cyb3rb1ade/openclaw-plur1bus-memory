@@ -309,7 +309,20 @@ def _bind_profile_home(config: dict[str, Any], config_path: Path, explicit: Path
         home = Path(selected).expanduser().resolve()
         if canonical_home is not None and home != canonical_home:
             raise ValueError("scheduled Hermes home does not match the provider config profile")
+        # Scheduled callers must see the same reviewed profile overrides as
+        # the gateway; an agent ID is not a profile identity.
+        from .provider import Plur1busMemoryProvider
+        profile = home.name if home.parent.name == "profiles" else "default"
+        if canonical_home is not None and home.parent.name == "profiles":
+            root_path = resolve_inside(str(home.parent.parent), "plugins", "plur1bus", "config.json")
+            inherited = Plur1busMemoryProvider._read_json(root_path)
+            bound = {**inherited, **bound}
+        profiles = bound.get("profileSettings")
+        if isinstance(profiles, dict) and isinstance(profiles.get(profile), dict):
+            bound = Plur1busMemoryProvider._deep_merge(bound, profiles[profile])
         bound["hermesHome"] = str(home)
+    elif bound.get("profileSettings"):
+        raise ValueError("reviewed settings require an explicit scheduled Hermes profile home")
     return bound
 
 

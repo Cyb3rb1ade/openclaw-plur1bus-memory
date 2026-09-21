@@ -23,6 +23,8 @@ Status: **not release-ready**; no productive profile changed, no public release.
   profile no longer changes other profiles through root-config inheritance.
   Unrelated nested defaults and later credential rotation remain inherited;
   explicitly supplied runtime configuration retains precedence.
+  Scheduled CLI jobs resolve the profile from their owned config/home, not
+  from an agent ID, and apply the same sparse overrides and inherited routes.
 - Stable segmented-capture retries now repair missing metadata, mirrors and
   graph materialization before acknowledgement. Four injected component-boundary
   failures recover without duplicate canonical rows. Conflicting materializations
@@ -31,16 +33,19 @@ Status: **not release-ready**; no productive profile changed, no public release.
 
 ## Verification
 
-The earlier source checkpoint passed 1,085 native/controls/distribution tests,
-2 skipped, 444 subtests. Dashboard HTTP tests: 31 passed. Desktop and web
-harnesses passed. The full JavaScript run reported 4,981 passed, 76 skipped and
-one README runtime-floor assertion failure; the missing sentence was restored
-and both tests in that file subsequently passed. This is not a fresh all-green
-full-suite claim. Lint, npm dependency audit and diff checks passed.
+The cb0ff7c5 source checkpoint passed 1,092 native/controls/distribution tests,
+2 skipped, 441 subtests. Dashboard HTTP tests: 31 passed. Desktop and web
+harnesses passed. The fresh full JavaScript run passed 4,982 tests, with 76
+skipped and zero failures (5,058 total, 899 suites). Lint, npm dependency audit
+and diff checks passed. The subsequent scheduled-profile fix requires its own
+final native/package rerun; its focused regression tests pass.
 
 The c2235c67 macOS ARM candidate was signed and sandbox-installed; it predates
 the profile-isolation fix and must not be published as the final artifact.
 Final source, five-platform package and notarization gates remain separate.
+The cb0ff7c5 macOS candidate was also signed and sandbox-installed. The Apple
+notary profile `openclaw-notary` was not found during the final status query;
+notarization is not claimed. None of these candidates was publicly released.
 
 Upstream bug PR #182 prevents saving a GC cap when authoritative memory counts
 are missing or invalid. All six PR checks passed. It is not yet merged into
