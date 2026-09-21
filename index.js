@@ -55,7 +55,7 @@ import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plu
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
 import { readGcReport } from "./lib/dashboard-operations.js";
-import { readPluginConfigFile } from "./lib/dashboard-settings.js";
+import { readPluginConfigFile, largestKnownAgentCount } from "./lib/dashboard-settings.js";
 import { checkRuntimePressure } from "./lib/runtime-pressure-gate.js";
 import { resolveAgentWorkspaceDir } from "./lib/setup/memory-host-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
@@ -9390,8 +9390,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // the health snapshot is the same count the dashboard shows.
             maxAgentCards: async () => {
               const snapshot = await controlHealth.snapshot();
-              const counts = (snapshot?.cards?.byAgent || []).map((entry) => Number(entry?.cards)).filter(Number.isFinite);
-              return counts.length ? Math.max(...counts) : null;
+              return largestKnownAgentCount(snapshot);
             },
             modelCatalog: catalogModelIds,
             grantModel: grantModelPermission,

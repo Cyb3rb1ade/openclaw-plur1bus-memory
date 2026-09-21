@@ -148,9 +148,10 @@ test("die GC-Obergrenze faellt nie unter den groessten laufenden Bestand", async
   assert.equal(config().gc.maxMemoryCount, 150000, "nichts geschrieben");
   await mutate({ id: "gc.maxMemoryCount", value: "40000" });
   assert.equal(config().gc.maxMemoryCount, 40000);
-  // Ohne Zaehler (Health nicht verfuegbar) gilt nur das Schema.
-  await mutatorFor(draft, { maxAgentCards: async () => null })({ id: "gc.maxMemoryCount", value: "5" });
-  assert.equal(config().gc.maxMemoryCount, 5);
+  // Ohne Zaehler ist der Schutz nicht pruefbar: keine potenziell destruktive Aenderung.
+  await assert.rejects(() => mutatorFor(draft, { maxAgentCards: async () => null })({ id: "gc.maxMemoryCount", value: "5" }),
+    (error) => error.code === "denied_value");
+  assert.equal(config().gc.maxMemoryCount, 40000);
 });
 
 test("das Standardmodell wird gegen den Katalog geprueft und gibt genau dieses Modell frei", async () => {
