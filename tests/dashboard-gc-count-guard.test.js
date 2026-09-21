@@ -14,12 +14,22 @@ for (const count of [null, undefined, NaN, Infinity, -1, 0.5]) {
   });
 }
 
-test("one unknown agent cannot be hidden by healthy agents or numeric coercion", () => {
-  for (const cards of [null, undefined, "0", -1, 1.5]) {
-    assert.equal(largestKnownAgentCount({ cards: { byAgent: [{ cards: 10 }, { cards }] } }), null);
+// Der Waechter liest die Zahl, die der Scan nennt, und leitet sie nicht aus
+// byAgent ab: Diese Liste folgt dem oeffentlichen Kennungsvertrag und deckt
+// sich in beide Richtungen nicht mit dem, was der GC-Job bereinigt.
+test("the guard reads the scan's own number, never the published list", () => {
+  const byAgent = [{ cards: 10 }, { cards: 99 }];
+  assert.equal(largestKnownAgentCount({ cards: { largestAgentCards: 10, byAgent } }), 10);
+  assert.equal(largestKnownAgentCount({ cards: { largestAgentCards: 0, byAgent: [] } }), 0, "leerer Bestand ist bekannt, nicht unbekannt");
+});
+
+test("an inventory nobody vouches for is unknown, however healthy the rows look", () => {
+  const byAgent = [{ cards: 0 }, { cards: 10 }];
+  for (const largest of [undefined, null, -1, 1.5, NaN, Infinity, "10"]) {
+    assert.equal(largestKnownAgentCount({ cards: { largestAgentCards: largest, byAgent } }), null);
   }
-  assert.equal(largestKnownAgentCount({ cards: { byAgent: [] } }), null);
-  assert.equal(largestKnownAgentCount({ cards: { byAgent: [{ cards: 0 }, { cards: 10 }] } }), 10);
+  assert.equal(largestKnownAgentCount({ cards: { byAgent } }), null, "fehlende Zahl verweigert");
+  assert.equal(largestKnownAgentCount(null), null);
 });
 
 test("a known empty store still permits a positive cap", async () => {
