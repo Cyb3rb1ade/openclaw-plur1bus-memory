@@ -36,7 +36,7 @@ def test_settings_authentication_review_and_replay(tmp_path):
         commit_headers = {**headers, "X-Plur1bus-Confirm": "settings"}
         assert client.post("/settings", json=body, headers=commit_headers).status_code == 200
         assert client.post("/settings", json=body, headers=commit_headers).status_code == 409
-        assert json.loads(path.read_text())["captureChunkingMode"] == "geteilt"
+        assert json.loads(path.read_text())["profileSettings"]["default"]["captureChunkingMode"] == "geteilt"
         native_headers = {"X-Hermes-Session-Token": "test-token"}
         assert client.get("/desktop/settings", headers=headers).status_code == 403
         current = client.get("/desktop/settings", headers=native_headers).json()

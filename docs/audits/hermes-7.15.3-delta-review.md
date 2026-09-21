@@ -19,13 +19,27 @@ Status: **not release-ready**; no productive profile changed, no public release.
   backups and atomic configuration writes.
 - Saved settings are explicitly not presented as live gateway activation.
   Restart requirement remains visible.
+- Reviewed settings are sparse, profile-keyed overrides. Changing the default
+  profile no longer changes other profiles through root-config inheritance.
+  Unrelated nested defaults and later credential rotation remain inherited;
+  explicitly supplied runtime configuration retains precedence.
 
 ## Verification
 
-1,085 native/controls/distribution tests passed, 2 skipped, 444 subtests passed
-before the final desktop extension (rerun required). Focused new boundary tests
-passed. Existing desktop and web harnesses passed. Final HTTP, full JS,
-cross-platform packaging and signing gates are still required.
+The earlier source checkpoint passed 1,085 native/controls/distribution tests,
+2 skipped, 444 subtests. Dashboard HTTP tests: 31 passed. Desktop and web
+harnesses passed. The full JavaScript run reported 4,981 passed, 76 skipped and
+one README runtime-floor assertion failure; the missing sentence was restored
+and both tests in that file subsequently passed. This is not a fresh all-green
+full-suite claim. Lint, npm dependency audit and diff checks passed.
+
+The c2235c67 macOS ARM candidate was signed and sandbox-installed; it predates
+the profile-isolation fix and must not be published as the final artifact.
+Final source, five-platform package and notarization gates remain separate.
+
+Upstream bug PR #182 prevents saving a GC cap when authoritative memory counts
+are missing or invalid. All six PR checks passed. It is not yet merged into
+this Hermes candidate; the new native settings surface does not offer GC caps.
 
 ## Remaining from the 7.15.0 port
 
@@ -67,4 +81,3 @@ and final feature-matrix audit remain open. Do not call the package feature-comp
 - `fe5e9844 Dashboard sagt, was gespeichert und was wirklich am Laufen ist`
 - `a8a1e4f9 Kurze Stuecke an den vorigen Satz haengen, nicht an den naechsten`
 - `139e0b60 fix(capture): preserve prefixes and short statements when chunking`
-

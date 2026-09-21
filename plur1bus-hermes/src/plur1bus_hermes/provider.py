@@ -939,6 +939,13 @@ class Plur1busMemoryProvider(MemoryProvider):
             # Do not let a copied profile config outlive its router.  The only
             # source of automatic retrieval routes is the active Hermes YAML.
             merged.update(self._hermes_retrieval_config(profile))
+        # Root config remains a legacy default for all profiles. Reviewed UI
+        # changes belong only to the selected profile, including "default".
+        profiles = merged.get("profileSettings")
+        if isinstance(profiles, Mapping):
+            override = profiles.get(profile or "default")
+            if isinstance(override, Mapping):
+                merged = self._deep_merge(merged, override)
         return {**merged, **self._supplied_config}
 
     def _hermes_retrieval_config(self, profile: str) -> dict[str, Any]:

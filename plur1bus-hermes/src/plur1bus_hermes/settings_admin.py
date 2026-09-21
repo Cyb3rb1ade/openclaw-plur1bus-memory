@@ -85,20 +85,20 @@ def save_setting(view, identifier, value, revision):
         if not isinstance(original, dict):
             raise ValidationError("invalid profile configuration")
         updated = copy.deepcopy(original)
+        profiles = updated.setdefault("profileSettings", {})
+        if not isinstance(profiles, dict) or not isinstance(profiles.get(view.profile, {}), dict):
+            raise ValidationError("invalid profile settings")
+        scoped = profiles.setdefault(view.profile, {})
         if identifier == "capture.mode":
-            updated["captureChunking"] = value != "ganz"
+            scoped["captureChunking"] = value != "ganz"
             if value != "ganz":
-                updated["captureChunkingMode"] = value
+                scoped["captureChunkingMode"] = value
         elif identifier.startswith("model."):
-            # Preserve effective inherited routes and other agents' choices
-            # when a nested profile materializes its first router override.
-            updated["llmRouter"] = copy.deepcopy(view.config.get("llmRouter") or {})
-            _put(updated, ["llmRouter", "agentModels", view.agent_id, identifier[6:]], value)
+            # Sparse overrides keep inherited routes/credential rotation live.
+            _put(scoped, ["llmRouter", "agentModels", view.agent_id, identifier[6:]], value)
         else:
             parts = identifier.split(".")
-            if len(parts) > 1 and parts[0] not in updated:
-                updated[parts[0]] = copy.deepcopy(view.config.get(parts[0]) or {})
-            _put(updated, parts, value)
+            _put(scoped, parts, value)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             backup = path.with_name("config.before-settings-" + revision[:16] + ".json")
