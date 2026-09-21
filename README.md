@@ -109,7 +109,7 @@ workflow marks "Dry run" as **next** rather than **current**.
 Capture splitting no longer drops the text before the first list item or
 statements shorter than eight characters (#175).
 
-### New in v7.15.3 — switches and decisions on the cards, capacity at a glance
+### New in v7.15.0 — switches and decisions on the cards, capacity at a glance
 
 Every feature card now carries its own switch and the operating decisions
 that belong to it — one row per setting with a select or number field and a
