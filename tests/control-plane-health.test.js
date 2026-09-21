@@ -42,9 +42,10 @@ describe("PLUR1BUS control-plane health inspector", () => {
       status: "ready",
       namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 7 }],
       cards: {
-        // The hand-written scan result above does not vouch for its inventory,
-        // so the normalizer reports it as incomplete rather than assuming it.
-        agentCountsComplete: false,
+        // The hand-written scan result above names no largest store, so the
+        // normalizer reports it as unknown rather than deriving one from
+        // byAgent — that list is not the set gc prunes.
+        largestAgentCards: null,
         byAgent: [{ id: "agent-a", cards: 5 }],
         byWorkspace: [{ id: "workspace:v1:alpha", cards: 2 }],
         byUser: [{ id: "user:v1:alpha", cards: 1 }],
@@ -211,7 +212,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
     assert.deepStrictEqual(snapshot, {
       status: "degraded",
       namespaces: [],
-      cards: { agentCountsComplete: false, byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
+      cards: { largestAgentCards: null, byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
       storage: { bytes: null, complete: false },
       lastError: { component: "health", code: "health_scan_failed" },
       observedAt: 99,
@@ -254,7 +255,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
         { id: "shared-users", dimensions: 768, rows: 1 },
       ],
       cards: {
-        agentCountsComplete: true,
+        largestAgentCards: 5,
         byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
         byWorkspace: [{ id: "workspace:v1:alpha", cards: 2 }],
         byUser: [{ id: "u-0123456789abcdef", cards: 1 }],
@@ -296,7 +297,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
     assert.deepStrictEqual(await inspector.snapshot(), {
       status: "degraded",
       namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 0 }],
-      cards: { agentCountsComplete: true, byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
+      cards: { largestAgentCards: 0, byAgent: [], byWorkspace: [], byUser: [], byPrimaryAgent: [] },
       storage: { bytes: null, complete: false },
       lastError: { component: "storage", code: "storage_measure_failed" },
       observedAt: 77,
@@ -333,7 +334,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
       cards: {
         // The dropped id "55736530" sits in the user root; the agent listing is
         // untouched, so the agent inventory is still vouched for.
-        agentCountsComplete: true,
+        largestAgentCards: 5,
         byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
         byWorkspace: [],
         byUser: [{ id: "u-0123456789abcdef", cards: 1 }],
@@ -344,33 +345,74 @@ describe("PLUR1BUS control-plane health inspector", () => {
     });
   });
 
-  // Beides entfernt den Agenten *spurlos* aus byAgent — kein null, keine Zeile.
-  // Wer den Bestand als Ganzes braucht (die GC-Obergrenze tut das), kann eine
-  // Abwesenheit nicht sehen; deshalb sagt der Scan es hier ausdruecklich.
-  it("withdraws its vouch when an agent partition is dropped or cannot be counted", async () => {
+  // Die GC-Obergrenze fragt nach dem groessten Speicher, den der GC-Job
+  // bereinigen wuerde. Das ist *nicht* byAgent: Der oeffentliche
+  // Kennungsvertrag versteckt Speicher, die GC anfasst (`_neo`), und zeigt
+  // welche, die GC auslaesst (`agent.v2`). Also zaehlt der Scan nach GCs
+  // eigenem Vertrag und nimmt die Zusage zurueck, sobald eine dieser
+  // Zaehlungen fehlt — eine Abwesenheit sieht spaeter niemand mehr.
+  describe("largest store the gc job would prune", () => {
+    const rowsByName = (table) => async ({ partitionId }) => {
+      const value = table[partitionId];
+      if (value instanceof Error) throw value;
+      return value ?? 0;
+    };
     const scanWith = (overrides) => createControlPlaneHealthScan({
       namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
       maxPartitions: 8,
       listPartitions: async () => ["agent-a", "agent-b"],
-      inspectRows: async () => 3,
+      inspectRows: rowsByName({ "agent-a": 3, "agent-b": 5 }),
       measureStorage: async () => ({ bytes: 1, complete: true }),
       ...overrides,
+    })();
+
+    it("counts a reserved store the public contract hides", async () => {
+      const snapshot = await scanWith({
+        listPartitions: async () => ["agent-a", "_neo"],
+        inspectRows: rowsByName({ "agent-a": 3, _neo: 900 }),
+      });
+      assert.deepStrictEqual(snapshot.cards.byAgent, [{ id: "agent-a", cards: 3 }], "_neo bleibt unveroeffentlicht");
+      assert.equal(snapshot.cards.largestAgentCards, 900, "wird aber mitgezaehlt, denn GC bereinigt es");
+      assert.equal(snapshot.namespaces[0].rows, 3, "die Namensraum-Summe bleibt die der gezeigten Partitionen");
     });
 
-    const dropped = await scanWith({ listPartitions: async () => ["agent-a", "55736530"] })();
-    assert.equal(dropped.cards.agentCountsComplete, false, "verworfene Kennung");
-    assert.deepStrictEqual(dropped.cards.byAgent, [{ id: "agent-a", cards: 3 }], "der Rest wird weiter gezaehlt");
+    it("ignores a published store the gc job never touches", async () => {
+      const snapshot = await scanWith({
+        listPartitions: async () => ["agent-a", "agent.v2"],
+        inspectRows: rowsByName({ "agent-a": 3, "agent.v2": 900 }),
+      });
+      assert.equal(snapshot.cards.byAgent.length, 2, "beide werden gezeigt");
+      assert.equal(snapshot.cards.largestAgentCards, 3, "agent.v2 faellt nicht unter safeAgentId");
+    });
 
-    const uncounted = await scanWith({
-      inspectRows: async ({ partitionId }) => { if (partitionId === "agent-b") throw new Error("lance is busy"); return 3; },
-    })();
-    assert.equal(uncounted.cards.agentCountsComplete, false, "gescheiterte Zaehlung");
-    assert.deepStrictEqual(uncounted.cards.byAgent, [{ id: "agent-a", cards: 3 }], "agent-b fehlt spurlos");
+    it("keeps its answer when a name only the public contract rejects is dropped", async () => {
+      const snapshot = await scanWith({
+        listPartitions: async () => ["agent-a", "55736530"],
+        inspectRows: rowsByName({ "agent-a": 3, 55736530: 900 }),
+      });
+      assert.deepStrictEqual(snapshot.cards.byAgent, [{ id: "agent-a", cards: 3 }]);
+      assert.equal(snapshot.cards.largestAgentCards, 900, "GC bereinigt es, also zaehlt es — sperren waere falsch");
+    });
 
-    const limited = await scanWith({ maxPartitions: 1 })();
-    assert.equal(limited.cards.agentCountsComplete, false, "Partitionsgrenze erreicht");
+    it("withdraws its answer when one of those stores cannot be counted", async () => {
+      const uncounted = await scanWith({ inspectRows: rowsByName({ "agent-a": 3, "agent-b": new Error("lance is busy") }) });
+      assert.equal(uncounted.cards.largestAgentCards, null, "gescheiterte Zaehlung");
+      assert.deepStrictEqual(uncounted.cards.byAgent, [{ id: "agent-a", cards: 3 }], "agent-b fehlt spurlos");
 
-    assert.equal((await scanWith({})()).cards.agentCountsComplete, true, "vollstaendiger Lauf buergt");
+      const hidden = await scanWith({
+        listPartitions: async () => ["agent-a", "_neo"],
+        inspectRows: rowsByName({ "agent-a": 3, _neo: new Error("lance is busy") }),
+      });
+      assert.equal(hidden.cards.largestAgentCards, null, "auch wenn die Zeile nie sichtbar war");
+
+      assert.equal((await scanWith({ maxPartitions: 1 })).cards.largestAgentCards, null, "Partitionsgrenze erreicht");
+      assert.equal((await scanWith({ listPartitions: async () => { throw new Error("no dir"); } })).cards.largestAgentCards, null, "Liste gescheitert");
+    });
+
+    it("answers zero for a store that is genuinely empty", async () => {
+      assert.equal((await scanWith({ listPartitions: async () => [] })).cards.largestAgentCards, 0);
+      assert.equal((await scanWith({})).cards.largestAgentCards, 5, "vollstaendiger Lauf");
+    });
   });
 });
 

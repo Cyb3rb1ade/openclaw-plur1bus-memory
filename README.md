@@ -29,23 +29,30 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
-### New in v7.15.4 — the health scan vouches for the agent inventory
+### New in v7.15.4 — the gc cap is checked against the set gc actually prunes
 
-The gc cap may never drop below the largest store an agent currently holds, and
-the dashboard checks a proposed cap against `cards.byAgent`. But a partition
-whose row count failed was *removed* from that list rather than reported as
-unknown, and a directory name the public-id contract rejects never entered it.
-The list looked complete while the largest store could be the missing one, so
-the guard compared against too small a number and let a destructive cap
-through. The scan now carries `cards.agentCountsComplete`, and the guard refuses
-unless it is explicitly `true` — a layer that drops the flag refuses rather than
-permits. This is deliberately separate from `agentListingsComplete`, which
-answers a different question for `byPrimaryAgent` (are the ids known?) and stays
-exact there.
+The cap may never drop below the largest store an agent currently holds, and the
+dashboard used to derive that maximum from `cards.byAgent`. That list follows the
+public id contract, which disagrees with gc's contract in both directions:
+`safeAgentId` admits `_neo` and `_customer`, which the scan strips as reserved
+before anyone counts them, and rejects `agent.v2`, which the list publishes. On
+top of that, a partition whose row count failed was *removed* from the list
+rather than reported as unknown. In each case the guard compared against too
+small a number while the largest store could be the missing one, and let a
+destructive cap through.
+
+The scan now answers the question directly: `cards.largestAgentCards` is the
+largest store the gc job would prune, counted by gc's own contract whether or
+not the name may be shown, and `null` as soon as one of those counts is
+missing. `byAgent` remains the display list. `agentListingsComplete` is
+untouched — it answers a different question for `byPrimaryAgent` (are the ids
+known?) and stays exact there.
 
 Refusing with a reason: that case used to surface as `denied_value` ("outside
 the allowed range"), which is not what happened. It has its own code,
-`denied_unknown_count`, and its own message.
+`denied_unknown_count`, and its own message. A store with no partitions at all
+now counts as known (zero) rather than unknown, so a fresh install can set the
+cap.
 
 Known limit: the capacity table still omits an agent whose count failed instead
 of showing it as unknown. That is cosmetic and predates this release.

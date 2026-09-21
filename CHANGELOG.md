@@ -9,27 +9,36 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
-- **Der Gesundheitsscan bürgt jetzt für den Agent-Bestand.** Die Obergrenze der
-  Speicherbereinigung darf nie unter den größten laufenden Bestand fallen; sie
-  prüft das gegen `cards.byAgent`. Scheiterte dort die Zählung einer Partition
-  (`partition_count_failed`, `partition_limit_reached`) oder verwarf der Scan
-  einen Verzeichnisnamen, den der Kennungsvertrag ablehnt
-  (`partition_id_unsupported`), fiel der betroffene Agent **spurlos** aus der
-  Liste — kein `null`, keine Zeile. Die Liste sah vollständig aus, und der
-  Wächter rechnete gegen ein zu niedriges Maximum. Genau der größte Speicher
-  konnte der fehlende sein. Der Scan trägt das Wissen jetzt als
-  `cards.agentCountsComplete` mit; der Wächter verweigert, solange es nicht
-  ausdrücklich `true` ist. Unabhängig von `agentListingsComplete`, das für
-  `byPrimaryAgent` eine andere Frage beantwortet (kennen wir die Kennungen?)
-  und dort exakt bleibt.
+- **Die GC-Obergrenze prüft jetzt gegen die richtige Menge.** Sie darf nie unter
+  den größten laufenden Bestand fallen und rechnete dafür über `cards.byAgent`.
+  Diese Liste folgt aber dem öffentlichen Kennungsvertrag, und der deckt sich in
+  **beide Richtungen** nicht mit dem, was die Bereinigung anfasst: `safeAgentId`
+  lässt `_neo` und `_customer` zu, die der Scan vorab als reserviert entfernt —
+  solche Speicher wurden bereinigt, aber nie gezählt. Umgekehrt lehnt
+  `safeAgentId` `agent.v2` ab, das die Liste zeigt. Dazu kam, dass eine
+  gescheiterte Zählung (`partition_count_failed`, `partition_limit_reached`) den
+  Agenten **spurlos** aus der Liste nimmt — kein `null`, keine Zeile, und für
+  nachgelagerte Schichten unsichtbar. In allen drei Fällen rechnete der Wächter
+  gegen ein zu niedriges Maximum, und genau der größte Speicher konnte der
+  fehlende sein.
+
+  Der Scan nennt die Antwort jetzt selbst: `cards.largestAgentCards` ist der
+  größte Speicher, den der GC-Job bereinigen würde — gezählt nach dessen
+  eigenem Vertrag, ob der Name gezeigt werden darf oder nicht, und `null`,
+  sobald eine dieser Zählungen fehlt. `byAgent` bleibt unverändert die
+  Anzeigeliste. Unberührt davon `agentListingsComplete`, das für
+  `byPrimaryAgent` eine andere Frage beantwortet (kennen wir die Kennungen?).
 - **Die Oberfläche nennt den echten Grund.** Die Absage bei unbekanntem Bestand
   lief unter `denied_value` und wurde als „außerhalb des erlaubten Bereichs"
   erklärt — im Fenster nach jedem Neustart also mit einer falschen Begründung.
   Sie hat mit `denied_unknown_count` einen eigenen Code und einen eigenen Text.
 
-Auf diesem Host nachgemessen: 58 Agent-Partitionen, alle Kennungen gültig, 70
-von 128 Partitionen geprüft, `agentCountsComplete: true` — die Steuerung bleibt
-bedienbar.
+Nebenbei behoben: Ein Bestand ohne jede Partition gilt jetzt als bekannt (0)
+statt als unbekannt — eine frische Installation kann die Obergrenze setzen.
+
+Auf diesem Host nachgemessen: 58 gezeigte Agent-Partitionen, `_neo` mitgezählt
+(0 Zeilen), 70 von 128 Partitionen geprüft, `largestAgentCards: 12905` —
+die Steuerung bleibt bedienbar.
 
 ## [7.15.3] — 2026-09-21
 
