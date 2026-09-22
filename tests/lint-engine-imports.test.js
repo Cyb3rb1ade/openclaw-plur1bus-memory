@@ -170,4 +170,52 @@ describe("lint-engine-imports", () => {
     const result = run(base);
     assert.equal(result.status, 0, result.out);
   });
+
+  // Rule 5 (PR-03i). A moved range can arrive in the engine still holding a
+  // bare `api` parameter or ctx key; `.api` alone does not see that, and
+  // scripts/lint-no-api-outside-adapter.mjs allowlists nothing but a member
+  // read. The bare identifier is the form that actually appears when a
+  // register()-scope block is lifted verbatim.
+  it("rejects a bare api parameter in engine code", (t) => {
+    const base = fixture(t, {
+      "engine/bare.js": 'export function h(api) {\n  return api.on("x", () => {});\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/bare\.js:1/);
+    assert.match(result.out, /must not name the OpenClaw `api`/);
+  });
+
+  it("rejects a bare api destructured from the context object", (t) => {
+    const base = fixture(t, {
+      "engine/ctx.js": 'export function h(ctx) {\n  const { api, host } = ctx;\n  return [api, host];\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/ctx\.js:2/);
+  });
+
+  it("does not fire on words that merely contain api", (t) => {
+    const base = fixture(t, {
+      "engine/near.js": 'export function h(apiKey, rapidMode, openaiClient) {\n  return [apiKey, rapidMode, openaiClient, { apiVersion: 1 }];\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 0, result.out);
+  });
+
+  it("does not fire on api inside a comment", (t) => {
+    const base = fixture(t, {
+      "engine/prose.js": '// the adapter hands api to the host; the engine never sees it\n/* api, again */\nexport const x = 1;\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 0, result.out);
+  });
+
+  it("still allows a bare api in adapter code", (t) => {
+    const base = fixture(t, {
+      "adapter/bare-ok.js": 'export function h(api) {\n  return api.on("x", () => {});\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 0, result.out);
+  });
 });
