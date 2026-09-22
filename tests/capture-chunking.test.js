@@ -135,7 +135,11 @@ describe("expandForCapture", () => {
 });
 
 describe("Verdrahtung im Capture-Pfad", () => {
-  const quelle = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  // PR-03e (engine-extraction M1a) hat den agent_end-Capture-Rumpf aus
+  // index.js nach engine/capture/capture-turn.js verschoben; index.js
+  // registriert den Hook nur noch. Die Verdrahtungspruefungen folgen dem
+  // Rumpf — unveraendert, nur an seinem neuen Ort.
+  const quelle = readFileSync(new URL("../engine/capture/capture-turn.js", import.meta.url), "utf8");
 
   it("ruft die Aufteilung auf", () => {
     assert.match(quelle, /expandForCapture\(preppedOk/);

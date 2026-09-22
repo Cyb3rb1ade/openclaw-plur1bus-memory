@@ -71,12 +71,20 @@ describe("shouldSkipAutoCaptureForInternalTurn", () => {
   });
 
   it("gates internal turns before the NEO worker or any durable capture path", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    const autoCaptureStart = source.indexOf("if (autoCapture) {");
-    const handlerStart = source.indexOf('api.on("agent_end"', autoCaptureStart);
-    const skipAt = source.indexOf("shouldSkipAutoCaptureForInternalTurn(event, ctx)", handlerStart);
+    // PR-03e (engine-extraction M1a) moved the agent_end auto-capture body out
+    // of index.js into engine/capture/capture-turn.js; index.js keeps only the
+    // registration. The ordering guard follows the body, and `ctx` is the
+    // handler's second parameter there, now named `hookCtx`.
+    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const autoCaptureStart = indexSource.indexOf("if (autoCapture) {");
+    const registrationAt = indexSource.indexOf("registerCaptureHook({", autoCaptureStart);
+    assert.ok(autoCaptureStart >= 0 && registrationAt >= 0, "index.js still registers auto-capture");
+
+    const source = readFileSync(new URL("../engine/capture/capture-turn.js", import.meta.url), "utf8");
+    const handlerStart = source.indexOf("return async function captureTurn(");
+    const skipAt = source.indexOf("shouldSkipAutoCaptureForInternalTurn(event, hookCtx)", handlerStart);
     const neoAt = source.indexOf("neoWorkerRuntime.runNeoAgentEnd", handlerStart);
-    assert.ok(autoCaptureStart >= 0 && handlerStart >= 0 && skipAt >= 0 && neoAt >= 0);
+    assert.ok(handlerStart >= 0 && skipAt >= 0 && neoAt >= 0);
     assert.ok(skipAt < neoAt, "the internal-turn gate must run before NEO capture");
   });
 });

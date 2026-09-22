@@ -512,9 +512,15 @@ describe("deterministic LLM result-cache allowlist", () => {
     assertEveryCallIsDeterministic(knowledgeSection, "KNOWLEDGE_UPDATE", 2);
     assertEveryCallIsDeterministic(knowledgeToolSection, "KNOWLEDGE_UPDATE", 2);
 
+    // PR-03e (engine-extraction M1a) moved the agent_end capture pipeline's
+    // summarizeForCapture(...) call site out of index.js into
+    // engine/capture/capture-turn.js; the scope check follows it, and the
+    // "never the merging route" guards apply to both files.
+    const captureTurnSource = readSource("engine/capture/capture-turn.js");
     assert.doesNotMatch(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
+    assert.doesNotMatch(captureTurnSource, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
     assert.doesNotMatch(source, /makeQuerySummarizer\(mergingLlmCfg/);
-    assert.match(source, /summarizeForCapture\([\s\S]{0,250}?captureSummaryLlmCfg/);
+    assert.match(captureTurnSource, /summarizeForCapture\([\s\S]{0,250}?captureSummaryLlmCfg/);
     // PR-03d (engine-extraction M1a) moved the recall assembly's
     // makeQuerySummarizer(...) call site out of index.js into
     // engine/recall/assemble-prompt-context.js; the count spans both files so
