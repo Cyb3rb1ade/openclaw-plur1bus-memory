@@ -338,6 +338,7 @@ export const DEPLOY_FILES = [
   "scripts/importance-metrics.mjs",
   "scripts/dedupe-memory-ids.mjs",
   "scripts/importance-backfill.mjs",
+  "scripts/lint-engine-imports.mjs",
   "scripts/lint-no-api-outside-adapter.mjs",
   "scripts/repair-tombstones.mjs",
   "scripts/reapply-tombstones.mjs",
