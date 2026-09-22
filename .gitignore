@@ -22,6 +22,7 @@ docs/**
 !docs/configuration.md
 !docs/compatibility-openclaw-2026.8.1-beta.3.md
 !docs/compatibility-openclaw.md
+!docs/engine-api.md
 !docs/recall-architecture.md
 !docs/migration-v6.md
 !docs/release-checklist.md
