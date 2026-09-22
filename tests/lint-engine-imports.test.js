@@ -14,10 +14,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const script = join(root, "scripts", "lint-engine-imports.mjs");
@@ -36,13 +37,13 @@ function run(target) {
 
 /**
  * Materialise a throwaway tree with `engine/` and `adapter/` roots.
- * @param {import("node:test").TestContext} t Test context, for cleanup.
+ * Cleanup is handled by makeTempDir's own process-exit hook.
+ * @param {import("node:test").TestContext} _t Unused; kept for call-site symmetry.
  * @param {Record<string, string>} files Root-relative path → source.
  * @returns {string} The tmpdir root.
  */
-function fixture(t, files) {
-  const base = mkdtempSync(join(tmpdir(), "lint-engine-"));
-  t.after(() => rmSync(base, { recursive: true, force: true }));
+function fixture(_t, files) {
+  const base = makeTempDir("lint-engine-");
   mkdirSync(join(base, "engine"), { recursive: true });
   mkdirSync(join(base, "adapter"), { recursive: true });
   for (const [relativePath, source] of Object.entries(files)) {
