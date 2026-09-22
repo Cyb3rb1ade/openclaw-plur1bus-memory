@@ -338,6 +338,7 @@ export const DEPLOY_FILES = [
   "scripts/run-graph-links-once.mjs",
   "scripts/run-semantic-discover-once.mjs",
   "scripts/run-semantic-link-index-phase43c.mjs",
+  "scripts/typecheck.mjs",
   "scripts/verify-plugin-deploy.mjs",
   "scripts/verify-workspace-writer.mjs",
   "scripts/lib/deploy-integrity.mjs",
