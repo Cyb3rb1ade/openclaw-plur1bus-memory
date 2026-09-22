@@ -166,10 +166,12 @@ export function baseConfig(baseDbPath, overrides = {}) {
 
 /**
  * @param {object} scenario
+ * @param {{freezeClock?: boolean}} [options] `freezeClock: false` keeps the real
+ *   clock, which the latency probe needs; the golden test leaves it on.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
@@ -189,7 +191,7 @@ export async function runScenario(scenario) {
     workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-ws-"));
     stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
     process.env.OPENCLAW_HOME = stateDir;
-    restoreClock = freezeClock();
+    restoreClock = useFrozenClock ? freezeClock() : () => {};
     restoreEmbedder = stubEmbedder(topicOf);
     mkdirSync(join(workspaceDir, "memory"), { recursive: true });
     if (scenario.knowledge) {
