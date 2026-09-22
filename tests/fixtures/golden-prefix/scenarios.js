@@ -33,6 +33,68 @@ function eventFor(prompt, session, run) {
 /** A block of filler large enough to push the join past the 17 000-char cap. */
 const FILLER = "Deployment note. ".repeat(700); // ~11 900 chars
 
+/**
+ * Only a record's *summary* reaches the prompt, capped at 400 chars by
+ * `sanitizeMemoryTextForPrompt(rawDisplay, 400)` (lib/relevant-memory-context.js:122).
+ * The 17 000-char budget is therefore reachable only through record *count*,
+ * not through one long text. 60 records of ~350 visible chars overshoot it by
+ * roughly a factor of two.
+ */
+const TRUNCATION_RECORD_COUNT = 60;
+
+/**
+ * A distinct ~350-char summary per record. Distinct text matters because two
+ * identical summaries would collapse in the origin-key pass even with
+ * `recall.dedup` off.
+ * @param {number} index
+ * @returns {string}
+ */
+function bulkSummary(index) {
+  const label = String(index).padStart(2, "0");
+  const body = `Rollout checkpoint ${label} covers the staged database migration, the blue-green cutover window and the agreed rollback signal. `;
+  return `Runbook step ${label}: ${body.repeat(3)}`.slice(0, 350);
+}
+
+/**
+ * Deterministic, fixed ids — the index is the only varying part, so a given
+ * record always carries the same id across runs and machines.
+ * @param {number} index
+ * @returns {string}
+ */
+function bulkId(index) {
+  return `77777777-7777-4777-8777-${String(index).padStart(12, "0")}`;
+}
+
+const BULK_MEMORIES = Array.from({ length: TRUNCATION_RECORD_COUNT }, (_, index) => ({
+  id: bulkId(index),
+  text: `Rollout runbook entry ${index}. ${bulkSummary(index)}`,
+  summary: bulkSummary(index),
+  category: "fact",
+  ageDays: 1 + (index % 30),
+}));
+
+const BULK_TOPICS = Object.fromEntries([
+  ["walk me through the rollout runbook", "rollout"],
+  ...BULK_MEMORIES.flatMap((memory) => [
+    [memory.text, "rollout"],
+    [memory.summary, "rollout"],
+  ]),
+]);
+
+/** The canonical KNOWLEDGE.md used by `recall-canonical-flagged`. */
+const CANONICAL_KNOWLEDGE = "# Release Policy\n\nThe project ships on Fridays and never on a public holiday.\n";
+
+/**
+ * The exact string `getKnowledgeChunks` embeds for the single section of
+ * CANONICAL_KNOWLEDGE: `parseKnowledgeMd` (lib/recall-pipeline.js:812-832)
+ * keeps the heading line and every following line, each with its "\n", and the
+ * trailing empty line from the final split contributes one more. Mapping it to
+ * the query's topic gives cosine 1.0, which clears the 0.30 `canonicalMinScore`
+ * default (index.js:4703) that leaves canonical empty in
+ * `recall-knowledge-canonical`.
+ */
+const CANONICAL_SECTION_TEXT = "# Release Policy\n\nThe project ships on Fridays and never on a public holiday.\n\n";
+
 export const SCENARIOS = [
   {
     name: "recall-basic",
@@ -148,5 +210,64 @@ export const SCENARIOS = [
     config: { autoRecall: false, gc: { enabled: true } },
     event: eventFor("hello again", "golden-session-5", "golden-run-5"),
     ctx: ctxFor("golden-session-5", "golden-run-5"),
+  },
+  {
+    name: "recall-truncated",
+    agentId: AGENT,
+    workspaceKey: WORKSPACE,
+    topics: BULK_TOPICS,
+    memories: BULK_MEMORIES,
+    // Two different truncators have to fire here.
+    //
+    // `semanticCompression` defaults to on (index.js:13029) with a 240-token
+    // budget and would shrink every display long before either of them; off so
+    // the record bulk survives. `candidateTopK` has to clear
+    // `maxPromptMemories` or the pipeline never carries 60 candidates that far.
+    //
+    // `globalInjectMaxChars` is 11 000 rather than the product default 17 000
+    // because the memories block is *already* hard-capped at 12 000 by
+    // `truncateMemoryContext` (lib/relevant-memory-context.js:67,261-262) and
+    // index.js never overrides that default — so at 17 000
+    // `applyGlobalInjectBudget` is unreachable and would be left uncovered.
+    // At 11 000 both cut: the inner cap emits `<!-- memory context truncated -->`
+    // and the global budget then trims the droppable memories block on top.
+    config: {
+      recall: {
+        dedup: false,
+        canonicalFirst: false,
+        canonicalMaxItems: 1,
+        maxPromptMemories: TRUNCATION_RECORD_COUNT,
+        candidateTopK: 100,
+        semanticCompression: { enabled: false },
+        decisionTrace: { enabled: false, includeInPrompt: false },
+        globalInjectMaxChars: 11_000,
+      },
+    },
+    event: eventFor("walk me through the rollout runbook", "golden-session-6", "golden-run-6"),
+    ctx: ctxFor("golden-session-6", "golden-run-6"),
+  },
+  {
+    name: "recall-canonical-flagged",
+    agentId: AGENT,
+    workspaceKey: WORKSPACE,
+    knowledge: CANONICAL_KNOWLEDGE,
+    topics: {
+      "when may we release": "release-policy",
+      [CANONICAL_SECTION_TEXT]: "release-policy",
+      "The team agreed to ship on Fridays.": "release-policy",
+      "ship on fridays": "release-policy",
+    },
+    memories: [
+      {
+        id: "88888888-8888-4888-8888-888888888888",
+        text: "The team agreed to ship on Fridays.",
+        summary: "ship on fridays",
+        category: "fact",
+        ageDays: 5,
+      },
+    ],
+    config: {},
+    event: eventFor("when may we release", "golden-session-7", "golden-run-7"),
+    ctx: ctxFor("golden-session-7", "golden-run-7"),
   },
 ];
