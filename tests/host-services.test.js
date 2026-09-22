@@ -72,13 +72,29 @@ describe("createHostServices", () => {
     assert.deepEqual(createHostServices({}).config(), {});
   });
 
-  it("resolves a workspace dir through the runtime and undefined without one", () => {
-    assert.equal(createHostServices({}).workspaceDir("a"), undefined);
+  it("resolves a workspace dir through the runtime and undefined without one", async () => {
+    assert.equal(await createHostServices({}).workspaceDir("a"), undefined);
     const api = {
       config: { marker: true },
       runtime: { agent: { resolveAgentWorkspaceDir: (config, agentId) => `/ws/${agentId}/${config.marker}` } },
     };
-    assert.equal(createHostServices(api).workspaceDir("agent-1"), "/ws/agent-1/true");
+    assert.equal(await createHostServices(api).workspaceDir("agent-1"), "/ws/agent-1/true");
+  });
+
+  it("awaits an async resolveAgentWorkspaceDir, as every real host provides", async () => {
+    const api = {
+      config: { marker: true },
+      runtime: {
+        agent: {
+          async resolveAgentWorkspaceDir(config, agentId) {
+            return `/ws/${agentId}/${config.marker}`;
+          },
+        },
+      },
+    };
+    const result = createHostServices(api).workspaceDir("agent-2");
+    assert.ok(result instanceof Promise);
+    assert.equal(await result, "/ws/agent-2/true");
   });
 
   it("carries the four platform capabilities", () => {
@@ -97,13 +113,13 @@ describe("createHostServices", () => {
 });
 
 describe("createStubHost", () => {
-  it("is inert and complete by default", () => {
+  it("is inert and complete by default", async () => {
     const host = createStubHost();
     assert.equal(host.logger.info("x"), undefined);
     assert.equal(host.runtime, null);
     assert.equal(host.llm, undefined);
     assert.deepEqual(host.config(), {});
-    assert.equal(host.workspaceDir("a"), undefined);
+    assert.equal(await host.workspaceDir("a"), undefined);
     assert.equal(typeof host.clock(), "number");
     assert.equal(typeof host.platform.securePath, "function");
   });

@@ -62,7 +62,7 @@ assertTrue<Exact<(typeof run)["outcome"], "completed" | "skipped" | "failed" | "
 const minimalHost: HostServices = {
   logger: { info() {}, warn() {}, error() {}, debug() {} },
   stateDir: "/tmp/plur1bus",
-  workspaceDir: () => undefined,
+  workspaceDir: async () => undefined,
   config: (): EngineConfig => ({}),
   platform: {
     securePath: () => ({ applied: true, mechanism: "chmod" }),

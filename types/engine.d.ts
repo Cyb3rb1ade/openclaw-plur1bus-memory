@@ -29,9 +29,10 @@
  * consumers are never in disagreement at any commit.
  *
  * Changelog: 1.1.0 — SecurePathResult.reason gains "acl-tool-unavailable" (Task 5).
+ *            1.2.0 — HostServices.workspaceDir becomes async (Task 6).
  */
 
-export type ContractVersion = "1.1.0";
+export type ContractVersion = "1.2.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -148,7 +149,7 @@ export interface HostServices {
   stateDir: string;
   /** Replaces memory-host-runtime.js:104-111. A harness agent without a real
    *  workspace gets a synthetic one under `stateDir` (engine-extraction R7). */
-  workspaceDir(agentId: AgentId): string | undefined;
+  workspaceDir(agentId: AgentId): Promise<string | undefined>;
   config(): EngineConfig;
   mutateConfig?(patch: Record<string, unknown>): Promise<void>;
   llm?: { complete(params: LlmParams): Promise<LlmResult> };
