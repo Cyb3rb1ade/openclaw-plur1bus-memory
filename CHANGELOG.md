@@ -28,6 +28,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   zwischen 40 und 100 Kandidaten ist unbetreten; der Reranker wählt dort aus
   einem breiteren Feld, was Ranking-Zeit kostet und keinen Kontext.
 
+### Behoben
+
+- **Der Traum-Abschluss laedt das OpenClaw-SDK nicht mehr aus dem Test heraus.**
+  `lightDream` reicht jetzt `importHostEvents` an `emitDreamCompletedEvent`
+  durch. Der Injektionspunkt gab es dort schon, er war nur nicht verdrahtet,
+  also lief jeder Testlauf ueber den echten SDK-Pfad: 305 ms fuer den Load und
+  1929 ms fuer das erste Host-Event je Prozess, prozessweit einmalig.
+
+  Damit riss `tests/abort-commit-barriers.test.js` seine 2000-ms-Frist, bevor
+  der `dream-echo`-Aufruf ueberhaupt startete — der Test scheiterte im Aufbau
+  und pruefte die Barrieren, die er absichern soll, faktisch nicht. Sichtbar
+  war das nur auf Hosts mit installiertem OpenClaw; ohne das Paket scheitert
+  der Loader nach 20 ms, die fail-open-Behandlung greift, und der Lauf war
+  gruen. Deshalb blieb es in der CI unbemerkt.
+
+  Produktiv aendert sich nichts: Ohne uebergebene Bruecke greift weiterhin der
+  Standardpfad, und im langlebigen Gateway faellt der Lazy-Load einmal beim
+  ersten Traum nach einem Neustart an.
+
 ## [7.15.4] — 2026-09-21
 
 ### Behoben

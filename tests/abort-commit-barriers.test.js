@@ -84,6 +84,11 @@ function makeDreamHarness(t) {
       personaLlmCfg: { feature: "persona-voice" },
       logger: { info() {}, warn() {} },
       workspaceDir,
+      // Ohne diese Attrappe laedt der Lauf das echte OpenClaw-SDK: 305 ms
+      // Load plus 1929 ms fuer das erste Host-Event je Prozess. Das reisst
+      // die 2000-ms-Frist von waitForStart, bevor dream-echo ueberhaupt
+      // startet — die Barriere, die dieser Test prueft, kam nie dran.
+      importHostEvents: async () => ({ appendMemoryHostEvent: async () => {} }),
     },
   };
 }

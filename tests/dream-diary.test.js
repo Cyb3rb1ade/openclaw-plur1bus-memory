@@ -162,3 +162,44 @@ test("diaryScopeAllowed admits the agent's own scope under both spellings and re
   assert.equal(diaryScopeAllowed("workspace"), false);
   assert.equal(diaryScopeAllowed("user"), false);
 });
+
+// Die Bruecke ist von lightDream aus injizierbar. Ohne diese Verdrahtung laedt
+// jeder Testlauf das echte OpenClaw-SDK: 305 ms fuer den Load plus 1929 ms fuer
+// das erste Event je Prozess. Das hat die 2000-ms-Frist in
+// abort-commit-barriers.test.js gerissen, und zwar nur auf Hosts, auf denen
+// OpenClaw installiert ist — ohne das Paket scheitert der Loader nach 20 ms
+// und der Test lief gruen durch.
+test("lightDream reicht die Host-Event-Bruecke durch, statt das SDK zu laden", async () => {
+  const { lightDream } = await import("../lib/dreaming/light-dream.js");
+  const workspaceDir = mkdtempSync(join(tmpdir(), "light-dream-host-events-"));
+  const seen = [];
+  const createdAt = new Date().toISOString();
+  try {
+    await lightDream({
+      turns: Array.from({ length: 3 }, (_, i) => ({
+        id: `turn-${i}`, agentId: "diary-agent", workspaceKey: "default",
+        role: i % 2 === 0 ? "user" : "assistant", content: `Nachricht ${i} mit etwas Inhalt`, createdAt,
+      })),
+      workspaceDir,
+      neoStore: { readReactions: () => [], appendDreams: () => {}, appendBehaviorCards: () => {} },
+      db: { search: async () => [], store: async () => {} },
+      insightLlmCfg: { feature: "conversation-insights" },
+      narrativeLlmCfg: { feature: "dream-narrative" },
+      echoLlmCfg: { feature: "dream-echo" },
+      personaLlmCfg: { feature: "persona-voice" },
+      narrativeCfg: { enabled: true, storeAsMemory: false },
+      logger: { info: () => {}, warn: () => {} },
+      callLlm: async (_messages, cfg) => ({
+        "conversation-insights": JSON.stringify(["A durable project insight for the dream."]),
+        "dream-narrative": "A sufficiently long dream narrative crosses a quiet archive and returns with one clear project decision.",
+        "dream-echo": JSON.stringify({ sentence: "Die Entscheidung ging mir durch den Kopf.", topics: ["decision"] }),
+      })[cfg.feature],
+      importHostEvents: async () => ({
+        appendMemoryHostEvent: async (_dir, event) => { seen.push(event.type); },
+      }),
+    });
+    assert.deepEqual(seen, ["memory.dream.completed"], "die injizierte Bruecke muss das Ereignis erhalten");
+  } finally {
+    rmSync(workspaceDir, { recursive: true, force: true });
+  }
+});
