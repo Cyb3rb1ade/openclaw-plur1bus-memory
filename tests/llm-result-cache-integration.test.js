@@ -525,10 +525,16 @@ describe("deterministic LLM result-cache allowlist", () => {
     // makeQuerySummarizer(...) call site out of index.js into
     // engine/recall/assemble-prompt-context.js; the count spans both files so
     // every scoped summarizer stays covered, not just the ones still in index.js.
+    // PR-03g moved the three remaining registered-command call sites into
+    // adapter/openclaw/register-commands.js (index.js 4 -> 1), so the sum now
+    // spans three files. The total is still exactly 5.
     const summarizerPattern = /makeQuerySummarizer\(\s*(?:mergingEnabled\s*\?\s*)?recallQueryLlmCfg/g;
     const assemblePromptContextSource = readSource("engine/recall/assemble-prompt-context.js");
+    const registerCommandsSource = readSource("adapter/openclaw/register-commands.js");
     assert.equal(
-      countMatches(source, summarizerPattern) + countMatches(assemblePromptContextSource, summarizerPattern),
+      countMatches(source, summarizerPattern)
+        + countMatches(assemblePromptContextSource, summarizerPattern)
+        + countMatches(registerCommandsSource, summarizerPattern),
       5
     );
     assert.equal(countMatches(bridgeStoreSection, /callMergeCheck\([\s\S]{0,220}?mergingLlmCfg,[\s\S]{0,80}?storeAgentId,[\s\S]{0,80}?storeCtx\.callContext/g), 1);

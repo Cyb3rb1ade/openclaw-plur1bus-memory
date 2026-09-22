@@ -17,7 +17,11 @@ const engineSources = [
   "../engine/capture/capture-turn.js",
   "../engine/commands/plur1bus-command.js",
 ].map((relative) => readFileSync(new URL(relative, import.meta.url), "utf8"));
-const allRuntimeSources = [indexSource, ...engineSources];
+// PR-03g moved the chat-command registration and the six user-facing command
+// bodies into the OpenClaw adapter; it carries the `workspace` command call
+// sites and the native policy-runtime registration.
+const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+const allRuntimeSources = [indexSource, ...engineSources, commandsSource];
 
 describe("workspace policy runtime gates", () => {
   it("constructs one policy store and guard below the PLUR1BUS state root", () => {
@@ -62,8 +66,12 @@ describe("workspace policy runtime gates", () => {
   });
 
   it("registers the native policy runtime with a session-derived context", () => {
-    assert.match(indexSource, /registerWorkspacePolicyRuntime\(\{/);
-    assert.match(indexSource, /getSessionEntry\(\{\s*agentId,\s*sessionKey,/);
-    assert.match(indexSource, /spawnedWorkspaceDir/);
+    // PR-03g moved the chat-command registration — including the
+    // registerWorkspacePolicyRuntime({…}) call — out of index.js into
+    // adapter/openclaw/register-commands.js; all three anchors left index.js
+    // (1 -> 0, 2 -> 0, 1 -> 0), so the guard follows them there.
+    assert.match(commandsSource, /registerWorkspacePolicyRuntime\(\{/);
+    assert.match(commandsSource, /getSessionEntry\(\{\s*agentId,\s*sessionKey,/);
+    assert.match(commandsSource, /spawnedWorkspaceDir/);
   });
 });

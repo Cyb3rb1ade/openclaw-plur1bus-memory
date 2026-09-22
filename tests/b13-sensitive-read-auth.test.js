@@ -136,10 +136,16 @@ describe("B13 sensitive command-read authorization matrix", () => {
   });
 
   it("authorizes direct handlers before I/O locale resolution and preserves runtime LLM identity", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    for (const marker of ["const runStatusCommand", "handler: async (commandCtx) => {\n            const deniedLen = checkArgsLength(commandCtx);", "const runMemoryCommand"]) {
+    // PR-03g (engine-extraction M1a) moved the six user-facing command bodies
+    // and their registration out of index.js into
+    // adapter/openclaw/register-commands.js; all three markers left index.js
+    // (1 -> 0 each), so the scan follows them. The block sits six columns
+    // further left there, which is why the two indentation-bearing markers
+    // carry 8 and 2 spaces instead of 14 and 8.
+    const source = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    for (const marker of ["const runStatusCommand", "handler: async (commandCtx) => {\n      const deniedLen = checkArgsLength(commandCtx);", "const runMemoryCommand"]) {
       const start = source.indexOf(marker);
-      const end = source.indexOf("\n        };", start);
+      const end = source.indexOf("\n  };", start);
       const handler = source.slice(start, end);
       assert.ok(handler.indexOf("resolveRegisteredMemoryContext") < handler.indexOf("resolveCommandLocale"), marker);
       assert.ok(handler.indexOf("checkAuth(memoryCtx") < handler.indexOf("resolveCommandLocale"), marker);
