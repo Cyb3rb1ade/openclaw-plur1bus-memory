@@ -157,6 +157,7 @@ import { createDbAdapter } from "./lib/db-adapter.js";
 import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
 import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
 import { createLocalModelGenerationLifecycle, registerGatewayShutdown, registerLocalModelOwnershipServiceAfterLifecycle, registerModelPreparationServiceAfterLifecycle, registerReembeddingRecoveryServiceAfterLifecycle, runtimeIfUsable, shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "./lib/runtime-shutdown.js";
+import { createHostServices } from "./lib/host-services.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
   openDirectoryCapability,
@@ -449,7 +450,7 @@ let _featureCronsHintCache;
 
 const TABLE_NAME = "memories";
 
-// Modulweiter Debug-Logger: wird in register() auf api.logger gesetzt. So
+// Modulweiter Debug-Logger: wird in register() auf host.logger gesetzt. So
 // können auch leere best-effort-catches (#10) ihren Fehler auf Debug-Level
 // loggen statt ihn komplett zu schlucken — ohne in jedem Helper api zu haben.
 let pluginLogger = null;
@@ -4442,14 +4443,15 @@ const plugin = {
     const credentialResolver = createConfiguredSecretInputResolver({
       getConfig: () => runtimeIfUsable(api)?.config?.current?.() || api.config || {},
     });
-    pluginLogger = api.logger;
+    const host = createHostServices(api);
+    pluginLogger = host.logger;
     if (typeof api.registerMemoryCapability === "function") {
       // The host asks the memory-slot owner for a runtime; without it the
       // Memory page reports "memory plugin unavailable". Everything the
       // runtime touches is created further down in this function, so the
       // dependencies are closures that resolve when the host actually calls.
       const memoryHostRuntime = createMemoryHostRuntime({
-        logger: api.logger,
+        logger: host.logger,
         hostConfig: () => runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {},
         dbPath: () => baseDbPath,
         provider: () => ({
@@ -4467,7 +4469,7 @@ const plugin = {
         // user principal, so this reads the agent's private partition only.
         recall: async ({ agentId: forAgentId, query, limit, signal }) => {
           const memoryCtx = resolveMemoryRequestContext({ agentId: forAgentId });
-          return withAccessReadDbs(pool, sharedMemoryPool, forAgentId, { ...memoryCtx, logger: api.logger }, async (readDbs) => {
+          return withAccessReadDbs(pool, sharedMemoryPool, forAgentId, { ...memoryCtx, logger: host.logger }, async (readDbs) => {
             const initialized = [];
             for (const entry of readDbs) {
               const ok = await entry.db.init();
@@ -4477,7 +4479,7 @@ const plugin = {
             const phaseTimer = createRecallPhaseTimer({
               softBudgetMs,
               hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
-              logger: api.logger,
+              logger: host.logger,
             });
             const { memories } = await runMergedNamespaceRecall(initialized, {
               query,
@@ -4497,7 +4499,7 @@ const plugin = {
               rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
               rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
               summaryMaxWords,
-              logger: api.logger,
+              logger: host.logger,
               agentId: forAgentId,
               memoryCtx,
               workspaceKey: null,
@@ -4517,7 +4519,7 @@ const plugin = {
         runtime: memoryHostRuntime,
       });
     } else {
-      api.logger?.info?.(
+      host.logger.info(
         "memory-lancedb-namespaced: OpenClaw registerMemoryCapability API unavailable; legacy tool and hook surfaces remain active.",
       );
     }
@@ -4545,7 +4547,7 @@ const plugin = {
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const epistemicCutoffBoot = ensureEpistemicCutoff(baseDbPath);
     if (!epistemicCutoffBoot.ok) {
-      api.logger?.warn?.(`memory-lancedb-namespaced: epistemic cutoff unavailable (${epistemicCutoffBoot.reason})`);
+      host.logger.warn(`memory-lancedb-namespaced: epistemic cutoff unavailable (${epistemicCutoffBoot.reason})`);
     }
     const configuredNamespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
       explicit: namespacesExplicit,
@@ -4561,7 +4563,7 @@ const plugin = {
       maxBytes: cfg.runtime?.llmResultCacheMaxBytes ?? 67_108_864,
       metrics: cfg.runtime?.llmResultCacheMetrics !== false,
       baseDbPath,
-      logger: api.logger,
+      logger: host.logger,
     });
     // 7.12.58: Hintergrund-Features ohne eigenes Modell folgten dem Hauptmodell
     // des Agenten. Episodenextraktion, Traumdeutung, Gesprächsanalyse und die
@@ -4600,7 +4602,7 @@ const plugin = {
         feature,
         agentModels: featureModelOverrides(cfg, feature),
         runtimeLlm: runtimeIfUsable(api)?.llm,
-        logger: api.logger,
+        logger: host.logger,
         resultCache: llmResultCache,
         credentialUnavailable,
         // 7.12.55: Nur wenn der Betreiber es einschaltet, schreibt der Router
@@ -4612,7 +4614,7 @@ const plugin = {
       return isLlmRouteAvailable(route) ? route : null;
     };
     if (providerMigration.changed) {
-      api.logger.info(
+      host.logger.info(
         `memory-lancedb-namespaced: applied local provider defaults for empty legacy install (${providerMigration.migrations.join(", ")})`
       );
     }
@@ -4649,7 +4651,7 @@ const plugin = {
           // is worth a warning. One that is merely on by default is not: with
           // opt-out that would warn every user on every start about something
           // they never asked for.
-          reportDormantFeature(api.logger, {
+          reportDormantFeature(host.logger, {
             explicit: p.explicit,
             message: `memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`,
           });
@@ -4687,7 +4689,7 @@ const plugin = {
           baseUrl: normalizedEmbeddingCfg.fallback.baseUrl,
         }
       : null;
-    if (fallbackEmbeddingCfg) api.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl || "openai"})`);
+    if (fallbackEmbeddingCfg) host.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl || "openai"})`);
     const autoCapture = cfg.autoCapture !== false;
     const autoRecall = cfg.autoRecall !== false;
 
@@ -4713,7 +4715,7 @@ const plugin = {
     const recallEventLoopLagSnapshot = recallCfg.eventLoopLagSnapshot !== false;
     const runtimeScheduler = createBackgroundMemoryScheduler({
       config: { ...(cfg.runtime || {}), eventLoopLagSnapshot: recallEventLoopLagSnapshot },
-      logger: api.logger,
+      logger: host.logger,
     });
 
     // Configurable thresholds
@@ -4737,7 +4739,7 @@ const plugin = {
     // je erinnerter Erinnerung) laeuft nicht mehr im Prompt-Hook, sondern
     // seriell je Agent, angestossen nach dem Recall des Turns.
     const replyOutcomeDynamics = getSharedDeferredDynamicsQueue({
-      logger: api.logger,
+      logger: host.logger,
       maxBacklog: Math.max(1, Number(replyOutcomeCfg.dynamicsMaxBacklog) || 20),
       fallbackDelayMs: Math.max(0, Number(replyOutcomeCfg.dynamicsFallbackDelayMs ?? 10_000)),
     });
@@ -4770,7 +4772,7 @@ const plugin = {
       ? createFeatureRoute("merging", mergingCfg)
       : null;
     if (mergingEnabled && mergingLlmCfg) {
-      api.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, route: ${mergingLlmCfg.kind})`);
+      host.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, route: ${mergingLlmCfg.kind})`);
     }
 
     // Dreaming-Narrative config: menschenähnliche, stimmungsgefärbte Träume
@@ -4800,7 +4802,7 @@ const plugin = {
       ? createFeatureRoute("schicht15", schicht15Cfg)
       : null;
     if (schicht15LlmCfg) {
-      api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance}, route: ${schicht15LlmCfg.kind})`);
+      host.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance}, route: ${schicht15LlmCfg.kind})`);
     }
 
     // Skill Miner config
@@ -4810,7 +4812,7 @@ const plugin = {
       ? createFeatureRoute("skillMiner", skillMinerCfg)
       : null;
     if (skillMinerLlmCfg) {
-      api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (route: ${skillMinerLlmCfg.kind})`);
+      host.logger.info(`memory-lancedb-namespaced: skillMiner enabled (route: ${skillMinerLlmCfg.kind})`);
     }
     // 7.12.48: Auto-Apply geminter Skills. "host" folgt dem Selbstlern-Modus
     // des Hosts (skills.workshop.autonomous.mode, ungesetzt = auto), damit
@@ -4919,9 +4921,9 @@ const plugin = {
         }
       : null;
     if (emotionT3Enabled && emotionT3LlmCfg) {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled (route: ${emotionT3LlmCfg.kind})`);
+      host.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled (route: ${emotionT3LlmCfg.kind})`);
     } else if (emotionT3WantsEnabled && !emotionT3HasProvider) {
-      api.logger.info("memory-lancedb-namespaced: emotion tier-3 deferred — no LLM provider configured (onlyWhenProviderAvailable)");
+      host.logger.info("memory-lancedb-namespaced: emotion tier-3 deferred — no LLM provider configured (onlyWhenProviderAvailable)");
     }
     // Abschluss-Review, Important 6: eigene Call-Funktion für den
     // emotion-refine-Cron (lib/encoding-llm.js), unabhängig von
@@ -4988,7 +4990,7 @@ const plugin = {
       escalationConfidence: emotionT3EscalationConfidence,
     });
     if (emotionTier !== "auto") {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
+      host.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
     }
     // 7.12.22: Tier 3 fuer neue Erinnerungen laeuft nicht mehr im Turn. Die
     // LLM-Klassifikation je gespeicherter Erinnerung (4–16 s, mehrere je
@@ -5012,7 +5014,7 @@ const plugin = {
       ? emotionT3RefineImportanceMinRaw
       : 0.9;
     if (emotionT3Enabled) {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 capture mode ${emotionDeferredCapture ? "deferred (emotion-refine cron)" : "inline"}`);
+      host.logger.info(`memory-lancedb-namespaced: emotion tier-3 capture mode ${emotionDeferredCapture ? "deferred (emotion-refine cron)" : "inline"}`);
     }
     /**
      * Emotionsbewertung fuer eine neu zu speichernde Erinnerung.
@@ -5072,7 +5074,7 @@ const plugin = {
         if (isOpenAi) {
           // Unbekanntes OpenAI-Modell — defensive default, mit Warnung
           vectorDim = 1536;
-          api.logger.warn(`memory-lancedb-namespaced: unbekanntes OpenAI-Modell '${model}' — fallback auf 1536 dimensions. Empfohlen: 'dimensions' explizit setzen.`);
+          host.logger.warn(`memory-lancedb-namespaced: unbekanntes OpenAI-Modell '${model}' — fallback auf 1536 dimensions. Empfohlen: 'dimensions' explizit setzen.`);
         } else {
           // Provider-Modell (OpenRouter, etc.) ohne dimensions — hart fail
           throw new Error(
@@ -5101,7 +5103,7 @@ const plugin = {
         "memory-lancedb-namespaced: active reembedding selection does not match the configured embedding fingerprint",
       );
     }
-    const reembeddingStateStore = createMigrationStateStore({ stateRoot: baseDbPath, logger: api.logger });
+    const reembeddingStateStore = createMigrationStateStore({ stateRoot: baseDbPath, logger: host.logger });
     const memoryMaintenanceGate = createMemoryMaintenanceGate({
       externalStatus: () => {
         const switching = reembeddingStateStore.list().find((record) => record.state === "switching");
@@ -5174,7 +5176,7 @@ const plugin = {
       const global = searchNeoCandidatesGlobal(store, { queryVector, requester, excludeIds, ...neoGlobalRecall });
       for (const hit of global.hits) neoItems.push(hit.item);
       const top = global.hits[0];
-      api.logger?.info?.(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} index=${global.index}${global.indexLines ? `/${global.indexLines}` : ""} ms=${global.ms}`);
+      host.logger.info(`plur1bus-neo: global candidate search scanned=${global.scanned} unique=${global.unique} eligible=${global.eligible} withVector=${global.withVector} hits=${global.hits.length}${top ? ` topSim=${top.similarity.toFixed(3)} topAgeDays=${top.ageDays.toFixed(1)}` : ""} index=${global.index}${global.indexLines ? `/${global.indexLines}` : ""} ms=${global.ms}`);
       return new Set(global.hits.map((hit) => String(hit.item.id)));
     };
     // Der Wartungslauf nimmt sich die Warteschlange am Stueck vor. Die Frist
@@ -5221,15 +5223,15 @@ const plugin = {
     try {
       hostMemoryConfig = typeof runtimeIfUsable(api)?.config?.current === "function" ? runtimeIfUsable(api).config.current() : (runtimeIfUsable(api)?.config || {});
     } catch (error) {
-      api.logger?.warn?.(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
+      host.logger.warn(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
     }
     const memoryAccountTopology = buildMemoryAccountTopology(hostMemoryConfig);
     const hostRoutingLoader = createHostRoutingLoader({
-      logger: api.logger,
+      logger: host.logger,
       ...(importRouting ? { importRouting } : {}),
     });
     const classifyHostIncognitoSession = createHostIncognitoSessionClassifier({
-      logger: api.logger,
+      logger: host.logger,
       ...(importRouting ? { importRouting } : {}),
     });
     const turnRouteState = autoRecall ? { initPromise: null, registry: null } : null;
@@ -5240,10 +5242,10 @@ const plugin = {
           try {
             const routingCapability = await hostRoutingLoader();
             // 7.12.36: prozessweit geteilt — siehe lib/process-singleton.js.
-            turnRouteState.registry = getSharedMemoryTurnRouteRegistry({ routingCapability, logger: api.logger });
+            turnRouteState.registry = getSharedMemoryTurnRouteRegistry({ routingCapability, logger: host.logger });
             return turnRouteState.registry;
           } catch (error) {
-            api.logger?.warn?.(`memory-lancedb-namespaced: turn route registry unavailable: ${String(error)}`);
+            host.logger.warn(`memory-lancedb-namespaced: turn route registry unavailable: ${String(error)}`);
             return null;
           }
         })();
@@ -5257,7 +5259,7 @@ const plugin = {
     } : null;
     const workspacePolicyStore = createWorkspacePolicyStore({
       stateRoot: baseDbPath,
-      logger: api.logger,
+      logger: host.logger,
     });
     const workspacePolicyGuard = createWorkspacePolicyGuard({
       store: workspacePolicyStore,
@@ -5283,12 +5285,12 @@ const plugin = {
         }, { workspaceAliases: memoryWorkspaceAliases });
         return workspacePolicyGuard.automatic(memoryCtx);
       } catch (error) {
-        api.logger?.debug?.(`memory-lancedb-namespaced: workspace policy context unavailable: ${String(error)}`);
+        host.logger.debug(`memory-lancedb-namespaced: workspace policy context unavailable: ${String(error)}`);
         return { allowed: false, reason: "workspace_identity_required" };
       }
     };
     const neoWorkerRuntime = neoEnabled
-      ? getSharedNeoWorkerRuntime({ logger: api.logger })
+      ? getSharedNeoWorkerRuntime({ logger: host.logger })
       : null;
     // 7.12.24: Der erste agent_end nach einem Gateway-Neustart brauchte 8–18 s
     // bis "worker captured" (sonst 0,4–1 s). Den Worker-Thread deshalb kurz
@@ -5300,19 +5302,19 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       api.on("gateway_start", () => {
         const timer = setTimeout(() => {
           const ok = neoWorkerRuntime.warmUp();
-          api.logger?.info?.(`plur1bus-neo: worker warm-up ${ok ? "done" : "skipped"}`);
+          host.logger.info(`plur1bus-neo: worker warm-up ${ok ? "done" : "skipped"}`);
         }, NEO_WORKER_WARMUP_DELAY_MS);
         timer?.unref?.();
       }, { timeoutMs: 5_000 });
     }
     if (neoEnabled && neoMode === "slot") {
-      api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
+      host.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
     // Versteckte Kopplung sichtbar machen: Light/REM-Dreaming und
     // Episoden-Extraktion brauchen eine aktive Merging-Route. Ohne sie laufen
     // diese Features still als No-op, obwohl sie "aktiv" wirken.
     if (neoEnabled && !mergingLlmCfg) {
-      reportDormantFeature(api.logger, {
+      reportDormantFeature(host.logger, {
         explicit: cfg.neo?.enabled === true,
         message: "memory-lancedb-namespaced: light/REM dreaming and episode extraction require merging.enabled and an available LLM route. They will no-op until that route is available.",
       });
@@ -5591,8 +5593,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       return `plur1bus:${key}`;
     };
 
-    const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
-    const sharedMemoryPool = new SharedMemoryPool(embeddingGenerationLayout.sharedBaseDir, vectorDim, AgentDbPool, api.logger);
+    const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, host.logger);
+    const sharedMemoryPool = new SharedMemoryPool(embeddingGenerationLayout.sharedBaseDir, vectorDim, AgentDbPool, host.logger);
     // The control surface gets its own bounded, read-only view. It must never
     // reuse a write pool: a status request is not allowed to create a Lance
     // table, directory, or card as a side effect.
@@ -5619,7 +5621,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         },
       },
       listPartitions: ({ basePath }) => listControlHealthPartitions(basePath),
-      inspectRows: createControlHealthRowInspector(vectorDim, api.logger),
+      inspectRows: createControlHealthRowInspector(vectorDim, host.logger),
       measureStorage: () => measureControlHealthStorage(baseDbPath),
       workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
       userIdentityForKey: (key) => controlHealthUserLabelByKey.get(key) ?? null,
@@ -5672,7 +5674,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         try {
           syncControlHealthWorkspaceIdentities();
         } catch (error) {
-          api.logger?.warn?.(`memory-lancedb-namespaced: control health workspace identities unavailable: ${error?.message || error}`);
+          host.logger.warn(`memory-lancedb-namespaced: control health workspace identities unavailable: ${error?.message || error}`);
         }
         return controlHealthScan();
       },
@@ -5682,8 +5684,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       failedRetryMs: CONTROL_HEALTH_FAILED_RETRY_MS,
       onRefresh: ({ status, failed, durationMs }) => {
         const line = `memory-lancedb-namespaced: control health snapshot ${failed ? "failed" : "refreshed"} in ${Math.round(durationMs / 100) / 10}s (${status})`;
-        if (failed) api.logger?.warn?.(line);
-        else api.logger?.info?.(line);
+        if (failed) host.logger.warn(line);
+        else host.logger.info(line);
       },
     });
     const legacyMigrationShutdown = new AbortController();
@@ -5732,7 +5734,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           embeddingCacheScope: cfg.runtime?.embeddingCacheScope,
           embeddingCacheMaxBytes: cfg.runtime?.embeddingCacheMaxBytes,
           cacheBasePath: baseDbPath,
-          logger: api.logger,
+          logger: host.logger,
           localModelGeneration,
           sharedModelPool: sharesActiveLocalModel,
           sharedModelOwner: coordinatesLocalModelGeneration,
@@ -5756,7 +5758,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           embeddingCacheScope: cfg.runtime?.embeddingCacheScope,
           embeddingCacheMaxBytes: cfg.runtime?.embeddingCacheMaxBytes,
           cacheBasePath: baseDbPath,
-          logger: api.logger,
+          logger: host.logger,
         });
     const scopedEmbeddingServer = coordinatesLocalModelGeneration
       && normalizedEmbeddingCfg.provider === "local-transformers"
@@ -5764,7 +5766,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           stateRoot: baseDbPath,
           embeddings,
           fingerprintId: activeEmbeddingFingerprintId,
-          logger: api.logger,
+          logger: host.logger,
         })
       : null;
     if (commandRuntimeHooks) {
@@ -5786,14 +5788,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         try {
           return await embeddings.embed(text);
         } catch (error) {
-          safeDebug(api.logger, "memory-adapter.embedding-fallback", error);
+          safeDebug(host.logger, "memory-adapter.embedding-fallback", error);
           return null;
         }
       },
       embedder: {
         embed: async (text) => embeddings.embed(text),
       },
-      logger: api.logger,
+      logger: host.logger,
     });
 
     // 7.12.48: Das Skill-Ledger liegt je ACL-Partition unter dem Neo-Store.
@@ -5820,7 +5822,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       agentId,
       lang,
       tone,
-      logger: api.logger,
+      logger: host.logger,
       skillWorkshop: openClawSkillWorkshop,
       // 7.12.52: Mit welcher Stufe die Belege gehoben werden. Die
       // Workshop-Stufe darf nur nach corroborated; die Aktivierung überspringt
@@ -5845,7 +5847,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         } catch (error) {
           // null is indistinguishable from "no evidence exists", so record
           // that this was a failed read instead.
-          api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
+          host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
           return null;
         }
       },
@@ -5902,7 +5904,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }, { workspaceAliases: memoryWorkspaceAliases });
           return activateSkillProposal(workspaceDir, localProposal.id, {
             agentId,
-            logger: api.logger,
+            logger: host.logger,
             committedWorkshopEvent: workshopEvent,
             memoryCtx: lifecycleMemoryCtx,
             loadEvidenceRecord: async (memoryId) => pool.withAuthoritativeReadDb(
@@ -5942,7 +5944,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           try {
             return await synchronizeSkillWorkshopLifecycle(event, context);
           } catch (error) {
-            safeWarn(api.logger, "skill-workshop-lifecycle", error, {
+            safeWarn(host.logger, "skill-workshop-lifecycle", error, {
               proposalId: event?.proposal?.id,
               action: event?.action,
             });
@@ -5977,7 +5979,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           cacheDir: localModelCacheDir,
           acceptNonCommercialLicense: nonCommercialModelAccepted,
           embeddingCacheEnabled: false,
-          logger: api.logger,
+          logger: host.logger,
           localModelGeneration,
           sharedModelPool: requiresActiveSharedModelOwner,
           sharedModelOwner: false,
@@ -5992,7 +5994,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         ...(secretRef ? { apiKey: secretRef } : {}),
         credentialResolver,
         embeddingCacheEnabled: false,
-        logger: api.logger,
+        logger: host.logger,
       });
     };
     const embedWithTargetProvider = async (provider, text, purpose) => {
@@ -6030,7 +6032,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       const targetPool = new AgentDbPool(
         targetGenerationDataRoot(generation),
         targetDimensions,
-        api.logger,
+        host.logger,
       );
       let operationError = null;
       let result;
@@ -6145,10 +6147,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           activeFingerprint: activeEmbeddingFingerprint,
           inventoryActiveGeneration: reembeddingBackend.inventoryActiveGeneration,
           statDisk: readReembeddingDiskStatus,
-          logger: api.logger,
+          logger: host.logger,
         });
       } catch (error) {
-        safeWarn(api.logger, "model-preparation.initialize", error);
+        safeWarn(host.logger, "model-preparation.initialize", error);
         modelPreparationCoordinator = createFailedModelPreparationCoordinator({
           config: cfg.modelPreparation,
           activeFingerprint: activeEmbeddingFingerprint,
@@ -6183,14 +6185,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       : null;
     const configMutationNotice = configMutationLogNotice(api);
     if (configMutationNotice) {
-      api.logger?.[configMutationNotice.level]?.(configMutationNotice.message);
+      host.logger?.[configMutationNotice.level]?.(configMutationNotice.message);
     }
 
     // Reranker (optional — provider-aware since v3.1)
     // Cohere reranker — lokaler Fallback nur wenn fallbackProvider="local-transformers" explizit gesetzt
     const { reranker, rerankerCfg } = createRuntimeRerankerProvider(
       cfg.reranker || {},
-      api.logger,
+      host.logger,
       { credentialResolver, localModelGeneration },
     );
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
@@ -6199,10 +6201,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     if (reranker) {
       const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
       const modelName = reranker.model || reranker.id || "unknown";
-      api.logger.info(`memory-lancedb-namespaced: reranker enabled (${rerankerCfg.provider}${experimental}, model: ${modelName})`);
+      host.logger.info(`memory-lancedb-namespaced: reranker enabled (${rerankerCfg.provider}${experimental}, model: ${modelName})`);
     }
 
-    api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
+    host.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
 
     function resolveStoreScopeAccess(memoryCtx, rawScope) {
       const scope = MEMORY_SCOPES.includes(rawScope) ? rawScope : "agent-private";
@@ -6455,7 +6457,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           // Rejection beobachten, damit ein Late-Audit-Fehler nicht als
           // unhandled rejection den Prozess beendet; das Settlement bleibt abgelehnt.
           derived.catch((lateErr) => {
-            api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late settlement audit failed for agent=${agentId} memory=${memoryId}: ${String(lateErr)}`);
+            host.logger.warn(`memory-lancedb-namespaced: memory_forget late settlement audit failed for agent=${agentId} memory=${memoryId}: ${String(lateErr)}`);
           });
           err.settlement = derived;
           throw err;
@@ -6538,12 +6540,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       try {
         const lineage = JSON.parse(entry.mergedFrom || "[]");
         if (!Array.isArray(lineage)) {
-          api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom shape for replacement=${replacementId}`);
+          host.logger.debug(`memory-lancedb-namespaced: invalid mergedFrom shape for replacement=${replacementId}`);
           return false;
         }
         return durableMergeLineage(expectedCandidate).every((marker) => lineage.includes(marker));
       } catch (error) {
-        api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${String(error)}`);
+        host.logger.debug(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${String(error)}`);
         return false;
       }
     }
@@ -6564,13 +6566,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           // The predecessor already delivered its own failure. Keep the key
           // usable for the next independent attempt and make the continuation
           // visible without propagating the old rejection into the new work.
-          api.logger?.debug?.(`memory-lancedb-namespaced: durable merge predecessor failed for ${queueKey}: ${String(predecessorErr)}`);
+          host.logger.debug(`memory-lancedb-namespaced: durable merge predecessor failed for ${queueKey}: ${String(predecessorErr)}`);
         })
         .then(operation);
       const settlementTail = operationPromise.catch(async (error) => {
         const settlement = await waitForTimeoutSettlement(error);
         if (settlement.status === "rejected") {
-          api.logger?.debug?.(
+          host.logger.debug(
             `memory-lancedb-namespaced: durable merge late settlement failed for ${queueKey}: ${String(settlement.error)}`,
           );
         }
@@ -6581,7 +6583,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
         },
         (trackingError) => {
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge settlement tracking failed for ${queueKey}: ${String(trackingError)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge settlement tracking failed for ${queueKey}: ${String(trackingError)}`);
           if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
         },
       );
@@ -6604,7 +6606,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const authoritativeCandidate = await db.getById(candidateId);
         if (!isExpectedMergeCandidate(authoritativeCandidate, selectedCandidate.entry, candidateId, accessCtx)) {
           const staleErr = new Error("merge candidate is stale, no longer active, or no longer authorized");
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${staleErr.message}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${staleErr.message}`);
           throw staleErr;
         }
 
@@ -6617,12 +6619,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         try {
           candidateAfterPreparation = await db.getById(candidateId);
         } catch (revalidationErr) {
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge post-prepare revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(revalidationErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(revalidationErr)}`);
           throw revalidationErr;
         }
         if (!isExpectedMergeCandidate(candidateAfterPreparation, authoritativeCandidate, candidateId, accessCtx)) {
           const staleErr = new Error("stale merge candidate changed during replacement preparation");
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${staleErr.message}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${staleErr.message}`);
           throw staleErr;
         }
 
@@ -6632,7 +6634,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         try {
           archivePath = archiveCard(authoritativeCandidate, agentId);
         } catch (archiveErr) {
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge archive failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath || "unwritten"}: ${String(archiveErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge archive failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath || "unwritten"}: ${String(archiveErr)}`);
           throw archiveErr;
         }
 
@@ -6641,12 +6643,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           try {
             verifiedReplacement = await db.getById(replacementId);
           } catch (verificationErr) {
-            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
+            host.logger.warn(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
             throw verificationErr;
           }
           if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry, authoritativeCandidate)) {
             const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
-            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
+            host.logger.warn(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
             throw verificationErr;
           }
 
@@ -6654,12 +6656,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           try {
             candidateBeforeDelete = await db.getById(candidateId);
           } catch (revalidationErr) {
-            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge pre-delete revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(revalidationErr)}`);
+            host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(revalidationErr)}`);
             throw revalidationErr;
           }
           if (!isExpectedMergeCandidate(candidateBeforeDelete, authoritativeCandidate, candidateId, accessCtx)) {
             const staleErr = new Error("stale merge candidate changed before original deletion");
-            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${staleErr.message}`);
+            host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${staleErr.message}`);
             throw staleErr;
           }
 
@@ -6678,11 +6680,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 timestamp: new Date().toISOString(),
               },
               onLateFailure: (lateDeleteError) => {
-                api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateDeleteError)}`);
+                host.logger.warn(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateDeleteError)}`);
               },
             });
           } catch (deleteErr) {
-            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
+            host.logger.warn(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
             throw deleteErr;
           }
           return { ...prepared, authoritativeCandidate, archivePath, idempotencyKey };
@@ -6692,7 +6694,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         try {
           existingReplacement = await db.getById(replacementId);
         } catch (idempotencyReadError) {
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge idempotency read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(idempotencyReadError)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge idempotency read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(idempotencyReadError)}`);
           throw idempotencyReadError;
         }
         if (existingReplacement) {
@@ -6710,12 +6712,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             storeErr.settlement = rawStoreSettlement.then(
               () => finishDurableMerge(),
               (lateStoreError) => {
-                api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateStoreError)}`);
+                host.logger.warn(`memory-lancedb-namespaced: durable merge late store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateStoreError)}`);
                 throw lateStoreError;
               },
             );
           }
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(storeErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(storeErr)}`);
           throw storeErr;
         }
 
@@ -6779,7 +6781,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
         // Phase 2 — Bi-Temporal Memory (§7): caller-supplied only, never
         // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
-        const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
+        const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: host.logger });
 
         // 0. Tombstone-Block: eine gleichlautende, zuvor gelöschte Erinnerung im
         // selben autorisierten Scope darf nicht still reaktiviert werden.
@@ -6792,7 +6794,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         });
         if (blockingTombstone) {
           if (blockingTombstone._blockReason) {
-            api.logger?.warn?.(`memory-lancedb-namespaced: tombstone registry ${blockingTombstone._blockReason} for agent=${storeAgentId}: ${blockingTombstone._diagnostic || ""} — blocking capture fail-closed`);
+            host.logger.warn(`memory-lancedb-namespaced: tombstone registry ${blockingTombstone._blockReason} for agent=${storeAgentId}: ${blockingTombstone._diagnostic || ""} — blocking capture fail-closed`);
           }
           addTraceStoreDecision(trace, {
             action: "tombstone_blocked",
@@ -6820,7 +6822,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // That is the conservative outcome, and the decision is already durable in the
             // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
             // routine store into an operator alarm -- 192 of them in one seeded run.
-            api.logger?.info?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+            host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
             addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
           } else {
             if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -6858,7 +6860,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               prepareReplacement: async (authoritativeCandidate, replacementId) => {
                 let mergeResult = null;
                 if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
-                  api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                  host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
                   addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
                 } else {
                   try {
@@ -6873,7 +6875,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
                     ]);
                   } catch (mergeErr) {
-                    api.logger.warn("memory-lancedb-namespaced: merge check skipped", {
+                    host.logger.warn("memory-lancedb-namespaced: merge check skipped", {
                       errorClass: normalizedLlmErrorClass(mergeErr),
                     });
                   }
@@ -6887,12 +6889,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   return null;
                 }
                 if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
-                  api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                  host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
                   addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                   return null;
                 }
                 if (hasDisjointValidityWindows(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil })) {
-                  api.logger?.warn?.(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
+                  host.logger.warn(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
                   addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "disjoint validity windows" });
                   return null;
                 }
@@ -6936,7 +6938,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 maxAffected: riCfg.maxAffected ?? 5,
               }));
             return maintenance.catch((err) => {
-              api.logger?.warn?.("[retroactive-interference] failed", err?.message ?? err);
+              host.logger.warn("[retroactive-interference] failed", err?.message ?? err);
             });
           });
         }
@@ -6985,7 +6987,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
     if (obsidianBridgeEnabled) {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
-        logger: api.logger,
+        logger: host.logger,
         loadLanceDbRecords: async ({ workspace }) => {
           const workspaceIdentity = normalizeWorkspaceTarget(
             workspace.workspaceId,
@@ -7028,7 +7030,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           api.on("gateway_stop", () => bridgeService.stop(), { timeoutMs: 30_000 });
         }
       } else {
-        api.logger.info(`plur1bus-obsidian-bridge: configured (watch=false, dryRun=${obsidianBridgeCfg.dryRun !== false})`);
+        host.logger.info(`plur1bus-obsidian-bridge: configured (watch=false, dryRun=${obsidianBridgeCfg.dryRun !== false})`);
       }
     }
 
@@ -7048,7 +7050,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         "gateway_start",
         async (_event, gatewayContext) => {
           const cutoff = ensureEpistemicCutoff(baseDbPath);
-          if (!cutoff.ok) api.logger?.warn?.(`memory-lancedb-namespaced: epistemic cutoff unavailable (${cutoff.reason})`);
+          if (!cutoff.ok) host.logger.warn(`memory-lancedb-namespaced: epistemic cutoff unavailable (${cutoff.reason})`);
           if (!cronDirectDispatchReady) {
             await reconcileUnsafeDirectCronsWithService(api, gatewayContext);
           }
@@ -7061,7 +7063,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               baseDbPath,
               force: !cronDirectDispatchReady,
             }).catch((err) => {
-              api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap failed: ${err?.message || err}`);
+              host.logger.debug(`plur1bus-feature-crons: deferred bootstrap failed: ${err?.message || err}`);
             });
           }, cronDirectDispatchReady ? 90_000 : 0);
           timer?.unref?.();
@@ -7103,9 +7105,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             const items = [...store.readCandidates(500, requester), ...store.readBehaviorCards(200, requester)];
             let queryVector = null;
             try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(params?.query || "", { agentId: requester.requesterAgentId }) : embeddings.embed(params?.query || "", { agentId: requester.requesterAgentId })); }
-            catch (error) { api.logger?.debug?.(`plur1bus-neo: corpus query embedding unavailable: ${String(error)}`); }
+            catch (error) { host.logger.debug(`plur1bus-neo: corpus query embedding unavailable: ${String(error)}`); }
             try { runNeoGlobalSearch(store, items, queryVector, requester); }
-            catch (globalErr) { api.logger?.debug?.(`plur1bus-neo: corpus global search failed: ${String(globalErr)}`); }
+            catch (globalErr) { host.logger.debug(`plur1bus-neo: corpus global search failed: ${String(globalErr)}`); }
             const lanes = routeNeoRecall(items, params?.query || "", { ...requester, queryVector, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
             return Object.entries(lanes)
               .flatMap(([lane, rows]) => rows.map(row => ({ lane, row })))
@@ -7442,7 +7444,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 reportName: options.reportName,
                 continuationToken: options.continuationToken,
                 signal: commandCtx.abortSignal || legacyMigrationShutdown.signal,
-                logger: api.logger,
+                logger: host.logger,
               }));
             }
             const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
@@ -7518,7 +7520,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       createPartitionScopedDb(rawDb, dailyPartition, memoryCtx),
                       internalAgent,
                       {
-                        logger: api.logger,
+                        logger: host.logger,
                         neoStore: dailyStore,
                         requestContext: memoryCtx,
                         aclPartition: dailyPartition,
@@ -7626,7 +7628,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   vectorCompaction,
                   lancedbOptimize,
                 };
-                api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
               }
               if (subKey === "classify-recent") {
@@ -7643,7 +7645,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const nativeCriticalRuntimeAvailable = typeof sessionRuntime?.complete === "function"
                   || typeof cpLlmCfg?.runtimeLlm?.complete === "function";
                 if (cpLlmCfg && !directCriticalRoute && !nativeCriticalRuntimeAvailable) {
-                  api.logger.warn(
+                  host.logger.warn(
                     "memory-lancedb-namespaced: Critical Push skipped: openclaw-runtime-unavailable",
                     { feature: "criticalPush" },
                   );
@@ -7670,7 +7672,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   },
                 } : null;
                 const result = await runCriticalClassifier(memoryDbAdapter, internalAgent, {
-                  logger: api.logger,
+                  logger: host.logger,
                   model: criticalModel,
                   // Ohne Konfiguration greift der Default aus
                   // findRecentUnclassified, der das 3h-Cron-Intervall überdeckt.
@@ -7678,14 +7680,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   maxPerDay: cpCfg.maxPerDay ?? 3,
                   hideTypes: cpCfg.hideTypes,
                 });
-                api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
                 return cronInternal
                   ? formatClassifierCronReply(result)
                   : formatJsonCommandResult({ job: "classify-recent", ...result });
               }
               if (subKey === "auto-accept-stale") {
-                const result = await runAutoAcceptStale(memoryDbAdapter, internalAgent, { logger: api.logger, hours: 24 });
-                api.logger?.info?.(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
+                const result = await runAutoAcceptStale(memoryDbAdapter, internalAgent, { logger: host.logger, hours: 24 });
+                host.logger.info(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
               }
               if (subKey === "rem-dream") {
@@ -7747,7 +7749,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         inputTarget: remTarget,
                         outputTarget: remTarget,
                       },
-                      logger: api.logger,
+                      logger: host.logger,
                       maxMemories: isLocalProvider ? 1000 : 5000,
                       topK: isLocalProvider ? 10 : 20,
                       narrativeCfg: dreamNarrativeCfg,
@@ -7764,7 +7766,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   if (partitionResult.report) {
                     writeRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget);
                   }
-                  api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
+                  host.logger.info(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
                   remRuns.push({ scope: remAclPartition.scope, result: partitionResult });
                 }
                 // Der erste Lauf mit Report gewinnt für die Antwort; sonst der erste.
@@ -7777,11 +7779,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         db: semDb,
                         semVaultCfg,
                         pool,
-                        logger: api.logger,
+                        logger: host.logger,
                         defaultAgentId: internalAgent,
                       }))
-                    .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
-                    .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
+                    .then((r) => host.logger.info(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
+                    .catch((err) => host.logger.warn(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
                 return formatJsonCommandResult({
                   job: "rem-dream",
@@ -7819,7 +7821,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const runSkillMinerPartition = async (rawDb) => {
                       await rawDb.init();
                       return runSkillMiner(rawDb, internalAgent, {
-                        logger: api.logger,
+                        logger: host.logger,
                         neoStore: skillStore,
                         requestContext: memoryCtx,
                         aclPartition: skillAclPartition,
@@ -7866,11 +7868,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         : await pool.withDb(internalAgent, runSkillMinerPartition);
                     skillRuns.push({ scope: skillAclPartition.scope, result });
                   } catch {
-                    api.logger?.warn?.(`plur1bus internal skill-miner[${internalAgent}/${skillAclPartition.scope}] partition failed`);
+                    host.logger.warn(`plur1bus internal skill-miner[${internalAgent}/${skillAclPartition.scope}] partition failed`);
                     skillRuns.push({ scope: skillAclPartition.scope, failed: true });
                   }
                 }
-                api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(skillRuns)}`);
+                host.logger.info(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(skillRuns)}`);
                 const result = aggregateSkillMinerRuns(skillRuns, internalAgent);
                 return formatJsonCommandResult({
                   job: "skill-miner",
@@ -7904,9 +7906,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   ),
                   callLlm: callCommandLlm,
                   ...(Number.isFinite(backfillLimit) ? { limit: backfillLimit } : {}),
-                  logger: api.logger,
+                  logger: host.logger,
                 });
-                api.logger?.info?.(`plur1bus internal skill-benefit-backfill[${internalAgent}]: ${JSON.stringify({ ...result, items: result.items?.length })}`);
+                host.logger.info(`plur1bus internal skill-benefit-backfill[${internalAgent}]: ${JSON.stringify({ ...result, items: result.items?.length })}`);
                 return formatJsonCommandResult({ job: "skill-benefit-backfill", ...result });
               }
               if (subKey === "afterthought") {
@@ -7931,9 +7933,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   ),
                   callLlm: callCommandLlm,
                   timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
-                  logger: api.logger,
+                  logger: host.logger,
                 });
-                api.logger?.info?.(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
+                host.logger.info(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
                 return cronInternal
                   ? formatAfterthoughtCronReply(result)
                   : formatJsonCommandResult({ job: "afterthought", ...result });
@@ -7963,7 +7965,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   ),
                   callLlm: callCommandLlm,
                 });
-                api.logger?.info?.(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "persona-evolve", ...result });
               }
               if (subKey === "reminder-dispatch") {
@@ -7971,14 +7973,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const result = await pool.withDb(internalAgent, async (rawDb) => {
                   await rawDb.init();
                   return runReminderDispatch(rawDb, internalAgent, {
-                    logger: api.logger,
+                    logger: host.logger,
                     workspaceDir: commandCtx.workspaceDir,
                     workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
                     deliveryMode: remindersCfg.deliveryMode || "pending_only",
                     webhookUrl: remindersCfg.webhookUrl ? resolveEnvVars(remindersCfg.webhookUrl) : null,
                   });
                 });
-                api.logger?.info?.(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
               }
               // 7.12.43: Nachmigration aelterer Episoden-Karten auf das aktuelle
@@ -8050,7 +8052,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     result.errors.push(`${ep.id}: ${String(rebuildErr?.message || rebuildErr).slice(0, 120)}`);
                   }
                 }
-                api.logger?.info?.(`plur1bus internal episodes-rebuild[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal episodes-rebuild[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult(result);
               }
               if (subKey === "gc-run") {
@@ -8063,9 +8065,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   dbPool: pool,
                   policy: gcPolicy,
                   workspaceDir: commandCtx.workspaceDir,
-                  logger: api.logger,
+                  logger: host.logger,
                 });
-                api.logger?.info?.(`plur1bus internal gc-run[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal gc-run[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "gc-run", ...result });
               }
               // Wartungsgriff fuer die Neo-Embedding-Warteschlange. Bisher lief der
@@ -8090,7 +8092,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   dimensions: vectorDim,
                   embedder: (text) => embeddings.embed(text, { agentId: internalAgent }),
                 });
-                api.logger?.info?.(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "embedding-drain", ...result });
               }
               if (subKey === "emotion-refine") {
@@ -8184,9 +8186,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   // Sichtbar statt still (Important 6): eine wachsende Pending-
                   // Warteschlange ohne LLM-Route ist sonst nur an einer
                   // "importance: 0.5 für alles" über Wochen zu erahnen.
-                  api.logger?.warn?.(`plur1bus internal emotion-refine[${internalAgent}]: kein LLM-Provider verfügbar — ${result.pending} Zeile(n) bleiben ohne Importance-Klärung pending`);
+                  host.logger.warn(`plur1bus internal emotion-refine[${internalAgent}]: kein LLM-Provider verfügbar — ${result.pending} Zeile(n) bleiben ohne Importance-Klärung pending`);
                 } else {
-                  api.logger?.info?.(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
+                  host.logger.info(`plur1bus internal emotion-refine[${internalAgent}]: ${JSON.stringify(result)}`);
                 }
                 return formatJsonCommandResult({ job: "emotion-refine", ...result });
               }
@@ -8195,7 +8197,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   return formatJsonCommandResult({ job: "feedback-report", skipped: true, reason: "no_workspace" });
                 }
                 const result = await runFeedbackAnalyzer(commandCtx.workspaceDir);
-                api.logger?.info?.(`plur1bus internal feedback-report[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal feedback-report[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "feedback-report", ...result });
               }
               if (subKey === "discover-semantic-links") {
@@ -8223,18 +8225,18 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         db: wsDb,
                         semVaultCfg,
                         pool,
-                        logger: api.logger,
+                        logger: host.logger,
                         defaultAgentId: wsAgentId,
                         mutationPolicy,
                       }));
-                    api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
+                    host.logger.info(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
                     totalProcessed += semResult.processed;
                     totalSkipped += semResult.skipped;
                     totalUnchanged += semResult.unchanged;
                     totalErrors += semResult.errors;
                     if (semResult.blocked) totalBlocked++;
                   } catch (err) {
-                    api.logger?.warn?.(`[discover-semantic-links] workspace ${ws.path} failed: ${err.message}`);
+                    host.logger.warn(`[discover-semantic-links] workspace ${ws.path} failed: ${err.message}`);
                     totalErrors++;
                   }
                 }
@@ -8249,9 +8251,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   workspaceDir: commandCtx.workspaceDir,
                   workspaceKey: commandCtx.workspaceKey || "default",
                   embedFn: async (text) => embeddings.embed(text, { agentId: commandCtx?.agentId || "default" }),
-                  logger: api.logger,
+                  logger: host.logger,
                 });
-                api.logger?.info?.(`plur1bus internal proactive-check[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal proactive-check[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "proactive-check", ...result });
               }
               if (subKey === "meta-reflect") {
@@ -8262,10 +8264,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const result = await runReflectionJob({
                   store: neoStore,
                   workspaceDir: commandCtx.workspaceDir,
-                  logger: api.logger,
+                  logger: host.logger,
                   llmReport: metaCognitionLlmReport,
                 });
-                api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
+                host.logger.info(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
               return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "skill-benefit-backfill", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild"] });
@@ -8602,7 +8604,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       lang,
                       tone,
                       agentId: commandCtx.agentId || "default",
-                      logger: api.logger,
+                      logger: host.logger,
                       skillWorkshop: openClawSkillWorkshop,
                     },
                   );
@@ -8612,7 +8614,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   lang,
                   tone,
                   agentId: commandCtx.agentId || "default",
-                  logger: api.logger,
+                  logger: host.logger,
                   skillWorkshop: openClawSkillWorkshop,
                   memoryCtx,
                   loadEvidenceRecord: async (memoryId) => {
@@ -8621,7 +8623,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     } catch (error) {
                       // null is indistinguishable from "no evidence exists",
                       // so record that this was a failed read instead.
-                      api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
+                      host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
                       return null;
                     }
                   },
@@ -8651,7 +8653,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   lang,
                   tone,
                   agentId: commandCtx.agentId || "default",
-                  logger: api.logger,
+                  logger: host.logger,
                   skillWorkshop: openClawSkillWorkshop,
                   memoryCtx,
                   loadEvidenceRecord: async (memoryId) => {
@@ -8660,7 +8662,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     } catch (error) {
                       // null is indistinguishable from "no evidence exists",
                       // so record that this was a failed read instead.
-                      api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
+                      host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
                       return null;
                     }
                   },
@@ -8683,7 +8685,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   lang,
                   tone,
                   agentId: commandCtx.agentId || "default",
-                  logger: api.logger,
+                  logger: host.logger,
                   skillWorkshop: openClawSkillWorkshop,
                 });
                 return { text: result.text };
@@ -8716,7 +8718,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   try {
                     rows = await listReminders(rdb, reminderAgent, reminderWsKey);
                   } catch (e) {
-                    api.logger.warn(`plur1bus-reminder: list failed: ${String(e)}`);
+                    host.logger.warn(`plur1bus-reminder: list failed: ${String(e)}`);
                   }
                   const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
                   if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
@@ -8884,7 +8886,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   return applyConflictViaSafeUpdate(
                     rawDb,
                     { existingMemoryId: applyId, mergedText: text, reason: entry.reason },
-                    { confirm: true, vector, neoStore: commandStore, logger: api.logger, agentId: memoryCtx.agentId },
+                    { confirm: true, vector, neoStore: commandStore, logger: host.logger, agentId: memoryCtx.agentId },
                   );
                 });
                 if (result.ok) {
@@ -9144,7 +9146,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               });
             } catch (error) {
               // DB not available → cardCount stays null
-              api.logger?.debug?.(`memory-lancedb-namespaced: status card count unavailable for agent=${agentId}: ${String(error)}`);
+              host.logger.debug(`memory-lancedb-namespaced: status card count unavailable for agent=${agentId}: ${String(error)}`);
             }
             const data = collectStatusData({
               memoryStats: { cardCount, lastUpdateMinutes: null },
@@ -9360,7 +9362,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             getObsidianBridgeConfig: () => cfg.obsidianBridge || {},
           });
         } else {
-          api.logger?.warn?.(
+          host.logger.warn(
             "memory-lancedb-namespaced: OpenClaw Gateway/CLI capabilities unavailable; workspace and reembedding runtime controls are disabled",
           );
         }
@@ -9375,7 +9377,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               : "off")
           : "off";
         if (cfg.controlUi?.writeActions && cfg.controlUi.writeActions !== "off" && controlUiWriteMode === "off") {
-          api.logger?.warn?.(
+          host.logger.warn(
             "memory-lancedb-namespaced: controlUi.writeActions is set but OpenClaw config mutation is unavailable; the dashboard stays read-only",
           );
         }
@@ -9404,7 +9406,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           // not have it); it resolves the partition's table itself and reports
           // `no-table` for a directory without one.
           const compaction = createCompactionRunner({
-            logger: api.logger,
+            logger: host.logger,
             knownPartitions: async () => {
               const snapshot = await controlHealth.snapshot();
               return (Array.isArray(snapshot?.cards?.byAgent) ? snapshot.cards.byAgent : [])
@@ -9428,7 +9430,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               form,
               mode,
               deps: {
-                logger: api.logger,
+                logger: host.logger,
                 confirmations,
                 setReranker,
                 setFeatureModel,
@@ -9463,11 +9465,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   if (!proposal) return { ok: false, reason: "not_found" };
                   if (proposal.status !== "pending_review") return { ok: false, reason: "not_pending" };
                   return proposal.openClawWorkshop?.proposalId
-                    ? rejectSkillProposalWithWorkshop(ledgerDir, proposalId, { agentId, logger: api.logger, skillWorkshop: openClawSkillWorkshop })
+                    ? rejectSkillProposalWithWorkshop(ledgerDir, proposalId, { agentId, logger: host.logger, skillWorkshop: openClawSkillWorkshop })
                     : rejectSkillProposal(ledgerDir, proposalId);
                 }),
                 retireSkill: ({ agentId, proposalId }) => dashboardSkillAction(agentId, proposalId, ({ ledgerDir }) => (
-                  retireActiveSkill(ledgerDir, proposalId, { logger: api.logger })
+                  retireActiveSkill(ledgerDir, proposalId, { logger: host.logger })
                 )),
               },
             }),
@@ -9586,7 +9588,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             api.on("gateway_stop", () => { controlHealth.stop(); }, { timeoutMs: 5_000 });
           }
         } else {
-          api.logger?.warn?.(
+          host.logger.warn(
             "memory-lancedb-namespaced: OpenClaw control status Gateway capability unavailable",
           );
         }
@@ -9601,10 +9603,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const input = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
-            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, host.logger, agentId, {
               runtimeLlm: commandCtx?.runtimeContext?.llm,
             });
-            const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
+            const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: host.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
             const items = await queryMemoryAcrossAccessPools({
@@ -9613,7 +9615,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               embeddings,
               agent: agentId,
               parsed,
-              ctx: { ...memoryCtx, logger: api.logger },
+              ctx: { ...memoryCtx, logger: host.logger },
             });
             if (parsed.explain) {
               const explanations = explainResults(items.map((r) => ({ entry: r, score: r.score ?? 0 })), parsed.topic);
@@ -9638,7 +9640,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
-            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, host.logger, agentId, {
               runtimeLlm: commandCtx?.runtimeContext?.llm,
             });
 
@@ -9660,7 +9662,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 lang,
                 tone,
                 workspaceDir: memoryCtx.workspaceDir,
-                logger: api.logger,
+                logger: host.logger,
                 ctx: memoryCtx,
                 baseDbPath,
                 actor: memoryCtx?.userPrincipal || memoryCtx?.userId || "telegram:/forget",
@@ -9673,7 +9675,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
             // Initiation
             if (!args) return { text: t("plur1bus.forget_usage", { lang, tone }) };
-            const normalized = await normalizeCommandInput({ kind: "forget-intent", text: args, summarizer, logger: api.logger, lang, tone });
+            const normalized = await normalizeCommandInput({ kind: "forget-intent", text: args, summarizer, logger: host.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText, {
               ctx: memoryCtx,
@@ -9711,7 +9713,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
-            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, host.logger, agentId, {
               runtimeLlm: commandCtx?.runtimeContext?.llm,
             });
 
@@ -9769,7 +9771,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 lang,
                 tone,
                 workspaceDir: memoryCtx.workspaceDir,
-                logger: api.logger,
+                logger: host.logger,
                 ctx: memoryCtx,
                 updateMemory: async ({ id, newContent }) => {
                   return pool.withDb(agentId, async (rawDb) => {
@@ -9792,7 +9794,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       },
                       {
                         neoStore,
-                        logger: api.logger,
+                        logger: host.logger,
                         // Bewusst übersprungen: /correct ist eine per Nonce
                         // bestätigte Nutzeraktion, und der Bestätigungsdialog
                         // zeigt Alt- und Neu-Text im Klartext. Eine hohe
@@ -9811,7 +9813,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
                       }
                     } catch (err) {
-                      api.logger?.warn?.(`[/correct] reinforcement failed: ${err?.message}`);
+                      host.logger.warn(`[/correct] reinforcement failed: ${err?.message}`);
                     }
                   });
                 },
@@ -9869,13 +9871,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               return { text: t("plur1bus.correct_no_separator", { lang, tone }) };
             }
             const [oldNorm, newNorm] = await Promise.all([
-              normalizeCommandInput({ kind: "correction-old", text: parsed.old, summarizer, logger: api.logger, lang, tone }),
+              normalizeCommandInput({ kind: "correction-old", text: parsed.old, summarizer, logger: host.logger, lang, tone }),
               normalizeCommandInput({
                 kind: "correction-new",
                 text: parsed.new,
                 summarizer,
                 maxDirectChars: INPUT_LIMITS.CORRECTION_TEXT,
-                logger: api.logger,
+                logger: host.logger,
                 lang,
                 tone,
               }),
@@ -9950,7 +9952,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               // abgedeckt (edit gab zuvor card.title aus, also echten Inhalt).
               pending = await memoryDbAdapter.findPendingCriticalReviews(agentId, { ctx: memoryCtx });
             } catch (err) {
-              api.logger?.warn?.(`plur1bus critical[${agentId}]: findPendingCriticalReviews failed: ${err.message}`);
+              host.logger.warn(`plur1bus critical[${agentId}]: findPendingCriticalReviews failed: ${err.message}`);
             }
             const refMap = assignShortRefs((pending || []).map((c) => c.id));
 
@@ -10095,10 +10097,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               });
               const text = typeof result?.text === "string" ? result.text : "";
               if (!text) return undefined;
-              api.logger?.info?.(`plur1bus critical[${agentId}]: quoted-reply ${command.action} for ${command.refs.length} reference(s)`);
+              host.logger.info(`plur1bus critical[${agentId}]: quoted-reply ${command.action} for ${command.refs.length} reference(s)`);
               return { handled: true, text, reply: { text } };
             } catch (error) {
-              api.logger?.warn?.(`memory-lancedb-namespaced: critical quoted-reply handling failed: ${error?.message || error}`);
+              host.logger.warn(`memory-lancedb-namespaced: critical quoted-reply handling failed: ${error?.message || error}`);
               return undefined;
             }
           };
@@ -10106,7 +10108,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             try {
               api.on(hookName, answerQuotedCriticalReply);
             } catch (error) {
-              api.logger?.warn?.(`memory-lancedb-namespaced: could not listen on ${hookName}: ${error?.message || error}`);
+              host.logger.warn(`memory-lancedb-namespaced: could not listen on ${hookName}: ${error?.message || error}`);
             }
           }
         }
@@ -10154,7 +10156,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
               const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
-                targetScope, allowSensitiveShare: true, ctx: memoryCtx, logger: api.logger,
+                targetScope, allowSensitiveShare: true, ctx: memoryCtx, logger: host.logger,
               });
               if (!result.ok) return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
               return fail("plur1bus.share_done", { id: result.sharedId });
@@ -10171,7 +10173,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
             const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
-              targetScope, ctx: memoryCtx, logger: api.logger,
+              targetScope, ctx: memoryCtx, logger: host.logger,
             });
             if (result.ok) return fail("plur1bus.share_done", { id: result.sharedId });
             if (result.error?.startsWith("share.explicit approval required")) {
@@ -10318,15 +10320,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
       if (neoEnabled) {
         const startNeoService = () => {
-          api.logger.info(`plur1bus-neo: service ready (state: ${neoRoot}, mode: augment)`);
+          host.logger.info(`plur1bus-neo: service ready (state: ${neoRoot}, mode: augment)`);
         };
         const stopNeoService = async () => {
           try {
             await neoWorkerRuntime?.close?.();
           } catch (err) {
-            api.logger.warn?.(`plur1bus-neo: worker shutdown failed: ${String(err)}`);
+            host.logger.warn?.(`plur1bus-neo: worker shutdown failed: ${String(err)}`);
           }
-          api.logger.info("plur1bus-neo: service stopped");
+          host.logger.info("plur1bus-neo: service stopped");
         };
         if (typeof api.on === "function") {
           api.on("gateway_start", startNeoService, { timeoutMs: 30_000 });
@@ -10346,7 +10348,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     // ========================================================================
 
     if (autoCapture) {
-      api.logger.info(`memory-lancedb-namespaced: enabling autoCapture`);
+      host.logger.info(`memory-lancedb-namespaced: enabling autoCapture`);
 
       let warnedMissingCaptureSessionKey = false;
       let warnedIncognitoClassifierDegraded = false;
@@ -10361,15 +10363,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         if (typeof sessionKey === "string" && sessionKey.trim()) {
           try {
             if (await classifyHostIncognitoSession(sessionKey)) {
-              api.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
+              host.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
               return undefined;
             }
           } catch (error) {
             // Fail closed: a keyed session we cannot classify must not be stored.
-            trySafeWarn(api.logger, "auto-capture.incognito-classifier", error);
+            trySafeWarn(host.logger, "auto-capture.incognito-classifier", error);
             if (!warnedIncognitoClassifierDegraded) {
               warnedIncognitoClassifierDegraded = true;
-              trySafeWarn(api.logger, "auto-capture.incognito-classifier-degraded", new Error(
+              trySafeWarn(host.logger, "auto-capture.incognito-classifier-degraded", new Error(
                 "incognito classifier unavailable; durable capture is disabled for keyed sessions until it recovers",
               ));
             }
@@ -10377,16 +10379,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }
         } else if (!warnedMissingCaptureSessionKey) {
           warnedMissingCaptureSessionKey = true;
-          trySafeWarn(api.logger, "auto-capture.session-key-missing", new Error(
+          trySafeWarn(host.logger, "auto-capture.session-key-missing", new Error(
             "agent_end turn has no session key; capturing without incognito classification",
           ));
         }
-        api.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
+        host.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
 
         const agentId = ctx?.agentId || "default";
         const background = isBackgroundTurn(event, ctx);
         if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
-          api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
+          host.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
           return undefined;
         }
         let memoryCtx = null;
@@ -10404,7 +10406,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             sessionId: ctx?.sessionId ?? event?.sessionId,
           }, { workspaceAliases: memoryWorkspaceAliases });
         } catch (err) {
-          api.logger?.debug?.(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+          host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
         }
         if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
@@ -10476,11 +10478,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const neoTimings = neoResult.timings && typeof neoResult.timings === "object"
                   ? ` timings=${JSON.stringify(neoResult.timings)}`
                   : "";
-                api.logger.info(`plur1bus-neo: worker captured new turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${Number.isFinite(transcriptTurns) ? ` (transcript turns=${transcriptTurns})` : ""}${neoTimings}${background ? " (background)" : ""}`);
+                host.logger.info(`plur1bus-neo: worker captured new turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${Number.isFinite(transcriptTurns) ? ` (transcript turns=${transcriptTurns})` : ""}${neoTimings}${background ? " (background)" : ""}`);
               }
               const logDrain = (drain) => {
                 if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
-                  api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}${drain.stoppedEarly ? " (fruehzeitig gestoppt)" : ""}`);
+                  host.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}${drain.stoppedEarly ? " (fruehzeitig gestoppt)" : ""}`);
                 }
               };
               if (neoEmbeddingAutoDrainEnabled) {
@@ -10493,7 +10495,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   const remainingMs = runtimeScheduler.config.captureTimeoutMs
                     - (Date.now() - captureStartedAt) - NEO_HOOK_DRAIN_MARGIN_MS;
                   if (remainingMs < NEO_HOOK_DRAIN_MIN_MS) {
-                    api.logger.info(`plur1bus-neo: embedding queue drain skipped — ${Math.max(0, remainingMs)}ms left in the capture budget`);
+                    host.logger.info(`plur1bus-neo: embedding queue drain skipped — ${Math.max(0, remainingMs)}ms left in the capture budget`);
                     return;
                   }
                   logDrain(await neoStore.drainEmbeddingQueue({
@@ -10510,9 +10512,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
             } catch (neoErr) {
               if (isBudgetExhaustion(neoErr, signal)) {
-                api.logger.warn(`plur1bus-neo: worker capture exceeded its ${neoAgentEndBudgetMs}ms budget (kalter Store?) — die Erfassung laeuft weiter, Neo holt beim naechsten Turn auf`);
+                host.logger.warn(`plur1bus-neo: worker capture exceeded its ${neoAgentEndBudgetMs}ms budget (kalter Store?) — die Erfassung laeuft weiter, Neo holt beim naechsten Turn auf`);
               } else {
-                api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
+                host.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
               }
             }
           }
@@ -10521,7 +10523,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           throwIfCaptureAborted();
 
           if (!event.success || !event.messages || event.messages.length === 0) {
-            api.logger.info(`memory-lancedb-namespaced: skipping capture - success=${event.success}, messages=${event.messages?.length || 0}`);
+            host.logger.info(`memory-lancedb-namespaced: skipping capture - success=${event.success}, messages=${event.messages?.length || 0}`);
             return;
           }
 
@@ -10597,15 +10599,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               if (isInjectedContextText(items[i].text)) items.splice(i, 1);
             }
             if (items.length < beforeFilter) {
-              api.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture`);
+              host.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture`);
             }
 
             if (items.length === 0) {
-              api.logger.info(`memory-lancedb-namespaced: no texts to capture`);
+              host.logger.info(`memory-lancedb-namespaced: no texts to capture`);
               return;
             }
 
-            api.logger.info(`memory-lancedb-namespaced: found ${items.length} texts to capture for agent=${agentId}${background ? " (background)" : ""}`);
+            host.logger.info(`memory-lancedb-namespaced: found ${items.length} texts to capture for agent=${agentId}${background ? " (background)" : ""}`);
             const contextOrigin = String(event?.origin || event?.source || ctx?.origin || ctx?.source || "").toLowerCase();
             const contextKind = String(event?.kind || event?.type || ctx?.kind || ctx?.type || "").toLowerCase();
             // v2.2.0: ctx.chatType direkt prüfen (zuverlässiger als Text-Heuristik)
@@ -10638,12 +10640,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               try {
                 if (text.length > maxChars) {
                   if (mergingEnabled && isLlmRouteAvailable(captureSummaryLlmCfg)) {
-                    api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
+                    host.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
                     text = await summarizeForCapture(
                       text,
                       maxChars,
                       captureSummaryLlmCfg,
-                      api.logger,
+                      host.logger,
                       agentId,
                       { agentId, signal },
                     );
@@ -10653,7 +10655,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 }
                 return { it, text, ok: true };
               } catch (err) {
-                api.logger.warn(`memory-lancedb-namespaced: text prep failed for capture item: ${String(err)}`);
+                host.logger.warn(`memory-lancedb-namespaced: text prep failed for capture item: ${String(err)}`);
                 return { it, text, ok: false };
               }
             }));
@@ -10680,7 +10682,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             });
             const validPreps = chunkPlan.items;
             if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0) {
-              api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model for agent=${agentId}`);
+              host.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model for agent=${agentId}`);
             }
             const textToVector = new Map();
             if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {
@@ -10695,9 +10697,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     textToVector.set(batch[j], batchVectors[j]);
                   }
                 }
-                api.logger.info(`memory-lancedb-namespaced: embedded ${textsToEmbed.length} capture item(s) in batch for agent=${agentId}${background ? " (background)" : ""}`);
+                host.logger.info(`memory-lancedb-namespaced: embedded ${textsToEmbed.length} capture item(s) in batch for agent=${agentId}${background ? " (background)" : ""}`);
               } catch (batchErr) {
-                api.logger.warn(`memory-lancedb-namespaced: batch embed failed, falling back to individual embeddings: ${String(batchErr)}`);
+                host.logger.warn(`memory-lancedb-namespaced: batch embed failed, falling back to individual embeddings: ${String(batchErr)}`);
                 textToVector.clear();
               }
             }
@@ -10718,7 +10720,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 try {
                   vector = await embeddings.embed(p.text, { agentId });
                 } catch (err) {
-                  api.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
                   return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector: null, ok: false };
                 }
               }
@@ -10734,7 +10736,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   if (existing.length > 0) return null;
                   return p;
                 } catch (err) {
-                  api.logger.warn(`memory-lancedb-namespaced: dedup-check failed: ${String(err)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: dedup-check failed: ${String(err)}`);
                   return null;
                 }
               })
@@ -10805,11 +10807,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 await db.store(row);
                 storedMemoryRows.push(row);
                 stored++;
-                api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
+                host.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
               } catch (err) {
                 const settlement = await waitForTimeoutSettlement(err);
                 if (settlement.status === "rejected") {
-                  api.logger.warn(`memory-lancedb-namespaced: late capture store settlement failed: ${String(settlement.error)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: late capture store settlement failed: ${String(settlement.error)}`);
                 }
                 // Ist das Budget alle, scheitert jeder weitere Eintrag am selben
                 // Abbruch. Frueher stand deshalb je Restposten eine eigene
@@ -10818,12 +10820,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 // steht und der Rest beim naechsten Turn drankommt. Einmal
                 // abbrechen, der aeussere Block meldet den Zaehlstand.
                 if (isAbortError(err)) throw err;
-                api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
+                host.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
               }
             }
             throwIfCaptureAborted();
 
-            api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+            host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
 
             // Speaker naming pipeline: propose display names from merged diarization segments.
             await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
@@ -10845,7 +10847,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   const reflectResult = await runReflectionJob({
                     store: neoStore,
                     workspaceDir: reflectionWorkspaceDir,
-                    logger: api.logger,
+                    logger: host.logger,
                     llmReport: metaCognitionLlmReport,
                   });
                   if (reflectResult.ok) {
@@ -10853,10 +10855,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     lastReflectionAt = Date.now();
                     const metaStatePath = join(baseDbPath, "_meta-cognition-state.json");
                     writeFileSync(metaStatePath, JSON.stringify({ sessionCountSinceReflection, lastReflectionAt }, null, 2));
-                    api.logger.info(`memory-lancedb-namespaced: meta-reflection triggered after ${metaCognitionSessionThreshold} sessions`);
+                    host.logger.info(`memory-lancedb-namespaced: meta-reflection triggered after ${metaCognitionSessionThreshold} sessions`);
                   }
                 } catch (err) {
-                  api.logger.warn(`memory-lancedb-namespaced: meta-reflection failed: ${String(err)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: meta-reflection failed: ${String(err)}`);
                 }
               }
             }
@@ -10886,7 +10888,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       embeddings,
                       initialStatus: "pending_confirmation",
                     });
-                    api.logger.info(`plur1bus-reminder: stored pending-confirmation reminder for ${agentId}`);
+                    host.logger.info(`plur1bus-reminder: stored pending-confirmation reminder for ${agentId}`);
                   } else {
                     await saveReminder(db, {
                       text: reminderText,
@@ -10896,15 +10898,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       source,
                       embeddings,
                     });
-                    api.logger.info(`plur1bus-reminder: stored reminder for ${agentId} at ${new Date(parsed.remindAt).toISOString()} (${parsed.timePrecision})`);
+                    host.logger.info(`plur1bus-reminder: stored reminder for ${agentId} at ${new Date(parsed.remindAt).toISOString()} (${parsed.timePrecision})`);
                   }
                 }
               } catch (reminderStoreErr) {
                 const settlement = await waitForTimeoutSettlement(reminderStoreErr);
                 if (settlement.status === "rejected") {
-                  api.logger.warn(`plur1bus-reminder: late store settlement failed: ${String(settlement.error)}`);
+                  host.logger.warn(`plur1bus-reminder: late store settlement failed: ${String(settlement.error)}`);
                 }
-                api.logger.warn(`plur1bus-reminder: store failed: ${String(reminderStoreErr)}`);
+                host.logger.warn(`plur1bus-reminder: store failed: ${String(reminderStoreErr)}`);
               }
             }
 
@@ -10920,12 +10922,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // der Verlauf die alte Laenge wieder ueberschritt.
             let lastCount = recordedCount;
             if (currentCount < recordedCount) {
-              api.logger.info(`memory-lancedb-namespaced: message count dropped (${recordedCount} → ${currentCount}), resetting the agent_end watermark`);
+              host.logger.info(`memory-lancedb-namespaced: message count dropped (${recordedCount} → ${currentCount}), resetting the agent_end watermark`);
               lastCount = 0;
             }
 
             if (currentCount <= lastCount) {
-              api.logger.info(`memory-lancedb-namespaced: no new messages since last processing (${lastCount} → ${currentCount})`);
+              host.logger.info(`memory-lancedb-namespaced: no new messages since last processing (${lastCount} → ${currentCount})`);
             } else {
               // Nur die neuen Messages normalisieren
               const newMessages = event.messages.slice(lastCount);
@@ -10954,11 +10956,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               if (!background && mergingEnabled && isLlmRouteAvailable(conversationInsightsLlmCfg) && neoEnabled) {
                 const processedDreams = hooks?.agent_end?.processedDreams || [];
                 if (processedDreams.includes(digestHash)) {
-                  api.logger.info(`memory-lancedb-namespaced: light dream already processed for this session (digest=${digestHash})`);
+                  host.logger.info(`memory-lancedb-namespaced: light dream already processed for this session (digest=${digestHash})`);
                 } else if (normalizedTurns.length < 3) {
-                  api.logger.info(`memory-lancedb-namespaced: skipping light dream - too few turns (${normalizedTurns.length})`);
+                  host.logger.info(`memory-lancedb-namespaced: skipping light dream - too few turns (${normalizedTurns.length})`);
                 } else if (normalizedTurns.length > 50) {
-                  api.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
+                  host.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
                 } else {
                   // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
                   let personaIdentityText = "";
@@ -11019,7 +11021,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       { signal },
                     ) : null,
                     callLlm,
-                    logger: api.logger,
+                    logger: host.logger,
                     narrativeCfg: dreamNarrativeCfg,
                     workspaceDir: ctx?.workspaceDir || null,
                     temperamentName: resolveTemperamentName(agentId),
@@ -11041,7 +11043,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
                     return true;
                   }).catch((dreamErr) => {
-                    api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
+                    host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
                     return false;
                   }));
                 }
@@ -11051,7 +11053,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               if (!background && neoEnabled) {
                 const processedEpisodes = hooks?.agent_end?.processedEpisodes || [];
                 if (processedEpisodes.includes(digestHash)) {
-                  api.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
+                  host.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
                 } else {
                   // Dedup MUSS pro Turn greifen, nicht pro Batch: Bleibt das
                   // Watermark nach einem Fehlschlag stehen, ist die naechste
@@ -11093,7 +11095,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     // Teilueberlappung bleibt erhalten — sie enthaelt neue Turns.
                     const { fresh, skipped } = filterAlreadyEpisoded(episodes, episodedTurnIds);
                     if (skipped > 0) {
-                      api.logger.info(`memory-lancedb-namespaced: ${skipped} bereits episodierte Spanne(n) uebersprungen (agent=${agentId})`);
+                      host.logger.info(`memory-lancedb-namespaced: ${skipped} bereits episodierte Spanne(n) uebersprungen (agent=${agentId})`);
                     }
                     const vaultPaths = new Map();
                     if (fresh.length > 0) {
@@ -11103,14 +11105,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       if (typeof neoStore.appendEpisodesAsync === "function") await neoStore.appendEpisodesAsync(fresh);
                       else neoStore.appendEpisodes(fresh);
                       const continuedCount = fresh.filter((ep) => ep.id === continuedId).length;
-                      api.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId} (continued=${continuedCount}, turns=${fresh.map((ep) => ep.turnCount).join("/")})`);
+                      host.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId} (continued=${continuedCount}, turns=${fresh.map((ep) => ep.turnCount).join("/")})`);
                       if (ctx?.workspaceDir) {
                         for (const ep of fresh) {
                           throwIfAborted(signal, "episode commit aborted");
                           const replacePath = continuedId && ep.id === continuedId ? openEpisodeState?.vaultPath || null : null;
                           const written = writeEpisodeToVault(ep, ctx.workspaceDir, { replacePath });
                           if (written?.written) vaultPaths.set(ep.id, written.path);
-                          else if (written?.error) api.logger.warn?.(`memory-lancedb-namespaced: episode card not written: ${written.error}`);
+                          else if (written?.error) host.logger.warn?.(`memory-lancedb-namespaced: episode card not written: ${written.error}`);
                         }
                       }
                     }
@@ -11127,7 +11129,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     });
                     return true;
                   }).catch((epErr) => {
-                    api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
+                    host.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
                     return false;
                   }));
                 }
@@ -11154,16 +11156,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     maxRetries: MAX_POSTPROCESSING_RETRIES,
                   });
                   if (decision.gaveUp) {
-                    api.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung ${MAX_POSTPROCESSING_RETRIES}x gescheitert — Watermark wird nachgezogen, Turns ${lastCount}..${currentCount} bleiben unverarbeitet (agent=${agentId})`);
+                    host.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung ${MAX_POSTPROCESSING_RETRIES}x gescheitert — Watermark wird nachgezogen, Turns ${lastCount}..${currentCount} bleiben unverarbeitet (agent=${agentId})`);
                   }
                   if (decision.advance) {
                     advanceWatermark();
                     return;
                   }
-                  api.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung unvollstaendig — Watermark bleibt bei ${lastCount}, Bereich wird erneut versucht (${decision.nextFailures}/${MAX_POSTPROCESSING_RETRIES}, agent=${agentId})`);
+                  host.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung unvollstaendig — Watermark bleibt bei ${lastCount}, Bereich wird erneut versucht (${decision.nextFailures}/${MAX_POSTPROCESSING_RETRIES}, agent=${agentId})`);
                   neoStore.recordHook("agent_end", { postProcessingFailures: decision.nextFailures });
                 }).catch((aggErr) => {
-                  api.logger.warn?.(`memory-lancedb-namespaced: Watermark-Nachlauf fehlgeschlagen: ${String(aggErr)}`);
+                  host.logger.warn?.(`memory-lancedb-namespaced: Watermark-Nachlauf fehlgeschlagen: ${String(aggErr)}`);
                 });
               }
             }
@@ -11213,7 +11215,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     ],
                   });
                 } catch (err) {
-                  api.logger?.debug?.(`memory-graph: recent ownership projection failed: ${String(err)}`);
+                  host.logger.debug(`memory-graph: recent ownership projection failed: ${String(err)}`);
                 }
 
                 // Baue neue Edges
@@ -11221,7 +11223,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   newMemories.filter(m => m.vector),
                   [...recentExisting, ...newMemories],
                   db.table,
-                  api.logger,
+                  host.logger,
                   { requestContext: memoryCtx },
                 ) : [];
 
@@ -11253,7 +11255,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   for (const edge of newUniqueEdges) {
                     graphMetrics.record(edge.type);
                   }
-                  api.logger.info(`memory-graph: ${newUniqueEdges.length} edges added for agent=${agentId}`);
+                  host.logger.info(`memory-graph: ${newUniqueEdges.length} edges added for agent=${agentId}`);
                 }
 
                 // Vault-Ausgabe: Memory Constellation Report
@@ -11262,14 +11264,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const allEdges = neoStore.readGraphEdges(5_000);
                     const reportPath = writeGraphConstellationReport(allEdges, ctx.workspaceDir);
                     if (reportPath) {
-                      api.logger.info(`memory-graph: constellation report written to ${reportPath}`);
+                      host.logger.info(`memory-graph: constellation report written to ${reportPath}`);
                     }
                   } catch (vaultErr) {
-                    api.logger.warn?.(`memory-graph: vault report failed: ${String(vaultErr)}`);
+                    host.logger.warn?.(`memory-graph: vault report failed: ${String(vaultErr)}`);
                   }
                 }
               } catch (graphErr) {
-                api.logger.warn?.(`memory-lancedb-namespaced: graph build failed: ${String(graphErr)}`);
+                host.logger.warn?.(`memory-lancedb-namespaced: graph build failed: ${String(graphErr)}`);
               }
             }
           } catch (err) {
@@ -11277,9 +11279,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               // Ohne Zaehler: `stored`/`skipped` leben im try-Block und sind
               // hier nicht sichtbar. Was gespeichert wurde, steht ohnehin je
               // Eintrag im Log ("stored memory ...").
-              api.logger.info(`memory-lancedb-namespaced: capture budget exhausted for agent=${agentId} — das bereits Gespeicherte steht, der Rest folgt beim naechsten Turn`);
+              host.logger.info(`memory-lancedb-namespaced: capture budget exhausted for agent=${agentId} — das bereits Gespeicherte steht, der Rest folgt beim naechsten Turn`);
             } else {
-              api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
+              host.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
             }
           }
           });
@@ -11291,7 +11293,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               try {
                 await runNeoEmbeddingDrain();
               } catch (drainErr) {
-                api.logger.warn(`plur1bus-neo: embedding queue drain failed: ${String(drainErr)}`);
+                host.logger.warn(`plur1bus-neo: embedding queue drain failed: ${String(drainErr)}`);
               }
             }
           }
@@ -11316,7 +11318,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             maxAssistantChars: replyOutcomeMaxAssistantChars,
           });
         } catch (err) {
-          api.logger?.warn?.(`reply-outcome-tracking: recording agent reply failed: ${String(err)}`);
+          host.logger.warn(`reply-outcome-tracking: recording agent reply failed: ${String(err)}`);
         }
       });
     }
@@ -11360,7 +11362,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 pool,
                 sharedMemoryPool,
                 agentId,
-                { ...memoryCtx, logger: api.logger },
+                { ...memoryCtx, logger: host.logger },
                 async (readDbs) => {
               const limit = normalizeBoundedRecallInteger(params.limit, maxPromptMemories, 1, 100);
               const recallBudget = resolveRuntimeRecallBudget(params.query, limit, adaptiveBudgetCfg);
@@ -11389,7 +11391,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               const phaseTimer = createRecallPhaseTimer({
                 softBudgetMs,
                 hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
-                logger: api.logger,
+                logger: host.logger,
               });
               const _recallBaseParams = {
                 query: params.query,
@@ -11422,11 +11424,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 summaryMaxWords,
                 querySummarizer: makeQuerySummarizer(
                   mergingEnabled ? recallQueryLlmCfg : null,
-                  api.logger,
+                  host.logger,
                   agentId,
                   { agentId },
                 ),
-                logger: api.logger,
+                logger: host.logger,
                 emotionalState: emotionalPool.get(agentId),
                 graphEdges,
                 associativeEnabled: true,
@@ -11579,7 +11581,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
               // Phase 2 — Bi-Temporal Memory (§7): caller-supplied only, never
               // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
-              const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
+              const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: host.logger });
 
               // 0. Tombstone-Block: gleichlautende, zuvor gelöschte Erinnerung
               // im selben autorisierten Scope darf nicht still reaktiviert werden.
@@ -11592,7 +11594,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               });
               if (blockingTombstone) {
                 if (blockingTombstone._blockReason) {
-                  api.logger?.warn?.(`memory-lancedb-namespaced: tombstone registry ${blockingTombstone._blockReason} for agent=${agentId}: ${blockingTombstone._diagnostic || ""} — blocking capture fail-closed`);
+                  host.logger.warn(`memory-lancedb-namespaced: tombstone registry ${blockingTombstone._blockReason} for agent=${agentId}: ${blockingTombstone._diagnostic || ""} — blocking capture fail-closed`);
                 }
                 addTraceStoreDecision(trace, {
                   action: "tombstone_blocked",
@@ -11620,7 +11622,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             // That is the conservative outcome, and the decision is already durable in the
             // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
             // routine store into an operator alarm -- 192 of them in one seeded run.
-            api.logger?.info?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+            host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
                   addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
                 } else {
                   if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -11658,7 +11660,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     prepareReplacement: async (authoritativeCandidate, replacementId) => {
                       let mergeResult = null;
                       if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
-                        api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                        host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
                         addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
                       } else {
                         try {
@@ -11667,7 +11669,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                             new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
                           ]);
                         } catch (mergeErr) {
-                          api.logger.warn("memory-lancedb-namespaced: merge check skipped", {
+                          host.logger.warn("memory-lancedb-namespaced: merge check skipped", {
                             errorClass: normalizedLlmErrorClass(mergeErr),
                           });
                         }
@@ -11682,12 +11684,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         return null;
                       }
                       if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
-                        api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                        host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
                         addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                         return null;
                       }
                       if (hasDisjointValidityWindows(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil })) {
-                        api.logger?.warn?.(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
+                        host.logger.warn(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
                         addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "disjoint validity windows" });
                         return null;
                       }
@@ -11814,7 +11816,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     archivePath,
                   });
                 } catch (err) {
-                  api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${params.memoryId}: ${String(err)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${params.memoryId}: ${String(err)}`);
                   return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
                 }
                 return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (tombstoned).` }] };
@@ -11861,7 +11863,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                       archivePath: "",
                     });
                   } catch (err) {
-                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedId}: ${String(err)}`);
+                    host.logger.warn(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedId}: ${String(err)}`);
                     return { content: [{ type: "text", text: `Memory forget failed for ${deletedId}: ${String(err)}` }] };
                   }
                   return { content: [{ type: "text", text: `Forgotten (audit recovered for ${deletedId}).` }] };
@@ -11892,7 +11894,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     archivePath,
                   });
                 } catch (err) {
-                  api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${String(err)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${String(err)}`);
                   return { content: [{ type: "text", text: `Memory forget failed for ${targetId}: ${String(err)}` }] };
                 }
                 return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (tombstoned).` }] };
@@ -11941,7 +11943,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 if (lockAge > 5 * 60 * 1000) {
                   const { unlinkSync } = await import("node:fs");
                   unlinkSync(lockPath);
-                  api.logger.warn("memory-lancedb-namespaced: removed stale knowledge lock file");
+                  host.logger.warn("memory-lancedb-namespaced: removed stale knowledge lock file");
                 } else {
                   return { content: [{ type: "text", text: "knowledge_update: another update is already running (lock file exists). Try again in a moment." }] };
                 }
@@ -11978,7 +11980,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   const queriedIds = selectSafeUuids(pendingIds, 100);
                   const inList = safeUuidList(pendingIds, 100);
                   if (inList === null) {
-                    api.logger.warn(`memory-lancedb-namespaced: knowledge_update — keine valid UUIDs in ${pendingIds.length} pending IDs`);
+                    host.logger.warn(`memory-lancedb-namespaced: knowledge_update — keine valid UUIDs in ${pendingIds.length} pending IDs`);
                   } else {
                     const rows = await db.table.query().where(`id IN (${inList})`).toArray();
                     const keyById = new Map(agentPending.map(p => [p.memoryId, p.key]));
@@ -11996,11 +11998,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const stalePendingKeys = selectStalePendingKeys({ pending: agentPending, rows, queriedIds });
                     if (stalePendingKeys.length > 0) {
                       removeKnowledgePending(ctx.workspaceDir, stalePendingKeys);
-                      api.logger.info(`memory-lancedb-namespaced: knowledge_update — ${stalePendingKeys.length} nicht promotbare Warteschlangeneinträge entfernt (agent=${agentId})`);
+                      host.logger.info(`memory-lancedb-namespaced: knowledge_update — ${stalePendingKeys.length} nicht promotbare Warteschlangeneinträge entfernt (agent=${agentId})`);
                     }
                   }
                 } catch (fetchErr) {
-                  api.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
                 }
               }
 
@@ -12020,7 +12022,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const remaining = schicht15MaxPromotions - promoCheck.current;
                 if (pendingTexts.length > remaining) {
                   pendingTexts = pendingTexts.slice(0, remaining);
-                  api.logger.info(`memory-lancedb-namespaced: knowledge_update truncated to ${remaining} pending memories (maxPromotionsPerRun)`);
+                  host.logger.info(`memory-lancedb-namespaced: knowledge_update truncated to ${remaining} pending memories (maxPromotionsPerRun)`);
                 }
               }
 
@@ -12081,7 +12083,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               // abgeschnitten zurueck, wuerde sie hier ungeprueft ueber den
               // Bestand geschrieben und Wissen vernichten.
               if (isTruncatedKnowledgeBody(currentBody, updated)) {
-                api.logger.warn(`memory-lancedb-namespaced: knowledge_update verworfen — Antwort (${updated.trim().length} Zeichen) deutlich kuerzer als der Bestand (${currentBody.trim().length}); KNOWLEDGE.md bleibt unveraendert`);
+                host.logger.warn(`memory-lancedb-namespaced: knowledge_update verworfen — Antwort (${updated.trim().length} Zeichen) deutlich kuerzer als der Bestand (${currentBody.trim().length}); KNOWLEDGE.md bleibt unveraendert`);
                 return { content: [{ type: "text", text: "knowledge_update: the model returned a shortened body; KNOWLEDGE.md was left untouched." }] };
               }
 
@@ -12112,9 +12114,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const compactedLines = compacted?.split("\n").length ?? Infinity;
                 if (compacted && compactedLines <= 150) {
                   finalBody = compacted;
-                  api.logger.info(`memory-lancedb-namespaced: KNOWLEDGE.md compacted to ${compactedLines} lines`);
+                  host.logger.info(`memory-lancedb-namespaced: KNOWLEDGE.md compacted to ${compactedLines} lines`);
                 } else {
-                  api.logger.warn(`memory-lancedb-namespaced: KNOWLEDGE.md compaction skipped: result (${compactedLines} lines) not ≤150`);
+                  host.logger.warn(`memory-lancedb-namespaced: KNOWLEDGE.md compaction skipped: result (${compactedLines} lines) not ≤150`);
                 }
               }
 
@@ -12154,7 +12156,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               // zusammen. Am 09.09.2026 hat das die Fehlersuche mehrfach in
               // die Irre gefuehrt.
               const errorClass = normalizedLlmErrorClass(err);
-              api.logger.warn(`memory-lancedb-namespaced: knowledge_update failed (class=${errorClass})`);
+              host.logger.warn(`memory-lancedb-namespaced: knowledge_update failed (class=${errorClass})`);
               return { content: [{ type: "text", text: `knowledge_update failed (${errorClass}).` }] };
             } finally {
               // Release lock
@@ -12199,13 +12201,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             skipped: true,
           });
         } catch (neoErr) {
-          api.logger.warn(`plur1bus-neo: before_prompt_build maintenance tracking failed: ${String(neoErr)}`);
+          host.logger.warn(`plur1bus-neo: before_prompt_build maintenance tracking failed: ${String(neoErr)}`);
         }
       }
       // GC: purge expired memories (non-blocking, throttled on hot path)
       if (gcEnabled) {
-        pool.withDb(agentId, (db) => db.purgeExpiredThrottled(api.logger)).catch((gcErr) => {
-          api.logger?.warn?.(`memory-lancedb-namespaced: GC purge on internal turn failed: ${String(gcErr)}`);
+        pool.withDb(agentId, (db) => db.purgeExpiredThrottled(host.logger)).catch((gcErr) => {
+          host.logger.warn(`memory-lancedb-namespaced: GC purge on internal turn failed: ${String(gcErr)}`);
         });
       }
       return undefined;
@@ -12232,7 +12234,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             dbPool: pool,
             applyDynamics: true,
             dynamicsScheduler: (run, meta) => replyOutcomeDynamics.enqueue(outcomeAgentId, run, meta),
-            logger: api.logger,
+            logger: host.logger,
             maxAgeMs: replyOutcomeMaxAgeMs,
             maxMemoryIds: replyOutcomeMaxMemoryIds,
             maxReplyChars: replyOutcomeMaxReplyChars,
@@ -12243,10 +12245,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           const ms = Date.now() - startedAt;
           if (Array.isArray(completed) && completed.length > 0) {
             const line = `reply-outcome: completed outcomes=${completed.length} memoryIds=${completed.reduce((sum, entry) => sum + (entry.memoryIds?.length || 0), 0)} syncMs=${ms} queued=${replyOutcomeDynamics.pending(outcomeAgentId)} agent=${outcomeAgentId}`;
-            if (ms >= REPLY_OUTCOME_SYNC_LOG_MS) api.logger?.info?.(line); else api.logger?.debug?.(line);
+            if (ms >= REPLY_OUTCOME_SYNC_LOG_MS) host.logger.info(line); else host.logger.debug(line);
           }
         } catch (err) {
-          api.logger?.warn?.(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);
+          host.logger.warn(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);
         }
       });
     }
@@ -12258,7 +12260,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       let replyDispatchInvocations = 0;
       const replyDispatchRegistration = api.on("reply_dispatch", async (event, hookCtx) => {
         replyDispatchInvocations += 1;
-        api.logger?.info?.(`memory-turn-routes: reply_dispatch handler invoked #${replyDispatchInvocations} dispatchKind=${String(hookCtx?.dispatchKind || "")} hasCtx=${Boolean(event?.ctx)} sessionKey=${String(event?.sessionKey || event?.ctx?.SessionKey || "").slice(0, 96)}`);
+        host.logger.info(`memory-turn-routes: reply_dispatch handler invoked #${replyDispatchInvocations} dispatchKind=${String(hookCtx?.dispatchKind || "")} hasCtx=${Boolean(event?.ctx)} sessionKey=${String(event?.sessionKey || event?.ctx?.SessionKey || "").slice(0, 96)}`);
         const turnRoutes = await getMemoryTurnRoutes();
         turnRoutes?.observeReplyDispatch(event);
         // 7.12.33: Ausgang der Beobachtung (Debug); die Fallback-Warnung des
@@ -12268,12 +12270,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           const observed = turnRoutes?.lastObserve?.(sessionKey) || "none";
           const line = `memory-turn-routes: dispatch observe:${observed} session=${String(sessionKey).slice(0, 96)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} eventKeys=${Object.keys(event || {}).filter((k) => k !== "ctx").slice(0, 24).join(",")} ctxKeys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|BodyForAgent|RawBody|SenderId|ChatId|Provider|Surface|AccountId|OriginatingTo|OriginatingChannel|OriginatingAccountId|SessionKey|RunId|isTailDispatch|MessageThreadId)$/.test(k)).join(",")}`;
           // 7.12.34: Nicht-Kommando-Ausstiege sichtbar machen (Info), Rest Debug.
-          if (/^(registered|slash_command|command_turn:|command_source|is_command|tail_dispatch)/.test(observed)) api.logger?.debug?.(line);
-          else api.logger?.info?.(line);
+          if (/^(registered|slash_command|command_turn:|command_source|is_command|tail_dispatch)/.test(observed)) host.logger.debug(line);
+          else host.logger.info(line);
         } catch (_) { /* best-effort */ }
         return undefined;
       }, { priority: Number.MIN_SAFE_INTEGER, eligibleDispatchKinds: ["agent", "acp"] });
-      api.logger?.info?.(`memory-turn-routes: reply_dispatch hook registered result=${replyDispatchRegistration === undefined ? "undefined" : typeof replyDispatchRegistration} autoRecall=${autoRecall}`);
+      host.logger.info(`memory-turn-routes: reply_dispatch hook registered result=${replyDispatchRegistration === undefined ? "undefined" : typeof replyDispatchRegistration} autoRecall=${autoRecall}`);
 
       api.on("agent_end", async (event, ctx) => {
         if (!turnRouteState.initPromise) return;
@@ -12292,7 +12294,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const phaseTimer = createRecallPhaseTimer({
           softBudgetMs,
           hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
-          logger: api.logger,
+          logger: host.logger,
         });
         const scheduledRecall = await runtimeScheduler.runRecall({
           background,
@@ -12324,7 +12326,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               accountTopology: memoryAccountTopology,
               turnRoutes,
               routingCapability,
-              logger: api.logger,
+              logger: host.logger,
             })
           : resolveMemoryRequestContext({
               agentId: ctx?.agentId,
@@ -12362,7 +12364,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             };
             if (typeof neoStore.recordHookAsync === "function") {
               neoStore.recordHookAsync("before_prompt_build", hookMeta)
-                .catch((hookErr) => api.logger?.debug?.(`plur1bus-neo: before_prompt_build hook record skipped: ${String(hookErr?.message || hookErr)}`));
+                .catch((hookErr) => host.logger.debug(`plur1bus-neo: before_prompt_build hook record skipped: ${String(hookErr?.message || hookErr)}`));
             } else {
               neoStore.recordHook("before_prompt_build", hookMeta);
             }
@@ -12382,20 +12384,20 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   if (outcome === NEO_EMBED_TIMEOUT) {
                     recallPrelude.embedTimedOut = true;
                     embedPromise.catch(() => {});
-                    api.logger?.warn?.(`plur1bus-neo: prompt query embedding exceeded ${neoGlobalRecall.embedTimeoutMs} ms, continuing without vector`);
+                    host.logger.warn(`plur1bus-neo: prompt query embedding exceeded ${neoGlobalRecall.embedTimeoutMs} ms, continuing without vector`);
                   } else {
                     queryVector = outcome;
                   }
                 } finally {
                   if (embedTimer) clearTimeout(embedTimer);
                 }
-              } catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
+              } catch (error) { host.logger.debug(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
               recallPrelude.embedMs = Date.now() - embedStartedAt;
               const globalStartedAt = Date.now();
               try {
                 neoGlobalIds = runNeoGlobalSearch(neoStore, neoItems, queryVector, requester);
               } catch (globalErr) {
-                api.logger?.warn?.(`plur1bus-neo: global candidate search failed: ${String(globalErr)}`);
+                host.logger.warn(`plur1bus-neo: global candidate search failed: ${String(globalErr)}`);
               }
               recallPrelude.globalMs = Date.now() - globalStartedAt;
               const lanesStartedAt = Date.now();
@@ -12404,14 +12406,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               recallPrelude.lanesMs = Date.now() - lanesStartedAt;
             }
           } catch (neoErr) {
-            api.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
+            host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
           }
         }
         {
           const preludeMs = Date.now() - recallPrelude.startedAt;
           const preludeLine = `plur1bus-neo: recall prelude total=${preludeMs}ms identity=${recallPrelude.identityMs}ms hookRecord=${recallPrelude.hookRecordMs}ms window=${recallPrelude.windowMs}ms embed=${recallPrelude.embedMs}ms${recallPrelude.embedTimedOut ? "(timeout)" : ""} global=${recallPrelude.globalMs}ms lanes=${recallPrelude.lanesMs}ms authenticated=${memoryCtx?.userPrincipal ? "yes" : "no"} agent=${ctx?.agentId || "default"}`;
-          if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) api.logger?.info?.(preludeLine);
-          else api.logger?.debug?.(preludeLine);
+          if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) host.logger.info(preludeLine);
+          else host.logger.debug(preludeLine);
         }
         if (!event.prompt || event.prompt.length < 5) return neoContext ? { prependContext: neoContext } : undefined;
         // Skip heavy LanceDB recall for internal dreaming/sleep magic messages —
@@ -12431,13 +12433,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           pool,
           sharedMemoryPool,
           agentId,
-          { ...memoryCtx, logger: api.logger },
+          { ...memoryCtx, logger: host.logger },
           async (readDbs) => {
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(api.logger))
+          pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(host.logger))
             .catch((gcErr) => {
-              api.logger?.warn?.(`memory-lancedb-namespaced: GC purge before recall failed: ${String(gcErr)}`);
+              host.logger.warn(`memory-lancedb-namespaced: GC purge before recall failed: ${String(gcErr)}`);
             });
         }
         try {
@@ -12551,7 +12553,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               provisionalByDefault: overlayCfg.provisionalByDefault ?? true,
               maxAgeDays: overlayCfg.maxAgeDays ?? 30,
               overlayStore,
-              logger: api.logger,
+              logger: host.logger,
             });
           }
           const useAssociative = computeUseAssociative(continuityEnabled, assocCfg);
@@ -12588,11 +12590,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             summaryMaxWords,
             querySummarizer: makeQuerySummarizer(
               mergingEnabled ? recallQueryLlmCfg : null,
-              api.logger,
+              host.logger,
               agentId,
               { agentId, signal },
             ),
-            logger: api.logger,
+            logger: host.logger,
             emotionalState: emotionalPool.get(agentId),
             graphEdges,
             associativeEnabled: useAssociative,
@@ -12628,7 +12630,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           );
           trace = pipelineTrace || trace;
 
-          api.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
+          host.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
 
           const items = [];
           for (const c of canonicalHits) {
@@ -12718,7 +12720,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             epistemicStatus: r.entry.epistemicStatus,
           }));
           if (semanticLensItems.length > 0) {
-            api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);
+            host.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);
           }
 
           // Inner Continuity Engine: taste gate + pattern surfacing
@@ -12755,7 +12757,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   });
                 }
               } catch (e) {
-                api.logger.warn?.(`continuity-engine: pattern surfacing failed: ${String(e)}`);
+                host.logger.warn?.(`continuity-engine: pattern surfacing failed: ${String(e)}`);
                 matchedPattern = null;
               }
             }
@@ -12771,7 +12773,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
               overlays = await overlayStore.loadForTargets(targetIds, overlayCfg.maxAgeDays ?? 30);
             } catch (e) {
-              api.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
+              host.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
             }
             // Enrich loaded overlays with contradiction flags from persisted records.
             try {
@@ -12797,7 +12799,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 }
               }
             } catch (e) {
-              api.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
+              host.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
             }
             if (autoCreateOverlays && overlayGenerator && overlayStore) {
               const emotionalState = emotionalPool.get(agentId);
@@ -12830,14 +12832,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         throwIfAborted(signal, "recall aborted");
                       } catch (e) {
                         throwIfAborted(signal, "recall aborted");
-                        api.logger.warn?.(`continuity-engine: contradiction audit append failed: ${String(e)}`);
+                        host.logger.warn?.(`continuity-engine: contradiction audit append failed: ${String(e)}`);
                       }
                     }
                     if (written) overlays.push(newOverlay);
                   }
                 } catch (e) {
                   throwIfAborted(signal, "recall aborted");
-                  api.logger.warn?.(`continuity-engine: overlay generation failed: ${String(e)}`);
+                  host.logger.warn?.(`continuity-engine: overlay generation failed: ${String(e)}`);
                 }
               }
             }
@@ -12860,7 +12862,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               const detector = new ContradictionDetector({
                 llm,
                 workspaceDir: ctx.workspaceDir,
-                logger: api.logger,
+                logger: host.logger,
               });
               memoryTextContradictions = await detector.findMemoryTextContradictions(associativeItems, {
                 maxPairs: contraCfg.maxPairsPerRecall ?? 20,
@@ -12869,7 +12871,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               throwIfAborted(signal, "recall aborted");
             } catch (e) {
               throwIfAborted(signal, "recall aborted");
-              api.logger?.warn?.(`continuity-engine: memory-text contradiction detection failed: ${String(e)}`);
+              host.logger.warn(`continuity-engine: memory-text contradiction detection failed: ${String(e)}`);
             }
           }
           const contradictionPairs = [];
@@ -12898,7 +12900,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
             }
             try {
-              const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir, logger: api.logger });
+              const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir, logger: host.logger });
               for (const rec of memoryTextContradictions) {
                 throwIfAborted(signal, "recall aborted");
                 await detector.persistContradiction({
@@ -12920,7 +12922,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
             } catch (e) {
               throwIfAborted(signal, "recall aborted");
-              api.logger?.warn?.(`continuity-engine: failed to persist memory-text contradictions: ${String(e)}`);
+              host.logger.warn(`continuity-engine: failed to persist memory-text contradictions: ${String(e)}`);
             }
           }
 
@@ -12954,7 +12956,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   agentId,
                   sessionKey: ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "",
                   now: Date.now(),
-                  logger: api.logger,
+                  logger: host.logger,
                   compactedAt: event?.compactedAt || ctx?.compactedAt || null,
                   requestContext: memoryCtx,
                   getMemoryById: async (memoryId) => {
@@ -12974,7 +12976,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 trace = crrResult.trace;
               }
             } catch (crrErr) {
-              api.logger.warn?.(`conversation-reactivation-recall: ${crrErr.message}`);
+              host.logger.warn?.(`conversation-reactivation-recall: ${crrErr.message}`);
             }
           }
 
@@ -12999,7 +13001,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 maxAssistantChars: replyOutcomeMaxAssistantChars,
               });
             } catch (err) {
-              api.logger?.warn?.(`reply-outcome-tracking: recording pending outcome failed: ${String(err)}`);
+              host.logger.warn(`reply-outcome-tracking: recording pending outcome failed: ${String(err)}`);
             }
           }
 
@@ -13008,7 +13010,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               const { enrichTraceWithTemporalProvenance } = await import("./lib/temporal-provenance.js");
               enrichTraceWithTemporalProvenance(trace, associativeItems, { now: nowMs });
             } catch (e) {
-              api.logger?.warn?.(`temporal-provenance: trace enrichment failed: ${String(e)}`);
+              host.logger.warn(`temporal-provenance: trace enrichment failed: ${String(e)}`);
             }
           }
 
@@ -13085,12 +13087,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 callLlm,
                 signal,
               })?.catch((err) => {
-                api.logger?.debug?.(`persona-voice: scheduled seed failed (fail-open): ${normalizedLlmErrorClass(err)}`);
+                host.logger.debug(`persona-voice: scheduled seed failed (fail-open): ${normalizedLlmErrorClass(err)}`);
               });
               personaDirective = loadPersonaDirective(ctx.workspaceDir, { maxChars: personaDirectiveMaxChars });
               personaEmojiPalette = loadPersonaEmojiPalette(ctx.workspaceDir);
             } catch (err) {
-              api.logger?.debug?.(`persona-voice: scheduled seed setup failed (fail-open): ${normalizedLlmErrorClass(err)}`);
+              host.logger.debug(`persona-voice: scheduled seed setup failed (fail-open): ${normalizedLlmErrorClass(err)}`);
             }
           }
 
@@ -13162,7 +13164,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     chatId: ctx?.chatId,
                   }, { workspaceAliases: memoryWorkspaceAliases });
                 } catch (err) {
-                  api.logger?.debug?.(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
+                  host.logger.debug(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
                 }
                 const echo = loadFreshDreamEcho(ctx.workspaceDir, { now: nowMs, requestContext: echoRequestContext });
                 if (echo) {
@@ -13221,7 +13223,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             schicht15Enabled,
             lang,
             tone,
-            logger: api.logger,
+            logger: host.logger,
           });
 
           // Skill-proposal nudge: weekly proactive presentation of new skill proposals
@@ -13283,7 +13285,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               reminderNudge = formatReminderNudge(allDue, { lang, tone });
               for (const r of dueFromDb) {
                 await presentReminder(db, r.id).catch((err) => {
-                  api.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
+                  host.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
                 });
               }
               // Batch remove all from pending file in one write
@@ -13295,7 +13297,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
             }
           } catch (reminderErr) {
-            api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
+            host.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
           throwIfAborted(signal, "recall aborted");
           // 7.12.27: Globale Neo-Treffer, die als LanceDB-Erinnerung schon im
@@ -13306,10 +13308,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               const deduped = dedupeNeoLanesAgainstTexts(neoLanes, memoryTexts, { onlyIds: neoGlobalIds, threshold: neoGlobalRecall.dedupeThreshold });
               if (deduped.dropped > 0) {
                 neoContext = formatNeoRecallContext(deduped.lanes, { idempotencyKey: neoInjectionKey || undefined });
-                api.logger?.info?.(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories`);
+                host.logger.info(`plur1bus-neo: global candidate search dropped ${deduped.dropped} hit(s) already injected as memories`);
               }
             } catch (dedupeErr) {
-              api.logger?.debug?.(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
+              host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
             }
           }
           return { prependContext: applyGlobalInjectBudget({
@@ -13325,7 +13327,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }) };
         } catch (err) {
           throwIfAborted(signal, "recall aborted");
-          api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
+          host.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
           const fallbackContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
           if (fallbackContext) return { prependContext: fallbackContext };
         }
@@ -13336,16 +13338,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
         if (scheduledRecall.ok) {
           if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
-            api.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
+            host.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
           }
           return scheduledRecall.value;
         }
         if (scheduledRecall.timedOut) {
-          api.logger.warn(`memory-lancedb-namespaced: recall timed out without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
+          host.logger.warn(`memory-lancedb-namespaced: recall timed out without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
           return undefined;
         }
         if (scheduledRecall.error) {
-          api.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);
+          host.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);
         }
         return undefined;
       }, { timeoutMs: runtimeScheduler.config.recallTimeoutMs + 5_000 });
@@ -13363,13 +13365,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               autoRecallDisabled: true,
             });
           } catch (neoErr) {
-            api.logger.warn(`plur1bus-neo: before_prompt_build dispatch tracking failed: ${String(neoErr)}`);
+            host.logger.warn(`plur1bus-neo: before_prompt_build dispatch tracking failed: ${String(neoErr)}`);
           }
         }
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          pool.withDb(agentId, (db) => db.purgeExpiredThrottled(api.logger)).catch((gcErr) => {
-            api.logger?.warn?.(`memory-lancedb-namespaced: GC purge with auto-recall disabled failed: ${String(gcErr)}`);
+          pool.withDb(agentId, (db) => db.purgeExpiredThrottled(host.logger)).catch((gcErr) => {
+            host.logger.warn(`memory-lancedb-namespaced: GC purge with auto-recall disabled failed: ${String(gcErr)}`);
           });
         }
         // P0-1: Interne/background Turns bekommen keine Nudges (kein Prompt-Overhead).
@@ -13390,7 +13392,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           schicht15Enabled,
           lang,
           tone,
-          logger: api.logger,
+          logger: host.logger,
         });
 
         // --- Time Context & Reminder Nudge (auto-recall off) ---
@@ -13425,7 +13427,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             reminderNudge = formatReminderNudge(allDue, { lang, tone });
             for (const r of dueFromDb) {
               await presentReminder(db, r.id).catch((err) => {
-                api.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
+                host.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
               });
             }
             if (dueFromPending.length > 0) {
@@ -13437,7 +13439,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }
           });
         } catch (reminderErr) {
-          api.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
+          host.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
         }
         if (nudge || conflictNudge || startNoticeContext || timeContext || temporalContinuityContext || reminderNudge) {
           return { prependContext: [startNoticeContext, nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
