@@ -371,6 +371,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
+import { createDreamingStatusProvider } from "./lib/dreaming/dreaming-status-provider.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesWithState, writeEpisodeToVault, rebuildEpisode, findEpisodeCardPath } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
@@ -4444,6 +4445,22 @@ const plugin = {
     });
     pluginLogger = api.logger;
     if (typeof api.registerMemoryCapability === "function") {
+      // The dreaming provider needs the gateway's cron service, which only
+      // arrives with gateway_start. The feature-cron hook further down is
+      // conditional on featureCronSetup, so this capture stands on its own.
+      let gatewayCronGetter = null;
+      if (typeof api.on === "function") {
+        api.on("gateway_start", (_event, gatewayContext) => {
+          if (typeof gatewayContext?.getCron === "function") {
+            gatewayCronGetter = () => gatewayContext.getCron();
+          }
+        });
+      }
+      const dreamingStatusProvider = createDreamingStatusProvider({
+        getPluginConfig: () => cfg,
+        getCron: () => gatewayCronGetter?.(),
+        logger: api.logger,
+      });
       // The host asks the memory-slot owner for a runtime; without it the
       // Memory page reports "memory plugin unavailable". Everything the
       // runtime touches is created further down in this function, so the
@@ -4522,6 +4539,9 @@ const plugin = {
         publicArtifacts: {
           listArtifacts: (params) => listPluginPublicArtifacts(params),
         },
+        // Optional seam (openclaw/openclaw#155860): the per-agent sleep plan
+        // PLUR1BUS actually runs. Hosts without the seam ignore it.
+        dreaming: dreamingStatusProvider,
       });
     } else {
       api.logger?.info?.(

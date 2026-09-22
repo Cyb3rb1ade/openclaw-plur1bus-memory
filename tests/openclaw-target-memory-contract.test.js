@@ -92,6 +92,10 @@ describe("OpenClaw target release exclusive memory contract", () => {
       typeof api._memoryCapabilities[0].publicArtifacts?.listArtifacts,
       "function",
     );
+    // Optional seam proposed in openclaw/openclaw#155860: lets the Memory page
+    // show the per-agent dreaming schedule PLUR1BUS actually runs. Hosts
+    // without it ignore the field.
+    assert.equal(typeof api._memoryCapabilities[0].dreaming?.getStatus, "function");
     assert.deepEqual(api._embeddingProviders.map((adapter) => adapter.id), [
       "plur1bus-openai",
       "plur1bus-openai-compatible",

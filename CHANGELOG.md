@@ -5,6 +5,24 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.3] — 2026-09-23
+
+### Hinzugefügt
+
+- **PLUR1BUS meldet OpenClaws Gedächtnisseite seinen tatsächlichen Schlafplan.**
+  Die Memory-Capability trägt jetzt einen `dreaming`-Provider für die optionale
+  Naht, die in openclaw/openclaw#155860 vorgeschlagen ist. Er liest die real
+  eingetragenen Feature-Crons aus dem Cron-Dienst des Gateways — REM
+  (`rem-dream`) und Tiefschlaf (`consolidate-daily`) je Agent mit ihrem eigenen,
+  versetzten Ausdruck und den Laufzeiten — und meldet den Leichtschlaf als
+  ereignisgesteuert mit leerem `cron`, weil er nach einem Gespräch läuft und
+  keiner Uhr folgt. Quelle sind die Jobs selbst, nicht der Plan: ein von Hand
+  verschobener Job erscheint so, wie er läuft.
+
+  Ein Host ohne diese Naht ignoriert das Feld; auf dem veröffentlichten
+  OpenClaw ändert sich nichts. Fehlt der Cron-Dienst oder scheitert die Abfrage,
+  meldet der Provider `null`, und der Host behält seine eigene Auflösung.
+
 ## [7.16.2] — 2026-09-22
 
 ### Geändert
