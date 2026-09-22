@@ -109,13 +109,26 @@ describe("lib/platform securePath", () => {
     assert.equal(calls.length, 1);
   });
 
-  it("returns acl-tool-unavailable when execFile throws", () => {
+  it("returns acl-tool-unavailable when execFile throws ENOENT", () => {
     const result = securePath("C:\\state\\owner.token", {
       platform: "win32",
       username: "tester",
-      execFile: () => { throw new Error("icacls not found"); },
+      execFile: () => { const err = new Error("icacls not found"); err.code = "ENOENT"; throw err; },
     });
     assert.deepEqual(result, { applied: false, reason: "acl-tool-unavailable" });
+  });
+
+  it("rethrows a non-ENOENT error from execFile", () => {
+    const testError = new Error("permission denied");
+    testError.code = "EACCES";
+    assert.throws(
+      () => securePath("C:\\state\\owner.token", {
+        platform: "win32",
+        username: "tester",
+        execFile: () => { throw testError; },
+      }),
+      testError,
+    );
   });
 });
 
