@@ -29,6 +29,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-capture-hook.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
+  "engine/commands/plur1bus-command.js",
   "engine/recall/assemble-prompt-context.js",
   "engine/recall/minimal-maintenance.js",
   // ── core runtime ──────────────────────────────────────────────────────────
