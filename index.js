@@ -5051,14 +5051,15 @@ const plugin = {
 
     // Reminder-Extraktion aus Auto-Capture (reminders.autoExtract: false schaltet ab)
     const reminderAutoExtract = (cfg.reminders || {}).autoExtract !== false;
-    let sessionCountSinceReflection = 0;
-    let lastReflectionAt = 0;
+    // Shared mutable state: the capture hook rebinds these at turn time
+    // (index.js:10857-10858), so they must survive being passed into a module.
+    const metaReflectionState = { sessionCount: 0, lastAt: 0 };
     try {
       const metaStatePath = join(baseDbPath, "_meta-cognition-state.json");
       if (existsSync(metaStatePath)) {
         const metaState = JSON.parse(readFileSync(metaStatePath, "utf8"));
-        sessionCountSinceReflection = metaState.sessionCountSinceReflection || 0;
-        lastReflectionAt = metaState.lastReflectionAt || 0;
+        metaReflectionState.sessionCount = metaState.sessionCountSinceReflection || 0;
+        metaReflectionState.lastAt = metaState.lastReflectionAt || 0;
       }
     } catch (_) {
       // ignore corrupt state
@@ -10836,11 +10837,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
 
             // Meta-Cognition: Session-Counter erhöhen, ggf. Reflection triggern
             if (metaCognitionEnabled && stored > 0) {
-              sessionCountSinceReflection++;
+              metaReflectionState.sessionCount++;
               const shouldReflect = shouldTriggerReflection(
-                sessionCountSinceReflection,
+                metaReflectionState.sessionCount,
                 metaCognitionSessionThreshold,
-                lastReflectionAt,
+                metaReflectionState.lastAt,
                 { intervalMs: metaCognitionIntervalMs },
               );
               if (shouldReflect) {
@@ -10854,10 +10855,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     llmReport: metaCognitionLlmReport,
                   });
                   if (reflectResult.ok) {
-                    sessionCountSinceReflection = 0;
-                    lastReflectionAt = Date.now();
+                    metaReflectionState.sessionCount = 0;
+                    metaReflectionState.lastAt = Date.now();
                     const metaStatePath = join(baseDbPath, "_meta-cognition-state.json");
-                    writeFileSync(metaStatePath, JSON.stringify({ sessionCountSinceReflection, lastReflectionAt }, null, 2));
+                    writeFileSync(metaStatePath, JSON.stringify({ sessionCountSinceReflection: metaReflectionState.sessionCount, lastReflectionAt: metaReflectionState.lastAt }, null, 2));
                     host.logger.info(`memory-lancedb-namespaced: meta-reflection triggered after ${metaCognitionSessionThreshold} sessions`);
                   }
                 } catch (err) {
