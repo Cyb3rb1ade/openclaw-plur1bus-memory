@@ -102,7 +102,7 @@ export function readRuntimeSources() {
 }
 
 /**
- * Repo-relative path of a runtime source, for tests that need the path rather
+ * Absolute path of a runtime source, for tests that need the path rather
  * than the contents.
  *
  * @param {string} relativePath Repo-relative path, e.g. `engine/tools/memory-tools.js`.

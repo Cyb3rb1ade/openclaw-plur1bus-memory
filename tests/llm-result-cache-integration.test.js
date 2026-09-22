@@ -540,6 +540,8 @@ describe("deterministic LLM result-cache allowlist", () => {
     const summarizerPattern = /makeQuerySummarizer\(\s*(?:mergingEnabled\s*\?\s*)?recallQueryLlmCfg/g;
     const assemblePromptContextSource = engine.assemblePromptContext;
     const registerCommandsSource = adapter.commands;
+    assert.doesNotMatch(assemblePromptContextSource, /makeQuerySummarizer\(mergingLlmCfg/);
+    assert.doesNotMatch(registerCommandsSource, /makeQuerySummarizer\(mergingLlmCfg/);
     assert.equal(
       countMatches(source, summarizerPattern)
         + countMatches(assemblePromptContextSource, summarizerPattern)

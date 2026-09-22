@@ -24,11 +24,16 @@
  *      the same coupling one indirection earlier. PR-03 moved seven such
  *      ranges and every one of them had to be checked by hand for this.
  *
- * Rules 4 and 5 are text rules over the source lines. Line comments, block
- * comments and simple quoted strings are removed first; template literals are
- * not, so `${host.api}` is still caught. Consequence worth knowing: an
- * `engine/**` comment may not spell `api` followed by a dot, and a doc comment
- * describing the adapter has to say "the host's `registerTool`" instead.
+ * Rules 4 and 5 are text rules over the source lines, not a syntax-aware
+ * parser. Line comments, single-line block comments and simple quoted strings
+ * are stripped per line; a multi-line block comment's continuation line is
+ * only stripped when it starts with `*` (the convention every such comment in
+ * this codebase follows) — a continuation line without a leading `*` is
+ * scanned as code, so it produces a loud false positive rather than a silent
+ * miss. Template literals are left alone too, so `${host.api}` is still
+ * caught. Consequence worth knowing: an `engine/**` comment may not spell
+ * `api` followed by a dot, and a doc comment describing the adapter has to
+ * say "the host's `registerTool`" instead.
  *
  * dependency-cruiser is not installed and cannot be installed offline, so this
  * is a small static walker: it reads `import … from "x"`, `export … from "x"`
