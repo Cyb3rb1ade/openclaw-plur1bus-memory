@@ -5,6 +5,25 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.4] — 2026-09-23
+
+### Hinzugefügt
+
+- **Chat-Modell pro Workspace im Dashboard.** Eine neue Karte „Chat model" zeigt
+  je Chat-Agent (den Agenten mit Heartbeat, nicht ihren Subagenten) das laufende
+  Modell und bietet die Modelle an, die der Agent kennt und
+  `agents.defaults.modelPolicy.allow` freigibt. Speichern schreibt die Wahl nach
+  `chatModels.<agent>` und setzt `agents.entries.<agent>.model.primary`, die
+  Fallbacks bleiben. Aktive Sitzungen dieses Agenten werden mit der Host-Funktion
+  `applyModelOverrideToSessionEntry` entpinnt, damit sie ab ihrem nächsten Turn
+  folgen; Heartbeat-Sitzungen und gesperrte Sitzungen bleiben unberührt.
+  `sessions.patch` mit einem Modell wird bewusst nicht benutzt, weil es nebenbei
+  die Agenten-Konfiguration umschreibt. „Profile default" hebt die Wahl auf; der
+  laufende Primary bleibt dann bis zum nächsten Gateway-Start stehen.
+
+  `chatModels` ist die Stelle, an der ein Startskript, das Agentenmodelle aus
+  einem Profil neu schreibt, die Wahl erkennen und stehen lassen kann.
+
 ## [7.16.3] — 2026-09-23
 
 ### Hinzugefügt

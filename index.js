@@ -50,7 +50,7 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
-import { registerFeatureCronNativeDispatch, listPluginPublicArtifacts } from "./lib/setup/feature-cron-plugin-runtime.js";
+import { registerFeatureCronNativeDispatch, listPluginPublicArtifacts, loadOpenClawPluginSdkRuntime } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
@@ -66,6 +66,7 @@ import {
   createSettingMutator,
   createEmbeddingProfileMutator,
   createFeatureModelMutator,
+  createChatModelMutator,
   createFormTokenStore,
   createRerankerMutator,
   applyControlUiWriteAction,
@@ -9409,6 +9410,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
           const confirmations = createConfirmationStore();
           const setFeatureModel = createFeatureModelMutator({ api });
+          const setChatModel = createChatModelMutator({
+            api,
+            loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
+          });
           const setCaptureChunking = createCaptureChunkingMutator({ api });
           const setSetting = createSettingMutator({
             api,
@@ -9459,6 +9464,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 confirmations,
                 setReranker,
                 setFeatureModel,
+                setChatModel,
                 setCaptureChunking,
                 setSetting,
                 setEmbeddingProfile,

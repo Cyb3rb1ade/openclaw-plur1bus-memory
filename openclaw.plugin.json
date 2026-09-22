@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.16.3",
+  "version": "7.16.4",
   "kind": "memory",
   "cliCommands": [
     {
@@ -443,6 +443,12 @@
             "default": 5000
           }
         }
+      },
+      "chatModels": {
+        "type": "object",
+        "description": "Chat model per workspace, chosen on the dashboard: agent id to provider/model. The dashboard also writes the agent's model.primary; a start script that re-applies agent models from a profile can read this map and keep the choice.",
+        "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+        "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+@-]*/[A-Za-z0-9._:/+@-]+$" }
       },
       "dreaming": {
         "type": "object",
