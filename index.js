@@ -7255,6 +7255,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           ...SENSITIVE_READ_ACTIONS, "setup", "enable", "disable", "forget", "correct",
           "internal", "migrate-legacy-shared", "neo", "critical",
         ]);
+        // Pending-confirmation state, shared by the /plur1bus dispatcher and by
+        // the user-facing command handlers registered further down. Both hold
+        // the *same* two Map objects — a copy would split the nonce index from
+        // the record store and silently break every confirmation round-trip.
+        // They are declared here, above the first reader, rather than next to
+        // the handlers: PR-03f evaluates the dispatcher's context object at
+        // this point, and a `const` declared later is in its temporal dead zone.
+        const confirmationStore = new Map();
+        const confirmationIndex = new Map();
         const callCommandLlm = async (messages, llmCfg) => {
           emitCommandRuntimeHook("onLlmCallContext", llmCfg?.callContext);
           return callLlm(messages, llmCfg);
@@ -9178,9 +9187,6 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         // are resolved separately below; this switch remains an additional
         // deployment-level block for shared channels.
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
-
-        const confirmationStore = new Map();
-        const confirmationIndex = new Map();
 
         const resolveDenialLocale = (commandCtx) => ({
           lang: resolveLocale({ ctx: commandCtx, messages: commandCtx?.messages || [], fallback: "en" }),
