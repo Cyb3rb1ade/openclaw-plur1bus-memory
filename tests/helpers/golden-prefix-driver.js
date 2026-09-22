@@ -100,7 +100,15 @@ const routingCapability = Object.freeze({
   },
 });
 
-function makeApi(pluginConfig) {
+/**
+ * @param {object} pluginConfig
+ * @param {((entry: {agentId: string, phases: object, totalMs: number}) => void)|null} [recallTimingSink]
+ *   Forwarded as `api.__recallTimingSinkForTests`, the one test-only property
+ *   `index.js` reads with `?.` when building the recall-hook ctx
+ *   (`recallTimingSink: api.__recallTimingSinkForTests ?? null`). No real
+ *   OpenClaw host ever sets this property.
+ */
+function makeApi(pluginConfig, recallTimingSink = null) {
   const handlers = new Map();
   const noop = () => {};
   return {
@@ -117,6 +125,7 @@ function makeApi(pluginConfig) {
       return { dispose: noop };
     },
     handlers,
+    __recallTimingSinkForTests: recallTimingSink,
   };
 }
 
@@ -166,12 +175,15 @@ export function baseConfig(baseDbPath, overrides = {}) {
 
 /**
  * @param {object} scenario
- * @param {{freezeClock?: boolean}} [options] `freezeClock: false` keeps the real
- *   clock, which the latency probe needs; the golden test leaves it on.
+ * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number}) => void)|null}} [options]
+ *   `freezeClock: false` keeps the real clock, which the latency probe needs;
+ *   the golden test leaves it on. `recallTimingSink`, when given, is threaded
+ *   onto the stub `api` as `__recallTimingSinkForTests` (see `makeApi`) and
+ *   called once per attempted recall with the pipeline's phase timings.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario, { freezeClock: useFrozenClock = true } = {}) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
@@ -217,7 +229,7 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
         workspaceKey: scenario.workspaceKey,
       });
     }
-    const api = makeApi(baseConfig(baseDbPath, scenario.config));
+    const api = makeApi(baseConfig(baseDbPath, scenario.config), recallTimingSink);
     plugin.register(api, { importRouting: async () => routingCapability });
     const hooks = api.handlers.get("before_prompt_build");
     const hook = hooks?.at(-1);

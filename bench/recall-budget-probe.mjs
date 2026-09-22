@@ -29,19 +29,38 @@
  *     timer would be blind without the real clock, which is the actual
  *     reason `runScenario` needs the new `{ freezeClock: false }` option.
  *
- * The pipeline's per-phase breakdown (`vector_search`, `query_refinement`,
- * `temporal`, `canonical`, `scoring`, `graph`, `graph_hydration`, `rerank`,
- * `budget`, `dedup`, `acl`, `finalize` — see the `phaseTimer.start/end(...)`
- * calls in `lib/recall-pipeline.js`) is built inside the
- * `assemble-prompt-context.js` hook closure and is not returned by
- * `runScenario` (which only returns `prependContext`). This task's file list
- * only authorizes adding `{ freezeClock }` to the driver, so that internal
- * summary is not plumbed out here. The one phase this probe *can* observe
- * from outside is embedding, by timing calls through the embedding
- * provider's own public methods (`embedQuery`/`embedPassage`,
- * `lib/providers/embedding-local-transformers.js:684-689`). Everything else
- * (LanceDB open/query, scoring, dedup, budget trimming, context formatting)
- * falls out of "total minus embed share".
+ * Fix round (Task 19, controller ruling): the per-phase breakdown is what
+ * makes this measurement actionable for M1b, so it is now in scope. The
+ * pipeline's fine-grained phases (`embedding`, `vector_search`,
+ * `query_refinement`, `temporal`, `canonical`, `scoring`, `graph`,
+ * `graph_hydration`, `rerank`, `budget`, `dedup`, `acl`, `finalize` — see the
+ * `phaseTimer.start/end(...)` calls in `lib/recall-pipeline.js`) are recorded
+ * on a *child* phase timer created per namespace inside
+ * `runMergedNamespaceRecall` (`index.js:683`) — kept separate from the outer
+ * timer specifically so concurrent `Promise.allSettled` namespace reads don't
+ * interleave start/end calls on a shared timer. That outer timer (created in
+ * `engine/recall/assemble-prompt-context.js:140`) previously only ever saw
+ * one coarse `"namespace-recall"` block wrapping all of them combined.
+ * `index.js`'s `runMergedNamespaceRecall` now folds each finished child's
+ * phases back into the outer timer via a new, purely additive
+ * `phaseTimer.record(phase, ms)` method (`lib/recall-phase-timer.js`, next to
+ * `start`/`end`/`summary`), qualified as `"<namespace>:<phase>"` so multiple
+ * namespaces stay distinguishable (the golden fixtures only ever exercise one
+ * private namespace, whose `namespace` field is `null` — printed below as
+ * `private:<phase>`). `engine/recall/assemble-prompt-context.js` then calls
+ * an optional `ctx.recallTimingSink?.({ agentId, phases, totalMs })` right
+ * after the scheduled recall settles, with `phases = phaseTimer.summary()`
+ * and `totalMs = phaseTimer.elapsedMs()`. This is additive/observational
+ * only — it can never change the returned `prependContext`, defaults to
+ * `null`, and `index.js` only ever passes a real function through one
+ * test-only property (`api.__recallTimingSinkForTests`, read with `?.`) that
+ * no real OpenClaw host sets — so production behaviour is unchanged.
+ * `tests/helpers/golden-prefix-driver.js`'s `runScenario` forwards its own
+ * new `recallTimingSink` option onto that same stub-`api` property.
+ *
+ * Everything the sink reports (LanceDB vector search, scoring, dedup, budget
+ * trimming, context formatting) is still stub-embedder work — see the header
+ * this script prints, and the caveat below.
  *
  * Stub embedder, no reranker, two-card fixture store: this is the pipeline's
  * FLOOR (orchestration only), not a production distribution. The owner must
@@ -78,6 +97,10 @@ function quantile(values, q) {
 }
 
 const fmt = (n) => `${n.toFixed(1)} ms`;
+
+/** `null:<phase>` is the private namespace (its `namespace` field is JS `null`
+ *  in the golden fixtures); relabel only for display. */
+const displayPhase = (phase) => (phase.startsWith("null:") ? `private:${phase.slice(5)}` : phase);
 
 /** Grow a scenario's card count without changing what it recalls. */
 function scaled(scenario) {
@@ -125,19 +148,35 @@ console.log(`recall-budget-probe: ${iterations} iteration(s) per scenario, fixtu
 console.log("Stub embedder (fixed vectors, no model/network), no reranker, tiny fixture store:");
 console.log("these are the pipeline FLOOR, not a production distribution. Embedding and rerank");
 console.log("latency of a REAL provider are NOT included. Re-run against a real store and a");
-console.log("real embedding provider before fixing the budget.\n");
+console.log("real embedding provider before fixing the budget.");
+console.log("Today in code: soft budget 35000 ms (index.js:4538) / hard timeout 45000 ms");
+console.log("(lib/runtime-scheduler.js:7's recallTimeoutMs default, passed to the phase timer");
+console.log("as hardTimeoutMs at index.js:4315) — corrected here from stale index.js:4711/13351");
+console.log("citations found while writing this probe; see the task report for the full note.\n");
 
 const rows = [];
 for (const raw of SCENARIOS) {
   const scenario = scaled(raw);
   const totals = [];
   const embedShare = [];
+  /** @type {Map<string, number[]>} phase name -> one ms sample per iteration */
+  const phaseSamples = new Map();
+  let recallAttempts = 0;
+  const recordPhases = (entry) => {
+    recallAttempts += 1;
+    for (const { phase, ms } of entry.phases.completed) {
+      if (!phaseSamples.has(phase)) phaseSamples.set(phase, []);
+      phaseSamples.get(phase).push(ms);
+    }
+  };
   // One warm-up: the first run pays module init and LanceDB's first open.
+  // Its phase samples are discarded along with its wall-clock time, same as
+  // the original probe discarded the warm-up's total.
   await runScenario(scenario, { freezeClock: false });
   for (let i = 0; i < iterations; i += 1) {
     const probe = instrumentEmbedder();
     const started = performance.now();
-    await runScenario(scenario, { freezeClock: false });
+    await runScenario(scenario, { freezeClock: false, recallTimingSink: recordPhases });
     const elapsed = performance.now() - started;
     probe.restore();
     totals.push(elapsed);
@@ -149,6 +188,8 @@ for (const raw of SCENARIOS) {
     p95: quantile(totals, 0.95),
     p99: quantile(totals, 0.99),
     embedP50: quantile(embedShare, 0.5),
+    recallAttempts,
+    phaseSamples,
   });
 }
 
@@ -158,11 +199,36 @@ for (const row of rows) {
   console.log(`${row.name.padEnd(width)}  ${fmt(row.p50).padStart(10)}  ${fmt(row.p95).padStart(10)}  ${fmt(row.p99).padStart(10)}  ${fmt(row.embedP50).padStart(10)}`);
 }
 
+for (const row of rows) {
+  console.log(`\n${row.name} — per-phase breakdown (from the pipeline's own phase timer, ${row.recallAttempts}/${iterations} recall attempt(s) observed):`);
+  if (row.phaseSamples.size === 0) {
+    console.log("  (no recall attempted for this scenario — workspace-policy declined or the turn was routed to minimal maintenance before the phase timer was created)");
+    continue;
+  }
+  const phaseNames = [...row.phaseSamples.keys()];
+  const phaseWidth = Math.max(...phaseNames.map((p) => displayPhase(p).length), 8);
+  console.log(`  ${"phase".padEnd(phaseWidth)}  ${"p50".padStart(9)}  ${"p95".padStart(9)}  ${"p99".padStart(9)}  ${"share (p50)".padStart(11)}`);
+  for (const phase of phaseNames) {
+    const samples = row.phaseSamples.get(phase);
+    const p50 = quantile(samples, 0.5);
+    const p95 = quantile(samples, 0.95);
+    const p99 = quantile(samples, 0.99);
+    const share = row.p50 > 0 ? `${((p50 / row.p50) * 100).toFixed(1)}%` : "—";
+    console.log(`  ${displayPhase(phase).padEnd(phaseWidth)}  ${fmt(p50).padStart(9)}  ${fmt(p95).padStart(9)}  ${fmt(p99).padStart(9)}  ${share.padStart(11)}`);
+  }
+}
+
 const allP95 = Math.max(...rows.map((row) => row.p95));
 const allP99 = Math.max(...rows.map((row) => row.p99));
 console.log(`\nworst p95 ${fmt(allP95)}, worst p99 ${fmt(allP99)}`);
-console.log(`owner B6 proposal: soft 400 ms / hard 600 ms`);
-console.log(`today in code:     soft 35000 ms (index.js:4538) / hard 45000 ms (lib/runtime-scheduler.js:7)`);
+console.log(`\nOwner B6 ("40/60") against this data, all three readings:`);
+console.log(`  this task's framing:         soft  400 ms / hard   600 ms`);
+console.log(`  decisions-for-owner.md B6:   soft  400 ms / hard 1 200 ms`);
+console.log(`  decisions-for-owner.md B6's own fallback recommendation: soft 800 ms / hard 2 500 ms`);
+console.log(`today in code:                 soft 35000 ms (index.js:4538) / hard 45000 ms (lib/runtime-scheduler.js:7)`);
 console.log(allP95 <= 400
   ? "floor fits the 400 ms soft budget; the remaining headroom is the provider's."
   : "floor already exceeds the 400 ms soft budget before any provider is involved — report this.");
+console.log(allP95 <= 800
+  ? "floor fits the 800 ms fallback soft budget."
+  : "floor already exceeds even the 800 ms fallback soft budget — report this.");
