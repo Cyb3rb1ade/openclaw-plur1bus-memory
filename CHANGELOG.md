@@ -5,6 +5,27 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.2] — 2026-09-22
+
+### Geändert
+
+- **Der Schlafplan auf OpenClaws Gedächtnisseite lässt sich jetzt bedienen.** Die
+  Seite baut ihre Anzeige aus `doctor.memory.status`, und der Host füllt die aus
+  der `dreaming`-Sektion des Slot-Eigentümers — also unserer. Weil unser Schema
+  `additionalProperties: false` setzt, waren `frequency` und `timezone` bisher
+  unzulässig, und die Seite zeigte ersatzweise ihren eingebauten Standard
+  `0 3 * * *` für alle drei Phasen. Beide Schlüssel stehen jetzt im Manifest,
+  ohne eigenen Default, damit ein ungesetzter Wert weiterhin dem Host gehört.
+  Die Beschreibung von `dreaming.enabled` benennt außerdem, was der Schalter
+  wirklich bewirkt: Hält PLUR1BUS den Memory-Slot, schaltet der Host memory-core
+  ohnehin ab, und `true` sorgt nur dafür, dass die Seite nicht länger
+  „Deaktiviert“ behauptet.
+
+  Eine Einschränkung bleibt: Der Host kennt genau ein Cron-Feld für alle drei
+  Phasen. PLUR1BUS fährt REM und Tiefschlaf als eigene Feature-Crons je Agent und
+  den Leichtschlaf ereignisgesteuert nach einem Gespräch. Der angezeigte Wert ist
+  deshalb ein Hinweis, kein Fahrplan.
+
 ## [7.16.1] — 2026-09-22
 
 ### Hinzugefügt
