@@ -407,6 +407,7 @@ import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.j
 import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "./lib/open-threads.js";
 import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
+import { registerTurnRouteHooks } from "./adapter/openclaw/register-turn-route.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -12254,35 +12255,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     }
 
     if (autoRecall) {
-      // 7.12.35: Registrierung und jeden Aufruf sichtbar machen — auf 7.12.34
-      // erschien fuer Bernds Turns (10.09.2026 14:27–15:04) keine einzige
-      // Handler-Zeile, `pending=0`; statisch war im Host kein Gate zu finden.
-      let replyDispatchInvocations = 0;
-      const replyDispatchRegistration = api.on("reply_dispatch", async (event, hookCtx) => {
-        replyDispatchInvocations += 1;
-        host.logger.info(`memory-turn-routes: reply_dispatch handler invoked #${replyDispatchInvocations} dispatchKind=${String(hookCtx?.dispatchKind || "")} hasCtx=${Boolean(event?.ctx)} sessionKey=${String(event?.sessionKey || event?.ctx?.SessionKey || "").slice(0, 96)}`);
-        const turnRoutes = await getMemoryTurnRoutes();
-        turnRoutes?.observeReplyDispatch(event);
-        // 7.12.33: Ausgang der Beobachtung (Debug); die Fallback-Warnung des
-        // Prompt-Hooks traegt denselben Grund als `ticket=`.
-        try {
-          const sessionKey = event?.sessionKey || event?.ctx?.SessionKey || "";
-          const observed = turnRoutes?.lastObserve?.(sessionKey) || "none";
-          const line = `memory-turn-routes: dispatch observe:${observed} session=${String(sessionKey).slice(0, 96)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} eventKeys=${Object.keys(event || {}).filter((k) => k !== "ctx").slice(0, 24).join(",")} ctxKeys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|BodyForAgent|RawBody|SenderId|ChatId|Provider|Surface|AccountId|OriginatingTo|OriginatingChannel|OriginatingAccountId|SessionKey|RunId|isTailDispatch|MessageThreadId)$/.test(k)).join(",")}`;
-          // 7.12.34: Nicht-Kommando-Ausstiege sichtbar machen (Info), Rest Debug.
-          if (/^(registered|slash_command|command_turn:|command_source|is_command|tail_dispatch)/.test(observed)) host.logger.debug(line);
-          else host.logger.info(line);
-        } catch (_) { /* best-effort */ }
-        return undefined;
-      }, { priority: Number.MIN_SAFE_INTEGER, eligibleDispatchKinds: ["agent", "acp"] });
-      host.logger.info(`memory-turn-routes: reply_dispatch hook registered result=${replyDispatchRegistration === undefined ? "undefined" : typeof replyDispatchRegistration} autoRecall=${autoRecall}`);
-
-      api.on("agent_end", async (event, ctx) => {
-        if (!turnRouteState.initPromise) return;
-        const turnRoutes = await turnRouteState.initPromise;
-        const runId = ctx?.runId ?? event?.runId;
-        if (runId !== undefined && runId !== null) turnRoutes?.clearRun(runId);
-      });
+      registerTurnRouteHooks({ api, host, autoRecall, getMemoryTurnRoutes, turnRouteState });
 
       api.on("before_prompt_build", async (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
