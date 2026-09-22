@@ -5,6 +5,22 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.1] — 2026-09-22
+
+### Hinzugefügt
+
+- **PLUR1BUS bietet seine öffentlichen Gedächtnis-Artefakte an.** Die
+  Memory-Capability trägt jetzt `publicArtifacts.listArtifacts`, die Naht, über
+  die Begleit-Plugins wie das mitgelieferte `memory-wiki` die Workspaces
+  auflisten. Ohne sie meldete `openclaw wiki bridge import` „0 artifacts across
+  0 workspaces“ — die Bridge fragt nie selbst das Dateisystem, also blieben
+  `indexDailyNotes` und `indexDreamReports` wirkungslos, wie viele Notizen auch
+  vorlagen. Der Aufruf reicht an die SDK-Fassade
+  `openclaw/plugin-sdk/memory-host-core` durch; der Host entscheidet, was
+  öffentlich ist, und wir filtern nichts nach. Sichtbar werden damit `MEMORY.md`,
+  die Markdown-Notizen unter `memory/`, die Traumberichte und der
+  materialisierte Event-Log.
+
 ## [7.16.0] — 2026-09-22
 
 ### Hinzugefügt
