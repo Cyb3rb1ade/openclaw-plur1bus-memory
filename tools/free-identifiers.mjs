@@ -25,10 +25,45 @@ try {
   process.exit(2);
 }
 
+/**
+ * Print a usage error and exit 2. A silent `0/0` is the dangerous failure here:
+ * Tasks 11–17 read this output as "the move needs no context object", so a
+ * mistyped range must be loud.
+ * @param {string} message What is wrong.
+ * @returns {never}
+ */
+function fail(message) {
+  console.error(`free-identifiers: ${message}`);
+  console.error("Usage: node tools/free-identifiers.mjs <file> <startLine> <endLine>");
+  process.exit(2);
+}
+
 const [file, startArg, endArg] = process.argv.slice(2);
+if (!file) fail("no file given");
+if (startArg === undefined || endArg === undefined) fail("both <startLine> and <endLine> are required");
+
 const startLine = Number(startArg);
 const endLine = Number(endArg);
-const text = readFileSync(file, "utf8");
+// Number("12,285") and Number("") are NaN and 0 — neither may reach the walker.
+if (!Number.isInteger(startLine)) fail(`startLine is not an integer: ${JSON.stringify(startArg)}`);
+if (!Number.isInteger(endLine)) fail(`endLine is not an integer: ${JSON.stringify(endArg)}`);
+if (startLine < 1) fail(`startLine must be >= 1 (got ${startLine})`);
+if (endLine < startLine) fail(`endLine must be >= startLine (got ${startLine}-${endLine})`);
+
+let text;
+try {
+  text = readFileSync(file, "utf8");
+} catch (error) {
+  fail(`cannot read ${file}: ${error.message}`);
+}
+
+const sourceLines = text.split("\n");
+// A file ending in a newline yields a trailing "" that is not a line.
+const lineCount = sourceLines.length > 0 && sourceLines[sourceLines.length - 1] === ""
+  ? sourceLines.length - 1
+  : sourceLines.length;
+if (endLine > lineCount) fail(`endLine ${endLine} is past the end of ${file} (${lineCount} lines)`);
+
 const sf = ts.createSourceFile(file, text, ts.ScriptTarget.ESNext, true, ts.ScriptKind.JS);
 
 const lineOf = (pos) => sf.getLineAndCharacterOfPosition(pos).line + 1;
@@ -62,13 +97,18 @@ function collectBindingNames(node, out) {
 
 // Walk the whole file with a scope stack; when inside the range, record
 // identifier references that resolve outside the range.
-const declaredInRange = new Set();
 const free = new Map();
 // The line `register(api, registrationDependencies = {})` begins on. It only
 // separates "declared at module top level, so import it" from "declared inside
-// `register`, so pass it in"; if index.js shifts, update the constant and
-// re-run. Re-derived at fd5bac5b: `grep -n 'register(api' index.js`.
+// `register`, so pass it in". Every task that moves code out of index.js shifts
+// it, and a stale value degrades quietly, so it is self-checked below.
+// Re-derived at fd5bac5b: `grep -n 'register(api' index.js`.
 const registerStart = 4395;
+// Only index.js has a `register`; for any other file the constant is irrelevant
+// (nothing is module-scope-and-after-it) and the check would be noise.
+if (/(^|[\\/])index\.js$/.test(file) && !/\bregister\s*\(\s*api\b/.test(sourceLines[registerStart - 1] ?? "")) {
+  fail("registerStart is stale — re-derive with grep -n 'register(api'");
+}
 const scopes = [new Map()];
 
 function isScopeNode(n) {
@@ -82,7 +122,6 @@ function isScopeNode(n) {
 function declareInCurrent(name, node) {
   const line = lineOf(node.getStart(sf));
   scopes[scopes.length - 1].set(name, line);
-  if (line >= startLine && line <= endLine) declaredInRange.add(name);
 }
 
 function hoistDeclarations(node) {
