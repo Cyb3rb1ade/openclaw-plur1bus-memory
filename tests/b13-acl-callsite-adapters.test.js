@@ -17,6 +17,7 @@ import {
 } from "../lib/memory-request-context.js";
 import { isAuthorized } from "../lib/security.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -219,7 +220,7 @@ describe("B13 strict ownership ACL adapters", () => {
     // Every anchor below left index.js entirely (1 -> 0, and 6 -> 0 for the
     // destructive checkAuth call sites), so the guard follows them there
     // rather than asserting against a file that no longer holds them.
-    const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    const commandsSource = readRuntimeSources().adapter.commands;
     assert.match(commandsSource, /const auth = isAuthorized\(memoryCtx, cfg, \{ \.\.\.opts, chatKind: memoryCtx\.chatKind \}\)/);
     assert.match(commandsSource, /const checkAuth = async \(memoryCtx, opts = \{\}, localeCtx = null\) =>/);
     assert.match(commandsSource, /checkAuth\(memoryCtx, \{ destructive: true, chatKind: memoryCtx\.chatKind \}, commandCtx\)/);
@@ -291,7 +292,7 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.deepEqual(sideEffects, { processed: 0, idle: 0, dispatched: 0 });
     assert.ok(enabled.some((hook) => hook.name === "before_prompt_build"));
     assert.ok(enabled.some((hook) => hook.name === "agent_end"));
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const source = readRuntimeSources().index;
     assert.doesNotMatch(source, /api\.on\(["']message_received["']/);
   });
 
@@ -310,17 +311,17 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.match(sources["telegram-commands/memory-query.js"], /filterMemoriesByAcl\(ctx, results\)/);
     assert.match(sources["recall-pipeline.js"], /checkAccess\(aclCtx, r\.entry\)/);
 
-    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const { index: indexSource, engine, adapter } = readRuntimeSources();
     // PR-03g: the two registered command handlers that resolve the canonical
     // context now live in the adapter (2 -> 0 in index.js); the store and
     // recall call sites below stay in index.js and stay pinned to it.
-    const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    const commandsSource = adapter.commands;
     assert.match(commandsSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
     assert.match(indexSource, /const storeAccessCtx = memoryCtx/);
     // PR-03h: the model-facing recall call site moved with the tool factory
     // into engine/tools/memory-tools.js (index.js 1 -> 0); the bridge store
     // call site above stays in index.js and stays pinned to it.
-    const memoryToolsSource = readFileSync(new URL("../engine/tools/memory-tools.js", import.meta.url), "utf8");
+    const memoryToolsSource = engine.memoryTools;
     assert.match(memoryToolsSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
     assert.doesNotMatch(indexSource, /checkAccess\(\{\s*agentId,\s*workspaceId/);
   });

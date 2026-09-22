@@ -11,7 +11,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +22,7 @@ import { resolveHostCommandMemoryContext } from "../lib/memory-request-context.j
 import { safeUpdate } from "../lib/safe-update.js";
 import * as pluginModule from "../index.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const archiveDir = makeTempDir("p1b-confirm-");
 
@@ -472,7 +473,7 @@ describe("forget/correct confirmation completion", () => {
     // handlers out of index.js into adapter/openclaw/register-commands.js;
     // both slice anchors left index.js (1 -> 0 each), so the slice follows
     // them. The assertions themselves are unchanged.
-    const source = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    const source = readRuntimeSources().adapter.commands;
     const forgetStart = source.indexOf("const runForgetCommand");
     const correctEnd = source.indexOf("const runMemoryFeedbackCommand", forgetStart);
     const handlers = source.slice(forgetStart, correctEnd);

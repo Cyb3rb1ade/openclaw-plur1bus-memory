@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { shouldSkipAutoCaptureForInternalTurn } from "../lib/runtime-scheduler.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 describe("shouldSkipAutoCaptureForInternalTurn", () => {
   it("skips cron origin", () => {
@@ -75,12 +75,12 @@ describe("shouldSkipAutoCaptureForInternalTurn", () => {
     // of index.js into engine/capture/capture-turn.js; index.js keeps only the
     // registration. The ordering guard follows the body, and `ctx` is the
     // handler's second parameter there, now named `hookCtx`.
-    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const indexSource = readRuntimeSources().index;
     const autoCaptureStart = indexSource.indexOf("if (autoCapture) {");
     const registrationAt = indexSource.indexOf("registerCaptureHook({", autoCaptureStart);
     assert.ok(autoCaptureStart >= 0 && registrationAt >= 0, "index.js still registers auto-capture");
 
-    const source = readFileSync(new URL("../engine/capture/capture-turn.js", import.meta.url), "utf8");
+    const source = readRuntimeSources().engine.captureTurn;
     const handlerStart = source.indexOf("return async function captureTurn(");
     const skipAt = source.indexOf("shouldSkipAutoCaptureForInternalTurn(event, hookCtx)", handlerStart);
     const neoAt = source.indexOf("neoWorkerRuntime.runNeoAgentEnd", handlerStart);

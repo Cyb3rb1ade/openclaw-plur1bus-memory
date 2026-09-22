@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
 
@@ -30,17 +31,14 @@ describe("native cron direct-dispatch wiring", () => {
 
   it("ships and registers only capability-gated native integration", () => {
     const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-    const indexSource = readFileSync(path.join(repoRoot, "index.js"), "utf8");
+    const { index: indexSource, adapter } = readRuntimeSources();
     const runtimeSource = readFileSync(
       path.join(repoRoot, "lib/setup/feature-cron-plugin-runtime.js"),
       "utf8",
     );
     // PR-03i moved the two feature-cron registrations into the OpenClaw
     // adapter; the pure logic they call stays in index.js.
-    const cronSource = readFileSync(
-      path.join(repoRoot, "adapter/openclaw/register-cron.js"),
-      "utf8",
-    );
+    const cronSource = adapter.cron;
 
     assert.ok(!packageJson.files.includes("patches/apply-cron-plugin-direct-dispatch.mjs"));
     assert.doesNotMatch(indexSource, /applyCronPluginDirectDispatchPatch/);

@@ -39,7 +39,7 @@ describe("adapter/openclaw/register-commands", () => {
     assert.match(source, /name: "state"/);
     assert.match(source, /name: "enable"/);
     assert.match(source, /name: "disable"/);
-    assert.doesNotMatch(source, /name: "status"/, "/status is reserved by OpenClaw (index.js:9226)");
+    assert.doesNotMatch(source, /name: "status"/, "/status is reserved by OpenClaw");
   });
 
   it("returns the six command bodies the runner calls back into", () => {

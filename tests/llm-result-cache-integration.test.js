@@ -15,6 +15,7 @@ import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = join(TEST_DIR, "..");
@@ -493,7 +494,7 @@ describe("deterministic LLM result-cache allowlist", () => {
   });
 
   it("binds every private index transform to its exact scope, purpose, and deterministic config", () => {
-    const source = readSource("index.js");
+    const { index: source, engine, adapter } = readRuntimeSources();
     const captureSection = sourceSection(source, "async function summarizeForCapture", "// Baut eine querySummarizer-Funktion");
     const recallSection = sourceSection(source, "function makeQuerySummarizer", "const REINDEX_WRITE_THRESHOLD");
     const mergeSection = sourceSection(source, "async function callMergeCheck", "// Schicht 1.5 — Pending-Tracking");
@@ -503,7 +504,7 @@ describe("deterministic LLM result-cache allowlist", () => {
     // them. The `names: ["memory_recall"` metadata that used to terminate the
     // knowledge_update section went to adapter/openclaw/register-tools.js, so
     // the section now ends at the factory's own return instead.
-    const memoryToolsSource = readSource("engine/tools/memory-tools.js");
+    const memoryToolsSource = engine.memoryTools;
     const modelStoreSection = sourceSection(memoryToolsSource, "name: \"memory_store\"", "name: \"memory_forget\"");
     const knowledgeSection = sourceSection(source, "async function updateKnowledgeMd", "// applyImportanceBoost");
     const knowledgeToolSection = sourceSection(memoryToolsSource, "name: \"knowledge_update\"", "return guardWorkspaceTools(");
@@ -522,7 +523,7 @@ describe("deterministic LLM result-cache allowlist", () => {
     // summarizeForCapture(...) call site out of index.js into
     // engine/capture/capture-turn.js; the scope check follows it, and the
     // "never the merging route" guards apply to both files.
-    const captureTurnSource = readSource("engine/capture/capture-turn.js");
+    const captureTurnSource = engine.captureTurn;
     assert.doesNotMatch(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
     assert.doesNotMatch(captureTurnSource, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
     assert.doesNotMatch(source, /makeQuerySummarizer\(mergingLlmCfg/);
@@ -537,8 +538,8 @@ describe("deterministic LLM result-cache allowlist", () => {
     // spans three files. PR-03h moved the last one out with the tool factory
     // (index.js 1 -> 0), so it spans four. The total is still exactly 5.
     const summarizerPattern = /makeQuerySummarizer\(\s*(?:mergingEnabled\s*\?\s*)?recallQueryLlmCfg/g;
-    const assemblePromptContextSource = readSource("engine/recall/assemble-prompt-context.js");
-    const registerCommandsSource = readSource("adapter/openclaw/register-commands.js");
+    const assemblePromptContextSource = engine.assemblePromptContext;
+    const registerCommandsSource = adapter.commands;
     assert.equal(
       countMatches(source, summarizerPattern)
         + countMatches(assemblePromptContextSource, summarizerPattern)
