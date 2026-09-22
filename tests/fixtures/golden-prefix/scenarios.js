@@ -1,7 +1,7 @@
 /**
  * tests/fixtures/golden-prefix/scenarios.js
  *
- * Five synthetic recall scenarios. `topics` maps a fixture string to the axis
+ * Seven synthetic recall scenarios. `topics` maps a fixture string to the axis
  * the stub embedder puts it on, so recall order is a property of the fixture
  * and not of a downloaded model.
  */
@@ -30,7 +30,12 @@ function eventFor(prompt, session, run) {
   };
 }
 
-/** A block of filler large enough to push the join past the 17 000-char cap. */
+/**
+ * Bulk body text for the two `recall-over-budget` memories. It never reaches
+ * the prompt — only a record's summary does — so it exercises the store, embed
+ * and ranking path with large rows, not the injection budget. `recall-truncated`
+ * is the scenario that covers truncation.
+ */
 const FILLER = "Deployment note. ".repeat(700); // ~11 900 chars
 
 /**
@@ -88,12 +93,12 @@ const CANONICAL_KNOWLEDGE = "# Release Policy\n\nThe project ships on Fridays an
  * The exact string `getKnowledgeChunks` embeds for the single section of
  * CANONICAL_KNOWLEDGE: `parseKnowledgeMd` (lib/recall-pipeline.js:812-832)
  * keeps the heading line and every following line, each with its "\n", and the
- * trailing empty line from the final split contributes one more. Mapping it to
- * the query's topic gives cosine 1.0, which clears the 0.30 `canonicalMinScore`
- * default (index.js:4703) that leaves canonical empty in
- * `recall-knowledge-canonical`.
+ * trailing empty line from the final split contributes one more — so the
+ * section text is the file plus exactly one newline. Mapping it to the query's
+ * topic gives cosine 1.0, which clears the 0.30 `canonicalMinScore` default
+ * (index.js:4703) that leaves canonical empty in `recall-knowledge-canonical`.
  */
-const CANONICAL_SECTION_TEXT = "# Release Policy\n\nThe project ships on Fridays and never on a public holiday.\n\n";
+const CANONICAL_SECTION_TEXT = `${CANONICAL_KNOWLEDGE}\n`;
 
 export const SCENARIOS = [
   {

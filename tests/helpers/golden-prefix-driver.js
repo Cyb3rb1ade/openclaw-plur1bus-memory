@@ -56,13 +56,34 @@ export function topicVector(topic) {
   return out;
 }
 
+/**
+ * Seals the local-transformers provider so nothing can reach the real model.
+ *
+ * `_embedBatchForPurpose` is the single funnel every public entry point goes
+ * through — `embedQuery` and `embedPassage` delegate to `embedRaw`, `embed`
+ * delegates to `embedPassage`, and `embedBatch` calls it directly
+ * (lib/providers/embedding-local-transformers.js:657-693) — so patching it
+ * covers all five. `_computeBatch`, the one method that would load the model,
+ * is replaced with a thrower: if a future call site bypasses the funnel the
+ * scenario fails loudly instead of silently downloading weights.
+ *
+ * @param {(text: string) => string} topicOf
+ * @returns {() => void} restore function
+ */
 function stubEmbedder(topicOf) {
   const proto = LocalTransformersEmbeddingProvider.prototype;
-  const originalQuery = proto.embedQuery;
-  const originalPassage = proto.embedPassage;
-  proto.embedQuery = async (text) => topicVector(topicOf(text));
-  proto.embedPassage = async (text) => topicVector(topicOf(text));
-  return () => { proto.embedQuery = originalQuery; proto.embedPassage = originalPassage; };
+  const originalBatchForPurpose = proto._embedBatchForPurpose;
+  const originalComputeBatch = proto._computeBatch;
+  proto._embedBatchForPurpose = async (texts) => (
+    (Array.isArray(texts) ? texts : [texts]).map((text) => topicVector(topicOf(text)))
+  );
+  proto._computeBatch = async () => {
+    throw new Error("golden-prefix driver: real embedder reached");
+  };
+  return () => {
+    proto._embedBatchForPurpose = originalBatchForPurpose;
+    proto._computeBatch = originalComputeBatch;
+  };
 }
 
 const routingCapability = Object.freeze({
@@ -102,6 +123,12 @@ function makeApi(pluginConfig) {
 /**
  * Every feature that would reach the network, a model file or a background
  * scheduler is off. Scenario `config` is merged on top.
+ *
+ * The merge is a shallow top-level spread, not a deep merge: a scenario that
+ * sets `config.recall` replaces this whole default `recall` object rather than
+ * overriding single keys, so such a scenario must restate every `recall` key it
+ * still wants.
+ *
  * @param {string} baseDbPath
  * @param {object} [overrides]
  */
@@ -143,16 +170,27 @@ export function baseConfig(baseDbPath, overrides = {}) {
  *   handler returned undefined.
  */
 export async function runScenario(scenario) {
-  const restoreClock = freezeClock();
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
-  const restoreEmbedder = stubEmbedder(topicOf);
-  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-golden-db-"));
-  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-ws-"));
-  const stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
   const previousHome = process.env.OPENCLAW_HOME;
-  process.env.OPENCLAW_HOME = stateDir;
+  // Every global mutation and every temp dir is installed inside the `try`, with
+  // its handle declared out here, so a throw at any point still unwinds all of
+  // them. Installing before the `try` would leak globalThis.Date and the patched
+  // provider prototype into the rest of the process if a mkdtempSync failed.
+  /** @type {(() => void)|null} */
+  let restoreClock = null;
+  /** @type {(() => void)|null} */
+  let restoreEmbedder = null;
+  let baseDbPath = "";
+  let workspaceDir = "";
+  let stateDir = "";
   try {
+    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-golden-db-"));
+    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-ws-"));
+    stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
+    process.env.OPENCLAW_HOME = stateDir;
+    restoreClock = freezeClock();
+    restoreEmbedder = stubEmbedder(topicOf);
     mkdirSync(join(workspaceDir, "memory"), { recursive: true });
     if (scenario.knowledge) {
       const knowledgePath = join(workspaceDir, "memory", "KNOWLEDGE.md");
@@ -188,10 +226,10 @@ export async function runScenario(scenario) {
   } finally {
     if (previousHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = previousHome;
-    restoreEmbedder();
-    restoreClock();
-    rmSync(baseDbPath, { recursive: true, force: true });
-    rmSync(workspaceDir, { recursive: true, force: true });
-    rmSync(stateDir, { recursive: true, force: true });
+    restoreEmbedder?.();
+    restoreClock?.();
+    if (baseDbPath) rmSync(baseDbPath, { recursive: true, force: true });
+    if (workspaceDir) rmSync(workspaceDir, { recursive: true, force: true });
+    if (stateDir) rmSync(stateDir, { recursive: true, force: true });
   }
 }
