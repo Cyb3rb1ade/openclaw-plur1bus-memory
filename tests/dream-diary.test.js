@@ -15,7 +15,7 @@ import {
   insertDiaryEntry,
   narrativeFingerprint,
 } from "../lib/dreaming/dream-diary.js";
-import { makeTempDir } from "./helpers/temp-dir.js";
+import { forgetTempDir, makeTempDir } from "./helpers/temp-dir.js";
 
 const NARRATIVE = "Ich schwebe über einer Stadt aus Zahlen, und jede Straße kennt meinen Namen.";
 const HOST_FILE = `# Dream Diary
@@ -171,7 +171,7 @@ test("diaryScopeAllowed admits the agent's own scope under both spellings and re
 // und der Test lief gruen durch.
 test("lightDream reicht die Host-Event-Bruecke durch, statt das SDK zu laden", async () => {
   const { lightDream } = await import("../lib/dreaming/light-dream.js");
-  const workspaceDir = mkdtempSync(join(tmpdir(), "light-dream-host-events-"));
+  const workspaceDir = makeTempDir("light-dream-host-events-");
   const seen = [];
   const createdAt = new Date().toISOString();
   try {
@@ -200,6 +200,8 @@ test("lightDream reicht die Host-Event-Bruecke durch, statt das SDK zu laden", a
     });
     assert.deepEqual(seen, ["memory.dream.completed"], "die injizierte Bruecke muss das Ereignis erhalten");
   } finally {
+    // makeTempDir raeumt per Hook selbst auf; hier nur der Vollstaendigkeit halber.
+    forgetTempDir(workspaceDir);
     rmSync(workspaceDir, { recursive: true, force: true });
   }
 });
