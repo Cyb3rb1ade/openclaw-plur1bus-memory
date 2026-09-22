@@ -108,6 +108,15 @@ describe("lib/platform securePath", () => {
     assert.deepEqual(result, { applied: true, mechanism: "acl" });
     assert.equal(calls.length, 1);
   });
+
+  it("returns acl-tool-unavailable when execFile throws", () => {
+    const result = securePath("C:\\state\\owner.token", {
+      platform: "win32",
+      username: "tester",
+      execFile: () => { throw new Error("icacls not found"); },
+    });
+    assert.deepEqual(result, { applied: false, reason: "acl-tool-unavailable" });
+  });
 });
 
 describe("lib/platform ipcAddress", () => {

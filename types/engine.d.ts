@@ -129,7 +129,7 @@ export interface PlatformCapabilities {
 
 export interface SecurePathResult {
   applied: boolean;
-  reason?: "not-a-filesystem-path" | "missing" | "unsupported-platform";
+  reason?: "not-a-filesystem-path" | "missing" | "unsupported-platform" | "acl-tool-unavailable";
   mechanism?: "chmod" | "acl";
 }
 
