@@ -50,7 +50,7 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
-import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
+import { registerFeatureCronNativeDispatch, listPluginPublicArtifacts } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
@@ -4515,6 +4515,13 @@ const plugin = {
         deterministicRecallToolName: "memory_recall",
         supportsPrivateTranscriptRecall: false,
         runtime: memoryHostRuntime,
+        // Companion plugins (the bundled memory wiki) enumerate our workspaces
+        // through this seam instead of reading our layout. Without it their
+        // bridge reports zero workspaces and every file-level index toggle
+        // stays dark, however many notes are on disk.
+        publicArtifacts: {
+          listArtifacts: (params) => listPluginPublicArtifacts(params),
+        },
       });
     } else {
       api.logger?.info?.(

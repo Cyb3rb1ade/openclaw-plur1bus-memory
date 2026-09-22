@@ -72,6 +72,13 @@ describe("OpenClaw target release exclusive memory contract", () => {
     assert.equal(api._memoryCapabilities.length, 1);
     assert.equal(api._memoryCapabilities[0].deterministicRecallToolName, "memory_recall");
     assert.equal(api._memoryCapabilities[0].supportsPrivateTranscriptRecall, false);
+    // The bundled memory wiki enumerates our workspaces through this seam.
+    // Without it its bridge import reports zero workspaces, not just zero
+    // artifacts, because it never asks the filesystem itself.
+    assert.equal(
+      typeof api._memoryCapabilities[0].publicArtifacts?.listArtifacts,
+      "function",
+    );
     assert.deepEqual(api._embeddingProviders.map((adapter) => adapter.id), [
       "plur1bus-openai",
       "plur1bus-openai-compatible",
