@@ -30,6 +30,8 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-commands.js",
   "adapter/openclaw/register-prompt-supplements.js",
   "adapter/openclaw/register-tools.js",
+  "adapter/openclaw/register-gateway.js",
+  "adapter/openclaw/register-cron.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
   "engine/commands/plur1bus-command.js",
