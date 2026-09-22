@@ -4441,7 +4441,7 @@ const plugin = {
       enabled: coordinatesLocalModelGeneration,
     });
     const credentialResolver = createConfiguredSecretInputResolver({
-      getConfig: () => runtimeIfUsable(api)?.config?.current?.() || api.config || {},
+      getConfig: () => host.runtime?.config?.current?.() || api.config || {},
     });
     const host = createHostServices(api);
     pluginLogger = host.logger;
@@ -4452,7 +4452,7 @@ const plugin = {
       // dependencies are closures that resolve when the host actually calls.
       const memoryHostRuntime = createMemoryHostRuntime({
         logger: host.logger,
-        hostConfig: () => runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {},
+        hostConfig: () => host.runtime?.config?.current?.() ?? api.config ?? {},
         dbPath: () => baseDbPath,
         provider: () => ({
           provider: normalizedEmbeddingCfg.provider,
@@ -4601,7 +4601,7 @@ const plugin = {
       const route = resolveFeatureLlmRoute(routeConfig, {
         feature,
         agentModels: featureModelOverrides(cfg, feature),
-        runtimeLlm: runtimeIfUsable(api)?.llm,
+        runtimeLlm: host.runtime?.llm,
         logger: host.logger,
         resultCache: llmResultCache,
         credentialUnavailable,
@@ -4819,7 +4819,7 @@ const plugin = {
     // eine Installation, die dem Host nur Vorschlaege erlaubt, auch vom Miner
     // nur Vorschlaege bekommt.
     const hostSkillWorkshopMode = () => {
-      const mode = (runtimeIfUsable(api)?.config?.current?.() || api.config || {})?.skills?.workshop?.autonomous?.mode;
+      const mode = (host.runtime?.config?.current?.() || api.config || {})?.skills?.workshop?.autonomous?.mode;
       return mode === "off" || mode === "propose" ? mode : "auto";
     };
     const skillMinerAutoApplyMode = skillMinerCfg.autoApply === "on" || skillMinerCfg.autoApply === "off"
@@ -4881,7 +4881,7 @@ const plugin = {
     const emotionT3HasProvider = Boolean(
       emotionT3LlmCfg
       && (emotionT3LlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
-        || typeof runtimeIfUsable(api)?.llm?.complete === "function"),
+        || typeof host.runtime?.llm?.complete === "function"),
     );
     const emotionT3OnlyWhenProviderAvailable = emotionCfg.t3?.onlyWhenProviderAvailable !== false;
     const emotionT3Enabled = emotionT3WantsEnabled && (emotionT3HasProvider || !emotionT3OnlyWhenProviderAvailable);
@@ -4937,7 +4937,7 @@ const plugin = {
     // bleiben.
     const encodingLlmCfg = createFeatureRoute("emotion-encoding", emotionCfg.t3 || {});
     const encodingHasProvider = Boolean(encodingLlmCfg && (encodingLlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
-      || typeof runtimeIfUsable(api)?.llm?.complete === "function"));
+      || typeof host.runtime?.llm?.complete === "function"));
     const encodingCallLlm = encodingHasProvider
       ? (messages, context = {}) => {
           const emotionLlmCfg = withLlmCallContext(
@@ -5221,7 +5221,7 @@ const plugin = {
     const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
     let hostMemoryConfig = {};
     try {
-      hostMemoryConfig = typeof runtimeIfUsable(api)?.config?.current === "function" ? runtimeIfUsable(api).config.current() : (runtimeIfUsable(api)?.config || {});
+      hostMemoryConfig = typeof host.runtime?.config?.current === "function" ? host.runtime.config.current() : (host.runtime?.config || {});
     } catch (error) {
       host.logger.warn(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
     }
@@ -5325,7 +5325,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         event,
         defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
         rootDir: neoRoot,
-        runtime: runtimeIfUsable(api),
+        runtime: host.runtime ?? undefined,
         sessionWorkspaceKeys,
         workspaceAliases: neoWorkspaceAliases,
       });
@@ -5659,7 +5659,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       controlHealthUserLabelByKey.clear();
       let liveHostConfig = hostMemoryConfig;
       try {
-        const current = runtimeIfUsable(api)?.config?.current;
+        const current = host.runtime?.config?.current;
         if (typeof current === "function") liveHostConfig = current() || hostMemoryConfig;
       } catch {
         liveHostConfig = hostMemoryConfig;
@@ -5874,7 +5874,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       return run({ ledgerDir, memoryCtx, proposal });
     };
     const collectSkillWorkshopDashboard = () => {
-      const entries = (runtimeIfUsable(api)?.config?.current?.() || api.config || {})?.agents?.entries;
+      const entries = (host.runtime?.config?.current?.() || api.config || {})?.agents?.entries;
       const agents = [];
       for (const [agentId, entry] of Object.entries(entries && typeof entries === "object" ? entries : {})) {
         const ledgerDir = skillLedgerDirForAgent(agentId);
@@ -6053,7 +6053,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       return result;
     };
     const readConfiguredReembeddingSelection = () => {
-      const current = runtimeIfUsable(api)?.config?.current?.() || api.config || {};
+      const current = host.runtime?.config?.current?.() || api.config || {};
       const currentReembedding = current?.plugins?.entries?.[PLUGIN_KEY]?.config?.reembedding;
       return Object.freeze({ generation: currentReembedding?.activeGeneration ?? null });
     };
@@ -6157,7 +6157,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         });
       }
     }
-    const reembeddingConfigMutationAvailable = typeof runtimeIfUsable(api)?.config?.mutateConfigFile === "function";
+    const reembeddingConfigMutationAvailable = typeof host.runtime?.config?.mutateConfigFile === "function";
     const reembeddingSelectionMutator = reembeddingConfigMutationAvailable
       ? createOpenClawEmbeddingSelectionMutator({ api })
       : null;
@@ -7098,7 +7098,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
-              runtime: runtimeIfUsable(api),
+              runtime: host.runtime ?? undefined,
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
@@ -7133,7 +7133,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
-              runtime: runtimeIfUsable(api),
+              runtime: host.runtime ?? undefined,
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
@@ -7203,7 +7203,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         };
         const resolveCronMemoryContext = async (commandCtx) => {
           const agentId = safeAgentId(commandCtx?.agentId || "default");
-          const workspaceDir = await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
+          const workspaceDir = await host.runtime.agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
           return resolveMemoryRequestContext({
             agentId,
             workspaceDir,
@@ -7315,10 +7315,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               };
               let runtimeConfig = null;
               try {
-                if (typeof runtimeIfUsable(api)?.config?.current === "function") {
-                  runtimeConfig = runtimeIfUsable(api).config.current();
-                } else if (runtimeIfUsable(api)?.config && typeof runtimeIfUsable(api).config === "object") {
-                  runtimeConfig = runtimeIfUsable(api).config;
+                if (typeof host.runtime?.config?.current === "function") {
+                  runtimeConfig = host.runtime.config.current();
+                } else if (host.runtime?.config && typeof host.runtime.config === "object") {
+                  runtimeConfig = host.runtime.config;
                 }
               } catch (_e) { dbg(_e); }
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -9056,7 +9056,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           if (direct.agentId !== safeAgentId(agentId)) throw new Error("session key belongs to a different agent");
           // The host hands every command its workspaceDir; several handlers
           // read it straight off the context (tone hint, vault paths).
-          const workspaceDir = await runtimeIfUsable(api)?.agent?.resolveAgentWorkspaceDir?.(api.config, direct.agentId);
+          const workspaceDir = await host.runtime?.agent?.resolveAgentWorkspaceDir?.(api.config, direct.agentId);
           const commandCtx = {
             agentId: direct.agentId,
             sessionKey: direct.sessionKey,
@@ -9287,7 +9287,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         });
 
         const resolveRegisteredMemoryContext = (commandCtx, options = {}) => resolveHostCommandMemoryContext(commandCtx, {
-          resolveAgentWorkspaceDir: (config, agentId) => runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(config, agentId),
+          resolveAgentWorkspaceDir: (config, agentId) => host.runtime.agent.resolveAgentWorkspaceDir(config, agentId),
           workspaceAliases: memoryWorkspaceAliases,
           routingLoader: hostRoutingLoader,
           requireConversation: options.requireConversation !== false,
@@ -9296,7 +9296,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           // Bind conversation identity to the persisted session, not to the id
           // the host minted for this one call (see resolveHostCommandMemoryContext).
           resolveSessionEntry: async ({ agentId, sessionKey }) => {
-            const getSessionEntry = runtimeIfUsable(api)?.agent?.session?.getSessionEntry;
+            const getSessionEntry = host.runtime?.agent?.session?.getSessionEntry;
             if (typeof getSessionEntry !== "function") return { available: false };
             try {
               return { available: true, entry: getSessionEntry({ agentId, sessionKey, readConsistency: "latest" }) ?? null };
@@ -9313,7 +9313,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         // driven from the CLI for that conversation. Other session kinds keep
         // the plain agent/workspace context.
         const resolveSessionPolicyMemoryContext = async ({ sessionKey, agentId: suppliedAgentId }) => {
-          const sessionEntryFor = (agentId) => runtimeIfUsable(api).agent.session.getSessionEntry({
+          const sessionEntryFor = (agentId) => host.runtime.agent.session.getSessionEntry({
             agentId,
             sessionKey,
             readConsistency: "latest",
@@ -9330,7 +9330,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               return sessionEntry?.spawnedCwd
                 || sessionEntry?.spawnedWorkspaceDir
                 || sessionEntry?.worktree?.canonicalWorkspaceDir
-                || await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(api.config, agentId);
+                || await host.runtime.agent.resolveAgentWorkspaceDir(api.config, agentId);
             },
             resolveSessionEntry: async ({ agentId }) => ({ available: true, entry: sessionEntryFor(agentId) }),
           });
@@ -12321,7 +12321,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               sessionKey: ctx?.sessionKey ?? event?.sessionKey,
               sessionId: ctx?.sessionId ?? event?.sessionId,
             }, {
-              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => runtimeIfUsable(api).agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
+              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => host.runtime.agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
               workspaceAliases: memoryWorkspaceAliases,
               accountTopology: memoryAccountTopology,
               turnRoutes,
