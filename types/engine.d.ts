@@ -1,7 +1,9 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.1.0 (frozen 2026-09-22, owner decision B8).
+ * Contract version 1.2.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended twice under the policy below — see the changelog at the end of
+ * this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
  * differently (review-report finding S4). Where ADR-002 and
