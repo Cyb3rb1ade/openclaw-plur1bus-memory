@@ -25,7 +25,9 @@ export const DEPLOY_FILES = [
   // ── adapter (OpenClaw-only, engine-extraction M1a) ──────────────────────────
   "adapter/openclaw/register-turn-route.js",
   "adapter/openclaw/register-maintenance-hook.js",
+  "adapter/openclaw/register-recall-hook.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
+  "engine/recall/assemble-prompt-context.js",
   "engine/recall/minimal-maintenance.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
