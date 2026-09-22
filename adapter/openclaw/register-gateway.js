@@ -1,17 +1,24 @@
 /**
  * adapter/openclaw/register-gateway.js — PR-03i.
  *
- * The OpenClaw gateway lifecycle: the three `gateway_start`/`gateway_stop`
- * pairs (was index.js:5304-5318, :7034-7043 and :7484-7506) and the shutdown
- * owner plus its four after-lifecycle service registrations (was
- * index.js:7862-7900).
+ * The OpenClaw gateway lifecycle this module owns: a lone `gateway_start`
+ * (the Neo worker warm-up, was index.js:5299-5307, no matching `gateway_stop`)
+ * plus two `gateway_start`/`gateway_stop` pairs (the Obsidian bridge, was
+ * index.js:7023-7032, and the Neo maintenance service, was
+ * index.js:10319-10341), and the shutdown owner plus its four
+ * after-lifecycle service registrations (was index.js:13453-13491). A third
+ * `gateway_start`/`gateway_stop` pair — the control-health probe — moved with
+ * the command surface into `register-commands.js` instead, since it lives
+ * inside the same `registerGatewayMethod` block that builds the control-UI
+ * projection callback.
  *
- * Each pair keeps its own function and its own call site in `register()`.
- * The extraction plan sketched one `registerGatewayLifecycle(ctx)` for all
- * three, but the chat-command surface registers its control-health
- * `gateway_start`/`gateway_stop` pair between the Obsidian bridge pair and
- * the Neo service pair, so folding the three into one call would reorder the
- * host's handler lists — an observable change M1a does not make.
+ * Each range keeps its own function and its own call site in `register()`.
+ * The extraction plan sketched one `registerGatewayLifecycle(ctx)` for every
+ * `gateway_start`/`gateway_stop` registration, but the chat-command surface
+ * registers its control-health `gateway_start`/`gateway_stop` pair between
+ * the Obsidian bridge pair and the Neo service pair, so folding them into one
+ * call would reorder the host's handler lists — an observable change M1a
+ * does not make.
  *
  * Two budgets are load-bearing and must not drift:
  *   - `gateway_stop` is registered with `timeoutMs: 30_000`. The host default

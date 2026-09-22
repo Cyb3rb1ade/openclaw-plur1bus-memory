@@ -4,7 +4,12 @@
  * The auto-recall-off branch of before_prompt_build (was index.js:13329-13420).
  * It still records the Neo hook dispatch, runs throttled GC, and emits the
  * non-droppable time/temporal/reminder blocks plus the maintenance nudges.
- * Host-neutral: everything it needs arrives in the context object.
+ * Everything this module needs arrives in the context object. That does not
+ * make `engine/**` as a whole host-neutral yet: other engine modules
+ * (`assemble-prompt-context.js`, `plur1bus-command.js`) still read
+ * `OPENCLAW_HOME`/`OPENCLAW_CONFIG_PATH` from `process.env` directly rather
+ * than through `HostServices`. Those are faithful moves of existing
+ * behaviour, not new coupling; closing that gap is owner-gated for a later PR.
  */
 
 import { consumePlur1busStartNotice } from "../../lib/setup/feature-profiles.js";

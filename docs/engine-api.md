@@ -85,11 +85,22 @@ M1a implements `PlatformCapabilities` (`lib/platform.js`: `securePath`,
 - A transitional `api` escape hatch exists on the object `createHostServices`
   and `createStubHost` return, for the adapter shell's own use only; it is
   removed at PR-14.
+- `recallTimingSink` is an optional, test-internal context key on
+  `engine/recall/assemble-prompt-context.js`'s recall assembly: when given, it
+  is called once per attempted recall with per-phase timings. `index.js` only
+  ever supplies it via the test-only `api.__recallTimingSinkForTests`
+  property, so for every real OpenClaw host it is `null` and the sink is a
+  no-op in production.
 
 `engine/**` (`assemble-prompt-context.js`, `minimal-maintenance.js`,
 `capture-turn.js`, `plur1bus-command.js`, `memory-tools.js`) holds the recall,
 capture, command and tool bodies behind explicit context objects, moved out of
-`index.js`. No `createEngine()` exists yet: `Engine` is the target PR-04…PR-15
+`index.js`. This does not make `engine/**` host-neutral yet on its own: two of
+those modules (`assemble-prompt-context.js`, `plur1bus-command.js`) still read
+`OPENCLAW_HOME`/`OPENCLAW_CONFIG_PATH` from `process.env` directly at eight
+call sites — a faithful move of existing behaviour, not new coupling. No
+`createEngine()` exists yet: it is declared in the contract
+(`types/engine.d.ts:421`), not implemented — `Engine` is the target PR-04…PR-15
 build toward.
 
 ## Module layout after PR-03
@@ -108,7 +119,7 @@ build toward.
 | `adapter/openclaw/register-commands.js` | the `plur1bus_*` commands, `/state`, `/enable`, `/disable`, the control-UI descriptor and control-health pair, the critical-push claiming hooks, and the four `lib/setup/*-plugin-runtime.js` delegations |
 | `adapter/openclaw/register-tools.js` | the five model-facing tools |
 | `adapter/openclaw/register-prompt-supplements.js` | the static system-prompt supplement and the Neo corpus supplement |
-| `adapter/openclaw/register-gateway.js` | the three `gateway_start`/`gateway_stop` pairs, the shutdown owner and the four after-lifecycle service registrations |
+| `adapter/openclaw/register-gateway.js` | a lone `gateway_start` (Neo warm-up) plus two `gateway_start`/`gateway_stop` pairs (Obsidian bridge, Neo service), the shutdown owner and the four after-lifecycle service registrations |
 | `adapter/openclaw/register-cron.js` | the unsafe direct feature-cron guard and the deferred feature-cron bootstrap |
 | `index.js` | construction, the registration calls, the `/wiki` command, and the `export default` plugin factory |
 
