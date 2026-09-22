@@ -105,7 +105,7 @@ const routingCapability = Object.freeze({
  * @param {object} pluginConfig
  * @param {((entry: {agentId: string, phases: object, totalMs: number}) => void)|null} [recallTimingSink]
  *   Forwarded as `api.__recallTimingSinkForTests`, the one test-only property
- *   `index.js` reads with `?.` when building the recall-hook ctx
+ *   `index.js` reads with `??` when building the recall-hook ctx
  *   (`recallTimingSink: api.__recallTimingSinkForTests ?? null`). No real
  *   OpenClaw host ever sets this property.
  */
