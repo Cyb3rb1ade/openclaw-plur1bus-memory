@@ -60,6 +60,50 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   benutzergebundene ACL setzt statt nur das Read-only-Bit; wenn das ACL-Tool
   fehlt, wird das jetzt abgefangen statt die Operation scheitern zu lassen
   (ein anderer Fehler des ACL-Tools wird weiterhin nicht abgefangen).
+- `applyGlobalInjectBudget` (`lib/inject-budget.js`) kürzte den droppable
+  `memories`-Block an einer beliebigen Zeichenposition, was ein halb offenes
+  `<memory-record>`-Element (fehlerhaftes XML) erzeugen und den inneren
+  Trunkierungs-Marker verschlucken konnte. Der Block wird jetzt am Ende des
+  letzten vollständigen `<memory-record>`-Elements gekürzt und bekommt
+  denselben `<!-- memory context truncated -->`-Marker wie `truncateMemoryContext`;
+  jedes an dieser Stelle noch offene Element wird korrekt geschlossen —
+  seit Fix-Runde 2 über ein echtes Scannen des Tag-Stroms (`openTagsAt`/
+  `closeOpenElements`, `lib/inject-budget.js`) statt einer festen Liste
+  bekannter Wrapper-Namen, sodass auch ein bislang nicht aufgeführter
+  Wrapper wie `<memory-reactivation>` (dem am Ende angehängten
+  Reaktivierungs-Block, `lib/conversation-reactivation-recall.js`) korrekt
+  geschlossen wird; passt kein einziger Record mehr in das verbleibende
+  Budget, wird der ganze Block verworfen statt mittendrin abgeschnitten. Ein
+  droppable Block ganz ohne `<memory-record>`-Elemente (z. B. ein reiner
+  Start-Hinweis) wird ebenfalls vollständig verworfen statt an beliebiger
+  Zeichenposition abgeschnitten (Fix-Runde 1). `truncateMemoryContext`'s
+  eigener Fallback für den Fall, dass kein einziger Record mehr ins Budget
+  passt, schneidet seit Fix-Runde 2 ebenfalls vor dem ersten `<memory-record>`
+  statt mittendrin und schließt offene Wrapper über denselben Helper
+  (Fix-Runde 2).
+- `recall.globalInjectMaxChars` (Default 17 000) konnte nie greifen, weil der
+  `<relevant-memories>`-Block bereits vorher von `truncateMemoryContext` auf
+  12 000 Zeichen gedeckelt wurde und nichts diesen inneren Wert überschrieb.
+  Der innere Cap ist jetzt über `recall.memoriesMaxChars` (Default weiterhin
+  `12000`, additiv, verhaltensneutral) konfigurierbar; siehe
+  `docs/configuration.md` für das Zusammenspiel beider Werte.
+- Das Golden-Prefix-Szenario `recall-over-budget` war falsch benannt: sein
+  Kommentar versprach den 17 000-Zeichen-Cap, tatsächlich pinnt es einen
+  gewöhnlichen Prefix mit zwei Records (~1 100 Zeichen) — der 12 KB `FILLER`
+  jedes Records erreicht den Prompt nie, weil nur die auf 400 Zeichen
+  gedeckelte Summary angezeigt wird. Umbenannt zu
+  `recall-large-text-records` (`git mv`, Oracle-Bytes unverändert), Kommentar
+  korrigiert; alle Referenzen aktualisiert.
+- `truncateMemoryContext` (`lib/relevant-memory-context.js`, der innere Cap
+  hinter `recall.memoriesMaxChars`) schnitt ebenfalls an einer beliebigen
+  Zeichenposition (`output.slice(0, limit) + marker`), mit demselben Risiko
+  eines halb offenen `<memory-record>`-Elements oder eines nie geschlossenen
+  `<relevant-memories>`-Wrappers — und das am produktiven Pfad, der bei den
+  Standardeinstellungen tatsächlich greift. Nutzt jetzt denselben
+  Record-Grenzen-Helfer wie `applyGlobalInjectBudget`
+  (`trimAtRecordBoundary`, `lib/inject-budget.js`) und fällt nur noch auf den
+  reinen Zeichenschnitt zurück, wenn kein einziger Record mehr passt
+  (Fix-Runde 1, betrifft nur das Golden-Prefix-Szenario `recall-truncated`).
 
 ## [7.15.4] — 2026-09-21
 

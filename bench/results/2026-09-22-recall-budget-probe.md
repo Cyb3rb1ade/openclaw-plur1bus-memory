@@ -79,7 +79,7 @@ scenario                    setup p50     p95     p99  |  recall p50     p95    
 recall-basic                     29.5    44.7    44.7  |        26.4    39.0    39.0  |       55.0    83.7    83.7  |  0.0 ms
 recall-empty-store                2.4     7.1     7.1  |        23.3    36.6    36.6  |       25.9    38.8    38.8  |  0.1 ms
 recall-knowledge-canonical       18.6    27.8    27.8  |        19.8    37.2    37.2  |       40.0    56.7    56.7  |  0.1 ms
-recall-over-budget               23.9    50.0    50.0  |        23.3    35.7    35.7  |       51.7    82.5    82.5  |  0.0 ms
+recall-large-text-records        23.9    50.0    50.0  |        23.3    35.7    35.7  |       51.7    82.5    82.5  |  0.0 ms
 recall-maintenance-only          17.5    22.5    22.5  |         7.7    14.3    14.3  |       26.0    33.2    33.2  |  0.0 ms
 recall-truncated                389.5   515.2   515.2  |       197.9   241.9   241.9  |      591.0   721.4   721.4  |  0.0 ms
 recall-canonical-flagged         16.8    29.0    29.0  |        19.0    38.7    38.7  |       36.9    57.3    57.3  |  0.1 ms
@@ -138,7 +138,7 @@ recall-knowledge-canonical — per-phase breakdown (from the pipeline's own phas
     private:finalize                                                                     0.0 ms     0.0 ms     0.0 ms                    0.0%
   unattributed (recall − namespace-recall; everything else in the hook)                 14.8 ms    15.2 ms    15.2 ms                   74.8%
 
-recall-over-budget — per-phase breakdown (from the pipeline's own phase timer, 20/20 recall attempt(s) observed; share is of RECALL, not total):
+recall-large-text-records — per-phase breakdown (from the pipeline's own phase timer, 20/20 recall attempt(s) observed; share is of RECALL, not total):
   phase                                                                                     p50        p95        p99   share of recall (p50)
   namespace-recall (parent of the rows below — a further breakdown of its own share)     8.0 ms    17.0 ms    17.0 ms                   34.3%
     private:embedding                                                                    0.0 ms     0.0 ms     0.0 ms                    0.0%
@@ -234,7 +234,7 @@ scenario                    setup p50     p95     p99  |  recall p50     p95    
 recall-basic                     84.8   115.8   115.8  |        48.5    68.2    68.2  |      131.4   181.0   181.0  |  0.0 ms
 recall-empty-store                2.5     3.7     3.7  |        22.3    32.1    32.1  |       25.1    35.0    35.0  |  0.1 ms
 recall-knowledge-canonical       48.1    76.1    76.1  |        34.1    54.1    54.1  |       84.1   109.1   109.1  |  0.1 ms
-recall-over-budget               75.3   102.9   102.9  |        46.7    56.9    56.9  |      124.0   156.0   156.0  |  0.0 ms
+recall-large-text-records        75.3   102.9   102.9  |        46.7    56.9    56.9  |      124.0   156.0   156.0  |  0.0 ms
 recall-maintenance-only          39.6    50.0    50.0  |        16.6    21.0    21.0  |       56.1    66.6    66.6  |  0.0 ms
 recall-truncated               3160.7  3700.1  3700.1  |       614.1   663.4   663.4  |     3767.0  4363.5  4363.5  |  0.0 ms
 recall-canonical-flagged         44.4    94.7    94.7  |        33.8    52.4    52.4  |       77.2   137.5   137.5  |  0.1 ms
@@ -293,7 +293,7 @@ recall-knowledge-canonical — per-phase breakdown (from the pipeline's own phas
     private:finalize                                                                     0.0 ms     0.0 ms     0.0 ms                    0.0%
   unattributed (recall − namespace-recall; everything else in the hook)                 20.1 ms    33.1 ms    33.1 ms                   59.0%
 
-recall-over-budget — per-phase breakdown (from the pipeline's own phase timer, 20/20 recall attempt(s) observed; share is of RECALL, not total):
+recall-large-text-records — per-phase breakdown (from the pipeline's own phase timer, 20/20 recall attempt(s) observed; share is of RECALL, not total):
   phase                                                                                     p50        p95        p99   share of recall (p50)
   namespace-recall (parent of the rows below — a further breakdown of its own share)    21.0 ms    28.0 ms    28.0 ms                   45.0%
     private:embedding                                                                    0.0 ms     0.0 ms     0.0 ms                    0.0%

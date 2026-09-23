@@ -19,6 +19,53 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 | `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
 | `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
 
+### Prompt-Injektions-Budgets
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `memoriesMaxChars` | `number` | `12000` | Innerer Zeichen-Cap auf den gesamten Rückgabewert von `formatRelevantMemoriesContext` (`truncateMemoryContext`'s `maxTotalChars`, `lib/relevant-memory-context.js`) — also nicht nur den `<relevant-memories>`-Block selbst, sondern inklusive eines eventuell angehängten `<memory-semantic-lens>`-Blocks und des Pattern-Continuity-Blocks. Greift zuerst; überschreitet die Ausgabe diesen Wert, wird sie hier bereits mit `<!-- memory context truncated -->` markiert und abgeschnitten. |
+| `globalInjectMaxChars` | `number` | `17000` | Äußerer Zeichen-Cap über alle Prompt-Prepend-Blöcke zusammen (Neo, Start-Hinweis, Memories, Zeit, temporale Kontinuität, Reminder) — `applyGlobalInjectBudget`, `lib/inject-budget.js`. |
+
+Die beiden Caps sind unabhängig und messen nicht dasselbe: `memoriesMaxChars`
+deckelt ausschließlich `formatRelevantMemoriesContext`'s eigene Ausgabe (s. o.).
+Der äußere `memories`-Block, den `applyGlobalInjectBudget` tatsächlich sieht,
+ist größer — er hängt an diese bereits gedeckelte Ausgabe zusätzlich die
+Persona-/Mood-/Reaction-/Dream-Echo-/Open-Threads-/Widerspruchs- und
+Reaktivierungs-Direktiven sowie die Knowledge-Update-, Konflikt- und
+Skill-Proposal-Nudges an (`engine/recall/assemble-prompt-context.js:1085,1190`)
+— Text, den `memoriesMaxChars` nicht kennt und nicht begrenzt. Ob
+`globalInjectMaxChars` überhaupt bindet, hängt also von der Summe aus dem
+`memoriesMaxChars`-gedeckelten Anteil, diesen zusätzlichen Direktiven/Nudges
+und den übrigen Blöcken ab: **`globalInjectMaxChars` greift erst, wenn
+`memoriesMaxChars` plus die übrigen Blöcke ihn überschreiten** — bei den
+Vorgabewerten (`memoriesMaxChars: 12000`, wenige hundert Zeichen an weiteren
+Blöcken) ist das im Regelbetrieb selten der Fall, aber keineswegs
+ausgeschlossen, sobald die zusätzlichen Direktiven/Nudges selbst umfangreich
+werden.
+
+Überschreitet ein droppable Block, den `applyGlobalInjectBudget` kürzen muss,
+den äußeren Cap, unterscheidet sich das Vorgehen danach, ob der Block
+`<memory-record>`-Elemente enthält:
+- Die Blöcke `memories` und `neo` bestehen aus solchen Elementen; sie werden
+  am Ende des letzten vollständigen `<memory-record>`-Elements gekürzt, das
+  noch passt, bekommen denselben Trunkierungs-Marker, und jedes an dieser
+  Schnittstelle noch offene Element wird dabei geschlossen, damit kein
+  unvollständiges XML entsteht. Das ist kein Nachschlagen in einer festen
+  Liste bekannter Wrapper-Namen (`<relevant-memories>`, `<memory-semantic-lens>`,
+  `<plur1bus-recall>`, `<memory-reactivation>`, …), sondern ein echtes Scannen
+  des Tag-Stroms (`openTagsAt`/`closeOpenElements`, `lib/inject-budget.js`),
+  das jedes je öffnende Wrapper-Element korrekt erkennt und schließt —
+  unabhängig davon, wie viele es gibt oder wie sie heißen.
+- Andere droppable Blöcke (z. B. der Start-Hinweis) sowie ein `memories`-Block,
+  der nach den obigen Direktiven/Nudges keinen einzigen `<memory-record>` mehr
+  enthält, haben keine Record-Grenze, an der sinnvoll geschnitten werden
+  könnte; sie werden bei Bedarf vollständig verworfen statt an beliebiger
+  Zeichenposition abgeschnitten.
+Passt selbst bei den `<memory-record>`-Blöcken kein einziger Record mehr in
+das verbleibende Budget, wird auch dort der ganze Block verworfen.
+Nicht-droppable Blöcke (Zeit, temporale Kontinuität, Reminder) werden von
+`globalInjectMaxChars` nie angetastet.
+
 ---
 
 ## Deduplizierung

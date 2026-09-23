@@ -31,10 +31,10 @@ function eventFor(prompt, session, run) {
 }
 
 /**
- * Bulk body text for the two `recall-over-budget` memories. It never reaches
- * the prompt — only a record's summary does — so it exercises the store, embed
- * and ranking path with large rows, not the injection budget. `recall-truncated`
- * is the scenario that covers truncation.
+ * Bulk body text for the two `recall-large-text-records` memories. It never
+ * reaches the prompt — only a record's summary does — so it exercises the
+ * store, embed and ranking path with large rows, not the injection budget.
+ * `recall-truncated` is the scenario that covers truncation.
  */
 const FILLER = "Deployment note. ".repeat(700); // ~11 900 chars
 
@@ -166,7 +166,15 @@ export const SCENARIOS = [
     ctx: ctxFor("golden-session-3", "golden-run-3"),
   },
   {
-    name: "recall-over-budget",
+    // Pins the store/embed/rank path end-to-end for records with a large
+    // body text (~11 900 chars each, via FILLER). It does NOT exercise the
+    // 17 000-char recall.globalInjectMaxChars cap: display in the prompt is
+    // each record's *summary*, capped at 400 chars by
+    // sanitizeMemoryTextForPrompt (lib/relevant-memory-context.js:122), so
+    // the large body text never reaches the prompt and this scenario's
+    // prependContext is an ordinary ~1 100-char two-record prefix.
+    // `recall-truncated` is the scenario that actually pins truncation.
+    name: "recall-large-text-records",
     agentId: AGENT,
     workspaceKey: WORKSPACE,
     topics: {
