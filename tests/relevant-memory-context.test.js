@@ -511,4 +511,33 @@ describe("formatRelevantMemoriesContext — maxTotalChars", () => {
     assert.ok(out.length <= 1_000 + "\n<!-- memory context truncated -->".length + 200,
       `custom cap output too long: ${out.length}`);
   });
+
+  // fix round 2, item N2: the no-record-fits fallback used to slice at
+  // `maxTotalChars` verbatim (mid-record, mid-attribute even), and its
+  // docstring overclaimed the result was always `<= limit`. It now cuts
+  // before the first `<memory-record` (never inside one) and closes
+  // whatever wrapper is still open at that point.
+  it("N2: when the cap is too small for even one full record, cuts before the first record (not mid-record) and closes the open wrapper", () => {
+    const memories = [];
+    for (let i = 0; i < 5; i++) {
+      memories.push({ id: `n2-${i}`, category: "work", source: "dm", display: "z".repeat(400), memoryStrength: 1.0 });
+    }
+    // Large enough to include the full <relevant-memories ...> opening tag
+    // and preamble, too small for the first complete <memory-record> element.
+    const limit = 300;
+    const out = formatRelevantMemoriesContext(memories, { maxTotalChars: limit });
+
+    assert.ok(out.length <= limit, `expected length <= ${limit}, got ${out.length}`);
+    assert.ok(!out.includes("<memory-record"), "fallback must not include a partial (or any) memory-record");
+    assert.ok(out.includes("<!-- memory context truncated -->"), "truncation marker missing");
+    assert.match(out, /<\/relevant-memories>\s*$/, "the still-open <relevant-memories> wrapper must be closed");
+
+    const names = new Set();
+    for (const m of out.matchAll(/<\/?([a-zA-Z][\w-]*)/g)) names.add(m[1]);
+    for (const name of names) {
+      const opens = (out.match(new RegExp(`<${name}\\b`, "g")) || []).length;
+      const closes = (out.match(new RegExp(`</${name}>`, "g")) || []).length;
+      assert.equal(opens, closes, `<${name}> must open and close the same number of times`);
+    }
+  });
 });

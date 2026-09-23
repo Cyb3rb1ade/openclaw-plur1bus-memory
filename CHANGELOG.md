@@ -5,6 +5,28 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.6] — 2026-09-23
+
+### Behoben
+
+- **Gekürzter Gedächtnis-Kontext bleibt wohlgeformt** (aus PR #185). Beide
+  Kürzungen, `truncateMemoryContext` (`lib/relevant-memory-context.js`, die bei
+  Standardeinstellungen greift) und `applyGlobalInjectBudget`
+  (`lib/inject-budget.js`), schnitten an einer beliebigen Zeichenposition und
+  hinterließen ein halb offenes `<memory-record>`-Element oder einen nie
+  geschlossenen Wrapper. Sie schneiden jetzt hinter dem letzten vollständigen
+  `</memory-record>`, schließen jedes an dieser Stelle noch offene Element (aus
+  dem Tag-Strom gelesen, nicht aus einer festen Namensliste) und hängen
+  `<!-- memory context truncated -->` genau einmal an. Ein droppable Block ohne
+  Records wird ganz verworfen statt angeschnitten.
+
+### Hinzugefügt
+
+- **`recall.memoriesMaxChars`** (Standard 12 000, verhaltensneutral) macht den
+  inneren Cap einstellbar, der `recall.globalInjectMaxChars` (17 000) bisher
+  unerreichbar machte. Das Zusammenspiel beider Werte steht in
+  `docs/configuration.md`.
+
 ## [7.16.5] — 2026-09-23
 
 ### Behoben

@@ -795,7 +795,11 @@ value. The schema rejects it. Jina reranking is a local model, selected through
   allowed.
 - **A global inject budget** (`recall.globalInjectMaxChars`, default 17000) trims
   memories before time and reminder context, so a large recall can no longer
-  crowd the rest of the prompt out.
+  crowd the rest of the prompt out. An inner budget on the memories block
+  itself, `recall.memoriesMaxChars` (default 12000), caps
+  `formatRelevantMemoriesContext`'s own output before the global budget ever
+  sees it — see `docs/configuration.md`'s "Prompt-Injektions-Budgets" for how
+  the two relate.
 - **Two new curation commands.** `/plur1bus curation resolve <keep|drop>` ends a
   neo `conflict` without any hard filter, and `/plur1bus curation drop-injected`
   demotes only *injected* behaviour conflicts after a preview and a nonce —

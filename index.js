@@ -13094,6 +13094,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }
           const memoriesContext = formatRelevantMemoriesContext(promptItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
+            // Inner cap on the <relevant-memories> block itself, independent of
+            // (and hit first by) recall.globalInjectMaxChars — see
+            // docs/configuration.md "Recall-Pipeline" for how the two relate.
+            maxTotalChars: recallCfg.memoriesMaxChars ?? 12_000,
             overlays,
             matchedPattern,
             semanticLensMemories: promptSemanticLensItems,
