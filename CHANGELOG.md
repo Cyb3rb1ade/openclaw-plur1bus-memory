@@ -66,8 +66,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Trunkierungs-Marker verschlucken konnte. Der Block wird jetzt am Ende des
   letzten vollständigen `<memory-record>`-Elements gekürzt und bekommt
   denselben `<!-- memory context truncated -->`-Marker wie `truncateMemoryContext`;
-  passt kein einziger Record mehr in das verbleibende Budget, wird der ganze
-  Block verworfen statt mittendrin abgeschnitten.
+  ein dabei noch offener `<relevant-memories>`-, `<memory-semantic-lens>`-
+  oder `<plur1bus-recall>`-Wrapper wird korrekt geschlossen; passt kein
+  einziger Record mehr in das verbleibende Budget, wird der ganze Block
+  verworfen statt mittendrin abgeschnitten. Ein droppable Block ganz ohne
+  `<memory-record>`-Elemente (z. B. ein reiner Start-Hinweis) wird ebenfalls
+  vollständig verworfen statt an beliebiger Zeichenposition abgeschnitten
+  (Fix-Runde 1).
 - `recall.globalInjectMaxChars` (Default 17 000) konnte nie greifen, weil der
   `<relevant-memories>`-Block bereits vorher von `truncateMemoryContext` auf
   12 000 Zeichen gedeckelt wurde und nichts diesen inneren Wert überschrieb.
@@ -76,11 +81,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `docs/configuration.md` für das Zusammenspiel beider Werte.
 - Das Golden-Prefix-Szenario `recall-over-budget` war falsch benannt: sein
   Kommentar versprach den 17 000-Zeichen-Cap, tatsächlich pinnt es einen
-  gewöhnlichen zweizeiligen Prefix (~1 100 Zeichen) — der 12 KB `FILLER`
+  gewöhnlichen Prefix mit zwei Records (~1 100 Zeichen) — der 12 KB `FILLER`
   jedes Records erreicht den Prompt nie, weil nur die auf 400 Zeichen
   gedeckelte Summary angezeigt wird. Umbenannt zu
   `recall-large-text-records` (`git mv`, Oracle-Bytes unverändert), Kommentar
   korrigiert; alle Referenzen aktualisiert.
+- `truncateMemoryContext` (`lib/relevant-memory-context.js`, der innere Cap
+  hinter `recall.memoriesMaxChars`) schnitt ebenfalls an einer beliebigen
+  Zeichenposition (`output.slice(0, limit) + marker`), mit demselben Risiko
+  eines halb offenen `<memory-record>`-Elements oder eines nie geschlossenen
+  `<relevant-memories>`-Wrappers — und das am produktiven Pfad, der bei den
+  Standardeinstellungen tatsächlich greift. Nutzt jetzt denselben
+  Record-Grenzen-Helfer wie `applyGlobalInjectBudget`
+  (`trimAtRecordBoundary`, `lib/inject-budget.js`) und fällt nur noch auf den
+  reinen Zeichenschnitt zurück, wenn kein einziger Record mehr passt
+  (Fix-Runde 1, betrifft nur das Golden-Prefix-Szenario `recall-truncated`).
 
 ## [7.15.4] — 2026-09-21
 

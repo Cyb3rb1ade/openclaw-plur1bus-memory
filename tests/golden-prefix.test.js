@@ -19,10 +19,14 @@
  *
  * The recorded concern is real, but it is not an equal-score ranking-order
  * bug: `compareRecallCandidate` (lib/recall-pipeline.js) already breaks ties
- * on a deterministic `ordinal`, and the plain `.sort((a,b) => b.score -
- * a.score)` call sites rely on `Array.prototype.sort`'s ES2019 stability
- * over an otherwise-deterministic input order — so no ranking secondary key
- * was missing, and none was added here.
+ * on `ordinal`, a counter assigned in the order candidates are iterated off
+ * each namespace's LanceDB result arrays (lib/recall-pipeline.js:470-490) —
+ * i.e. equal-score order is inherited from LanceDB's own result order, not
+ * from any id key, and that iteration order is stable for a given query
+ * against the golden corpus in practice. The plain `.sort((a,b) => b.score -
+ * a.score)` call sites elsewhere rely on `Array.prototype.sort`'s ES2019
+ * stability over that same deterministic input order — so no ranking
+ * secondary key was missing, and none was added here.
  *
  * Driving `runScenario` (tests/helpers/golden-prefix-driver.js) truly
  * concurrently instead — via `Promise.all` over several scenarios, bypassing
