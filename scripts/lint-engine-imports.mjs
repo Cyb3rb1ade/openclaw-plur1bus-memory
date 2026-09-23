@@ -23,6 +23,13 @@
  *      parameter itself (`function f(api)`, `const { api } = ctx`), which is
  *      the same coupling one indirection earlier. PR-03 moved seven such
  *      ranges and every one of them had to be checked by hand for this.
+ *   6. Transitive: every lib/** module reachable from engine/** through
+ *      relative imports obeys rule 1 too. A reached forbidden module is
+ *      reported with the chain that reaches it and is not walked further.
+ *   7. No `process.env.OPENCLAW_*` read and no literal "openclaw/…" load
+ *      specifier (import()/require()/resolve()) on that graph. Host paths come
+ *      from HostServices / lib/host-paths.js; host SDK modules from
+ *      lib/host-sdk-loader.js.
  *
  * Rules 4 and 5 are text rules over the source lines, not a syntax-aware
  * parser. Line comments, single-line block comments and simple quoted strings
@@ -193,6 +200,63 @@ for (const scanRoot of ROOTS) {
   }
 }
 
+// Rule 6/7: walk engine/** through lib/** relative imports, applying the
+// forbidden-import rule transitively and flagging `process.env.OPENCLAW_*`
+// reads and literal `openclaw/…` load specifiers on every reached module. A
+// forbidden module is reported where it is reached and not descended into
+// (spec §6 R-3), so its own imports are never re-reported.
+const ENV_READ = /process\.env(?:\.|\[\s*["'`])OPENCLAW_/;
+const OPENCLAW_LOAD = /\b(?:import|require|resolve)\s*\(\s*[`"']openclaw(?:[/`"'])/;
+const forbiddenWhy = (spec, target) => FORBIDDEN_FOR_ENGINE.find((rule) => rule.test(spec, target))?.why ?? null;
+
+/**
+ * Resolve a relative import specifier to an absolute file path, defaulting a
+ * missing extension to `.js`. Returns null for a bare package specifier.
+ * @param {string} fromFile Absolute path of the importing file.
+ * @param {string} spec Import specifier.
+ * @returns {string|null} Absolute path, or null for a bare package.
+ */
+function resolveModule(fromFile, spec) {
+  if (!spec.startsWith(".")) return null;
+  let target = resolve(dirname(fromFile), spec);
+  if (!/\.m?js$/.test(target)) target = `${target}.js`;
+  return target;
+}
+
+const reached = new Map();
+const queue = [];
+for (const [from] of graph) {
+  if (from.startsWith("engine/")) queue.push({ file: join(root, from), chain: [from] });
+}
+while (queue.length > 0) {
+  const { file, chain } = queue.shift();
+  const rel = toPosix(relative(root, file));
+  if (reached.has(rel)) continue;
+  let source;
+  try {
+    source = readFileSync(file, "utf8");
+  } catch {
+    continue;
+  }
+  reached.set(rel, chain);
+  source.split("\n").forEach((line, index) => {
+    const code = stripComments(line);
+    if (ENV_READ.test(code)) violations.push(`env: ${rel}:${index + 1}: process.env.OPENCLAW_* read on the engine graph (via ${chain.join(" -> ")})`);
+    if (!rel.startsWith("engine/") && OPENCLAW_LOAD.test(code)) violations.push(`transitive: ${chain.join(" -> ")}: loads the openclaw package (${line.trim()})`);
+  });
+  for (const spec of importsOf(source)) {
+    const targetAbs = resolveModule(file, spec);
+    const target = targetAbs ? toPosix(relative(root, targetAbs)) : null;
+    const why = forbiddenWhy(spec, target);
+    if (why && !rel.startsWith("engine/")) {
+      violations.push(`transitive: ${chain.concat(target ?? spec).join(" -> ")}: engine graph must not reach ${why}`);
+      continue;
+    }
+    if (why) continue; // rule 1 already reported this direct import
+    if (target && target.startsWith("lib/")) queue.push({ file: targetAbs, chain: chain.concat(target) });
+  }
+}
+
 // Depth-first cycle detection over the engine+adapter subgraph.
 const WHITE = 0;
 const GREY = 1;
@@ -225,4 +289,6 @@ if (violations.length > 0) {
   console.error(`\n${new Set(violations).size} violation(s)`);
   process.exit(1);
 }
-console.log(`lint-engine-imports: clean (${graph.size} module(s))`);
+console.log(
+  `lint-engine-imports: clean (${graph.size} module(s), ${reached.size - [...graph.keys()].filter((k) => k.startsWith("engine/")).length} lib module(s) reached)`,
+);

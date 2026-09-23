@@ -67,7 +67,7 @@ describe("lint-engine-imports", () => {
     });
     const result = run(base);
     assert.equal(result.status, 0, result.out);
-    assert.match(result.out, /clean \(2 module\(s\)\)/);
+    assert.match(result.out, /clean \(2 module\(s\), 0 lib module\(s\) reached\)/);
   });
 
   it("rejects engine code importing the adapter lifecycle", (t) => {
@@ -217,5 +217,56 @@ describe("lint-engine-imports", () => {
     });
     const result = run(base);
     assert.equal(result.status, 0, result.out);
+  });
+
+  it("follows engine imports through lib/ and rejects a transitive openclaw import", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import { b } from "../lib/b.js";\nexport const a = b;\n',
+      "lib/b.js": 'import { c } from "./c.js";\nexport const b = c;\n',
+      "lib/c.js": 'export async function c() { return import("openclaw/plugin-sdk/routing"); }\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/a\.js -> lib\/b\.js -> lib\/c\.js/);
+    assert.match(result.out, /openclaw/);
+  });
+
+  it("reports a reached forbidden lib file once and does not descend into it", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/x.js";\n',
+      "lib/x.js": 'import "./setup/foo-plugin-runtime.js";\n',
+      "lib/setup/foo-plugin-runtime.js": 'import "openclaw";\nimport "../runtime-shutdown.js";\n',
+      "lib/runtime-shutdown.js": "export {};\n",
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/setup\/foo-plugin-runtime\.js/);
+    assert.doesNotMatch(result.out, /runtime-shutdown/, "the forbidden file's own imports are not walked");
+  });
+
+  it("rejects process.env.OPENCLAW_* anywhere on the engine graph", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": 'export const home = process.env.OPENCLAW_HOME;\nexport const cfg = process.env["OPENCLAW_CONFIG_PATH"];\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/b\.js:1/);
+    assert.match(result.out, /lib\/b\.js:2/);
+  });
+
+  it("ignores env reads and openclaw imports in lib files the engine never reaches", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": "export const a = 1;\n",
+      "lib/unreached.js": 'import "openclaw";\nexport const x = process.env.OPENCLAW_HOME;\n',
+    });
+    assert.equal(run(base).status, 0);
+  });
+
+  it("does not flag an OPENCLAW_ mention inside a comment", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": "// was process.env.OPENCLAW_HOME before G1\nexport const a = 1;\n",
+    });
+    assert.equal(run(base).status, 0);
   });
 });
