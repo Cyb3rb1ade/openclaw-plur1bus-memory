@@ -312,3 +312,26 @@ export const SCENARIOS = [
     ctx: ctxFor("golden-session-8", "golden-run-8"),
   },
 ];
+
+/**
+ * Job-ledger scenarios: the ledger rows (and the dream diary) a sequence of
+ * sweeps leaves behind, under a virtual clock. Written once, like the prefix
+ * oracle.
+ */
+export const JOB_SCENARIOS = [
+  {
+    // REM produces no narrative four nights running inside one REM week:
+    // incomplete (attempt 1), incomplete (2), abandoned (3, reason written to
+    // DREAMS.md), then skipped as abandoned.
+    name: "jobs-ledger-retry",
+    agentId: AGENT,
+    job: "rem-dream",
+    runKey: `rem:${WORKSPACE}:${AGENT}:private:2026-W02`,
+    sweeps: [
+      Date.UTC(2026, 0, 13, 0, 15),
+      Date.UTC(2026, 0, 14, 0, 15),
+      Date.UTC(2026, 0, 15, 0, 15),
+      Date.UTC(2026, 0, 16, 0, 15),
+    ],
+  },
+];

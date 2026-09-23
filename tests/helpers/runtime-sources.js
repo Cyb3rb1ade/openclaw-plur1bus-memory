@@ -44,6 +44,7 @@ const ENGINE_PATHS = Object.freeze({
   minimalMaintenance: "engine/recall/minimal-maintenance.js",
   plur1busCommand: "engine/commands/plur1bus-command.js",
   recallResult: "engine/recall/recall-result.js",
+  remOutcome: "engine/jobs/rem-outcome.js",
 });
 
 /** OpenClaw adapter modules, by short name. */

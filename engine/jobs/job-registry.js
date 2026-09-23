@@ -14,12 +14,19 @@
 import { randomUUID } from "node:crypto";
 
 import { emitEngineEvent } from "../events.js";
+import { appendDreamDiaryEntry } from "../../lib/dreaming/dream-diary.js";
 import { createJobLedger } from "./job-ledger.js";
 import { JOB_SPECS } from "./job-specs.js";
 
 const EXIT = Symbol("plur1bus.job.exit");
 
 export const BREAKER_PHASES = Object.freeze(new Set(["rem", "deep"]));
+
+/** Original run plus two retries before a no-narrative REM key is abandoned. */
+export const MAX_ATTEMPTS = 3;
+
+/** rem/deep phases share this many LLM sessions per agent per sweep. */
+export const BREAKER_LIMIT = 3;
 
 /** @param {number} ms @returns {string} UTC day. */
 export function sweepKey(ms) {
@@ -34,6 +41,29 @@ export function sweepKey(ms) {
  */
 export function jobExit(outcome, reason, output) {
   return { [EXIT]: true, outcome, reason, output };
+}
+
+/**
+ * How many consecutive `incomplete` rows for this job (matching the current
+ * pendingKeys when both sides have keys to compare) immediately precede the
+ * run about to finish. A `skipped` row (breaker, `already_processed`,
+ * `abandoned`) neither counts nor breaks the streak; any other outcome does.
+ * @param {Array<object>} rows Ledger snapshot, oldest first.
+ * @param {string} job
+ * @param {string[]} pendingKeys
+ * @returns {number}
+ */
+function priorIncompleteStreak(rows, job, pendingKeys) {
+  let streak = 0;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i];
+    if (row.job !== job || row.outcome === "skipped") continue;
+    if (row.outcome !== "incomplete") break;
+    const rowKeys = Array.isArray(row.pendingKeys) ? row.pendingKeys : [];
+    if (pendingKeys.length > 0 && rowKeys.length > 0 && !rowKeys.some((key) => pendingKeys.includes(key))) break;
+    streak += 1;
+  }
+  return streak;
 }
 
 /**
@@ -61,7 +91,13 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     return {
       ...run,
       sweep: sweepKey(run.startedAt),
-      llmSession: BREAKER_PHASES.has(run.phase) && run.outcome !== "skipped",
+      // A session is a new piece of dreaming work starting, not a raw
+      // invocation count: a retry of the same still-open key (attempt > 1)
+      // continues that key's own session rather than opening a new one, so
+      // it must not also spend the sweep's shared breaker budget — otherwise
+      // MAX_ATTEMPTS retries of one stuck key would exhaust BREAKER_LIMIT by
+      // themselves and starve every other rem/deep job in the same sweep.
+      llmSession: BREAKER_PHASES.has(run.phase) && run.outcome !== "skipped" && run.attempt === 1,
     };
   }
 
@@ -127,7 +163,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     owners.set(name, { body, defaultInput });
   }
 
-  function jobContext(inflight, { signal, input }) {
+  function jobContext(inflight, { signal, input, snapshot }) {
     return Object.freeze({
       agentId: inflight.agentId,
       trigger: inflight.trigger,
@@ -142,10 +178,37 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       markCompletedKey: (key) => { if (key && !inflight.keys.includes(key)) inflight.keys.push(String(key)); },
       notePendingKey: (key) => { if (key && !inflight.pendingKeys.includes(key)) inflight.pendingKeys.push(String(key)); },
       setDiaryTarget: (dir) => { inflight.diaryTarget = dir || null; },
+      // Served from the one readAll() snapshot taken at the start of this
+      // run() (after recovery), not a fresh ledger read per call — this
+      // run's own row is not appended yet, so it is correctly absent here.
+      hasCompletedKey: (key) => snapshot.some((row) => Array.isArray(row.keys) && row.keys.includes(key)),
+      isAbandonedKey: (key) => snapshot.some((row) => row.outcome === "abandoned" && Array.isArray(row.pendingKeys) && row.pendingKeys.includes(key)),
+      noteAbandonedKey: (key) => { if (key && !inflight.abandonedKeys.includes(key)) inflight.abandonedKeys.push(String(key)); },
     });
   }
 
-  function finish(inflight, exit, error, ledger) {
+  function finish(inflight, exit, error, ledger, snapshot = []) {
+    let outcome = exit.outcome;
+    let reason = exit.reason;
+    if (ledger && outcome !== "skipped") {
+      const streak = priorIncompleteStreak(snapshot, inflight.job, inflight.pendingKeys);
+      inflight.attempt = streak + 1;
+      if (outcome === "incomplete" && inflight.attempt >= MAX_ATTEMPTS) {
+        outcome = "abandoned";
+        reason = `abandoned_after_retries:${exit.reason || "incomplete"}`;
+        const diary = appendDreamDiaryEntry({
+          workspaceDir: inflight.diaryTarget,
+          narrative: `REM run abandoned after ${inflight.attempt} attempts: ${exit.reason || "incomplete"}.`,
+          mode: "rem",
+          now: clock,
+          logger: host.logger,
+        });
+        inflight.diary = { written: diary.written === true, ...(diary.reason ? { reason: diary.reason } : {}) };
+      }
+    }
+    if (outcome === "skipped" && exit.reason === "already_processed" && inflight.abandonedKeys.length > 0) {
+      reason = "abandoned";
+    }
     const finishedAt = clock();
     const durationMs = Math.max(0, finishedAt - inflight.startedAt);
     const run = {
@@ -157,8 +220,8 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       startedAt: inflight.startedAt,
       finishedAt,
       durationMs,
-      outcome: exit.outcome,
-      ...(exit.reason ? { reason: exit.reason } : {}),
+      outcome,
+      ...(reason ? { reason } : {}),
       attempt: inflight.attempt,
       cost: { ms: durationMs },
       counts: {},
@@ -206,6 +269,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       attempt: 1,
       keys: [],
       pendingKeys: [],
+      abandonedKeys: [],
       diary: undefined,
       diaryTarget: null,
     };
@@ -213,11 +277,19 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     // agentId, so it lives inside this try too — run() must always resolve
     // to a JobRun, never reject, whatever went wrong with the ledger.
     let ledger = null;
+    // One readAll() snapshot per run(), taken right after this run's own
+    // marker is written (so its own row, appended only in finish(), is
+    // never in it) and after recovery (so a crash row from *this* process's
+    // first run for this agent is visible). Every key check and the breaker
+    // count below is served from this snapshot, not a fresh ledger read per
+    // call (owner addendum, PR-08 = a).
+    let snapshot = [];
     if (jobsRoot) {
       try {
         ledger = ledgerFor(agentId);
         recoverOnce(agentId, ledger);
         ledger.writeMarker(inflight);
+        snapshot = ledger.readAll();
       } catch (writeError) {
         const message = `plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${String(writeError?.message || writeError)}`;
         // A broken ledger root is a standing condition, not a per-run event:
@@ -230,6 +302,19 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
           host.logger.warn(message);
         }
         return finish(inflight, jobExit("failed", "ledger_unwritable", undefined), writeError, null);
+      }
+    }
+    // rem/deep share a per-agent, per-sweep breaker of BREAKER_LIMIT LLM
+    // sessions, counted from the snapshot taken above — a pre-skipped call
+    // (e.g. an outer disabled-feature check) never counted as a session and
+    // must not be blocked by one either.
+    if (ledger && BREAKER_PHASES.has(spec.phase) && !preSkip) {
+      const sweep = sweepKey(inflight.startedAt);
+      const sessions = snapshot.filter((row) => row.sweep === sweep && row.llmSession === true && BREAKER_PHASES.has(row.phase)).length;
+      if (sessions >= BREAKER_LIMIT) {
+        return finish(inflight, jobExit("skipped", "circuit_open", {
+          text: JSON.stringify({ job: name, skipped: true, reason: "circuit_open" }, null, 2),
+        }), null, ledger, snapshot);
       }
     }
     const owner = owners.get(name);
@@ -245,7 +330,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
         if (resolved?.preSkip) {
           exit = jobExit("skipped", resolved.preSkip.reason, resolved.preSkip.output);
         } else {
-          const value = await owner.body(name, jobContext(inflight, { signal, input: resolved }));
+          const value = await owner.body(name, jobContext(inflight, { signal, input: resolved, snapshot }));
           exit = value && value[EXIT] ? value : jobExit("completed", undefined, value);
         }
       }
@@ -253,7 +338,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       error = thrown;
       exit = jobExit("failed", `error:${thrown?.name || "Error"}`, undefined);
     }
-    return finish(inflight, exit, error, ledger);
+    return finish(inflight, exit, error, ledger, snapshot);
   }
 
   return Object.freeze({

@@ -1,0 +1,17 @@
+{"runId":"run-1","job":"rem-dream","phase":"rem","agentId":"golden-agent","trigger":"cron","startedAt":1768263300000,"finishedAt":1768263300000,"outcome":"incomplete","reason":"no_narrative","attempt":1,"pendingKeys":["rem:golden-workspace:golden-agent:private:2026-W02"],"sweep":"2026-01-13","llmSession":true}
+{"runId":"run-2","job":"rem-dream","phase":"rem","agentId":"golden-agent","trigger":"cron","startedAt":1768349700000,"finishedAt":1768349700000,"outcome":"incomplete","reason":"no_narrative","attempt":2,"pendingKeys":["rem:golden-workspace:golden-agent:private:2026-W02"],"sweep":"2026-01-14","llmSession":false}
+{"runId":"run-3","job":"rem-dream","phase":"rem","agentId":"golden-agent","trigger":"cron","startedAt":1768436100000,"finishedAt":1768436100000,"outcome":"abandoned","reason":"abandoned_after_retries:no_narrative","attempt":3,"pendingKeys":["rem:golden-workspace:golden-agent:private:2026-W02"],"diary":{"written":true},"sweep":"2026-01-15","llmSession":false}
+{"runId":"run-4","job":"rem-dream","phase":"rem","agentId":"golden-agent","trigger":"cron","startedAt":1768522500000,"finishedAt":1768522500000,"outcome":"skipped","reason":"abandoned","attempt":1,"sweep":"2026-01-16","llmSession":false}
+--- DREAMS.md ---
+# Dream Diary
+
+<!-- openclaw:dreaming:diary:start -->
+---
+
+*January 15, 2026 at 1:15 AM GMT+1*
+
+REM run abandoned after 3 attempts: no_narrative.
+
+<sub>PLUR1BUS · REM dream · 6753f66220ee0589</sub>
+
+<!-- openclaw:dreaming:diary:end -->

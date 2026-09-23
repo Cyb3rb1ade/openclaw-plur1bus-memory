@@ -10,6 +10,7 @@
 import { IMPORTANCE_STATUS } from "../../lib/importance-status.js";
 import { buildRefinePatch, classifyEncoding } from "../../lib/encoding-llm.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "../../lib/dreaming/rem-dream.js";
+import { ledgerBackedCompletion, remJobOutcome } from "./rem-outcome.js";
 import { findEpisodeCardPath, rebuildEpisode, writeEpisodeToVault } from "../../lib/episodes.js";
 import { formatAfterthoughtCronReply, formatClassifierCronReply } from "../../lib/internal-cron-reply.js";
 import { autoAcceptStale as runAutoAcceptStale } from "../../lib/jobs/auto-accept-stale-criticals.js";
@@ -314,7 +315,7 @@ export function createInternalJobBodies(ctx) {
         }
         const remRuns = [];
         for (const remAclPartition of remAclPartitions) {
-          const remStore = createOwnerBoundNeoStore(remAclPartition);
+          const remStore = ledgerBackedCompletion(createOwnerBoundNeoStore(remAclPartition), jobCtx);
           const remOutputRoot = resolveRemOutputRoot({
             partition: remAclPartition,
             memoryCtx,
@@ -365,6 +366,7 @@ export function createInternalJobBodies(ctx) {
           }
           host.logger.info(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
           remRuns.push({ scope: remAclPartition.scope, result: partitionResult });
+          if (partitionResult?.diary) jobCtx.noteDiary(partitionResult.diary);
         }
         // Der erste Lauf mit Report gewinnt für die Antwort; sonst der erste.
         const result = (remRuns.find((run) => run.result?.report) || remRuns[0]).result;
@@ -382,11 +384,17 @@ export function createInternalJobBodies(ctx) {
             .then((r) => host.logger.info(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
             .catch((err) => host.logger.warn(`plur1bus-semantic: discovery failed: ${String(err)}`));
         }
-        return formatJsonCommandResult({
+        const remReply = formatJsonCommandResult({
           job: "rem-dream",
           partitions: remRuns.map((run) => describeRemPartitionRun(run)),
           ...(result.report || result),
         });
+        const verdict = remJobOutcome(remRuns, { narrativeExpected: dreamNarrativeCfg?.enabled !== false, dryRun: false });
+        for (const key of verdict.pendingKeys) jobCtx.notePendingKey(key);
+        jobCtx.setDiaryTarget(memoryCtx?.workspaceDir || null);
+        if (verdict.outcome === "incomplete") return jobCtx.incomplete(verdict.reason, remReply);
+        if (verdict.outcome === "skipped") return jobCtx.skip(verdict.reason, remReply);
+        return remReply;
       }
       if (subKey === "skill-miner") {
         if (!skillMinerEnabled || !skillMinerLlmCfg) {

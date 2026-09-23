@@ -54,8 +54,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SCENARIOS } from "./fixtures/golden-prefix/scenarios.js";
+import { JOB_SCENARIOS, SCENARIOS } from "./fixtures/golden-prefix/scenarios.js";
 import { runScenario } from "./helpers/golden-prefix-driver.js";
+import { runJobScenario } from "./helpers/golden-jobs-driver.js";
 
 const expectedDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "golden-prefix", "expected");
 
@@ -66,6 +67,13 @@ describe("golden prefix corpus", () => {
       const actual = await runScenario(scenario);
       assert.equal(typeof actual, "string", `${scenario.name} returned no prependContext`);
       assert.equal(actual, expected);
+    });
+  }
+
+  for (const scenario of JOB_SCENARIOS) {
+    it(`${scenario.name} leaves the recorded ledger byte for byte`, async () => {
+      const expected = readFileSync(join(expectedDir, `${scenario.name}.txt`), "utf8");
+      assert.equal(await runJobScenario(scenario), expected);
     });
   }
 

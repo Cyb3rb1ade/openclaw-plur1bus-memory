@@ -42,6 +42,7 @@ export const DEPLOY_FILES = [
   "engine/jobs/job-ledger.js",
   "engine/jobs/job-registry.js",
   "engine/jobs/job-specs.js",
+  "engine/jobs/rem-outcome.js",
   "engine/recall/assemble-prompt-context.js",
   "engine/recall/minimal-maintenance.js",
   "engine/recall/recall-result.js",
