@@ -372,7 +372,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { createDreamingStatusProvider } from "./lib/dreaming/dreaming-status-provider.js";
+import { createDreamingStatusProvider, readLightDreamRun, recordLightDreamRun } from "./lib/dreaming/dreaming-status-provider.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesWithState, writeEpisodeToVault, rebuildEpisode, findEpisodeCardPath } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
@@ -4460,6 +4460,8 @@ const plugin = {
       const dreamingStatusProvider = createDreamingStatusProvider({
         getPluginConfig: () => cfg,
         getCron: () => gatewayCronGetter?.(),
+        // Lazy: baseDbPath is resolved further down in register().
+        readLastLightRun: (agentId) => readLightDreamRun({ baseDbPath, agentId }),
         logger: api.logger,
       });
       // The host asks the memory-slot owner for a runtime; without it the
@@ -11072,6 +11074,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const mergedDreams = [...processedDreams.slice(-100), digestHash];
                     throwIfAborted(signal, "light dream commit aborted");
                     neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+                    // Light sleep has no schedule; its last run is the only
+                    // time the Memory page can show for it.
+                    recordLightDreamRun({ baseDbPath, agentId }).catch((runErr) => {
+                      api.logger.debug?.(`memory-lancedb-namespaced: light dream run not recorded: ${String(runErr)}`);
+                    });
                     return true;
                   }).catch((dreamErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);

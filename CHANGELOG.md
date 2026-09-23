@@ -5,6 +5,18 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.5] — 2026-09-23
+
+### Geändert
+
+- **Der Leichtschlaf zeigt auf OpenClaws Gedächtnisseite, wann er zuletzt lief.**
+  Er hat keinen Zeitplan, weil PLUR1BUS ihn nach einem Gespräch anstößt, und die
+  Szene zeigte deshalb nur einen Strich. Jetzt hält PLUR1BUS je Agent in
+  `dreaming-phase-runs.json` neben der Datenbank fest, wann ein Leichtschlaf
+  abgeschlossen wurde, und der `dreaming`-Provider meldet das als
+  `lastRunAtMs`. Ein Host mit der Naht aus openclaw/openclaw#155860 zeigt dann
+  „zuletzt HH:MM"; ein Lesefehler kostet nur diesen Zeitstempel.
+
 ## [7.16.4] — 2026-09-23
 
 ### Hinzugefügt

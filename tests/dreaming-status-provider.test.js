@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createDreamingStatusProvider } from "../lib/dreaming/dreaming-status-provider.js";
+import { createDreamingStatusProvider, readLightDreamRun, recordLightDreamRun } from "../lib/dreaming/dreaming-status-provider.js";
+import { forgetTempDir, makeTempDir } from "./helpers/temp-dir.js";
 
 // Form wie OpenClaws cron.list() sie liefert: Feature-Crons laufen als
 // command-Jobs mit `--agent`/`--feature` im argv, je Agent versetzt.
@@ -87,4 +88,36 @@ describe("PLUR1BUS dreaming-status provider", () => {
     const broken = provider({ cron: { list: async () => { throw new Error("cron down"); } } });
     assert.equal(await broken.getStatus({ cfg: {}, agentId: "main" }), null);
   });
+
+  it("hält den letzten Leichtschlaf je Agent fest, dateibasiert und neustartfest", async () => {
+    const dir = makeTempDir("dreaming-phase-runs-");
+    try {
+      await recordLightDreamRun({ baseDbPath: dir, agentId: "main", atMs: 1_000 });
+      await recordLightDreamRun({ baseDbPath: dir, agentId: "bernhardine", atMs: 2_000 });
+      await recordLightDreamRun({ baseDbPath: dir, agentId: "main", atMs: 3_000 });
+      assert.equal(await readLightDreamRun({ baseDbPath: dir, agentId: "main" }), 3_000);
+      assert.equal(await readLightDreamRun({ baseDbPath: dir, agentId: "bernhardine" }), 2_000);
+      assert.equal(await readLightDreamRun({ baseDbPath: dir, agentId: "heisenberg" }), undefined);
+      await assert.rejects(() => recordLightDreamRun({ baseDbPath: dir, agentId: "__proto__", atMs: 1 }), /agent/);
+    } finally {
+      forgetTempDir(dir);
+    }
+  });
+
+  it("meldet den letzten Leichtschlaf als lastRunAtMs, damit die Szene ihn zeigen kann", async () => {
+    const status = await createDreamingStatusProvider({
+      getPluginConfig: () => ({}),
+      getCron: () => ({ list: async () => JOBS }),
+      readLastLightRun: async (agentId) => (agentId === "main" ? 4_000 : undefined),
+    }).getStatus({ cfg: {}, agentId: "main" });
+    assert.deepEqual(status.phases.light, { enabled: true, scheduled: true, cron: "", lastRunAtMs: 4_000 });
+
+    const none = await createDreamingStatusProvider({
+      getPluginConfig: () => ({}),
+      getCron: () => ({ list: async () => JOBS }),
+      readLastLightRun: async () => { throw new Error("unreadable"); },
+    }).getStatus({ cfg: {}, agentId: "main" });
+    assert.deepEqual(none.phases.light, { enabled: true, scheduled: true, cron: "" }, "ein Lesefehler kostet nur den Zeitstempel");
+  });
 });
+
