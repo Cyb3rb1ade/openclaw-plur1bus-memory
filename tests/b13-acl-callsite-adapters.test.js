@@ -213,11 +213,17 @@ describe("B13 strict ownership ACL adapters", () => {
     }), /agentId is required/);
     assert.equal(workspaceReads, 0);
 
-    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    assert.match(indexSource, /const auth = isAuthorized\(memoryCtx, cfg, \{ \.\.\.opts, chatKind: memoryCtx\.chatKind \}\)/);
-    assert.match(indexSource, /const checkAuth = async \(memoryCtx, opts = \{\}, localeCtx = null\) =>/);
-    assert.match(indexSource, /checkAuth\(memoryCtx, \{ destructive: true, chatKind: memoryCtx\.chatKind \}, commandCtx\)/);
-    assert.match(indexSource, /const runStatusCommand = async \(commandCtx, suppliedMemoryCtx = null\)/);
+    // PR-03g (engine-extraction M1a) moved the chat-command registration —
+    // with `checkAuth`, its `isAuthorized` call site and the six command
+    // bodies — out of index.js into adapter/openclaw/register-commands.js.
+    // Every anchor below left index.js entirely (1 -> 0, and 6 -> 0 for the
+    // destructive checkAuth call sites), so the guard follows them there
+    // rather than asserting against a file that no longer holds them.
+    const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    assert.match(commandsSource, /const auth = isAuthorized\(memoryCtx, cfg, \{ \.\.\.opts, chatKind: memoryCtx\.chatKind \}\)/);
+    assert.match(commandsSource, /const checkAuth = async \(memoryCtx, opts = \{\}, localeCtx = null\) =>/);
+    assert.match(commandsSource, /checkAuth\(memoryCtx, \{ destructive: true, chatKind: memoryCtx\.chatKind \}, commandCtx\)/);
+    assert.match(commandsSource, /const runStatusCommand = async \(commandCtx, suppliedMemoryCtx = null\)/);
   });
 
   it("rejects malformed snapshots and unknown/internal scopes", () => {
@@ -305,7 +311,11 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.match(sources["recall-pipeline.js"], /checkAccess\(aclCtx, r\.entry\)/);
 
     const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    assert.match(indexSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
+    // PR-03g: the two registered command handlers that resolve the canonical
+    // context now live in the adapter (2 -> 0 in index.js); the store and
+    // recall call sites below stay in index.js and stay pinned to it.
+    const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    assert.match(commandsSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
     assert.match(indexSource, /const storeAccessCtx = memoryCtx/);
     assert.match(indexSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
     assert.doesNotMatch(indexSource, /checkAccess\(\{\s*agentId,\s*workspaceId/);

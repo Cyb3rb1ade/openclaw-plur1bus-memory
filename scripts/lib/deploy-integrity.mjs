@@ -27,6 +27,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-maintenance-hook.js",
   "adapter/openclaw/register-recall-hook.js",
   "adapter/openclaw/register-capture-hook.js",
+  "adapter/openclaw/register-commands.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
   "engine/commands/plur1bus-command.js",
