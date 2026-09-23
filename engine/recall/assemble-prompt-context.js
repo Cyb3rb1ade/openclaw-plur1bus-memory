@@ -24,7 +24,7 @@ import { getPendingProposals, lastPresentationAgeMs, recordPresentation } from "
 import { withLlmCallContext } from "../../lib/llm-result-cache.js";
 import { isLlmRouteAvailable } from "../../lib/llm-router.js";
 import { createRetrievalLedgerEntry } from "../../lib/memory-dynamics.js";
-import { resolveHostHookMemoryContext, resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
+import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { buildMoodStyleDirective } from "../../lib/mood-style-directive.js";
 import { dedupeNeoLanesAgainstTexts, formatNeoRecallContext, routeNeoRecall } from "../../lib/neo-arch.js";
 import { OPEN_THREADS_SHOWN_FILE, collectOpenThreads, formatOpenThreadsContext, normalizeTopic } from "../../lib/open-threads.js";
@@ -90,14 +90,11 @@ export function createPromptContextAssembler(ctx) {
     embeddings,
     emotionalPool,
     gcEnabled,
-    getMemoryTurnRoutes,
     getNeoStore,
     host,
-    hostRoutingLoader,
     makeQuerySummarizer,
     markNeoRecallInjection,
     maxPromptMemories,
-    memoryAccountTopology,
     memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
     mergingEnabled,
@@ -124,6 +121,7 @@ export function createPromptContextAssembler(ctx) {
     rerankerCfg,
     resolveCommandLocaleRecall,
     resolveRuntimeRecallBudget,
+    resolveTurnPrincipal = null,
     runMergedNamespaceRecall,
     runMinimalBeforePromptMaintenance,
     runNeoGlobalSearch,
@@ -158,8 +156,8 @@ export function createPromptContextAssembler(ctx) {
     // Blocks finished before the scheduled work completes. An aborted or
     // timed-out recall returns these (spec 3.2) instead of nothing.
     const completed = { neo: "", start: "" };
-    const background = isBackgroundTurn(event, hookCtx);
-    const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, hookCtx);
+    const background = opts.agentContext ? opts.agentContext.background === true : isBackgroundTurn(event, hookCtx);
+    const skipInternalRecall = opts.agentContext ? opts.agentContext.origin !== "user" : shouldSkipAutoRecallForInternalTurn(event, hookCtx);
     if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return recallResult();
     const agentIdForCache = hookCtx?.agentId || "default";
     const sessionKeyForCache = hookCtx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
@@ -181,35 +179,23 @@ export function createPromptContextAssembler(ctx) {
     if (skipInternalRecall) {
       return runMinimalBeforePromptMaintenance(event, hookCtx, { neoEnabled, gcEnabled });
     }
-    const routingCapability = await hostRoutingLoader();
-    const turnRoutes = await getMemoryTurnRoutes();
     // 7.12.30: Phasenzeiten des Vorlaufs (Identitaet, Neo-Fenster, Embedding,
     // globale Suche, Lanes). Der Host bricht den Hook nach 15 s ab; am
     // 09./10.09.2026 passierte das dutzendfach, ohne dass eine Logzeile den
     // Verbleib der Zeit zeigte.
     const recallPrelude = { startedAt: Date.now(), identityMs: 0, hookRecordMs: 0, windowMs: 0, embedMs: 0, embedTimedOut: false, globalMs: 0, lanesMs: 0 };
-    const memoryCtx = turnRoutes
-      ? await resolveHostHookMemoryContext({
-          ...hookCtx,
-          runId: hookCtx?.runId ?? event?.runId,
-          sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
-          sessionId: hookCtx?.sessionId ?? event?.sessionId,
-        }, {
-          getSessionEntry: ({ agentId, sessionKey, readConsistency }) => host.runtime.agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
-          workspaceAliases: memoryWorkspaceAliases,
-          accountTopology: memoryAccountTopology,
-          turnRoutes,
-          routingCapability,
-          logger: host.logger,
-        })
-      : resolveMemoryRequestContext({
+    const { memoryCtx } = opts.memoryCtx
+      ? { memoryCtx: opts.memoryCtx }
+      : resolveTurnPrincipal
+        ? await resolveTurnPrincipal(event, hookCtx)
+        : { memoryCtx: resolveMemoryRequestContext({
           agentId: hookCtx?.agentId,
           workspaceDir: hookCtx?.workspaceDir,
           channel: hookCtx?.messageProvider,
           chatId: hookCtx?.chatId,
           sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
           sessionId: hookCtx?.sessionId ?? event?.sessionId,
-        }, { workspaceAliases: memoryWorkspaceAliases });
+        }, { workspaceAliases: memoryWorkspaceAliases }) };
     if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
     let neoContext = "";
     let neoLanes = null;

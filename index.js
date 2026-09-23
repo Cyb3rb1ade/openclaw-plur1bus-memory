@@ -235,6 +235,7 @@ import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.j
 import { registerTurnRouteHooks } from "./adapter/openclaw/register-turn-route.js";
 import { registerMaintenanceHook } from "./adapter/openclaw/register-maintenance-hook.js";
 import { registerRecallHook } from "./adapter/openclaw/register-recall-hook.js";
+import { agentContextFromCommand } from "./adapter/openclaw/turn-principal.js";
 import { registerCaptureHook } from "./adapter/openclaw/register-capture-hook.js";
 import { createPlur1busCommandRunner } from "./engine/commands/plur1bus-command.js";
 import { createCheckpointStore } from "./engine/checkpoint/checkpoint-store.js";
@@ -6946,14 +6947,6 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           "morning-review",
           "review",
         ]);
-        const isCronCommandContext = (commandCtx) => {
-          const channel = String(commandCtx?.channel || "").toLowerCase();
-          const origin = String(commandCtx?.origin || commandCtx?.source || commandCtx?.kind || "").toLowerCase();
-          const sessionKey = String(commandCtx?.sessionKey || "").toLowerCase();
-          return channel === "cron"
-            || origin === "cron"
-            || /^agent:[^:]+:cron(?::|$)/.test(sessionKey);
-        };
         const resolveCronMemoryContext = async (commandCtx) => {
           const agentId = safeAgentId(commandCtx?.agentId || "default");
           const workspaceDir = await host.runtime.agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
@@ -7029,7 +7022,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         // wrapper keeps this object literal out of their temporal dead zone.
         // `resolveNeoHooksConfig` is pre-bound to `api`: the engine module
         // never sees the OpenClaw plugin handle.
-        const runPlur1busCommand = createPlur1busCommandRunner({
+        const runPlur1busCommandWithIdentity = createPlur1busCommandRunner({
           __pluginDir,
           afterthoughtLlmCfg,
           aggregateSkillMinerRuns,
@@ -7066,7 +7059,6 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           getFeatureCronsSetupHint,
           getNeoStore,
           host,
-          isCronCommandContext,
           isDestructiveAction,
           isSensitiveChatRead,
           jobs,
@@ -7131,6 +7123,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           vectorDim,
           workspacePolicyGuard,
         });
+        const runPlur1busCommand = (commandCtx, prefixTokens = [], opts = {}) =>
+          runPlur1busCommandWithIdentity(commandCtx, prefixTokens, { agentContext: agentContextFromCommand(commandCtx), ...opts });
         // Operator path for chat commands: `/name args` runs the registered
         // handler with the same identity-bound context the channel would build
         // for that direct chat (channel, account, peer, sender = peer). The

@@ -80,7 +80,6 @@ export function createPlur1busCommandRunner(ctx) {
     getFeatureCronsSetupHint,
     getNeoStore,
     host,
-    isCronCommandContext,
     isDestructiveAction,
     isSensitiveChatRead,
     jobs = null,
@@ -186,7 +185,8 @@ export function createPlur1busCommandRunner(ctx) {
     for (const jobName of INTERNAL_JOB_NAMES) jobs.bind(jobName, runInternalJob, { defaultInput });
   }
 
-  return async function runPlur1busCommand(commandCtx, prefixTokens = []) {
+  return async function runPlur1busCommand(commandCtx, prefixTokens = [], opts = {}) {
+    const agentContext = opts.agentContext ?? { origin: "user", background: false };
     const deniedLen = checkArgsLength(commandCtx);
     if (deniedLen) return deniedLen;
     const tokens = [...prefixTokens, ...parsePlur1busArgs(commandCtx)];
@@ -379,10 +379,10 @@ export function createPlur1busCommandRunner(ctx) {
         logger: host.logger,
       }));
     }
-    const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
-    const memoryCtx = cronInternal
+    const cronInternal = actionKey === "internal" && agentContext.origin === "cron";
+    const memoryCtx = opts.memoryCtx ?? (cronInternal
       ? await resolveCronMemoryContext(commandCtx)
-      : await resolveRegisteredMemoryContext(commandCtx);
+      : await resolveRegisteredMemoryContext(commandCtx));
     const workspacePolicyDecision = workspacePolicyGuard.decision(memoryCtx);
     if (!workspacePolicyDecision.allowed) {
       const rejectionReason = workspacePolicyDecision.reason || "workspace_disabled";
@@ -410,7 +410,7 @@ export function createPlur1busCommandRunner(ctx) {
       });
     }
     if (actionKey === "internal") {
-      if (!isCronCommandContext(commandCtx)) {
+      if (agentContext.origin !== "cron") {
         const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
         if (denied) return denied;
       }

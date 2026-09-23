@@ -17,13 +17,14 @@
 
 import { createPromptContextAssembler } from "../../engine/recall/assemble-prompt-context.js";
 import { prependContextFromRecall } from "./join-recall.js";
+import { createTurnPrincipalResolver } from "./turn-principal.js";
 
 /**
  * @param {Record<string, any>} ctx Registration context: the engine context plus `api`.
  * @returns {void}
  */
 export function registerRecallHook(ctx) {
-  const recall = createPromptContextAssembler(ctx);
+  const recall = createPromptContextAssembler({ ...ctx, resolveTurnPrincipal: createTurnPrincipalResolver(ctx) });
   ctx.api.on("before_prompt_build", async (event, hookCtx) => prependContextFromRecall(
     await recall(event, hookCtx, { signal: AbortSignal.timeout(ctx.runtimeScheduler.config.recallTimeoutMs + 250) }),
   ), { timeoutMs: ctx.runtimeScheduler.config.recallTimeoutMs + 5_000 });

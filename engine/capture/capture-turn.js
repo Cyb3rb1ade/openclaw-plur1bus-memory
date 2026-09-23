@@ -155,7 +155,7 @@ export function createTurnCapture(ctx) {
   let warnedIncognitoClassifierDegraded = false;
   const warnLightDreamLedgerUnwritable = createLightDreamLedgerWarnOnce(host.logger);
 
-  return async function captureTurn(event, hookCtx) {
+  return async function captureTurn(event, hookCtx, opts = {}) {
     const sessionKey = hookCtx?.sessionKey ?? event?.sessionKey;
     // A turn without a session key cannot be an incognito session: the host
     // identifies incognito *by* that key. Both the host types and every
@@ -188,27 +188,31 @@ export function createTurnCapture(ctx) {
     host.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
 
     const agentId = hookCtx?.agentId || "default";
-    const background = isBackgroundTurn(event, hookCtx);
-    if (shouldSkipAutoCaptureForInternalTurn(event, hookCtx)) {
+    const background = opts.agentContext ? opts.agentContext.background === true : isBackgroundTurn(event, hookCtx);
+    if (opts.agentContext ? opts.agentContext.origin !== "user" : shouldSkipAutoCaptureForInternalTurn(event, hookCtx)) {
       host.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
       return undefined;
     }
     let memoryCtx = null;
-    try {
-      memoryCtx = resolveMemoryRequestContext({
-        agentId,
-        workspaceDir: hookCtx?.workspaceDir,
-        workspaceKey: hookCtx?.workspaceKey,
-        workspaceId: hookCtx?.workspaceId,
-        userId: hookCtx?.userId ?? hookCtx?.senderId,
-        channel: hookCtx?.channel ?? hookCtx?.messageProvider,
-        accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
-        chatId: hookCtx?.chatId,
-        sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
-        sessionId: hookCtx?.sessionId ?? event?.sessionId,
-      }, { workspaceAliases: memoryWorkspaceAliases });
-    } catch (err) {
-      host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+    if (opts.memoryCtx) {
+      memoryCtx = opts.memoryCtx;
+    } else {
+      try {
+        memoryCtx = resolveMemoryRequestContext({
+          agentId,
+          workspaceDir: hookCtx?.workspaceDir,
+          workspaceKey: hookCtx?.workspaceKey,
+          workspaceId: hookCtx?.workspaceId,
+          userId: hookCtx?.userId ?? hookCtx?.senderId,
+          channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+          accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+          chatId: hookCtx?.chatId,
+          sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
+          sessionId: hookCtx?.sessionId ?? event?.sessionId,
+        }, { workspaceAliases: memoryWorkspaceAliases });
+      } catch (err) {
+        host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+      }
     }
     if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 

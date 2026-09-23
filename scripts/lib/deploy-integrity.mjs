@@ -33,11 +33,13 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-gateway.js",
   "adapter/openclaw/register-cron.js",
   "adapter/openclaw/join-recall.js",
+  "adapter/openclaw/turn-principal.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
   "engine/checkpoint/checkpoint-store.js",
   "engine/commands/plur1bus-command.js",
   "engine/events.js",
+  "engine/identity/principal.js",
   "engine/jobs/internal-job-bodies.js",
   "engine/jobs/job-ledger.js",
   "engine/jobs/job-registry.js",

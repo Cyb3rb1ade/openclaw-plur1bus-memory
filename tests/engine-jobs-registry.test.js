@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { INTERNAL_JOB_NAMES, JOB_NAMES, JOB_SPECS } from "../engine/jobs/job-specs.js";
 import { createJobRegistry } from "../engine/jobs/job-registry.js";
 import { createPlur1busCommandRunner } from "../engine/commands/plur1bus-command.js";
+import { agentContextFromCommand } from "../adapter/openclaw/turn-principal.js";
 import { createStubHost } from "../lib/host-services.js";
 import plugin from "../index.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -272,7 +273,6 @@ describe("/plur1bus internal policy refusal recording (fix round 1)", () => {
       parsePlur1busArgs: () => [],
       obsidianActionNames: new Set(),
       knownPlur1busActions: new Set(["internal"]),
-      isCronCommandContext: (commandCtx) => commandCtx.channel === "cron",
       resolveCronMemoryContext: async () => ({ agentId: "agent-a", workspaceIdentity: "ws" }),
       resolveRegisteredMemoryContext: async () => ({ agentId: "agent-a", workspaceIdentity: "ws" }),
       workspacePolicyGuard: { decision: () => ({ allowed: false, reason: "workspace_disabled" }) },
@@ -283,7 +283,8 @@ describe("/plur1bus internal policy refusal recording (fix round 1)", () => {
     const runCalls = [];
     const jobs = { bind: () => {}, run: async (...args) => { runCalls.push(args); return { output: { text: "must-not-be-used" } }; } };
     const runner = createPlur1busCommandRunner(makeRefusalCtx(jobs));
-    const result = await runner({ channel: "telegram", agentId: "agent-a" }, ["internal", "gc-run"]);
+    const commandCtx = { channel: "telegram", agentId: "agent-a" };
+    const result = await runner(commandCtx, ["internal", "gc-run"], { agentContext: agentContextFromCommand(commandCtx) });
     assert.deepEqual(result, { text: "NO_REPLY", metadata: { skipped: true, reason: "workspace_disabled" } });
     assert.equal(runCalls.length, 0);
   });
@@ -298,7 +299,8 @@ describe("/plur1bus internal policy refusal recording (fix round 1)", () => {
       },
     };
     const runner = createPlur1busCommandRunner(makeRefusalCtx(jobs));
-    const result = await runner({ channel: "cron", agentId: "agent-a" }, ["internal", "gc-run"]);
+    const commandCtx = { channel: "cron", agentId: "agent-a" };
+    const result = await runner(commandCtx, ["internal", "gc-run"], { agentContext: agentContextFromCommand(commandCtx) });
     assert.deepEqual(result, { text: "NO_REPLY", metadata: { skipped: true, reason: "workspace_disabled" } });
     assert.equal(runCalls.length, 1);
     assert.equal(runCalls[0].name, "gc-run");

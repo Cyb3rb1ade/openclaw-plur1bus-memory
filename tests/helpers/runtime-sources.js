@@ -36,6 +36,7 @@ const ENGINE_PATHS = Object.freeze({
   captureTurn: "engine/capture/capture-turn.js",
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
   events: "engine/events.js",
+  principal: "engine/identity/principal.js",
   internalJobBodies: "engine/jobs/internal-job-bodies.js",
   jobLedger: "engine/jobs/job-ledger.js",
   jobRegistry: "engine/jobs/job-registry.js",
@@ -60,6 +61,7 @@ const ADAPTER_PATHS = Object.freeze({
   recallHook: "adapter/openclaw/register-recall-hook.js",
   tools: "adapter/openclaw/register-tools.js",
   turnRoute: "adapter/openclaw/register-turn-route.js",
+  turnPrincipal: "adapter/openclaw/turn-principal.js",
 });
 
 function listJsFiles(relativeDir) {
