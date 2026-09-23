@@ -307,6 +307,10 @@ export const DEPLOY_FILES = [
   "lib/pattern-detector-embedding.js",
   "lib/pattern-detector.js",
   "lib/platform.js",
+  // Not yet imported by index.js (Task 6, PR-02a) — listed early so Task 7's
+  // index.js rewrite, which does import it, does not trip the DEPLOY_FILES
+  // coverage tests.
+  "lib/host-services.js",
   "lib/proactive-nudge.js",
   "lib/query-refiner.js",
   "lib/temporal-parser.js",
