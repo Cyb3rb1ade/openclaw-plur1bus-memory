@@ -79,6 +79,93 @@ describe("run-state migration", () => {
     assert.deepEqual(migrateRunStateCompletions({ store, agentId: "agent-a", appendRow: () => {}, clock: () => 1, logger: quiet }), { migrated: 0, status: "absent" });
     assert.equal(existsSync(`${store.paths.runs}.migrated`), false);
   });
+
+  it("a corrupt file retried twice does not overwrite run-state.json.migrated (fix round 1, item 3)", () => {
+    const store = fakeStore();
+    const corrupt = "{\"completed\": {\"rem:x";
+    writeFileSync(store.paths.runs, corrupt);
+    const args = { store, agentId: "agent-a", appendRow: () => assert.fail("no rows"), clock: () => 1, logger: quiet };
+    assert.deepEqual(migrateRunStateCompletions(args), { migrated: 0, status: "corrupt" });
+    const firstCopy = readFileSync(`${store.paths.runs}.migrated`, "utf8");
+    assert.equal(firstCopy, corrupt);
+    // A second call against the still-corrupt file must not touch the copy
+    // again (a no-op existsSync guard, exercised twice rather than once).
+    assert.deepEqual(migrateRunStateCompletions(args), { migrated: 0, status: "corrupt" });
+    assert.equal(readFileSync(`${store.paths.runs}.migrated`, "utf8"), firstCopy);
+  });
+
+  it("other keys of run-state.json survive the marker write byte-for-byte (fix round 1, item 3)", () => {
+    const store = fakeStore();
+    const before = JSON.parse(readFileSync(FIXTURE, "utf8"));
+    migrateRunStateCompletions({ store, agentId: "agent-a", appendRow: () => {}, clock: () => Date.UTC(2026, 0, 13), logger: quiet });
+    const after = JSON.parse(readFileSync(store.paths.runs, "utf8"));
+    assert.deepEqual(after.memoryDynamics, before.memoryDynamics);
+    assert.deepEqual(after.compaction, before.compaction);
+    assert.deepEqual(after.completed["reflect:agent-a:2026-01-05"], before.completed["reflect:agent-a:2026-01-05"]);
+    assert.deepEqual(after.completed["rem:workspace:v1:main:agent-b:private:2026-W01"], before.completed["rem:workspace:v1:main:agent-b:private:2026-W01"]);
+  });
+});
+
+describe("fix round 1", () => {
+  it("a writeRunState that throws once is retried on the next run in this process (item 1)", async () => {
+    const store = fakeStore();
+    let calls = 0;
+    const realWrite = store.writeRunState;
+    store.writeRunState = (state) => {
+      calls += 1;
+      if (calls === 1) throw new Error("disk full");
+      return realWrite(state);
+    };
+    const boundStore = { ...store, aclBindings: { scope: "agent" }, markRunCompleted: () => {} };
+    const jobs = createJobRegistry({ host: createStubHost({ clock: () => Date.UTC(2026, 0, 13) }), jobsRoot: makeTempDir("plur1bus-migrate-retry-") });
+    jobs.bind("rem-dream", async (_n, ctx) => {
+      const wrapped = ledgerBackedCompletion(Object.freeze(boundStore), ctx);
+      await wrapped.hasCompletedRun("rem:workspace:v1:main:agent-a:private:2026-W01");
+      return ctx.skip("already_processed");
+    });
+    const run1 = await jobs.run("rem-dream", "agent-a");
+    assert.equal(run1.outcome, "failed");
+    assert.equal(calls, 1);
+    const run2 = await jobs.run("rem-dream", "agent-a");
+    assert.equal(run2.outcome, "skipped");
+    assert.equal(run2.reason, "already_processed");
+    assert.equal(calls, 2, "the second run() retried the migration (it was not left permanently guarded by the failed first attempt)");
+  });
+
+  it("a second ledgerBackedCompletion wrap in the same run adds no extra rows (item 3)", async () => {
+    const store = { ...fakeStore(), aclBindings: { scope: "agent" }, markRunCompleted: () => {} };
+    const jobs = createJobRegistry({ host: createStubHost({ clock: () => Date.UTC(2026, 0, 13) }), jobsRoot: makeTempDir("plur1bus-migrate-double-wrap-") });
+    jobs.bind("rem-dream", async (_n, ctx) => {
+      ledgerBackedCompletion(Object.freeze(store), ctx);
+      ledgerBackedCompletion(Object.freeze(store), ctx);
+      return ctx.skip("already_processed");
+    });
+    await jobs.run("rem-dream", "agent-a");
+    const history = await jobs.history("agent-a");
+    assert.equal(history.filter((row) => row.migrated === true).length, 2, "not 4 — the second wrap's migrateStore call is a no-op");
+  });
+
+  it("a new registry over an already-marked file adds no rows (item 3)", async () => {
+    const store = { ...fakeStore(), aclBindings: { scope: "agent" }, markRunCompleted: () => {} };
+    const host = createStubHost({ clock: () => Date.UTC(2026, 0, 13) });
+    const jobs1 = createJobRegistry({ host, jobsRoot: makeTempDir("plur1bus-migrate-reg1-") });
+    jobs1.bind("rem-dream", async (_n, ctx) => {
+      ledgerBackedCompletion(Object.freeze(store), ctx);
+      return ctx.skip("already_processed");
+    });
+    await jobs1.run("rem-dream", "agent-a");
+    // A brand-new registry (fresh in-process `migratedStores` Set, as if the
+    // process restarted) wrapping the *same* store — the file-level marker
+    // written by jobs1 must stop it from re-migrating.
+    const jobs2 = createJobRegistry({ host, jobsRoot: makeTempDir("plur1bus-migrate-reg2-") });
+    jobs2.bind("rem-dream", async (_n, ctx) => {
+      ledgerBackedCompletion(Object.freeze(store), ctx);
+      return ctx.skip("already_processed");
+    });
+    await jobs2.run("rem-dream", "agent-a");
+    const history = await jobs2.history("agent-a");
+    assert.equal(history.filter((row) => row.migrated === true).length, 0, "jobs2's own ledger got no migrated rows — the file was already marked");
+  });
 });
 
 describe("migration through the REM wrapper", () => {

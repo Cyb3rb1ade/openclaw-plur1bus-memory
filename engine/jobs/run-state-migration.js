@@ -15,6 +15,14 @@ import { sweepKey } from "./job-registry.js";
 export const MIGRATION_MARKER_KEY = "plur1busLedgerMigratedAt";
 const MIGRATED_SUFFIX = ".migrated";
 
+// The `.migrated` rollback copy keeps whatever bytes were present the FIRST
+// time this ran against `path`, even if that first run saw a corrupt file
+// (Review Focus 3) and a later run sees the same file repaired: the
+// `existsSync(copy)` guard never overwrites an existing copy. This is by
+// design — the copy exists to let an operator roll back to what
+// `run-state.json` looked like before PLUR1BUS ever touched it, not to track
+// its most recent state, so a later repair (of the corruption, or of
+// anything else) intentionally does not refresh it.
 function keepCopy(path, raw) {
   const copy = `${path}${MIGRATED_SUFFIX}`;
   if (!existsSync(copy)) writeFileSync(copy, raw);

@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 
 import { emitEngineEvent } from "../events.js";
 import { appendDreamDiaryEntry } from "../../lib/dreaming/dream-diary.js";
-import { createJobLedger } from "./job-ledger.js";
+import { createJobLedger, LEDGER_VERSION } from "./job-ledger.js";
 import { JOB_SPECS } from "./job-specs.js";
 
 const EXIT = Symbol("plur1bus.job.exit");
@@ -186,21 +186,54 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       // Rows migrated during this run are appended to the ledger AND pushed
       // onto this same `snapshot` array (by reference) so a migration that
       // happens mid-run is visible to hasCompletedKey/isAbandonedKey calls
-      // later in the same run, not just on the next one.
+      // later in the same run, not just on the next one. The pushed shape
+      // includes `v: LEDGER_VERSION` so an in-memory row is indistinguishable
+      // from one that came back out of a fresh `ledger.readAll()`.
+      //
+      // The `migratedStores` guard key is marked BEFORE `migrate()` runs and
+      // removed again if `migrate()` throws (fix round 1, item 1): a
+      // migration can fail mid-write (a lock timeout in `writeRunState`,
+      // EACCES, a full disk) after `keepCopy` already succeeded but before
+      // the per-agent marker is persisted. Marking the guard first and
+      // rolling it back on failure means this process still won't repeat a
+      // *successful* migration on a second `migrateStore` call for the same
+      // store within the same run (there is none, by construction — see
+      // `migrateStore`'s own guard), while a *failed* migration is retried
+      // on the very next `run()` in this process instead of being
+      // permanently — and silently — skipped for this process's lifetime,
+      // which would otherwise re-run an already-finished week on the next
+      // sweep with no migrated rows ever landing (the exact regression this
+      // task exists to prevent).
+      //
+      // This Set is per-process, not persisted: an absent `run-state.json`
+      // (e.g. right after a fresh install) still marks the guard key here
+      // even though `migrateRunStateCompletions` returns `{ status:
+      // "absent" }` and appends nothing. If the file only appears *after* a
+      // process restart (a fresh `migratedStores` Set), that later process
+      // migrates it for real — harmless duplicate `migrated` rows are at
+      // worst one-time-per-restart, `hasCompletedKey` is any-match so a
+      // duplicate changes nothing observable, and the rows carry
+      // `llmSession: false` so they never affect the breaker.
       migrateStore: (store, migrate) => {
         const key = store?.paths?.runs;
         if (!ledger || !key || migratedStores.has(`${inflight.agentId}\u0000${key}`)) return null;
-        migratedStores.add(`${inflight.agentId}\u0000${key}`);
-        return migrate({
-          store,
-          agentId: inflight.agentId,
-          appendRow: (row) => {
-            ledger.append(row);
-            snapshot.push(row);
-          },
-          clock,
-          logger: host.logger,
-        });
+        const guardKey = `${inflight.agentId}\u0000${key}`;
+        migratedStores.add(guardKey);
+        try {
+          return migrate({
+            store,
+            agentId: inflight.agentId,
+            appendRow: (row) => {
+              ledger.append(row);
+              snapshot.push({ v: LEDGER_VERSION, ...row });
+            },
+            clock,
+            logger: host.logger,
+          });
+        } catch (migrateError) {
+          migratedStores.delete(guardKey);
+          throw migrateError;
+        }
       },
     });
   }
