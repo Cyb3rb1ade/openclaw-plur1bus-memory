@@ -408,6 +408,7 @@ import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THRE
 import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
 import { registerTurnRouteHooks } from "./adapter/openclaw/register-turn-route.js";
+import { registerMaintenanceHook } from "./adapter/openclaw/register-maintenance-hook.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -13326,97 +13327,19 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       }, { timeoutMs: runtimeScheduler.config.recallTimeoutMs + 5_000 });
     } else if (neoEnabled || schicht15Enabled || gcEnabled) {
       // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.
-      api.on("before_prompt_build", async (_event, ctx) => {
-        const agentId = ctx?.agentId;
-        if (!automaticWorkspacePolicyDecision(_event, ctx).allowed) return undefined;
-        if (neoEnabled) {
-          try {
-            const neoStore = getNeoStore(ctx, _event);
-            neoStore.recordHook("before_prompt_build", {
-              agentId: ctx?.agentId || "default",
-              promptLength: _event?.prompt?.length || 0,
-              autoRecallDisabled: true,
-            });
-          } catch (neoErr) {
-            host.logger.warn(`plur1bus-neo: before_prompt_build dispatch tracking failed: ${String(neoErr)}`);
-          }
-        }
-        // GC: purge expired memories (non-blocking, throttled on hot path)
-        if (gcEnabled) {
-          pool.withDb(agentId, (db) => db.purgeExpiredThrottled(host.logger)).catch((gcErr) => {
-            host.logger.warn(`memory-lancedb-namespaced: GC purge with auto-recall disabled failed: ${String(gcErr)}`);
-          });
-        }
-        // P0-1: Interne/background Turns bekommen keine Nudges (kein Prompt-Overhead).
-        if (shouldSkipAutoRecallForInternalTurn(_event, ctx)) {
-          return undefined;
-        }
-        if (!ctx?.workspaceDir) return undefined;
-        const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
-        const startNoticeContext = pendingStartNotice
-          ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
-          : "";
-
-        // Knowledge-update + conflict-review nudges (shared, localized helper;
-        // conflict-log is read only once). #9 dedup + #11 i18n.
-        const { lang, tone } = resolveCommandLocaleRecall({ messages: _event?.messages || [] });
-        const { knowledgeNudge: nudge, conflictNudge } = buildMaintenanceNudges({
-          workspaceDir: ctx.workspaceDir,
-          schicht15Enabled,
-          lang,
-          tone,
-          logger: host.logger,
-        });
-
-        // --- Time Context & Reminder Nudge (auto-recall off) ---
-        let timeContext = "";
-        let temporalContinuityContext = "";
-        let reminderNudge = "";
-        try {
-          await pool.withDb(agentId, async (db) => {
-          // lang/tone bereits oben via resolveCommandLocale aufgelöst.
-          const wsKey = ctx?.workspaceDir || "default";
-          // Capture previous activity before recording the current turn
-          const previousUserTurnAt = await getLastActivity(agentId, wsKey, ctx?.workspaceDir);
-          timeContext = await formatTimeContext(agentId, wsKey, ctx?.workspaceDir, lang);
-          if (temporalContextEnabled) {
-            temporalContinuityContext = await formatTemporalContinuityContext(
-              agentId,
-              wsKey,
-              ctx?.workspaceDir,
-              { enabled: true, lang, now: Date.now(), previousUserTurnAt }
-            );
-          }
-          await recordActivity(agentId, wsKey, ctx?.workspaceDir);
-          const dueFromDb = await listDueReminders(db, agentId, wsKey);
-          const pendingData = await readPendingReminders(ctx?.workspaceDir, wsKey, agentId);
-          const dueFromPending = Object.values(pendingData.pending || {});
-          const byId = new Map();
-          for (const r of [...dueFromDb, ...dueFromPending]) {
-            byId.set(r.id || r.reminderKey, r);
-          }
-          const allDue = [...byId.values()];
-          if (allDue.length > 0) {
-            reminderNudge = formatReminderNudge(allDue, { lang, tone });
-            for (const r of dueFromDb) {
-              await presentReminder(db, r.id).catch((err) => {
-                host.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
-              });
-            }
-            if (dueFromPending.length > 0) {
-              for (const r of allDue) {
-                delete pendingData.pending[r.id || r.reminderKey];
-              }
-              await writePendingReminders(ctx?.workspaceDir, wsKey, agentId, pendingData);
-            }
-          }
-          });
-        } catch (reminderErr) {
-          host.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
-        }
-        if (nudge || conflictNudge || startNoticeContext || timeContext || temporalContinuityContext || reminderNudge) {
-          return { prependContext: [startNoticeContext, nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
-        }
+      registerMaintenanceHook({
+        api,
+        host,
+        automaticWorkspacePolicyDecision,
+        buildMaintenanceNudges,
+        gcEnabled,
+        getNeoStore,
+        neoEnabled,
+        pool,
+        resolveCommandLocaleRecall,
+        schicht15Enabled,
+        stateDir: host.stateDir,
+        temporalContextEnabled,
       });
     }
 

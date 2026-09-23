@@ -24,6 +24,9 @@ export const DEPLOY_FILES = [
   "package.json",
   // ── adapter (OpenClaw-only, engine-extraction M1a) ──────────────────────────
   "adapter/openclaw/register-turn-route.js",
+  "adapter/openclaw/register-maintenance-hook.js",
+  // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
+  "engine/recall/minimal-maintenance.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
   "lib/neo-worker-runner.js",

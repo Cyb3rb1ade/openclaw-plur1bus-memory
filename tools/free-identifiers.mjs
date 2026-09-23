@@ -102,8 +102,8 @@ const free = new Map();
 // separates "declared at module top level, so import it" from "declared inside
 // `register`, so pass it in". Every task that moves code out of index.js shifts
 // it, and a stale value degrades quietly, so it is self-checked below.
-// Re-derived at fd5bac5b: `grep -n 'register(api' index.js`.
-const registerStart = 4395;
+// Re-derived at abea9503: `grep -n 'register(api' index.js`.
+const registerStart = 4396;
 // Only index.js has a `register`; for any other file the constant is irrelevant
 // (nothing is module-scope-and-after-it) and the check would be noise.
 if (/(^|[\\/])index\.js$/.test(file) && !/\bregister\s*\(\s*api\b/.test(sourceLines[registerStart - 1] ?? "")) {
