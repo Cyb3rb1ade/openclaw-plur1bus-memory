@@ -306,6 +306,7 @@ export const DEPLOY_FILES = [
   "lib/obsidian/weekly-synthesis.js",
   "lib/pattern-detector-embedding.js",
   "lib/pattern-detector.js",
+  "lib/platform.js",
   "lib/proactive-nudge.js",
   "lib/query-refiner.js",
   "lib/temporal-parser.js",
