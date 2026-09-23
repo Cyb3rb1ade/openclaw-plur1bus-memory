@@ -503,7 +503,7 @@ describe("deterministic LLM result-cache allowlist", () => {
     const knowledgeToolSection = sourceSection(source, "name: \"knowledge_update\"", "names: [\"memory_recall\"");
     const emotionSection = sourceSection(source, "const emotionT3CallLlm", "if (emotionT3Enabled && emotionT3LlmCfg)");
 
-    assert.match(source, /createLlmResultCache\(\{[\s\S]*?baseDbPath,[\s\S]*?logger: api\.logger,[\s\S]*?\}\)/);
+    assert.match(source, /createLlmResultCache\(\{[\s\S]*?baseDbPath,[\s\S]*?logger: host\.logger,[\s\S]*?\}\)/);
     assert.match(source, /completeFeatureLlm\(messages, llmCfg,[\s\S]*?resultCacheContext: llmCfg\?\.resultCacheContext/);
     assert.match(source, /directCall: \(directMessages, directCfg\) => callOpenAiLlm\(directMessages, directCfg,[\s\S]*?resultCache: directCfg\?\.resultCache/);
     assertEveryCallIsDeterministic(captureSection, "CAPTURE_SUMMARY", 1);

@@ -273,7 +273,7 @@ describe("LLM result cache lifecycle", () => {
     assert.match(source, /requiresActiveSharedModelOwner[\s\S]*?new ReloadSafeIpcScopedEmbeddingProvider\(\{[\s\S]*?stateRoot:\s*baseDbPath/s);
     assert.match(
       source,
-      /createScopedEmbeddingIpcServer\(\{\s*stateRoot:\s*baseDbPath,\s*embeddings,\s*fingerprintId:\s*activeEmbeddingFingerprintId,\s*logger:\s*api\.logger/s,
+      /createScopedEmbeddingIpcServer\(\{\s*stateRoot:\s*baseDbPath,\s*embeddings,\s*fingerprintId:\s*activeEmbeddingFingerprintId,\s*logger:\s*host\.logger/s,
     );
     assert.match(source, /registerScopedEmbeddingIpcServiceAfterLifecycle\(\{\s*api,\s*server:\s*scopedEmbeddingServer,\s*enabled:\s*Boolean\(scopedEmbeddingServer\),\s*lifecycleRegistered:\s*gatewayShutdownRegistered/s);
     assert.match(source, /sharedModelPool:\s*sharesActiveLocalModel,\s*sharedModelOwner:\s*coordinatesLocalModelGeneration,\s*sharedModelRequireOwner:\s*requiresActiveSharedModelOwner,\s*sharedModelActivationManaged:\s*coordinatesLocalModelGeneration/s);

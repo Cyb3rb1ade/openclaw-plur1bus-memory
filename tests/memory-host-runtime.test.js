@@ -162,7 +162,7 @@ test("a host-originated search stays on the agent's private partition", async ()
   assert.ok(start > 0, "runtime registration present in index.js");
   const block = source.slice(start, source.indexOf("api.registerMemoryCapability({", start));
   assert.match(block, /resolveMemoryRequestContext\(\{ agentId: forAgentId \}\)/, "context comes from the agent id only");
-  assert.match(block, /withAccessReadDbs\(pool, sharedMemoryPool, forAgentId, \{ \.\.\.memoryCtx, logger: api\.logger \}/, "that context is what scopes the read pools");
+  assert.match(block, /withAccessReadDbs\(pool, sharedMemoryPool, forAgentId, \{ \.\.\.memoryCtx, logger: host\.logger \}/, "that context is what scopes the read pools");
   assert.doesNotMatch(block, /workspaceIdentity|userPrincipal/, "nothing widens the scope by hand");
   assert.match(source, /runtime: memoryHostRuntime,/, "the runtime is what gets registered");
 });
