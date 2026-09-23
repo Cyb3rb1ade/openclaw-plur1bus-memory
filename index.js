@@ -238,6 +238,7 @@ import { registerRecallHook } from "./adapter/openclaw/register-recall-hook.js";
 import { registerCaptureHook } from "./adapter/openclaw/register-capture-hook.js";
 import { createPlur1busCommandRunner } from "./engine/commands/plur1bus-command.js";
 import { createCheckpointStore } from "./engine/checkpoint/checkpoint-store.js";
+import { createJobRegistry } from "./engine/jobs/job-registry.js";
 import { registerChatCommands } from "./adapter/openclaw/register-commands.js";
 import { registerPromptSupplements } from "./adapter/openclaw/register-prompt-supplements.js";
 import { registerMemoryTools } from "./adapter/openclaw/register-tools.js";
@@ -6907,6 +6908,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       sessionWorkspaceKeys,
     });
 
+    const jobs = createJobRegistry({ host });
+
     {
       const resolveCommandLocale = (commandCtx) => {
         emitCommandRuntimeHook("onLocale", { commandCtx });
@@ -7066,6 +7069,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           isCronCommandContext,
           isDestructiveAction,
           isSensitiveChatRead,
+          jobs,
           knownPlur1busActions,
           legacyMigrationShutdown,
           memoryCompactionLlmCfg,
