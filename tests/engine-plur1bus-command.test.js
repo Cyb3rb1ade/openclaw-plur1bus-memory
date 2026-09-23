@@ -8,14 +8,13 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { createPlur1busCommandRunner } from "../engine/commands/plur1bus-command.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const source = readFileSync(join(root, "engine", "commands", "plur1bus-command.js"), "utf8");
+const { engine } = readRuntimeSources();
+const source = engine.plur1busCommand;
+const jobBodiesSource = engine.internalJobBodies;
 
 const INTERNAL_JOBS = [
   "consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream",
@@ -37,6 +36,16 @@ describe("engine/commands/plur1bus-command", () => {
   it("still handles all 17 internal job names", () => {
     for (const job of INTERNAL_JOBS) {
       assert.match(source, new RegExp(`"${job}"`), `internal job ${job} must survive the move`);
+    }
+  });
+
+  it("still has a subKey branch for each internal job in the moved bodies", () => {
+    for (const job of INTERNAL_JOBS) {
+      assert.match(
+        jobBodiesSource,
+        new RegExp(`subKey === "${job}"`),
+        `internal job ${job} must have a subKey branch in internal-job-bodies.js`,
+      );
     }
   });
 

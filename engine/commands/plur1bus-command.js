@@ -149,6 +149,7 @@ export function createPlur1busCommandRunner(ctx) {
   if (jobs) {
     const runInternalJob = createInternalJobBodies({ ...ctx });
     const defaultInput = async (agentId, jobName) => {
+      const workspaceDir = await host.workspaceDir(agentId);
       const commandCtx = {
         agentId,
         channel: "cron",
@@ -156,6 +157,7 @@ export function createPlur1busCommandRunner(ctx) {
         sessionKey: `agent:${agentId}:cron:${jobName}`,
         args: `internal ${jobName}`,
         config: host.config(),
+        workspaceDir,
       };
       const memoryCtx = await resolveCronMemoryContext(commandCtx);
       const decision = workspacePolicyGuard.decision(memoryCtx);
@@ -167,7 +169,14 @@ export function createPlur1busCommandRunner(ctx) {
         workspaceDir: memoryCtx?.workspaceDir || "",
         agentId: memoryCtx?.agentId || agentId,
       });
-      return { commandCtx, memoryCtx, cronInternal: true, commandStore };
+      return {
+        commandCtx,
+        memoryCtx,
+        cronInternal: true,
+        commandStore,
+        id: "",
+        tokens: ["internal", jobName],
+      };
     };
     for (const jobName of INTERNAL_JOB_NAMES) jobs.bind(jobName, runInternalJob, { defaultInput });
   }
@@ -375,9 +384,13 @@ export function createPlur1busCommandRunner(ctx) {
       if (actionKey === "internal") {
         const refusal = { text: "NO_REPLY", metadata: { skipped: true, reason: rejectionReason } };
         const jobName = (sub || "").toLowerCase();
-        if (jobs && INTERNAL_JOB_NAMES.includes(jobName)) {
+        // Controller ruling: an unauthenticated/non-cron caller never
+        // produces a job record — only a verified cron-internal call is
+        // recorded (job.run + skip log), matching the authorized dispatch
+        // path below.
+        if (jobs && cronInternal && INTERNAL_JOB_NAMES.includes(jobName)) {
           const refused = await jobs.run(jobName, commandCtx.agentId || "default", {
-            trigger: cronInternal ? "cron" : "manual",
+            trigger: "cron",
             preSkip: { reason: rejectionReason, output: refusal },
           });
           return refused.output;
@@ -431,7 +444,7 @@ export function createPlur1busCommandRunner(ctx) {
         signal: commandCtx.abortSignal,
         input: { commandCtx, memoryCtx, cronInternal, commandStore, id, tokens },
       });
-      if (internalRun.outcome === "failed" && internalRun.error) throw internalRun.error;
+      if (internalRun.outcome === "failed") throw internalRun.error;
       return internalRun.output;
     }
     if (actionKey === "start") {

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import { INTERNAL_JOB_NAMES, JOB_NAMES, JOB_SPECS } from "../engine/jobs/job-specs.js";
 import { createJobRegistry } from "../engine/jobs/job-registry.js";
+import { createPlur1busCommandRunner } from "../engine/commands/plur1bus-command.js";
 import { createStubHost } from "../lib/host-services.js";
 import plugin from "../index.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -165,5 +166,112 @@ describe("/plur1bus internal goes through jobs.run", () => {
         assert.deepEqual([runs[0].payload.outcome, runs[0].payload.reason], ["skipped", expectedSkips[name]], name);
       }
     }
+  });
+});
+
+// Fix round 1 — a harness-triggered run (no explicit `input`) goes through
+// createPlur1busCommandRunner's `defaultInput`, which must supply everything
+// the moved job bodies destructure from `jobCtx.input` (including `id` and
+// `tokens`, which episodes-rebuild slices) and must resolve `workspaceDir`
+// from the host so feedback-report/proactive-check/meta-reflect are not
+// permanently `no_workspace` outside the command path.
+describe("createPlur1busCommandRunner defaultInput (fix round 1)", () => {
+  function noopLogger() {
+    return { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+  }
+
+  it("backs a harness-triggered episodes-rebuild without a TypeError on tokens/id", async () => {
+    const jobs = createJobRegistry({ host: createStubHost() });
+    const neoStoreStub = { readEpisodes: () => [], readTurns: () => [], readHooks: () => ({}) };
+    createPlur1busCommandRunner({
+      jobs,
+      host: { config: () => ({}), workspaceDir: async () => "/tmp/plur1bus-episodes-rebuild-ws", logger: noopLogger() },
+      checkArgsLength: () => null,
+      parsePlur1busArgs: () => [],
+      isCronCommandContext: () => false,
+      resolveCronMemoryContext: async (commandCtx) => ({ agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, workspaceIdentity: "ws" }),
+      resolveRegisteredMemoryContext: async () => ({}),
+      workspacePolicyGuard: { decision: () => ({ allowed: true }) },
+      getNeoStore: () => neoStoreStub,
+      neoEnabled: true,
+      mergingEnabled: false,
+      formatJsonCommandResult: (x) => x,
+      callLlm: async () => "",
+    });
+    const run = await jobs.run("episodes-rebuild", "agent-a", { trigger: "harness" });
+    assert.equal(run.outcome, "completed", run.outcome === "failed" ? String(run.error) : undefined);
+    assert.equal(run.output.job, "episodes-rebuild");
+  });
+
+  it("resolves workspaceDir from the host for a harness-triggered job", async () => {
+    const jobs = createJobRegistry({ host: createStubHost() });
+    const capturedCommandCtx = [];
+    createPlur1busCommandRunner({
+      jobs,
+      host: { config: () => ({}), workspaceDir: async (agentId) => `/ws/${agentId}`, logger: noopLogger() },
+      checkArgsLength: () => null,
+      parsePlur1busArgs: () => [],
+      isCronCommandContext: () => false,
+      resolveCronMemoryContext: async (commandCtx) => {
+        capturedCommandCtx.push(commandCtx);
+        return { agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, workspaceIdentity: "ws" };
+      },
+      resolveRegisteredMemoryContext: async () => ({}),
+      workspacePolicyGuard: { decision: () => ({ allowed: true }) },
+      getNeoStore: () => ({}),
+    });
+    await jobs.run("gc-run", "agent-x", { trigger: "harness" });
+    assert.equal(capturedCommandCtx.length, 1);
+    assert.equal(capturedCommandCtx[0].workspaceDir, "/ws/agent-x");
+  });
+});
+
+// Fix round 1, controller ruling — a non-cron caller never produces a job
+// record for a workspace-policy refusal; only a verified cron-internal call
+// is recorded (job.run + skip log). The reply is identical either way.
+describe("/plur1bus internal policy refusal recording (fix round 1)", () => {
+  function makeRefusalCtx(jobs) {
+    return {
+      jobs,
+      checkArgsLength: () => null,
+      parsePlur1busArgs: () => [],
+      obsidianActionNames: new Set(),
+      knownPlur1busActions: new Set(["internal"]),
+      isCronCommandContext: (commandCtx) => commandCtx.channel === "cron",
+      resolveCronMemoryContext: async () => ({ agentId: "agent-a", workspaceIdentity: "ws" }),
+      resolveRegisteredMemoryContext: async () => ({ agentId: "agent-a", workspaceIdentity: "ws" }),
+      workspacePolicyGuard: { decision: () => ({ allowed: false, reason: "workspace_disabled" }) },
+    };
+  }
+
+  it("records no job.run and returns the refusal directly for a non-cron caller", async () => {
+    const runCalls = [];
+    const jobs = { bind: () => {}, run: async (...args) => { runCalls.push(args); return { output: { text: "must-not-be-used" } }; } };
+    const runner = createPlur1busCommandRunner(makeRefusalCtx(jobs));
+    const result = await runner({ channel: "telegram", agentId: "agent-a" }, ["internal", "gc-run"]);
+    assert.deepEqual(result, { text: "NO_REPLY", metadata: { skipped: true, reason: "workspace_disabled" } });
+    assert.equal(runCalls.length, 0);
+  });
+
+  it("records the refusal via jobs.run for a cron-internal caller", async () => {
+    const runCalls = [];
+    const jobs = {
+      bind: () => {},
+      run: async (name, agentId, opts) => {
+        runCalls.push({ name, agentId, opts });
+        return { output: opts.preSkip.output };
+      },
+    };
+    const runner = createPlur1busCommandRunner(makeRefusalCtx(jobs));
+    const result = await runner({ channel: "cron", agentId: "agent-a" }, ["internal", "gc-run"]);
+    assert.deepEqual(result, { text: "NO_REPLY", metadata: { skipped: true, reason: "workspace_disabled" } });
+    assert.equal(runCalls.length, 1);
+    assert.equal(runCalls[0].name, "gc-run");
+    assert.equal(runCalls[0].agentId, "agent-a");
+    assert.equal(runCalls[0].opts.trigger, "cron");
+    assert.deepEqual(runCalls[0].opts.preSkip, {
+      reason: "workspace_disabled",
+      output: { text: "NO_REPLY", metadata: { skipped: true, reason: "workspace_disabled" } },
+    });
   });
 });
