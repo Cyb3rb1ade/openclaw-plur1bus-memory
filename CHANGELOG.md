@@ -60,6 +60,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   benutzergebundene ACL setzt statt nur das Read-only-Bit; wenn das ACL-Tool
   fehlt, wird das jetzt abgefangen statt die Operation scheitern zu lassen
   (ein anderer Fehler des ACL-Tools wird weiterhin nicht abgefangen).
+- `applyGlobalInjectBudget` (`lib/inject-budget.js`) kürzte den droppable
+  `memories`-Block an einer beliebigen Zeichenposition, was ein halb offenes
+  `<memory-record>`-Element (fehlerhaftes XML) erzeugen und den inneren
+  Trunkierungs-Marker verschlucken konnte. Der Block wird jetzt am Ende des
+  letzten vollständigen `<memory-record>`-Elements gekürzt und bekommt
+  denselben `<!-- memory context truncated -->`-Marker wie `truncateMemoryContext`;
+  passt kein einziger Record mehr in das verbleibende Budget, wird der ganze
+  Block verworfen statt mittendrin abgeschnitten.
 
 ## [7.15.4] — 2026-09-21
 
