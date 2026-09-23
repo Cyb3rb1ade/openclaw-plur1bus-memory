@@ -52,6 +52,15 @@ import { hourInTimeZone } from "../../lib/time-window.js";
  * engine context. Every binding the moved body closes over is destructured
  * once, here, at registration time.
  *
+ * `ctx.recallTimingSink`, when provided, is called once per attempted recall
+ * with `{ agentId, phases, totalMs }` after the scheduled recall settles —
+ * `phases` is `phaseTimer.summary()` (`lib/recall-phase-timer.js`), `totalMs`
+ * is `phaseTimer.elapsedMs()`. Purely additive/observational: it never
+ * changes the returned `prependContext`, defaults to `null` (a no-op), and
+ * production wiring (`index.js`) only ever passes a real function through a
+ * test-only property nothing in production sets — see the fix-round note at
+ * that call site.
+ *
  * @param {Record<string, any>} ctx Engine context; see the destructuring below.
  * @returns {(event: Record<string, any>, hookCtx: Record<string, any>) => Promise<{prependContext: string}|undefined>} The hook handler.
  */
@@ -101,6 +110,7 @@ export function createPromptContextAssembler(ctx) {
     pool,
     queryRefinerEnabled,
     recallQueryLlmCfg,
+    recallTimingSink = null,
     replyOutcomeDynamics,
     replyOutcomeEnabled,
     replyOutcomeMaxAssistantChars,
@@ -1179,6 +1189,12 @@ export function createPromptContextAssembler(ctx) {
     }
     }));
     });
+    // Task 19 fix round: additive, observational only — never changes what
+    // is returned below. `phaseTimer` (created above, same object as the
+    // `timer` the callback closed over) is fully populated by now, whether
+    // the callback returned normally, hit the soft-budget fallback, timed
+    // out, or threw and was caught as `scheduledRecall.error`.
+    recallTimingSink?.({ agentId: hookCtx?.agentId, phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs() });
     // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
     // Reply-Outcome-Dynamik die Tabelle anfassen.
     if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);

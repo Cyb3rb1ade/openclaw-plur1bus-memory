@@ -727,6 +727,19 @@ async function runMergedNamespaceRecall(
         candidateHardLimit: 100,
         now: requestNow,
       });
+      // Task 19 fix round: fold this namespace's fine-grained phases
+      // (embedding, vector_search, query_refinement, ... — see
+      // lib/recall-pipeline.js's phaseTimer.start/end calls) into the outer
+      // phaseTimer, which otherwise only ever sees one coarse
+      // "namespace-recall" block covering all of them combined. `childTimer`
+      // stays separate from `phaseTimer` for the actual timing (concurrent
+      // namespace reads via Promise.allSettled would otherwise interleave
+      // start/end calls on a shared timer); this only copies its finished,
+      // already-measured entries over via the additive `record()` method,
+      // after that namespace's own recall has fully settled.
+      for (const entry of childTimer.summary().completed) {
+        phaseTimer?.record?.(`${namespace}:${entry.phase}`, entry.ms);
+      }
       return { namespace, sourceKind, optional, result };
     }));
     const requiredSettled = settled.filter((result, index) => readDbs[index].optional !== true);
@@ -7554,6 +7567,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         pool,
         queryRefinerEnabled,
         recallQueryLlmCfg,
+        // Test-only hook (Task 19 fix round): the golden-prefix probe sets
+        // `api.__recallTimingSinkForTests` on its stub api object so it can
+        // read the pipeline's per-phase timings; no real OpenClaw host ever
+        // sets this property, so `recallTimingSink` is always `null` here in
+        // production and `createPromptContextAssembler` treats it as a no-op.
+        recallTimingSink: api.__recallTimingSinkForTests ?? null,
         replyOutcomeDynamics,
         replyOutcomeEnabled,
         replyOutcomeMaxAssistantChars,
