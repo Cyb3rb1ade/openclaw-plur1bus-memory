@@ -615,4 +615,4 @@ beyond "leave as is; record it as a follow-up in the report").
 
 ### New commits (fix round 2)
 
-- (filled in below after commit)
+- `4cf2e988` — fix(recall): close any open wrapper via a tag-stream scan, not a fixed list (N1, N2, N3 follow-up note)
