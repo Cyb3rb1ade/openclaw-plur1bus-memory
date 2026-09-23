@@ -59,9 +59,21 @@ export function agentContextFromCommand(commandCtx) {
   return cron ? { origin: "cron", background: true } : { origin: "user", background: false };
 }
 
-/** The recall/capture turn classification, as an AgentContext. */
+/**
+ * The recall/capture turn classification, as an AgentContext.
+ *
+ * Fix round 1 (security review): `isBackgroundTurn`/
+ * `shouldSkipAutoRecallForInternalTurn` match on prompt-text substrings the
+ * hook payload itself carries (e.g. a `[cron:` marker in the prompt) — that
+ * is host-observed evidence, not a proof of origin the way
+ * `agentContextFromCommand`'s literal `channel === "cron"` is. Only
+ * `agentContextFromCommand` may report `origin: "cron"` (it runs a
+ * `checkAuth` bypass on that value); a hook-derived background/internal turn
+ * degrades to `"system"` instead, which still skips auto-recall/-capture but
+ * never widens a command's authorization gate.
+ */
 export function agentContextFromHook(event, hookCtx) {
   const background = isBackgroundTurn(event, hookCtx);
   const internal = shouldSkipAutoRecallForInternalTurn(event, hookCtx);
-  return { origin: internal ? (background ? "cron" : "system") : "user", background };
+  return { origin: internal ? "system" : "user", background };
 }

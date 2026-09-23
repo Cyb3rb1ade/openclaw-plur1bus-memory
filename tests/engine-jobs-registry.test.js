@@ -190,7 +190,6 @@ describe("createPlur1busCommandRunner defaultInput (fix round 1)", () => {
       host: { config: () => ({}), workspaceDir: async () => episodesRebuildWorkspaceDir, logger: noopLogger() },
       checkArgsLength: () => null,
       parsePlur1busArgs: () => [],
-      isCronCommandContext: () => false,
       resolveCronMemoryContext: async (commandCtx) => ({ agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, workspaceIdentity: "ws" }),
       resolveRegisteredMemoryContext: async () => ({}),
       workspacePolicyGuard: { decision: () => ({ allowed: true }) },
@@ -213,7 +212,6 @@ describe("createPlur1busCommandRunner defaultInput (fix round 1)", () => {
       host: { config: () => ({}), workspaceDir: async (agentId) => `/ws/${agentId}`, logger: noopLogger() },
       checkArgsLength: () => null,
       parsePlur1busArgs: () => [],
-      isCronCommandContext: () => false,
       resolveCronMemoryContext: async (commandCtx) => {
         capturedCommandCtx.push(commandCtx);
         return { agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, workspaceIdentity: "ws" };
@@ -240,7 +238,6 @@ describe("createPlur1busCommandRunner defaultInput (fix round 1)", () => {
       host: rejectingHost,
       checkArgsLength: () => null,
       parsePlur1busArgs: () => [],
-      isCronCommandContext: () => false,
       resolveCronMemoryContext: async (commandCtx) => ({ agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, workspaceIdentity: "ws" }),
       resolveRegisteredMemoryContext: async () => ({}),
       workspacePolicyGuard: { decision: () => ({ allowed: true }) },
