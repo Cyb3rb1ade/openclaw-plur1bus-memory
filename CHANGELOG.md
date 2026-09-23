@@ -58,8 +58,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   die Variable nicht gesetzt, der Modell-Cache landete im Arbeitsverzeichnis.
 - Alle `chmod`-Stellen laufen über `securePath`, das unter Windows eine
   benutzergebundene ACL setzt statt nur das Read-only-Bit; wenn das ACL-Tool
-  fehlt oder fehlschlägt, wird das jetzt abgefangen statt die Operation
-  scheitern zu lassen.
+  fehlt, wird das jetzt abgefangen statt die Operation scheitern zu lassen
+  (ein anderer Fehler des ACL-Tools wird weiterhin nicht abgefangen).
 
 ## [7.15.4] — 2026-09-21
 
