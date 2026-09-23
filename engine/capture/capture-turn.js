@@ -35,6 +35,44 @@ import { trySafeWarn } from "../../lib/safe-logging.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
 
 /**
+ * Classifies a light-dream JobRun's effect on capture post-processing
+ * (fix round 1, PR-08 review). `ledger_unwritable` is a ledger-storage
+ * problem, not a dreaming failure or an incomplete dream: it must not hold
+ * the capture watermark or spend the capture postProcessing retry budget
+ * (`MAX_POSTPROCESSING_RETRIES`) — it is treated exactly like a skipped
+ * dream. Any other `failed` run is a real dreaming failure and keeps the
+ * prior behaviour (watermark held, warned every time).
+ * @param {{outcome: string, reason?: string}} dreamRun
+ * @returns {{advance: boolean, warnKind: "ledger_unwritable"|"failed"|null}}
+ */
+export function classifyLightDreamOutcome(dreamRun) {
+  if (dreamRun.outcome === "completed") return { advance: true, warnKind: null };
+  if (dreamRun.outcome === "failed" && dreamRun.reason === "ledger_unwritable") {
+    return { advance: true, warnKind: "ledger_unwritable" };
+  }
+  if (dreamRun.outcome === "failed") return { advance: false, warnKind: "failed" };
+  return { advance: false, warnKind: null };
+}
+
+/**
+ * Builds a per-agent, warn-once-per-agent latch for the `ledger_unwritable`
+ * light-dream case (fix round 1): an unwritable ledger is a standing
+ * condition, not a per-turn event, so every turn re-triggering it must not
+ * re-log — only the first occurrence per agent does, for the lifetime of
+ * this `createTurnCapture` closure.
+ * @param {{warn?: (m: string) => void}} logger
+ * @returns {(agentId: string) => void}
+ */
+export function createLightDreamLedgerWarnOnce(logger) {
+  const warned = new Set();
+  return (agentId) => {
+    if (warned.has(agentId)) return;
+    warned.add(agentId);
+    logger.warn?.(`memory-lancedb-namespaced: light dream ledger unwritable for agent ${agentId}; dreaming is paused for this agent until it recovers`);
+  };
+}
+
+/**
  * Build the `agent_end` auto-capture handler from an already-resolved engine
  * context. Every binding the moved body closes over is destructured once,
  * here, at registration time.
@@ -115,6 +153,7 @@ export function createTurnCapture(ctx) {
   // than travelling through the context object by value.
   let warnedMissingCaptureSessionKey = false;
   let warnedIncognitoClassifierDegraded = false;
+  const warnLightDreamLedgerUnwritable = createLightDreamLedgerWarnOnce(host.logger);
 
   return async function captureTurn(event, hookCtx) {
     const sessionKey = hookCtx?.sessionKey ?? event?.sessionKey;
@@ -809,10 +848,13 @@ export function createTurnCapture(ctx) {
               postProcessing.push(jobs
                 ? jobs.run("light-dream", agentId, { trigger: "capture", signal, input: { work: lightDreamWork } })
                   .then((dreamRun) => {
-                    if (dreamRun.outcome === "failed") {
+                    const { advance, warnKind } = classifyLightDreamOutcome(dreamRun);
+                    if (warnKind === "ledger_unwritable") {
+                      warnLightDreamLedgerUnwritable(agentId);
+                    } else if (warnKind === "failed") {
                       host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamRun.error)}`);
                     }
-                    return dreamRun.outcome === "completed";
+                    return advance;
                   })
                 : lightDreamWork().catch((dreamErr) => {
                   host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);

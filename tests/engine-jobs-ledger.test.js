@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { createJobRegistry, sweepKey } from "../engine/jobs/job-registry.js";
@@ -96,5 +96,115 @@ describe("job ledger", () => {
     writeFileSync(join(root, "agent-a", "ledger.jsonl"), `${JSON.stringify({ v: 1, runId: "a", job: "gc-run", outcome: "completed" })}\n{"v":1,"runId":"b"`);
     const ledger = createJobLedger({ root, agentId: "agent-a", logger: createStubHost().logger });
     assert.deepEqual(ledger.readAll().map((r) => r.runId), ["a"]);
+  });
+
+  // ---- Fix round 1 ----------------------------------------------------
+
+  it("survives a torn ledger tail when crash-recovery appends the row for that very run (fix round 1)", async () => {
+    const root = makeTempDir("plur1bus-ledger-torn-crash-");
+    mkdirSync(join(root, "agent-a", "running"), { recursive: true });
+    writeFileSync(
+      join(root, "agent-a", "ledger.jsonl"),
+      `${JSON.stringify({ v: 1, runId: "a", job: "gc-run", outcome: "completed" })}\n{"v":1,"runId":"b","job":"rem-dream","outcome":"comple`,
+    );
+    writeFileSync(
+      join(root, "agent-a", "running", "b.started"),
+      JSON.stringify({ runId: "b", job: "rem-dream", phase: "rem", trigger: "cron", startedAt: Date.UTC(2026, 0, 12, 1, 15) }),
+    );
+    const { jobs } = registry(root);
+    jobs.bind("gc-run", async () => ({}));
+    await jobs.run("gc-run", "agent-a");
+    const ledger = createJobLedger({ root, agentId: "agent-a", logger: createStubHost().logger });
+    const rows = ledger.readAll();
+    assert.deepEqual(rows.map((r) => [r.runId, r.outcome, r.reason ?? null]), [
+      ["a", "completed", null],
+      ["b", "failed", "crash"],
+      ["run-1", "completed", null],
+    ]);
+    const rawLines = readFileSync(join(root, "agent-a", "ledger.jsonl"), "utf8").split("\n").filter((l) => l.trim());
+    const unparseable = rawLines.filter((line) => {
+      try {
+        JSON.parse(line);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    assert.equal(unparseable.length, 1, "the torn fragment stays as exactly one unparseable line");
+    assert.equal(existsSync(join(root, "agent-a", "running", "b.started")), false);
+  });
+
+  it("resolves failed/ledger_unwritable instead of rejecting for an invalid agentId (fix round 1)", async () => {
+    const root = makeTempDir("plur1bus-ledger-badagent-");
+    const warned = [];
+    const { jobs } = registry(root, { logger: { warn: (m) => warned.push(m) } });
+    jobs.bind("gc-run", async () => ({}));
+    const run = await jobs.run("gc-run", "../not-a-safe-agent-id");
+    assert.deepEqual([run.outcome, run.reason], ["failed", "ledger_unwritable"]);
+    assert.equal(warned.length, 1);
+    assert.match(warned[0], /ledger unwritable/);
+  });
+
+  it("records a corrupt marker as crash with trigger:null and names the corruption (fix round 1)", async () => {
+    const root = makeTempDir("plur1bus-ledger-corrupt-marker-");
+    mkdirSync(join(root, "agent-a", "running"), { recursive: true });
+    writeFileSync(join(root, "agent-a", "running", "bad-run.started"), "{not json");
+    const warned = [];
+    const { jobs } = registry(root, { logger: { warn: (m) => warned.push(m) } });
+    jobs.bind("gc-run", async () => ({}));
+    await jobs.run("gc-run", "agent-a");
+    const ledger = createJobLedger({ root, agentId: "agent-a", logger: createStubHost().logger });
+    const crashRow = ledger.readAll().find((r) => r.runId === "bad-run");
+    assert.ok(crashRow, "a corrupt marker must still produce a crash row");
+    assert.deepEqual([crashRow.outcome, crashRow.reason, crashRow.trigger], ["failed", "crash", null]);
+    assert.ok(warned.some((m) => /corrupt/i.test(m)), "the warning must name the marker as corrupt");
+  });
+
+  it("warns distinctly when only marker removal fails after a successful append (fix round 1)", async () => {
+    const root = makeTempDir("plur1bus-ledger-marker-rm-fail-");
+    const warned = [];
+    const { jobs } = registry(root, { logger: { warn: (m) => warned.push(m) } });
+    const markerPath = join(root, "agent-a", "running", "run-1.started");
+    jobs.bind("gc-run", async () => {
+      // Replace the marker file with a non-empty directory so removing it
+      // by that same path fails with something other than ENOENT once the
+      // run finishes — the append itself must still succeed independently.
+      unlinkSync(markerPath);
+      mkdirSync(markerPath);
+      writeFileSync(join(markerPath, "keep"), "x");
+      return {};
+    });
+    const run = await jobs.run("gc-run", "agent-a");
+    assert.equal(run.outcome, "completed");
+    const rows = rowsOf(root, "agent-a");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].outcome, "completed");
+    assert.equal(warned.length, 1);
+    assert.match(warned[0], /marker could not be removed/);
+    assert.doesNotMatch(warned[0], /append failed/);
+  });
+
+  it("retries recovery on the next run() after a failed pass instead of marking the agent permanently recovered (fix round 1)", async () => {
+    const root = makeTempDir("plur1bus-ledger-recover-retry-");
+    mkdirSync(join(root, "agent-a", "running"), { recursive: true });
+    writeFileSync(
+      join(root, "agent-a", "running", "orphan-1.started"),
+      JSON.stringify({ runId: "orphan-1", job: "rem-dream", phase: "rem", trigger: "cron", startedAt: Date.UTC(2026, 0, 12, 1, 15) }),
+    );
+    // Force the first recovery pass to fail before it even reaches the
+    // orphan marker: ledger.jsonl is a directory, so readAll()'s read throws.
+    mkdirSync(join(root, "agent-a", "ledger.jsonl"));
+    const { jobs } = registry(root);
+    jobs.bind("gc-run", async () => ({}));
+    const first = await jobs.run("gc-run", "agent-a");
+    assert.deepEqual([first.outcome, first.reason], ["failed", "ledger_unwritable"]);
+    assert.equal(existsSync(join(root, "agent-a", "running", "orphan-1.started")), true, "a failed recovery pass must not consume the marker");
+    rmSync(join(root, "agent-a", "ledger.jsonl"), { recursive: true, force: true });
+    const second = await jobs.run("gc-run", "agent-a");
+    assert.equal(second.outcome, "completed");
+    const ledger = createJobLedger({ root, agentId: "agent-a", logger: createStubHost().logger });
+    const rows = ledger.readAll().map((r) => [r.runId, r.outcome, r.reason ?? null]).sort();
+    assert.deepEqual(rows, [["orphan-1", "failed", "crash"], ["run-2", "completed", null]]);
+    assert.equal(existsSync(join(root, "agent-a", "running", "orphan-1.started")), false);
   });
 });

@@ -64,9 +64,17 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     };
   }
 
+  // Recovery scans a ledger for markers no run of *this process* wrote, so
+  // it belongs at the first `run()` a process makes for that agent — never
+  // again afterwards in that same process (a leftover marker from a later
+  // in-process failure is picked up by the next *process* start, not by the
+  // next call to `run()`; see the ledger append/removeMarker failure paths
+  // in `finish()`). The agent is marked recovered only once the pass
+  // completes without throwing: a partial failure here (e.g. `readAll` or
+  // an append throws) must not permanently skip recovery for that agent for
+  // the rest of the process's lifetime — the next `run()` retries it.
   function recoverOnce(agentId, ledger) {
     if (recovered.has(agentId)) return;
-    recovered.add(agentId);
     const finished = new Set(ledger.readAll().map((row) => row.runId));
     for (const marker of ledger.orphanMarkers()) {
       if (!finished.has(marker.runId)) {
@@ -77,7 +85,11 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
           job: marker.job ?? "unknown",
           phase: marker.phase ?? null,
           agentId,
-          trigger: marker.trigger ?? "cron",
+          // A corrupt (unreadable) marker carries no trustworthy trigger —
+          // record it as unknown (`null`) rather than guessing "cron" and
+          // masking the corruption; a marker that parsed fine but simply
+          // lacks the field still defaults to "cron" as before.
+          trigger: marker.corrupt ? null : (marker.trigger ?? "cron"),
           startedAt,
           finishedAt,
           durationMs: Math.max(0, finishedAt - startedAt),
@@ -87,10 +99,13 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
           cost: { ms: 0 },
           counts: {},
         }));
-        host.logger.warn(`plur1bus job ${marker.job ?? "unknown"}[${agentId}]: run ${marker.runId} left no ledger row; recorded as crash`);
+        host.logger.warn(marker.corrupt
+          ? `plur1bus job ${marker.job ?? "unknown"}[${agentId}]: run ${marker.runId} left a corrupt (unreadable) marker with no ledger row; recorded as crash`
+          : `plur1bus job ${marker.job ?? "unknown"}[${agentId}]: run ${marker.runId} left no ledger row; recorded as crash`);
       }
       ledger.removeMarker(marker.runId);
     }
+    recovered.add(agentId);
   }
 
   function bind(name, body, { defaultInput = null } = {}) {
@@ -143,11 +158,22 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     Object.defineProperty(run, "output", { value: exit.output, enumerable: false });
     if (error) Object.defineProperty(run, "error", { value: error, enumerable: false });
     if (ledger) {
+      let appended = false;
       try {
         ledger.append(rowOf(run));
-        ledger.removeMarker(run.runId);
-      } catch (persistError) {
-        host.logger.warn(`plur1bus job ${run.job}[${run.agentId}]: ledger append failed; the marker stays for crash recovery: ${String(persistError?.message || persistError)}`);
+        appended = true;
+      } catch (appendError) {
+        host.logger.warn(`plur1bus job ${run.job}[${run.agentId}]: ledger append failed; the marker stays for crash recovery: ${String(appendError?.message || appendError)}`);
+      }
+      // Only attempt to clear the marker once the row it guards is actually
+      // durable — clearing it after a failed append would let a crash
+      // before the next append lose this run entirely.
+      if (appended) {
+        try {
+          ledger.removeMarker(run.runId);
+        } catch (removeError) {
+          host.logger.warn(`plur1bus job ${run.job}[${run.agentId}]: ledger row was recorded but its start marker could not be removed (harmless — the next recovery pass sees the row and skips it): ${String(removeError?.message || removeError)}`);
+        }
       }
     }
     if (run.outcome === "skipped") host.logger.info(`plur1bus job ${run.job}[${run.agentId}]: skipped (${run.reason})`);
@@ -171,9 +197,13 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       diary: undefined,
       diaryTarget: null,
     };
-    const ledger = ledgerFor(agentId);
-    if (ledger) {
+    // `ledgerFor` (and, inside it, `safeAgentId`) can throw on an invalid
+    // agentId, so it lives inside this try too — run() must always resolve
+    // to a JobRun, never reject, whatever went wrong with the ledger.
+    let ledger = null;
+    if (jobsRoot) {
       try {
+        ledger = ledgerFor(agentId);
         recoverOnce(agentId, ledger);
         ledger.writeMarker(inflight);
       } catch (writeError) {
