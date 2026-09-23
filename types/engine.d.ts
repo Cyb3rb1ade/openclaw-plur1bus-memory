@@ -17,6 +17,16 @@
  * Nothing in this file is implemented in M1a. It is the shape both the
  * OpenClaw adapter and the harness are written against, and it is checked
  * by `npm run typecheck`.
+ *
+ * Amendment policy: "frozen" means 1.0.0 is never edited in place. Any change
+ * to an exported member's shape that an existing adapter could observe — a new
+ * required property, a removed or renamed member, a narrowed or widened union,
+ * a changed parameter or return type — forces a `ContractVersion` bump; only
+ * additions no adapter can observe (a comment, a new optional property on a
+ * type the engine alone constructs) may land without one.
+ * `ContractVersion`, the assertions in `types/engine.conformance.ts` and both
+ * adapters move together in a single PR, so the contract, its gate and its two
+ * consumers are never in disagreement at any commit.
  */
 
 export type ContractVersion = "1.0.0";

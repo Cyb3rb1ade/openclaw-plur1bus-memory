@@ -13,8 +13,14 @@ import type {
   TurnRecord,
 } from "./engine.js";
 
-/** Compile-time equality assertion. */
-type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+/** Compile-time equality assertion.
+ *
+ *  The invariance form, not a two-way `extends`. A mutual-assignability check
+ *  passes when either side is widened to `any` (`any` is assignable both
+ *  ways), so `trust: any` would have satisfied the old `Exact`. Comparing two
+ *  identically-shaped generic signatures instead makes the checker test type
+ *  *identity*, which `any` fails in both directions. */
+type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 function assertTrue<T extends true>(): void { void 0 as unknown as T; }
 
 // B8 decision 1: trust, not proof.
