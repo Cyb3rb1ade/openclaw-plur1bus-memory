@@ -19,7 +19,7 @@ write "the host's `registerTool`" instead.
 | `register-turn-route.js` | `reply_dispatch`, `agent_end` run cleanup |
 | `register-recall-hook.js` | `before_prompt_build` (auto-recall on) |
 | `register-maintenance-hook.js` | `before_prompt_build` (auto-recall off) |
-| `register-capture-hook.js` | `agent_end` auto-capture |
+| `register-capture-hook.js` | `agent_end` auto-capture, `before_compaction` checkpoint |
 | `register-commands.js` | the 15 `plur1bus_*` commands, `/state`, `/enable`, `/disable`, the control-UI descriptor and control-health pair, the critical-push claiming hooks, and the four `lib/setup/*-plugin-runtime.js` delegations |
 | `register-tools.js` | the five model-facing tools |
 | `register-prompt-supplements.js` | the static system-prompt supplement and the Neo corpus supplement |

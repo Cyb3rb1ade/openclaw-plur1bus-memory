@@ -237,6 +237,7 @@ import { registerMaintenanceHook } from "./adapter/openclaw/register-maintenance
 import { registerRecallHook } from "./adapter/openclaw/register-recall-hook.js";
 import { registerCaptureHook } from "./adapter/openclaw/register-capture-hook.js";
 import { createPlur1busCommandRunner } from "./engine/commands/plur1bus-command.js";
+import { createCheckpointStore } from "./engine/checkpoint/checkpoint-store.js";
 import { registerChatCommands } from "./adapter/openclaw/register-commands.js";
 import { registerPromptSupplements } from "./adapter/openclaw/register-prompt-supplements.js";
 import { registerMemoryTools } from "./adapter/openclaw/register-tools.js";
@@ -4583,6 +4584,7 @@ const plugin = {
       config: { ...(cfg.runtime || {}), eventLoopLagSnapshot: recallEventLoopLagSnapshot },
       logger: host.logger,
     });
+    const checkpointStore = createCheckpointStore({ clock: host.clock });
 
     // Configurable thresholds
     const recallMinScore     = cfg.recallMinScore     ?? 0.15;
@@ -7310,6 +7312,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         callLlm,
         captureSummaryLlmCfg,
         cfg,
+        checkpointStore,
         classifyEmotionForStore,
         classifyHostIncognitoSession,
         conversationInsightsLlmCfg,
@@ -7564,6 +7567,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         canonicalMaxItems,
         canonicalMinScore,
         cfg,
+        checkpointStore,
         dbg,
         dedupEnabled,
         dedupJaccard,

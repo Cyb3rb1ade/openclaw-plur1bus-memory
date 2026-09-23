@@ -35,6 +35,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/join-recall.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
+  "engine/checkpoint/checkpoint-store.js",
   "engine/commands/plur1bus-command.js",
   "engine/events.js",
   "engine/recall/assemble-prompt-context.js",

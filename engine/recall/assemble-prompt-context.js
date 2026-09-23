@@ -38,6 +38,7 @@ import { formatReminderNudge } from "../../lib/reminder-nudge.js";
 import { readPendingReminders, writePendingReminders } from "../../lib/reminder-pending.js";
 import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
+import { resolveCompactedAt } from "../checkpoint/checkpoint-store.js";
 import { emitEngineEvent } from "../events.js";
 import { ABORTED, contextBlock, recallResult } from "./recall-result.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
@@ -81,6 +82,7 @@ export function createPromptContextAssembler(ctx) {
     canonicalMaxItems,
     canonicalMinScore,
     cfg,
+    checkpointStore = null,
     dbg,
     dedupEnabled,
     dedupJaccard,
@@ -846,7 +848,7 @@ export function createPromptContextAssembler(ctx) {
               sessionKey: hookCtx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "",
               now: Date.now(),
               logger: host.logger,
-              compactedAt: event?.compactedAt || hookCtx?.compactedAt || null,
+              compactedAt: resolveCompactedAt({ event, hookCtx, store: checkpointStore, agentId }),
               requestContext: memoryCtx,
               getMemoryById: async (memoryId) => {
                 const memory = await db.getById(memoryId);
