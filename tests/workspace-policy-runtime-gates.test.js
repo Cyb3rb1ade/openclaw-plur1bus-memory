@@ -21,7 +21,10 @@ const engineSources = [
 // bodies into the OpenClaw adapter; it carries the `workspace` command call
 // sites and the native policy-runtime registration.
 const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
-const allRuntimeSources = [indexSource, ...engineSources, commandsSource];
+// PR-03h moved the five model-facing tools into the engine; the tool-surface
+// guard below travels with them.
+const memoryToolsSource = readFileSync(new URL("../engine/tools/memory-tools.js", import.meta.url), "utf8");
+const allRuntimeSources = [indexSource, ...engineSources, memoryToolsSource, commandsSource];
 
 describe("workspace policy runtime gates", () => {
   it("constructs one policy store and guard below the PLUR1BUS state root", () => {
@@ -32,7 +35,7 @@ describe("workspace policy runtime gates", () => {
   });
 
   it("guards the complete five-tool surface before execute", () => {
-    assert.match(indexSource, /guardWorkspaceTools\(workspaceTools, workspacePolicyGuard\.decision\(memoryCtx\)\)/);
+    assert.match(memoryToolsSource, /guardWorkspaceTools\(workspaceTools, workspacePolicyGuard\.decision\(memoryCtx\)\)/);
   });
 
   it("checks automatic capture, recall, outcome, and maintenance paths", () => {

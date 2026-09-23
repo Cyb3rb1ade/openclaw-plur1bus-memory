@@ -317,7 +317,11 @@ describe("B13 strict ownership ACL adapters", () => {
     const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
     assert.match(commandsSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
     assert.match(indexSource, /const storeAccessCtx = memoryCtx/);
-    assert.match(indexSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
+    // PR-03h: the model-facing recall call site moved with the tool factory
+    // into engine/tools/memory-tools.js (index.js 1 -> 0); the bridge store
+    // call site above stays in index.js and stays pinned to it.
+    const memoryToolsSource = readFileSync(new URL("../engine/tools/memory-tools.js", import.meta.url), "utf8");
+    assert.match(memoryToolsSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
     assert.doesNotMatch(indexSource, /checkAccess\(\{\s*agentId,\s*workspaceId/);
   });
 });
