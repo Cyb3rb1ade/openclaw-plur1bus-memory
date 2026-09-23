@@ -1,7 +1,7 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.0.0 (frozen 2026-09-22, owner decision B8).
+ * Contract version 1.1.0 (frozen 2026-09-22, owner decision B8).
  *
  * This file reconciles the four places Phase 0 sketched the same API
  * differently (review-report finding S4). Where ADR-002 and
@@ -27,9 +27,11 @@
  * `ContractVersion`, the assertions in `types/engine.conformance.ts` and both
  * adapters move together in a single PR, so the contract, its gate and its two
  * consumers are never in disagreement at any commit.
+ *
+ * Changelog: 1.1.0 — SecurePathResult.reason gains "acl-tool-unavailable" (Task 5).
  */
 
-export type ContractVersion = "1.0.0";
+export type ContractVersion = "1.1.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
