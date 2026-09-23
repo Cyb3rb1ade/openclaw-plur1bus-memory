@@ -34,10 +34,10 @@ const HOST_LOGGER_EXEMPT_FUNCTIONS = [
   ["function makeReactionsCapabilityChecker(api) {", "export function parseConfirmationCommand(args) {"],
 ];
 
-function exemptLineNumbers(source) {
+function exemptLineNumbers(source, exemptFunctions = HOST_LOGGER_EXEMPT_FUNCTIONS) {
   const lines = source.split("\n");
   const exempt = new Set();
-  for (const [startMarker, endMarker] of HOST_LOGGER_EXEMPT_FUNCTIONS) {
+  for (const [startMarker, endMarker] of exemptFunctions) {
     const start = lines.findIndex((line) => line.includes(startMarker));
     assert.notEqual(start, -1, `marker not found: ${startMarker}`);
     const end = lines.findIndex((line, i) => i > start && line.includes(endMarker));
@@ -46,6 +46,20 @@ function exemptLineNumbers(source) {
   }
   return exempt;
 }
+
+// PR-02c: index.js reaches the host runtime through `host.runtime` instead of
+// calling `runtimeIfUsable(api)` directly. The same four pre-register
+// api-surface helpers above are exempt (no `host` in their scope), plus a
+// fifth: `resolveNeoHooksConfig`. It is also declared at module top level
+// before `register()` and takes its own `api` parameter, but it was never
+// added to HOST_LOGGER_EXEMPT_FUNCTIONS because it already read
+// `api?.logger` (optional chaining) rather than `api.logger`, so PR-02b's
+// regex never flagged it. It has the identical structural problem here:
+// `host` does not exist in its scope.
+const HOST_RUNTIME_EXEMPT_FUNCTIONS = [
+  ...HOST_LOGGER_EXEMPT_FUNCTIONS,
+  ["function resolveNeoHooksConfig(api, commandConfig) {", "function formatJsonCommandResult(value) {"],
+];
 
 describe("PR-02b host logger", () => {
   it("index.js no longer reads api.logger outside the pre-register api-surface helpers", () => {
@@ -76,5 +90,16 @@ describe("PR-02b host logger", () => {
       on() { return { dispose() {} }; },
     };
     assert.doesNotThrow(() => plugin.register(api, {}));
+  });
+
+  it("index.js reaches the host runtime through HostServices", () => {
+    const source = readFileSync(join(root, "index.js"), "utf8");
+    const lines = source.split("\n");
+    const exempt = exemptLineNumbers(source, HOST_RUNTIME_EXEMPT_FUNCTIONS);
+    const hits = lines
+      .map((line, i) => [i, line])
+      .filter(([i, line]) => !exempt.has(i) && /runtimeIfUsable\s*\(\s*api\s*\)/.test(line));
+    assert.deepEqual(hits.map(([i, line]) => `${i + 1}: ${line.trim()}`), []);
+    assert.match(source, /host\.runtime/);
   });
 });
