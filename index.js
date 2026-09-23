@@ -36,42 +36,20 @@ import { performance } from "node:perf_hooks";
 
 // Shared modules (v1.9.0) — zentrale Logik für Plugin und Cron-Scripts
 import { distanceToScore } from "./lib/score.js";
-import { flushMetrics } from "./lib/metrics.js";
-import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary, compressMemorySlotsForPrompt } from "./lib/text-utils.js";
-import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
+import { generateSummary as libGenerateSummary } from "./lib/text-utils.js";
+import { MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemoryWithReason } from "./lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
-import { IMPORTANCE_STATUS, normalizeImportanceStatus } from "./lib/importance-status.js";
-import { classifyEncoding, buildRefinePatch } from "./lib/encoding-llm.js";
+import { normalizeImportanceStatus } from "./lib/importance-status.js";
 import {
   hasMeaningfulDifference,
   isSafeDuplicate,
   validateMergedTextPreservesFacts,
 } from "./lib/memory-merge-safety.js";
-import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
+import { stripFrontmatter, withFrontmatter } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
-import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
-import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
-import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
-import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
-import { readGcReport } from "./lib/dashboard-operations.js";
-import { readPluginConfigFile, largestKnownAgentCount } from "./lib/dashboard-settings.js";
-import { checkRuntimePressure } from "./lib/runtime-pressure-gate.js";
-import { resolveAgentWorkspaceDir } from "./lib/setup/memory-host-runtime.js";
-import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
+import { featureModelOverrides } from "./lib/featureModels.js";
 import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
-import {
-  createCaptureChunkingMutator,
-  createConfirmationStore,
-  createSettingMutator,
-  createEmbeddingProfileMutator,
-  createFeatureModelMutator,
-  createFormTokenStore,
-  createRerankerMutator,
-  applyControlUiWriteAction,
-  rerankerKeyConfigured,
-} from "./lib/setup/control-ui-write.js";
-import { createCompactionRunner, isPartitionId } from "./lib/setup/control-ui-compaction.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
 import { createMemoryMaintenanceGate } from "./lib/memory-maintenance-gate.js";
@@ -94,15 +72,12 @@ import {
   embeddingFingerprintFromNormalizedConfig,
   redactedEmbeddingSecretRef,
 } from "./lib/reembedding/runtime-config.js";
-import { registerReembeddingRuntime } from "./lib/setup/reembedding-plugin-runtime.js";
-import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
 import {
   createControlPlaneHealthInspector,
   createControlPlaneHealthScan,
 } from "./lib/control-plane-health.js";
 import {
   createWorkspacePolicyGuard,
-  guardWorkspaceTools,
 } from "./lib/workspace-policy-guard.js";
 import {
   isGuardedDirectFeatureCronMessage,
@@ -111,52 +86,20 @@ import {
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
-import { loadLinkIndex } from "./lib/obsidian/link-index.js";
-import { handleObsidianBridgeCommand, resolveCommandVaultPath } from "./lib/obsidian-control-room.js";
+import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
 import { mutationAllowed, parseObsidianCommandPlan } from "./lib/obsidian-mutation-policy.js";
-import { buildCriticalReplyCommand } from "./lib/critical-reply-intent.js";
-import { describeOwnedVaultConfirmation, isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
-import { renderStatus } from "./lib/telegram-commands/status.js";
-import { collectStatusData } from "./lib/telegram-commands/status-data.js";
-import {
-  FEATURE_WHITELIST,
-  listFeatures,
-  toggleFeature,
-  renderToggleResult,
-  renderFeatureList,
-  withConfigLock,
-} from "./lib/telegram-commands/feature-toggle.js";
-import {
-  parseQuery as parseMemoryQuery,
-  formatResults as formatMemoryResults,
-  queryMemoryAcrossAccessPools,
-  parseMemoryFeedback,
-} from "./lib/telegram-commands/memory-query.js";
+import { isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
 import { withAccessReadDbs } from "./lib/shared-memory.js";
-import {
-  migrateLegacySharedRows,
-  parseLegacyMigrationArgs,
-} from "./lib/shared-memory-migration.js";
-import { recordFeedback } from "./lib/feedback-log.js";
 import { getSharedDeferredDynamicsQueue } from "./lib/deferred-dynamics-queue.js";
-import { resolveLancedbOptimizePlan, summarizeLancedbOptimize } from "./lib/lancedb-optimize.js";
 import {
-  parseCorrection,
-  resolveCandidates,
-  forgetCard,
-  correctCard,
-  renderCandidateChoice,
-  renderForgetResult,
-  renderCorrectResult,
   archiveCard,
   shareCard,
 } from "./lib/telegram-commands/memory-edit.js";
-import { normalizeCommandInput } from "./lib/semantic-input.js";
-import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
+import { validateMemoryText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
-import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
-import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
-import { createLocalModelGenerationLifecycle, registerGatewayShutdown, registerLocalModelOwnershipServiceAfterLifecycle, registerModelPreparationServiceAfterLifecycle, registerReembeddingRecoveryServiceAfterLifecycle, runtimeIfUsable, shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "./lib/runtime-shutdown.js";
+import { normalizeEpistemicStatus, transitionEpistemicStatus, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
+import { normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
+import { createLocalModelGenerationLifecycle, runtimeIfUsable, shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "./lib/runtime-shutdown.js";
 import { createHostServices } from "./lib/host-services.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
@@ -164,48 +107,17 @@ import {
   pathMatchesDirectoryCapability,
   stableDirectoryCapabilitiesSupported,
 } from "./lib/directory-capability.js";
-import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
-import { runSkillMiner } from "./lib/jobs/skill-miner.js";
-import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposal, rejectSkillProposalWithWorkshop, retireActiveSkill, findProposalWorkspace, buildSkillReviewPayload, createSkillWorkshopLifecycleSynchronizer } from "./lib/telegram-commands/skill-commands.js";
-import { getPendingProposals, recordPresentation, lastPresentationAgeMs, markProposalStatus, patchProposal, readProposals as readSkillProposals } from "./lib/jobs/skill-miner/proposal-writer.js";
+import { activateSkillProposal, findProposalWorkspace, createSkillWorkshopLifecycleSynchronizer } from "./lib/telegram-commands/skill-commands.js";
+import { markProposalStatus, patchProposal, readProposals as readSkillProposals } from "./lib/jobs/skill-miner/proposal-writer.js";
 import { collectSkillWorkshopProposals } from "./lib/setup/skill-workshop-dashboard.js";
-import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
-import {
-  runSpeakerListCommand,
-  runSpeakerNameCommand,
-  runSpeakerProposalsCommand,
-  runSpeakerConfirmCommand,
-  runSpeakerRejectCommand,
-  runSpeakerClearCommand,
-} from "./lib/telegram-commands/speaker-mapping.js";
 import { resolveLocale, readSoulToneCached, pickTone, t } from "./lib/i18n.js";
-import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions, computeContentHash } from "./lib/jobs/schicht15-tracker.js";
 import {
   PLUGIN_KEY,
-  applyFeatureProfile,
-  consumePlur1busStartNotice,
-  describeProfileDiff,
-  detectObsidianVaults,
   detectPendingFeatures,
   isApplyBlocked,
   reportDormantFeature,
-  recommendedProfile,
-  renderPlur1busStartStatus,
-  safeProfile,
 } from "./lib/setup/feature-profiles.js";
 import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-contract.js";
-import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
-import {
-  assignShortRefs,
-  resolveShortRef,
-  translateType,
-} from "./lib/critical-review.js";
-import {
-  formatAfterthoughtCronReply,
-  formatClassifierCronReply,
-} from "./lib/internal-cron-reply.js";
-import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
-import { safeUpdate } from "./lib/safe-update.js";
 import {
   checkWikiAuth,
   parseWikiCommandInput,
@@ -217,105 +129,53 @@ import {
   buildMemoryWorkspaceAliases,
   createHostIncognitoSessionClassifier,
   createHostRoutingLoader,
-  createMemoryTurnRouteRegistry,
   getSharedMemoryTurnRouteRegistry,
-  resolveHostCommandMemoryContext,
-  resolveHostHookMemoryContext,
   describePrimaryAgentIds,
   describeUserPoolLabels,
   describeWorkspacePoolLabels,
   resolveMemoryRequestContext,
-  resolveSessionOwnerMemoryContext,
   resolveToolMemoryRequestContext,
   normalizeWorkspaceTarget,
   workspacePoolKey,
   describeDirectSessionRoute as describeOperatorDirectSession,
 } from "./lib/memory-request-context.js";
-import { safeUuid, safeUuidList, selectSafeUuids, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
+import { safeUuid, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
 import { measureControlHealthStorage } from "./lib/control-plane-storage.js";
-import { isTruncatedKnowledgeBody, resolveKnowledgeUpdateMaxTokens, resolveKnowledgeUpdateTimeoutMs } from "./lib/knowledge-update-budget.js";
-import { selectStalePendingKeys } from "./lib/knowledge-pending-prune.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
 import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
 import { ensureEpistemicCutoff, readEpistemicCutoff } from "./lib/epistemic-cutoff.js";
 import { assertCardWriteAllowed, isContentChangingUpdate, splitAgentDbPath } from "./lib/tombstone-write-guard.js";
-import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
-import { applyGlobalInjectBudget } from "./lib/inject-budget.js";
-import { resolveCurationRecord } from "./lib/curation-resolve.js";
-import { previewDropInjected, applyDropInjected } from "./lib/drop-injected-conflicts.js";
-import {
-  applyConflictViaSafeUpdate,
-  findResolvableConflict,
-  resolutionApplyId,
-  resolutionApplyText,
-} from "./lib/jobs/apply-conflict-resolution.js";
-import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
-import { runGcJob } from "./lib/jobs/gc-job.js";
-import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
-import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
-import { runReflectionJob } from "./lib/jobs/reflection-job.js";
-import { shouldTriggerReflection } from "./lib/meta-cognition.js";
-import { explainResults, renderExplanation } from "./lib/explainability.js";
-import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative, emitRetrievalLedger } from "./lib/recall-pipeline.js";
+import { validateConfirmation } from "./lib/security.js";
+import { runRecallPipeline, mergeNamespaceRecallResults, emitRetrievalLedger } from "./lib/recall-pipeline.js";
 import { applyRecallBudget, resolveRecallBudget } from "./lib/recall-budget.js";
 import {
   createRecallDecisionTrace,
-  addTraceDecision,
   addTraceStoreDecision,
-  attachTraceToMemory,
-  summarizeTrace,
   textPreview,
 } from "./lib/recall-decision-trace.js";
-import { applySemanticLensToRecall } from "./lib/semantic-lens-index.js";
 import {
-  buildNeoDoctorReport,
   buildNeoWorkspaceAliases,
   createNeoStore,
   findLatestNeoRecord,
-  formatNeoRecallContext,
-  isInjectedContextText,
   isNeoRecordAccessible,
-  migrateNeoWorkspaces,
   listNeoWorkspaceKeys,
   neoSessionKeysFromContext,
-  routeNeoRecall,
   searchNeoCandidatesGlobal,
-  dedupeNeoLanesAgainstTexts,
-  transitionRecordStatus,
   workspaceKeyFromContext,
-  turnIdentityParams,
-  turnEventsFromMessages,
 } from "./lib/neo-arch.js";
-import { createNeoWorkerRuntime, getSharedNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
-import {
-  DISPLAY_SOURCES,
-  sanitizeMemoryTextForPrompt,
-} from "./lib/memory-context-sanitize.js";
-import {
-  buildRecallSafetyPreamble,
-  formatRelevantMemoriesContext,
-  resolveFadedThreshold,
-} from "./lib/relevant-memory-context.js";
-import { runConversationReactivationRecall } from "./lib/conversation-reactivation-recall.js";
-import { filterAssociativeCandidates, filterPatternCandidates } from "./lib/continuity-gate.js";
-import { findBestPattern } from "./lib/pattern-surface.js";
-import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
-import { OverlayGenerator } from "./lib/overlay-generator.js";
-import { ContradictionDetector } from "./lib/contradiction-detector.js";
-import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
+import { getSharedNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
 import {
   normalizeEmbeddingConfig,
   normalizeRerankerConfig,
   resolveLocalModelCacheDir,
 } from "./lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "./lib/providers/legacy-provider-migration.js";
-import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL, embeddingDimensionProfiles } from "./lib/providers/dimensions.js";
+import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import {
   ReloadSafeIpcScopedEmbeddingProvider,
   createScopedEmbeddingIpcServer,
-  registerScopedEmbeddingIpcServiceAfterLifecycle,
 } from "./lib/providers/scoped-embedding-ipc.js";
 import {
   pinnedLocalModelProfile,
@@ -329,7 +189,6 @@ import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import {
   createBackgroundMemoryScheduler,
   isBackgroundTurn,
-  shouldSkipAutoCaptureForInternalTurn,
   shouldSkipAutoRecallForInternalTurn,
 } from "./lib/runtime-scheduler.js";
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
@@ -337,7 +196,6 @@ import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import { redactError, safeDebug, safeWarn, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
-import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
   LLM_ROUTE_KINDS,
@@ -352,61 +210,27 @@ import {
   withLlmResultCacheContext,
 } from "./lib/llm-result-cache.js";
 import {
-  inferEmotionalValence,
   inferEmotionalValenceAsync,
-  serializeEmotionalValence,
   deserializeEmotionalValence,
-  emotionEmoji,
   setEmotionConfig,
 } from "./lib/emotion.js";
-import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessageText, DEFAULT_TEMPERAMENTS } from "./lib/emotional-state.js";
-import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
-import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
-import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
-import { expandForCapture } from "./lib/memory-chunking.js";
+import { createEmotionalStatePool } from "./lib/emotional-state.js";
+import { applyDynamicsDefaults, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
-import { planReminderExtraction } from "./lib/reminder-extraction.js";
-import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
-import { formatReminderNudge } from "./lib/reminder-nudge.js";
-import { recordActivity, formatTimeContext, getLastActivity } from "./lib/session-time.js";
-import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
-import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
-import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
-import { extractEpisodesWithState, writeEpisodeToVault, rebuildEpisode, findEpisodeCardPath } from "./lib/episodes.js";
-import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
-import {
-  buildEdgesForSession,
-  buildEpisodeAnchorEdges,
-  readBoundGraph,
-  createGraphMetrics,
-  writeGraphConstellationReport,
-  pruneGraphEdges,
-  extractGraphSignals,
-} from "./lib/memory-graph.js";
+import { buildRemPartitions } from "./lib/dreaming/rem-dream.js";
 import {
   completePendingReplyOutcomes,
   lastMessageText,
   recordAgentReplyForOutcome,
-  recordPendingReplyOutcome,
-  readReplyOutcomeLog,
   sessionKeyFrom,
 } from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
 import { SharedMemoryPool } from "./lib/shared-memory-pool.js";
 import { resolveNamespaceLayout } from "./lib/namespace-config.js";
 import {
-  extractMediaOutputIds,
-  stripMediaOutputIdToken,
-} from "./lib/speaker-segment-schema.js";
-import {
   getMergeResultByMediaOutputId,
-  resetSpeakerMappingDbForTests,
 } from "./lib/speaker-mapping-store.js";
 import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.js";
-import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "./lib/open-threads.js";
-import { hourInTimeZone } from "./lib/time-window.js";
-import { readJsonl } from "./lib/jsonl-utils.js";
 import { registerTurnRouteHooks } from "./adapter/openclaw/register-turn-route.js";
 import { registerMaintenanceHook } from "./adapter/openclaw/register-maintenance-hook.js";
 import { registerRecallHook } from "./adapter/openclaw/register-recall-hook.js";
