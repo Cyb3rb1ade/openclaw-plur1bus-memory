@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 
 import plugin, { MemoryDB } from "../../index.js";
 import { LocalTransformersEmbeddingProvider } from "../../lib/providers/embedding-local-transformers.js";
@@ -175,15 +176,21 @@ export function baseConfig(baseDbPath, overrides = {}) {
 
 /**
  * @param {object} scenario
- * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number}) => void)|null}} [options]
+ * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number}) => void)|null, onTiming?: ((entry: {setupMs: number, recallMs: number, totalMs: number}) => void)|null}} [options]
  *   `freezeClock: false` keeps the real clock, which the latency probe needs;
  *   the golden test leaves it on. `recallTimingSink`, when given, is threaded
  *   onto the stub `api` as `__recallTimingSinkForTests` (see `makeApi`) and
  *   called once per attempted recall with the pipeline's phase timings.
+ *   `onTiming`, when given, is called once, right before this function
+ *   returns normally (not on a thrown error), with `setupMs` (temp dirs,
+ *   clock/embedder stubs, the fixture `db.store()` loop, `plugin.register()`)
+ *   measured separately from `recallMs` (just the one `before_prompt_build`
+ *   hook invocation) — fix round 2: the wall-clock total the probe reported
+ *   before this conflated both, and setup dominates at larger `--scale`.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null } = {}) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
@@ -199,6 +206,7 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
   let workspaceDir = "";
   let stateDir = "";
   try {
+    const setupStartedAt = performance.now();
     baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-golden-db-"));
     workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-ws-"));
     stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
@@ -234,8 +242,12 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
     const hooks = api.handlers.get("before_prompt_build");
     const hook = hooks?.at(-1);
     if (typeof hook !== "function") throw new Error(`${scenario.name}: before_prompt_build not registered`);
+    const setupMs = performance.now() - setupStartedAt;
+    const recallStartedAt = performance.now();
     const result = await hook(scenario.event, { ...scenario.ctx, workspaceDir });
+    const recallMs = performance.now() - recallStartedAt;
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+    onTiming?.({ setupMs, recallMs, totalMs: setupMs + recallMs });
     return result?.prependContext ?? null;
   } finally {
     if (previousHome === undefined) delete process.env.OPENCLAW_HOME;

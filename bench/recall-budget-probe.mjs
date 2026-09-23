@@ -62,6 +62,26 @@
  * trimming, context formatting) is still stub-embedder work — see the header
  * this script prints, and the caveat below.
  *
+ * Fix round 2 (controller review):
+ *   1. The per-namespace phase fold in `index.js`'s `runMergedNamespaceRecall`
+ *      is now gated on a new `recordNamespacePhases` option (default
+ *      `false`), which `engine/recall/assemble-prompt-context.js` only sets
+ *      `true` when `recallTimingSink` is actually attached. Production never
+ *      attaches one, so the fold now never *executes* there — not just a
+ *      harmless no-op — and the outer phase timer's `summary()` (read in
+ *      production by `lib/runtime-scheduler.js:456-476`'s timeout-warning log
+ *      line) is unchanged. Verified by the full suite staying green and by
+ *      `tests/recall-phase-timer.test.js`/`tests/multi-namespace-recall-runtime.test.js`
+ *      staying green with no edits.
+ *   2. The wall-clock total this probe reported before conflated fixture
+ *      setup (temp dirs, the sequential `db.store()` loop, `plugin.register()`
+ *      cold start) with the actual recall. `runScenario` now takes an
+ *      `onTiming` option and reports `setupMs` / `recallMs` separately (the
+ *      latter timed strictly around the one `before_prompt_build` hook
+ *      invocation). This script now prints setup / recall / total as three
+ *      column groups, and the per-phase table's "share" column is share of
+ *      **recall**, not of the (setup-inflated) total.
+ *
  * Stub embedder, no reranker, two-card fixture store: this is the pipeline's
  * FLOOR (orchestration only), not a production distribution. The owner must
  * re-run this against a real store and a real embedding provider before
@@ -157,7 +177,9 @@ console.log("citations found while writing this probe; see the task report for t
 const rows = [];
 for (const raw of SCENARIOS) {
   const scenario = scaled(raw);
-  const totals = [];
+  const setupTimes = [];
+  const recallTimes = [];
+  const totalTimes = [];
   const embedShare = [];
   /** @type {Map<string, number[]>} phase name -> one ms sample per iteration */
   const phaseSamples = new Map();
@@ -170,23 +192,34 @@ for (const raw of SCENARIOS) {
     }
   };
   // One warm-up: the first run pays module init and LanceDB's first open.
-  // Its phase samples are discarded along with its wall-clock time, same as
-  // the original probe discarded the warm-up's total.
+  // Its samples are discarded, same as the original probe discarded the
+  // warm-up's total.
   await runScenario(scenario, { freezeClock: false });
   for (let i = 0; i < iterations; i += 1) {
     const probe = instrumentEmbedder();
-    const started = performance.now();
-    await runScenario(scenario, { freezeClock: false, recallTimingSink: recordPhases });
-    const elapsed = performance.now() - started;
+    await runScenario(scenario, {
+      freezeClock: false,
+      recallTimingSink: recordPhases,
+      onTiming: ({ setupMs, recallMs, totalMs }) => {
+        setupTimes.push(setupMs);
+        recallTimes.push(recallMs);
+        totalTimes.push(totalMs);
+      },
+    });
     probe.restore();
-    totals.push(elapsed);
     embedShare.push(probe.totals.embedMs);
   }
   rows.push({
     name: scenario.name,
-    p50: quantile(totals, 0.5),
-    p95: quantile(totals, 0.95),
-    p99: quantile(totals, 0.99),
+    setupP50: quantile(setupTimes, 0.5),
+    setupP95: quantile(setupTimes, 0.95),
+    setupP99: quantile(setupTimes, 0.99),
+    recallP50: quantile(recallTimes, 0.5),
+    recallP95: quantile(recallTimes, 0.95),
+    recallP99: quantile(recallTimes, 0.99),
+    totalP50: quantile(totalTimes, 0.5),
+    totalP95: quantile(totalTimes, 0.95),
+    totalP99: quantile(totalTimes, 0.99),
     embedP50: quantile(embedShare, 0.5),
     recallAttempts,
     phaseSamples,
@@ -194,41 +227,55 @@ for (const raw of SCENARIOS) {
 }
 
 const width = Math.max(...rows.map((row) => row.name.length), 8);
-console.log(`${"scenario".padEnd(width)}  ${"p50".padStart(10)}  ${"p95".padStart(10)}  ${"p99".padStart(10)}  ${"embed p50".padStart(10)}`);
+const num = (n) => n.toFixed(1);
+console.log("(all times in ms; setup = temp dirs + fixture db.store() loop + plugin.register();");
+console.log(" recall = the one before_prompt_build hook invocation, start to return)\n");
+console.log(
+  `${"scenario".padEnd(width)}  `
+  + `${"setup p50".padStart(9)} ${"p95".padStart(7)} ${"p99".padStart(7)}  |  `
+  + `${"recall p50".padStart(10)} ${"p95".padStart(7)} ${"p99".padStart(7)}  |  `
+  + `${"total p50".padStart(9)} ${"p95".padStart(7)} ${"p99".padStart(7)}  |  embed p50`,
+);
 for (const row of rows) {
-  console.log(`${row.name.padEnd(width)}  ${fmt(row.p50).padStart(10)}  ${fmt(row.p95).padStart(10)}  ${fmt(row.p99).padStart(10)}  ${fmt(row.embedP50).padStart(10)}`);
+  console.log(
+    `${row.name.padEnd(width)}  `
+    + `${num(row.setupP50).padStart(9)} ${num(row.setupP95).padStart(7)} ${num(row.setupP99).padStart(7)}  |  `
+    + `${num(row.recallP50).padStart(10)} ${num(row.recallP95).padStart(7)} ${num(row.recallP99).padStart(7)}  |  `
+    + `${num(row.totalP50).padStart(9)} ${num(row.totalP95).padStart(7)} ${num(row.totalP99).padStart(7)}  |  ${fmt(row.embedP50)}`,
+  );
 }
 
 for (const row of rows) {
-  console.log(`\n${row.name} — per-phase breakdown (from the pipeline's own phase timer, ${row.recallAttempts}/${iterations} recall attempt(s) observed):`);
+  console.log(`\n${row.name} — per-phase breakdown (from the pipeline's own phase timer, ${row.recallAttempts}/${iterations} recall attempt(s) observed; share is of RECALL, not total):`);
   if (row.phaseSamples.size === 0) {
     console.log("  (no recall attempted for this scenario — workspace-policy declined or the turn was routed to minimal maintenance before the phase timer was created)");
     continue;
   }
   const phaseNames = [...row.phaseSamples.keys()];
   const phaseWidth = Math.max(...phaseNames.map((p) => displayPhase(p).length), 8);
-  console.log(`  ${"phase".padEnd(phaseWidth)}  ${"p50".padStart(9)}  ${"p95".padStart(9)}  ${"p99".padStart(9)}  ${"share (p50)".padStart(11)}`);
+  console.log(`  ${"phase".padEnd(phaseWidth)}  ${"p50".padStart(9)}  ${"p95".padStart(9)}  ${"p99".padStart(9)}  ${"share of recall (p50)".padStart(22)}`);
   for (const phase of phaseNames) {
     const samples = row.phaseSamples.get(phase);
     const p50 = quantile(samples, 0.5);
     const p95 = quantile(samples, 0.95);
     const p99 = quantile(samples, 0.99);
-    const share = row.p50 > 0 ? `${((p50 / row.p50) * 100).toFixed(1)}%` : "—";
-    console.log(`  ${displayPhase(phase).padEnd(phaseWidth)}  ${fmt(p50).padStart(9)}  ${fmt(p95).padStart(9)}  ${fmt(p99).padStart(9)}  ${share.padStart(11)}`);
+    const share = row.recallP50 > 0 ? `${((p50 / row.recallP50) * 100).toFixed(1)}%` : "—";
+    console.log(`  ${displayPhase(phase).padEnd(phaseWidth)}  ${fmt(p50).padStart(9)}  ${fmt(p95).padStart(9)}  ${fmt(p99).padStart(9)}  ${share.padStart(22)}`);
   }
 }
 
-const allP95 = Math.max(...rows.map((row) => row.p95));
-const allP99 = Math.max(...rows.map((row) => row.p99));
-console.log(`\nworst p95 ${fmt(allP95)}, worst p99 ${fmt(allP99)}`);
-console.log(`\nOwner B6 ("40/60") against this data, all three readings:`);
+const worstRecallP95 = Math.max(...rows.map((row) => row.recallP95));
+const worstRecallP99 = Math.max(...rows.map((row) => row.recallP99));
+const worstTotalP95 = Math.max(...rows.map((row) => row.totalP95));
+console.log(`\nworst RECALL p95 ${fmt(worstRecallP95)}, worst RECALL p99 ${fmt(worstRecallP99)} (worst TOTAL p95 ${fmt(worstTotalP95)}, includes setup — see above)`);
+console.log(`\nOwner B6 ("40/60") against RECALL-only data, all three readings:`);
 console.log(`  this task's framing:         soft  400 ms / hard   600 ms`);
 console.log(`  decisions-for-owner.md B6:   soft  400 ms / hard 1 200 ms`);
 console.log(`  decisions-for-owner.md B6's own fallback recommendation: soft 800 ms / hard 2 500 ms`);
 console.log(`today in code:                 soft 35000 ms (index.js:4538) / hard 45000 ms (lib/runtime-scheduler.js:7)`);
-console.log(allP95 <= 400
-  ? "floor fits the 400 ms soft budget; the remaining headroom is the provider's."
-  : "floor already exceeds the 400 ms soft budget before any provider is involved — report this.");
-console.log(allP95 <= 800
-  ? "floor fits the 800 ms fallback soft budget."
-  : "floor already exceeds even the 800 ms fallback soft budget — report this.");
+console.log(worstRecallP95 <= 400
+  ? "recall-only floor fits the 400 ms soft budget; the remaining headroom is the provider's."
+  : "recall-only floor already exceeds the 400 ms soft budget before any provider is involved — report this.");
+console.log(worstRecallP95 <= 800
+  ? "recall-only floor fits the 800 ms fallback soft budget."
+  : "recall-only floor already exceeds even the 800 ms fallback soft budget — report this.");

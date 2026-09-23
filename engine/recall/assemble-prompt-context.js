@@ -482,7 +482,16 @@ export function createPromptContextAssembler(ctx) {
         _autoRecallBaseParams,
         trace,
         timer,
-        { strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1 },
+        {
+          strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1,
+          // Fix round 2: only fold per-namespace fine-grained phases into the
+          // outer timer when something will actually read them — otherwise
+          // this stays exactly the pre-fix-round behaviour (one coarse
+          // "namespace-recall" entry), including for the timeout-warning log
+          // line at lib/runtime-scheduler.js:456-476, which reads this same
+          // outer timer's summary().
+          recordNamespacePhases: Boolean(recallTimingSink),
+        },
       );
       trace = pipelineTrace || trace;
 

@@ -685,7 +685,16 @@ async function runMergedNamespaceRecall(
   baseParams,
   trace,
   phaseTimer,
-  { strictReadErrors = false } = {},
+  // Fix round 2: `recordNamespacePhases` defaults to false, so this stays a
+  // pure no-op for every existing caller (index.js:4318's `recall:` tool
+  // helper, engine/tools/memory-tools.js's manual `memory_recall` path) and
+  // in production (assemble-prompt-context.js only sets it true when a
+  // recallTimingSink is actually attached, which no real OpenClaw host does
+  // — see that call site). This makes the fold below conditional rather than
+  // relying on a test to prove the outer phaseTimer's observable summary()
+  // (read in production by lib/runtime-scheduler.js:456's timeout-warning
+  // log line) is unaffected.
+  { strictReadErrors = false, recordNamespacePhases = false } = {},
 ) {
   if (!Array.isArray(readDbs) || readDbs.length === 0) {
     return { queryVector: undefined, canonical: [], memories: [], trace };
@@ -727,7 +736,7 @@ async function runMergedNamespaceRecall(
         candidateHardLimit: 100,
         now: requestNow,
       });
-      // Task 19 fix round: fold this namespace's fine-grained phases
+      // Task 19 fix round 2: fold this namespace's fine-grained phases
       // (embedding, vector_search, query_refinement, ... — see
       // lib/recall-pipeline.js's phaseTimer.start/end calls) into the outer
       // phaseTimer, which otherwise only ever sees one coarse
@@ -736,9 +745,14 @@ async function runMergedNamespaceRecall(
       // namespace reads via Promise.allSettled would otherwise interleave
       // start/end calls on a shared timer); this only copies its finished,
       // already-measured entries over via the additive `record()` method,
-      // after that namespace's own recall has fully settled.
-      for (const entry of childTimer.summary().completed) {
-        phaseTimer?.record?.(`${namespace}:${entry.phase}`, entry.ms);
+      // after that namespace's own recall has fully settled. Gated on
+      // `recordNamespacePhases` (default false) so this is skipped entirely
+      // — not just harmlessly no-op, but never executed — unless a caller
+      // opted in; production never does (see the function's JSDoc above).
+      if (recordNamespacePhases) {
+        for (const entry of childTimer.summary().completed) {
+          phaseTimer?.record?.(`${namespace}:${entry.phase}`, entry.ms);
+        }
       }
       return { namespace, sourceKind, optional, result };
     }));
