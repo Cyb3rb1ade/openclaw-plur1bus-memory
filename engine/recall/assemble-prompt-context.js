@@ -8,7 +8,6 @@
  */
 
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { throwIfAborted } from "../../lib/abort.js";
 import { checkAccess } from "../../lib/acl-middleware.js";
@@ -290,7 +289,7 @@ export function createPromptContextAssembler(ctx) {
     // aborted job must degrade here, before it can consume (and thereby hide)
     // the notice a still-pending or future job would otherwise still show.
     throwIfAborted(signal, "recall aborted");
-    const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
+    const pendingStartNotice = consumePlur1busStartNotice(host.stateDir);
     const startNoticeContext = pendingStartNotice
       ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
       : "";

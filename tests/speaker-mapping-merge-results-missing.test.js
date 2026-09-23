@@ -17,6 +17,8 @@ import {
   getMergeResultByMediaOutputId,
   resetSpeakerMappingDbForTests,
 } from "../lib/speaker-mapping-store.js";
+import { bindHostPaths, resetHostPaths } from "../lib/host-paths.js";
+import { envHostPaths } from "../lib/host-services.js";
 
 describe("getMergeResultByMediaOutputId — missing merge_results table", () => {
   let tmpDir, originalStateDir;
@@ -25,11 +27,13 @@ describe("getMergeResultByMediaOutputId — missing merge_results table", () => 
     originalStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "plur1bus-merge-results-"));
     process.env.OPENCLAW_STATE_DIR = tmpDir;
+    bindHostPaths(envHostPaths());
     resetSpeakerMappingDbForTests();
   });
 
   afterEach(async () => {
     resetSpeakerMappingDbForTests();
+    resetHostPaths();
     if (originalStateDir !== undefined) process.env.OPENCLAW_STATE_DIR = originalStateDir;
     else delete process.env.OPENCLAW_STATE_DIR;
     await fs.rm(tmpDir, { recursive: true, force: true });

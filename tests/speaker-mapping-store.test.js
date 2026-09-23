@@ -21,6 +21,8 @@ import {
   resetSpeakerMappingDbForTests,
   setManualSpeakerMapping,
 } from "../lib/speaker-mapping-store.js";
+import { bindHostPaths, resetHostPaths } from "../lib/host-paths.js";
+import { envHostPaths } from "../lib/host-services.js";
 
 let originalStateDir;
 let tmpDir;
@@ -30,11 +32,13 @@ describe("speaker-mapping-store", () => {
     originalStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "plur1bus-speaker-mapping-"));
     process.env.OPENCLAW_STATE_DIR = tmpDir;
+    bindHostPaths(envHostPaths());
     resetSpeakerMappingDbForTests();
   });
 
   afterEach(async () => {
     resetSpeakerMappingDbForTests();
+    resetHostPaths();
     if (originalStateDir !== undefined) {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
     } else {

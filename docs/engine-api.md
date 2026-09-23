@@ -1,7 +1,7 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.2.0** · frozen at 1.0.0 on 2026-09-22, amended twice under
-the amendment policy · source of truth: `types/engine.d.ts`
+**Contract version 1.3.0** · frozen at 1.0.0 on 2026-09-22, amended three times
+under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
 `types/engine.conformance.ts` fails `npm run typecheck` if the two disagree on
@@ -41,6 +41,7 @@ changelog:
 
 - **1.1.0** — `SecurePathResult.reason` gains `"acl-tool-unavailable"` (Task 5).
 - **1.2.0** — `HostServices.workspaceDir` becomes async (Task 6).
+- **1.3.0** — `HostServices.configPath()`, `HostServices.routing?`, `HostServices.pathOverrides?` (G1 closure, M1b-1 Task 11).
 
 ## The two halves
 

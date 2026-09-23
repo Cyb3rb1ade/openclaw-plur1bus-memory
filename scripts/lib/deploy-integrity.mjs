@@ -34,6 +34,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-cron.js",
   "adapter/openclaw/join-recall.js",
   "adapter/openclaw/turn-principal.js",
+  "adapter/openclaw/host-probes.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
   "engine/checkpoint/checkpoint-store.js",
@@ -340,6 +341,10 @@ export const DEPLOY_FILES = [
   // index.js rewrite, which does import it, does not trip the DEPLOY_FILES
   // coverage tests.
   "lib/host-services.js",
+  "lib/host-paths.js",
+  "lib/host-sdk-loader.js",
+  "lib/plugin-meta.js",
+  "lib/feature-crons-hint.js",
   "lib/proactive-nudge.js",
   "lib/query-refiner.js",
   "lib/temporal-parser.js",

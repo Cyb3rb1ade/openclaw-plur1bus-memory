@@ -9,8 +9,6 @@
 
 import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { resolveCurationRecord } from "../../lib/curation-resolve.js";
 import { applyDropInjected, previewDropInjected } from "../../lib/drop-injected-conflicts.js";
 import { DEFAULT_TEMPERAMENTS } from "../../lib/emotional-state.js";
@@ -253,8 +251,8 @@ export function createPlur1busCommandRunner(ctx) {
           runtimeConfig = host.runtime.config;
         }
       } catch (_e) { dbg(_e); }
-      const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
-      const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
+      const openclawHome = host.stateDir;
+      const openclawConfigPath = host.configPath();
       const obsidianTokens = actionKey === "obsidian" ? tokens.slice(1) : tokens;
       // Resolve the vault the way the handler will, so the confirmed
       // receipt is looked up under the same path it was written for.
@@ -453,7 +451,7 @@ export function createPlur1busCommandRunner(ctx) {
       return internalRun.output;
     }
     if (actionKey === "start") {
-      const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+      const openclawHome = host.stateDir;
       const statusText = renderPlur1busStartStatus(cfg, {
         vaultPath: cfg.obsidianBridge?.vaultPath || null,
         workspaceRoot: cfg.obsidianBridge?.workspaceRoot || null,
@@ -483,8 +481,8 @@ export function createPlur1busCommandRunner(ctx) {
       if (cfg.security?.allowChatConfigCommands === false) {
         return { text: t("plur1bus.setup_blocked", { lang, tone }) };
       }
-      const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
-      const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
+      const openclawHome = host.stateDir;
+      const openclawConfigPath = host.configPath();
       const writeResult = withConfigLock(openclawConfigPath, () => {
         let rawTemperamentCfg;
         try {
@@ -591,8 +589,8 @@ export function createPlur1busCommandRunner(ctx) {
         return { text: t("plur1bus.setup_blocked", { lang, tone }) };
       }
       const profileName = sub?.toLowerCase() || "";
-      const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
-      const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
+      const openclawHome = host.stateDir;
+      const openclawConfigPath = host.configPath();
       if (profileName === "crons") {
         const cronsAgent = commandOption(tokens, "--agent", "") || null;
         const cronsAccount = commandOption(tokens, "--account", "") || null;

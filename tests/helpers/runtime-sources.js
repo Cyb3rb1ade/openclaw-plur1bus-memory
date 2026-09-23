@@ -62,6 +62,7 @@ const ADAPTER_PATHS = Object.freeze({
   tools: "adapter/openclaw/register-tools.js",
   turnRoute: "adapter/openclaw/register-turn-route.js",
   turnPrincipal: "adapter/openclaw/turn-principal.js",
+  hostProbes: "adapter/openclaw/host-probes.js",
 });
 
 function listJsFiles(relativeDir) {

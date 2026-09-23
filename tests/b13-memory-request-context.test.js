@@ -248,9 +248,17 @@ describe("B13 canonical memory request context", () => {
       resolveAgentWorkspaceDir: async () => { workspaceCalls++; return "/unused"; },
     }), /loader failed/);
     assert.equal(workspaceCalls, 0);
-    const source = readFileSync(new URL("../lib/memory-request-context.js", import.meta.url), "utf8");
-    assert.match(source, /import\("openclaw\/plugin-sdk\/routing"\)/);
-    assert.doesNotMatch(source, /^import .*openclaw\/plugin-sdk\/routing/m);
+    // G1 (M1b-1 Task 11): lib/memory-request-context.js no longer defaults
+    // importRouting to a lazy `import("openclaw/plugin-sdk/routing")` — that
+    // default now lives on the host (lib/host-services.js's
+    // createHostServices), and without one, createHostRoutingLoader's own
+    // default (missingHostRouting) rejects instead of reaching into OpenClaw.
+    const contextSource = readFileSync(new URL("../lib/memory-request-context.js", import.meta.url), "utf8");
+    assert.doesNotMatch(contextSource, /openclaw\/plugin-sdk\/routing/);
+    const hostServicesSource = readFileSync(new URL("../lib/host-services.js", import.meta.url), "utf8");
+    assert.match(hostServicesSource, /import\("openclaw\/plugin-sdk\/routing"\)/);
+    assert.doesNotMatch(hostServicesSource, /^import .*openclaw\/plugin-sdk\/routing/m);
+    await assert.rejects(() => createHostRoutingLoader()(), /host routing capability not provided/);
   });
 
   it("loads, validates, and memoizes the public incognito classifier lazily", async () => {

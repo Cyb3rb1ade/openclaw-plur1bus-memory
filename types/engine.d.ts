@@ -1,9 +1,9 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.2.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended twice under the policy below — see the changelog at the end of
- * this header).
+ * Contract version 1.3.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended three times under the policy below — see the changelog at the end
+ * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
  * differently (review-report finding S4). Where ADR-002 and
@@ -32,9 +32,10 @@
  *
  * Changelog: 1.1.0 — SecurePathResult.reason gains "acl-tool-unavailable" (Task 5).
  *            1.2.0 — HostServices.workspaceDir becomes async (Task 6).
+ *            1.3.0 — HostServices.configPath(), HostServices.routing?, HostServices.pathOverrides? (G1 closure, M1b-1 Task 11).
  */
 
-export type ContractVersion = "1.2.0";
+export type ContractVersion = "1.3.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -149,6 +150,13 @@ export interface HostServices {
   logger: Logger;
   /** Replaces OPENCLAW_HOME (index.js:12425). */
   stateDir: string;
+  /** The host's config file. Replaces OPENCLAW_CONFIG_PATH reads in engine code. */
+  configPath(): string;
+  /** Loads the host's routing capability (four session/channel parsers).
+   *  Absent: turn identity degrades to the agent's own context. */
+  routing?(): Promise<unknown>;
+  /** Raw path overrides lib/ defaults honour (lib/host-paths.js); absent: ~/.openclaw. */
+  pathOverrides?: HostPathOverrides;
   /** Replaces memory-host-runtime.js:104-111. A harness agent without a real
    *  workspace gets a synthetic one under `stateDir` (engine-extraction R7). */
   workspaceDir(agentId: AgentId): Promise<string | undefined>;
@@ -163,6 +171,12 @@ export interface HostServices {
   /** Host runtime escape hatch; `null` when the host exposes none. Replaces
    *  runtimeIfUsable(api) (runtime-shutdown.js:35). */
   runtime: HostRuntime | null;
+}
+
+export interface HostPathOverrides {
+  openclawHome?(): string | undefined;
+  configPathOverride?(): string | undefined;
+  stateDirOverride?(): string | undefined;
 }
 
 export interface HostRuntime {

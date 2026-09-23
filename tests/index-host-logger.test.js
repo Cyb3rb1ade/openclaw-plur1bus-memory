@@ -18,21 +18,16 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// These four functions are declared at module top level, *before* `register()`
-// runs, and each takes its own `api` parameter — the real OpenClaw plugin
-// capability surface (they also call `api.registerGatewayMethod`,
+// Five functions took their own `api` parameter — the real OpenClaw plugin
+// capability surface (they also called `api.registerGatewayMethod`,
 // `api.registerCli`, `runtimeIfUsable(api)`, etc., none of which HostServices
-// exposes). `host` does not exist in their scope, and three of them
-// (`inspectCronNativeCapabilities`, `reconcileUnsafeDirectCronsWithService`,
-// `runDeferredFeatureCronBootstrap`) are called directly by other test files
-// with a hand-built `api` stub, bypassing `register()`/`host` entirely. Their
-// `api.logger` reads are therefore intentionally out of scope for PR-02b.
-const HOST_LOGGER_EXEMPT_FUNCTIONS = [
-  ["function inspectCronNativeCapabilities(api) {", "function guardUnsafeDirectCronTurn(event, context, { hostReady } = {}) {"],
-  ["async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {", "async function runDeferredFeatureCronBootstrap(api, {"],
-  ["async function runDeferredFeatureCronBootstrap(api, {", "function parseFeatureCronBootstrapLastPlanCreateCount(stdout) {"],
-  ["function makeReactionsCapabilityChecker(api) {", "export function parseConfirmationCommand(args) {"],
-];
+// exposes) — and were declared at module top level, *before* `register()`
+// ran, so `host` did not exist in their scope. G1 (M1b-1 Task 11) moved all
+// five out of index.js into adapter/openclaw/host-probes.js (outside this
+// test's scope by design), so index.js no longer contains any `api.logger`
+// or `runtimeIfUsable(api)` reads at all, and no exemption list is needed
+// any more.
+const HOST_LOGGER_EXEMPT_FUNCTIONS = [];
 
 function exemptLineNumbers(source, exemptFunctions = HOST_LOGGER_EXEMPT_FUNCTIONS) {
   const lines = source.split("\n");
@@ -48,18 +43,11 @@ function exemptLineNumbers(source, exemptFunctions = HOST_LOGGER_EXEMPT_FUNCTION
 }
 
 // PR-02c: index.js reaches the host runtime through `host.runtime` instead of
-// calling `runtimeIfUsable(api)` directly. The same four pre-register
-// api-surface helpers above are exempt (no `host` in their scope), plus a
-// fifth: `resolveNeoHooksConfig`. It is also declared at module top level
-// before `register()` and takes its own `api` parameter, but it was never
-// added to HOST_LOGGER_EXEMPT_FUNCTIONS because it already read
-// `api?.logger` (optional chaining) rather than `api.logger`, so PR-02b's
-// regex never flagged it. It has the identical structural problem here:
-// `host` does not exist in its scope.
-const HOST_RUNTIME_EXEMPT_FUNCTIONS = [
-  ...HOST_LOGGER_EXEMPT_FUNCTIONS,
-  ["function resolveNeoHooksConfig(api, commandConfig) {", "function formatJsonCommandResult(value) {"],
-];
+// calling `runtimeIfUsable(api)` directly. `resolveNeoHooksConfig` had the
+// same structural problem (its own `api` parameter, no `host` in scope) and
+// moved to adapter/openclaw/host-probes.js alongside the other four in G1
+// (M1b-1 Task 11), so no exemption is needed here either.
+const HOST_RUNTIME_EXEMPT_FUNCTIONS = [...HOST_LOGGER_EXEMPT_FUNCTIONS];
 
 describe("PR-02b host logger", () => {
   it("index.js no longer reads api.logger outside the pre-register api-surface helpers", () => {

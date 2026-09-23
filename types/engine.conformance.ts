@@ -62,6 +62,7 @@ assertTrue<Exact<(typeof run)["outcome"], "completed" | "skipped" | "failed" | "
 const minimalHost: HostServices = {
   logger: { info() {}, warn() {}, error() {}, debug() {} },
   stateDir: "/tmp/plur1bus",
+  configPath: () => "/tmp/plur1bus/openclaw.json",
   workspaceDir: async () => undefined,
   config: (): EngineConfig => ({}),
   platform: {
@@ -73,3 +74,7 @@ const minimalHost: HostServices = {
   runtime: null,
 };
 void minimalHost;
+
+// 1.3.0: routing and path overrides are optional host capabilities.
+const hostWithRouting: HostServices = { ...minimalHost, routing: async () => ({}), pathOverrides: { openclawHome: () => undefined } };
+void hostWithRouting;
