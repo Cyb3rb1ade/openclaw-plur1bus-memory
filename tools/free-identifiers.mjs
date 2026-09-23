@@ -101,14 +101,19 @@ const free = new Map();
 // The line `register(api, registrationDependencies = {})` begins on. It only
 // separates "declared at module top level, so import it" from "declared inside
 // `register`, so pass it in". Every task that moves code out of index.js shifts
-// it, and a stale value degrades quietly, so it is self-checked below.
-// Re-derived at abea9503: `grep -n 'register(api' index.js`.
-const registerStart = 4396;
-// Only index.js has a `register`; for any other file the constant is irrelevant
-// (nothing is module-scope-and-after-it) and the check would be noise.
-if (/(^|[\\/])index\.js$/.test(file) && !/\bregister\s*\(\s*api\b/.test(sourceLines[registerStart - 1] ?? "")) {
-  fail("registerStart is stale — re-derive with grep -n 'register(api'");
+// it, so it is derived from the source instead of being hand-maintained: a
+// constant went stale on every single PR-03 task and degraded quietly.
+const registerLines = [];
+for (let i = 0; i < sourceLines.length; i++) {
+  if (/\bregister\s*\(\s*api\b/.test(sourceLines[i])) registerLines.push(i + 1);
 }
+// Only index.js has a `register`; for any other file the boundary is irrelevant
+// (nothing is module-scope-and-after-it), so it degrades to "everything
+// module-scope is module-scope" rather than failing on an unrelated file.
+if (/(^|[\\/])index\.js$/.test(file) && registerLines.length !== 1) {
+  fail(`expected exactly one \`register(api\` line in ${file}, found ${registerLines.length}`);
+}
+const registerStart = registerLines.length === 1 ? registerLines[0] : Number.POSITIVE_INFINITY;
 const scopes = [new Map()];
 
 function isScopeNode(n) {
