@@ -1,0 +1,19 @@
+/**
+ * adapter/openclaw/register-maintenance-hook.js
+ *
+ * Registers the auto-recall-off before_prompt_build branch. The OpenClaw hook
+ * default of 15 000 ms applies (no timeoutMs was declared here before and none
+ * is declared now — host-contract §a.1).
+ */
+
+import { createMinimalMaintenance } from "../../engine/recall/minimal-maintenance.js";
+
+/**
+ * @param {object} ctx Registration context: the engine context plus `api`.
+ * @param {object} ctx.api OpenClaw plugin API (`api.on`).
+ * @returns {void}
+ */
+export function registerMaintenanceHook(ctx) {
+  const handler = createMinimalMaintenance(ctx);
+  ctx.api.on("before_prompt_build", handler);
+}

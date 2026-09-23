@@ -22,6 +22,22 @@ export const DEPLOY_FILES = [
   // Laufzeit nimmt zwar das Plugin-Manifest, aber zwei widersprechende
   // Versionsangaben im selben Verzeichnis fuehren jede Diagnose in die Irre.
   "package.json",
+  // ── adapter (OpenClaw-only, engine-extraction M1a) ──────────────────────────
+  "adapter/openclaw/register-turn-route.js",
+  "adapter/openclaw/register-maintenance-hook.js",
+  "adapter/openclaw/register-recall-hook.js",
+  "adapter/openclaw/register-capture-hook.js",
+  "adapter/openclaw/register-commands.js",
+  "adapter/openclaw/register-prompt-supplements.js",
+  "adapter/openclaw/register-tools.js",
+  "adapter/openclaw/register-gateway.js",
+  "adapter/openclaw/register-cron.js",
+  // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
+  "engine/capture/capture-turn.js",
+  "engine/commands/plur1bus-command.js",
+  "engine/recall/assemble-prompt-context.js",
+  "engine/recall/minimal-maintenance.js",
+  "engine/tools/memory-tools.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
   "lib/neo-worker-runner.js",
@@ -306,6 +322,11 @@ export const DEPLOY_FILES = [
   "lib/obsidian/weekly-synthesis.js",
   "lib/pattern-detector-embedding.js",
   "lib/pattern-detector.js",
+  "lib/platform.js",
+  // Not yet imported by index.js (Task 6, PR-02a) — listed early so Task 7's
+  // index.js rewrite, which does import it, does not trip the DEPLOY_FILES
+  // coverage tests.
+  "lib/host-services.js",
   "lib/proactive-nudge.js",
   "lib/query-refiner.js",
   "lib/temporal-parser.js",
@@ -333,11 +354,14 @@ export const DEPLOY_FILES = [
   "scripts/importance-metrics.mjs",
   "scripts/dedupe-memory-ids.mjs",
   "scripts/importance-backfill.mjs",
+  "scripts/lint-engine-imports.mjs",
+  "scripts/lint-no-api-outside-adapter.mjs",
   "scripts/repair-tombstones.mjs",
   "scripts/reapply-tombstones.mjs",
   "scripts/run-graph-links-once.mjs",
   "scripts/run-semantic-discover-once.mjs",
   "scripts/run-semantic-link-index-phase43c.mjs",
+  "scripts/typecheck.mjs",
   "scripts/verify-plugin-deploy.mjs",
   "scripts/verify-workspace-writer.mjs",
   "scripts/lib/deploy-integrity.mjs",

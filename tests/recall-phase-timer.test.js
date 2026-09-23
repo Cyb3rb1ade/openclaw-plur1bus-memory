@@ -103,4 +103,66 @@ describe("recall-phase-timer", () => {
     timer.end("scoring");
     assert.strictEqual(timer.activePhase(), null);
   });
+
+  describe("record() — Task 19 fix round: folding a nested timer's finished phases in", () => {
+    it("appends a phase to completed() without needing a start/end pair", () => {
+      const timer = createRecallPhaseTimer({});
+      timer.record("private:vector_search", 12);
+      const summary = timer.summary();
+      assert.strictEqual(summary.completed.length, 1);
+      assert.strictEqual(summary.completed[0].phase, "private:vector_search");
+      assert.strictEqual(summary.completed[0].ms, 12);
+    });
+
+    it("clamps a negative duration to 0", () => {
+      const timer = createRecallPhaseTimer({});
+      timer.record("private:embedding", -5);
+      assert.strictEqual(timer.summary().completed[0].ms, 0);
+    });
+
+    it("clamps a NaN duration to 0", () => {
+      const timer = createRecallPhaseTimer({});
+      timer.record("private:embedding", NaN);
+      assert.strictEqual(timer.summary().completed[0].ms, 0);
+    });
+
+    it("is a no-op for a non-string or empty phase name", () => {
+      const timer = createRecallPhaseTimer({});
+      timer.record("", 5);
+      timer.record(null, 5);
+      timer.record(undefined, 5);
+      assert.strictEqual(timer.summary().completed.length, 0);
+    });
+
+    it("does not touch firstStart/elapsedMs() when called before any start()", () => {
+      const timer = createRecallPhaseTimer({});
+      timer.record("private:vector_search", 12);
+      // firstStart is only set by start(); record() must not set it, or a
+      // recall that only ever folds child-timer entries in (no top-level
+      // start/end of its own around that point) would suddenly report a
+      // non-zero elapsedMs()/isSoftBudgetExceeded() from record() alone.
+      assert.strictEqual(timer.elapsedMs(), 0);
+    });
+
+    it("does not disturb an in-progress start()/end() cycle or the active phase", async () => {
+      const timer = createRecallPhaseTimer({ softBudgetMs: 100, hardTimeoutMs: 200 });
+      timer.start("embedding");
+      timer.record("private:vector_search", 42);
+      // record() must not auto-close the active phase the way a second
+      // start() would.
+      assert.strictEqual(timer.activePhase(), "embedding");
+      timer.end("embedding");
+      const summary = timer.summary();
+      assert.strictEqual(summary.completed.length, 2);
+      assert.deepEqual(summary.completed.map((c) => c.phase), ["private:vector_search", "embedding"]);
+      assert.strictEqual(timer.activePhase(), null);
+    });
+
+    it("participates in the same bounded completed() ring as start()/end()", () => {
+      const timer = createRecallPhaseTimer({});
+      for (let i = 0; i < 40; i++) timer.record(`child-${i}`, i);
+      assert.strictEqual(timer.summary().completed.length, 32);
+      assert.strictEqual(timer.summary().completed[0].phase, "child-8");
+    });
+  });
 });

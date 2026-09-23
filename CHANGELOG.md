@@ -5,6 +5,62 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Hinzugefügt
+
+- **Eingefrorener Engine-Vertrag** in `types/engine.d.ts` (Contract 1.2.0,
+  eingefroren bei 1.0.0, seitdem zweimal geändert: 1.1.0 fügt
+  `SecurePathResult.reason: "acl-tool-unavailable"` hinzu, 1.2.0 macht
+  `HostServices.workspaceDir` asynchron) plus `npm run typecheck`. Reicht
+  `Host`/`HostServices`, `Engine`, `Principal`, `AgentContext`, `TurnOrigin`,
+  `RecallQuery`/`RecallResult`, `CaptureHandle` und `JobRun` in einer Form ein,
+  gegen die beide Adapter geschrieben werden.
+- **`lib/platform.js`** mit `securePath`, `ipcAddress`, `isUnsafeLink` und
+  `canonicalIdentityPath`.
+- **`lib/host-services.js`** — `createHostServices(api)` und `createStubHost()`.
+- **Golden-Prefix-Korpus** (`tests/fixtures/golden-prefix/`): sieben
+  synthetische Szenarien, deren `prependContext` byteweise festgehalten ist.
+- **`bench/recall-budget-probe.mjs`** und
+  `bench/results/2026-09-22-recall-budget-probe.md` — p50/p95/p99 der
+  Recall-Latenz gegen den synthetischen Golden-Prefix-Korpus mit
+  Stub-Embedder; bei N=20 Stichproben entsprechen p95 und p99 dem
+  Stichproben-Maximum (nearest-rank, floor).
+- **`tools/free-identifiers.mjs`** — Scope-Analyse über die TypeScript-Compiler-
+  API (keine neue Abhängigkeit), benutzt um die Extraktionsgrenzen zu ziehen.
+- **`scripts/lint-engine-imports.mjs`, `scripts/lint-no-api-outside-adapter.mjs`,
+  `scripts/typecheck.mjs`** — alle drei in `npm run lint` verdrahtet.
+- **`tests/helpers/runtime-sources.js`** (`readRuntimeSources()`).
+- **`docs/engine-api.md`** und die Spalte *Harness behaviour* in
+  `docs/compatibility-openclaw.md`.
+- Optionaler, testinterner Kontext-Schlüssel `recallTimingSink` (additiv, in
+  Produktion ein No-op).
+
+### Geändert
+
+- `index.js` ist auf die Konstruktion und die Registrierungsaufrufe reduziert;
+  Recall, Capture, Kommandos und Tools liegen unter `engine/`, jede
+  `api.on`/`api.register*`-Stelle unter `adapter/openclaw/`. **Kein
+  Verhaltensunterschied** — die volle Suite und der Golden-Prefix-Korpus sind
+  die Gates.
+- `index.js` liest den Logger jetzt über `HostServices` (`host.logger`) statt
+  direkt über `api.logger`; die fünf host-gekoppelten Funktionen vor
+  `register()` (`inspectCronNativeCapabilities`,
+  `reconcileUnsafeDirectCronsWithService`, `runDeferredFeatureCronBootstrap`,
+  `makeReactionsCapabilityChecker`, `resolveNeoHooksConfig`) bleiben davon
+  ausgenommen, da sie ihren eigenen `api`-Parameter tragen statt `host` aus
+  einem Closure zu lesen.
+
+### Behoben
+
+- `process.env.HOME` wird nicht mehr als Home-Verzeichnis benutzt
+  (`lib/providers/openclaw-memory-embedding-adapters.js`); unter Windows ist
+  die Variable nicht gesetzt, der Modell-Cache landete im Arbeitsverzeichnis.
+- Alle `chmod`-Stellen laufen über `securePath`, das unter Windows eine
+  benutzergebundene ACL setzt statt nur das Read-only-Bit; wenn das ACL-Tool
+  fehlt, wird das jetzt abgefangen statt die Operation scheitern zu lassen
+  (ein anderer Fehler des ACL-Tools wird weiterhin nicht abgefangen).
+
 ## [7.15.4] — 2026-09-21
 
 ### Behoben

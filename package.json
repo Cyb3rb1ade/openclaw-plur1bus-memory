@@ -21,11 +21,15 @@
   "files": [
     "index.js",
     "lib/",
+    "engine/",
+    "adapter/",
     "scripts/",
+    "types/",
     "docs/audits/",
     "docs/runbooks/",
     "docs/configuration.md",
     "docs/compatibility-openclaw.md",
+    "docs/engine-api.md",
     "docs/recall-architecture.md",
     "docs/migration-v6.md",
     "docs/release-checklist.md",
@@ -37,7 +41,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "lint": "node --check index.js && find lib tests test -name '*.js' -exec node --check {} + && find scripts -name '*.mjs' -exec node --check {} +",
+    "lint": "node --check index.js && find lib engine adapter tests test -name '*.js' -exec node --check {} + && find scripts tools engine adapter -name '*.mjs' -exec node --check {} + && node scripts/typecheck.mjs && node scripts/lint-no-api-outside-adapter.mjs && node scripts/lint-engine-imports.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
     "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
     "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
     "repair": "node scripts/repair-installed-plugin.mjs",

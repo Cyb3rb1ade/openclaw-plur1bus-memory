@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
 
@@ -30,23 +31,27 @@ describe("native cron direct-dispatch wiring", () => {
 
   it("ships and registers only capability-gated native integration", () => {
     const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-    const indexSource = readFileSync(path.join(repoRoot, "index.js"), "utf8");
+    const { index: indexSource, adapter } = readRuntimeSources();
     const runtimeSource = readFileSync(
       path.join(repoRoot, "lib/setup/feature-cron-plugin-runtime.js"),
       "utf8",
     );
+    // PR-03i moved the two feature-cron registrations into the OpenClaw
+    // adapter; the pure logic they call stays in index.js.
+    const cronSource = adapter.cron;
 
     assert.ok(!packageJson.files.includes("patches/apply-cron-plugin-direct-dispatch.mjs"));
     assert.doesNotMatch(indexSource, /applyCronPluginDirectDispatchPatch/);
     assert.doesNotMatch(indexSource, /resolveOpenClawDistDir/);
     assert.doesNotMatch(runtimeSource, /apply-cron-plugin-direct-dispatch/);
     assert.match(indexSource, /inspectCronNativeCapabilities\(api\)/);
-    assert.match(indexSource, /force: !cronDirectDispatchReady/);
-    assert.match(indexSource, /cronDirectDispatchReady \? 90_000 : 0/);
-    assert.match(indexSource, /await reconcileUnsafeDirectCronsWithService\(api, gatewayContext\)/);
+    assert.match(cronSource, /force: !cronDirectDispatchReady/);
+    assert.match(cronSource, /cronDirectDispatchReady \? 90_000 : 0/);
+    assert.match(cronSource, /await reconcileUnsafeDirectCronsWithService\(api, gatewayContext\)/);
     assert.match(indexSource, /cron\.list\(\{ includeDisabled: true \}\)/);
     assert.match(indexSource, /Promise\.resolve\(cron\.update\(job\.id/);
-    assert.match(indexSource, /api\.on\(\s*"before_agent_reply"/);
+    assert.match(cronSource, /api\.on\(\s*"before_agent_reply"/);
+    assert.match(cronSource, /guardUnsafeDirectCronTurn/);
     assert.match(indexSource, /guardUnsafeDirectCronTurn/);
   });
 
