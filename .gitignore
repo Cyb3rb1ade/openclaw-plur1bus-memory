@@ -61,6 +61,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/migrate-neo-vectors-sidecar.mjs
 !scripts/build-neo-candidate-index.mjs
 !scripts/typecheck.mjs
+!scripts/lint-no-api-outside-adapter.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
 !scripts/lib/find-deploy-dir.mjs
