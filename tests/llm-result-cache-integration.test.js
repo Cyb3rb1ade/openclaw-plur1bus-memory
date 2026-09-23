@@ -515,7 +515,16 @@ describe("deterministic LLM result-cache allowlist", () => {
     assert.doesNotMatch(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
     assert.doesNotMatch(source, /makeQuerySummarizer\(mergingLlmCfg/);
     assert.match(source, /summarizeForCapture\([\s\S]{0,250}?captureSummaryLlmCfg/);
-    assert.equal(countMatches(source, /makeQuerySummarizer\(\s*(?:mergingEnabled\s*\?\s*)?recallQueryLlmCfg/g), 5);
+    // PR-03d (engine-extraction M1a) moved the recall assembly's
+    // makeQuerySummarizer(...) call site out of index.js into
+    // engine/recall/assemble-prompt-context.js; the count spans both files so
+    // every scoped summarizer stays covered, not just the ones still in index.js.
+    const summarizerPattern = /makeQuerySummarizer\(\s*(?:mergingEnabled\s*\?\s*)?recallQueryLlmCfg/g;
+    const assemblePromptContextSource = readSource("engine/recall/assemble-prompt-context.js");
+    assert.equal(
+      countMatches(source, summarizerPattern) + countMatches(assemblePromptContextSource, summarizerPattern),
+      5
+    );
     assert.equal(countMatches(bridgeStoreSection, /callMergeCheck\([\s\S]{0,220}?mergingLlmCfg,[\s\S]{0,80}?storeAgentId,[\s\S]{0,80}?storeCtx\.callContext/g), 1);
     assert.equal(countMatches(modelStoreSection, /callMergeCheck\(authoritativeCandidate\.text, params\.text, mergingLlmCfg, agentId\)/g), 1);
     assert.equal(countMatches(bridgeStoreSection, /withDurableMerge\(\{\s*db: storeDb,\s*agentId: storeAgentId,/g), 1);
