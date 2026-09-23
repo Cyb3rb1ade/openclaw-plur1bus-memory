@@ -9,7 +9,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -155,7 +155,14 @@ export async function runScenario(scenario) {
   try {
     mkdirSync(join(workspaceDir, "memory"), { recursive: true });
     if (scenario.knowledge) {
-      writeFileSync(join(workspaceDir, "memory", "KNOWLEDGE.md"), scenario.knowledge);
+      const knowledgePath = join(workspaceDir, "memory", "KNOWLEDGE.md");
+      writeFileSync(knowledgePath, scenario.knowledge);
+      // A canonical KNOWLEDGE.md hit has no row of its own, so its age comes
+      // from the file's mtime (`knowledgeMtimeMs`, lib/recall-pipeline.js:902).
+      // freezeClock cannot reach the filesystem, so pin the mtime too or the
+      // canonical record's created-at is real wall-clock time.
+      const frozenSeconds = FROZEN_NOW / 1000;
+      utimesSync(knowledgePath, frozenSeconds, frozenSeconds);
     }
     const db = new MemoryDB(join(baseDbPath, scenario.agentId), VECTOR_DIM);
     for (const memory of scenario.memories) {
