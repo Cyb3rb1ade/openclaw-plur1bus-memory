@@ -149,7 +149,12 @@ export function createPlur1busCommandRunner(ctx) {
   if (jobs) {
     const runInternalJob = createInternalJobBodies({ ...ctx });
     const defaultInput = async (agentId, jobName) => {
-      const workspaceDir = await host.workspaceDir(agentId);
+      let workspaceDir;
+      try {
+        workspaceDir = await host.workspaceDir(agentId);
+      } catch (error) {
+        host.logger.debug(`plur1bus job ${jobName}[${agentId}]: workspaceDir unresolved: ${String(error?.message || error)}`);
+      }
       const commandCtx = {
         agentId,
         channel: "cron",

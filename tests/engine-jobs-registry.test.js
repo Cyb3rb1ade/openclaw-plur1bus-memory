@@ -183,9 +183,10 @@ describe("createPlur1busCommandRunner defaultInput (fix round 1)", () => {
   it("backs a harness-triggered episodes-rebuild without a TypeError on tokens/id", async () => {
     const jobs = createJobRegistry({ host: createStubHost() });
     const neoStoreStub = { readEpisodes: () => [], readTurns: () => [], readHooks: () => ({}) };
+    const episodesRebuildWorkspaceDir = makeTempDir("plur1bus-episodes-rebuild-ws-");
     createPlur1busCommandRunner({
       jobs,
-      host: { config: () => ({}), workspaceDir: async () => "/tmp/plur1bus-episodes-rebuild-ws", logger: noopLogger() },
+      host: { config: () => ({}), workspaceDir: async () => episodesRebuildWorkspaceDir, logger: noopLogger() },
       checkArgsLength: () => null,
       parsePlur1busArgs: () => [],
       isCronCommandContext: () => false,
@@ -223,6 +224,40 @@ describe("createPlur1busCommandRunner defaultInput (fix round 1)", () => {
     await jobs.run("gc-run", "agent-x", { trigger: "harness" });
     assert.equal(capturedCommandCtx.length, 1);
     assert.equal(capturedCommandCtx[0].workspaceDir, "/ws/agent-x");
+  });
+
+  it("degrades to no workspace instead of failing the job when the host resolver rejects (fix round 2)", async () => {
+    const jobs = createJobRegistry({ host: createStubHost() });
+    const debugLines = [];
+    const rejectingHost = {
+      config: () => ({}),
+      workspaceDir: async () => { throw new Error("resolver unavailable"); },
+      logger: { ...noopLogger(), debug: (msg) => debugLines.push(msg) },
+    };
+    createPlur1busCommandRunner({
+      jobs,
+      host: rejectingHost,
+      checkArgsLength: () => null,
+      parsePlur1busArgs: () => [],
+      isCronCommandContext: () => false,
+      resolveCronMemoryContext: async (commandCtx) => ({ agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, workspaceIdentity: "ws" }),
+      resolveRegisteredMemoryContext: async () => ({}),
+      workspacePolicyGuard: { decision: () => ({ allowed: true }) },
+      getNeoStore: () => ({}),
+      cfg: { gc: { enabled: false } },
+      formatJsonCommandResult: (x) => x,
+    });
+    // A job that never reads workspaceDir (gc-run: it skips on cfg.gc.enabled
+    // === false) must not turn `failed` just because the resolver rejected.
+    const gcRun = await jobs.run("gc-run", "agent-a", { trigger: "harness" });
+    assert.equal(gcRun.outcome, "skipped", gcRun.outcome === "failed" ? String(gcRun.error) : undefined);
+    assert.equal(gcRun.reason, "gc_disabled");
+    // A job that does read commandCtx.workspaceDir degrades to its normal
+    // no-workspace skip instead of failing.
+    const feedbackReport = await jobs.run("feedback-report", "agent-a", { trigger: "harness" });
+    assert.equal(feedbackReport.outcome, "skipped", feedbackReport.outcome === "failed" ? String(feedbackReport.error) : undefined);
+    assert.equal(feedbackReport.reason, "no_workspace");
+    assert.ok(debugLines.some((line) => /workspaceDir unresolved/.test(line)), "the rejection is logged at debug");
   });
 });
 
