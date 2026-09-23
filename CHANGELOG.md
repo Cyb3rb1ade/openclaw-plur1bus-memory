@@ -74,6 +74,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Der innere Cap ist jetzt über `recall.memoriesMaxChars` (Default weiterhin
   `12000`, additiv, verhaltensneutral) konfigurierbar; siehe
   `docs/configuration.md` für das Zusammenspiel beider Werte.
+- Das Golden-Prefix-Szenario `recall-over-budget` war falsch benannt: sein
+  Kommentar versprach den 17 000-Zeichen-Cap, tatsächlich pinnt es einen
+  gewöhnlichen zweizeiligen Prefix (~1 100 Zeichen) — der 12 KB `FILLER`
+  jedes Records erreicht den Prompt nie, weil nur die auf 400 Zeichen
+  gedeckelte Summary angezeigt wird. Umbenannt zu
+  `recall-large-text-records` (`git mv`, Oracle-Bytes unverändert), Kommentar
+  korrigiert; alle Referenzen aktualisiert.
 
 ## [7.15.4] — 2026-09-21
 
