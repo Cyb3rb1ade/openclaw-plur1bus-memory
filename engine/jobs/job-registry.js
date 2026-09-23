@@ -76,6 +76,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
   const ledgers = new Map();
   const recovered = new Set();
   const warnedLedgerUnwritable = new Set();
+  const migratedStores = new Set();
 
   function ledgerFor(agentId) {
     if (!jobsRoot) return null;
@@ -157,7 +158,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     owners.set(name, { body, defaultInput });
   }
 
-  function jobContext(inflight, { signal, input, snapshot }) {
+  function jobContext(inflight, { signal, input, snapshot, ledger }) {
     return Object.freeze({
       agentId: inflight.agentId,
       trigger: inflight.trigger,
@@ -182,6 +183,25 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       hasCompletedKey: (key) => snapshot.some((row) => Array.isArray(row.keys) && row.keys.includes(key)),
       isAbandonedKey: (key) => snapshot.some((row) => row.outcome === "abandoned" && Array.isArray(row.pendingKeys) && row.pendingKeys.includes(key)),
       noteAbandonedKey: (key) => { if (key && !inflight.abandonedKeys.includes(key)) inflight.abandonedKeys.push(String(key)); },
+      // Rows migrated during this run are appended to the ledger AND pushed
+      // onto this same `snapshot` array (by reference) so a migration that
+      // happens mid-run is visible to hasCompletedKey/isAbandonedKey calls
+      // later in the same run, not just on the next one.
+      migrateStore: (store, migrate) => {
+        const key = store?.paths?.runs;
+        if (!ledger || !key || migratedStores.has(`${inflight.agentId}\u0000${key}`)) return null;
+        migratedStores.add(`${inflight.agentId}\u0000${key}`);
+        return migrate({
+          store,
+          agentId: inflight.agentId,
+          appendRow: (row) => {
+            ledger.append(row);
+            snapshot.push(row);
+          },
+          clock,
+          logger: host.logger,
+        });
+      },
     });
   }
 
@@ -350,7 +370,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
         if (resolved?.preSkip) {
           exit = jobExit("skipped", resolved.preSkip.reason, resolved.preSkip.output);
         } else {
-          const value = await owner.body(name, jobContext(inflight, { signal, input: resolved, snapshot }));
+          const value = await owner.body(name, jobContext(inflight, { signal, input: resolved, snapshot, ledger }));
           exit = value && value[EXIT] ? value : jobExit("completed", undefined, value);
         }
       }

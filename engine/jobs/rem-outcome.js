@@ -5,8 +5,13 @@
  * partition produced a report without the narrative it was expected to
  * produce (lib/dreaming/rem-dream.js leaves that week open); completion is
  * keyed by the partition's runKey and read from the ledger, not from
- * run-state.json.
+ * run-state.json. `ledgerBackedCompletion` migrates the store it wraps once
+ * per store (spec 3.3 "Migration") before consulting the ledger, so a week
+ * already finished before the upgrade stays `already_processed` instead of
+ * re-running.
  */
+
+import { migrateRunStateCompletions } from "./run-state-migration.js";
 
 /**
  * @param {Array<{scope: string, result: object}>} remRuns
@@ -37,6 +42,7 @@ export function remJobOutcome(remRuns, { narrativeExpected, dryRun }) {
  * @returns {object} The same store with completion routed through the ledger.
  */
 export function ledgerBackedCompletion(store, jobCtx) {
+  jobCtx.migrateStore?.(store, migrateRunStateCompletions);
   return Object.freeze({
     ...store,
     hasCompletedRun: async (runKey) => {
