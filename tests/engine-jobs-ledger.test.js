@@ -207,4 +207,54 @@ describe("job ledger", () => {
     assert.deepEqual(rows, [["orphan-1", "failed", "crash"], ["run-2", "completed", null]]);
     assert.equal(existsSync(join(root, "agent-a", "running", "orphan-1.started")), false);
   });
+
+  // ---- Fix round 2 -----------------------------------------------------
+
+  it("an undeletable orphan marker never blocks recovery: crash row written once, later runs execute normally (fix round 2)", async () => {
+    const root = makeTempDir("plur1bus-ledger-undeletable-marker-");
+    mkdirSync(join(root, "agent-a", "running"), { recursive: true });
+    // A directory where a `.started` marker file should be: orphanMarkers()
+    // still lists it (readFileSync throws, so it comes back `corrupt: true`),
+    // but removeMarker()'s unlinkSync fails with EISDIR, not ENOENT — the
+    // exact case that must no longer abort the recovery pass.
+    mkdirSync(join(root, "agent-a", "running", "orphan-1.started"));
+    writeFileSync(join(root, "agent-a", "running", "orphan-1.started", "keep"), "x");
+    const warned = [];
+    const { jobs } = registry(root, { logger: { warn: (m) => warned.push(m) } });
+    jobs.bind("gc-run", async () => ({}));
+    for (let i = 0; i < 3; i++) {
+      const run = await jobs.run("gc-run", "agent-a");
+      assert.equal(run.outcome, "completed", `run ${i + 1} must execute the body normally, not fail on ledger_unwritable`);
+    }
+    const ledger = createJobLedger({ root, agentId: "agent-a", logger: createStubHost().logger });
+    const rows = ledger.readAll();
+    const crashRows = rows.filter((r) => r.runId === "orphan-1");
+    assert.equal(crashRows.length, 1, "the crash row for the undeletable marker must be written exactly once");
+    assert.deepEqual([crashRows[0].outcome, crashRows[0].reason], ["failed", "crash"]);
+    const removalWarnings = warned.filter((m) => /could not be removed/.test(m));
+    assert.equal(removalWarnings.length, 1, "the removal failure is warned once, not on every later run");
+    // Untouched — but harmless, since its crash row is already durable.
+    assert.equal(existsSync(join(root, "agent-a", "running", "orphan-1.started")), true);
+  });
+
+  it("warns once per agent for a persistently unwritable ledger, then drops to debug (fix round 2)", async () => {
+    const parent = makeTempDir("plur1bus-ledger-warnonce-");
+    const root = join(parent, "not-a-dir");
+    writeFileSync(root, "occupied");
+    const warned = [];
+    const debugged = [];
+    const { jobs } = registry(root, { logger: { warn: (m) => warned.push(m), debug: (m) => debugged.push(m) } });
+    jobs.bind("gc-run", async () => ({}));
+    for (let i = 0; i < 3; i++) {
+      const run = await jobs.run("gc-run", "agent-a");
+      assert.deepEqual([run.outcome, run.reason], ["failed", "ledger_unwritable"]);
+    }
+    assert.equal(warned.length, 1);
+    assert.match(warned[0], /ledger unwritable/);
+    assert.equal(debugged.length, 2);
+    // The latch is per agent, not global.
+    const runB = await jobs.run("gc-run", "agent-b");
+    assert.deepEqual([runB.outcome, runB.reason], ["failed", "ledger_unwritable"]);
+    assert.equal(warned.length, 2);
+  });
 });

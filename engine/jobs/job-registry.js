@@ -45,6 +45,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
   const clock = () => (typeof host?.clock === "function" ? host.clock() : Date.now());
   const ledgers = new Map();
   const recovered = new Set();
+  const warnedLedgerUnwritable = new Set();
 
   function ledgerFor(agentId) {
     if (!jobsRoot) return null;
@@ -70,9 +71,16 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
   // in-process failure is picked up by the next *process* start, not by the
   // next call to `run()`; see the ledger append/removeMarker failure paths
   // in `finish()`). The agent is marked recovered only once the pass
-  // completes without throwing: a partial failure here (e.g. `readAll` or
-  // an append throws) must not permanently skip recovery for that agent for
-  // the rest of the process's lifetime — the next `run()` retries it.
+  // completes without throwing: a partial failure in `readAll`,
+  // `orphanMarkers` or `append` must not permanently skip recovery for that
+  // agent for the rest of the process's lifetime — the next `run()` retries
+  // it. An undeletable marker is different (fix round 2): once its crash
+  // row is durable (freshly appended, or already present from an earlier
+  // pass), the marker itself is cosmetic — a `removeMarker` failure there is
+  // "warn and continue", never blocking recovery, or every later `run()`
+  // for that agent would redo — and re-fail — the same recovery pass
+  // forever, permanently returning `ledger_unwritable` without ever
+  // invoking the body again.
   function recoverOnce(agentId, ledger) {
     if (recovered.has(agentId)) return;
     const finished = new Set(ledger.readAll().map((row) => row.runId));
@@ -103,7 +111,11 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
           ? `plur1bus job ${marker.job ?? "unknown"}[${agentId}]: run ${marker.runId} left a corrupt (unreadable) marker with no ledger row; recorded as crash`
           : `plur1bus job ${marker.job ?? "unknown"}[${agentId}]: run ${marker.runId} left no ledger row; recorded as crash`);
       }
-      ledger.removeMarker(marker.runId);
+      try {
+        ledger.removeMarker(marker.runId);
+      } catch (removeError) {
+        host.logger.warn(`plur1bus job ${marker.job ?? "unknown"}[${agentId}]: orphan marker ${marker.runId} is recorded but its marker could not be removed (harmless — it stays but is already accounted for): ${String(removeError?.message || removeError)}`);
+      }
     }
     recovered.add(agentId);
   }
@@ -207,7 +219,16 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
         recoverOnce(agentId, ledger);
         ledger.writeMarker(inflight);
       } catch (writeError) {
-        host.logger.warn(`plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${String(writeError?.message || writeError)}`);
+        const message = `plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${String(writeError?.message || writeError)}`;
+        // A broken ledger root is a standing condition, not a per-run event:
+        // warn once per agent, then drop to debug so a repeatedly-firing
+        // cron does not spam warn on every tick (fix round 2).
+        if (warnedLedgerUnwritable.has(agentId)) {
+          host.logger.debug(message);
+        } else {
+          warnedLedgerUnwritable.add(agentId);
+          host.logger.warn(message);
+        }
         return finish(inflight, jobExit("failed", "ledger_unwritable", undefined), writeError, null);
       }
     }
