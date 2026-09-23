@@ -22,6 +22,8 @@ export const DEPLOY_FILES = [
   // Laufzeit nimmt zwar das Plugin-Manifest, aber zwei widersprechende
   // Versionsangaben im selben Verzeichnis fuehren jede Diagnose in die Irre.
   "package.json",
+  // ── adapter (OpenClaw-only, engine-extraction M1a) ──────────────────────────
+  "adapter/openclaw/register-turn-route.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
   "lib/neo-worker-runner.js",
