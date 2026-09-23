@@ -208,6 +208,78 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     assert.equal(shutdownCalls, 1, "shutdown may close the DB only after the underlying read settles");
   });
 
+  it("keeps both leases alive when two concurrent raceAbort calls share one signal (fix round 2)", async (t) => {
+    const baseDbPath = makeTempDir("plur1bus-b3-agent-pool-abort-shared-signal-");
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      info() {}, warn() {}, error() {}, debug() {},
+    });
+    const rawA = deferred();
+    const rawB = deferred();
+    let shutdownCallsA = 0;
+    let shutdownCallsB = 0;
+
+    // Mirrors runMergedNamespaceRecall: several concurrent namespace reads
+    // (here: two agent leases) sharing ONE caller signal. Before fix round 2,
+    // `raceAbort` threw the shared `signal.reason` object for both calls, so
+    // the second operation's `.settlement` assignment silently overwrote the
+    // first's — leaving operation A's lease waiting on operation B's promise
+    // instead of its own.
+    const sharedController = new AbortController();
+    const operationA = pool.withDb("agent-abort-a", async (db) => {
+      db.shutdown = async () => { shutdownCallsA += 1; };
+      return await raceAbort(rawA.promise, sharedController.signal, "namespace a read aborted");
+    });
+    const operationB = pool.withDb("agent-abort-b", async (db) => {
+      db.shutdown = async () => { shutdownCallsB += 1; };
+      return await raceAbort(rawB.promise, sharedController.signal, "namespace b read aborted");
+    });
+    sharedController.abort();
+    const [resultA, resultB] = await Promise.allSettled([operationA, operationB]);
+    assert.equal(resultA.status, "rejected");
+    assert.equal(resultB.status, "rejected");
+    assert.notEqual(resultA.reason, resultB.reason, "each raceAbort call must reject with its own error object");
+    assert.equal(resultA.reason.settlement, rawA.promise);
+    assert.equal(resultB.reason.settlement, rawB.promise);
+
+    // pool.shutdown() waits for every leasePromise (Promise.allSettled over
+    // this.activeOperations) before disposing any DB, so the observable
+    // effect of the bug isn't "which counter flips first" — it's that
+    // resolving only B's raw read must NOT let A's lease (or the pool as a
+    // whole) think it is done. Under the pre-fix-round-2 bug, both raceAbort
+    // calls rejected with the SAME shared `signal.reason` object, so the
+    // second call's `.settlement` assignment silently overwrote the first's:
+    // lease A would then incorrectly track rawB's promise too, and resolving
+    // only rawB would let the whole pool shut down while rawA — the actual
+    // read lease A is holding — was still running.
+    const shutdown = pool.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownCallsA, 0, "lease A must remain held while its own aborted read is still running");
+    assert.equal(shutdownCallsB, 0, "lease B must remain held while its own aborted read is still running");
+
+    rawB.resolve("late-b");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownCallsA, 0, "lease A must still be held — resolving B's read must not release A's lease");
+    assert.equal(shutdownCallsB, 0, "the pool only disposes DBs after every lease settles, A's is still pending");
+
+    rawA.resolve("late-a");
+    await shutdown;
+    assert.equal(shutdownCallsA, 1, "lease A releases once its own settlement resolves");
+    assert.equal(shutdownCallsB, 1, "lease B releases once every lease (including A's) has settled");
+  });
+
+  it("never mutates signal.reason when raceAbort rejects (fix round 2)", async () => {
+    const controller = new AbortController();
+    const hang = new Promise(() => {});
+    const rejection = raceAbort(hang, controller.signal, "operation aborted");
+    controller.abort();
+    await assert.rejects(rejection, (error) => isAbortError(error) && error.settlement === hang);
+    const reason = controller.signal.reason;
+    assert.ok(reason, "the signal must have an abort reason");
+    assert.equal(Object.hasOwn(reason, "settlement"), false, "signal.reason must not gain a .settlement property");
+    assert.equal(Object.hasOwn(reason, "cause"), false, "signal.reason must not gain a .cause property either");
+  });
+
   it("keeps the oldest of 51 agent DBs open until its operation settles", async (t) => {
     const baseDbPath = makeTempDir("plur1bus-b7-agent-pool-");
     const workspaceDir = makeTempDir("plur1bus-b7-agent-pool-ws-");

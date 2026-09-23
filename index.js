@@ -816,8 +816,14 @@ function combineNamespaceRecallFailures(settled) {
     .filter((result) => result.status === "rejected")
     .map((result) => result.reason);
   if (failures.length === 0) return null;
+  // Fix round 2: an aborted `raceAbort` (its own fresh error, distinct per
+  // call — see lib/abort.js) carries `.settlement` exactly like a
+  // `TimeoutError` and must be combined the same way, or a caller signal
+  // shared across namespaces (runMergedNamespaceRecall reads private,
+  // workspace and user concurrently) leaves every non-primary namespace's
+  // LanceDB read still running on a released lease.
   const timeoutFailures = failures.filter((error) => (
-    error instanceof TimeoutError
+    (error instanceof TimeoutError || isAbortError(error))
     && error.settlement
     && typeof error.settlement.then === "function"
   ));

@@ -206,10 +206,18 @@ export function baseConfig(baseDbPath, overrides = {}) {
  *   `hostEvents`: forwarded to plugin.register as the hostEvents dependency.
  *   `embedderProbe`: forwarded to `stubEmbedder`'s `probe` option (PR-05,
  *   `recall-aborted`); records embedder call count and abort timing.
+ *   `callerSignal` (fix round 2): when given, this exact `AbortSignal` is
+ *   handed to the assembler in place of the adapter's own
+ *   `AbortSignal.timeout(recallTimeoutMs + 250)` — `register-recall-hook.js`
+ *   calls `AbortSignal.timeout` fresh on every `before_prompt_build`
+ *   invocation, so patching the global for just the one `hook(...)` call
+ *   below swaps in the caller's real signal without touching production code.
+ *   This is what lets a test drive a genuine caller-initiated abort through
+ *   the real assembler/scheduler/pipeline, instead of mocking `runRecall`.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null, embedderProbe = null } = {}) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null, embedderProbe = null, callerSignal = null } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
@@ -264,7 +272,18 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
     if (typeof hook !== "function") throw new Error(`${scenario.name}: before_prompt_build not registered`);
     const setupMs = performance.now() - setupStartedAt;
     const recallStartedAt = performance.now();
-    const result = await hook(scenario.event, { ...scenario.ctx, workspaceDir });
+    let restoreAbortTimeout = null;
+    if (callerSignal) {
+      const originalTimeout = AbortSignal.timeout;
+      AbortSignal.timeout = () => callerSignal;
+      restoreAbortTimeout = () => { AbortSignal.timeout = originalTimeout; };
+    }
+    let result;
+    try {
+      result = await hook(scenario.event, { ...scenario.ctx, workspaceDir });
+    } finally {
+      restoreAbortTimeout?.();
+    }
     const recallMs = performance.now() - recallStartedAt;
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
     onTiming?.({ setupMs, recallMs, totalMs: setupMs + recallMs });

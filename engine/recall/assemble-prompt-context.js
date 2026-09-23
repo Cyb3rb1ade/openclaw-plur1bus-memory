@@ -297,9 +297,10 @@ export function createPromptContextAssembler(ctx) {
       event.prompt === "__openclaw_memory_core_light_sleep__" ||
       event.prompt === "__openclaw_memory_core_rem_sleep__"
     ) { return neoContext ? recallResult({ blocks: [contextBlock("neo", neoContext, true)] }) : undefined; }
-    // A job that loses the race after this point still holds the file lock
-    // window; check first so an abandoned job cannot consume the one-time
-    // start notice a still-pending or future job would otherwise show.
+    // consumePlur1busStartNotice deletes the one-time start notice as it reads
+    // it, so this check must run immediately before that call: an already-
+    // aborted job must degrade here, before it can consume (and thereby hide)
+    // the notice a still-pending or future job would otherwise still show.
     throwIfAborted(signal, "recall aborted");
     const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
     const startNoticeContext = pendingStartNotice

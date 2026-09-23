@@ -14,7 +14,7 @@ import { runScenario } from "./helpers/golden-prefix-driver.js";
 const aborted = () => SCENARIOS.find((s) => s.name === "recall-aborted");
 
 describe("recall abort", () => {
-  it("abort at 100 ms cancels the embedder and resolves within 50 ms with degraded.reason=timeout (scheduler owns the budget, fix round 1)", async () => {
+  it("scheduler-timeout path: the adapter's own signal fires and resolves with degraded.reason=timeout (scheduler owns the budget, fix round 1)", async () => {
     const scenario = { ...aborted(), config: { ...aborted().config, runtime: { recallTimeoutMs: 100 } } };
     const events = [];
     const embedder = { calls: 0, abortedAt: null };
@@ -38,6 +38,35 @@ describe("recall abort", () => {
     // tests/runtime-scheduler-caller-signal.test.js (a caller signal that
     // fires strictly before the scheduler's own budget).
     assert.equal(degraded.payload.degraded.reason, "timeout");
+    assert.match(prefix, /^<plur1bus-start-notice>\n/);
+  });
+
+  it("caller-abort path: a genuine caller abort at 100 ms cancels the embedder end-to-end with degraded.reason=aborted (fix round 2, success criterion 3)", async () => {
+    // Unlike the scheduler-timeout test above, recallTimeoutMs is large (10s)
+    // so the scheduler's own internal timer cannot fire first: only the
+    // caller's own AbortController — driven through the real
+    // assembler/scheduler/pipeline via runScenario's `callerSignal` option —
+    // can produce this result. This is the end-to-end proof success criterion
+    // 3 asks for; the mocked-runRecall test below stays as a fast, fully
+    // deterministic pin of the same outer-exit mapping.
+    const scenario = { ...aborted(), config: { ...aborted().config, runtime: { recallTimeoutMs: 10_000 } } };
+    const events = [];
+    const embedder = { calls: 0, abortedAt: null };
+    let recallMs = null;
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const prefix = await runScenario(scenario, {
+      hostEvents: { emit: (name, payload) => events.push({ name, payload }) },
+      embedderProbe: embedder,
+      onTiming: (t) => { recallMs = t.recallMs; },
+      callerSignal: controller.signal,
+    });
+    assert.ok(embedder.calls >= 1, "the embedder was reached");
+    assert.ok(embedder.abortedAt !== null, "the embedder saw its signal abort");
+    assert.ok(recallMs < 150, `recall took ${recallMs} ms`);
+    const degraded = events.find((e) => e.name === "recall.degraded");
+    assert.ok(degraded, "recall.degraded emitted");
+    assert.equal(degraded.payload.degraded.reason, "aborted");
     assert.match(prefix, /^<plur1bus-start-notice>\n/);
   });
 
