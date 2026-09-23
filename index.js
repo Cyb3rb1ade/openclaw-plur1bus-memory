@@ -415,6 +415,8 @@ import { createPlur1busCommandRunner } from "./engine/commands/plur1bus-command.
 import { registerChatCommands } from "./adapter/openclaw/register-commands.js";
 import { registerPromptSupplements } from "./adapter/openclaw/register-prompt-supplements.js";
 import { registerMemoryTools } from "./adapter/openclaw/register-tools.js";
+import { registerDeferredFeatureCronBootstrap, registerUnsafeDirectCronGuard } from "./adapter/openclaw/register-cron.js";
+import { registerGatewayShutdownServices, registerNeoServiceLifecycle, registerNeoWorkerWarmUp, registerObsidianBridgeLifecycle } from "./adapter/openclaw/register-gateway.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -4541,16 +4543,7 @@ const plugin = {
             ? createOpenClawSkillWorkshopClient()
             : null
         );
-    if (!cronDirectDispatchReady && typeof api.on === "function") {
-      api.on(
-        "before_agent_reply",
-        (event, context) => guardUnsafeDirectCronTurn(
-          event,
-          context,
-          { hostReady: cronDirectDispatchReady },
-        ),
-      );
-    }
+    registerUnsafeDirectCronGuard({ api, cronDirectDispatchReady, guardUnsafeDirectCronTurn });
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const epistemicCutoffBoot = ensureEpistemicCutoff(baseDbPath);
@@ -5301,21 +5294,9 @@ const plugin = {
     const neoWorkerRuntime = neoEnabled
       ? getSharedNeoWorkerRuntime({ logger: host.logger })
       : null;
-    // 7.12.24: Der erste agent_end nach einem Gateway-Neustart brauchte 8–18 s
-    // bis "worker captured" (sonst 0,4–1 s). Den Worker-Thread deshalb kurz
-    // nach dem Start anwerfen, ausserhalb jedes Turns.
-    const NEO_WORKER_WARMUP_DELAY_MS = 20_000;
 // 7.12.30: Sentinel fuer das Embedding-Budget im Prompt-Recall.
 const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
-    if (neoWorkerRuntime && typeof api.on === "function") {
-      api.on("gateway_start", () => {
-        const timer = setTimeout(() => {
-          const ok = neoWorkerRuntime.warmUp();
-          host.logger.info(`plur1bus-neo: worker warm-up ${ok ? "done" : "skipped"}`);
-        }, NEO_WORKER_WARMUP_DELAY_MS);
-        timer?.unref?.();
-      }, { timeoutMs: 5_000 });
-    }
+    registerNeoWorkerWarmUp({ api, host, neoWorkerRuntime });
     if (neoEnabled && neoMode === "slot") {
       host.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
@@ -7031,55 +7012,18 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           return result;
         },
       });
-      if (obsidianBridgeCfg.watch === true) {
-        if (typeof api.registerService === "function") {
-          api.registerService(bridgeService);
-        } else if (typeof api.on === "function") {
-          api.on("gateway_start", () => bridgeService.start(), { timeoutMs: 30_000 });
-          api.on("gateway_stop", () => bridgeService.stop(), { timeoutMs: 30_000 });
-        }
-      } else {
-        host.logger.info(`plur1bus-obsidian-bridge: configured (watch=false, dryRun=${obsidianBridgeCfg.dryRun !== false})`);
-      }
+      registerObsidianBridgeLifecycle({ api, bridgeService, host, obsidianBridgeCfg });
     }
 
-    // Feature-cron bootstrap, deferred (installer/ClawHub channel): the
-    // documented install path rsyncs the plugin and never runs npm, so the
-    // postinstall hook (`npm install` → scripts/setup-feature-crons.mjs)
-    // never fires there. This handler covers that gap for every install
-    // channel — npm install, rsync/git-clone install, and ClawHub — without
-    // depending on any of them running npm at all. See getFeatureCronsSetupHint
-    // above and shouldRunCronBootstrap/featureCronsHintFromMarker in
-    // lib/setup/feature-cron-bootstrap.js for the pure throttle/hint logic.
-    if (
-      typeof api.on === "function"
-      && (cfg.featureCronSetup?.auto !== false || !cronDirectDispatchReady)
-    ) {
-      api.on(
-        "gateway_start",
-        async (_event, gatewayContext) => {
-          const cutoff = ensureEpistemicCutoff(baseDbPath);
-          if (!cutoff.ok) host.logger.warn(`memory-lancedb-namespaced: epistemic cutoff unavailable (${cutoff.reason})`);
-          if (!cronDirectDispatchReady) {
-            await reconcileUnsafeDirectCronsWithService(api, gatewayContext);
-          }
-          // The in-process service closes the immediate safety window first.
-          // CLI reconciliation remains deferred and retried so it can restore
-          // only safely marked jobs after the native capability becomes ready.
-          const timer = setTimeout(() => {
-            runDeferredFeatureCronBootstrap(api, {
-              cfg,
-              baseDbPath,
-              force: !cronDirectDispatchReady,
-            }).catch((err) => {
-              host.logger.debug(`plur1bus-feature-crons: deferred bootstrap failed: ${err?.message || err}`);
-            });
-          }, cronDirectDispatchReady ? 90_000 : 0);
-          timer?.unref?.();
-        },
-        { timeoutMs: cronDirectDispatchReady ? 5_000 : 30_000 },
-      );
-    }
+    registerDeferredFeatureCronBootstrap({
+      api,
+      baseDbPath,
+      cfg,
+      cronDirectDispatchReady,
+      host,
+      reconcileUnsafeDirectCronsWithService,
+      runDeferredFeatureCronBootstrap,
+    });
 
     registerPromptSupplements({
       api,
@@ -7481,29 +7425,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         });
       }
 
-      if (neoEnabled) {
-        const startNeoService = () => {
-          host.logger.info(`plur1bus-neo: service ready (state: ${neoRoot}, mode: augment)`);
-        };
-        const stopNeoService = async () => {
-          try {
-            await neoWorkerRuntime?.close?.();
-          } catch (err) {
-            host.logger.warn?.(`plur1bus-neo: worker shutdown failed: ${String(err)}`);
-          }
-          host.logger.info("plur1bus-neo: service stopped");
-        };
-        if (typeof api.on === "function") {
-          api.on("gateway_start", startNeoService, { timeoutMs: 30_000 });
-          api.on("gateway_stop", stopNeoService, { timeoutMs: 30_000 });
-        } else if (typeof api.registerService === "function") {
-          api.registerService({
-            id: "plur1bus-neo-maintenance",
-            start: startNeoService,
-            stop: stopNeoService,
-          });
-        }
-      }
+      registerNeoServiceLifecycle({ api, host, neoEnabled, neoRoot, neoWorkerRuntime });
     }
 
     // ========================================================================
@@ -7859,44 +7781,22 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     // controlled by the automatic hook opt-outs above. Lifecycle ownership is
     // intentionally registered after every hook/capability registration and
     // independently of the optional chat-command surface.
-    const gatewayShutdownRegistered = registerGatewayShutdown(api, {
-      memoryDbAdapter,
-      pool: {
-        shutdown: async () => {
-          legacyMigrationShutdown.abort();
-          await pool.shutdown();
-        },
-      },
-      sharedMemoryPool,
-      clearTurnRoutes: clearInitializedTurnRoutes,
-      flushMetrics,
-      llmResultCache,
-      scopedEmbeddingServer,
-      embeddings,
-      reranker,
-      modelPreparationCoordinator,
-      reembeddingCoordinator,
-      localModelGeneration,
-    });
-    registerLocalModelOwnershipServiceAfterLifecycle(api, {
-      enabled: coordinatesLocalModelGeneration
-        && typeof embeddings?.activateSharedModelOwner === "function",
-      lifecycleRegistered: gatewayShutdownRegistered,
-      embeddings,
-    });
-    registerScopedEmbeddingIpcServiceAfterLifecycle({
+    registerGatewayShutdownServices({
       api,
-      server: scopedEmbeddingServer,
-      enabled: Boolean(scopedEmbeddingServer),
-      lifecycleRegistered: gatewayShutdownRegistered,
-    });
-    registerModelPreparationServiceAfterLifecycle(api, {
-      lifecycleRegistered: gatewayShutdownRegistered,
-      coordinator: modelPreparationCoordinator,
-    });
-    registerReembeddingRecoveryServiceAfterLifecycle(api, {
-      lifecycleRegistered: gatewayShutdownRegistered,
-      recovery: reembeddingSwitchRecovery,
+      clearInitializedTurnRoutes,
+      coordinatesLocalModelGeneration,
+      embeddings,
+      legacyMigrationShutdown,
+      llmResultCache,
+      localModelGeneration,
+      memoryDbAdapter,
+      modelPreparationCoordinator,
+      pool,
+      reembeddingCoordinator,
+      reembeddingSwitchRecovery,
+      reranker,
+      scopedEmbeddingServer,
+      sharedMemoryPool,
     });
   },
 };

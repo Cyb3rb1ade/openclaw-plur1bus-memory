@@ -35,18 +35,25 @@ describe("native cron direct-dispatch wiring", () => {
       path.join(repoRoot, "lib/setup/feature-cron-plugin-runtime.js"),
       "utf8",
     );
+    // PR-03i moved the two feature-cron registrations into the OpenClaw
+    // adapter; the pure logic they call stays in index.js.
+    const cronSource = readFileSync(
+      path.join(repoRoot, "adapter/openclaw/register-cron.js"),
+      "utf8",
+    );
 
     assert.ok(!packageJson.files.includes("patches/apply-cron-plugin-direct-dispatch.mjs"));
     assert.doesNotMatch(indexSource, /applyCronPluginDirectDispatchPatch/);
     assert.doesNotMatch(indexSource, /resolveOpenClawDistDir/);
     assert.doesNotMatch(runtimeSource, /apply-cron-plugin-direct-dispatch/);
     assert.match(indexSource, /inspectCronNativeCapabilities\(api\)/);
-    assert.match(indexSource, /force: !cronDirectDispatchReady/);
-    assert.match(indexSource, /cronDirectDispatchReady \? 90_000 : 0/);
-    assert.match(indexSource, /await reconcileUnsafeDirectCronsWithService\(api, gatewayContext\)/);
+    assert.match(cronSource, /force: !cronDirectDispatchReady/);
+    assert.match(cronSource, /cronDirectDispatchReady \? 90_000 : 0/);
+    assert.match(cronSource, /await reconcileUnsafeDirectCronsWithService\(api, gatewayContext\)/);
     assert.match(indexSource, /cron\.list\(\{ includeDisabled: true \}\)/);
     assert.match(indexSource, /Promise\.resolve\(cron\.update\(job\.id/);
-    assert.match(indexSource, /api\.on\(\s*"before_agent_reply"/);
+    assert.match(cronSource, /api\.on\(\s*"before_agent_reply"/);
+    assert.match(cronSource, /guardUnsafeDirectCronTurn/);
     assert.match(indexSource, /guardUnsafeDirectCronTurn/);
   });
 
