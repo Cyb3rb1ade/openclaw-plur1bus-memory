@@ -37,6 +37,7 @@ const ENGINE_PATHS = Object.freeze({
   memoryTools: "engine/tools/memory-tools.js",
   minimalMaintenance: "engine/recall/minimal-maintenance.js",
   plur1busCommand: "engine/commands/plur1bus-command.js",
+  recallResult: "engine/recall/recall-result.js",
 });
 
 /** OpenClaw adapter modules, by short name. */
@@ -45,6 +46,7 @@ const ADAPTER_PATHS = Object.freeze({
   commands: "adapter/openclaw/register-commands.js",
   cron: "adapter/openclaw/register-cron.js",
   gateway: "adapter/openclaw/register-gateway.js",
+  joinRecall: "adapter/openclaw/join-recall.js",
   maintenanceHook: "adapter/openclaw/register-maintenance-hook.js",
   promptSupplements: "adapter/openclaw/register-prompt-supplements.js",
   recallHook: "adapter/openclaw/register-recall-hook.js",

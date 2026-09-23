@@ -32,11 +32,13 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/register-tools.js",
   "adapter/openclaw/register-gateway.js",
   "adapter/openclaw/register-cron.js",
+  "adapter/openclaw/join-recall.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
   "engine/commands/plur1bus-command.js",
   "engine/recall/assemble-prompt-context.js",
   "engine/recall/minimal-maintenance.js",
+  "engine/recall/recall-result.js",
   "engine/tools/memory-tools.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",

@@ -30,12 +30,10 @@ describe("engine/recall/assemble-prompt-context", () => {
 
   it("keeps the six named blocks and the 17000-char default in one place", () => {
     const source = readFileSync(join(root, "engine", "recall", "assemble-prompt-context.js"), "utf8");
-    for (const name of ["neo", "start", "memories", "time", "temporal", "reminder"]) {
-      assert.match(source, new RegExp(`name:\\s*"${name}"`), `block ${name} must survive the move`);
+    for (const [name, droppable] of [["neo", true], ["start", true], ["memories", true], ["time", false], ["temporal", false], ["reminder", false]]) {
+      assert.match(source, new RegExp(`contextBlock\\("${name}", [^\\n]+, ${droppable}\\)`), `block ${name} must keep droppable=${droppable}`);
     }
-    assert.match(source, /globalInjectMaxChars \?\? 17_000/);
-    assert.match(source, /\{ name: "time", text: timeContext, droppable: false \}/);
-    assert.match(source, /\{ name: "reminder", text: reminderNudge, droppable: false \}/);
+    assert.match(source, /capChars: cfg\.recall\?\.globalInjectMaxChars \?\? 17_000/);
   });
 
   it("refuses a turn the workspace policy declines, without touching the pool", async () => {
@@ -48,7 +46,8 @@ describe("engine/recall/assemble-prompt-context", () => {
       automaticWorkspacePolicyDecision: () => ({ allowed: false }),
       pool: { withDb: async () => { poolTouched = true; return undefined; } },
     });
-    assert.equal(await handler({ prompt: "x" }, { workspaceDir: "/tmp/ws", agentId: "a" }), undefined);
+    const result = await handler({ prompt: "x" }, { workspaceDir: "/tmp/ws", agentId: "a" });
+    assert.equal(result.blocks.length, 0);
     assert.equal(poolTouched, false);
   });
 

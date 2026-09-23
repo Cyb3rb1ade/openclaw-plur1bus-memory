@@ -17,7 +17,6 @@ import { ContradictionDetector } from "../../lib/contradiction-detector.js";
 import { runConversationReactivationRecall } from "../../lib/conversation-reactivation-recall.js";
 import { inferEmotionalValenceAsync } from "../../lib/emotion.js";
 import { extractMessageText, formatMoodFile } from "../../lib/emotional-state.js";
-import { applyGlobalInjectBudget } from "../../lib/inject-budget.js";
 import { InterpretationOverlayStore } from "../../lib/interpretation-overlay.js";
 import { renderSkillProposalNudge } from "../../lib/jobs/skill-miner/nudge-renderer.js";
 import { getPendingProposals, lastPresentationAgeMs, recordPresentation } from "../../lib/jobs/skill-miner/proposal-writer.js";
@@ -38,6 +37,7 @@ import { formatReminderNudge } from "../../lib/reminder-nudge.js";
 import { readPendingReminders, writePendingReminders } from "../../lib/reminder-pending.js";
 import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
+import { contextBlock, recallResult } from "./recall-result.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { applySemanticLensToRecall } from "../../lib/semantic-lens-index.js";
 import { formatTimeContext, getLastActivity, recordActivity } from "../../lib/session-time.js";
@@ -62,7 +62,7 @@ import { hourInTimeZone } from "../../lib/time-window.js";
  * that call site.
  *
  * @param {Record<string, any>} ctx Engine context; see the destructuring below.
- * @returns {(event: Record<string, any>, hookCtx: Record<string, any>) => Promise<{prependContext: string}|undefined>} The hook handler.
+ * @returns {(event: Record<string, any>, hookCtx: Record<string, any>) => Promise<object>} A RecallResult (engine/recall/recall-result.js).
  */
 export function createPromptContextAssembler(ctx) {
   const {
@@ -143,7 +143,7 @@ export function createPromptContextAssembler(ctx) {
   return async function assemblePromptContext(event, hookCtx) {
     const background = isBackgroundTurn(event, hookCtx);
     const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, hookCtx);
-    if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return undefined;
+    if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return recallResult();
     const agentIdForCache = hookCtx?.agentId || "default";
     const sessionKeyForCache = hookCtx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
     const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
@@ -271,7 +271,7 @@ export function createPromptContextAssembler(ctx) {
       if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) host.logger.info(preludeLine);
       else host.logger.debug(preludeLine);
     }
-    if (!event.prompt || event.prompt.length < 5) return neoContext ? { prependContext: neoContext } : undefined;
+    if (!event.prompt || event.prompt.length < 5) return neoContext ? recallResult({ blocks: [contextBlock("neo", neoContext, true)] }) : undefined;
     // Skip heavy LanceDB recall for internal dreaming/sleep magic messages —
     // these cron turns don't need memory context and the recall would block
     // the event loop for each workspace, causing lane timeouts.
@@ -279,7 +279,7 @@ export function createPromptContextAssembler(ctx) {
       event.prompt === "__openclaw_memory_core_short_term_promotion_dream__" ||
       event.prompt === "__openclaw_memory_core_light_sleep__" ||
       event.prompt === "__openclaw_memory_core_rem_sleep__"
-    ) { return neoContext ? { prependContext: neoContext } : undefined; }
+    ) { return neoContext ? recallResult({ blocks: [contextBlock("neo", neoContext, true)] }) : undefined; }
     const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
     const startNoticeContext = pendingStartNotice
       ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
@@ -1183,22 +1183,23 @@ export function createPromptContextAssembler(ctx) {
           host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
         }
       }
-      return { prependContext: applyGlobalInjectBudget({
+      return recallResult({
         blocks: [
-          { name: "neo", text: neoContext, droppable: true },
-          { name: "start", text: startNoticeContext, droppable: true },
-          { name: "memories", text: fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, droppable: true },
-          { name: "time", text: timeContext, droppable: false },
-          { name: "temporal", text: temporalContinuityContext, droppable: false },
-          { name: "reminder", text: reminderNudge, droppable: false },
+          contextBlock("neo", neoContext, true),
+          contextBlock("start", startNoticeContext, true),
+          contextBlock("memories", fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, true),
+          contextBlock("time", timeContext, false),
+          contextBlock("temporal", temporalContinuityContext, false),
+          contextBlock("reminder", reminderNudge, false),
         ],
-        maxChars: cfg.recall?.globalInjectMaxChars ?? 17_000,
-      }) };
+        capChars: cfg.recall?.globalInjectMaxChars ?? 17_000,
+      });
     } catch (err) {
       throwIfAborted(signal, "recall aborted");
       host.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
-      const fallbackContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
-      if (fallbackContext) return { prependContext: fallbackContext };
+      const fallbackBlocks = [contextBlock("neo", neoContext, true), contextBlock("start", startNoticeContext, true)]
+        .filter((block) => block.text);
+      if (fallbackBlocks.length > 0) return recallResult({ blocks: fallbackBlocks });
     }
     }));
     });
@@ -1222,15 +1223,15 @@ export function createPromptContextAssembler(ctx) {
       if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
         host.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
       }
-      return scheduledRecall.value;
+      return scheduledRecall.value ?? recallResult();
     }
     if (scheduledRecall.timedOut) {
       host.logger.warn(`memory-lancedb-namespaced: recall timed out without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
-      return undefined;
+      return recallResult();
     }
     if (scheduledRecall.error) {
       host.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);
     }
-    return undefined;
+    return recallResult();
   };
 }

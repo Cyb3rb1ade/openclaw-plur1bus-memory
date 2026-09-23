@@ -16,6 +16,7 @@ import { consumePlur1busStartNotice } from "../../lib/setup/feature-profiles.js"
 import { formatReminderNudge } from "../../lib/reminder-nudge.js";
 import { readPendingReminders, writePendingReminders } from "../../lib/reminder-pending.js";
 import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
+import { contextBlock, recallResult } from "./recall-result.js";
 import { shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { recordActivity, formatTimeContext, getLastActivity } from "../../lib/session-time.js";
 import { formatTemporalContinuityContext } from "../../lib/temporal-context.js";
@@ -34,7 +35,7 @@ import { formatTemporalContinuityContext } from "../../lib/temporal-context.js";
  * @param {boolean} ctx.schicht15Enabled
  * @param {string} ctx.stateDir The OpenClaw state dir (`host.stateDir`).
  * @param {boolean} ctx.temporalContextEnabled
- * @returns {(event: object, hookCtx: object) => Promise<{prependContext: string}|undefined>} Handler.
+ * @returns {(event: object, hookCtx: object) => Promise<object>} A RecallResult (engine/recall/recall-result.js).
  */
 export function createMinimalMaintenance(ctx) {
   const {
@@ -53,7 +54,7 @@ export function createMinimalMaintenance(ctx) {
 
   return async function minimalMaintenance(event, hookCtx) {
     const agentId = hookCtx?.agentId;
-    if (!automaticWorkspacePolicyDecision(event, hookCtx).allowed) return undefined;
+    if (!automaticWorkspacePolicyDecision(event, hookCtx).allowed) return recallResult();
     if (neoEnabled) {
       try {
         const neoStore = getNeoStore(hookCtx, event);
@@ -74,9 +75,9 @@ export function createMinimalMaintenance(ctx) {
     }
     // P0-1: Interne/background Turns bekommen keine Nudges (kein Prompt-Overhead).
     if (shouldSkipAutoRecallForInternalTurn(event, hookCtx)) {
-      return undefined;
+      return recallResult();
     }
-    if (!hookCtx?.workspaceDir) return undefined;
+    if (!hookCtx?.workspaceDir) return recallResult();
     const pendingStartNotice = consumePlur1busStartNotice(stateDir);
     const startNoticeContext = pendingStartNotice
       ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
@@ -139,8 +140,14 @@ export function createMinimalMaintenance(ctx) {
     } catch (reminderErr) {
       host.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
     }
-    if (nudge || conflictNudge || startNoticeContext || timeContext || temporalContinuityContext || reminderNudge) {
-      return { prependContext: [startNoticeContext, nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
-    }
+    return recallResult({
+      blocks: [
+        contextBlock("start", startNoticeContext, true),
+        contextBlock("memories", nudge + conflictNudge, true),
+        contextBlock("time", timeContext, false),
+        contextBlock("temporal", temporalContinuityContext, false),
+        contextBlock("reminder", reminderNudge, false),
+      ].filter((block) => block.text),
+    });
   };
 }
