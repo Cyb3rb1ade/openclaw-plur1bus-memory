@@ -194,6 +194,7 @@ import {
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
+import { isAbortError } from "./lib/abort.js";
 import { redactError, safeDebug, safeWarn, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
@@ -872,7 +873,7 @@ async function waitForTimeoutSettlement(error) {
   let waited = false;
   const seen = new Set();
   while (
-    currentError instanceof TimeoutError
+    (currentError instanceof TimeoutError || isAbortError(currentError))
     && currentError.settlement
     && typeof currentError.settlement.then === "function"
     && !seen.has(currentError.settlement)

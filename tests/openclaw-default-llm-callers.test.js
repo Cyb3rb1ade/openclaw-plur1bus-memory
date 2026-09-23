@@ -962,13 +962,7 @@ test("recall commit barriers block writes when the runtime ignores abort and suc
     ]);
     assert.equal(didStart, true, JSON.stringify(api._logs));
     await emitted;
-    // PR-05: register-recall-hook now supplies AbortSignal.timeout(recallTimeoutMs)
-    // as the mandatory caller signal, wired into runRecall alongside the
-    // scheduler's own internal timer of the same duration. The caller signal is
-    // created before the async setup work runs and so consistently wins the
-    // race, so this recall resolves as "aborted" (not "timed out") — either
-    // outcome proves the recall didn't wait for the late LLM completion.
-    assert.match(JSON.stringify(api._logs), /recall (timed out|aborted) without cache/);
+    assert.match(JSON.stringify(api._logs), /recall timed out without cache/);
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(calls.length, 1);
     assert.equal(calls[0].purpose, scenario);

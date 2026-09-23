@@ -107,6 +107,40 @@ describe("local Transformers.js lifecycle", () => {
     await requestScoped.shutdown();
   });
 
+  it("keeps a pending compute alive across an aborted call and drains it before shutdown (PR-05 fix round 1)", async () => {
+    const provider = new LocalTransformersEmbeddingProvider({
+      dimensions: 2,
+      embeddingCacheEnabled: false,
+    });
+    const order = [];
+    let resolveCompute;
+    const computeGate = new Promise((resolve) => { resolveCompute = resolve; });
+    provider._computeBatch = async (input) => {
+      order.push("compute-started");
+      await computeGate;
+      order.push("compute-settled");
+      return input.map(() => [1, 0]);
+    };
+
+    const controller = new AbortController();
+    const call = provider.embedBatch(["alpha"], 3, { signal: controller.signal });
+    // Let `_computeBatch` actually start before aborting, otherwise the
+    // already-aborted branch never reaches `work` at all.
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    await assert.rejects(call, (error) => error.name === "AbortError");
+    order.push("call-rejected");
+
+    let shutdownSettled = false;
+    const shutdown = provider.shutdown().then(() => { shutdownSettled = true; order.push("shutdown-settled"); });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "shutdown must wait for the pending compute, not just the aborted call");
+
+    resolveCompute();
+    await shutdown;
+    assert.deepStrictEqual(order, ["compute-started", "call-rejected", "compute-settled", "shutdown-settled"]);
+  });
+
   it("rejects an owner-required scoped load until the active full runtime claims the pool", async () => {
     let pipelineLoads = 0;
     const loadTransformers = async () => ({

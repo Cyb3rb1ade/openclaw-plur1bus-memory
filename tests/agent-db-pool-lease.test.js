@@ -7,6 +7,7 @@ import { join } from "node:path";
 import plugin, * as pluginModule from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { TimeoutError } from "../lib/with-timeout.js";
+import { isAbortError, raceAbort } from "../lib/abort.js";
 
 import { makeTempDir as createTrackedTempDir } from "./helpers/temp-dir.js";
 const VECTOR_DIM = 384;
@@ -175,6 +176,36 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     rawSettlement.resolve("late-write-settled");
     await shutdown;
     assert.equal(shutdownCalls, 1, "shutdown may close the DB only after raw mutation settlement");
+  });
+
+  it("keeps a raceAbort-cancelled query leased until the underlying LanceDB read settles (PR-05 fix round 1)", async (t) => {
+    const baseDbPath = makeTempDir("plur1bus-b3-agent-pool-abort-");
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      info() {}, warn() {}, error() {}, debug() {},
+    });
+    const rawToArray = deferred();
+    let shutdownCalls = 0;
+
+    const controller = new AbortController();
+    const operation = pool.withDb("agent-abort", async (db) => {
+      db.shutdown = async () => { shutdownCalls += 1; };
+      // Mirrors runVectorSearchWithValidTimeFallback: raceAbort wraps the raw
+      // `toArray()` promise, and aborting mid-query must not drop it — the
+      // rejection carries it forward as `.settlement`.
+      const abortPromise = raceAbort(rawToArray.promise, controller.signal, "recall aborted");
+      controller.abort();
+      return await abortPromise;
+    });
+    await assert.rejects(operation, (error) => isAbortError(error) && error.settlement === rawToArray.promise);
+
+    const shutdown = pool.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownCalls, 0, "the DB must remain leased while the aborted LanceDB read is still running");
+
+    rawToArray.resolve(["late-row"]);
+    await shutdown;
+    assert.equal(shutdownCalls, 1, "shutdown may close the DB only after the underlying read settles");
   });
 
   it("keeps the oldest of 51 agent DBs open until its operation settles", async (t) => {

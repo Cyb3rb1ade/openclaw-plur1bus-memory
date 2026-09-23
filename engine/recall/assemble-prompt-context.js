@@ -145,7 +145,9 @@ export function createPromptContextAssembler(ctx) {
   return async function assemblePromptContext(event, hookCtx, opts = {}) {
     const callerSignal = opts?.signal;
     if (!(callerSignal instanceof AbortSignal)) {
-      return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: "signal is required" } });
+      const degraded = { reason: "invalid-query", capability: "recall", detail: "signal is required" };
+      emitEngineEvent(host, "recall.degraded", { agentId: hookCtx?.agentId || "default", degraded });
+      return recallResult({ degraded });
     }
     if (callerSignal.aborted) {
       emitEngineEvent(host, "recall.degraded", { agentId: hookCtx?.agentId || "default", degraded: ABORTED });
@@ -295,6 +297,10 @@ export function createPromptContextAssembler(ctx) {
       event.prompt === "__openclaw_memory_core_light_sleep__" ||
       event.prompt === "__openclaw_memory_core_rem_sleep__"
     ) { return neoContext ? recallResult({ blocks: [contextBlock("neo", neoContext, true)] }) : undefined; }
+    // A job that loses the race after this point still holds the file lock
+    // window; check first so an abandoned job cannot consume the one-time
+    // start notice a still-pending or future job would otherwise show.
+    throwIfAborted(signal, "recall aborted");
     const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
     const startNoticeContext = pendingStartNotice
       ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
