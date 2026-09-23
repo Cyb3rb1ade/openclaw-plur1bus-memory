@@ -60,13 +60,15 @@ describe("Chat-Modell pro Workspace", () => {
   });
 
   describe("Mutator", () => {
-    function harness({ sessions = [], locked = new Set() } = {}) {
+    function harness({ sessions = [], locked = new Set(), hostConfig = null } = {}) {
       let config = clone(HOST);
       const patched = [];
+      const steps = [];
       const api = {
         runtime: {
           config: {
             async mutateConfigFile({ mutate }) {
+              steps.push("write");
               const draft = clone(config);
               const result = await mutate(draft);
               config = draft;
@@ -79,6 +81,7 @@ describe("Chat-Modell pro Workspace", () => {
               async patchSessionEntry(params) {
                 const current = sessions.find((s) => s.sessionKey === params.sessionKey);
                 const next = await params.update(clone(current.entry), { existingEntry: current.entry });
+                steps.push("release");
                 patched.push({ ...params, next });
                 return next;
               },
@@ -98,8 +101,12 @@ describe("Chat-Modell pro Workspace", () => {
           return { updated, selection };
         },
       };
-      const mutator = createChatModelMutator({ api, loadModelSession: async () => modelSession });
-      return { mutator, patched, config: () => config };
+      const mutator = createChatModelMutator({
+        api,
+        loadModelSession: async () => modelSession,
+        ...(hostConfig ? { getHostConfig: () => hostConfig } : {}),
+      });
+      return { mutator, patched, steps, config: () => config };
     }
 
     it("schreibt Wahl und Agent-Primary, lässt die Fallbacks stehen", async () => {
@@ -143,6 +150,29 @@ describe("Chat-Modell pro Workspace", () => {
       assert.equal(h.patched[0].next.modelOverride, undefined);
       assert.equal(h.patched[0].next.contextTokens, undefined);
       assert.deepEqual(result, { agentId: "main", model: "anthropic/claude-opus-5-5", releasedSessions: 1 });
+    });
+
+    it("schreibt die Config zuletzt, damit der Aufruf vor dem Plugin-Reload endet", async () => {
+      // Die Config-Änderung ersetzt dieses Plugin beim nächsten Reload. Läuft
+      // der Aufruf dann noch, verweigert OpenClaw den Tausch, und der Gateway
+      // blieb am 23.09.26 ohne Telegram-Zustellung, bis er neu startete.
+      const sessions = [
+        { agentId: "main", sessionKey: "agent:main:telegram:direct:1", entry: { id: "a", modelOverride: "claude-opus-4-6" } },
+        { agentId: "main", sessionKey: "agent:main:telegram:direct:2", entry: { id: "b", modelOverride: "claude-opus-4-6" } },
+      ];
+      const h = harness({ sessions, hostConfig: HOST });
+      await h.mutator({ agentId: "main", model: "anthropic/claude-opus-5-5" });
+      assert.deepEqual(h.steps, ["release", "release", "write"]);
+    });
+
+    it("löst keine Pins, wenn die Wahl schon an der laufenden Config scheitert", async () => {
+      const sessions = [
+        { agentId: "main", sessionKey: "agent:main:telegram:direct:1", entry: { id: "a", modelOverride: "claude-opus-4-6" } },
+      ];
+      const h = harness({ sessions, hostConfig: HOST });
+      await assert.rejects(() => h.mutator({ agentId: "main", model: "anthropic/claude-opus-4-8" }), /not allowed/);
+      await assert.rejects(() => h.mutator({ agentId: "developer", model: "kimi-coding/k3" }), /not a chat agent/);
+      assert.deepEqual(h.steps, []);
     });
 
     it("übersteht einen fehlenden Session-Zugriff und meldet dann null entpinnte Sitzungen", async () => {

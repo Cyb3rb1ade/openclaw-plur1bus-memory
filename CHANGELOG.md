@@ -7,6 +7,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [7.16.5] — 2026-09-23
 
+### Behoben
+
+- **Das Speichern auf der Chat-Modell-Karte legte den Gateway lahm.** Die Karte
+  schrieb die Konfiguration und löste danach noch die Session-Pins. Die
+  Konfigurationsänderung betrifft PLUR1BUS' eigenen Eintrag, also ersetzt
+  OpenClaw das Plugin beim folgenden Reload, und das verweigert es, solange der
+  Aufruf des Plugins noch läuft („cannot replace itself from its own active
+  call“). Am 23.09.26 blieb der Gateway danach ohne Telegram-Zustellung für
+  Bernd, bis er neu gestartet wurde. Jetzt wird die Wahl zuerst an der
+  laufenden Konfiguration geprüft, dann werden die Pins gelöst, und das
+  Schreiben kommt als letzter Schritt. Eine abgelehnte Wahl löst keine Pins mehr.
+
 ### Geändert
 
 - **Der Leichtschlaf zeigt auf OpenClaws Gedächtnisseite, wann er zuletzt lief.**

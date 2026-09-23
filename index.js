@@ -9414,6 +9414,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           const setFeatureModel = createFeatureModelMutator({ api });
           const setChatModel = createChatModelMutator({
             api,
+            getHostConfig: () => runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {},
             loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
           });
           const setCaptureChunking = createCaptureChunkingMutator({ api });
