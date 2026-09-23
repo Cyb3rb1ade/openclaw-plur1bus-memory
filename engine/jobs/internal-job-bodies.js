@@ -391,7 +391,11 @@ export function createInternalJobBodies(ctx) {
         });
         const verdict = remJobOutcome(remRuns, { narrativeExpected: dreamNarrativeCfg?.enabled !== false, dryRun: false });
         for (const key of verdict.pendingKeys) jobCtx.notePendingKey(key);
-        jobCtx.setDiaryTarget(memoryCtx?.workspaceDir || null);
+        const diaryDisabled = dreamNarrativeCfg?.diary === false;
+        jobCtx.setDiaryTarget(diaryDisabled ? null : (memoryCtx?.workspaceDir || null), {
+          timezone: dreamNarrativeCfg?.timezone ?? null,
+          disabled: diaryDisabled,
+        });
         if (verdict.outcome === "incomplete") return jobCtx.incomplete(verdict.reason, remReply);
         if (verdict.outcome === "skipped") return jobCtx.skip(verdict.reason, remReply);
         return remReply;

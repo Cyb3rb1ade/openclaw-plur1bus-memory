@@ -327,6 +327,9 @@ export const JOB_SCENARIOS = [
     agentId: AGENT,
     job: "rem-dream",
     runKey: `rem:${WORKSPACE}:${AGENT}:private:2026-W02`,
+    // Explicit, machine-independent timezone: the diary line must not
+    // depend on the CI host's TZ (fix round 1, item 2).
+    timezone: "UTC",
     sweeps: [
       Date.UTC(2026, 0, 13, 0, 15),
       Date.UTC(2026, 0, 14, 0, 15),

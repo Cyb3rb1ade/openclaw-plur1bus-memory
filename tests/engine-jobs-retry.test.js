@@ -52,14 +52,19 @@ describe("retry and abandon", () => {
       ["skipped", 1, "abandoned"],
     ]);
     const diary = readFileSync(join(workspaceDir, "DREAMS.md"), "utf8");
-    assert.match(diary, /abandoned after 3 attempts/);
+    assert.match(diary, /rem-dream run abandoned after 3 attempts/, "the diary line names the job, not a hardcoded \"REM run\" (fix round 1, item 5)");
     const [abandoned] = await jobs.history("agent-a", { limit: 2 }).then((rows) => rows.filter((r) => r.outcome === "abandoned"));
     assert.deepEqual(abandoned.diary, { written: true });
     assert.deepEqual(abandoned.pendingKeys, [KEY]);
   });
 
   it("already_processed only after a completed row for the same key", async () => {
-    const { jobs } = setup();
+    // Spec 3.3: retries happen on the *next* sweep, so this exercises four
+    // sweeps (one session per sweep), not four calls piled into one — a
+    // retry must count toward the breaker (fix round 1, item 1), and four
+    // real sessions in a single sweep would otherwise trip it before this
+    // test ever reaches its `already_processed` assertion.
+    const { jobs, advance } = setup();
     let completeNow = false;
     jobs.bind("rem-dream", async (_n, ctx) => {
       if (ctx.hasCompletedKey(KEY)) return ctx.skip("already_processed");
@@ -68,10 +73,13 @@ describe("retry and abandon", () => {
       return { text: "dreamed" };
     });
     assert.equal((await jobs.run("rem-dream", "agent-a")).outcome, "incomplete");
+    advance(DAY);
     assert.equal((await jobs.run("rem-dream", "agent-a")).outcome, "incomplete");
+    advance(DAY);
     completeNow = true;
     const done = await jobs.run("rem-dream", "agent-a");
     assert.deepEqual([done.outcome, done.attempt, done.keys], ["completed", 3, [KEY]]);
+    advance(DAY);
     const again = await jobs.run("rem-dream", "agent-a");
     assert.deepEqual([again.outcome, again.reason], ["skipped", "already_processed"]);
   });
@@ -94,6 +102,36 @@ describe("retry and abandon", () => {
     assert.equal((await jobs.run("consolidate-daily", "agent-a")).outcome, "completed", "next sweep resets the breaker");
   });
 
+  it("fix round 1 item 1: a retry of an already-open key still counts toward the breaker (no bypass)", async () => {
+    // Reviewer's probe: two consolidate-daily sessions, then a *retry* of a
+    // key opened on the previous sweep (not a fresh key), then a fourth
+    // consolidate-daily. Before the fix, a retry's row had `llmSession:
+    // false` (it was never `attempt === 1`) and did not count, so this
+    // fourth call ran; after the fix it must stop at 3 sessions.
+    const { jobs, advance } = setup();
+    jobs.bind("rem-dream", async (_n, ctx) => {
+      if (ctx.hasCompletedKey(KEY)) return ctx.skip("already_processed");
+      ctx.notePendingKey(KEY);
+      return ctx.incomplete("no_narrative");
+    });
+    jobs.bind("consolidate-daily", async () => ({ text: "ok" }));
+    // Day 1: open the key (attempt 1), its own sweep only has this one session.
+    assert.equal((await jobs.run("rem-dream", "agent-a")).outcome, "incomplete");
+    advance(DAY);
+    // Day 2: consolidate, consolidate, rem retry (attempt 2 of the SAME key), consolidate.
+    const results = [];
+    for (const name of ["consolidate-daily", "consolidate-daily", "rem-dream", "consolidate-daily"]) {
+      const run = await jobs.run(name, "agent-a");
+      results.push([name, run.outcome, run.reason ?? null]);
+    }
+    assert.deepEqual(results, [
+      ["consolidate-daily", "completed", null],
+      ["consolidate-daily", "completed", null],
+      ["rem-dream", "incomplete", "no_narrative"],
+      ["consolidate-daily", "skipped", "circuit_open"],
+    ]);
+  });
+
   it("a body that throws after writing the diary records failed with the diary outcome (Review Focus 4)", async () => {
     const { jobs, root } = setup();
     jobs.bind("rem-dream", async (_n, ctx) => { ctx.noteDiary({ written: true }); throw new Error("after diary"); });
@@ -102,6 +140,71 @@ describe("retry and abandon", () => {
     const [row] = await jobs.history("agent-a");
     assert.deepEqual(row.diary, { written: true });
     assert.deepEqual(readdirSync(join(root, "agent-a", "running")), []);
+  });
+
+  it("the abandonment diary line uses the timezone passed to setDiaryTarget, not the host's (fix round 1, item 2)", async () => {
+    const { jobs, workspaceDir, advance } = setup();
+    jobs.bind("rem-dream", async (_n, ctx) => {
+      ctx.notePendingKey(KEY);
+      ctx.setDiaryTarget(workspaceDir, { timezone: "America/New_York" });
+      return ctx.incomplete("no_narrative");
+    });
+    for (let day = 0; day < 3; day++) {
+      await jobs.run("rem-dream", "agent-a");
+      advance(DAY);
+    }
+    const diary = readFileSync(join(workspaceDir, "DREAMS.md"), "utf8");
+    // The abandoning run starts 2026-01-15T01:15Z: in Europe/Berlin (the host
+    // TZ this suite runs under) that is "January 15" GMT+1; in the explicit
+    // America/New_York zone passed here it is the evening of "January 14"
+    // EST — proof the explicit timezone, not the host's, was used.
+    assert.match(diary, /January 14, 2026 at 8:15 PM EST/);
+    assert.doesNotMatch(diary, /January 15, 2026/);
+  });
+
+  it("the abandonment diary respects the opt-out: diary_disabled, no DREAMS.md write (fix round 1, item 3)", async () => {
+    const { jobs, workspaceDir, advance } = setup();
+    jobs.bind("rem-dream", async (_n, ctx) => {
+      ctx.notePendingKey(KEY);
+      ctx.setDiaryTarget(null, { disabled: true });
+      return ctx.incomplete("no_narrative");
+    });
+    let last;
+    for (let day = 0; day < 3; day++) {
+      last = await jobs.run("rem-dream", "agent-a");
+      advance(DAY);
+    }
+    assert.deepEqual([last.outcome, last.diary], ["abandoned", { written: false, reason: "diary_disabled" }]);
+    assert.equal(existsSync(join(workspaceDir, "DREAMS.md")), false, "the diary file must not be written at all when the diary is disabled");
+  });
+
+  it("a marker is removed best-effort when readAll() throws right after writeMarker succeeds (fix round 1, item 4)", async () => {
+    const { root } = setup();
+    let n = 0;
+    const host = createStubHost({ clock: () => Date.UTC(2026, 0, 13, 1, 15) });
+    const jobs = createJobRegistry({ host, jobsRoot: root, idFactory: () => `run-${++n}` });
+    jobs.bind("rem-dream", async () => ({ text: "ok" }));
+    // First run: ledger.jsonl does not exist yet, so recoverOnce's own
+    // readAll() succeeds trivially and marks this agent recovered — its one
+    // readAll() per process is now spent, so the next run's snapshot
+    // readAll() is the only one that will fire.
+    const first = await jobs.run("rem-dream", "agent-a");
+    assert.equal(first.outcome, "completed");
+    // Corrupt ledger.jsonl into a directory *after* the first run wrote it,
+    // so writeMarker() (which never touches ledger.jsonl) still succeeds for
+    // the second run, and only the post-marker snapshot readAll() throws.
+    const { rmSync, mkdirSync } = await import("node:fs");
+    const ledgerPath = join(root, "agent-a", "ledger.jsonl");
+    rmSync(ledgerPath, { force: true });
+    mkdirSync(ledgerPath, { recursive: true });
+    const second = await jobs.run("rem-dream", "agent-a");
+    assert.equal(second.outcome, "failed");
+    assert.equal(second.reason, "ledger_unwritable");
+    assert.deepEqual(
+      readdirSync(join(root, "agent-a", "running")),
+      [],
+      "the second run's marker must not survive a readAll() failure that happened right after it was written",
+    );
   });
 });
 

@@ -31,7 +31,7 @@ export async function runJobScenario(scenario) {
     if (ctx.isAbandonedKey(scenario.runKey)) return ctx.skip("abandoned");
     if (ctx.hasCompletedKey(scenario.runKey)) return ctx.skip("already_processed");
     ctx.notePendingKey(scenario.runKey);
-    ctx.setDiaryTarget(workspaceDir);
+    ctx.setDiaryTarget(workspaceDir, { timezone: scenario.timezone ?? null });
     return ctx.incomplete("no_narrative");
   });
   for (const at of scenario.sweeps) {

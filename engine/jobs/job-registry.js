@@ -91,13 +91,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     return {
       ...run,
       sweep: sweepKey(run.startedAt),
-      // A session is a new piece of dreaming work starting, not a raw
-      // invocation count: a retry of the same still-open key (attempt > 1)
-      // continues that key's own session rather than opening a new one, so
-      // it must not also spend the sweep's shared breaker budget — otherwise
-      // MAX_ATTEMPTS retries of one stuck key would exhaust BREAKER_LIMIT by
-      // themselves and starve every other rem/deep job in the same sweep.
-      llmSession: BREAKER_PHASES.has(run.phase) && run.outcome !== "skipped" && run.attempt === 1,
+      llmSession: BREAKER_PHASES.has(run.phase) && run.outcome !== "skipped",
     };
   }
 
@@ -177,7 +171,11 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       },
       markCompletedKey: (key) => { if (key && !inflight.keys.includes(key)) inflight.keys.push(String(key)); },
       notePendingKey: (key) => { if (key && !inflight.pendingKeys.includes(key)) inflight.pendingKeys.push(String(key)); },
-      setDiaryTarget: (dir) => { inflight.diaryTarget = dir || null; },
+      setDiaryTarget: (dir, { timezone, disabled } = {}) => {
+        inflight.diaryTarget = dir || null;
+        inflight.diaryTimezone = timezone ?? null;
+        inflight.diaryDisabled = disabled === true;
+      },
       // Served from the one readAll() snapshot taken at the start of this
       // run() (after recovery), not a fresh ledger read per call — this
       // run's own row is not appended yet, so it is correctly absent here.
@@ -196,14 +194,19 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       if (outcome === "incomplete" && inflight.attempt >= MAX_ATTEMPTS) {
         outcome = "abandoned";
         reason = `abandoned_after_retries:${exit.reason || "incomplete"}`;
-        const diary = appendDreamDiaryEntry({
-          workspaceDir: inflight.diaryTarget,
-          narrative: `REM run abandoned after ${inflight.attempt} attempts: ${exit.reason || "incomplete"}.`,
-          mode: "rem",
-          now: clock,
-          logger: host.logger,
-        });
-        inflight.diary = { written: diary.written === true, ...(diary.reason ? { reason: diary.reason } : {}) };
+        if (inflight.diaryDisabled) {
+          inflight.diary = { written: false, reason: "diary_disabled" };
+        } else {
+          const diary = appendDreamDiaryEntry({
+            workspaceDir: inflight.diaryTarget,
+            narrative: `${inflight.job} run abandoned after ${inflight.attempt} attempts: ${exit.reason || "incomplete"}.`,
+            mode: "rem",
+            timezone: inflight.diaryTimezone,
+            now: clock,
+            logger: host.logger,
+          });
+          inflight.diary = { written: diary.written === true, ...(diary.reason ? { reason: diary.reason } : {}) };
+        }
       }
     }
     if (outcome === "skipped" && exit.reason === "already_processed" && inflight.abandonedKeys.length > 0) {
@@ -272,6 +275,8 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       abandonedKeys: [],
       diary: undefined,
       diaryTarget: null,
+      diaryTimezone: null,
+      diaryDisabled: false,
     };
     // `ledgerFor` (and, inside it, `safeAgentId`) can throw on an invalid
     // agentId, so it lives inside this try too — run() must always resolve
@@ -285,12 +290,27 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     // call (owner addendum, PR-08 = a).
     let snapshot = [];
     if (jobsRoot) {
+      let markerWritten = false;
       try {
         ledger = ledgerFor(agentId);
         recoverOnce(agentId, ledger);
         ledger.writeMarker(inflight);
+        markerWritten = true;
         snapshot = ledger.readAll();
       } catch (writeError) {
+        // A throw after the marker was actually written (e.g. readAll()
+        // fails on a subsequent read) must not leave a marker with no row
+        // behind it: that marker would otherwise be mistaken for a crash at
+        // the next process start, even though this run never invoked its
+        // body. Best-effort only — if removal also fails, recovery's normal
+        // crash-row handling still covers it.
+        if (markerWritten) {
+          try {
+            ledger.removeMarker(inflight.runId);
+          } catch {
+            // ignored — recovery covers a leftover marker on next start
+          }
+        }
         const message = `plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${String(writeError?.message || writeError)}`;
         // A broken ledger root is a standing condition, not a per-run event:
         // warn once per agent, then drop to debug so a repeatedly-firing
