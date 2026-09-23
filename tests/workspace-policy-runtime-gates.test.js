@@ -3,17 +3,19 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-// PR-03c/PR-03d/PR-03e (engine-extraction M1a) moved the auto-recall-off
-// before_prompt_build branch, the recall assembly and the agent_end capture
-// pipeline — with their automaticWorkspacePolicyDecision(...) and
-// workspacePolicyGuard.automatic(...) call sites — out of index.js and into
-// these engine modules; the totals below span all of them so this guard still
-// verifies every automatic decision point, not just the ones still textually
-// present in index.js.
+// PR-03c/PR-03d/PR-03e/PR-03f (engine-extraction M1a) moved the auto-recall-off
+// before_prompt_build branch, the recall assembly, the agent_end capture
+// pipeline and the /plur1bus command runner — with their
+// automaticWorkspacePolicyDecision(...), workspacePolicyGuard.automatic(...)
+// and workspace-command call sites — out of index.js and into these engine
+// modules; the totals below span all of them so this guard still verifies
+// every automatic decision point, not just the ones still textually present
+// in index.js.
 const engineSources = [
   "../engine/recall/minimal-maintenance.js",
   "../engine/recall/assemble-prompt-context.js",
   "../engine/capture/capture-turn.js",
+  "../engine/commands/plur1bus-command.js",
 ].map((relative) => readFileSync(new URL(relative, import.meta.url), "utf8"));
 const allRuntimeSources = [indexSource, ...engineSources];
 
@@ -47,8 +49,15 @@ describe("workspace policy runtime gates", () => {
   });
 
   it("keeps policy status and mutation available while other commands fail closed", () => {
-    assert.match(indexSource, /actionKey === "workspace"/);
-    assert.match(indexSource, /workspacePolicyDecision\.reason \|\| "workspace_disabled"/);
+    // PR-03f moved the /plur1bus dispatcher — and with it the whole
+    // `workspace` action branch — out of index.js; both anchors now live in
+    // engine/commands/plur1bus-command.js, so the guard reduces over every
+    // runtime source instead of index.js alone. `text: "NO_REPLY"` still has a
+    // call site in index.js (the operator command path) and stays pinned there.
+    assert.ok(allRuntimeSources.some((source) => /actionKey === "workspace"/.test(source)));
+    assert.ok(allRuntimeSources.some(
+      (source) => /workspacePolicyDecision\.reason \|\| "workspace_disabled"/.test(source)
+    ));
     assert.match(indexSource, /text: "NO_REPLY"/);
   });
 

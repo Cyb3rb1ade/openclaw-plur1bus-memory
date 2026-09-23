@@ -100,7 +100,12 @@ const ACTION_FIXTURES = [
 
 describe("B13 sensitive command-read authorization matrix", () => {
   it("classifies every non-Obsidian dispatched action explicitly", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    // PR-03f (engine-extraction M1a) moved the /plur1bus dispatcher out of
+    // index.js into engine/commands/plur1bus-command.js; the scan spans both
+    // so every dispatched action stays classified, not just the ones still
+    // textually present in index.js.
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8")
+      + readFileSync(new URL("../engine/commands/plur1bus-command.js", import.meta.url), "utf8");
     const observed = new Set([...source.matchAll(/if \(action(?:Key)? === "([a-z-]+)"/g)].map((match) => match[1]));
     const classes = {
       "public-help": new Set(),
@@ -117,8 +122,12 @@ describe("B13 sensitive command-read authorization matrix", () => {
   });
 
   it("keeps public help and B14 delegation ahead of the general Neo store", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    const dispatcher = source.indexOf("const runPlur1busCommand");
+    // PR-03f moved the dispatcher body into engine/commands/plur1bus-command.js;
+    // index.js keeps only the `const runPlur1busCommand = createPlur1busCommandRunner({…})`
+    // binding, so every anchor below now lives in the engine module. The
+    // ordering claims are unchanged.
+    const source = readFileSync(new URL("../engine/commands/plur1bus-command.js", import.meta.url), "utf8");
+    const dispatcher = source.indexOf("return async function runPlur1busCommand");
     const generalStoreAt = source.indexOf("const commandStore = getNeoStore({", source.indexOf("const cronInternal", dispatcher));
     assert.ok(source.indexOf('actionKey === "obsidian"', dispatcher) < generalStoreAt);
     assert.ok(source.indexOf("handleObsidianBridgeCommand", dispatcher) < generalStoreAt);
@@ -195,7 +204,8 @@ describe("B13 sensitive command-read authorization matrix", () => {
   });
 
   it("uses only canonical workspace fields for the general Neo store", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    // PR-03f: the general Neo store lives in the moved dispatcher body.
+    const source = readFileSync(new URL("../engine/commands/plur1bus-command.js", import.meta.url), "utf8");
     const start = source.indexOf("const commandStore = getNeoStore({", source.indexOf("const cronInternal"));
     const store = source.slice(start, source.indexOf("});", start) + 3);
     assert.match(store, /workspaceDir: memoryCtx\?\.workspaceDir \|\| ""/);
