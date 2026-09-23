@@ -19,6 +19,29 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 | `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
 | `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
 
+### Prompt-Injektions-Budgets
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `memoriesMaxChars` | `number` | `12000` | Innerer Zeichen-Cap auf den `<relevant-memories>`-Block selbst (`truncateMemoryContext`'s `maxTotalChars`, `lib/relevant-memory-context.js`). Greift zuerst; überschreitet der Block diesen Wert, wird er hier bereits mit `<!-- memory context truncated -->` markiert und abgeschnitten. |
+| `globalInjectMaxChars` | `number` | `17000` | Äußerer Zeichen-Cap über alle Prompt-Prepend-Blöcke zusammen (Neo, Start-Hinweis, Memories, Zeit, temporale Kontinuität, Reminder) — `applyGlobalInjectBudget`, `lib/inject-budget.js`. |
+
+Die beiden Caps sind unabhängig, aber `globalInjectMaxChars` sieht nur, was
+`memoriesMaxChars` bereits durchgelassen hat: bei den Vorgabewerten
+(`memoriesMaxChars: 12000`) ist der Memories-Block plus die übrigen Blöcke
+(typischerweise wenige hundert Zeichen) so gut wie nie größer als `12000` +
+etwas Rand, wodurch `globalInjectMaxChars: 17000` im Regelbetrieb nie bindend
+wird — es greift nur bei ungewöhnlich vielen/langen nicht-droppable Blöcken
+oder wenn `memoriesMaxChars` bewusst höher gesetzt wird. Um
+`globalInjectMaxChars` tatsächlich als scharfe Grenze zu testen oder zu
+nutzen, muss `memoriesMaxChars` mindestens so hoch (oder niedriger, um zuerst
+dort zu kappen) konfiguriert werden. Überschreitet ein droppable Block (z. B.
+`memories`) den äußeren Cap, wird er am Ende des letzten vollständigen
+`<memory-record>`-Elements gekürzt, das noch passt, und bekommt denselben
+Trunkierungs-Marker; passt kein einziger Record mehr, wird der ganze Block
+verworfen. Nicht-droppable Blöcke (Zeit, temporale Kontinuität, Reminder)
+werden von `globalInjectMaxChars` nie angetastet.
+
 ---
 
 ## Deduplizierung

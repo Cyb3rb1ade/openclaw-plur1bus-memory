@@ -68,6 +68,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   denselben `<!-- memory context truncated -->`-Marker wie `truncateMemoryContext`;
   passt kein einziger Record mehr in das verbleibende Budget, wird der ganze
   Block verworfen statt mittendrin abgeschnitten.
+- `recall.globalInjectMaxChars` (Default 17 000) konnte nie greifen, weil der
+  `<relevant-memories>`-Block bereits vorher von `truncateMemoryContext` auf
+  12 000 Zeichen gedeckelt wurde und nichts diesen inneren Wert überschrieb.
+  Der innere Cap ist jetzt über `recall.memoriesMaxChars` (Default weiterhin
+  `12000`, additiv, verhaltensneutral) konfigurierbar; siehe
+  `docs/configuration.md` für das Zusammenspiel beider Werte.
 
 ## [7.15.4] — 2026-09-21
 

@@ -111,4 +111,35 @@ describe("engine/recall/assemble-prompt-context", () => {
       assert.match(source, /recallTimingSink:\s*api\.__recallTimingSinkForTests\s*\?\?\s*null/);
     });
   });
+
+  describe("recall.memoriesMaxChars (F2 — threads to truncateMemoryContext's maxTotalChars)", () => {
+    it("a lowered recall.memoriesMaxChars shrinks the memories block", async () => {
+      // globalInjectMaxChars is raised well past the inner cap so the outer
+      // budget (applyGlobalInjectBudget) never binds here — only the inner
+      // cap (truncateMemoryContext's maxTotalChars, fed by
+      // recall.memoriesMaxChars) is under test.
+      const base = SCENARIOS.find((s) => s.name === "recall-truncated");
+      const withDefaultCap = {
+        ...base,
+        config: { recall: { ...base.config.recall, globalInjectMaxChars: 50_000 } },
+      };
+      const withLoweredCap = {
+        ...base,
+        config: { recall: { ...base.config.recall, globalInjectMaxChars: 50_000, memoriesMaxChars: 2_000 } },
+      };
+      const defaultOut = await runScenario(withDefaultCap);
+      const loweredOut = await runScenario(withLoweredCap);
+
+      assert.ok(loweredOut.length < defaultOut.length, "a smaller memoriesMaxChars must shrink the prependContext");
+      const defaultRecords = (defaultOut.match(/<memory-record\b/g) || []).length;
+      const loweredRecords = (loweredOut.match(/<memory-record\b/g) || []).length;
+      assert.ok(loweredRecords < defaultRecords, "fewer records must survive the smaller inner cap");
+      assert.match(loweredOut, /<!-- memory context truncated -->/);
+    });
+
+    it("omitting recall.memoriesMaxChars keeps the 12000-char default (behaviour-neutral)", () => {
+      const source = readFileSync(join(root, "engine", "recall", "assemble-prompt-context.js"), "utf8");
+      assert.match(source, /memoriesMaxChars\s*\?\?\s*12_000/);
+    });
+  });
 });
