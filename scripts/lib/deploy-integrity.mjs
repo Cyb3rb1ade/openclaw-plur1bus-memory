@@ -39,6 +39,7 @@ export const DEPLOY_FILES = [
   "engine/commands/plur1bus-command.js",
   "engine/events.js",
   "engine/jobs/internal-job-bodies.js",
+  "engine/jobs/job-ledger.js",
   "engine/jobs/job-registry.js",
   "engine/jobs/job-specs.js",
   "engine/recall/assemble-prompt-context.js",

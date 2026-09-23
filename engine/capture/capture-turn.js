@@ -69,6 +69,7 @@ export function createTurnCapture(ctx) {
     getNeoStore,
     halfLifeOverrides,
     host,
+    jobs = null,
     memoryWorkspaceAliases,
     mergingEnabled,
     metaCognitionEnabled,
@@ -102,6 +103,12 @@ export function createTurnCapture(ctx) {
     waitForTimeoutSettlement,
     workspacePolicyGuard,
   } = ctx;
+
+  jobs?.bind("light-dream", async (_name, jobCtx) => {
+    const work = jobCtx.input?.work;
+    if (typeof work !== "function") return jobCtx.skip("no_turns");
+    return { dreamed: await work() };
+  });
 
   // Per-registration one-shot warning latches (were index.js:10357-10358).
   // They are rebound at turn time, so they stay inside the closure rather
@@ -747,7 +754,7 @@ export function createTurnCapture(ctx) {
                   ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
                   : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
                 : null;
-              postProcessing.push(lightDream({
+              const lightDreamWork = () => lightDream({
                 turns: normalizedTurns,
                 neoStore,
                 db,
@@ -798,10 +805,19 @@ export function createTurnCapture(ctx) {
                 throwIfAborted(signal, "light dream commit aborted");
                 neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
                 return true;
-              }).catch((dreamErr) => {
-                host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
-                return false;
-              }));
+              });
+              postProcessing.push(jobs
+                ? jobs.run("light-dream", agentId, { trigger: "capture", signal, input: { work: lightDreamWork } })
+                  .then((dreamRun) => {
+                    if (dreamRun.outcome === "failed") {
+                      host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamRun.error)}`);
+                    }
+                    return dreamRun.outcome === "completed";
+                  })
+                : lightDreamWork().catch((dreamErr) => {
+                  host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
+                  return false;
+                }));
             }
           }
 

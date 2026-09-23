@@ -1,17 +1,30 @@
 /**
- * engine/jobs/job-registry.js — PR-07 (spec 3.3).
+ * engine/jobs/job-registry.js — PR-07/PR-08 (spec 3.3).
  *
  * One owner per job name. A body returns its output (the command reply) for
  * a completed run, or `jobCtx.skip(...)` / `jobCtx.incomplete(...)` for the
  * other exits; a throw is a failed run. Every run resolves to a JobRun.
+ *
+ * Every run writes `<runId>.started` before invoking the body (Job ledger,
+ * PR-08); every exit appends exactly one JobRun row and removes the marker.
+ * A marker left behind with no matching row at the next start is recorded
+ * as a `failed`/`crash` run before that start's own run proceeds.
  */
 
 import { randomUUID } from "node:crypto";
 
 import { emitEngineEvent } from "../events.js";
+import { createJobLedger } from "./job-ledger.js";
 import { JOB_SPECS } from "./job-specs.js";
 
 const EXIT = Symbol("plur1bus.job.exit");
+
+export const BREAKER_PHASES = Object.freeze(new Set(["rem", "deep"]));
+
+/** @param {number} ms @returns {string} UTC day. */
+export function sweepKey(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
 
 /**
  * @param {"completed"|"skipped"|"incomplete"|"failed"|"abandoned"} outcome
@@ -24,12 +37,61 @@ export function jobExit(outcome, reason, output) {
 }
 
 /**
- * @param {{host: object, idFactory?: () => string}} options
+ * @param {{host: object, jobsRoot?: string|null, idFactory?: () => string}} options
  */
-export function createJobRegistry({ host, idFactory = () => randomUUID() } = {}) {
+export function createJobRegistry({ host, jobsRoot = null, idFactory = () => randomUUID() } = {}) {
   const specs = new Map(JOB_SPECS.map((spec) => [spec.name, spec]));
   const owners = new Map();
   const clock = () => (typeof host?.clock === "function" ? host.clock() : Date.now());
+  const ledgers = new Map();
+  const recovered = new Set();
+
+  function ledgerFor(agentId) {
+    if (!jobsRoot) return null;
+    let ledger = ledgers.get(agentId);
+    if (!ledger) {
+      ledger = createJobLedger({ root: jobsRoot, agentId, logger: host.logger });
+      ledgers.set(agentId, ledger);
+    }
+    return ledger;
+  }
+
+  function rowOf(run) {
+    return {
+      ...run,
+      sweep: sweepKey(run.startedAt),
+      llmSession: BREAKER_PHASES.has(run.phase) && run.outcome !== "skipped",
+    };
+  }
+
+  function recoverOnce(agentId, ledger) {
+    if (recovered.has(agentId)) return;
+    recovered.add(agentId);
+    const finished = new Set(ledger.readAll().map((row) => row.runId));
+    for (const marker of ledger.orphanMarkers()) {
+      if (!finished.has(marker.runId)) {
+        const startedAt = Number.isFinite(marker.startedAt) ? marker.startedAt : clock();
+        const finishedAt = clock();
+        ledger.append(rowOf({
+          runId: marker.runId,
+          job: marker.job ?? "unknown",
+          phase: marker.phase ?? null,
+          agentId,
+          trigger: marker.trigger ?? "cron",
+          startedAt,
+          finishedAt,
+          durationMs: Math.max(0, finishedAt - startedAt),
+          outcome: "failed",
+          reason: "crash",
+          attempt: 1,
+          cost: { ms: 0 },
+          counts: {},
+        }));
+        host.logger.warn(`plur1bus job ${marker.job ?? "unknown"}[${agentId}]: run ${marker.runId} left no ledger row; recorded as crash`);
+      }
+      ledger.removeMarker(marker.runId);
+    }
+  }
 
   function bind(name, body, { defaultInput = null } = {}) {
     if (!specs.has(name)) throw new TypeError(`unknown job: ${name}`);
@@ -56,7 +118,7 @@ export function createJobRegistry({ host, idFactory = () => randomUUID() } = {})
     });
   }
 
-  function finish(inflight, exit, error) {
+  function finish(inflight, exit, error, ledger) {
     const finishedAt = clock();
     const durationMs = Math.max(0, finishedAt - inflight.startedAt);
     const run = {
@@ -80,6 +142,14 @@ export function createJobRegistry({ host, idFactory = () => randomUUID() } = {})
     };
     Object.defineProperty(run, "output", { value: exit.output, enumerable: false });
     if (error) Object.defineProperty(run, "error", { value: error, enumerable: false });
+    if (ledger) {
+      try {
+        ledger.append(rowOf(run));
+        ledger.removeMarker(run.runId);
+      } catch (persistError) {
+        host.logger.warn(`plur1bus job ${run.job}[${run.agentId}]: ledger append failed; the marker stays for crash recovery: ${String(persistError?.message || persistError)}`);
+      }
+    }
     if (run.outcome === "skipped") host.logger.info(`plur1bus job ${run.job}[${run.agentId}]: skipped (${run.reason})`);
     emitEngineEvent(host, "job.run", run);
     return run;
@@ -101,6 +171,16 @@ export function createJobRegistry({ host, idFactory = () => randomUUID() } = {})
       diary: undefined,
       diaryTarget: null,
     };
+    const ledger = ledgerFor(agentId);
+    if (ledger) {
+      try {
+        recoverOnce(agentId, ledger);
+        ledger.writeMarker(inflight);
+      } catch (writeError) {
+        host.logger.warn(`plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${String(writeError?.message || writeError)}`);
+        return finish(inflight, jobExit("failed", "ledger_unwritable", undefined), writeError, null);
+      }
+    }
     const owner = owners.get(name);
     let exit;
     let error = null;
@@ -122,13 +202,21 @@ export function createJobRegistry({ host, idFactory = () => randomUUID() } = {})
       error = thrown;
       exit = jobExit("failed", `error:${thrown?.name || "Error"}`, undefined);
     }
-    return finish(inflight, exit, error);
+    return finish(inflight, exit, error, ledger);
   }
 
   return Object.freeze({
     list: () => [...specs.values()],
     bind,
     run,
-    history: async () => [],
+    history: async (agentId, { job, since, limit } = {}) => {
+      const ledger = ledgerFor(agentId);
+      if (!ledger) return [];
+      let rows = ledger.readAll();
+      if (job) rows = rows.filter((row) => row.job === job);
+      if (Number.isFinite(since)) rows = rows.filter((row) => row.startedAt >= since);
+      rows.reverse();
+      return Number.isInteger(limit) && limit >= 0 ? rows.slice(0, limit) : rows;
+    },
   });
 }

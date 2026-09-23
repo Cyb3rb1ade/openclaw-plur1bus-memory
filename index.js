@@ -6908,7 +6908,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       sessionWorkspaceKeys,
     });
 
-    const jobs = createJobRegistry({ host });
+    const jobs = createJobRegistry({ host, jobsRoot: join(baseDbPath, "_jobs") });
 
     {
       const resolveCommandLocale = (commandCtx) => {
@@ -7334,6 +7334,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         getNeoStore,
         halfLifeOverrides,
         host,
+        jobs,
         memoryWorkspaceAliases,
         mergingEnabled,
         metaCognitionEnabled,
