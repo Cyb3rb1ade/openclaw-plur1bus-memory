@@ -45,21 +45,26 @@ describe("recall abort", () => {
     // Unlike the scheduler-timeout test above, recallTimeoutMs is large (10s)
     // so the scheduler's own internal timer cannot fire first: only the
     // caller's own AbortController — driven through the real
-    // assembler/scheduler/pipeline via runScenario's `callerSignal` option —
+    // assembler/scheduler/pipeline via runScenario's `abortAfterMs` option —
     // can produce this result. This is the end-to-end proof success criterion
     // 3 asks for; the mocked-runRecall test below stays as a fast, fully
     // deterministic pin of the same outer-exit mapping.
+    //
+    // fix round 3: `abortAfterMs` (not a `setTimeout` armed here, before
+    // runScenario's own setup — temp dirs, fixture writes, plugin.register —
+    // which could itself eat 30-100+ ms and land the abort at an
+    // unpredictable point) arms its timer immediately before the one
+    // `hook(...)` call, so the 100 ms is measured from the start of the
+    // actual recall.
     const scenario = { ...aborted(), config: { ...aborted().config, runtime: { recallTimeoutMs: 10_000 } } };
     const events = [];
     const embedder = { calls: 0, abortedAt: null };
     let recallMs = null;
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 100);
     const prefix = await runScenario(scenario, {
       hostEvents: { emit: (name, payload) => events.push({ name, payload }) },
       embedderProbe: embedder,
       onTiming: (t) => { recallMs = t.recallMs; },
-      callerSignal: controller.signal,
+      abortAfterMs: 100,
     });
     assert.ok(embedder.calls >= 1, "the embedder was reached");
     assert.ok(embedder.abortedAt !== null, "the embedder saw its signal abort");

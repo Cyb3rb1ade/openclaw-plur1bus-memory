@@ -214,10 +214,25 @@ export function baseConfig(baseDbPath, overrides = {}) {
  *   below swaps in the caller's real signal without touching production code.
  *   This is what lets a test drive a genuine caller-initiated abort through
  *   the real assembler/scheduler/pipeline, instead of mocking `runRecall`.
+ *   `abortAfterMs` (fix round 3): prefer this over building your own
+ *   `callerSignal` with a `setTimeout` armed before calling `runScenario` —
+ *   that timer would start ticking before this function's own setup (temp
+ *   dirs, fixture `db.store()` writes, `plugin.register()` — tens of ms, more
+ *   at scale), landing the abort at an unpredictable point in the recall
+ *   itself instead of right after it starts. Given a number of milliseconds,
+ *   this function creates its own `AbortController` and arms the timer
+ *   immediately before the one `hook(...)` call, so the delay is measured
+ *   from the start of the actual recall. Takes precedence over `callerSignal`
+ *   when both are given.
+ *
+ *   NOTE: the `AbortSignal.timeout` patch this implies is a global,
+ *   non-reentrant stub — it is installed and restored around one
+ *   `hook(...)` call and is not safe for concurrent `runScenario` calls
+ *   (with `callerSignal` or `abortAfterMs`) racing in the same process.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null, embedderProbe = null, callerSignal = null } = {}) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null, embedderProbe = null, callerSignal = null, abortAfterMs = null } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
@@ -273,9 +288,20 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
     const setupMs = performance.now() - setupStartedAt;
     const recallStartedAt = performance.now();
     let restoreAbortTimeout = null;
-    if (callerSignal) {
+    // abortAfterMs arms its timer here, immediately before hook(...), not
+    // when runScenario was called — so the delay is measured from the start
+    // of the actual recall, not from before this function's own setup work
+    // (fix round 3).
+    const effectiveCallerSignal = abortAfterMs !== null
+      ? (() => {
+          const controller = new AbortController();
+          setTimeout(() => controller.abort(), abortAfterMs);
+          return controller.signal;
+        })()
+      : callerSignal;
+    if (effectiveCallerSignal) {
       const originalTimeout = AbortSignal.timeout;
-      AbortSignal.timeout = () => callerSignal;
+      AbortSignal.timeout = () => effectiveCallerSignal;
       restoreAbortTimeout = () => { AbortSignal.timeout = originalTimeout; };
     }
     let result;
