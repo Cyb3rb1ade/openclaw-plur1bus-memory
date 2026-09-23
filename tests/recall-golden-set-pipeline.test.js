@@ -353,10 +353,16 @@ describe("Golden-Set: runRecallPipeline reranker", () => {
       makeRow({ id: "second", text: "second by score", distance: 0.2 }),
     ];
     const reranker = {
-      async rerank() {
-        await new Promise(r => setTimeout(r, 50));
-        return [{ index: 1 }, { index: 0 }];
-      },
+      // PR-09: the pipeline hands the reranker one signal instead of racing
+      // its own setTimeout; this stub honors it, same as a real provider's
+      // HTTP request would.
+      rerank: (_query, _documents, _topN, { signal } = {}) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve([{ index: 1 }, { index: 0 }]), 50);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        }, { once: true });
+      }),
     };
     const result = await runRecallPipeline({
       query: "timeout",

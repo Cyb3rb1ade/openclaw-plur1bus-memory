@@ -161,6 +161,7 @@ export const DEPLOY_FILES = [
   "lib/providers/factory.js",
   "lib/providers/legacy-provider-migration.js",
   "lib/providers/openclaw-memory-embedding-adapters.js",
+  "lib/providers/rerank-signal.js",
   "lib/providers/reranker-chained.js",
   "lib/providers/reranker-cohere.js",
   "lib/providers/reranker-local-transformers.js",

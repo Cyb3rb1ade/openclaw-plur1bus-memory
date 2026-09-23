@@ -72,11 +72,19 @@ describe("reranker-pipeline", () => {
   });
 
   it("times out and falls back when reranker is too slow", async () => {
+    // PR-09: the pipeline no longer races its own setTimeout against the
+    // reranker's promise — it hands the reranker one signal and relies on
+    // the reranker's own request being driven by it (exactly like the real
+    // Cohere/local providers). This stub honors that signal, same as a real
+    // provider's HTTP request would.
     const slowReranker = {
-      rerank: async () => {
-        await new Promise(r => setTimeout(r, 500));
-        return [{ index: 0 }];
-      },
+      rerank: async (_query, _documents, _topN, { signal } = {}) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve([{ index: 0 }]), 500);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(signal.reason);
+        }, { once: true });
+      }),
     };
     const t0 = Date.now();
     const { memories } = await runRecallPipeline({
