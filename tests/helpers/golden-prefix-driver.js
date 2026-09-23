@@ -16,6 +16,7 @@ import { performance } from "node:perf_hooks";
 
 import plugin, { MemoryDB } from "../../index.js";
 import { LocalTransformersEmbeddingProvider } from "../../lib/providers/embedding-local-transformers.js";
+import { writePlur1busStartNotice } from "../../lib/setup/feature-profiles.js";
 
 /** 2026-01-15T12:00:00Z — every scenario is evaluated at this instant. */
 export const FROZEN_NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
@@ -69,15 +70,30 @@ export function topicVector(topic) {
  * scenario fails loudly instead of silently downloading weights.
  *
  * @param {(text: string) => string} topicOf
+ * @param {{hang?: boolean, probe?: {calls: number, abortedAt: number|null}|null}} [opts]
+ *   `hang: true` makes the stub never resolve on its own — it only settles
+ *   (by rejecting) when `options.signal` aborts, exercising the abort path
+ *   (PR-05). `probe`, when given, records call counts and the abort instant.
  * @returns {() => void} restore function
  */
-function stubEmbedder(topicOf) {
+function stubEmbedder(topicOf, { hang = false, probe = null } = {}) {
   const proto = LocalTransformersEmbeddingProvider.prototype;
   const originalBatchForPurpose = proto._embedBatchForPurpose;
   const originalComputeBatch = proto._computeBatch;
-  proto._embedBatchForPurpose = async (texts) => (
-    (Array.isArray(texts) ? texts : [texts]).map((text) => topicVector(topicOf(text)))
-  );
+  proto._embedBatchForPurpose = async (texts, _purpose, options = {}) => {
+    if (probe) probe.calls += 1;
+    if (hang) {
+      return await new Promise((_, reject) => {
+        const signal = options?.signal;
+        if (!signal) return; // no signal: hangs until the scenario's timeout; the recall still resolves via the scheduler
+        signal.addEventListener("abort", () => {
+          if (probe) probe.abortedAt = performance.now();
+          reject(signal.reason);
+        }, { once: true });
+      });
+    }
+    return (Array.isArray(texts) ? texts : [texts]).map((text) => topicVector(topicOf(text)));
+  };
   proto._computeBatch = async () => {
     throw new Error("golden-prefix driver: real embedder reached");
   };
@@ -188,10 +204,12 @@ export function baseConfig(baseDbPath, overrides = {}) {
  *   hook invocation) — fix round 2: the wall-clock total the probe reported
  *   before this conflated both, and setup dominates at larger `--scale`.
  *   `hostEvents`: forwarded to plugin.register as the hostEvents dependency.
+ *   `embedderProbe`: forwarded to `stubEmbedder`'s `probe` option (PR-05,
+ *   `recall-aborted`); records embedder call count and abort timing.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null } = {}) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null, embedderProbe = null } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
@@ -213,8 +231,9 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
     stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
     process.env.OPENCLAW_HOME = stateDir;
     restoreClock = useFrozenClock ? freezeClock() : () => {};
-    restoreEmbedder = stubEmbedder(topicOf);
+    restoreEmbedder = stubEmbedder(topicOf, { hang: scenario.hangEmbedder === true, probe: embedderProbe });
     mkdirSync(join(workspaceDir, "memory"), { recursive: true });
+    if (scenario.startNotice) writePlur1busStartNotice(stateDir, { text: scenario.startNotice });
     if (scenario.knowledge) {
       const knowledgePath = join(workspaceDir, "memory", "KNOWLEDGE.md");
       writeFileSync(knowledgePath, scenario.knowledge);

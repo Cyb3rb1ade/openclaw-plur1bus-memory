@@ -5,7 +5,7 @@
  * to write anything unless both runs are byte-identical. Run once, on
  * unmodified main. Never re-run to "fix" a failing golden test.
  *
- * Usage: node tools/capture-golden-prefix.mjs [--force]
+ * Usage: node tools/capture-golden-prefix.mjs [--force] [--only=name[,name]]
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -18,11 +18,14 @@ import { runScenario } from "../tests/helpers/golden-prefix-driver.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "..", "tests", "fixtures", "golden-prefix", "expected");
 const force = process.argv.includes("--force");
+const onlyArg = process.argv.find((arg) => arg.startsWith("--only="));
+const only = onlyArg ? new Set(onlyArg.slice("--only=".length).split(",").filter(Boolean)) : null;
 
 mkdirSync(outDir, { recursive: true });
 
 let failures = 0;
 for (const scenario of SCENARIOS) {
+  if (only && !only.has(scenario.name)) continue;
   const first = await runScenario(scenario);
   const second = await runScenario(scenario);
   if (first !== second) {

@@ -39,7 +39,7 @@ import { readPendingReminders, writePendingReminders } from "../../lib/reminder-
 import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
 import { emitEngineEvent } from "../events.js";
-import { contextBlock, recallResult } from "./recall-result.js";
+import { ABORTED, contextBlock, recallResult } from "./recall-result.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { applySemanticLensToRecall } from "../../lib/semantic-lens-index.js";
 import { formatTimeContext, getLastActivity, recordActivity } from "../../lib/session-time.js";
@@ -142,7 +142,18 @@ export function createPromptContextAssembler(ctx) {
     workspacePolicyGuard,
   } = ctx;
 
-  return async function assemblePromptContext(event, hookCtx) {
+  return async function assemblePromptContext(event, hookCtx, opts = {}) {
+    const callerSignal = opts?.signal;
+    if (!(callerSignal instanceof AbortSignal)) {
+      return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: "signal is required" } });
+    }
+    if (callerSignal.aborted) {
+      emitEngineEvent(host, "recall.degraded", { agentId: hookCtx?.agentId || "default", degraded: ABORTED });
+      return recallResult({ degraded: ABORTED });
+    }
+    // Blocks finished before the scheduled work completes. An aborted or
+    // timed-out recall returns these (spec 3.2) instead of nothing.
+    const completed = { neo: "", start: "" };
     const background = isBackgroundTurn(event, hookCtx);
     const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, hookCtx);
     if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return recallResult();
@@ -159,6 +170,7 @@ export function createPromptContextAssembler(ctx) {
       cacheKey,
       priority: background ? "low" : "normal",
       phaseTimer,
+      signal: callerSignal,
     }, async (signal, timer) => {
     throwIfAborted(signal, "recall aborted");
     // P0-1: Interne/background Turns bekommen keine volle Recall-Injektion.
@@ -267,6 +279,7 @@ export function createPromptContextAssembler(ctx) {
         host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
       }
     }
+    completed.neo = neoContext;
     {
       const preludeMs = Date.now() - recallPrelude.startedAt;
       const preludeLine = `plur1bus-neo: recall prelude total=${preludeMs}ms identity=${recallPrelude.identityMs}ms hookRecord=${recallPrelude.hookRecordMs}ms window=${recallPrelude.windowMs}ms embed=${recallPrelude.embedMs}ms${recallPrelude.embedTimedOut ? "(timeout)" : ""} global=${recallPrelude.globalMs}ms lanes=${recallPrelude.lanesMs}ms authenticated=${memoryCtx?.userPrincipal ? "yes" : "no"} agent=${hookCtx?.agentId || "default"}`;
@@ -286,6 +299,7 @@ export function createPromptContextAssembler(ctx) {
     const startNoticeContext = pendingStartNotice
       ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
       : "";
+    completed.start = startNoticeContext;
     const agentId = memoryCtx.agentId;
     return pool.withWriteDb(agentId, (db) => withAccessReadDbs(
       pool,
@@ -430,6 +444,7 @@ export function createPromptContextAssembler(ctx) {
         phaseTimer: timer,
         softBudgetFallback,
         embeddings,
+        signal,
         workspaceDir: hookCtx?.workspaceDir,
         topN: maxPromptMemories,
         budget: resolveRuntimeRecallBudget(event.prompt, maxPromptMemories, adaptiveBudgetCfg),
@@ -1228,15 +1243,20 @@ export function createPromptContextAssembler(ctx) {
     // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
     // Reply-Outcome-Dynamik die Tabelle anfassen.
     if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
+    const partial = () => [contextBlock("neo", completed.neo, true), contextBlock("start", completed.start, true)]
+      .filter((block) => block.text);
     if (scheduledRecall.ok) {
       if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
         host.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
       }
       return scheduledRecall.value ?? recallResult();
     }
-    if (scheduledRecall.timedOut) {
-      host.logger.warn(`memory-lancedb-namespaced: recall timed out without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
-      return recallResult();
+    if (scheduledRecall.aborted || scheduledRecall.timedOut) {
+      const degraded = scheduledRecall.aborted ? ABORTED : { reason: "timeout", capability: "recall" };
+      const reasonLabel = scheduledRecall.aborted ? "aborted" : "timed out";
+      host.logger.warn(`memory-lancedb-namespaced: recall ${reasonLabel} without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
+      emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded });
+      return recallResult({ blocks: partial(), degraded });
     }
     if (scheduledRecall.error) {
       host.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);

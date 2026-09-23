@@ -1,7 +1,7 @@
 /**
  * tests/fixtures/golden-prefix/scenarios.js
  *
- * Seven synthetic recall scenarios. `topics` maps a fixture string to the axis
+ * Eight synthetic recall scenarios. `topics` maps a fixture string to the axis
  * the stub embedder puts it on, so recall order is a property of the fixture
  * and not of a downloaded model.
  */
@@ -282,5 +282,33 @@ export const SCENARIOS = [
     config: {},
     event: eventFor("when may we release", "golden-session-7", "golden-run-7"),
     ctx: ctxFor("golden-session-7", "golden-run-7"),
+  },
+  {
+    // Signal fires mid-recall: the embedder only settles when its signal
+    // aborts, so the recall is cut after the start notice was consumed and
+    // before any memory was embedded. Spec 3.2: the aborted recall returns
+    // the blocks already complete — here exactly the start notice.
+    name: "recall-aborted",
+    agentId: AGENT,
+    workspaceKey: WORKSPACE,
+    startNotice: "PLUR1BUS is set up. This notice is shown once.",
+    hangEmbedder: true,
+    topics: {
+      "what happened while I was away": "away",
+      "The user travelled to Lisbon in December.": "away",
+      "Lisbon trip": "away",
+    },
+    memories: [
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        text: "The user travelled to Lisbon in December.",
+        summary: "Lisbon trip",
+        category: "fact",
+        ageDays: 20,
+      },
+    ],
+    config: { runtime: { recallTimeoutMs: 300 } },
+    event: eventFor("what happened while I was away", "golden-session-8", "golden-run-8"),
+    ctx: ctxFor("golden-session-8", "golden-run-8"),
   },
 ];

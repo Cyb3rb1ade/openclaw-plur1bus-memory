@@ -700,11 +700,14 @@ async function runMergedNamespaceRecall(
     return { queryVector: undefined, canonical: [], memories: [], trace };
   }
   const providerEmbeddings = baseParams.embeddings;
+  const embedOptions = baseParams.signal
+    ? { agentId: baseParams.agentId, signal: baseParams.signal }
+    : { agentId: baseParams.agentId };
   const requestEmbeddings = Object.freeze({
     embedQuery: (text) => typeof providerEmbeddings.embedQuery === "function"
-      ? providerEmbeddings.embedQuery(text, { agentId: baseParams.agentId })
-      : providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
-    embed: (text) => providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
+      ? providerEmbeddings.embedQuery(text, embedOptions)
+      : providerEmbeddings.embed(text, embedOptions),
+    embed: (text) => providerEmbeddings.embed(text, embedOptions),
   });
   const timerConfig = phaseTimer?.summary?.() || {};
   phaseTimer?.start("namespace-recall");
