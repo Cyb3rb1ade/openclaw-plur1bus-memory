@@ -29,7 +29,13 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Optional root argument. The repo is the default; the test suite points this
+// at a tmpdir so its fixtures never touch the working tree (a crashed test run
+// must not be able to leave a probe module behind that then fails `npm run
+// lint` for everyone).
+const root = process.argv[2]
+  ? resolve(process.argv[2])
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const ROOTS = ["engine", "adapter"];
 
@@ -46,6 +52,9 @@ const IMPORT_PATTERNS = [
   /(?:^|\n)\s*import\s*["']([^"']+)["']/g,
   /(?:^|\n)\s*export\s[^;]*?\sfrom\s*["']([^"']+)["']/g,
   /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+  // The package is `"type": "module"` and uses no `require`, but a copied
+  // snippet or a createRequire escape would otherwise slip the whole rule set.
+  /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
 ];
 
 /** A member read of `api` off any receiver: `host.api`, `services.api.on`, … */
@@ -63,7 +72,7 @@ function* walk(directory) {
     if (entry.isDirectory()) {
       if (entry.name === "node_modules") continue;
       yield* walk(full);
-    } else if (entry.isFile() && entry.name.endsWith(".js")) {
+    } else if (entry.isFile() && /\.m?js$/.test(entry.name)) {
       yield full;
     }
   }

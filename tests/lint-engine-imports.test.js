@@ -4,81 +4,137 @@
  * Review Focus item 3: an ESM cycle between adapter and engine modules yields
  * an undefined binding at call time, not a load error, so it must be caught
  * statically.
+ *
+ * Every fixture lives in a tmpdir and the linter is pointed at it with its
+ * optional root argument. Writing probe modules into the real `engine/` and
+ * `adapter/` would mean a crashed test run leaves behind a module that then
+ * fails `npm run lint` for everyone.
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const script = join(root, "scripts", "lint-engine-imports.mjs");
 
-function run() {
+/**
+ * @param {string} target Root the linter should scan.
+ * @returns {{status: number, out: string}} Exit status and combined output.
+ */
+function run(target) {
   try {
-    return { status: 0, out: execFileSync(process.execPath, [script], { cwd: root, encoding: "utf8" }) };
+    return { status: 0, out: execFileSync(process.execPath, [script, target], { cwd: root, encoding: "utf8" }) };
   } catch (error) {
     return { status: error.status ?? 1, out: `${error.stdout ?? ""}${error.stderr ?? ""}` };
   }
 }
 
-function probe(t, files) {
-  const dirs = new Set();
+/**
+ * Materialise a throwaway tree with `engine/` and `adapter/` roots.
+ * @param {import("node:test").TestContext} t Test context, for cleanup.
+ * @param {Record<string, string>} files Root-relative path → source.
+ * @returns {string} The tmpdir root.
+ */
+function fixture(t, files) {
+  const base = mkdtempSync(join(tmpdir(), "lint-engine-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(join(base, "engine"), { recursive: true });
+  mkdirSync(join(base, "adapter"), { recursive: true });
   for (const [relativePath, source] of Object.entries(files)) {
-    const full = join(root, relativePath);
+    const full = join(base, relativePath);
     mkdirSync(dirname(full), { recursive: true });
-    dirs.add(dirname(full));
     writeFileSync(full, source);
   }
-  t.after(() => {
-    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
-  });
+  return base;
 }
 
 describe("lint-engine-imports", () => {
   it("passes on the current tree", () => {
-    const result = run();
+    const result = run(root);
     assert.equal(result.status, 0, result.out);
   });
 
   it("allows an adapter module importing an engine module", (t) => {
-    probe(t, {
-      "engine/__probe__/a.js": 'import { applyGlobalInjectBudget } from "../../lib/inject-budget.js";\nexport function a() { return applyGlobalInjectBudget; }\n',
-      "adapter/__probe__/r.js": 'import { a } from "../../engine/__probe__/a.js";\nexport function r(api) { return api.on("x", a); }\n',
+    const base = fixture(t, {
+      "engine/a.js": 'import { applyGlobalInjectBudget } from "../lib/inject-budget.js";\nexport function a() { return applyGlobalInjectBudget; }\n',
+      "adapter/r.js": 'import { a } from "../engine/a.js";\nexport function r(api) { return api.on("x", a); }\n',
     });
-    assert.equal(run().status, 0);
+    const result = run(base);
+    assert.equal(result.status, 0, result.out);
+    assert.match(result.out, /clean \(2 module\(s\)\)/);
   });
 
   it("rejects engine code importing the adapter lifecycle", (t) => {
-    probe(t, {
-      "engine/__probe__/bad.js": 'import { runtimeIfUsable } from "../../lib/runtime-shutdown.js";\nexport const x = runtimeIfUsable;\n',
+    const base = fixture(t, {
+      "engine/bad.js": 'import { runtimeIfUsable } from "../lib/runtime-shutdown.js";\nexport const x = runtimeIfUsable;\n',
     });
-    const result = run();
+    const result = run(base);
     assert.equal(result.status, 1);
     assert.match(result.out, /must not import lib\/runtime-shutdown\.js/);
   });
 
+  it("rejects engine code importing the openclaw package", (t) => {
+    const base = fixture(t, {
+      "engine/host.js": 'import { thing } from "openclaw/plugin";\nexport const t = thing;\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /must not import the openclaw package/);
+  });
+
   it("rejects an import of index.js", (t) => {
-    probe(t, { "engine/__probe__/shell.js": 'import plugin from "../../index.js";\nexport const p = plugin;\n' });
-    const result = run();
+    const base = fixture(t, { "engine/shell.js": 'import plugin from "../index.js";\nexport const p = plugin;\n' });
+    const result = run(base);
     assert.equal(result.status, 1);
     assert.match(result.out, /imports index\.js/);
   });
 
   it("rejects an import cycle", (t) => {
-    probe(t, {
-      "engine/__probe__/b.js": 'import { c } from "./c.js";\nexport function b() { return c(); }\n',
-      "engine/__probe__/c.js": 'import { b } from "./b.js";\nexport function c() { return b(); }\n',
+    const base = fixture(t, {
+      "engine/b.js": 'import { c } from "./c.js";\nexport function b() { return c(); }\n',
+      "engine/c.js": 'import { b } from "./b.js";\nexport function c() { return b(); }\n',
     });
-    const result = run();
+    const result = run(base);
     assert.equal(result.status, 1);
-    assert.match(result.out, /import cycle: engine\/__probe__\/[bc]\.js/);
+    assert.match(result.out, /import cycle: engine\/[bc]\.js/);
     // The report must name *both* files of the cycle, not just its entry point —
     // otherwise it does not say what to break.
-    assert.match(result.out, /engine\/__probe__\/b\.js/);
-    assert.match(result.out, /engine\/__probe__\/c\.js/);
+    assert.match(result.out, /engine\/b\.js/);
+    assert.match(result.out, /engine\/c\.js/);
+  });
+
+  it("rejects an engine↔adapter cycle across the two roots", (t) => {
+    const base = fixture(t, {
+      "engine/e.js": 'import { r } from "../adapter/d.js";\nexport function e() { return r(); }\n',
+      "adapter/d.js": 'import { e } from "../engine/e.js";\nexport function r() { return e(); }\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/e\.js/);
+    assert.match(result.out, /adapter\/d\.js/);
+  });
+
+  it("lints .mjs files under engine/ too", (t) => {
+    const base = fixture(t, {
+      "engine/tool.mjs": 'import { runtimeIfUsable } from "../lib/runtime-shutdown.js";\nexport const x = runtimeIfUsable;\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/tool\.mjs/);
+  });
+
+  it("sees a require() specifier, not just an import", (t) => {
+    const base = fixture(t, {
+      "engine/cjs.js": 'import { createRequire } from "node:module";\nconst req = createRequire(import.meta.url);\nexport const host = req.call(null, require("openclaw"));\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /must not import the openclaw package/);
   });
 
   // Task 9 left `api` on HostServices as a transitional escape hatch so the
@@ -88,26 +144,29 @@ describe("lint-engine-imports", () => {
   // (scripts/lint-no-api-outside-adapter.mjs) deliberately does not match a
   // dotted receiver.
   it("rejects engine code reading host.api", (t) => {
-    probe(t, {
-      "engine/__probe__/hatch.js": 'export function h(host) {\n  return host.api.on("x", () => {});\n}\n',
+    const base = fixture(t, {
+      "engine/hatch.js": 'export function h(host) {\n  return host.api.on("x", () => {});\n}\n',
     });
-    const result = run();
+    const result = run(base);
     assert.equal(result.status, 1);
-    assert.match(result.out, /engine\/__probe__\/hatch\.js:2/);
+    assert.match(result.out, /engine\/hatch\.js:2/);
     assert.match(result.out, /escape hatch/);
   });
 
   it("rejects any dotted `.api.` read in engine code", (t) => {
-    probe(t, {
-      "engine/__probe__/hatch2.js": 'export function h(services) {\n  const { logger } = services.api;\n  return logger;\n}\n',
+    const base = fixture(t, {
+      "engine/hatch2.js": 'export function h(services) {\n  const { logger } = services.api;\n  return logger;\n}\n',
     });
-    assert.equal(run().status, 1);
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/hatch2\.js:2/);
   });
 
   it("allows the adapter to use host.api", (t) => {
-    probe(t, {
-      "adapter/__probe__/ok.js": 'export function h(host) {\n  return host.api.on("x", () => {});\n}\n',
+    const base = fixture(t, {
+      "adapter/ok.js": 'export function h(host) {\n  return host.api.on("x", () => {});\n}\n',
     });
-    assert.equal(run().status, 0);
+    const result = run(base);
+    assert.equal(result.status, 0, result.out);
   });
 });
