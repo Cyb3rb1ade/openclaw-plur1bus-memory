@@ -18,6 +18,17 @@
  *      re-couples the engine to OpenClaw through the back door.
  *      `scripts/lint-no-api-outside-adapter.mjs` deliberately does not match a
  *      dotted receiver, so this rule lives here.
+ *   5. `engine/**` never names a bare `api` either. Rule 4 only sees a member
+ *      read; a range lifted verbatim out of `register()` arrives holding the
+ *      parameter itself (`function f(api)`, `const { api } = ctx`), which is
+ *      the same coupling one indirection earlier. PR-03 moved seven such
+ *      ranges and every one of them had to be checked by hand for this.
+ *
+ * Rules 4 and 5 are text rules over the source lines. Line comments, block
+ * comments and simple quoted strings are removed first; template literals are
+ * not, so `${host.api}` is still caught. Consequence worth knowing: an
+ * `engine/**` comment may not spell `api` followed by a dot, and a doc comment
+ * describing the adapter has to say "the host's `registerTool`" instead.
  *
  * dependency-cruiser is not installed and cannot be installed offline, so this
  * is a small static walker: it reads `import … from "x"`, `export … from "x"`
@@ -60,6 +71,13 @@ const IMPORT_PATTERNS = [
 /** A member read of `api` off any receiver: `host.api`, `services.api.on`, … */
 const DOTTED_API_REFERENCE = /\.\s*api\b/;
 
+/**
+ * A bare `api` identifier: a parameter, a destructured ctx key, a shorthand
+ * property. The lookbehind keeps this disjoint from DOTTED_API_REFERENCE so
+ * each violation is reported once, under the rule that explains it.
+ */
+const BARE_API_IDENTIFIER = /(?<![.\w$])api(?![\w$])/;
+
 function* walk(directory) {
   let entries;
   try {
@@ -91,6 +109,19 @@ function toPosix(value) {
  */
 function stripComments(line) {
   return line.replace(/\/\*.*?\*\//g, " ").replace(/\/\/.*$/, "").replace(/^\s*\*.*$/, "");
+}
+
+/**
+ * Comments plus simple `'…'` / `"…"` literals, so prose inside a message
+ * string is not read as a reference. Template literals are deliberately left
+ * alone: `${host.api}` is a real read, not prose.
+ * @param {string} line Source line.
+ * @returns {string} Line with comments and quoted strings removed.
+ */
+function stripCommentsAndStrings(line) {
+  return stripComments(line)
+    .replace(/'(?:\\.|[^'\\])*'/g, "''")
+    .replace(/"(?:\\.|[^"\\])*"/g, '""');
 }
 
 /**
@@ -144,8 +175,12 @@ for (const scanRoot of ROOTS) {
     }
     if (from.startsWith("engine/")) {
       source.split("\n").forEach((line, index) => {
-        if (DOTTED_API_REFERENCE.test(stripComments(line))) {
+        const code = stripCommentsAndStrings(line);
+        if (DOTTED_API_REFERENCE.test(code)) {
           violations.push(`${from}:${index + 1}: engine code must not read the HostServices \`api\` escape hatch — use the typed HostServices members (${line.trim()})`);
+        }
+        if (BARE_API_IDENTIFIER.test(code)) {
+          violations.push(`${from}:${index + 1}: engine code must not name the OpenClaw \`api\` — it stays in adapter/openclaw/** and reaches the engine only as typed HostServices members (${line.trim()})`);
         }
       });
     }
