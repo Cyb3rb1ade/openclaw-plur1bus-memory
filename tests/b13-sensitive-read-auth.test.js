@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
 
 import plugin from "../index.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -104,8 +104,8 @@ describe("B13 sensitive command-read authorization matrix", () => {
     // index.js into engine/commands/plur1bus-command.js; the scan spans both
     // so every dispatched action stays classified, not just the ones still
     // textually present in index.js.
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8")
-      + readFileSync(new URL("../engine/commands/plur1bus-command.js", import.meta.url), "utf8");
+    const { index, engine } = readRuntimeSources();
+    const source = index + engine.plur1busCommand;
     const observed = new Set([...source.matchAll(/if \(action(?:Key)? === "([a-z-]+)"/g)].map((match) => match[1]));
     const classes = {
       "public-help": new Set(),
@@ -126,7 +126,7 @@ describe("B13 sensitive command-read authorization matrix", () => {
     // index.js keeps only the `const runPlur1busCommand = createPlur1busCommandRunner({…})`
     // binding, so every anchor below now lives in the engine module. The
     // ordering claims are unchanged.
-    const source = readFileSync(new URL("../engine/commands/plur1bus-command.js", import.meta.url), "utf8");
+    const source = readRuntimeSources().engine.plur1busCommand;
     const dispatcher = source.indexOf("return async function runPlur1busCommand");
     const generalStoreAt = source.indexOf("const commandStore = getNeoStore({", source.indexOf("const cronInternal", dispatcher));
     assert.ok(source.indexOf('actionKey === "obsidian"', dispatcher) < generalStoreAt);
@@ -141,8 +141,8 @@ describe("B13 sensitive command-read authorization matrix", () => {
     // adapter/openclaw/register-commands.js; all three markers left index.js
     // (1 -> 0 each), so the scan follows them. The block sits six columns
     // further left there, which is why the two indentation-bearing markers
-    // carry 8 and 2 spaces instead of 14 and 8.
-    const source = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
+    // carry 6 and 2 spaces instead of 12 and 8.
+    const source = readRuntimeSources().adapter.commands;
     for (const marker of ["const runStatusCommand", "handler: async (commandCtx) => {\n      const deniedLen = checkArgsLength(commandCtx);", "const runMemoryCommand"]) {
       const start = source.indexOf(marker);
       const end = source.indexOf("\n  };", start);
@@ -211,7 +211,7 @@ describe("B13 sensitive command-read authorization matrix", () => {
 
   it("uses only canonical workspace fields for the general Neo store", () => {
     // PR-03f: the general Neo store lives in the moved dispatcher body.
-    const source = readFileSync(new URL("../engine/commands/plur1bus-command.js", import.meta.url), "utf8");
+    const source = readRuntimeSources().engine.plur1busCommand;
     const start = source.indexOf("const commandStore = getNeoStore({", source.indexOf("const cronInternal"));
     const store = source.slice(start, source.indexOf("});", start) + 3);
     assert.match(store, /workspaceDir: memoryCtx\?\.workspaceDir \|\| ""/);

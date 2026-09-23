@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { runtimeSourcePath } from "./helpers/runtime-sources.js";
 
 const REPAIR_SCRIPT = fileURLToPath(new URL("../scripts/repair-tombstones.mjs", import.meta.url));
 
@@ -83,7 +84,7 @@ describe("K3/K6 — statische Prüfung am Quelltext", () => {
   // Kommando-Registrierung nach adapter/openclaw/register-commands.js
   // verschoben; beide Anker stehen jetzt dort (`critical.failed`: 4 Treffer in
   // der Adapter-Datei, 0 in index.js), sonst wäre das doesNotMatch leer.
-  const commandsSource = fileURLToPath(new URL("../adapter/openclaw/register-commands.js", import.meta.url));
+  const commandsSource = runtimeSourcePath("adapter/openclaw/register-commands.js");
 
   it("K3: `list` nimmt denselben Pfad wie der leere subKey", async () => {
     const { readFileSync } = await import("node:fs");

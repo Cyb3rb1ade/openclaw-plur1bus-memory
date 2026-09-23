@@ -1,31 +1,23 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-// PR-03c/PR-03d/PR-03e/PR-03f (engine-extraction M1a) moved the auto-recall-off
-// before_prompt_build branch, the recall assembly, the agent_end capture
-// pipeline and the /plur1bus command runner — with their
-// automaticWorkspacePolicyDecision(...), workspacePolicyGuard.automatic(...)
-// and workspace-command call sites — out of index.js and into these engine
-// modules; the totals below span all of them so this guard still verifies
-// every automatic decision point, not just the ones still textually present
-// in index.js.
-const engineSources = [
-  "../engine/recall/minimal-maintenance.js",
-  "../engine/recall/assemble-prompt-context.js",
-  "../engine/capture/capture-turn.js",
-  "../engine/commands/plur1bus-command.js",
-].map((relative) => readFileSync(new URL(relative, import.meta.url), "utf8"));
-// PR-03g moved the chat-command registration and the six user-facing command
-// bodies into the OpenClaw adapter; it carries the `workspace` command call
-// sites and the native policy-runtime registration.
-const commandsSource = readFileSync(new URL("../adapter/openclaw/register-commands.js", import.meta.url), "utf8");
-// PR-03h moved the five model-facing tools into the engine; the tool-surface
-// guard below travels with them.
-const memoryToolsSource = readFileSync(new URL("../engine/tools/memory-tools.js", import.meta.url), "utf8");
-const allRuntimeSources = [indexSource, ...engineSources, memoryToolsSource, commandsSource];
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
+// PR-03c to PR-03i (engine-extraction M1a) moved the auto-recall-off
+// before_prompt_build branch, the recall assembly, the agent_end capture
+// pipeline, the /plur1bus command runner and the five model-facing tools —
+// with their automaticWorkspacePolicyDecision(...),
+// workspacePolicyGuard.automatic(...) and workspace-command call sites — out
+// of index.js and into engine/**; the totals below span index.js and every
+// engine module so this guard still verifies every automatic decision point,
+// not just the ones still textually present in index.js. The adapter
+// contributes no match to any of them, so it is not in the reduction; the
+// registration anchors it does own are asserted against it directly.
+const { index: indexSource, engine, adapter } = readRuntimeSources();
+const engineSources = Object.values(engine);
+const commandsSource = adapter.commands;
+const memoryToolsSource = engine.memoryTools;
+const allRuntimeSources = [indexSource, ...engineSources];
 describe("workspace policy runtime gates", () => {
   it("constructs one policy store and guard below the PLUR1BUS state root", () => {
     assert.match(indexSource, /createWorkspacePolicyStore\(\{\s*stateRoot: baseDbPath,/);

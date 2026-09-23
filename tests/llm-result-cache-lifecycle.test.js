@@ -1,8 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   registerGatewayShutdown,
@@ -10,8 +7,7 @@ import {
   registerModelPreparationServiceAfterLifecycle,
   registerReembeddingRecoveryServiceAfterLifecycle,
 } from "../lib/runtime-shutdown.js";
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 function makeDependencies(overrides = {}) {
   return {
@@ -255,7 +251,7 @@ describe("LLM result cache lifecycle", () => {
     // PR-03i: the shutdown owner and the four after-lifecycle services moved
     // into the OpenClaw adapter; index.js keeps only the call that must stay
     // the last statement of register().
-    const source = readFileSync(join(root, "adapter/openclaw/register-gateway.js"), "utf8");
+    const source = readRuntimeSources().adapter.gateway;
     assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*scopedEmbeddingServer,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,\s*localModelGeneration,?\s*\}\);/s);
   });
 
@@ -264,8 +260,8 @@ describe("LLM result cache lifecycle", () => {
     // *when* lifecycle ownership is taken (last statement of register(),
     // after every hook registration); adapter/openclaw/register-gateway.js
     // decides that model preparation starts after that ownership.
-    const source = readFileSync(join(root, "index.js"), "utf8");
-    const gatewaySource = readFileSync(join(root, "adapter/openclaw/register-gateway.js"), "utf8");
+    const { index: source, adapter } = readRuntimeSources();
+    const gatewaySource = adapter.gateway;
     const shutdownOwnership = source.indexOf("registerGatewayShutdownServices({");
     const finalPromptHook = source.lastIndexOf('api.on("before_prompt_build"');
     const ownershipCall = gatewaySource.indexOf("registerGatewayShutdown(api,");
@@ -278,7 +274,7 @@ describe("LLM result cache lifecycle", () => {
   });
 
   it("routes scoped local providers through activation-owned private IPC", () => {
-    const source = readFileSync(join(root, "index.js"), "utf8");
+    const { index: source, adapter } = readRuntimeSources();
     assert.match(source, /requiresActiveSharedModelOwner\s*=\s*typeof api\.registrationMode === "string"\s*&&\s*api\.registrationMode !== "full"/s);
     assert.match(source, /requiresActiveSharedModelOwner[\s\S]*?new ReloadSafeIpcScopedEmbeddingProvider\(\{[\s\S]*?stateRoot:\s*baseDbPath/s);
     assert.match(
@@ -286,7 +282,7 @@ describe("LLM result cache lifecycle", () => {
       /createScopedEmbeddingIpcServer\(\{\s*stateRoot:\s*baseDbPath,\s*embeddings,\s*fingerprintId:\s*activeEmbeddingFingerprintId,\s*logger:\s*host\.logger/s,
     );
     // PR-03i: this registration moved with the shutdown boundary.
-    const gatewaySource = readFileSync(join(root, "adapter/openclaw/register-gateway.js"), "utf8");
+    const gatewaySource = adapter.gateway;
     assert.match(gatewaySource, /registerScopedEmbeddingIpcServiceAfterLifecycle\(\{\s*api,\s*server:\s*scopedEmbeddingServer,\s*enabled:\s*Boolean\(scopedEmbeddingServer\),\s*lifecycleRegistered:\s*gatewayShutdownRegistered/s);
     assert.match(source, /sharedModelPool:\s*sharesActiveLocalModel,\s*sharedModelOwner:\s*coordinatesLocalModelGeneration,\s*sharedModelRequireOwner:\s*requiresActiveSharedModelOwner,\s*sharedModelActivationManaged:\s*coordinatesLocalModelGeneration/s);
     assert.match(source, /createTargetEmbeddingProvider[\s\S]*?sharedModelPool:\s*requiresActiveSharedModelOwner,\s*sharedModelOwner:\s*false,\s*sharedModelRequireOwner:\s*requiresActiveSharedModelOwner/s);

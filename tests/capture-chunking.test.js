@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { expandForCapture, planChunks, findSentenceParts } from "../lib/memory-chunking.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const mehrteilig = [
   "- Erik hat seit Montag einen neuen Sensor",
@@ -139,7 +140,7 @@ describe("Verdrahtung im Capture-Pfad", () => {
   // index.js nach engine/capture/capture-turn.js verschoben; index.js
   // registriert den Hook nur noch. Die Verdrahtungspruefungen folgen dem
   // Rumpf — unveraendert, nur an seinem neuen Ort.
-  const quelle = readFileSync(new URL("../engine/capture/capture-turn.js", import.meta.url), "utf8");
+  const quelle = readRuntimeSources().engine.captureTurn;
 
   it("ruft die Aufteilung auf", () => {
     assert.match(quelle, /expandForCapture\(preppedOk/);
@@ -203,7 +204,7 @@ describe("Schema-Erweiterung", () => {
 });
 
 describe("Schreibpfade vertragen die neue Spalte", () => {
-  const quelle = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const quelle = readRuntimeSources().index;
   const safeUpdate = readFileSync(new URL("../lib/safe-update.js", import.meta.url), "utf8");
 
   it("setzt den Standardwert zentral in store(), nicht je Zeilenbauer", () => {
