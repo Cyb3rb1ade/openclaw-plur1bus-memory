@@ -19,10 +19,16 @@
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Optional root argument. The repo is the default; the test suite points this
+// at a tmpdir so its fixtures never touch the working tree (a crashed test run
+// must not be able to leave a probe module behind that then fails `npm run
+// lint` for everyone).
+const root = process.argv[2]
+  ? resolve(process.argv[2])
+  : join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const SCANNED_ROOTS = ["lib", "engine"];
 

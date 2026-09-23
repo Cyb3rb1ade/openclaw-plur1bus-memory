@@ -34,7 +34,7 @@ describe("golden prefix corpus", () => {
     assert.equal(first, second);
   });
 
-  it("covers at least five scenarios", () => {
-    assert.ok(SCENARIOS.length >= 5, `expected >= 5 scenarios, found ${SCENARIOS.length}`);
+  it("covers at least seven scenarios", () => {
+    assert.ok(SCENARIOS.length >= 7, `expected >= 7 scenarios, found ${SCENARIOS.length}`);
   });
 });
