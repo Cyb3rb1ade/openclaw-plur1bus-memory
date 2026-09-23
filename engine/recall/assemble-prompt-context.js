@@ -1202,8 +1202,15 @@ export function createPromptContextAssembler(ctx) {
     // is returned below. `phaseTimer` (created above, same object as the
     // `timer` the callback closed over) is fully populated by now, whether
     // the callback returned normally, hit the soft-budget fallback, timed
-    // out, or threw and was caught as `scheduledRecall.error`.
-    recallTimingSink?.({ agentId: hookCtx?.agentId, phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs() });
+    // out, or threw and was caught as `scheduledRecall.error`. Fix round 3:
+    // a caller-supplied sink is untrusted code from this function's point of
+    // view (AGENTS.md: no silent catches), so a throwing sink is caught and
+    // logged rather than breaking the turn's actual reply.
+    try {
+      recallTimingSink?.({ agentId: hookCtx?.agentId, phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs() });
+    } catch (sinkErr) {
+      dbg(sinkErr);
+    }
     // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
     // Reply-Outcome-Dynamik die Tabelle anfassen.
     if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
