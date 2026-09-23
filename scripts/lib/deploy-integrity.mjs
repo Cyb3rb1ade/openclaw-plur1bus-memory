@@ -36,6 +36,7 @@ export const DEPLOY_FILES = [
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/capture/capture-turn.js",
   "engine/commands/plur1bus-command.js",
+  "engine/events.js",
   "engine/recall/assemble-prompt-context.js",
   "engine/recall/minimal-maintenance.js",
   "engine/recall/recall-result.js",

@@ -74,7 +74,7 @@ describe("PR-02b host logger", () => {
 
   it("index.js constructs HostServices", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /createHostServices\s*\(\s*api\s*\)/);
+    assert.match(source, /createHostServices\s*\(\s*api\s*,/);
   });
 
   it("registers against a host whose logger has only one method", () => {

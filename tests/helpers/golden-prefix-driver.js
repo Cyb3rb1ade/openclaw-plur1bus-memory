@@ -176,7 +176,7 @@ export function baseConfig(baseDbPath, overrides = {}) {
 
 /**
  * @param {object} scenario
- * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number}) => void)|null, onTiming?: ((entry: {setupMs: number, recallMs: number, totalMs: number}) => void)|null}} [options]
+ * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number}) => void)|null, onTiming?: ((entry: {setupMs: number, recallMs: number, totalMs: number}) => void)|null, hostEvents?: {emit: (name: string, payload: unknown) => void}|null}} [options]
  *   `freezeClock: false` keeps the real clock, which the latency probe needs;
  *   the golden test leaves it on. `recallTimingSink`, when given, is threaded
  *   onto the stub `api` as `__recallTimingSinkForTests` (see `makeApi`) and
@@ -187,10 +187,11 @@ export function baseConfig(baseDbPath, overrides = {}) {
  *   measured separately from `recallMs` (just the one `before_prompt_build`
  *   hook invocation) — fix round 2: the wall-clock total the probe reported
  *   before this conflated both, and setup dominates at larger `--scale`.
+ *   `hostEvents`: forwarded to plugin.register as the hostEvents dependency.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null } = {}) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
@@ -238,7 +239,7 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
       });
     }
     const api = makeApi(baseConfig(baseDbPath, scenario.config), recallTimingSink);
-    plugin.register(api, { importRouting: async () => routingCapability });
+    plugin.register(api, { importRouting: async () => routingCapability, ...(hostEvents ? { hostEvents } : {}) });
     const hooks = api.handlers.get("before_prompt_build");
     const hook = hooks?.at(-1);
     if (typeof hook !== "function") throw new Error(`${scenario.name}: before_prompt_build not registered`);

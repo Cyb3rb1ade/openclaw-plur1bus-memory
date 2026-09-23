@@ -17,6 +17,7 @@ import { ContradictionDetector } from "../../lib/contradiction-detector.js";
 import { runConversationReactivationRecall } from "../../lib/conversation-reactivation-recall.js";
 import { inferEmotionalValenceAsync } from "../../lib/emotion.js";
 import { extractMessageText, formatMoodFile } from "../../lib/emotional-state.js";
+import { planGlobalInjectBudget } from "../../lib/inject-budget.js";
 import { InterpretationOverlayStore } from "../../lib/interpretation-overlay.js";
 import { renderSkillProposalNudge } from "../../lib/jobs/skill-miner/nudge-renderer.js";
 import { getPendingProposals, lastPresentationAgeMs, recordPresentation } from "../../lib/jobs/skill-miner/proposal-writer.js";
@@ -37,6 +38,7 @@ import { formatReminderNudge } from "../../lib/reminder-nudge.js";
 import { readPendingReminders, writePendingReminders } from "../../lib/reminder-pending.js";
 import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
+import { emitEngineEvent } from "../events.js";
 import { contextBlock, recallResult } from "./recall-result.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { applySemanticLensToRecall } from "../../lib/semantic-lens-index.js";
@@ -918,6 +920,7 @@ export function createPromptContextAssembler(ctx) {
         ));
         promptSemanticLensItems = [];
       }
+      const memoryDeferrals = [];
       const memoriesContext = formatRelevantMemoriesContext(promptItems, {
         fadedThreshold: resolveFadedThreshold(recallCfg),
         // Inner cap on the <relevant-memories> block itself, independent of
@@ -933,6 +936,9 @@ export function createPromptContextAssembler(ctx) {
           maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
         },
         now: nowMs,
+        onTruncate: ({ from, to }) => {
+          memoryDeferrals.push({ block: "memories", kind: "clipped", from, to, reason: "memories-cap" });
+        },
       });
       let personaDirective = null;
       let personaEmojiPalette = null;
@@ -1183,17 +1189,20 @@ export function createPromptContextAssembler(ctx) {
           host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
         }
       }
-      return recallResult({
-        blocks: [
-          contextBlock("neo", neoContext, true),
-          contextBlock("start", startNoticeContext, true),
-          contextBlock("memories", fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, true),
-          contextBlock("time", timeContext, false),
-          contextBlock("temporal", temporalContinuityContext, false),
-          contextBlock("reminder", reminderNudge, false),
-        ],
-        capChars: cfg.recall?.globalInjectMaxChars ?? 17_000,
-      });
+      const blocks = [
+        contextBlock("neo", neoContext, true),
+        contextBlock("start", startNoticeContext, true),
+        contextBlock("memories", fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, true),
+        contextBlock("time", timeContext, false),
+        contextBlock("temporal", temporalContinuityContext, false),
+        contextBlock("reminder", reminderNudge, false),
+      ];
+      const capChars = cfg.recall?.globalInjectMaxChars ?? 17_000;
+      const deferrals = [...memoryDeferrals, ...planGlobalInjectBudget({ blocks, maxChars: capChars }).deferrals];
+      for (const deferral of deferrals) {
+        emitEngineEvent(host, `recall.block-${deferral.kind}`, { agentId, ...deferral });
+      }
+      return recallResult({ blocks, capChars, deferrals });
     } catch (err) {
       throwIfAborted(signal, "recall aborted");
       host.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);

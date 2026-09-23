@@ -34,6 +34,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ENGINE_PATHS = Object.freeze({
   assemblePromptContext: "engine/recall/assemble-prompt-context.js",
   captureTurn: "engine/capture/capture-turn.js",
+  events: "engine/events.js",
   memoryTools: "engine/tools/memory-tools.js",
   minimalMaintenance: "engine/recall/minimal-maintenance.js",
   plur1busCommand: "engine/commands/plur1bus-command.js",

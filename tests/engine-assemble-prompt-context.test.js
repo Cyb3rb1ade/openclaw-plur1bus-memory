@@ -33,7 +33,7 @@ describe("engine/recall/assemble-prompt-context", () => {
     for (const [name, droppable] of [["neo", true], ["start", true], ["memories", true], ["time", false], ["temporal", false], ["reminder", false]]) {
       assert.match(source, new RegExp(`contextBlock\\("${name}", [^\\n]+, ${droppable}\\)`), `block ${name} must keep droppable=${droppable}`);
     }
-    assert.match(source, /capChars: cfg\.recall\?\.globalInjectMaxChars \?\? 17_000/);
+    assert.match(source, /capChars = cfg\.recall\?\.globalInjectMaxChars \?\? 17_000/);
   });
 
   it("refuses a turn the workspace policy declines, without touching the pool", async () => {

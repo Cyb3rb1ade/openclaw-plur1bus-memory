@@ -4260,6 +4260,7 @@ const plugin = {
     const {
       importRouting,
       commandRuntimeHooks = null,
+      hostEvents,
       skillWorkshop: registeredSkillWorkshop,
       handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand,
       shareCard: registeredShareCard = shareCard,
@@ -4269,6 +4270,9 @@ const plugin = {
     }
     if (commandRuntimeHooks !== null && (typeof commandRuntimeHooks !== "object" || Array.isArray(commandRuntimeHooks))) {
       throw new TypeError("commandRuntimeHooks must be an object when provided");
+    }
+    if (hostEvents !== undefined && (hostEvents === null || typeof hostEvents.emit !== "function")) {
+      throw new TypeError("hostEvents must expose emit(name, payload) when provided");
     }
     if (registeredObsidianCommandHandler !== handleObsidianBridgeCommand && typeof registeredObsidianCommandHandler !== "function") {
       throw new TypeError("handleObsidianBridgeCommand must be a function when provided");
@@ -4304,7 +4308,7 @@ const plugin = {
     const credentialResolver = createConfiguredSecretInputResolver({
       getConfig: () => host.runtime?.config?.current?.() || api.config || {},
     });
-    const host = createHostServices(api);
+    const host = createHostServices(api, { events: hostEvents });
     pluginLogger = host.logger;
     if (typeof api.registerMemoryCapability === "function") {
       // The host asks the memory-slot owner for a runtime; without it the
