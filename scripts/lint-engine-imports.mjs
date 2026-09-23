@@ -78,7 +78,20 @@ const IMPORT_PATTERNS = [
   // The package is `"type": "module"` and uses no `require`, but a copied
   // snippet or a createRequire escape would otherwise slip the whole rule set.
   /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+  // `createRequire(import.meta.url)("./x.js")` chained straight into a call —
+  // no bare `require` identifier ever appears, so the pattern above misses it.
+  /\bcreateRequire\s*\([^)]*\)\s*\(\s*["']([^"']+)["']\s*\)/g,
 ];
+
+/**
+ * A dynamic `import(` call whose argument is not a plain single/double-quoted
+ * string literal — a computed specifier (a variable, a template literal, a
+ * concatenation). The static walker cannot resolve where a computed import
+ * leads, so instead of silently missing it, an occurrence inside `engine/**`
+ * is itself the violation: computed specifiers are a documented limitation of
+ * this text-based linter, and closing the hole this cheaply is worth doing.
+ */
+const COMPUTED_IMPORT = /\bimport\s*\(\s*(?!["'])\S/;
 
 /** A member read of `api` off any receiver: `host.api`, `services.api.on`, … */
 const DOTTED_API_REFERENCE = /\.\s*api\b/;
@@ -193,6 +206,12 @@ for (const scanRoot of ROOTS) {
         }
         if (BARE_API_IDENTIFIER.test(code)) {
           violations.push(`${from}:${index + 1}: engine code must not name the OpenClaw \`api\` — it stays in adapter/openclaw/** and reaches the engine only as typed HostServices members (${line.trim()})`);
+        }
+        // Checked against comments-only-stripped text (not strings-stripped):
+        // COMPUTED_IMPORT needs to see whether the import() argument is a
+        // real string literal or not.
+        if (COMPUTED_IMPORT.test(stripComments(line))) {
+          violations.push(`${from}:${index + 1}: engine code must not call import() with a computed specifier — the static import-graph walker cannot follow it (${line.trim()})`);
         }
       });
     }

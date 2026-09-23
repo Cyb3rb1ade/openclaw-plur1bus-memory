@@ -269,4 +269,23 @@ describe("lint-engine-imports", () => {
     });
     assert.equal(run(base).status, 0);
   });
+
+  it("rejects a computed import() specifier in engine code", (t) => {
+    const base = fixture(t, {
+      "engine/dyn.js": 'export async function load(name) {\n  return import(`../lib/${name}.js`);\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/dyn\.js:2/);
+    assert.match(result.out, /computed specifier/);
+  });
+
+  it("sees a createRequire(...)(\"...\") chained call, not just require()", (t) => {
+    const base = fixture(t, {
+      "engine/req.js": 'import { createRequire } from "node:module";\nexport const host = createRequire(import.meta.url)("openclaw");\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /must not import the openclaw package/);
+  });
 });
