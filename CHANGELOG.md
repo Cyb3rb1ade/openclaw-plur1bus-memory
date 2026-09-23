@@ -66,13 +66,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Trunkierungs-Marker verschlucken konnte. Der Block wird jetzt am Ende des
   letzten vollständigen `<memory-record>`-Elements gekürzt und bekommt
   denselben `<!-- memory context truncated -->`-Marker wie `truncateMemoryContext`;
-  ein dabei noch offener `<relevant-memories>`-, `<memory-semantic-lens>`-
-  oder `<plur1bus-recall>`-Wrapper wird korrekt geschlossen; passt kein
-  einziger Record mehr in das verbleibende Budget, wird der ganze Block
-  verworfen statt mittendrin abgeschnitten. Ein droppable Block ganz ohne
-  `<memory-record>`-Elemente (z. B. ein reiner Start-Hinweis) wird ebenfalls
-  vollständig verworfen statt an beliebiger Zeichenposition abgeschnitten
-  (Fix-Runde 1).
+  jedes an dieser Stelle noch offene Element wird korrekt geschlossen —
+  seit Fix-Runde 2 über ein echtes Scannen des Tag-Stroms (`openTagsAt`/
+  `closeOpenElements`, `lib/inject-budget.js`) statt einer festen Liste
+  bekannter Wrapper-Namen, sodass auch ein bislang nicht aufgeführter
+  Wrapper wie `<memory-reactivation>` (dem am Ende angehängten
+  Reaktivierungs-Block, `lib/conversation-reactivation-recall.js`) korrekt
+  geschlossen wird; passt kein einziger Record mehr in das verbleibende
+  Budget, wird der ganze Block verworfen statt mittendrin abgeschnitten. Ein
+  droppable Block ganz ohne `<memory-record>`-Elemente (z. B. ein reiner
+  Start-Hinweis) wird ebenfalls vollständig verworfen statt an beliebiger
+  Zeichenposition abgeschnitten (Fix-Runde 1). `truncateMemoryContext`'s
+  eigener Fallback für den Fall, dass kein einziger Record mehr ins Budget
+  passt, schneidet seit Fix-Runde 2 ebenfalls vor dem ersten `<memory-record>`
+  statt mittendrin und schließt offene Wrapper über denselben Helper
+  (Fix-Runde 2).
 - `recall.globalInjectMaxChars` (Default 17 000) konnte nie greifen, weil der
   `<relevant-memories>`-Block bereits vorher von `truncateMemoryContext` auf
   12 000 Zeichen gedeckelt wurde und nichts diesen inneren Wert überschrieb.

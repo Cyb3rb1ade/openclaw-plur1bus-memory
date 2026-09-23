@@ -48,9 +48,14 @@ den äußeren Cap, unterscheidet sich das Vorgehen danach, ob der Block
 `<memory-record>`-Elemente enthält:
 - Die Blöcke `memories` und `neo` bestehen aus solchen Elementen; sie werden
   am Ende des letzten vollständigen `<memory-record>`-Elements gekürzt, das
-  noch passt, bekommen denselben Trunkierungs-Marker, und ein noch offener
-  `<relevant-memories>`-, `<memory-semantic-lens>`- oder `<plur1bus-recall>`-
-  Wrapper wird dabei geschlossen, damit kein unvollständiges XML entsteht.
+  noch passt, bekommen denselben Trunkierungs-Marker, und jedes an dieser
+  Schnittstelle noch offene Element wird dabei geschlossen, damit kein
+  unvollständiges XML entsteht. Das ist kein Nachschlagen in einer festen
+  Liste bekannter Wrapper-Namen (`<relevant-memories>`, `<memory-semantic-lens>`,
+  `<plur1bus-recall>`, `<memory-reactivation>`, …), sondern ein echtes Scannen
+  des Tag-Stroms (`openTagsAt`/`closeOpenElements`, `lib/inject-budget.js`),
+  das jedes je öffnende Wrapper-Element korrekt erkennt und schließt —
+  unabhängig davon, wie viele es gibt oder wie sie heißen.
 - Andere droppable Blöcke (z. B. der Start-Hinweis) sowie ein `memories`-Block,
   der nach den obigen Direktiven/Nudges keinen einzigen `<memory-record>` mehr
   enthält, haben keine Record-Grenze, an der sinnvoll geschnitten werden

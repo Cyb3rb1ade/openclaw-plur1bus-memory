@@ -48,6 +48,21 @@ function neoBlock(count) {
 }
 
 /**
+ * Mirrors `lib/conversation-reactivation-recall.js`'s reactivation block
+ * shape: `<memory-reactivation>` around a flat run of single-line
+ * `<memory-record>` elements — not in any fixed "known wrapper" list, which
+ * is exactly the point of fix round 2's item N1.
+ */
+function reactivationBlock(count) {
+  const items = Array.from({ length: count }, (_, i) => (
+    `  <memory-record category="fact" source="reactivation" id="react-${i}"><quoted-evidence>` +
+    `Reactivated record number ${i} carries a reasonably long piece of evidence text.` +
+    `</quoted-evidence></memory-record>`
+  )).join("\n");
+  return `<memory-reactivation untrusted="true" mode="historical-evidence-only">\nRecall safety: facts are memory-derived, may be stale, verify before acting.\n${items}\n</memory-reactivation>`;
+}
+
+/**
  * Asserts every XML-ish element name found anywhere in `text` opens and
  * closes an equal number of times (an XML comment like the truncation
  * marker is not a tag and is ignored by this regex, since it never matches
@@ -285,5 +300,55 @@ describe("trimAtRecordBoundary", () => {
     assert.ok(out !== null);
     assert.equal((out.match(/<!-- memory context truncated -->/g) || []).length, 1);
     assertTagsBalanced(out);
+  });
+});
+
+describe("applyGlobalInjectBudget — fix round 2", () => {
+  it("item N1 (must fix): closes <memory-reactivation> when the cut lands inside it — not a fixed wrapper list, a real element scan", () => {
+    const out = applyGlobalInjectBudget({
+      blocks: [
+        { name: "memories", text: reactivationBlock(30), droppable: true },
+        { name: "time", text: "TIME", droppable: false },
+      ],
+      maxChars: 800,
+    });
+    assertTagsBalanced(out);
+    assert.match(out, /<\/memory-reactivation>/);
+  });
+
+  it("item N1 (must fix): property sweep — every cap from 1 to the untrimmed length yields balanced tags and length <= cap, for a block combining relevant-memories + lens + reactivation", () => {
+    const lensItems = Array.from({ length: 10 }, (_, i) => (
+      `  <memory-record category="fact" source="semantic-lens" id="lens-${i}"><quoted-evidence>` +
+      `Lens record number ${i} carries a reasonably long piece of evidence text.` +
+      `</quoted-evidence></memory-record>`
+    )).join("\n");
+    const combined = (
+      `${memoriesBlock(10)}\n` +
+      `<memory-semantic-lens>\nErgänzende assoziative Erinnerungen aus nahen Graph-Communities.\n${lensItems}\n</memory-semantic-lens>\n` +
+      reactivationBlock(10)
+    );
+    const blocks = [
+      { name: "memories", text: combined, droppable: true },
+      { name: "time", text: "TIME", droppable: false },
+    ];
+    const untrimmedLen = blocks.map((b) => b.text).join("\n\n").length;
+    // applyGlobalInjectBudget never touches non-droppable blocks, so once
+    // every droppable block is dropped the output floors out at whatever
+    // the non-droppable blocks alone total — a cap below that floor cannot
+    // be met and isn't a bug (see the pre-existing "trims memories before
+    // time context" test above, which relies on the same floor).
+    const nonDroppableFloor = blocks.filter((b) => !b.droppable).map((b) => b.text).join("\n\n").length;
+
+    // Every 7th cap point across the full range, plus the two ends, keeps
+    // this fast while still exercising a cut inside every element in
+    // `combined` (each is well over 7 chars long) — a cut inside
+    // <relevant-memories>, inside <memory-semantic-lens>, inside
+    // <memory-reactivation>, mid-preamble, and past the end.
+    for (let cap = 1; cap <= untrimmedLen; cap += 7) {
+      const out = applyGlobalInjectBudget({ blocks, maxChars: cap });
+      assertTagsBalanced(out);
+      const ceiling = Math.max(cap, nonDroppableFloor);
+      assert.ok(out.length <= ceiling, `cap ${cap}: expected length <= ${ceiling}, got ${out.length}`);
+    }
   });
 });
