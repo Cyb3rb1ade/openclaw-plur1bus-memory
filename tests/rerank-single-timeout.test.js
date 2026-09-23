@@ -55,6 +55,27 @@ describe("rerank timeout ownership", () => {
     }
   });
 
+  it("bounds a provider that ignores its own signal to ~2x the budget (fix round 1)", async () => {
+    // "One timeout owner" means one timer, not no bound: the pipeline's
+    // raceAbort(reranker.rerank(...), rerankAbort, "reranker timeout") must
+    // still cut this off, on the very signal the reranker was handed, even
+    // though this stub never looks at it.
+    const budgetMs = 50;
+    const stubbornReranker = {
+      id: "stubborn",
+      rerank: () => new Promise((resolve) => setTimeout(() => resolve([{ index: 0 }]), 400)),
+    };
+    const t0 = Date.now();
+    const { memories } = await runRecallPipeline({
+      query: "q", dbTable, embeddings, reranker: stubbornReranker, rerankerTimeoutMs: budgetMs,
+      logger: { info() {}, warn() {}, debug() {}, error() {} }, recallMinScore: 0, topN: 3, dedupEnabled: false,
+      canonicalEnabled: false, associativeEnabled: false, agentId: "agent-a",
+    });
+    const elapsed = Date.now() - t0;
+    assert.equal(memories.length, 3, "fell back to unreranked top-N");
+    assert.ok(elapsed < budgetMs * 3, `expected fallback within ~2x the ${budgetMs}ms budget, took ${elapsed}ms`);
+  });
+
   it("a caller abort during rerank propagates instead of falling back", async () => {
     const controller = new AbortController();
     const reranker = { id: "stub", rerank: (_q, _d, _n, opts) => new Promise((_, reject) => {

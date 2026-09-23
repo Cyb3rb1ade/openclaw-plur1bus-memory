@@ -585,6 +585,63 @@ describe("local Transformers.js lifecycle", () => {
     assert.deepEqual(calls, ["rerank.start", "rerank.end", "reranker.dispose"]);
   });
 
+  it("never scores when the rerank call is already aborted (fix round 1)", async () => {
+    let scoringCalls = 0;
+    const pipeline = Object.assign(async () => {
+      scoringCalls += 1;
+      return [{ score: 0.9 }];
+    }, { async dispose() {} });
+    const provider = new LocalTransformersRerankerProvider({
+      model: "fixture/reranker",
+      loadTransformers: async () => ({ pipeline: async () => pipeline }),
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("caller gone"));
+
+    await assert.rejects(
+      () => provider.rerank("query", ["document"], 1, { signal: controller.signal }),
+      /caller gone/,
+    );
+    assert.strictEqual(scoringCalls, 0, "an already-aborted call must never reach the classifier");
+  });
+
+  it("does not dispose a reranker pipeline while an aborted rerank's classifier is still running (fix round 1)", async () => {
+    const calls = [];
+    let signalStarted;
+    let releaseInference;
+    const started = new Promise((resolve) => { signalStarted = resolve; });
+    const blocked = new Promise((resolve) => { releaseInference = resolve; });
+    const pipeline = Object.assign(async () => {
+      calls.push("rerank.start");
+      signalStarted();
+      await blocked;
+      calls.push("rerank.end");
+      return [{ score: 0.9 }];
+    }, {
+      async dispose() { calls.push("reranker.dispose"); },
+    });
+    const provider = new LocalTransformersRerankerProvider({
+      model: "fixture/reranker",
+      loadTransformers: async () => ({ pipeline: async () => pipeline }),
+    });
+
+    const controller = new AbortController();
+    const inference = provider.rerank("query", ["document"], 1, { signal: controller.signal });
+    await started;
+    controller.abort(new Error("caller gone"));
+    // raceAbort wraps the abort in its own error (lib/abort.js); the
+    // original reason survives as `.cause`.
+    await assert.rejects(inference, (err) => err.cause?.message === "caller gone");
+
+    const shutdown = provider.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ["rerank.start"], "dispose must wait for the classifier, not the abort");
+
+    releaseInference();
+    await shutdown;
+    assert.deepEqual(calls, ["rerank.start", "rerank.end", "reranker.dispose"]);
+  });
+
   it("keeps a provider registered when model disposal fails so generation cleanup remains fail-closed", async () => {
     const unregistered = [];
     const generation = {
