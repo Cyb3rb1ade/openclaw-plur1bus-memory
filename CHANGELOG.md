@@ -5,6 +5,19 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.7] — 2026-09-24
+
+### Behoben
+
+- **Feature-Crons zeigen nicht mehr auf gelöschte Plugin-Kopien.** Seit OpenClaw
+  2026.9.6 lädt der Gateway Plugins aus Capture-Kopien unter
+  `<state>/tmp/plugin-captures/…` und räumt alte Kopien weg. PLUR1BUS schrieb den
+  Pfad seines Cron-Runners aus dem Ladeort in die Feature-Crons. Nach dem Update
+  am 24.09.26 zeigten 31 von 40 Crons auf eine gelöschte Kopie und scheiterten mit
+  `MODULE_NOT_FOUND`. Liegt der Ladeort in einer Capture-Kopie, schreibt PLUR1BUS
+  jetzt den Pfad der festen Installation `<state>/extensions/memory-lancedb-namespaced/…`
+  desselben State-Verzeichnisses, sofern es sie gibt.
+
 ## [7.16.6] — 2026-09-23
 
 ### Behoben
