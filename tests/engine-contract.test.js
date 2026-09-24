@@ -190,6 +190,36 @@ describe("Engine", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
+  it("recall() reports an inner store failure as degraded error, not a clean result (final review I6)", async () => {
+    const failing = flatEmbedder();
+    failing.embedQuery = async () => { throw new Error("vector store unavailable"); };
+    failing.embed = failing.embedQuery;
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => makeTempDir("ec-ws-") });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: failing } });
+    const result = await engine.recall({ query: "what did we decide about the roadmap", principal, agent, signal: AbortSignal.timeout(8_000) });
+    assert.equal(result.degraded?.reason, "error");
+    assert.equal(result.degraded?.capability, "recall");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("an aborted recall does not mark due reminders presented (final review I7)", async () => {
+    const { addPendingReminder, readPendingReminders } = await import("../lib/reminder-pending.js");
+    const workspace = makeTempDir("ec-ws-");
+    await addPendingReminder(workspace, workspace, "agent-a", { id: "r-1", text: "water the plants", remindAt: 1 });
+    const controller = new AbortController();
+    // The reaction-capability probe runs after the store search and right
+    // before the reminder block: the caller gives up exactly there.
+    const detectReactionsCapabilityCached = async () => { controller.abort(new Error("caller gave up")); return false; };
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => workspace });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder(), detectReactionsCapabilityCached } });
+    const result = await engine.recall({ query: "what did we decide about the roadmap", principal, agent, signal: controller.signal });
+    assert.equal(result.degraded?.reason, "aborted");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const pending = await readPendingReminders(workspace, workspace, "agent-a");
+    assert.ok(pending.pending?.["r-1"], "the reminder is still pending after the aborted recall");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
   it("capture() returns a handle immediately", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
     const started = Date.now();

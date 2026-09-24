@@ -102,6 +102,46 @@ describe("recall abort", () => {
     assert.deepEqual(degraded.payload.degraded, { reason: "aborted", capability: "recall" });
   });
 
+  it("pressure, queue-full and scheduler errors come back degraded, never as a clean empty recall (final review I6)", async () => {
+    const { createPromptContextAssembler } = await import("../engine/recall/assemble-prompt-context.js");
+    const cases = [
+      [{ ok: false, skipped: true, reason: "RSS 9.00 GiB >= critical 8.00 GiB", pressure: { level: "critical" }, background: false }, "pressure"],
+      [{ ok: false, skipped: true, reason: "queue-full", background: false }, "queue-full"],
+      [{ ok: false, skipped: true, reason: "queue-depth-evicted", background: false }, "queue-full"],
+      [{ ok: false, error: new Error("scheduler exploded"), background: false }, "error"],
+    ];
+    for (const [shape, reason] of cases) {
+      const events = [];
+      const handler = createPromptContextAssembler({
+        runtimeScheduler: { config: { recallTimeoutMs: 1_000 }, runRecall: async () => shape },
+        host: {
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          events: { emit: (name, payload) => events.push({ name, payload }) },
+        },
+      });
+      const result = await handler({ prompt: "hello there" }, { agentId: "a" }, { signal: AbortSignal.timeout(1_000) });
+      assert.equal(result.degraded?.reason, reason, `${JSON.stringify(shape.reason ?? "error")} maps to ${reason}`);
+      assert.equal(result.degraded.capability, "recall");
+      assert.equal(result.blocks.length, 0);
+      assert.ok(events.some((e) => e.name === "recall.degraded" && e.payload.degraded.reason === reason), "recall.degraded emitted");
+    }
+  });
+
+  it("a caller-initiated abort logs at debug; a timeout still warns (final review m3)", async () => {
+    const { createPromptContextAssembler } = await import("../engine/recall/assemble-prompt-context.js");
+    for (const [shape, level] of [[{ ok: false, aborted: true, timedOut: true, background: false }, "debug"], [{ ok: false, timedOut: true, background: false }, "warn"]]) {
+      const lines = { warn: [], debug: [] };
+      const handler = createPromptContextAssembler({
+        runtimeScheduler: { config: { recallTimeoutMs: 1_000 }, runRecall: async () => shape },
+        host: { logger: { info() {}, warn: (m) => lines.warn.push(m), error() {}, debug: (m) => lines.debug.push(m) } },
+      });
+      await handler({ prompt: "hello there" }, { agentId: "a" }, { signal: AbortSignal.timeout(1_000) });
+      const other = level === "debug" ? "warn" : "debug";
+      assert.ok(lines[level].some((m) => /without cache/.test(m)), `logged at ${level}`);
+      assert.ok(!lines[other].some((m) => /without cache/.test(m)), `not logged at ${other}`);
+    }
+  });
+
   it("an already-aborted signal returns zero blocks and consumes nothing (Review Focus 1)", async () => {
     const { createPromptContextAssembler } = await import("../engine/recall/assemble-prompt-context.js");
     const touched = [];

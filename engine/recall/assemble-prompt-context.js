@@ -185,6 +185,11 @@ export function createPromptContextAssembler(ctx) {
       logger: host.logger,
     });
     const namespacePhases = [];
+    // Set when the store section fails and the callback falls back to the
+    // neo/start blocks (or nothing): the result reports it as degraded
+    // instead of passing for a clean recall. Kept out of the returned value
+    // so what the scheduler caches is unchanged.
+    let innerFailure = null;
     const scheduledRecall = await runtimeScheduler.runRecall({
       background,
       cacheKey,
@@ -1181,6 +1186,9 @@ export function createPromptContextAssembler(ctx) {
         }
         const allDue = [...byId.values()];
         if (allDue.length > 0) {
+          // An aborted recall injects nothing, so it must not mark anything
+          // presented (or drop it from the pending file) either.
+          throwIfAborted(signal, "recall aborted");
           reminderNudge = formatReminderNudge(allDue, { lang, tone });
           for (const r of dueFromDb) {
             await presentReminder(db, r.id).catch((err) => {
@@ -1196,6 +1204,7 @@ export function createPromptContextAssembler(ctx) {
           }
         }
       } catch (reminderErr) {
+        if (signal.aborted) throw reminderErr;
         host.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
       }
       throwIfAborted(signal, "recall aborted");
@@ -1229,6 +1238,7 @@ export function createPromptContextAssembler(ctx) {
       return recallResult({ blocks, capChars, deferrals });
     } catch (err) {
       throwIfAborted(signal, "recall aborted");
+      innerFailure = { reason: "error", capability: "recall", detail: String(err?.message || err).slice(0, 200) };
       host.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
       const fallbackBlocks = [contextBlock("neo", neoContext, true), contextBlock("start", startNoticeContext, true)]
         .filter((block) => block.text);
@@ -1264,6 +1274,12 @@ export function createPromptContextAssembler(ctx) {
         emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
         return result;
       }
+      if (innerFailure && !scheduledRecall.fromCache) {
+        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: innerFailure });
+        const result = withTiming({ ...value, degraded: innerFailure });
+        emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+        return result;
+      }
       const result = withTiming(value);
       emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
       return result;
@@ -1271,16 +1287,30 @@ export function createPromptContextAssembler(ctx) {
     if (scheduledRecall.aborted || scheduledRecall.timedOut) {
       const degraded = scheduledRecall.aborted ? ABORTED : { reason: "timeout", capability: "recall" };
       const reasonLabel = scheduledRecall.aborted ? "aborted" : "timed out";
-      host.logger.warn(`memory-lancedb-namespaced: recall ${reasonLabel} without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
+      // A caller-initiated abort is the caller's decision, not a fault:
+      // debug. A timeout stays a warning.
+      const abortLine = `memory-lancedb-namespaced: recall ${reasonLabel} without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`;
+      if (scheduledRecall.aborted) host.logger.debug(abortLine);
+      else host.logger.warn(abortLine);
       emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded });
       const result = withTiming(recallResult({ blocks: partial(), degraded }));
       emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
       return result;
     }
+    // Every other exit is a failure the caller must be able to tell from an
+    // empty recall: pressure shedding, a full or evicting queue, or a
+    // scheduler/callback error.
+    let failure = null;
     if (scheduledRecall.error) {
       host.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);
+      failure = { reason: "error", capability: "recall", detail: String(scheduledRecall.error?.message || scheduledRecall.error).slice(0, 200) };
+    } else if (scheduledRecall.skipped) {
+      failure = scheduledRecall.pressure
+        ? { reason: "pressure", capability: "recall", ...(scheduledRecall.reason ? { detail: String(scheduledRecall.reason) } : {}) }
+        : { reason: "queue-full", capability: "recall", ...(scheduledRecall.reason ? { detail: String(scheduledRecall.reason) } : {}) };
     }
-    const result = withTiming(recallResult());
+    if (failure) emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: failure });
+    const result = withTiming(recallResult({ degraded: failure }));
     emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
     return result;
   };

@@ -39,6 +39,20 @@ describe("runRecall caller signal", () => {
     assert.equal(scheduler.status().recall.queued, before);
   });
 
+  it("a late value from an aborted job never becomes the cached recall (final review I7)", async () => {
+    const scheduler = createBackgroundMemoryScheduler({ config: { recallTimeoutMs: 10_000 }, logger: quietLogger });
+    const controller = new AbortController();
+    let finishLate = null;
+    const pending = scheduler.runRecall({ cacheKey: "k", signal: controller.signal }, () => new Promise((resolve) => { finishLate = resolve; }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort(new Error("caller gave up"));
+    const result = await pending;
+    assert.equal(result.aborted, true);
+    finishLate("late value");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(scheduler.status().recall.cacheSize, 0, "the late value was not cached");
+  });
+
   it("behaves exactly as before when no signal is given", async () => {
     const scheduler = createBackgroundMemoryScheduler({ config: {}, logger: quietLogger });
     const result = await scheduler.runRecall({ cacheKey: "" }, async () => "value");
