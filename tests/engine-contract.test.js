@@ -220,6 +220,47 @@ describe("Engine", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
+  it("recall() reads a proved user's dream echo with the Principal, not a user-less hook context (final review I3)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { resolveMemoryRequestContext } = await import("../lib/memory-request-context.js");
+    const workspace = makeTempDir("ec-ws-");
+    const user = `user:v1:${"c".repeat(64)}`;
+    const workspaceIdentity = resolveMemoryRequestContext({ agentId: "agent-a", workspaceDir: workspace }).workspaceIdentity;
+    writeFileSync(join(workspace, ".dream-echoes.jsonl"), `${JSON.stringify({
+      sentence: "Last night the lighthouse keeper dreamt in teal.",
+      createdAt: Date.now() - 60_000,
+      aclBindings: { scope: "user", agentId: "agent-a", workspaceIdentity: "", ownerUserId: user },
+    })}\n`);
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => workspace });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder() } });
+    const result = await engine.recall({
+      query: "what did we decide about the roadmap",
+      principal: { ...provedPrincipal, workspace: workspaceIdentity, user },
+      agent,
+      signal: AbortSignal.timeout(8_000),
+    });
+    assert.equal(result.degraded, null);
+    const memories = result.blocks.find((b) => b.name === "memories")?.text ?? "";
+    assert.match(memories, /lighthouse keeper dreamt in teal/, "the user-scoped echo reaches its proved owner");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("capture() on a routing-less host stores a host-classified turn and reports the count (final review I2, m5)", async () => {
+    const workspace = makeTempDir("ec-ws-");
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => workspace });
+    const engine = createEngine(host, { ...config(makeTempDir("ec-db-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const messages = [
+      { role: "user", content: "Please remember that I always prefer green tea over coffee in the morning." },
+      { role: "assistant", content: "Noted: green tea in the morning." },
+      { role: "user", content: "Also remember that my sister Mira lives in Lisbon and visits every spring." },
+    ];
+    const outcome = await engine.capture({ agentId: "agent-a", principal, agent, messages, sessionKey: "agent:agent-a:main", incognito: false, signal: AbortSignal.timeout(8_000) }).done;
+    assert.equal(outcome.reason, undefined, `not skipped: ${outcome.reason}`);
+    assert.ok(outcome.stored >= 2, `stored reports the actual count (${outcome.stored})`);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
   it("capture() returns a handle immediately", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
     const started = Date.now();

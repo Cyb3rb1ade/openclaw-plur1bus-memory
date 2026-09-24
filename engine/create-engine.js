@@ -3389,12 +3389,16 @@ export function createEngine(host, config, testOptions = {}) {
         if (t.principal?.agentId !== agentId) return { stored: 0, skipped: 1, reason: "principal-agent-mismatch" };
         const workspaceDir = await host.workspaceDir(agentId);
         const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
+        // TurnRecord.incognito === false is the host's own classification:
+        // the host routing classifier is not consulted again (a host without
+        // routing would otherwise store nothing for a keyed session).
+        const report = { stored: 0, skipped: 0 };
         const outcome = await internals.getCaptureTurn()(
           { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
           { agentId, workspaceDir, sessionKey: t.sessionKey },
-          { memoryCtx, agentContext: t.agent, signal },
+          { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report },
         );
-        if (outcome?.ok) return { stored: 1, skipped: 0 };
+        if (outcome?.ok) return { stored: report.stored, skipped: report.skipped };
         return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
       })().catch((error) => ({ stored: 0, skipped: 1, reason: detailOf(error) }));
       return { id: randomUUID(), acceptedAt, done, abort: (reason) => controller.abort(reason) };

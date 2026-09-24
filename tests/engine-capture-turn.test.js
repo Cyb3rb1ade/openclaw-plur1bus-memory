@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { classifyLightDreamOutcome, createLightDreamLedgerWarnOnce, createTurnCapture } from "../engine/capture/capture-turn.js";
+import { classifyLightDreamOutcome, createLightDreamLedgerWarnOnce, createTurnCapture, lightDreamIdentity } from "../engine/capture/capture-turn.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -85,5 +85,56 @@ describe("createLightDreamLedgerWarnOnce (fix round 1)", () => {
     assert.equal(warned.length, 2);
     assert.match(warned[0], /agent-a/);
     assert.match(warned[1], /agent-b/);
+  });
+});
+
+describe("lightDreamIdentity (final review I3)", () => {
+  const user = `user:v1:${"d".repeat(64)}`;
+
+  it("writes a proved user's light-dream insight at user scope from the caller's memory context", () => {
+    let fallbackCalls = 0;
+    const memoryCtx = { agentId: "agent-a", workspaceIdentity: "workspace:v1:main", userPrincipal: user, trust: "proved" };
+    const { requestContext, aclBindings } = lightDreamIdentity(memoryCtx, () => { fallbackCalls += 1; return { agentId: "agent-a", workspaceIdentity: "workspace:v1:main", userPrincipal: "" }; });
+    assert.equal(requestContext, memoryCtx);
+    assert.deepEqual(aclBindings, { scope: "user", agentId: "agent-a", workspaceIdentity: "", ownerUserId: user });
+    assert.equal(fallbackCalls, 0, "the hook context is not re-resolved");
+  });
+
+  it("keeps the adapter path: without a memory context the hook context is resolved (workspace scope without a user)", () => {
+    const { aclBindings } = lightDreamIdentity(undefined, () => ({ agentId: "agent-a", workspaceIdentity: "workspace:v1:main", userPrincipal: "" }));
+    assert.deepEqual(aclBindings, { scope: "workspace", agentId: "agent-a", workspaceIdentity: "workspace:v1:main", ownerUserId: "" });
+    assert.deepEqual(lightDreamIdentity(null, () => { throw new Error("bad"); }), { requestContext: null, aclBindings: null });
+  });
+
+  it("captureTurn hands opts.memoryCtx to lightDreamIdentity", () => {
+    const source = readFileSync(join(root, "engine", "capture", "capture-turn.js"), "utf8");
+    assert.match(source, /lightDreamIdentity\(opts\.memoryCtx,/);
+  });
+});
+
+describe("captureTurn incognito classification on the Engine path (final review I2)", () => {
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+  const failingClassifier = async () => { throw new Error("host routing unavailable"); };
+
+  it("an unclassifiable keyed turn from an Engine caller says why", async () => {
+    const captureTurn = createTurnCapture({ host: { logger: quiet }, classifyHostIncognitoSession: failingClassifier });
+    const outcome = await captureTurn({ sessionKey: "agent:a:main", messages: [] }, { agentId: "a" }, { memoryCtx: { agentId: "a" } });
+    assert.deepEqual(outcome, { ok: false, reason: "incognito-unclassifiable" });
+  });
+
+  it("the adapter path still returns undefined for an unclassifiable turn", async () => {
+    const captureTurn = createTurnCapture({ host: { logger: quiet }, classifyHostIncognitoSession: failingClassifier });
+    assert.equal(await captureTurn({ sessionKey: "agent:a:main", messages: [] }, { agentId: "a" }), undefined);
+  });
+
+  it("a host-classified turn never consults the routing classifier", async () => {
+    let calls = 0;
+    const captureTurn = createTurnCapture({
+      host: { logger: quiet },
+      classifyHostIncognitoSession: async () => { calls += 1; return false; },
+      workspacePolicyGuard: { automatic: () => ({ allowed: false }) },
+    });
+    await captureTurn({ sessionKey: "agent:a:main", messages: [] }, { agentId: "a" }, { memoryCtx: { agentId: "a" }, agentContext: { origin: "user", background: false }, incognitoClassified: true });
+    assert.equal(calls, 0);
   });
 });

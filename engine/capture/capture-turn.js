@@ -63,6 +63,32 @@ export function classifyLightDreamOutcome(dreamRun) {
  * @param {{warn?: (m: string) => void}} logger
  * @returns {(agentId: string) => void}
  */
+/**
+ * The request context and ACL bindings a light dream writes its insights
+ * under. A caller-resolved memory context (Engine.capture's Principal) is
+ * used as is; only without one does the hook context get re-resolved
+ * (`resolveFallback`, the adapter path — unchanged).
+ * @param {object|null|undefined} memoryCtx
+ * @param {() => object} resolveFallback
+ * @returns {{requestContext: object|null, aclBindings: object|null}}
+ */
+export function lightDreamIdentity(memoryCtx, resolveFallback) {
+  let requestContext = memoryCtx ?? null;
+  if (!requestContext) {
+    try {
+      requestContext = resolveFallback();
+    } catch (_) {
+      requestContext = null;
+    }
+  }
+  const aclBindings = requestContext
+    ? (requestContext.userPrincipal
+      ? { scope: "user", agentId: requestContext.agentId, workspaceIdentity: "", ownerUserId: requestContext.userPrincipal }
+      : { scope: "workspace", agentId: requestContext.agentId, workspaceIdentity: requestContext.workspaceIdentity, ownerUserId: "" })
+    : null;
+  return { requestContext, aclBindings };
+}
+
 export function createLightDreamLedgerWarnOnce(logger) {
   const warned = new Set();
   return (agentId) => {
@@ -162,7 +188,12 @@ export function createTurnCapture(ctx) {
     // other consumer in this file treat sessionKey as optional, so a
     // missing key must not silently drop the turn — that would disable the
     // plugin's core function. Classify only when a key is actually present.
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
+    // An Engine caller (TurnRecord.incognito === false) has already
+    // classified the turn on the host side: the host routing classifier is
+    // skipped, so a host without routing still captures.
+    if (opts.incognitoClassified === true) {
+      // classified by the caller
+    } else if (typeof sessionKey === "string" && sessionKey.trim()) {
       try {
         if (await classifyHostIncognitoSession(sessionKey)) {
           host.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
@@ -177,7 +208,7 @@ export function createTurnCapture(ctx) {
             "incognito classifier unavailable; durable capture is disabled for keyed sessions until it recovers",
           ));
         }
-        return undefined;
+        return opts.memoryCtx ? { ok: false, reason: "incognito-unclassifiable" } : undefined;
       }
     } else if (!warnedMissingCaptureSessionKey) {
       warnedMissingCaptureSessionKey = true;
@@ -613,6 +644,7 @@ export function createTurnCapture(ctx) {
             await db.store(row);
             storedMemoryRows.push(row);
             stored++;
+            if (opts.report) opts.report.stored = stored;
             host.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
           } catch (err) {
             const settlement = await waitForTimeoutSettlement(err);
@@ -632,6 +664,7 @@ export function createTurnCapture(ctx) {
         throwIfCaptureAborted();
 
         host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+        if (opts.report) Object.assign(opts.report, { stored, skipped });
 
         // Speaker naming pipeline: propose display names from merged diarization segments.
         await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
@@ -778,25 +811,15 @@ export function createTurnCapture(ctx) {
                   } catch (_) { /* try next */ }
                 }
               }
-              let lightRequestContext = null;
-              try {
-                lightRequestContext = resolveMemoryRequestContext({
-                  agentId,
-                  workspaceDir: hookCtx?.workspaceDir,
-                  workspaceKey: hookCtx?.workspaceKey,
-                  userId: hookCtx?.userId ?? hookCtx?.senderId,
-                  channel: hookCtx?.channel ?? hookCtx?.messageProvider,
-                  accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
-                  chatId: hookCtx?.chatId,
-                }, { workspaceAliases: memoryWorkspaceAliases });
-              } catch (_) {
-                lightRequestContext = null;
-              }
-              const lightAclBindings = lightRequestContext
-                ? (lightRequestContext.userPrincipal
-                  ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
-                  : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
-                : null;
+              const { requestContext: lightRequestContext, aclBindings: lightAclBindings } = lightDreamIdentity(opts.memoryCtx, () => resolveMemoryRequestContext({
+                agentId,
+                workspaceDir: hookCtx?.workspaceDir,
+                workspaceKey: hookCtx?.workspaceKey,
+                userId: hookCtx?.userId ?? hookCtx?.senderId,
+                channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+                accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+                chatId: hookCtx?.chatId,
+              }, { workspaceAliases: memoryWorkspaceAliases }));
               const lightDreamWork = () => lightDream({
                 turns: normalizedTurns,
                 neoStore,

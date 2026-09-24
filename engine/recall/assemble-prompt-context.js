@@ -1057,18 +1057,22 @@ export function createPromptContextAssembler(ctx) {
           if (echoCooldownOk) {
             const { loadFreshDreamEcho, formatDreamEchoContext } = await import("../../lib/dream-echo.js");
             const { loadGovernorState, saveGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend, withGovernorLock } = await import("../../lib/proactive-governor.js");
-            let echoRequestContext = null;
-            try {
-              echoRequestContext = resolveMemoryRequestContext({
-                agentId: hookCtx?.agentId || "default",
-                workspaceDir: hookCtx.workspaceDir,
-                userId: hookCtx?.userId ?? hookCtx?.senderId,
-                channel: hookCtx?.channel ?? hookCtx?.messageProvider,
-                accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
-                chatId: hookCtx?.chatId,
-              }, { workspaceAliases: memoryWorkspaceAliases });
-            } catch (err) {
-              host.logger.debug(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
+            // A caller-resolved Principal (Engine.recall) is the read
+            // context as is; only the hook path re-resolves from hookCtx.
+            let echoRequestContext = opts.memoryCtx ?? null;
+            if (!echoRequestContext) {
+              try {
+                echoRequestContext = resolveMemoryRequestContext({
+                  agentId: hookCtx?.agentId || "default",
+                  workspaceDir: hookCtx.workspaceDir,
+                  userId: hookCtx?.userId ?? hookCtx?.senderId,
+                  channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+                  accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+                  chatId: hookCtx?.chatId,
+                }, { workspaceAliases: memoryWorkspaceAliases });
+              } catch (err) {
+                host.logger.debug(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
+              }
             }
             const echo = loadFreshDreamEcho(hookCtx.workspaceDir, { now: nowMs, requestContext: echoRequestContext });
             if (echo) {
