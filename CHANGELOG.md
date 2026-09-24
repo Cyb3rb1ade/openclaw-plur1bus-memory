@@ -5,6 +5,21 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.8] — 2026-09-24
+
+### Hinzugefügt
+
+- **Dashboard: Modell je Subagent, ein Aufklappfeld pro Workspace.** Unter der
+  Aufgaben-Matrix steht die Karte „Subagent models“ mit je einem `<details>`
+  für Bernd, Bernhardine und Heisenberg. Darin jeder Subagent des Workspaces mit
+  derselben Zeile wie in der Karte „Chat model“ (bekannte und per
+  `modelPolicy.allow` freigegebene Modelle, „Profile default“, laufendes Modell).
+  Speichern nutzt den bestehenden Pfad (`chatModels.<agent>` plus
+  `agents.entries.<agent>.model.primary`, Entpinnen aktiver Sitzungen) und ist
+  über `model-profile.cjs` neustartfest. Zuordnung: Workspace-Pfad des
+  Chat-Agenten, sonst Namenspräfix, sonst der Standard-Workspace; Workspaces
+  ohne Chat-Agenten (cron, faxpert) bleiben draußen.
+
 ## [7.16.7] — 2026-09-24
 
 ### Behoben

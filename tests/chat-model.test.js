@@ -5,6 +5,7 @@ import {
   chatModelOptions,
   createChatModelMutator,
   projectChatModels,
+  projectSubagentModels,
   splitModelRef,
   validChatModelRequest,
 } from "../lib/chat-model.js";
@@ -20,10 +21,17 @@ const HOST = {
       },
       modelPolicy: { allow: ["anthropic/claude-opus-4-6", "anthropic/claude-opus-5-5", "kimi-coding/k3"] },
     },
+    workspace: "/ws/main",
     entries: {
-      main: { heartbeat: { every: "30m" }, model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["anthropic/claude-sonnet-5"] } },
-      bernhardine: { heartbeat: { every: "30m" }, model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } },
-      developer: { model: { primary: "kimi-coding/k3", fallbacks: [] } },
+      main: { heartbeat: { every: "30m" }, workspace: "/ws/main", model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["anthropic/claude-sonnet-5"] } },
+      bernhardine: { heartbeat: { every: "30m" }, workspace: "/ws/bernhardine", model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } },
+      developer: { workspace: "/ws/main", model: { primary: "kimi-coding/k3", fallbacks: [] } },
+      "bernhardine-developer": { workspace: "/ws/bernhardine", model: { primary: "kimi-coding/k3", fallbacks: [] } },
+      // Ohne Workspace: die Verifier haengen am Namenspraefix bzw. am Standard-Workspace.
+      "bernhardine-developer-verifier": { model: { primary: "kimi-coding/k3" } },
+      "developer-verifier": { model: { primary: "kimi-coding/k3" } },
+      // Eigener Workspace ohne Chat-Agenten: gehoert zu niemandem.
+      cron: { workspace: "/ws/cron", model: { primary: "kimi-coding/k3" } },
     },
   },
   plugins: { entries: { "memory-lancedb-namespaced": { config: {} } } },
@@ -57,6 +65,21 @@ describe("Chat-Modell pro Workspace", () => {
     assert.equal(validChatModelRequest({ agentId: "main", model: "" }), true, "leer hebt die Wahl auf");
     assert.equal(validChatModelRequest({ agentId: "__proto__", model: "" }), false);
     assert.equal(validChatModelRequest({ agentId: "main", model: "kein modell" }), false);
+  });
+
+  it("ordnet jedem Chat-Workspace seine Subagenten zu — über Workspace, Namenspraefix oder Standard-Workspace", () => {
+    const projected = projectSubagentModels({ chatModels: { developer: "anthropic/claude-opus-5-5" } }, HOST);
+    assert.deepEqual(projected.workspaces.map((ws) => ws.id), ["main", "bernhardine"]);
+    const [main, bernhardine] = projected.workspaces;
+    assert.deepEqual(main.agents.map((agent) => agent.id), ["developer", "developer-verifier"]);
+    assert.deepEqual(bernhardine.agents.map((agent) => agent.id), ["bernhardine-developer", "bernhardine-developer-verifier"]);
+    const developer = main.agents[0];
+    assert.equal(developer.chosen, "anthropic/claude-opus-5-5");
+    assert.equal(developer.running, "kimi-coding/k3");
+    assert.deepEqual(developer.models.map((model) => model.id).sort(), ["anthropic/claude-opus-4-6", "anthropic/claude-opus-5-5", "kimi-coding/k3"]);
+    const listed = projected.workspaces.flatMap((ws) => ws.agents.map((agent) => agent.id));
+    assert.equal(listed.includes("cron"), false, "ein Workspace ohne Chat-Agenten bleibt draussen");
+    assert.equal(listed.includes("main"), false, "Chat-Agenten stehen in der Chat-Karte, nicht hier");
   });
 
   describe("Mutator", () => {
@@ -118,10 +141,19 @@ describe("Chat-Modell pro Workspace", () => {
       assert.equal(cfg.agents.entries.bernhardine.model.primary, "anthropic/claude-opus-4-6", "nur der gewählte Agent");
     });
 
-    it("lehnt Modelle ab, die modelPolicy.allow nicht freigibt, und Agenten ohne Heartbeat", async () => {
+    it("lehnt Modelle ab, die modelPolicy.allow nicht freigibt, und Agenten ohne Chat-Workspace", async () => {
       const h = harness();
       await assert.rejects(() => h.mutator({ agentId: "main", model: "anthropic/claude-opus-4-8" }), /not allowed/);
-      await assert.rejects(() => h.mutator({ agentId: "developer", model: "kimi-coding/k3" }), /not a chat agent/);
+      await assert.rejects(() => h.mutator({ agentId: "cron", model: "kimi-coding/k3" }), /not a chat agent/);
+    });
+
+    it("schreibt die Wahl eines Subagenten wie die eines Chat-Agenten", async () => {
+      const h = harness();
+      await h.mutator({ agentId: "developer", model: "anthropic/claude-opus-5-5" });
+      const cfg = h.config();
+      assert.equal(cfg.plugins.entries["memory-lancedb-namespaced"].config.chatModels.developer, "anthropic/claude-opus-5-5");
+      assert.equal(cfg.agents.entries.developer.model.primary, "anthropic/claude-opus-5-5");
+      assert.equal(cfg.agents.entries.main.model.primary, "anthropic/claude-opus-4-6", "der Chat-Agent bleibt");
     });
 
     it("hebt die Wahl mit leerem Modell auf und lässt den laufenden Primary bis zum Neustart stehen", async () => {
@@ -171,7 +203,7 @@ describe("Chat-Modell pro Workspace", () => {
       ];
       const h = harness({ sessions, hostConfig: HOST });
       await assert.rejects(() => h.mutator({ agentId: "main", model: "anthropic/claude-opus-4-8" }), /not allowed/);
-      await assert.rejects(() => h.mutator({ agentId: "developer", model: "kimi-coding/k3" }), /not a chat agent/);
+      await assert.rejects(() => h.mutator({ agentId: "cron", model: "kimi-coding/k3" }), /not a chat agent/);
       assert.deepEqual(h.steps, []);
     });
 
