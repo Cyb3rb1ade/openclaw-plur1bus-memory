@@ -2857,8 +2857,13 @@ export function createEngine(host, config, testOptions = {}) {
   const closeEngine = (budgetMs) => {
     if (closing) return closing;
     const budget = Number.isFinite(budgetMs) && budgetMs > 0 ? budgetMs : 30_000;
+    // close() never rejects (final review m4): a resource that fails to
+    // close is logged, and the engine is closed either way. The closer is
+    // read from internals so a testOptions.internals override reaches it.
     closing = Promise.race([
-      closeResources(),
+      Promise.resolve()
+        .then(() => internals.closeResources())
+        .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${detailOf(error)}`); }),
       new Promise((resolve) => {
         const timer = setTimeout(() => {
           host.logger.warn(`plur1bus engine: close exceeded ${budget} ms; resources still closing in the background`);
@@ -3342,6 +3347,9 @@ export function createEngine(host, config, testOptions = {}) {
   internals.embeddingService = embeddingService;
   internals.adminOps = adminOps;
 
+  // What recall/capture answer once close() was called (final review m4).
+  const ENGINE_CLOSED = Object.freeze({ reason: "engine-closed", detail: "engine closed" });
+
   // The Engine (types/engine.d.ts, contract 1.4.0).
   const engine = {
     contract: "1.4.0",
@@ -3357,6 +3365,7 @@ export function createEngine(host, config, testOptions = {}) {
     },
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
+      if (closing) return recallResult({ degraded: { ...ENGINE_CLOSED, capability: "recall" } });
       if (!(q?.signal instanceof AbortSignal)) {
         return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: "signal is required" } });
       }
@@ -3382,6 +3391,7 @@ export function createEngine(host, config, testOptions = {}) {
       const signal = t?.signal instanceof AbortSignal ? AbortSignal.any([t.signal, controller.signal]) : controller.signal;
       const acceptedAt = clock();
       const done = (async () => {
+        if (closing) return { stored: 0, skipped: 1, reason: ENGINE_CLOSED.reason };
         if (t?.incognito !== false) return { stored: 0, skipped: 1, reason: "incognito" };
         const agentId = safeAgentId(t.agentId);
         // The turn's agent and its principal's agent must agree: the queue is
@@ -3444,7 +3454,17 @@ export function createEngine(host, config, testOptions = {}) {
     },
     jobs: Object.freeze({
       list: () => internals.jobs.list(),
-      run: (name, agentId, opts = {}) => internals.jobs.run(name, agentId, { trigger: "harness", ...opts }),
+      // Only the contract's options reach the registry: a host cannot inject
+      // the registry-internal `input`/`preSkip`. `signal` is observed before
+      // start only; `dryRun` comes back skipped/dry_run_unsupported.
+      run: async (name, agentId, opts = {}) => {
+        if (closing) throw new Error("engine closed");
+        return internals.jobs.run(name, agentId, {
+          trigger: opts?.trigger ?? "harness",
+          ...(opts?.signal instanceof AbortSignal ? { signal: opts.signal } : {}),
+          ...(opts?.dryRun === true ? { dryRun: true } : {}),
+        });
+      },
       history: (agentId, opts = {}) => internals.jobs.history(agentId, opts),
     }),
     embedding: embeddingService,

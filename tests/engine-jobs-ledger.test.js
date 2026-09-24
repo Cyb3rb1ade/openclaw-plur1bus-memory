@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { createJobRegistry, sweepKey } from "../engine/jobs/job-registry.js";
 import { createJobLedger } from "../engine/jobs/job-ledger.js";
 import { createStubHost } from "../lib/host-services.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 function registry(root, { clockStart = Date.UTC(2026, 0, 13, 1, 15), logger } = {}) {
@@ -256,5 +257,17 @@ describe("job ledger", () => {
     const runB = await jobs.run("gc-run", "agent-b");
     assert.deepEqual([runB.outcome, runB.reason], ["failed", "ledger_unwritable"]);
     assert.equal(warned.length, 2);
+  });
+
+  it("never swallows a marker-removal failure silently: every catch around removeMarker logs (final review m1)", () => {
+    const { engine } = readRuntimeSources();
+    const source = engine.jobRegistry;
+    assert.doesNotMatch(source, /catch\s*\{/, "no bare catch without a binding in the registry");
+    const removals = [...source.matchAll(/ledger\.removeMarker\([^)]*\);\s*\}\s*catch\s*\((\w+)\)\s*\{([\s\S]*?)\n\s*\}/g)];
+    assert.ok(removals.length >= 3, `found ${removals.length} guarded removeMarker calls`);
+    for (const [, name, body] of removals) {
+      assert.match(body, /host\.logger\.(debug|warn)\(/, "the failure is logged");
+      assert.ok(body.includes(name), "with its error");
+    }
   });
 });

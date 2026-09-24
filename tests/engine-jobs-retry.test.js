@@ -239,3 +239,75 @@ describe("ledgerBackedCompletion", () => {
     assert.deepEqual(calls, [["store", "k2"]], "run-state.json keeps being written for rollback");
   });
 });
+
+describe("concurrent runs (final review I4)", () => {
+  function gate() {
+    let open;
+    const opened = new Promise((resolve) => { open = resolve; });
+    return { opened, open };
+  }
+
+  it("in-flight rem/deep sessions count toward the breaker: two prior sessions plus two concurrent starts run one body", async () => {
+    const { jobs, advance } = setup();
+    const { opened, open } = gate();
+    let bodies = 0;
+    let blocking = false;
+    const body = async () => { bodies += 1; if (blocking) await opened; return { text: "ok" }; };
+    jobs.bind("rem-dream", body);
+    jobs.bind("consolidate-daily", body);
+    await jobs.run("consolidate-daily", "agent-a");
+    advance(60_000);
+    await jobs.run("consolidate-daily", "agent-a");
+    advance(60_000);
+    blocking = true;
+    const pending = [jobs.run("rem-dream", "agent-a"), jobs.run("consolidate-daily", "agent-a")];
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    open();
+    const runs = await Promise.all(pending);
+    assert.equal(bodies, 3, "the breaker's third session is the only concurrent body");
+    assert.deepEqual(runs.map((r) => [r.outcome, r.reason ?? null]).sort(), [["completed", null], ["skipped", "circuit_open"]]);
+  });
+
+  it("five concurrent rem/deep starts run at most three bodies", async () => {
+    const { jobs } = setup();
+    const { opened, open } = gate();
+    let bodies = 0;
+    const body = async () => { bodies += 1; await opened; return { text: "ok" }; };
+    jobs.bind("rem-dream", body);
+    jobs.bind("consolidate-daily", body);
+    const pending = ["rem-dream", "consolidate-daily", "rem-dream", "consolidate-daily", "rem-dream"].map((name) => jobs.run(name, "agent-a"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    open();
+    await Promise.all(pending);
+    assert.ok(bodies <= 3, `${bodies} bodies ran`);
+  });
+
+  it("two concurrent rem-dream runs for one agent run one body; the other is skipped already_running with a ledger row", async () => {
+    const { jobs, root } = setup();
+    const { opened, open } = gate();
+    let bodies = 0;
+    jobs.bind("rem-dream", async () => { bodies += 1; await opened; return { text: "ok" }; });
+    const pending = [jobs.run("rem-dream", "agent-a"), jobs.run("rem-dream", "agent-a"), jobs.run("rem-dream", "agent-b")];
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    open();
+    const runs = await Promise.all(pending);
+    assert.equal(bodies, 2, "one body per agent");
+    assert.deepEqual(runs.map((r) => [r.agentId, r.outcome, r.reason ?? null]), [["agent-a", "completed", null], ["agent-a", "skipped", "already_running"], ["agent-b", "completed", null]]);
+    const rows = readFileSync(join(root, "agent-a", "ledger.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    assert.ok(rows.some((r) => r.reason === "already_running" && r.llmSession === false), "the skip is recorded and never counts as a session");
+    assert.equal((await jobs.run("rem-dream", "agent-a")).outcome, "completed", "the guard is released when the run finishes");
+  });
+
+  it("the gc-run singleton is guarded the same way", async () => {
+    const { jobs } = setup();
+    const { opened, open } = gate();
+    let bodies = 0;
+    jobs.bind("gc-run", async () => { bodies += 1; await opened; return { text: "ok" }; });
+    const pending = [jobs.run("gc-run", "agent-a"), jobs.run("gc-run", "agent-a")];
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    open();
+    const runs = await Promise.all(pending);
+    assert.equal(bodies, 1);
+    assert.equal(runs[1].reason, "already_running");
+  });
+});

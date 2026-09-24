@@ -77,6 +77,13 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
   const recovered = new Set();
   const warnedLedgerUnwritable = new Set();
   const migratedStores = new Set();
+  // In-flight state (final review I4). A run's ledger row lands only when it
+  // finishes, so the snapshot a concurrent start reads cannot see it: the
+  // breaker counts in-flight rem/deep sessions from here as well, per agent
+  // and sweep, and a singleton or rem/deep job runs at most once per agent
+  // at a time.
+  const inflightSessions = new Map();
+  const inflightJobs = new Set();
 
   function ledgerFor(agentId) {
     if (!jobsRoot) return null;
@@ -238,7 +245,21 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     });
   }
 
+  function release(inflight) {
+    if (inflight.sessionKey) {
+      const left = (inflightSessions.get(inflight.sessionKey) ?? 1) - 1;
+      if (left > 0) inflightSessions.set(inflight.sessionKey, left);
+      else inflightSessions.delete(inflight.sessionKey);
+      inflight.sessionKey = null;
+    }
+    if (inflight.jobKey) {
+      inflightJobs.delete(inflight.jobKey);
+      inflight.jobKey = null;
+    }
+  }
+
   function finish(inflight, exit, error, ledger, snapshot = []) {
+    release(inflight);
     let outcome = exit.outcome;
     let reason = exit.reason;
     if (ledger && outcome !== "skipped") {
@@ -312,7 +333,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     return run;
   }
 
-  async function run(name, agentId, { signal, trigger = "manual", input, preSkip } = {}) {
+  async function run(name, agentId, { signal, trigger = "manual", input, preSkip, dryRun = false } = {}) {
     const spec = specs.get(name);
     if (!spec) throw new TypeError(`unknown job: ${name}`);
     const inflight = {
@@ -330,7 +351,12 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
       diaryTarget: null,
       diaryTimezone: null,
       diaryDisabled: false,
+      sessionKey: null,
+      jobKey: null,
     };
+    // A dry run is not a run: nothing is executed and no ledger row or
+    // marker is written (JobRegistry.run's dryRun, unsupported in M1b-1).
+    if (dryRun === true) return finish(inflight, jobExit("skipped", "dry_run_unsupported", undefined), null, null);
     // `ledgerFor` (and, inside it, `safeAgentId`) can throw on an invalid
     // agentId, so it lives inside this try too — run() must always resolve
     // to a JobRun, never reject, whatever went wrong with the ledger.
@@ -360,8 +386,9 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
         if (markerWritten) {
           try {
             ledger.removeMarker(inflight.runId);
-          } catch {
-            // ignored — recovery covers a leftover marker on next start
+          } catch (removeError) {
+            // Recovery covers a leftover marker on the next start.
+            host.logger.debug(`plur1bus job ${name}[${agentId}]: marker ${inflight.runId} could not be removed after the ledger failed (recovery records it at the next start): ${String(removeError?.message || removeError)}`);
           }
         }
         const message = `plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${String(writeError?.message || writeError)}`;
@@ -377,18 +404,42 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
         return finish(inflight, jobExit("failed", "ledger_unwritable", undefined), writeError, null);
       }
     }
+    // The caller's signal is observed before start only (job bodies do not
+    // yet take it — M1b-3): an already-aborted call is a recorded skip.
+    if (signal?.aborted) {
+      return finish(inflight, jobExit("skipped", "aborted", undefined), null, ledger, snapshot);
+    }
+    // A singleton or rem/deep job already running for this agent: this start
+    // is skipped (and recorded like any other skip) rather than run twice.
+    // Everything from run() entry to here is synchronous, so the check and
+    // the reservation cannot interleave with another start.
+    if (spec.singleton || BREAKER_PHASES.has(spec.phase)) {
+      const jobKey = `${agentId}\u0000${name}`;
+      if (inflightJobs.has(jobKey)) {
+        return finish(inflight, jobExit("skipped", "already_running", {
+          text: JSON.stringify({ job: name, skipped: true, reason: "already_running" }, null, 2),
+        }), null, ledger, snapshot);
+      }
+      inflightJobs.add(jobKey);
+      inflight.jobKey = jobKey;
+    }
     // rem/deep share a per-agent, per-sweep breaker of BREAKER_LIMIT LLM
-    // sessions, counted from the snapshot taken above — a pre-skipped call
-    // (e.g. an outer disabled-feature check) never counted as a session and
-    // must not be blocked by one either.
+    // sessions, counted from the snapshot taken above plus the sessions
+    // still in flight (reserved here, released in finish) — a pre-skipped
+    // call (e.g. an outer disabled-feature check) never counted as a
+    // session and must not be blocked by one either.
     if (ledger && BREAKER_PHASES.has(spec.phase) && !preSkip) {
       const sweep = sweepKey(inflight.startedAt);
-      const sessions = snapshot.filter((row) => row.sweep === sweep && row.llmSession === true && BREAKER_PHASES.has(row.phase)).length;
+      const sessionKey = `${agentId}\u0000${sweep}`;
+      const sessions = snapshot.filter((row) => row.sweep === sweep && row.llmSession === true && BREAKER_PHASES.has(row.phase)).length
+        + (inflightSessions.get(sessionKey) ?? 0);
       if (sessions >= BREAKER_LIMIT) {
         return finish(inflight, jobExit("skipped", "circuit_open", {
           text: JSON.stringify({ job: name, skipped: true, reason: "circuit_open" }, null, 2),
         }), null, ledger, snapshot);
       }
+      inflightSessions.set(sessionKey, (inflightSessions.get(sessionKey) ?? 0) + 1);
+      inflight.sessionKey = sessionKey;
     }
     const owner = owners.get(name);
     let exit;

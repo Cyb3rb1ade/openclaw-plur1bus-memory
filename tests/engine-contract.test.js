@@ -261,6 +261,33 @@ describe("Engine", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
+  it("jobs.run passes only signal and trigger; dryRun is refused without running (final review I5)", async () => {
+    const workspace = makeTempDir("ec-ws-");
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => workspace }), config(makeTempDir("ec-db-")));
+    const injected = await engine.jobs.run("gc-run", "agent-a", { preSkip: { reason: "host-injected" }, input: { forged: true } });
+    assert.deepEqual([injected.outcome, injected.reason], ["skipped", "gc_disabled"], "a host cannot inject preSkip/input");
+    const dry = await engine.jobs.run("gc-run", "agent-a", { dryRun: true });
+    assert.deepEqual([dry.outcome, dry.reason, dry.job, dry.trigger], ["skipped", "dry_run_unsupported", "gc-run", "harness"]);
+    const history = await engine.jobs.history("agent-a", { job: "gc-run" });
+    assert.ok(!history.some((row) => row.runId === dry.runId), "a dry run writes no ledger row");
+    const aborted = await engine.jobs.run("gc-run", "agent-a", { signal: AbortSignal.abort() });
+    assert.deepEqual([aborted.outcome, aborted.reason], ["skipped", "aborted"], "an already-aborted signal is observed before start");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("close() never rejects, and recall/capture/jobs.run after close say the engine is closed (final review m4)", async () => {
+    const warned = [];
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-"), logger: { info() {}, warn: (m) => warned.push(String(m)), error: (m) => warned.push(String(m)), debug() {} } });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder(), closeResources: async () => { throw new Error("store refused to close"); } } });
+    await engine.close({ budgetMs: 5_000 });
+    assert.ok(warned.some((m) => /store refused to close/.test(m)), "the close failure is logged");
+    const recalled = await engine.recall({ query: "anything at all", principal, agent, signal: AbortSignal.timeout(1_000) });
+    assert.equal(recalled.degraded?.reason, "engine-closed");
+    const captured = await engine.capture({ agentId: "agent-a", principal, agent, messages: [], incognito: false, signal: AbortSignal.timeout(1_000) }).done;
+    assert.deepEqual(captured, { stored: 0, skipped: 1, reason: "engine-closed" });
+    await assert.rejects(() => engine.jobs.run("gc-run", "agent-a"), /engine closed/);
+  });
+
   it("capture() returns a handle immediately", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
     const started = Date.now();
