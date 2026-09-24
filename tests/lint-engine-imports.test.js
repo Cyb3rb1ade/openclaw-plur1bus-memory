@@ -288,4 +288,35 @@ describe("lint-engine-imports", () => {
     assert.equal(result.status, 1);
     assert.match(result.out, /must not import the openclaw package/);
   });
+
+  it("rejects a destructured process.env.OPENCLAW_* read, plain and renamed", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": 'const { OPENCLAW_HOME } = process.env;\nconst { OPENCLAW_HOME: home } = process.env;\nexport { OPENCLAW_HOME, home };\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/b\.js:1/);
+    assert.match(result.out, /lib\/b\.js:2/);
+  });
+
+  it("does not catch process.env aliased into a variable read on a later line (documented gap)", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": "const env = process.env;\nexport const home = env.OPENCLAW_HOME;\n",
+    });
+    const result = run(base);
+    assert.equal(result.status, 0, result.out);
+  });
+
+  it("extends the computed-import check to a reached lib/ file", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": 'export async function load(name) {\n  return import(`./${name}.js`);\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/b\.js/);
+    assert.match(result.out, /computed specifier/);
+  });
 });
