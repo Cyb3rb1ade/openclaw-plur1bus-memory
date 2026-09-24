@@ -47,6 +47,20 @@ const ENGINE_PATHS = Object.freeze({
   recallResult: "engine/recall/recall-result.js",
   remOutcome: "engine/jobs/rem-outcome.js",
   runStateMigration: "engine/jobs/run-state-migration.js",
+  agentDbPool: "engine/store/agent-db-pool.js",
+  commandHelpers: "engine/commands/command-helpers.js",
+  constants: "engine/runtime/constants.js",
+  controlHealth: "engine/store/control-health.js",
+  debugLog: "engine/runtime/debug-log.js",
+  envConfig: "engine/runtime/env-config.js",
+  knowledgePending: "engine/knowledge/knowledge-pending.js",
+  lancedbLoader: "engine/store/lancedb-loader.js",
+  legacyProviders: "engine/providers/legacy-providers.js",
+  llmCalls: "engine/runtime/llm-calls.js",
+  memoryDb: "engine/store/memory-db.js",
+  namespaceRecall: "engine/recall/namespace-recall.js",
+  runtimeReranker: "engine/providers/runtime-reranker.js",
+  semanticDiscovery: "engine/runtime/semantic-discovery.js",
 });
 
 /** OpenClaw adapter modules, by short name. */

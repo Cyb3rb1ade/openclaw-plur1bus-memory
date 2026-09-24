@@ -323,6 +323,11 @@ describe("B13 strict ownership ACL adapters", () => {
     // call site above stays in index.js and stays pinned to it.
     const memoryToolsSource = engine.memoryTools;
     assert.match(memoryToolsSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
-    assert.doesNotMatch(indexSource, /checkAccess\(\{\s*agentId,\s*workspaceId/);
+    // Step 9 part 1 moved MemoryDB (the store-side checkAccess call sites)
+    // into engine/store/memory-db.js, so the legacy-shape ban covers every
+    // runtime source, not index.js alone.
+    for (const source of readRuntimeSources().all) {
+      assert.doesNotMatch(source, /checkAccess\(\{\s*agentId,\s*workspaceId/);
+    }
   });
 });

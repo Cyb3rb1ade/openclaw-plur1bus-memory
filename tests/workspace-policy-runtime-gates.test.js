@@ -51,13 +51,14 @@ describe("workspace policy runtime gates", () => {
     // PR-03f moved the /plur1bus dispatcher — and with it the whole
     // `workspace` action branch — out of index.js; both anchors now live in
     // engine/commands/plur1bus-command.js, so the guard reduces over every
-    // runtime source instead of index.js alone. `text: "NO_REPLY"` still has a
-    // call site in index.js (the operator command path) and stays pinned there.
+    // runtime source instead of index.js alone. The `text: "NO_REPLY"` site
+    // that stayed in index.js (guardUnsafeDirectCronTurn) moved to
+    // engine/commands/command-helpers.js in step 9 part 1 and is pinned there.
     assert.ok(allRuntimeSources.some((source) => /actionKey === "workspace"/.test(source)));
     assert.ok(allRuntimeSources.some(
       (source) => /workspacePolicyDecision\.reason \|\| "workspace_disabled"/.test(source)
     ));
-    assert.match(indexSource, /text: "NO_REPLY"/);
+    assert.match(engine.commandHelpers, /text: "NO_REPLY"/);
   });
 
   it("registers the native policy runtime with a session-derived context", () => {

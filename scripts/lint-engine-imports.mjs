@@ -123,6 +123,18 @@ const IMPORT_PATTERNS = [
  */
 const COMPUTED_IMPORT = /\bimport\s*\(\s*(?!["'])\S/;
 
+/**
+ * Engine files exempt from COMPUTED_IMPORT, and from no other rule. Keep this
+ * to exactly the files named here, each with its reason:
+ *
+ * - engine/store/lancedb-loader.js — getLanceDB()/getOpenAI() fall back to
+ *   importing the LanceDB/OpenAI *packages* from the plugin's own
+ *   node_modules or the legacy stock checkout by absolute path. These are
+ *   package-location fallbacks, not host code; injecting the loaders through
+ *   host capabilities instead is a PR-14 item.
+ */
+const COMPUTED_IMPORT_ALLOW = new Set(["engine/store/lancedb-loader.js"]);
+
 /** A member read of `api` off any receiver: `host.api`, `services.api.on`, … */
 const DOTTED_API_REFERENCE = /\.\s*api\b/;
 
@@ -240,7 +252,7 @@ for (const scanRoot of ROOTS) {
         // Checked against comments-only-stripped text (not strings-stripped):
         // COMPUTED_IMPORT needs to see whether the import() argument is a
         // real string literal or not.
-        if (COMPUTED_IMPORT.test(stripComments(line))) {
+        if (!COMPUTED_IMPORT_ALLOW.has(from) && COMPUTED_IMPORT.test(stripComments(line))) {
           violations.push(`${from}:${index + 1}: engine code must not call import() with a computed specifier — the static import-graph walker cannot follow it (${line.trim()})`);
         }
       });

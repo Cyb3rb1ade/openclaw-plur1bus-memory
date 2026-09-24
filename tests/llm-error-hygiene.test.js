@@ -21,6 +21,7 @@ import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.
 import { withAbortableLlmTimeout } from "../lib/llm-failure.js";
 import { OverlayGenerator } from "../lib/overlay-generator.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const SECRET = "Authorization Bearer TEST_SECRET";
 const tempDirs = [];
@@ -253,7 +254,8 @@ describe("LLM caller error hygiene", () => {
   });
 
   it("uses safe failure logging in capture summarization", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    // summarizeForCapture moved to engine/runtime/env-config.js (step 9, part 1).
+    const source = readRuntimeSources().engine.envConfig;
     const start = source.indexOf("async function summarizeForCapture");
     const end = source.indexOf("// Baut eine querySummarizer-Funktion", start);
     const section = source.slice(start, end);

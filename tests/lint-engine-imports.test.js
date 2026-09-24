@@ -14,7 +14,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -318,5 +318,34 @@ describe("lint-engine-imports", () => {
     assert.equal(result.status, 1);
     assert.match(result.out, /lib\/b\.js/);
     assert.match(result.out, /computed specifier/);
+  });
+
+  it("exempts exactly one file from the computed-import rule (the LanceDB/OpenAI package loader)", () => {
+    const source = readFileSync(script, "utf8");
+    const declarations = source.match(/const COMPUTED_IMPORT_ALLOW = new Set\(\[([^\]]*)\]\);/g) || [];
+    assert.equal(declarations.length, 1, "one COMPUTED_IMPORT_ALLOW declaration");
+    const entries = [...declarations[0].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    assert.deepEqual(entries, ["engine/store/lancedb-loader.js"]);
+  });
+
+  it("allows a computed import only in the allowlisted file, still flags it in any other engine file", (t) => {
+    const loader = 'const P = "/x/node_modules/pkg/index.js";\nexport async function load() {\n  return import(P);\n}\n';
+    const allowed = run(fixture(t, { "engine/store/lancedb-loader.js": loader }));
+    assert.equal(allowed.status, 0, allowed.out);
+    const flagged = run(fixture(t, {
+      "engine/store/lancedb-loader.js": loader,
+      "engine/store/other-loader.js": loader,
+    }));
+    assert.equal(flagged.status, 1);
+    assert.match(flagged.out, /engine\/store\/other-loader\.js:3: .*computed specifier/);
+    assert.doesNotMatch(flagged.out, /engine\/store\/lancedb-loader\.js/);
+  });
+
+  it("the allowlisted file is still held to the api rules", (t) => {
+    const result = run(fixture(t, {
+      "engine/store/lancedb-loader.js": 'export function f(host) { return host.api.on; }\n',
+    }));
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lancedb-loader\.js:1: engine code must not read the HostServices/);
   });
 });
