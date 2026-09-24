@@ -131,13 +131,8 @@ const routingCapability = Object.freeze({
 
 /**
  * @param {object} pluginConfig
- * @param {((entry: {agentId: string, phases: object, totalMs: number}) => void)|null} [recallTimingSink]
- *   Forwarded as `api.__recallTimingSinkForTests`, the one test-only property
- *   `index.js` reads with `??` when building the recall-hook ctx
- *   (`recallTimingSink: api.__recallTimingSinkForTests ?? null`). No real
- *   OpenClaw host ever sets this property.
  */
-function makeApi(pluginConfig, recallTimingSink = null) {
+function makeApi(pluginConfig) {
   const handlers = new Map();
   const noop = () => {};
   return {
@@ -154,7 +149,6 @@ function makeApi(pluginConfig, recallTimingSink = null) {
       return { dispose: noop };
     },
     handlers,
-    __recallTimingSinkForTests: recallTimingSink,
   };
 }
 
@@ -204,11 +198,13 @@ export function baseConfig(baseDbPath, overrides = {}) {
 
 /**
  * @param {object} scenario
- * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number}) => void)|null, onTiming?: ((entry: {setupMs: number, recallMs: number, totalMs: number}) => void)|null, hostEvents?: {emit: (name: string, payload: unknown) => void}|null}} [options]
+ * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number, namespacePhases: object[]}) => void)|null, onTiming?: ((entry: {setupMs: number, recallMs: number, totalMs: number}) => void)|null, hostEvents?: {emit: (name: string, payload: unknown) => void}|null}} [options]
  *   `freezeClock: false` keeps the real clock, which the latency probe needs;
- *   the golden test leaves it on. `recallTimingSink`, when given, is threaded
- *   onto the stub `api` as `__recallTimingSinkForTests` (see `makeApi`) and
- *   called once per attempted recall with the pipeline's phase timings.
+ *   the golden test leaves it on. `recallTimingSink`, when given, is not a
+ *   plugin option at all any more (`RecallResult.timing` replaced it) — it is
+ *   implemented here as a `recall.completed` host-event listener, called once
+ *   per attempted recall with the pipeline's phase timings from that event's
+ *   `timing` payload.
  *   `onTiming`, when given, is called once, right before this function
  *   returns normally (not on a thrown error), with `setupMs` (temp dirs,
  *   clock stub, the fixture `db.store()` loop, `plugin.register()`)
@@ -293,8 +289,14 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
         workspaceKey: scenario.workspaceKey,
       });
     }
-    const api = makeApi(baseConfig(baseDbPath, scenario.config), recallTimingSink);
-    plugin.register(api, { importRouting: async () => routingCapability, ...(hostEvents ? { hostEvents } : {}), engineInternals: { embeddings: engineEmbeddings } });
+    const api = makeApi(baseConfig(baseDbPath, scenario.config));
+    const listeners = [hostEvents, recallTimingSink && {
+      emit: (name, payload) => {
+        if (name === "recall.completed") recallTimingSink({ agentId: payload.agentId, phases: payload.timing.phases, totalMs: payload.timing.totalMs, namespacePhases: payload.timing.namespacePhases });
+      },
+    }].filter(Boolean);
+    const events = listeners.length ? { emit: (name, payload) => { for (const l of listeners) l.emit(name, payload); } } : null;
+    plugin.register(api, { importRouting: async () => routingCapability, ...(events ? { hostEvents: events } : {}), engineInternals: { embeddings: engineEmbeddings } });
     const hooks = api.handlers.get("before_prompt_build");
     const hook = hooks?.at(-1);
     if (typeof hook !== "function") throw new Error(`${scenario.name}: before_prompt_build not registered`);

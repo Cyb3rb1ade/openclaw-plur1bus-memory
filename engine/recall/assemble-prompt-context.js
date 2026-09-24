@@ -54,14 +54,15 @@ import { hourInTimeZone } from "../../lib/time-window.js";
  * engine context. Every binding the moved body closes over is destructured
  * once, here, at registration time.
  *
- * `ctx.recallTimingSink`, when provided, is called once per attempted recall
- * with `{ agentId, phases, totalMs }` after the scheduled recall settles —
- * `phases` is `phaseTimer.summary()` (`lib/recall-phase-timer.js`), `totalMs`
- * is `phaseTimer.elapsedMs()`. Purely additive/observational: it never
- * changes the returned `prependContext`, defaults to `null` (a no-op), and
- * production wiring (`index.js`) only ever passes a real function through a
- * test-only property nothing in production sets — see the fix-round note at
- * that call site.
+ * Every scheduled recall fills `RecallResult.timing = { phases, totalMs,
+ * namespacePhases }` — `phases` is `phaseTimer.summary()`
+ * (`lib/recall-phase-timer.js`), `totalMs` is `phaseTimer.elapsedMs()`, and
+ * `namespacePhases` is the fine-grained per-namespace phase list collected
+ * via `runMergedNamespaceRecall`'s `onNamespacePhases` callback (always, not
+ * folded into the outer `phaseTimer` the scheduler's timeout log reads). A
+ * `recall.completed` host event carries the same `timing` alongside
+ * `agentId` and `degraded`, emitted once per scheduled recall right before
+ * it returns.
  *
  * @param {Record<string, any>} ctx Engine context; see the destructuring below.
  * @returns {(event: Record<string, any>, hookCtx: Record<string, any>) => Promise<object>} A RecallResult (engine/recall/recall-result.js).
@@ -110,7 +111,6 @@ export function createPromptContextAssembler(ctx) {
     pool,
     queryRefinerEnabled,
     recallQueryLlmCfg,
-    recallTimingSink = null,
     replyOutcomeDynamics,
     replyOutcomeEnabled,
     replyOutcomeMaxAssistantChars,
@@ -166,6 +166,7 @@ export function createPromptContextAssembler(ctx) {
       hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
       logger: host.logger,
     });
+    const namespacePhases = [];
     const scheduledRecall = await runtimeScheduler.runRecall({
       background,
       cacheKey,
@@ -495,13 +496,9 @@ export function createPromptContextAssembler(ctx) {
         timer,
         {
           strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1,
-          // Fix round 2: only fold per-namespace fine-grained phases into the
-          // outer timer when something will actually read them — otherwise
-          // this stays exactly the pre-fix-round behaviour (one coarse
-          // "namespace-recall" entry), including for the timeout-warning log
-          // line at lib/runtime-scheduler.js:456-476, which reads this same
-          // outer timer's summary().
-          recordNamespacePhases: Boolean(recallTimingSink),
+          onNamespacePhases: (namespace, completed) => {
+            for (const entry of completed) namespacePhases.push({ namespace, phase: entry.phase, ms: entry.ms });
+          },
         },
       );
       trace = pipelineTrace || trace;
@@ -1221,19 +1218,14 @@ export function createPromptContextAssembler(ctx) {
     }
     }));
     });
-    // Task 19 fix round: additive, observational only — never changes what
-    // is returned below. `phaseTimer` (created above, same object as the
-    // `timer` the callback closed over) is fully populated by now, whether
-    // the callback returned normally, hit the soft-budget fallback, timed
-    // out, or threw and was caught as `scheduledRecall.error`. Fix round 3:
-    // a caller-supplied sink is untrusted code from this function's point of
-    // view (AGENTS.md: no silent catches), so a throwing sink is caught and
-    // logged rather than breaking the turn's actual reply.
-    try {
-      recallTimingSink?.({ agentId: hookCtx?.agentId, phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs() });
-    } catch (sinkErr) {
-      dbg(sinkErr);
-    }
+    // `phaseTimer` (created above, same object as the `timer` the callback
+    // closed over) is fully populated by now, whether the callback returned
+    // normally, hit the soft-budget fallback, timed out, or threw and was
+    // caught as `scheduledRecall.error`. `namespacePhases` was collected
+    // separately, via `onNamespacePhases`, and is never folded into
+    // `phaseTimer` itself.
+    const timing = { phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs(), namespacePhases };
+    const withTiming = (result) => ({ ...result, timing });
     // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
     // Reply-Outcome-Dynamik die Tabelle anfassen.
     if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
@@ -1243,18 +1235,24 @@ export function createPromptContextAssembler(ctx) {
       if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
         host.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
       }
-      return scheduledRecall.value ?? recallResult();
+      const result = withTiming(scheduledRecall.value ?? recallResult());
+      emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+      return result;
     }
     if (scheduledRecall.aborted || scheduledRecall.timedOut) {
       const degraded = scheduledRecall.aborted ? ABORTED : { reason: "timeout", capability: "recall" };
       const reasonLabel = scheduledRecall.aborted ? "aborted" : "timed out";
       host.logger.warn(`memory-lancedb-namespaced: recall ${reasonLabel} without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
       emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded });
-      return recallResult({ blocks: partial(), degraded });
+      const result = withTiming(recallResult({ blocks: partial(), degraded }));
+      emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+      return result;
     }
     if (scheduledRecall.error) {
       host.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);
     }
-    return recallResult();
+    const result = withTiming(recallResult());
+    emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+    return result;
   };
 }

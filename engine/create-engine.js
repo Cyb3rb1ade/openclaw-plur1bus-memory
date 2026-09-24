@@ -3126,7 +3126,6 @@ export function createEngine(host, config, testOptions = {}) {
     normalizedLlmErrorClass,
     resolveRuntimeRecallBudget,
     runMergedNamespaceRecall,
-    recallTimingSink: null,
   });
   internals.captureContext ??= viewOf([
     "NEO_HOOK_DRAIN_MARGIN_MS",
@@ -3367,9 +3366,11 @@ export function createEngine(host, config, testOptions = {}) {
         const memoryCtx = memoryContextFromPrincipal(q.principal, { workspaceDir, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
         const query = String(q.query ?? "");
         const event = { prompt: query, messages: [{ role: "user", content: query }], ...(q.compactedAt ? { compactedAt: q.compactedAt } : {}) };
-        const result = (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent })) ?? recallResult();
-        host.events.emit("recall.completed", { agentId, timing: result.timing, degraded: result.degraded });
-        return result;
+        // The assembler itself emits `recall.completed` (with `timing`) once
+        // per scheduled recall — do not emit it again here, or every
+        // `Engine.recall` call would double the event the adapter's own
+        // registered hook already produces through the same assembler.
+        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent })) ?? recallResult();
       } catch (error) {
         // An abort that lands before the assembler runs (e.g. during
         // host.workspaceDir) is still an abort, not a bad query.

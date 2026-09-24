@@ -52,64 +52,25 @@ describe("engine/recall/assemble-prompt-context", () => {
     assert.equal(poolTouched, false);
   });
 
-  describe("recallTimingSink — Task 19 fix round (additive, observational only)", () => {
-    it("is called exactly once per attempted recall with {agentId, phases, totalMs}, and never changes the returned prependContext", async () => {
-      const scenario = SCENARIOS.find((s) => s.name === "recall-basic");
-      const calls = [];
-      const withSink = await runScenario(scenario, {
-        freezeClock: false,
-        recallTimingSink: (entry) => calls.push(entry),
-      });
-      const withoutSink = await runScenario(scenario, { freezeClock: false });
-
-      assert.strictEqual(calls.length, 1, "sink must fire exactly once for one attempted recall");
-      const [entry] = calls;
-      assert.strictEqual(entry.agentId, scenario.ctx.agentId);
-      assert.strictEqual(typeof entry.totalMs, "number");
-      assert.ok(entry.totalMs >= 0);
-      assert.ok(entry.phases && Array.isArray(entry.phases.completed), "phases must be a phaseTimer.summary()-shaped object");
-      assert.ok(entry.phases.completed.some((c) => c.phase === "namespace-recall"), "attaching a sink also enables the namespace-phase fold (recordNamespacePhases), so completed must contain more than just the coarse phase");
-
-      // The whole point of "additive, observational only": attaching a sink
-      // must not change one byte of what the model would see.
-      assert.strictEqual(withSink, withoutSink);
+  describe("RecallResult.timing (replaces recallTimingSink)", () => {
+    it("recall.completed carries phases, totalMs and per-namespace phases, and never changes the prefix", async () => {
+      const scenario = SCENARIOS[0];
+      const events = [];
+      const withEvents = await runScenario(scenario, { hostEvents: { emit: (name, payload) => events.push({ name, payload }) } });
+      const without = await runScenario(scenario);
+      assert.equal(withEvents, without);
+      const completed = events.filter((e) => e.name === "recall.completed");
+      assert.equal(completed.length, 1);
+      const { timing } = completed[0].payload;
+      assert.ok(Array.isArray(timing.phases.completed));
+      assert.ok(timing.phases.completed.some((c) => c.phase === "namespace-recall"));
+      assert.ok(timing.totalMs >= 0);
+      assert.ok(timing.namespacePhases.some((p) => p.phase === "embedding"), "fine phases are always collected, separately");
     });
 
-    it("a throwing sink does not break the turn (caught and swallowed, not rethrown)", async () => {
-      const scenario = SCENARIOS.find((s) => s.name === "recall-basic");
-      const result = await runScenario(scenario, {
-        freezeClock: false,
-        recallTimingSink: () => { throw new Error("sink boom"); },
-      });
-      assert.strictEqual(typeof result, "string");
-      assert.ok(result.length > 0);
-    });
-  });
-
-  describe("recordNamespacePhases — tied 1:1 to recallTimingSink (Task 19 fix round 2/3)", () => {
-    // `runMergedNamespaceRecall`'s per-namespace phase fold is gated on
-    // `recordNamespacePhases`, which `assemble-prompt-context.js` sets to
-    // `Boolean(recallTimingSink)` — so the two can never be observed
-    // independently through the public hook: whenever a test can read the
-    // outer timer's summary() at all (by attaching a sink), the fold has
-    // necessarily already been enabled for that same call (proven by the
-    // "namespace-recall" test above finding fine-grained phases present, not
-    // just the coarse block). The one case worth asserting directly is the
-    // production wiring itself: that recordNamespacePhases is *derived from*
-    // recallTimingSink, not an independent flag someone could accidentally
-    // default to `true`. Source assertions are this file's own established
-    // pattern for exactly this kind of structural invariant (see "does not
-    // mention the OpenClaw api surface" and "keeps the six named blocks..."
-    // above).
-    it("assemble-prompt-context.js derives recordNamespacePhases from Boolean(recallTimingSink), not an independent flag", () => {
-      const source = readFileSync(join(root, "engine", "recall", "assemble-prompt-context.js"), "utf8");
-      assert.match(source, /recordNamespacePhases:\s*Boolean\(recallTimingSink\)/);
-    });
-
-    it("the plugin only ever supplies a real recallTimingSink through a test-only api property, so recordNamespacePhases is false for every real OpenClaw host", () => {
-      // Task 13b: the recall-hook registration moved from index.js into adapter/openclaw/plugin.js.
-      const source = readRuntimeSources().adapter.plugin;
-      assert.match(source, /recallTimingSink:\s*api\.__recallTimingSinkForTests\s*\?\?\s*null/);
+    it("no test-only api property remains", () => {
+      const { all } = readRuntimeSources();
+      for (const source of all) assert.doesNotMatch(source, /__recallTimingSinkForTests|recallTimingSink/);
     });
   });
 

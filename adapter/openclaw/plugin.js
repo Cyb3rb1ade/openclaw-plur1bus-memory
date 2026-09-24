@@ -540,12 +540,6 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     registerRecallHook({
       api,
       ...internals.recallContext,
-      // Test-only hook (Task 19 fix round): the golden-prefix probe sets
-      // `api.__recallTimingSinkForTests` on its stub api object so it can
-      // read the pipeline's per-phase timings; no real OpenClaw host ever
-      // sets this property, so `recallTimingSink` is always `null` here in
-      // production and `createPromptContextAssembler` treats it as a no-op.
-      recallTimingSink: api.__recallTimingSinkForTests ?? null,
     });
   } else if (neoEnabled || schicht15Enabled || gcEnabled) {
     // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.

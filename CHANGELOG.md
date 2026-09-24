@@ -34,7 +34,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **`docs/engine-api.md`** und die Spalte *Harness behaviour* in
   `docs/compatibility-openclaw.md`.
 - Optionaler, testinterner Kontext-Schlüssel `recallTimingSink` (additiv, in
-  Produktion ein No-op).
+  Produktion ein No-op) — inzwischen wieder entfernt, siehe M1b-1 unten
+  (`RecallResult.timing`/`recall.completed`).
 
 ### Geändert
 
@@ -104,6 +105,79 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   (`trimAtRecordBoundary`, `lib/inject-budget.js`) und fällt nur noch auf den
   reinen Zeichenschnitt zurück, wenn kein einziger Record mehr passt
   (Fix-Runde 1, betrifft nur das Golden-Prefix-Szenario `recall-truncated`).
+
+### M1b-1 — die Engine-API (`createEngine`)
+
+Contract-Version **1.4.0** (von 1.0.0 über 1.1.0/1.2.0/1.3.0, siehe oben, auf
+1.4.0 gehoben — der komplette `Engine`-Umfang von `createEngine`). Details in
+`docs/engine-api.md`.
+
+#### Hinzugefügt
+
+- **`engine/create-engine.js`** — `createEngine(host, config, testOptions?)`
+  baut den vollen 1.4.0-`Engine`-Umfang aus einem reinen `HostServices`-Objekt
+  ohne OpenClaw-`api` im Aufrufgraphen (`createEngine(createStubHost(),
+  config)` ist genau das, was `tests/engine-contract.test.js` prüft).
+  `index.js` ist auf 55 Zeilen geschrumpft (Konstruktion, ein
+  `plugin.register()`-Aufruf, `/wiki`, `export default`).
+- **`Principal`/`AgentContext` als explizite Eingaben** (`engine/identity/
+  principal.js`) statt implizit aus dem OpenClaw-Hook gelesen; ein
+  Kanal-Register (`Engine.channels`) für die offene `ChannelRef`-Vokabular.
+- **JobRegistry mit 18 engine-eigenen Jobs** (`engine/jobs/job-registry.js`,
+  `job-specs.js`, `internal-job-bodies.js`) — `Engine.jobs.run()`/`.history()`/
+  `.list()` ersetzen die bisherigen Cron-/internen Command-Aufrufer.
+- **Anhängendes Run-Ledger** (`engine/jobs/job-ledger.js`) unter
+  `<baseDbPath>/_jobs/<agentId>/ledger.jsonl` (bewusste Abweichung von der
+  ursprünglichen Spezifikation, die `stateDir` nannte — der Ledger-Wurzelpfad
+  bleibt im selben Verzeichnisbaum, den Tests bereits pro Agent über
+  `baseDbPath` isolieren) plus Started-Markern zur Absturzerkennung.
+- **`checkpoint(agentId, reason)`** (`engine/checkpoint/checkpoint-store.js`,
+  `CheckpointReason` inkl. `"session-end"`).
+- **`RecallResult.timing`** (`{ phases, totalMs, namespacePhases }`) auf jedem
+  geplanten Recall, plus das Host-Event `recall.completed` (`{ agentId,
+  timing, degraded }`), genau einmal pro Recall-Versuch, unabhängig davon, ob
+  `Engine.recall` oder der adapter-eigene `before_prompt_build`-Hook ihn
+  ausgelöst hat — beide rufen denselben Assembler. Ersetzt den testinternen
+  `recallTimingSink`/`api.__recallTimingSinkForTests`-Seam vollständig; die
+  feinkörnigen Pro-Namensraum-Phasen werden separat gesammelt
+  (`onNamespacePhases`) und nicht mehr in den äußeren Timer gefaltet, den die
+  Timeout-Log-Zeile des Schedulers liest.
+- **L3-Events und `Deferral`s** (additiv): `recall.block-clipped`,
+  `recall.block-dropped`, `recall.degraded`, `job.run`.
+- **`lib/host-paths.js`/`lib/host-sdk-loader.js` als injizierte Host-Pfade**
+  (`HostServices.configPath()`, `.routing?`, `.pathOverrides?`, Contract
+  1.3.0) statt direkter `OPENCLAW_HOME`/`OPENCLAW_CONFIG_PATH`-Lesungen im
+  Engine-Graphen.
+- **`scripts/lint-engine-imports.mjs`, Regeln 6–7**: die
+  Forbidden-Import-Regel gilt jetzt transitiv über den gesamten von
+  `engine/**` erreichbaren `lib/**`-Graphen, und kein
+  `process.env.OPENCLAW_*`-Lesen bzw. kein `"openclaw/…"`-Ladepfad ist auf
+  diesem Graphen erlaubt.
+- **`bench/results/2026-09-24-recall-budget-probe.md`** — Re-Lauf des B6-
+  Probes gegen `RecallResult.timing`/`recall.completed` statt
+  `recallTimingSink`, mit Vergleichstabelle gegen den 2026-09-22-Report.
+
+#### Geändert (Verhaltensänderungen, siehe M1b-1-Vertrag §7)
+
+- **Job-Semantik (PR-08):** ein `incomplete`-Job-Lauf wird bis zu zweimal neu
+  versucht (`MAX_ATTEMPTS = 3` insgesamt), bevor er als `abandoned` markiert
+  wird (mit Diary-Zeile, sofern Diary aktiv); `already_processed` gilt nur
+  noch nach einem vorherigen `completed`-Eintrag für denselben Schlüssel,
+  nicht mehr nach `incomplete`/`failed`/`abandoned`; `rem`/`deep`-Phasen
+  teilen sich einen Circuit-Breaker von 3 LLM-Sitzungen pro Agent und
+  UTC-Kalendertag (Wiederholungsversuche zählen mit); jeder Job-Lauf erzeugt
+  eine Ledger-Zeile, auch ein Skip.
+- **Recall-Abbruch (spec §3.2):** ein abgebrochener oder per Timeout
+  beendeter Recall liefert jetzt die bereits fertigen Blöcke zurück
+  (`degraded.reason: "aborted"`/`"timeout"`) statt gar nichts — die sieben
+  Golden-Szenarien laufen nie in einen Timeout, das Oracle bleibt also
+  unverändert.
+- **Rerank-Budget:** ein einziges Signal bindet Embedder, Reranker und
+  LanceDB-Abfrage gemeinsam (`raceAbort(reranker.rerank(...), rerankAbort,
+  …)`) — ein Timeout-Owner statt eines zweiten, unabhängigen Timers.
+- `run-state.json`'s historische REM-Abschlüsse werden einmalig in das
+  Ledger migriert (`engine/jobs/run-state-migration.js`); danach wird die
+  alte Datei nicht mehr gelesen.
 
 ## [7.15.4] — 2026-09-21
 
