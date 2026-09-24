@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.4.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended four times under the policy below — see the changelog at the end
+ * Contract version 1.4.1 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended five times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -34,9 +34,10 @@
  *            1.2.0 — HostServices.workspaceDir becomes async (Task 6).
  *            1.3.0 — HostServices.configPath(), HostServices.routing?, HostServices.pathOverrides? (G1 closure, M1b-1 Task 11).
  *            1.4.0 — Engine surface of createEngine (M1b-1): ContextBlock.chars; RecallResult.timing (replaces timings) and .deferrals; RecallQuery.budget optional; JobRun/JobRegistry/JobSpec per spec 3.3 (outcome gains "abandoned"); CheckpointReason gains "session-end"; Engine.close({ budgetMs }); Engine.channels; HostServices.capabilities?; EngineEventName gains recall.block-clipped/-dropped, recall.completed; createEngine testOptions.
+ *            1.4.1 — JobTrigger gains "unknown" (a crash row recovered from a corrupt, unreadable start marker; M1b-1 final review m2).
  */
 
-export type ContractVersion = "1.4.0";
+export type ContractVersion = "1.4.1";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -336,7 +337,8 @@ export interface JobSpec {
 
 export type JobOutcome = "completed" | "skipped" | "incomplete" | "failed" | "abandoned";
 
-export type JobTrigger = "cron" | "manual" | "harness" | "capture";
+/** "unknown" only on a crash row recovered from a corrupt start marker (1.4.1). */
+export type JobTrigger = "cron" | "manual" | "harness" | "capture" | "unknown";
 
 export interface JobCost {
   ms: number;
@@ -369,6 +371,10 @@ export interface JobRun {
 
 export interface JobRegistry {
   list(): JobSpec[];
+  /** `signal` is observed before start only (an already-aborted call is a
+   *  recorded skip, reason "aborted"). `dryRun` is not supported in M1b-1:
+   *  it resolves skipped/"dry_run_unsupported" without running or writing a
+   *  ledger row. */
   run(job: JobName, agentId: AgentId, opts?: { signal?: AbortSignal; trigger?: JobTrigger; dryRun?: boolean }): Promise<JobRun>;
   history(agentId: AgentId, opts?: { job?: JobName; since?: number; limit?: number }): Promise<JobRun[]>;
 }

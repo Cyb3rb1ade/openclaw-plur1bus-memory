@@ -146,7 +146,7 @@ describe("job ledger", () => {
     assert.match(warned[0], /ledger unwritable/);
   });
 
-  it("records a corrupt marker as crash with trigger:null and names the corruption (fix round 1)", async () => {
+  it("records a corrupt marker as crash with trigger \"unknown\" and names the corruption (fix round 1; contract 1.4.1)", async () => {
     const root = makeTempDir("plur1bus-ledger-corrupt-marker-");
     mkdirSync(join(root, "agent-a", "running"), { recursive: true });
     writeFileSync(join(root, "agent-a", "running", "bad-run.started"), "{not json");
@@ -157,7 +157,7 @@ describe("job ledger", () => {
     const ledger = createJobLedger({ root, agentId: "agent-a", logger: createStubHost().logger });
     const crashRow = ledger.readAll().find((r) => r.runId === "bad-run");
     assert.ok(crashRow, "a corrupt marker must still produce a crash row");
-    assert.deepEqual([crashRow.outcome, crashRow.reason, crashRow.trigger], ["failed", "crash", null]);
+    assert.deepEqual([crashRow.outcome, crashRow.reason, crashRow.trigger], ["failed", "crash", "unknown"]);
     assert.ok(warned.some((m) => /corrupt/i.test(m)), "the warning must name the marker as corrupt");
   });
 

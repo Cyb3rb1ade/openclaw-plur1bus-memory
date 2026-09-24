@@ -5,7 +5,7 @@
  * Task 13b. Every object it builds is a member of one EngineInternals; the
  * OpenClaw adapter registers views over it (engine/internals.js), a harness
  * or any other host uses the Engine surface returned at the end
- * (types/engine.d.ts, contract 1.4.0).
+ * (types/engine.d.ts, contract 1.4.1).
  *
  * OpenClaw-only construction inputs arrive as `host.capabilities`
  * (registrationMode, coordinatesLocalModelGeneration, resolvePath,
@@ -115,7 +115,7 @@ import { flushMetrics } from "../lib/metrics.js";
  * Build the engine: every store, provider, route, scheduler and command body
  * the old register() built, in the same order, with no host registration.
  *
- * @param {object} host HostServices (types/engine.d.ts, contract 1.4.0).
+ * @param {object} host HostServices (types/engine.d.ts, contract 1.4.1).
  * @param {object} config The plugin config (EngineConfig).
  * @param {{internals?: object}} [testOptions] Test-only: overrides applied to EngineInternals after construction.
  * @returns {object} Engine (types/engine.d.ts), plus the adapter-only internals seam (engine/internals.js).
@@ -3350,9 +3350,9 @@ export function createEngine(host, config, testOptions = {}) {
   // What recall/capture answer once close() was called (final review m4).
   const ENGINE_CLOSED = Object.freeze({ reason: "engine-closed", detail: "engine closed" });
 
-  // The Engine (types/engine.d.ts, contract 1.4.0).
+  // The Engine (types/engine.d.ts, contract 1.4.1).
   const engine = {
-    contract: "1.4.0",
+    contract: "1.4.1",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3361,7 +3361,7 @@ export function createEngine(host, config, testOptions = {}) {
     },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
     async status() {
-      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.4.0" };
+      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.4.1" };
     },
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {

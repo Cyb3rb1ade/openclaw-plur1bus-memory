@@ -69,7 +69,8 @@ assertTrue<Exact<(typeof run)["attempt"], number>>();
 assertTrue<Exact<(typeof run)["cost"]["ms"], number>>();
 assertTrue<Exact<(typeof run)["counts"], Record<string, number>>>();
 // A run triggered by capture (light-dream) is distinguishable from cron/manual/harness.
-assertTrue<Exact<JobTrigger, "cron" | "manual" | "harness" | "capture">>();
+// 1.4.1: "unknown" marks a crash row recovered from a corrupt start marker.
+assertTrue<Exact<JobTrigger, "cron" | "manual" | "harness" | "capture" | "unknown">>();
 // 1.4.0: the spec's option shapes for run() and history().
 assertTrue<Exact<NonNullable<Parameters<JobRegistry["run"]>[2]>["trigger"], JobTrigger | undefined>>();
 assertTrue<Exact<Parameters<JobRegistry["history"]>[1], { job?: JobName; since?: number; limit?: number } | undefined>>();
@@ -101,7 +102,7 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.4.0">>();
+assertTrue<Exact<ContractVersion, "1.4.1">>();
 // The channel registry and the three new engine events.
 assertTrue<Exact<ReturnType<Engine["channels"]["list"]>, string[]>>();
 assertTrue<Exact<Extract<EngineEventName, `recall.${string}`>, "recall.degraded" | "recall.block-clipped" | "recall.block-dropped" | "recall.completed">>();

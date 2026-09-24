@@ -132,10 +132,10 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
           phase: marker.phase ?? null,
           agentId,
           // A corrupt (unreadable) marker carries no trustworthy trigger —
-          // record it as unknown (`null`) rather than guessing "cron" and
-          // masking the corruption; a marker that parsed fine but simply
-          // lacks the field still defaults to "cron" as before.
-          trigger: marker.corrupt ? null : (marker.trigger ?? "cron"),
+          // record it as "unknown" (JobTrigger, contract 1.4.1) rather than
+          // guessing "cron" and masking the corruption; a marker that parsed
+          // fine but simply lacks the field still defaults to "cron".
+          trigger: marker.corrupt ? "unknown" : (marker.trigger ?? "cron"),
           startedAt,
           finishedAt,
           durationMs: Math.max(0, finishedAt - startedAt),

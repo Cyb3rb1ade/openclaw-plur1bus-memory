@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.4.0** · frozen at 1.0.0 on 2026-09-22, amended four times
+**Contract version 1.4.1** · frozen at 1.0.0 on 2026-09-22, amended five times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -36,7 +36,7 @@ against one shape.
 > adapters move together in a single PR, so the contract, its gate and its two
 > consumers are never in disagreement at any commit.
 
-Four amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
+Five amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
 own changelog:
 
 - **1.1.0** — `SecurePathResult.reason` gains `"acl-tool-unavailable"` (Task 5).
@@ -51,6 +51,11 @@ own changelog:
   `Engine.channels`; `HostServices.capabilities?`; `EngineEventName` gains
   `recall.block-clipped`/`-dropped`/`recall.completed`; `createEngine`'s
   test-only `testOptions`.
+- **1.4.1** — `JobTrigger` gains `"unknown"`: the trigger of a `failed`/`crash`
+  row recovered from a corrupt (unreadable) start marker, which carries no
+  trustworthy trigger (M1b-1 final review). Consumed by
+  `engine/jobs/job-registry.js` and `engine/create-engine.js` in the same
+  commit.
 
 ## The two halves
 
@@ -84,7 +89,7 @@ test-only.
 - **The six blocks are the output shape, and they are data — the host joins them.** `neo`, `start` and `memories` are droppable; `time`, `temporal` and `reminder` are not. `RecallResult.blocks`/`capChars` are plain data; nothing in `engine/**` concatenates them into a prompt string. `adapter/openclaw/join-recall.js`'s `prependContextFromRecall(result)` is the OpenClaw host's own join-and-cap step (`lib/inject-budget.js`'s `applyGlobalInjectBudget`), producing the `{ prependContext }` shape `before_prompt_build` expects; a harness host does its own equivalent joining.
 - **`UserPrincipal` stays `user:v1:sha256([channel, accountId, userId])`.** The hash is an on-disk pool directory name; changing it orphans every `user`-scoped row.
 - **`trust: "inferred"` degrades to agent-private and never throws.** `engine/identity/principal.js`'s `memoryContextFromPrincipal` gives a `"proved"` principal the same defence-in-depth `lib/memory-request-context.js` already applies to a host hook (user format `/^user:v1:[0-9a-f]{64}$/`, channel must be registered, chat kind normalized, workspace resolved through the canonical resolver with the conflicting-workspace-identity check); when any of that fails, or the principal is `"inferred"`, the memory context falls back to the unclaimed, agent-private base context rather than throwing — the same fail-open-to-degraded behaviour `resolveHostHookMemoryContext`'s `catch` block already had. `AgentContext.origin` from a caller of `Engine.recall`/`capture`/`runCommand` is taken as given; a hook-derived origin resolved inside the adapter (e.g. a background job body) never claims `"cron"` for itself — that origin is reserved for `agentContextFromCommand`, and a background hook turn maps to `"system"`.
-- **Every clip or drop the join performs is a `Deferral`, and every `Deferral` is also an L3 event.** `Deferral.reason` is `"global-cap"` (the outer `capChars` budget, `lib/inject-budget.js`'s planner) or `"memories-cap"` (`recall.memoriesMaxChars`'s inner cap via `onTruncate`) — those are the only two values in the 1.4.0 union. `engine/recall/assemble-prompt-context.js` emits one `recall.block-clipped` or `recall.block-dropped` host event per deferral, `{ agentId, ...deferral }`, alongside the ones it collects into `RecallResult.deferrals`.
+- **Every clip or drop the join performs is a `Deferral`, and every `Deferral` is also an L3 event.** `Deferral.reason` is `"global-cap"` (the outer `capChars` budget, `lib/inject-budget.js`'s planner) or `"memories-cap"` (`recall.memoriesMaxChars`'s inner cap via `onTruncate`) — those are the only two values in the union (unchanged since 1.4.0). `engine/recall/assemble-prompt-context.js` emits one `recall.block-clipped` or `recall.block-dropped` host event per deferral, `{ agentId, ...deferral }`, alongside the ones it collects into `RecallResult.deferrals`.
 - **The cancellation signal reaches every recall dependency, and abort returns what finished.** `RecallQuery.signal`/`opts.signal` threads into the embedder (`embedQuery`/`embed`), the reranker (`raceAbort(reranker.rerank(...), rerankAbort, ...)`, one timer — see below), and LanceDB's own query path (`db.table` reads). An aborted or timed-out recall does **not** come back empty: it returns the blocks that finished before the cutoff (`completed.neo`/`completed.start`, whichever the prelude produced) with `degraded.reason` set to `"aborted"` (caller-initiated) or `"timeout"` (the scheduler's own budget) — spec §3.2's abort contract, a deliberate behaviour change from M1a (Global Constraint 7c): the seven golden scenarios never time out, so their oracle is unaffected.
 - **One rerank timer, not two.** The reranker is bounded by the same signal the pipeline already races everything else against (`raceAbort(reranker.rerank(...), rerankAbort, "reranker timeout")`) — "one timeout owner" means one shared timer, not that nothing bounds a provider that ignores its own signal.
 - **Every job run produces a ledger row, including a skip.** `<baseDbPath>/_jobs/<agentId>/ledger.jsonl` (one `JobRun` per line, append-only) plus `<baseDbPath>/_jobs/<agentId>/running/<runId>.started` marker files that exist exactly while a body runs — a marker with no matching row at the next process start is a crash, logged and recorded as `failed`/`crash`. The root is `<baseDbPath>/_jobs`, not `stateDir` (a deliberate deviation from spec §3.3's literal wording, Task 7: it keeps the ledger inside the same directory tests already isolate per agent via `baseDbPath`, which the harness controls anyway). `incomplete` outcomes retry up to `MAX_ATTEMPTS = 3` total attempts (the original run plus two retries, `engine/jobs/job-registry.js`); the third `incomplete` becomes `outcome: "abandoned"`, `reason: "abandoned_after_retries:<original reason>"`, with a diary line (when the diary is enabled) recording the abandonment. `rem`/`deep` phases share a per-agent, per-UTC-day breaker (`BREAKER_LIMIT = 3` LLM sessions, `sweepKey(ms)` = the UTC calendar day of `startedAt`): a session is any non-pre-skipped `rem`/`deep` run, retries included (a retried run is still a session, since it still spends an LLM call); once the sweep's count reaches the limit, further `rem`/`deep` runs come back `skipped`/`circuit_open` without attempting the body. `already_processed` is only honoured after a prior `completed` row for the same idempotency key — never after `incomplete`/`failed`/`abandoned`. Historical `run-state.json` REM completions are migrated into the ledger once (`engine/jobs/run-state-migration.js`): each `completed[runKey]` entry becomes a ledger row with `cost: { ms: 0 }`, `migrated: true`, `llmSession: false` (migrated rows never count toward the breaker); the old file is never read again once migration has appended its rows for a given key.
@@ -93,7 +98,7 @@ test-only.
 ## What is implemented in M1b-1
 
 `createEngine(host, config, testOptions?)` (`engine/create-engine.js`)
-constructs the full 1.4.0 `Engine` surface described above from a plain
+constructs the full 1.4.1 `Engine` surface described above from a plain
 `HostServices` object with no OpenClaw `api` anywhere in its call graph —
 `createEngine(createStubHost(), config)` is exactly how the engine's own
 tests build one, and `tests/engine-contract.test.js` proves it end to end.
@@ -138,7 +143,7 @@ involved):
   the provider, and `serve()` returns a no-op `Disposable` without opening any
   IPC address.
 - `status()` is static: it reports `{ ready: true, degraded: null, agents:
-  openedAgents.size, contract: "1.4.0" }` unconditionally — it does not probe
+  openedAgents.size, contract: "1.4.1" }` unconditionally — it does not probe
   the store, the embedder or any other dependency for actual health.
 
 Everything else — `recall`, `capture`, `checkpoint`, `jobs.run`/`history`,
@@ -246,13 +251,13 @@ short allowlist of host-coupled `lib/` files — `lib/setup/*-plugin-runtime.js`
 `lib/providers/scoped-embedding-ipc.js`, `lib/host-services.js` itself — may
 reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 `types/`, so `types/engine.conformance.ts` fails the build the moment it and
-`types/engine.d.ts` disagree — checked at contract 1.4.0).
+`types/engine.d.ts` disagree — checked at contract 1.4.1).
 
 ## Module layout after M1b-1
 
 | Path | Holds |
 |---|---|
-| `engine/create-engine.js` | `createEngine(host, config, testOptions?)` — builds every context object, the nine views, and the 1.4.0 `Engine` surface |
+| `engine/create-engine.js` | `createEngine(host, config, testOptions?)` — builds every context object, the nine views, and the 1.4.1 `Engine` surface |
 | `engine/internals.js` | `ENGINE_INTERNALS`/`internalsOf(engine)` — the adapter-only seam onto `EngineInternals` |
 | `engine/events.js` | `emitEngineEvent(host, name, payload)` |
 | `engine/lifecycle/close-resources.js` | the shutdown owner `Engine.close({ budgetMs })` calls |

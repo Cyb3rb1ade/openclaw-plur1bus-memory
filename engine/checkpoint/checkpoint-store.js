@@ -4,7 +4,7 @@
  * Hosts tell the engine that a transcript boundary happened (compaction,
  * session end, shutdown, a manual mark). Two callers share the one store
  * createEngine builds: Engine.checkpoint(agentId, reason)
- * (engine/create-engine.js, contract 1.4.0), which validates the agent id and
+ * (engine/create-engine.js, contract 1.4.1), which validates the agent id and
  * rejects an unknown reason, and the OpenClaw adapter's before_compaction
  * hook (adapter/openclaw/register-capture-hook.js). The store is in-memory:
  * it keeps the last checkpoint per agent and reason for the engine's

@@ -1,7 +1,7 @@
 /**
  * engine/recall/recall-result.js
  *
- * Value helpers for the recall contract (types/engine.d.ts, target 1.4.0):
+ * Value helpers for the recall contract (types/engine.d.ts, target 1.4.1):
  * the engine returns ContextBlocks as data and the host joins and caps them.
  * `UNCAPPED` marks the exits that today inject an uncapped join; the host's
  * joiner treats a non-finite cap as "join only".
