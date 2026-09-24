@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.3.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended three times under the policy below — see the changelog at the end
+ * Contract version 1.4.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended four times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -16,9 +16,9 @@
  *   - `RecallResult.degraded` is a structured object or null
  *     (not a boolean)
  *
- * Nothing in this file is implemented in M1a. It is the shape both the
- * OpenClaw adapter and the harness are written against, and it is checked
- * by `npm run typecheck`.
+ * `createEngine` (engine/create-engine.js) implements it from M1b-1 on. It is
+ * the shape both the OpenClaw adapter and the harness are written against,
+ * and it is checked by `npm run typecheck`.
  *
  * Amendment policy: "frozen" means 1.0.0 is never edited in place. Any change
  * to an exported member's shape that an existing adapter could observe — a new
@@ -33,9 +33,10 @@
  * Changelog: 1.1.0 — SecurePathResult.reason gains "acl-tool-unavailable" (Task 5).
  *            1.2.0 — HostServices.workspaceDir becomes async (Task 6).
  *            1.3.0 — HostServices.configPath(), HostServices.routing?, HostServices.pathOverrides? (G1 closure, M1b-1 Task 11).
+ *            1.4.0 — Engine surface of createEngine (M1b-1): ContextBlock.chars; RecallResult.timing (replaces timings) and .deferrals; RecallQuery.budget optional; JobRun/JobRegistry/JobSpec per spec 3.3 (outcome gains "abandoned"); CheckpointReason gains "session-end"; Engine.close({ budgetMs }); Engine.channels; HostServices.capabilities?; EngineEventName gains recall.block-clipped/-dropped, recall.completed; createEngine testOptions.
  */
 
-export type ContractVersion = "1.3.0";
+export type ContractVersion = "1.4.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -157,6 +158,9 @@ export interface HostServices {
   routing?(): Promise<unknown>;
   /** Raw path overrides lib/ defaults honour (lib/host-paths.js); absent: ~/.openclaw. */
   pathOverrides?: HostPathOverrides;
+  /** Host-specific construction inputs (registration mode, path resolver,
+   *  optional host features). Every one has an inert default. */
+  capabilities?: HostCapabilities;
   /** Replaces memory-host-runtime.js:104-111. A harness agent without a real
    *  workspace gets a synthetic one under `stateDir` (engine-extraction R7). */
   workspaceDir(agentId: AgentId): Promise<string | undefined>;
@@ -177,6 +181,12 @@ export interface HostPathOverrides {
   openclawHome?(): string | undefined;
   configPathOverride?(): string | undefined;
   stateDirOverride?(): string | undefined;
+}
+
+export interface HostCapabilities {
+  resolvePath?(path: string): string;
+  registrationMode?: string;
+  [capability: string]: unknown;
 }
 
 export interface HostRuntime {
@@ -204,6 +214,8 @@ export interface ContextBlock {
   name: ContextBlockName;
   text: string;
   droppable: boolean;
+  /** `text.length`. */
+  chars: number;
   tokensEstimate?: number;
 }
 
@@ -217,7 +229,7 @@ export interface RecallQuery {
   query: string;
   principal: Principal;
   agent: AgentContext;
-  budget: RecallBudget;
+  budget?: Partial<RecallBudget>;
   /** MANDATORY from PR-05. Fixes host-contract §f.1. */
   signal: AbortSignal;
   compactedAt?: number | null;
@@ -235,13 +247,30 @@ export interface DecisionTrace {
   [key: string]: unknown;
 }
 
+/** A block the host's joiner clipped or dropped to fit `capChars`. */
+export interface Deferral {
+  block: ContextBlockName;
+  kind: "clipped" | "dropped";
+  from: number;
+  to: number;
+  reason: "global-cap" | "memories-cap";
+}
+
+export interface RecallTiming {
+  phases: Record<string, unknown> | null;
+  totalMs: number;
+  namespacePhases?: Array<{ namespace: string; phase: string; ms: number }>;
+}
+
 export interface RecallResult {
   blocks: ContextBlock[];
+  /** Non-finite (Infinity) on the exits that inject an uncapped join. */
   capChars: number;
   /** null means not degraded. Structured, never a bare boolean (B8). */
   degraded: Degraded | null;
   trace?: DecisionTrace;
-  timings: Record<string, number>;
+  timing: RecallTiming;
+  deferrals: Deferral[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -275,7 +304,7 @@ export interface CaptureHandle {
   abort(reason?: string): void;
 }
 
-export type CheckpointReason = "compaction" | "shutdown" | "manual";
+export type CheckpointReason = "compaction" | "session-end" | "shutdown" | "manual";
 
 export interface CheckpointResult {
   agentId: AgentId;
@@ -305,22 +334,43 @@ export interface JobSpec {
   phase?: "light" | "rem" | "deep";
 }
 
+export type JobOutcome = "completed" | "skipped" | "incomplete" | "failed" | "abandoned";
+
+export type JobTrigger = "cron" | "manual" | "harness" | "capture";
+
+export interface JobCost {
+  ms: number;
+  provider?: string;
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface JobRun {
+  runId: string;
   job: JobName;
+  phase: "light" | "rem" | "deep" | null;
   agentId: AgentId;
-  partition?: string;
+  trigger: JobTrigger;
   startedAt: number;
+  finishedAt: number;
   durationMs: number;
-  outcome: "completed" | "skipped" | "failed" | "incomplete";
+  outcome: JobOutcome;
   reason?: string;
+  attempt: number;
+  cost: JobCost;
   counts: Record<string, number>;
-  logRef?: string;
+  idempotencyKey?: string;
+  keys?: string[];
+  pendingKeys?: string[];
+  diary?: { written: boolean; reason?: string };
+  migrated?: boolean;
 }
 
 export interface JobRegistry {
   list(): JobSpec[];
-  run(job: JobName, agentId: AgentId, opts?: { signal?: AbortSignal; dryRun?: boolean }): Promise<JobRun>;
-  history(agentId: AgentId, job?: JobName, limit?: number): Promise<JobRun[]>;
+  run(job: JobName, agentId: AgentId, opts?: { signal?: AbortSignal; trigger?: JobTrigger; dryRun?: boolean }): Promise<JobRun>;
+  history(agentId: AgentId, opts?: { job?: JobName; since?: number; limit?: number }): Promise<JobRun[]>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -385,7 +435,8 @@ export interface AdminOps {
 }
 
 export type EngineEventName =
-  | "dream.completed" | "job.run" | "acl.denied" | "recall.degraded" | "embedding.identity.changed";
+  | "dream.completed" | "job.run" | "acl.denied" | "recall.degraded" | "embedding.identity.changed"
+  | "recall.block-clipped" | "recall.block-dropped" | "recall.completed";
 
 export interface EngineEvents {
   on(event: EngineEventName, handler: (payload: unknown) => void): Disposable;
@@ -411,7 +462,9 @@ export interface Engine {
   readonly contract: ContractVersion;
 
   open(agentId: AgentId): Promise<AgentStore>;
-  close(): Promise<void>;
+  /** Idempotent: every call returns the same promise. Resolves within
+   *  `budgetMs` (default 30 000) even if resources are still closing. */
+  close(opts?: { budgetMs?: number }): Promise<void>;
   status(): Promise<EngineStatus>;
 
   /** Stable, cached prefix (index.js:7073-7088). */
@@ -430,6 +483,10 @@ export interface Engine {
   embedding: EmbeddingService;
   admin: AdminOps;
   events: EngineEvents;
+  /** The open channel vocabulary (ChannelRef): a host declares its channels. */
+  channels: { register(name: ChannelRef): string; has(name: ChannelRef): boolean; list(): ChannelRef[] };
 }
 
-export declare function createEngine(host: HostServices, config: EngineConfig): Engine;
+/** `testOptions` is test-only: `internals` overrides members of the engine's
+ *  internal object after construction (e.g. a stub embedder). */
+export declare function createEngine(host: HostServices, config: EngineConfig, testOptions?: { internals?: Record<string, unknown> }): Engine;

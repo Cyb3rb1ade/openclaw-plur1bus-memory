@@ -17,11 +17,13 @@ import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
 import { resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "../../engine/recall/namespace-recall.js";
 
 /**
- * @param {object} ctx Registration context: the engine context plus `api`.
+ * @param {object} ctx Registration context: the engine's tool view plus
+ *   `api`, and `toolFactory` — the engine's tool factory, shared with
+ *   Engine.tools.
  * @returns {void}
  */
 export function registerMemoryTools(ctx) {
-  ctx.api.registerTool(createMemoryTools(ctx), {
+  ctx.api.registerTool(ctx.toolFactory ?? createMemoryTools(ctx), {
     names: ["memory_recall", "memory_search", "memory_store", "memory_forget", "knowledge_update"],
   });
 }

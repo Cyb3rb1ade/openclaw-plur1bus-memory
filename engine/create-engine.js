@@ -1,17 +1,18 @@
 /**
  * engine/create-engine.js — the one construction path (spec 3.1, owner decision A).
  *
- * Was the construction half of index.js register(), moved verbatim
- * (.superpowers/sdd/2026-09-23-m1b-1-engine-api/task-13b-gen.mjs). Every object
- * it builds is a member of one EngineInternals; the OpenClaw adapter registers
- * views over it (engine/internals.js), the harness uses the Engine surface.
+ * Was the construction half of index.js register(), moved verbatim in M1b-1
+ * Task 13b. Every object it builds is a member of one EngineInternals; the
+ * OpenClaw adapter registers views over it (engine/internals.js), a harness
+ * or any other host uses the Engine surface returned at the end
+ * (types/engine.d.ts, contract 1.4.0).
  *
  * OpenClaw-only construction inputs arrive as `host.capabilities`
  * (registrationMode, coordinatesLocalModelGeneration, resolvePath,
  * cronDirectDispatchReady, skillWorkshop, detectReactions,
  * createEmbeddingSelectionMutator, configMutationNotice, resolveNeoHooksConfig,
- * commandRuntimeHooks, handleObsidianBridgeCommand, shareCard); every one has
- * an inert default, so a stub host constructs an engine too.
+ * commandRuntimeHooks, handleObsidianBridgeCommand); every one has an inert
+ * default, so a stub host constructs an engine too.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -39,7 +40,7 @@ import { handleObsidianBridgeCommand } from "../lib/obsidian-control-room.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 import { isOwnedVaultConfirmed } from "../lib/obsidian-vault-authority.js";
 import { getSharedDeferredDynamicsQueue } from "../lib/deferred-dynamics-queue.js";
-import { archiveCard, shareCard } from "../lib/telegram-commands/memory-edit.js";
+import { archiveCard } from "../lib/telegram-commands/memory-edit.js";
 import { validateMemoryText } from "../lib/input-limits.js";
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { combineEpistemicStatusForMerge, normalizeEpistemicStatus } from "../lib/epistemic-status.js";
@@ -86,19 +87,25 @@ import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 import { createPlur1busCommandRunner } from "./commands/plur1bus-command.js";
+import { createTurnCapture } from "./capture/capture-turn.js";
+import { createPromptContextAssembler } from "./recall/assemble-prompt-context.js";
+import { recallResult } from "./recall/recall-result.js";
+import { buildSystemSupplement } from "./recall/system-supplement.js";
+import { createMemoryTools } from "./tools/memory-tools.js";
+import { createChannelRegistry, memoryContextFromPrincipal } from "./identity/principal.js";
 import { createCheckpointStore } from "./checkpoint/checkpoint-store.js";
 import { createJobRegistry } from "./jobs/job-registry.js";
-import { dbg, getPluginLogger, setPluginLogger } from "./runtime/debug-log.js";
-import { DEFAULT_BASE_DB_PATH, DEFAULT_MODEL } from "./runtime/constants.js";
+import { dbg, getPluginLogger, runSpeakerProposalPipeline, setPluginLogger } from "./runtime/debug-log.js";
+import { DEFAULT_BASE_DB_PATH, DEFAULT_MODEL, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES } from "./runtime/constants.js";
 import { runSemanticDiscoveryBatches, selectSemanticDiscoveryWorkspaces } from "./runtime/semantic-discovery.js";
-import { callLlm, callMergeCheck } from "./runtime/llm-calls.js";
-import { commandOption, generateSummary, normalizedLlmErrorClass, resolveConfiguredApiKey, resolveEnvVars, resolveOptionalEnvVars } from "./runtime/env-config.js";
-import { normalizeBoundedRecallInteger } from "./recall/namespace-recall.js";
+import { callLlm, callMergeCheck, withDeterministicLlmContext } from "./runtime/llm-calls.js";
+import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmErrorClass, resolveConfiguredApiKey, resolveEnvVars, resolveOptionalEnvVars, summarizeForCapture } from "./runtime/env-config.js";
+import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "./recall/namespace-recall.js";
 import { applyEpistemicStatusToLanceDb, waitForTimeoutSettlement } from "./store/memory-db.js";
 import { AgentDbPool } from "./store/agent-db-pool.js";
 import { CONTROL_HEALTH_CACHE_TTL_MS, CONTROL_HEALTH_FAILED_RETRY_MS, CONTROL_HEALTH_MAX_PARTITIONS, CONTROL_HEALTH_REFRESH_INTERVAL_MS, createControlHealthRowInspector, listControlHealthPartitions } from "./store/control-health.js";
-import { appendCurationLog, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
-import { aggregateSkillMinerRuns, appendConflictLog, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore } from "./commands/command-helpers.js";
+import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
+import { aggregateSkillMinerRuns, appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, formatKnownValidityLabel, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore, textSuggestsGroupOrigin } from "./commands/command-helpers.js";
 import { createRuntimeRerankerProvider } from "./providers/runtime-reranker.js";
 import { ENGINE_INTERNALS } from "./internals.js";
 import { createResourceCloser } from "./lifecycle/close-resources.js";
@@ -108,19 +115,44 @@ import { flushMetrics } from "../lib/metrics.js";
  * Build the engine: every store, provider, route, scheduler and command body
  * the old register() built, in the same order, with no host registration.
  *
- * @param {object} host HostServices (contract 1.3.0; `capabilities` lands in the 1.4.0 text).
+ * @param {object} host HostServices (types/engine.d.ts, contract 1.4.0).
  * @param {object} config The plugin config (EngineConfig).
  * @param {{internals?: object}} [testOptions] Test-only: overrides applied to EngineInternals after construction.
- * @returns {object} Engine: `contract`, `close({ budgetMs })` and the adapter-only internals seam.
+ * @returns {object} Engine (types/engine.d.ts), plus the adapter-only internals seam (engine/internals.js).
  */
 export function createEngine(host, config, testOptions = {}) {
+  // Engine.events listeners. Every engine event already goes through
+  // host.events.emit (engine/events.js); wrapping it once, before anything
+  // reads `host`, feeds both the engine's own listeners and the host's.
+  // Object.create keeps the host's lazy getters (runtime, llm) live.
+  const listeners = new Map();
+  const emit = (name, payload) => {
+    for (const listener of listeners.get(name) ?? []) {
+      try {
+        listener(payload);
+      } catch (error) {
+        host.logger.debug(`engine listener ${name} failed: ${String(error?.message || error)}`);
+      }
+    }
+  };
+  const hostEvents = host.events;
+  host = Object.create(host, {
+    events: {
+      value: Object.freeze({
+        emit: (name, payload) => {
+          emit(name, payload);
+          hostEvents?.emit?.(name, payload);
+        },
+      }),
+      enumerable: true,
+    },
+  });
   const capabilities = host.capabilities ?? {};
   const resolvePath = typeof capabilities.resolvePath === "function" ? capabilities.resolvePath : (value) => value;
   const __pluginDir = PLUGIN_ROOT;
   const {
     commandRuntimeHooks = null,
     handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand,
-    shareCard: registeredShareCard = shareCard,
   } = capabilities;
   const emitCommandRuntimeHook = (name, value) => {
     const hook = commandRuntimeHooks?.[name];
@@ -1548,7 +1580,9 @@ export function createEngine(host, config, testOptions = {}) {
       : root;
   };
   const withTargetGenerationDb = async ({ generation, agentId, dimensions: targetDimensions }, operation) => {
-    const targetPool = new AgentDbPool(
+    // EngineAgentDbPool, not AgentDbPool: re-embedding reads rank with the
+    // same recall.halfLifeDaysMap as every other pool the engine opens.
+    const targetPool = new EngineAgentDbPool(
       targetGenerationDataRoot(generation),
       targetDimensions,
       host.logger,
@@ -2991,9 +3025,420 @@ export function createEngine(host, config, testOptions = {}) {
     runPlur1busCommand: runPlur1busCommandWithIdentity,
     ...(testOptions.internals ?? {}),
   };
+
+  // Registration views (spec 3.1: views over EngineInternals are built once,
+  // not per call). Each is the context the OpenClaw adapter used to assemble
+  // inline for registerRecallHook / registerCaptureHook / registerMemoryTools;
+  // the adapter now spreads these with its host handle, and the Engine
+  // surface below builds its recall assembler, capture handler and tool
+  // factory from the same objects. Members are read from `internals`, not
+  // the local bindings, so testOptions.internals overrides reach both paths.
+  const viewOf = (names, extra) => {
+    const view = {};
+    for (const name of names) {
+      if (!Object.hasOwn(internals, name)) throw new Error(`EngineInternals has no ${name}`);
+      view[name] = internals[name];
+    }
+    return Object.freeze({ ...view, ...extra });
+  };
+  internals.recallContext ??= viewOf([
+    "NEO_EMBED_TIMEOUT",
+    "NEO_RECALL_PRELUDE_LOG_MS",
+    "adaptiveBudgetCfg",
+    "autoRecallMinScore",
+    "automaticWorkspacePolicyDecision",
+    "candidateTopK",
+    "canonicalEnabled",
+    "canonicalMaxItems",
+    "canonicalMinScore",
+    "cfg",
+    "checkpointStore",
+    "dedupEnabled",
+    "dedupJaccard",
+    "detectReactionsCapabilityCached",
+    "embeddings",
+    "emotionalPool",
+    "gcEnabled",
+    "getMemoryTurnRoutes",
+    "getNeoStore",
+    "host",
+    "hostRoutingLoader",
+    "markNeoRecallInjection",
+    "maxPromptMemories",
+    "memoryAccountTopology",
+    "memoryTextContradictionLlmCfg",
+    "memoryWorkspaceAliases",
+    "mergingEnabled",
+    "namespaceLayout",
+    "neoEnabled",
+    "neoGlobalRecall",
+    "neoRequester",
+    "neoWorkerRuntime",
+    "overlayLlmCfg",
+    "personaDirectiveMaxChars",
+    "personaVoiceLlmCfg",
+    "pool",
+    "queryRefinerEnabled",
+    "recallQueryLlmCfg",
+    "replyOutcomeDynamics",
+    "replyOutcomeEnabled",
+    "replyOutcomeMaxAssistantChars",
+    "replyOutcomeMaxMemoryIds",
+    "rerankCandidates",
+    "reranker",
+    "rerankerCfg",
+    "resolveCommandLocaleRecall",
+    "runMinimalBeforePromptMaintenance",
+    "runNeoGlobalSearch",
+    "runtimeScheduler",
+    "schicht15Enabled",
+    "semanticCompressionCfg",
+    "semanticLensCfg",
+    "sharedMemoryPool",
+    "skillLedgerDirForAgent",
+    "skillMinerEnabled",
+    "softBudgetFallback",
+    "softBudgetMs",
+    "summaryMaxWords",
+    "temporalContextEnabled",
+    "traceCfg",
+    "traceEnabled",
+    "traceInPrompt",
+    "workspacePolicyGuard",
+  ], {
+    MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
+    buildMaintenanceNudges,
+    callLlm,
+    dbg,
+    makeQuerySummarizer,
+    normalizeBoundedRecallInteger,
+    normalizedLlmErrorClass,
+    resolveRuntimeRecallBudget,
+    runMergedNamespaceRecall,
+    recallTimingSink: null,
+  });
+  internals.captureContext ??= viewOf([
+    "NEO_HOOK_DRAIN_MARGIN_MS",
+    "NEO_HOOK_DRAIN_MIN_MS",
+    "baseDbPath",
+    "captureSummaryLlmCfg",
+    "cfg",
+    "checkpointStore",
+    "classifyEmotionForStore",
+    "classifyHostIncognitoSession",
+    "conversationInsightsLlmCfg",
+    "dreamEchoLlmCfg",
+    "dreamNarrativeCfg",
+    "dreamNarrativeLlmCfg",
+    "duplicateThreshold",
+    "embeddings",
+    "emotionIntensityHalfLifeFactor",
+    "emotionalPool",
+    "episodeExtractionLlmCfg",
+    "epistemicCutoffBoot",
+    "flashbulbEncodingEnabled",
+    "getNeoStore",
+    "halfLifeOverrides",
+    "host",
+    "jobs",
+    "memoryWorkspaceAliases",
+    "mergingEnabled",
+    "metaCognitionEnabled",
+    "metaCognitionIntervalMs",
+    "metaCognitionLlmReport",
+    "metaCognitionSessionThreshold",
+    "metaReflectionState",
+    "neoAgentEndBudgetMs",
+    "neoCfg",
+    "neoEmbeddingAutoDrainEnabled",
+    "neoEmbeddingDrainImpact",
+    "neoEmbeddingDrainMaxItems",
+    "neoEnabled",
+    "neoRoot",
+    "neoWorkerRuntime",
+    "neoWorkspaceAliases",
+    "personaVoiceLlmCfg",
+    "pool",
+    "rememberNeoWorkspace",
+    "reminderAutoExtract",
+    "resolveTemperamentName",
+    "runtimeScheduler",
+    "skillMinerEnabled",
+    "snapshotNeoMessages",
+    "snapshotNeoString",
+    "summaryMaxWords",
+    "vectorDim",
+    "workspacePolicyGuard",
+  ], {
+    EPISODED_TURN_ID_MEMORY,
+    MAX_POSTPROCESSING_RETRIES,
+    callLlm,
+    generateSummary,
+    runSpeakerProposalPipeline,
+    summarizeForCapture,
+    textSuggestsGroupOrigin,
+    waitForTimeoutSettlement,
+  });
+  internals.toolContext ??= viewOf([
+    "TTL_MAP",
+    "adaptiveBudgetCfg",
+    "baseDbPath",
+    "candidateTopK",
+    "candidateVisibleForStore",
+    "canonicalEnabled",
+    "canonicalMaxItems",
+    "canonicalMinScore",
+    "cfg",
+    "classifyEmotionForStore",
+    "dedupEnabled",
+    "dedupJaccard",
+    "duplicateThreshold",
+    "durableMergeEpistemicMetadata",
+    "durableMergeLineage",
+    "durableMergeWriteKey",
+    "embeddings",
+    "emotionIntensityHalfLifeFactor",
+    "emotionalPool",
+    "epistemicCutoffBoot",
+    "findSafeDuplicateForValidity",
+    "flashbulbEncodingEnabled",
+    "forgetThreshold",
+    "getNeoStore",
+    "halfLifeOverrides",
+    "host",
+    "maxPromptMemories",
+    "memoryWorkspaceAliases",
+    "mergingAutoApply",
+    "mergingEnabled",
+    "mergingLlmCfg",
+    "mergingThreshold",
+    "namespaceLayout",
+    "pool",
+    "queryRefinerEnabled",
+    "recallMinScore",
+    "recallQueryLlmCfg",
+    "rerankCandidates",
+    "reranker",
+    "rerankerCfg",
+    "resolveStoreScopeAccess",
+    "runtimeScheduler",
+    "schicht15Enabled",
+    "schicht15LlmCfg",
+    "schicht15MaxPromotions",
+    "schicht15MinImportance",
+    "sharedMemoryPool",
+    "softBudgetFallback",
+    "softBudgetMs",
+    "summaryMaxWords",
+    "tombstoneMemoryWithAudit",
+    "traceCfg",
+    "traceEnabled",
+    "withDurableMerge",
+    "workspacePolicyGuard",
+  ], {
+    KNOWLEDGE_LOCK_FILE,
+    appendConflictLog,
+    appendCurationLog,
+    callLlm,
+    callMergeCheck,
+    dbg,
+    formatKnownValidityLabel,
+    generateSummary,
+    makeQuerySummarizer,
+    normalizeBoundedRecallInteger,
+    normalizedLlmErrorClass,
+    readKnowledgePendingSnapshot,
+    removeKnowledgePending,
+    resolveRuntimeRecallBudget,
+    runMergedNamespaceRecall,
+    trackKnowledgePending,
+    withDeterministicLlmContext,
+  });
+  // The capture handler is built at most once: createTurnCapture binds the
+  // light-dream job owner when it runs, and a second call would throw. It is
+  // built lazily — by the adapter's registerCaptureHook (only when autoCapture
+  // is on, as before) or by the first Engine.capture() — so an engine that
+  // never captures leaves light-dream unowned exactly as before. The recall
+  // assembler and the tool factory have no construction-time side effect;
+  // they are lazy only so an adapter-only engine never builds them.
+  let captureTurnHandler = null;
+  let engineRecallTurn = null;
+  let memoryToolFactory = null;
+  internals.getCaptureTurn ??= () => (captureTurnHandler ??= createTurnCapture(internals.captureContext));
+  internals.getToolFactory ??= () => (memoryToolFactory ??= createMemoryTools(internals.toolContext));
+  // Engine.recall always passes its memoryCtx, so its assembler needs no turn
+  // resolver; the adapter builds its own with the host's (register-recall-hook.js).
+  const getRecallTurn = () => (engineRecallTurn ??= createPromptContextAssembler(internals.recallContext));
+
+  const clock = () => (typeof host.clock === "function" ? host.clock() : Date.now());
+  const detailOf = (error) => String(error?.message || error).slice(0, 200);
+  const notInM1b1 = (name) => async () => {
+    throw new Error(`${name} is not available in M1b-1`);
+  };
+  const openedAgents = new Set();
+  const channels = createChannelRegistry();
+  let toolSpecs = null;
+
+  // EmbeddingService over the engine's provider and reranker.
+  const embeddingService = Object.freeze({
+    async embed(texts, o = {}) {
+      const provider = internals.embeddings;
+      const method = o.kind === "query" ? "embedQuery" : "embedPassage";
+      const vectors = await Promise.all(texts.map((text) => provider[method](text, { signal: o.signal })));
+      return vectors.map((vector) => Float32Array.from(vector));
+    },
+    rerank: (query, docs, o = {}) => (internals.reranker
+      ? internals.reranker.rerank(query, docs, o.topN, { signal: o.signal })
+      : Promise.resolve([])),
+    probe: async () => ({ ok: true, cached: false }),
+    identities: () => [Object.freeze({
+      fingerprintId: internals.activeEmbeddingFingerprintId,
+      provider: internals.normalizedEmbeddingCfg.provider,
+      model: internals.normalizedEmbeddingCfg.model || internals.model,
+      dimensions: internals.vectorDim,
+    })],
+    serve: async () => ({ dispose() {} }),
+  });
+
+  // AdminOps: the existing coordinators behind the contract's method names;
+  // an operation with no engine-side implementation yet rejects.
+  const adminOps = Object.freeze({
+    share: notInM1b1("admin.share"),
+    forget: notInM1b1("admin.forget"),
+    reembedding: Object.freeze({
+      plan: (...args) => internals.reembeddingCoordinator.plan(...args),
+      apply: (...args) => internals.reembeddingCoordinator.apply(...args),
+      resume: (...args) => internals.reembeddingCoordinator.resume(...args),
+      status: (...args) => internals.reembeddingCoordinator.status(...args),
+      rollback: (...args) => (internals.reembeddingSwitchRuntime
+        ? internals.reembeddingSwitchRuntime.planManualRollback(...args)
+        : notInM1b1("admin.reembedding.rollback without host config mutation")()),
+      switch: (...args) => (internals.reembeddingSwitchRuntime
+        ? internals.reembeddingSwitchRuntime.switchGeneration(...args)
+        : notInM1b1("admin.reembedding.switch without host config mutation")()),
+    }),
+    workspacePolicy: Object.freeze({
+      get: async (...args) => internals.workspacePolicyStore.get(...args),
+      list: async (...args) => internals.workspacePolicyStore.list(...args),
+      set: async (...args) => internals.workspacePolicyStore.set(...args),
+    }),
+    obsidian: Object.freeze({
+      detect: notInM1b1("admin.obsidian.detect"),
+      prepare: notInM1b1("admin.obsidian.prepare"),
+      confirm: notInM1b1("admin.obsidian.confirm"),
+    }),
+    migrate: notInM1b1("admin.migrate"),
+  });
+  internals.embeddingService = embeddingService;
+  internals.adminOps = adminOps;
+
+  // The Engine (types/engine.d.ts, contract 1.4.0).
   const engine = {
     contract: "1.4.0",
+    async open(agentId) {
+      const id = safeAgentId(agentId);
+      await internals.pool.withDb(id, (db) => db.init());
+      openedAgents.add(id);
+      return { agentId: id, close: async () => { openedAgents.delete(id); } };
+    },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
+    async status() {
+      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.4.0" };
+    },
+    systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
+    async recall(q) {
+      if (!(q?.signal instanceof AbortSignal)) {
+        return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: "signal is required" } });
+      }
+      try {
+        const agentId = safeAgentId(q.principal?.agentId);
+        const workspaceDir = await host.workspaceDir(agentId);
+        const memoryCtx = memoryContextFromPrincipal(q.principal, { workspaceDir, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
+        const query = String(q.query ?? "");
+        const event = { prompt: query, messages: [{ role: "user", content: query }], ...(q.compactedAt ? { compactedAt: q.compactedAt } : {}) };
+        const result = (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent })) ?? recallResult();
+        host.events.emit("recall.completed", { agentId, timing: result.timing, degraded: result.degraded });
+        return result;
+      } catch (error) {
+        return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: detailOf(error) } });
+      }
+    },
+    capture(t) {
+      const controller = new AbortController();
+      const signal = t?.signal instanceof AbortSignal ? AbortSignal.any([t.signal, controller.signal]) : controller.signal;
+      const acceptedAt = clock();
+      const done = (async () => {
+        if (t?.incognito !== false) return { stored: 0, skipped: 1, reason: "incognito" };
+        const agentId = safeAgentId(t.agentId);
+        // The turn's agent and its principal's agent must agree: the queue is
+        // keyed by one and the stores are scoped by the other.
+        if (t.principal?.agentId !== agentId) return { stored: 0, skipped: 1, reason: "principal-agent-mismatch" };
+        const workspaceDir = await host.workspaceDir(agentId);
+        const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
+        const outcome = await internals.getCaptureTurn()(
+          { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
+          { agentId, workspaceDir, sessionKey: t.sessionKey },
+          { memoryCtx, agentContext: t.agent, signal },
+        );
+        if (outcome?.ok) return { stored: 1, skipped: 0 };
+        return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
+      })().catch((error) => ({ stored: 0, skipped: 1, reason: detailOf(error) }));
+      return { id: randomUUID(), acceptedAt, done, abort: (reason) => controller.abort(reason) };
+    },
+    async checkpoint(agentId, reason) {
+      return internals.checkpointStore.checkpoint(safeAgentId(agentId), reason);
+    },
+    get tools() {
+      // The five specs do not depend on who asks: they are read once from a
+      // describe-only tool context (the engine's own state directory as the
+      // workspace), and nothing built here is ever executed.
+      toolSpecs ??= Object.freeze(internals.getToolFactory()({ agentId: "default", workspaceDir: host.stateDir })
+        .map(({ name, description, parameters }) => Object.freeze({ name, description, parameters })));
+      return toolSpecs;
+    },
+    commands: Object.freeze([Object.freeze({ name: "plur1bus", description: "PLUR1BUS memory commands", acceptsArgs: true })]),
+    async runCommand(name, args, principalIn, agentIn) {
+      if (name !== "plur1bus") {
+        return { text: `command not available on this host: ${String(name).slice(0, 64)}`, details: { reason: "unknown-command" } };
+      }
+      // The six user-facing command bodies and their auth/locale helpers are
+      // still built by the OpenClaw adapter (register-commands.js) and handed
+      // over through commandBodies; on a host without that surface the
+      // dispatcher's first call would be a TypeError.
+      if (typeof internals.commandBodies.checkArgsLength !== "function") {
+        return {
+          text: "PLUR1BUS commands are not available on this host.",
+          details: { reason: "commands-unavailable", capability: "commands" },
+        };
+      }
+      try {
+        const agentId = safeAgentId(principalIn?.agentId);
+        const workspaceDir = await host.workspaceDir(agentId);
+        const memoryCtx = memoryContextFromPrincipal(principalIn, { workspaceDir, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
+        return await internals.runPlur1busCommand(
+          { agentId, args: String(args ?? ""), channel: principalIn.channel, accountId: principalIn.accountId, chatId: principalIn.chat?.id, workspaceDir, config: host.config() },
+          [],
+          { agentContext: agentIn, memoryCtx },
+        );
+      } catch (error) {
+        return { text: "PLUR1BUS command failed.", details: { reason: "command-failed", detail: detailOf(error) } };
+      }
+    },
+    jobs: Object.freeze({
+      list: () => internals.jobs.list(),
+      run: (name, agentId, opts = {}) => internals.jobs.run(name, agentId, { trigger: "harness", ...opts }),
+      history: (agentId, opts = {}) => internals.jobs.history(agentId, opts),
+    }),
+    embedding: embeddingService,
+    admin: adminOps,
+    events: Object.freeze({
+      on(name, handler) {
+        if (!listeners.has(name)) listeners.set(name, new Set());
+        listeners.get(name).add(handler);
+        return { dispose: () => { listeners.get(name)?.delete(handler); } };
+      },
+    }),
+    channels,
   };
   Object.defineProperty(engine, ENGINE_INTERNALS, { value: internals, enumerable: false });
   return engine;

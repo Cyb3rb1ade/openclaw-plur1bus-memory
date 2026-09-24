@@ -8,10 +8,12 @@
  */
 
 import type {
-  AgentContext, CaptureHandle, ContextBlock, Degraded, Engine, EngineConfig,
-  HostServices, JobRun, Principal, RecallQuery, RecallResult, TurnOrigin,
-  TurnRecord,
+  AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
+  Deferral, Degraded, Engine, EngineConfig, EngineEventName, HostServices,
+  JobName, JobRegistry, JobRun, JobTrigger, Principal, RecallQuery, RecallResult,
+  RecallTiming, TurnOrigin, TurnRecord,
 } from "./engine.js";
+import type { createEngine } from "./engine.js";
 
 /** Compile-time equality assertion.
  *
@@ -39,12 +41,12 @@ assertTrue<Exact<RecallResult["degraded"], Degraded | null>>();
 
 // The six named blocks and their droppability are the engine's output shape.
 const blocks: ContextBlock[] = [
-  { name: "neo", text: "", droppable: true },
-  { name: "start", text: "", droppable: true },
-  { name: "memories", text: "", droppable: true },
-  { name: "time", text: "", droppable: false },
-  { name: "temporal", text: "", droppable: false },
-  { name: "reminder", text: "", droppable: false },
+  { name: "neo", text: "", droppable: true, chars: 0 },
+  { name: "start", text: "", droppable: true, chars: 0 },
+  { name: "memories", text: "", droppable: true, chars: 0 },
+  { name: "time", text: "", droppable: false, chars: 0 },
+  { name: "temporal", text: "", droppable: false, chars: 0 },
+  { name: "reminder", text: "", droppable: false, chars: 0 },
 ];
 void blocks;
 
@@ -55,8 +57,50 @@ declare const turn: TurnRecord;
 assertTrue<Exact<(typeof turn)["signal"], AbortSignal>>();
 
 // A job run always carries an outcome, including the skip and incomplete paths.
+// 1.4.0: five outcomes, abandoned included.
 declare const run: JobRun;
-assertTrue<Exact<(typeof run)["outcome"], "completed" | "skipped" | "failed" | "incomplete">>();
+assertTrue<Exact<(typeof run)["outcome"], "completed" | "skipped" | "incomplete" | "failed" | "abandoned">>();
+// 1.4.0: JobRun is the union of the 1.2.0 and spec 3.3 field sets.
+assertTrue<Exact<(typeof run)["runId"], string>>();
+assertTrue<Exact<(typeof run)["phase"], "light" | "rem" | "deep" | null>>();
+assertTrue<Exact<(typeof run)["trigger"], JobTrigger>>();
+assertTrue<Exact<(typeof run)["finishedAt"], number>>();
+assertTrue<Exact<(typeof run)["attempt"], number>>();
+assertTrue<Exact<(typeof run)["cost"]["ms"], number>>();
+assertTrue<Exact<(typeof run)["counts"], Record<string, number>>>();
+// A run triggered by capture (light-dream) is distinguishable from cron/manual/harness.
+assertTrue<Exact<JobTrigger, "cron" | "manual" | "harness" | "capture">>();
+// 1.4.0: the spec's option shapes for run() and history().
+assertTrue<Exact<NonNullable<Parameters<JobRegistry["run"]>[2]>["trigger"], JobTrigger | undefined>>();
+assertTrue<Exact<Parameters<JobRegistry["history"]>[1], { job?: JobName; since?: number; limit?: number } | undefined>>();
+
+// 1.4.0: deferral kinds and the timing object replace the untyped timings map.
+declare const result: RecallResult;
+assertTrue<Exact<(typeof result)["deferrals"], Deferral[]>>();
+assertTrue<Exact<(typeof result)["deferrals"][number]["kind"], "clipped" | "dropped">>();
+assertTrue<Exact<(typeof result)["deferrals"][number]["reason"], "global-cap" | "memories-cap">>();
+assertTrue<Exact<(typeof result)["timing"], RecallTiming>>();
+assertTrue<Exact<(typeof result)["timing"]["totalMs"], number>>();
+assertTrue<Exact<(typeof result)["timing"]["phases"], Record<string, unknown> | null>>();
+// timings (1.2.0) is gone.
+assertTrue<Exact<"timings" extends keyof RecallResult ? true : false, false>>();
+// Every block reports its length.
+assertTrue<Exact<ContextBlock["chars"], number>>();
+// The recall budget is optional and partial.
+assertTrue<Exact<RecallQuery["budget"], Partial<{ softMs: number; hardMs: number; capChars: number }> | undefined>>();
+
+// 1.4.0: CheckpointReason is the widened union.
+assertTrue<Exact<CheckpointReason, "compaction" | "session-end" | "shutdown" | "manual">>();
+
+// 1.4.0: close takes an optional budget; createEngine takes an optional test-only third argument.
+assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>();
+assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
+assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
+assertTrue<Exact<Engine["contract"], ContractVersion>>();
+assertTrue<Exact<ContractVersion, "1.4.0">>();
+// The channel registry and the three new engine events.
+assertTrue<Exact<ReturnType<Engine["channels"]["list"]>, string[]>>();
+assertTrue<Exact<Extract<EngineEventName, `recall.${string}`>, "recall.degraded" | "recall.block-clipped" | "recall.block-dropped" | "recall.completed">>();
 
 // A minimal host satisfies HostServices: everything optional stays optional.
 const minimalHost: HostServices = {
@@ -78,3 +122,8 @@ void minimalHost;
 // 1.3.0: routing and path overrides are optional host capabilities.
 const hostWithRouting: HostServices = { ...minimalHost, routing: async () => ({}), pathOverrides: { openclawHome: () => undefined } };
 void hostWithRouting;
+
+// 1.4.0: capabilities is optional and open; its two named members are typed.
+const hostWithCapabilities: HostServices = { ...minimalHost, capabilities: { resolvePath: (p: string) => p, registrationMode: "full", skillWorkshop: null } };
+void hostWithCapabilities;
+assertTrue<Exact<NonNullable<HostServices["capabilities"]>["registrationMode"], string | undefined>>();

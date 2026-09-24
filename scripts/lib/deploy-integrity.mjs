@@ -59,6 +59,7 @@ export const DEPLOY_FILES = [
   "engine/recall/minimal-maintenance.js",
   "engine/recall/namespace-recall.js",
   "engine/recall/recall-result.js",
+  "engine/recall/system-supplement.js",
   "engine/runtime/constants.js",
   "engine/runtime/debug-log.js",
   "engine/runtime/env-config.js",

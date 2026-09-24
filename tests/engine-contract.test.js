@@ -1,0 +1,175 @@
+/**
+ * tests/engine-contract.test.js — the Engine surface against a stub host
+ * (spec success criteria 1, 3; step 9 gates).
+ */
+
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+
+import { createEngine } from "../engine/create-engine.js";
+import { createStubHost } from "../lib/host-services.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
+
+const config = (baseDbPath) => ({
+  baseDbPath,
+  embedding: { provider: "local-transformers", local: { dimensions: 384 } },
+  autoCapture: false, autoRecall: true,
+  neo: { enabled: false }, gc: { enabled: false }, obsidianBridge: { enabled: false },
+  merging: { enabled: false }, dreaming: { enabled: false }, skillMiner: { enabled: false },
+  temporalContext: { enabled: false }, conversationReactivationRecall: { enabled: false },
+  runtime: { recallTimeoutMs: 10_000 },
+});
+
+function hangingEmbedder(probe) {
+  const hang = (_text, options = {}) => new Promise((_, reject) => {
+    probe.calls += 1;
+    options.signal?.addEventListener("abort", () => { probe.abortedAt = Date.now(); reject(options.signal.reason); }, { once: true });
+  });
+  return { embed: hang, embedQuery: hang, embedPassage: hang, embedBatch: async () => [], shutdown: async () => {} };
+}
+
+// A fixed 384-dimension vector: the stub-host engine never loads a real model.
+function flatEmbedder() {
+  const vector = () => Array.from({ length: 384 }, (_, i) => (i === 0 ? 1 : 0));
+  const one = async () => vector();
+  return { embed: one, embedQuery: one, embedPassage: one, embedBatch: async (texts) => texts.map(vector), shutdown: async () => {} };
+}
+
+const principal = { agentId: "agent-a", workspace: "workspace:v1:main", channel: "telegram", accountId: "default", chat: { id: "c1", kind: "direct" }, trust: "inferred" };
+const provedPrincipal = { ...principal, trust: "proved" };
+const agent = { origin: "user", background: false };
+
+describe("Engine", () => {
+  it("reports contract 1.4.0, 18 jobs, the tools and a status", async () => {
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
+    assert.equal(engine.contract, "1.4.0");
+    assert.equal(engine.jobs.list().length, 18);
+    assert.deepEqual(engine.tools.map((t) => t.name).sort(), ["knowledge_update", "memory_forget", "memory_recall", "memory_search", "memory_store"]);
+    assert.equal((await engine.status()).contract, "1.4.0");
+    assert.ok(engine.systemSupplement().length >= 1);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("recall() aborted at 100 ms cancels the embedder and resolves within 50 ms (criterion 3)", async () => {
+    const probe = { calls: 0, abortedAt: null };
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => makeTempDir("ec-ws-") });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: hangingEmbedder(probe) } });
+    const signal = AbortSignal.timeout(100);
+    const result = await engine.recall({ query: "what happened while I was away", principal, agent, signal });
+    const resolvedAt = Date.now();
+    assert.deepEqual(result.degraded, { reason: "aborted", capability: "recall" });
+    assert.ok(probe.calls >= 1);
+    assert.ok(probe.abortedAt !== null);
+    assert.ok(resolvedAt - probe.abortedAt <= 50, `resolved ${resolvedAt - probe.abortedAt} ms after the abort`);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("recall() never throws: a missing signal and a bad principal come back degraded", async () => {
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
+    assert.equal((await engine.recall({ query: "x", principal, agent })).degraded.reason, "invalid-query");
+    assert.equal((await engine.recall({ query: "x", principal: { ...principal, agentId: "../etc" }, agent, signal: AbortSignal.timeout(1_000) })).degraded.reason, "invalid-query");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("recall() with a proved Principal returns a RecallResult and emits recall.completed", async () => {
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-") });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder() } });
+    const seen = [];
+    const subscription = engine.events.on("recall.completed", (payload) => seen.push(payload));
+    const result = await engine.recall({ query: "what did we decide about the roadmap", principal: provedPrincipal, agent, signal: AbortSignal.timeout(8_000) });
+    assert.ok(Array.isArray(result.blocks));
+    assert.equal(result.degraded, null);
+    assert.equal(typeof result.capChars, "number");
+    assert.equal(typeof result.timing.totalMs, "number");
+    assert.ok(Array.isArray(result.deferrals));
+    for (const block of result.blocks) assert.equal(block.chars, block.text.length);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].agentId, "agent-a");
+    subscription.dispose();
+    await engine.recall({ query: "a second question for the store", principal: provedPrincipal, agent, signal: AbortSignal.timeout(8_000) });
+    assert.equal(seen.length, 1, "a disposed listener hears nothing");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("jobs.run returns a JobRun and checkpoint returns a CheckpointResult", async () => {
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-"), clock: () => 5 }), config(makeTempDir("ec-db-")));
+    const run = await engine.jobs.run("gc-run", "agent-a", { trigger: "harness" });
+    assert.equal(run.job, "gc-run");
+    assert.equal(run.trigger, "harness");
+    assert.ok(["skipped", "completed", "failed"].includes(run.outcome));
+    const history = await engine.jobs.history("agent-a", { job: "gc-run" });
+    assert.equal(history[0].runId, run.runId);
+    const cp = await engine.checkpoint("agent-a", "session-end");
+    assert.deepEqual([cp.agentId, cp.reason, cp.written], ["agent-a", "session-end", true]);
+    await assert.rejects(() => engine.checkpoint("agent-a", "reboot"), /unknown checkpoint reason/);
+    await assert.rejects(() => engine.checkpoint("../etc", "manual"), /Invalid agent ID/);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("capture() returns a handle immediately", async () => {
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
+    const started = Date.now();
+    const handle = engine.capture({ agentId: "agent-a", principal, agent, messages: [{ role: "user", content: "hi" }], incognito: false, signal: AbortSignal.timeout(5_000) });
+    assert.ok(Date.now() - started < 5);
+    assert.equal(typeof handle.id, "string");
+    assert.ok(handle.done instanceof Promise);
+    handle.abort("test over");
+    const outcome = await handle.done;
+    assert.equal(outcome.stored, 0);
+    const incognito = await engine.capture({ agentId: "agent-a", principal, agent, messages: [], incognito: true, signal: AbortSignal.timeout(5_000) }).done;
+    assert.deepEqual(incognito, { stored: 0, skipped: 1, reason: "incognito" });
+    const unclassified = await engine.capture({ agentId: "agent-a", principal, agent, messages: [], signal: AbortSignal.timeout(5_000) }).done;
+    assert.equal(unclassified.reason, "incognito", "an unclassified turn fails closed");
+    const mismatch = await engine.capture({ agentId: "agent-b", principal, agent, messages: [], incognito: false, signal: AbortSignal.timeout(5_000) }).done;
+    assert.equal(mismatch.reason, "principal-agent-mismatch");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("runCommand on a host without a command surface degrades instead of throwing", async () => {
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
+    assert.deepEqual(engine.commands.map((c) => c.name), ["plur1bus"]);
+    const result = await engine.runCommand("plur1bus", "status", provedPrincipal, agent);
+    assert.equal(result.details.reason, "commands-unavailable");
+    assert.equal(typeof result.text, "string");
+    const unknown = await engine.runCommand("nope", "", provedPrincipal, agent);
+    assert.equal(unknown.details.reason, "unknown-command");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("open(), channels and the embedding and admin surfaces are present", async () => {
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder() } });
+    const store = await engine.open("agent-a");
+    assert.equal(store.agentId, "agent-a");
+    assert.equal((await engine.status()).agents, 1);
+    await store.close();
+    assert.equal((await engine.status()).agents, 0);
+    assert.equal(engine.channels.has("telegram"), true);
+    assert.ok(engine.channels.list().includes("telegram"));
+    const [vector] = await engine.embedding.embed(["hello"], { kind: "query", identity: null, signal: AbortSignal.timeout(1_000) });
+    assert.equal(vector.length, 384);
+    await assert.rejects(() => engine.admin.share("x", "workspace", provedPrincipal, { nonce: "n" }), /not available in M1b-1/);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("close() under a tiny budget still resolves, and stays idempotent", async () => {
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
+    const started = Date.now();
+    await engine.close({ budgetMs: 1 });
+    assert.ok(Date.now() - started < 1_000);
+    assert.equal(engine.close({ budgetMs: 1 }), engine.close());
+  });
+
+  it("no engine module imports openclaw", () => {
+    const { engine } = readRuntimeSources();
+    for (const [name, source] of Object.entries(engine)) {
+      assert.ok(!/\bfrom\s+["']openclaw|import\(\s*["']openclaw/.test(source), `engine module ${name} imports openclaw`);
+    }
+  });
+
+  it("re-embedding target reads use the engine's pool class (halfLifeOverrides reach them)", () => {
+    const { engine } = readRuntimeSources();
+    assert.ok(!/new AgentDbPool\(/.test(engine.createEngine), "createEngine constructs a bare AgentDbPool");
+    assert.ok(/const targetPool = new EngineAgentDbPool\(/.test(engine.createEngine), "withTargetGenerationDb uses EngineAgentDbPool");
+  });
+});

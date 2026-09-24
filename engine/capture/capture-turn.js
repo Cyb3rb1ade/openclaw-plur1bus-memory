@@ -217,7 +217,7 @@ export function createTurnCapture(ctx) {
     if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
     // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
-    return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+    return runtimeScheduler.enqueueCapture(agentId, { background, ...(opts.signal ? { signal: opts.signal } : {}) }, async (signal) => {
       const captureStartedAt = Date.now();
       const throwIfCaptureAborted = () => {
         if (!signal?.aborted) return;

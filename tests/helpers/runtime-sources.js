@@ -45,6 +45,7 @@ const ENGINE_PATHS = Object.freeze({
   minimalMaintenance: "engine/recall/minimal-maintenance.js",
   plur1busCommand: "engine/commands/plur1bus-command.js",
   recallResult: "engine/recall/recall-result.js",
+  systemSupplement: "engine/recall/system-supplement.js",
   remOutcome: "engine/jobs/rem-outcome.js",
   runStateMigration: "engine/jobs/run-state-migration.js",
   agentDbPool: "engine/store/agent-db-pool.js",

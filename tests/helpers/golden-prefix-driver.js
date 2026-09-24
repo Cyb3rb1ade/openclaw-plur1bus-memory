@@ -15,7 +15,6 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import plugin, { MemoryDB } from "../../index.js";
-import { LocalTransformersEmbeddingProvider } from "../../lib/providers/embedding-local-transformers.js";
 import { writePlur1busStartNotice } from "../../lib/setup/feature-profiles.js";
 
 /** 2026-01-15T12:00:00Z — every scenario is evaluated at this instant. */
@@ -59,28 +58,22 @@ export function topicVector(topic) {
 }
 
 /**
- * Seals the local-transformers provider so nothing can reach the real model.
+ * A deterministic embedding provider, handed to the engine through its
+ * internals seam (createEngine's testOptions.internals, via plugin.register's
+ * `engineInternals`) in place of the local-transformers provider, so nothing
+ * can reach the real model. Task 13c replaced the earlier prototype patch with
+ * it; the golden corpus stayed byte-identical and a tripwire on the real
+ * provider's _computeBatch/_embedBatchForPurpose saw zero calls.
  *
- * `_embedBatchForPurpose` is the single funnel every public entry point goes
- * through — `embedQuery` and `embedPassage` delegate to `embedRaw`, `embed`
- * delegates to `embedPassage`, and `embedBatch` calls it directly
- * (lib/providers/embedding-local-transformers.js:657-693) — so patching it
- * covers all five. `_computeBatch`, the one method that would load the model,
- * is replaced with a thrower: if a future call site bypasses the funnel the
- * scenario fails loudly instead of silently downloading weights.
- *
+ * `hang: true` makes every call settle only (by rejecting) when
+ * `options.signal` aborts, exercising the abort path (PR-05); `probe`, when
+ * given, records call counts and the abort instant.
  * @param {(text: string) => string} topicOf
  * @param {{hang?: boolean, probe?: {calls: number, abortedAt: number|null}|null}} [opts]
- *   `hang: true` makes the stub never resolve on its own — it only settles
- *   (by rejecting) when `options.signal` aborts, exercising the abort path
- *   (PR-05). `probe`, when given, records call counts and the abort instant.
- * @returns {() => void} restore function
+ * @returns {object}
  */
-function stubEmbedder(topicOf, { hang = false, probe = null } = {}) {
-  const proto = LocalTransformersEmbeddingProvider.prototype;
-  const originalBatchForPurpose = proto._embedBatchForPurpose;
-  const originalComputeBatch = proto._computeBatch;
-  proto._embedBatchForPurpose = async (texts, _purpose, options = {}) => {
+function stubProvider(topicOf, { hang = false, probe = null } = {}) {
+  const batch = async (texts, options = {}) => {
     if (probe) probe.calls += 1;
     if (hang) {
       return await new Promise((_, reject) => {
@@ -92,14 +85,16 @@ function stubEmbedder(topicOf, { hang = false, probe = null } = {}) {
         }, { once: true });
       });
     }
-    return (Array.isArray(texts) ? texts : [texts]).map((text) => topicVector(topicOf(text)));
+    return texts.map((text) => topicVector(topicOf(text)));
   };
-  proto._computeBatch = async () => {
-    throw new Error("golden-prefix driver: real embedder reached");
-  };
-  return () => {
-    proto._embedBatchForPurpose = originalBatchForPurpose;
-    proto._computeBatch = originalComputeBatch;
+  const one = async (text, options) => (await batch([text], options))[0];
+  return {
+    embed: one,
+    embedQuery: one,
+    embedPassage: one,
+    embedRaw: (text, _purpose, _retries, options) => one(text, options),
+    embedBatch: (texts, _retries, options) => batch(texts, options),
+    shutdown: async () => {},
   };
 }
 
@@ -199,12 +194,12 @@ export function baseConfig(baseDbPath, overrides = {}) {
  *   called once per attempted recall with the pipeline's phase timings.
  *   `onTiming`, when given, is called once, right before this function
  *   returns normally (not on a thrown error), with `setupMs` (temp dirs,
- *   clock/embedder stubs, the fixture `db.store()` loop, `plugin.register()`)
+ *   clock stub, the fixture `db.store()` loop, `plugin.register()`)
  *   measured separately from `recallMs` (just the one `before_prompt_build`
  *   hook invocation) — fix round 2: the wall-clock total the probe reported
  *   before this conflated both, and setup dominates at larger `--scale`.
  *   `hostEvents`: forwarded to plugin.register as the hostEvents dependency.
- *   `embedderProbe`: forwarded to `stubEmbedder`'s `probe` option (PR-05,
+ *   `embedderProbe`: forwarded to `stubProvider`'s `probe` option (PR-05,
  *   `recall-aborted`); records embedder call count and abort timing.
  *   `callerSignal` (fix round 2): when given, this exact `AbortSignal` is
  *   handed to the assembler in place of the adapter's own
@@ -238,12 +233,10 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
   const previousHome = process.env.OPENCLAW_HOME;
   // Every global mutation and every temp dir is installed inside the `try`, with
   // its handle declared out here, so a throw at any point still unwinds all of
-  // them. Installing before the `try` would leak globalThis.Date and the patched
-  // provider prototype into the rest of the process if a mkdtempSync failed.
+  // them. Installing before the `try` would leak globalThis.Date into the rest
+  // of the process if a mkdtempSync failed.
   /** @type {(() => void)|null} */
   let restoreClock = null;
-  /** @type {(() => void)|null} */
-  let restoreEmbedder = null;
   let baseDbPath = "";
   let workspaceDir = "";
   let stateDir = "";
@@ -254,7 +247,7 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
     stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
     process.env.OPENCLAW_HOME = stateDir;
     restoreClock = useFrozenClock ? freezeClock() : () => {};
-    restoreEmbedder = stubEmbedder(topicOf, { hang: scenario.hangEmbedder === true, probe: embedderProbe });
+    const engineEmbeddings = stubProvider(topicOf, { hang: scenario.hangEmbedder === true, probe: embedderProbe });
     mkdirSync(join(workspaceDir, "memory"), { recursive: true });
     if (scenario.startNotice) writePlur1busStartNotice(stateDir, { text: scenario.startNotice });
     if (scenario.knowledge) {
@@ -281,7 +274,7 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
       });
     }
     const api = makeApi(baseConfig(baseDbPath, scenario.config), recallTimingSink);
-    plugin.register(api, { importRouting: async () => routingCapability, ...(hostEvents ? { hostEvents } : {}) });
+    plugin.register(api, { importRouting: async () => routingCapability, ...(hostEvents ? { hostEvents } : {}), engineInternals: { embeddings: engineEmbeddings } });
     const hooks = api.handlers.get("before_prompt_build");
     const hook = hooks?.at(-1);
     if (typeof hook !== "function") throw new Error(`${scenario.name}: before_prompt_build not registered`);
@@ -317,7 +310,6 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
   } finally {
     if (previousHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = previousHome;
-    restoreEmbedder?.();
     restoreClock?.();
     if (baseDbPath) rmSync(baseDbPath, { recursive: true, force: true });
     if (workspaceDir) rmSync(workspaceDir, { recursive: true, force: true });

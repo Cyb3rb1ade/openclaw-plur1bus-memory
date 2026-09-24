@@ -2,8 +2,14 @@
  * engine/checkpoint/checkpoint-store.js — PR-15.
  *
  * Hosts tell the engine that a transcript boundary happened (compaction,
- * session end, shutdown, a manual mark) through Engine.checkpoint(). The
- * reactivation recall keys off the last compaction timestamp; an explicit
+ * session end, shutdown, a manual mark). Two callers share the one store
+ * createEngine builds: Engine.checkpoint(agentId, reason)
+ * (engine/create-engine.js, contract 1.4.0), which validates the agent id and
+ * rejects an unknown reason, and the OpenClaw adapter's before_compaction
+ * hook (adapter/openclaw/register-capture-hook.js). The store is in-memory:
+ * it keeps the last checkpoint per agent and reason for the engine's
+ * lifetime, and `written` is false when the same digest repeats.
+ * The reactivation recall keys off the last compaction timestamp; an explicit
  * `compactedAt` a host still puts on the turn event wins, so a host that only
  * does that sees exactly the old behaviour.
  */

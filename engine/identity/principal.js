@@ -8,7 +8,8 @@
  * proof fails: the agent's own context, no user scope.
  */
 
-import { listRouteProviders, normalizeChatKind, registerRouteProvider, resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
+import { INPUT_LIMITS } from "../../lib/input-limits.js";
+import { listRouteProviders, normalizeChatKind, registerRouteProvider, resolveMemoryRequestContext, validatedIdentity } from "../../lib/memory-request-context.js";
 import { safeDebug } from "../../lib/safe-logging.js";
 
 export const DEFAULT_CHANNELS = Object.freeze(["telegram", "discord", "slack", "mattermost"]);
@@ -18,6 +19,21 @@ export const DEFAULT_CHANNELS = Object.freeze(["telegram", "discord", "slack", "
 // nothing else is a proof of anything, and trusting it verbatim would let a
 // forged Principal name any pool it likes.
 const USER_PRINCIPAL_FORMAT = /^user:v1:[0-9a-f]{64}$/;
+
+// The contract's ChatKind (direct | dm | group | channel) and the lib's
+// request-context vocabulary (private | group, anything else "unknown")
+// name the same two cases differently; an unmapped proved DM would read
+// as "unknown" and fail closed on every DM-only path.
+const LIB_CHAT_KIND = Object.freeze({ direct: "private", dm: "private", group: "group", channel: "group" });
+const CONTRACT_CHAT_KIND = Object.freeze({ private: "direct", group: "group" });
+
+/**
+ * @param {unknown} kind Contract ChatKind.
+ * @returns {"private"|"group"|"unknown"} The lib's chat kind.
+ */
+export function libChatKind(kind) {
+  return normalizeChatKind(LIB_CHAT_KIND[kind] ?? kind);
+}
 
 /**
  * @param {object} principal Principal (types/engine.d.ts).
@@ -58,6 +74,25 @@ export function memoryContextFromPrincipal(principal, { workspaceDir, sessionKey
   // "conflicting workspace identity" exactly as it would for a directly
   // supplied commandCtx) — a proved principal cannot simply overwrite
   // workspaceIdentity with an unverified claim.
+  // accountId and chat.id get the lib's own identity validation (length,
+  // control characters); a claim that fails it degrades like the others.
+  let accountId;
+  let chatId;
+  try {
+    accountId = validatedIdentity(principal.accountId, INPUT_LIMITS.ACCOUNT_ID, "accountId");
+    chatId = validatedIdentity(principal.chat?.id, INPUT_LIMITS.CHAT_ID, "chatId", { allowNumber: true });
+  } catch (error) {
+    safeDebug(logger, "principal.invalid-identity", error);
+    return inferred();
+  }
+  // The lib derives a user principal only from all three of channel,
+  // account and user (resolveMemoryRequestContext); a claimed user without
+  // the other two names a pool the lib itself could never have produced.
+  if (rawUser && !(rawChannel && accountId)) {
+    safeDebug(logger, "principal.incomplete-user", new Error("proved principal names a user without both channel and accountId"));
+    return inferred();
+  }
+
   const workspaceScoped = typeof principal.workspace === "string" && principal.workspace
     ? resolveMemoryRequestContext({ agentId: principal.agentId, workspaceId: principal.workspace, workspaceDir, sessionKey, sessionId }, options)
     : base;
@@ -68,9 +103,9 @@ export function memoryContextFromPrincipal(principal, { workspaceDir, sessionKey
     workspaceIdentity: workspaceScoped.workspaceIdentity,
     userPrincipal: rawUser,
     channel: rawChannel,
-    accountId: String(principal.accountId || ""),
-    chatId: String(principal.chat?.id || ""),
-    chatKind: normalizeChatKind(principal.chat?.kind),
+    accountId,
+    chatId,
+    chatKind: libChatKind(principal.chat?.kind),
     trust: "proved",
   });
 }
@@ -87,7 +122,7 @@ export function principalFromMemoryContext(memoryCtx, trust) {
     ...(memoryCtx.userPrincipal ? { user: memoryCtx.userPrincipal } : {}),
     channel: memoryCtx.channel || "",
     accountId: memoryCtx.accountId || "",
-    chat: Object.freeze({ id: memoryCtx.chatId || "", kind: memoryCtx.chatKind || "direct" }),
+    chat: Object.freeze({ id: memoryCtx.chatId || "", kind: CONTRACT_CHAT_KIND[memoryCtx.chatKind] ?? "direct" }),
     trust: trust === "proved" ? "proved" : "inferred",
   });
 }

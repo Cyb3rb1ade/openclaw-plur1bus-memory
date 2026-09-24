@@ -45,3 +45,34 @@ describe("runRecall caller signal", () => {
     assert.deepEqual(result, { ok: true, value: "value", background: false });
   });
 });
+
+describe("enqueueCapture caller signal (Task 13c)", () => {
+  it("never enqueues when the signal is already aborted", async () => {
+    const scheduler = createBackgroundMemoryScheduler({ config: {}, logger: quietLogger });
+    let called = false;
+    const result = await scheduler.enqueueCapture("a", { signal: AbortSignal.abort() }, async () => { called = true; });
+    assert.deepEqual(result, { ok: false, aborted: true, reason: "aborted", background: false });
+    assert.equal(called, false);
+    assert.equal(scheduler.status().capture.queuedTotal, 0);
+  });
+
+  it("an abort after enqueueing reaches the job's signal", async () => {
+    const scheduler = createBackgroundMemoryScheduler({ config: {}, logger: quietLogger });
+    const controller = new AbortController();
+    let jobSignal = null;
+    const done = scheduler.enqueueCapture("a", { signal: controller.signal }, (signal) => {
+      jobSignal = signal;
+      return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort(new Error("caller gave up"));
+    const result = await done;
+    assert.equal(jobSignal.aborted, true);
+    assert.equal(result.ok, false);
+  });
+
+  it("behaves exactly as before when no signal is given", async () => {
+    const scheduler = createBackgroundMemoryScheduler({ config: {}, logger: quietLogger });
+    assert.deepEqual(await scheduler.enqueueCapture("a", {}, async () => "value"), { ok: true, background: false });
+  });
+});

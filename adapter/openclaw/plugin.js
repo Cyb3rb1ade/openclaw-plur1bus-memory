@@ -14,7 +14,9 @@
  * host.capabilities (built here); every registration below reads the engine's
  * objects through internalsOf(engine), the transitional seam PR-14 removes.
  * The registration statements are the old index.js register() statements,
- * moved verbatim (tools .superpowers/sdd/…/task-13b-gen.mjs).
+ * moved verbatim in M1b-1 Task 13b. The recall, capture and tool contexts
+ * are the engine's registration views (internals.recallContext,
+ * captureContext, toolContext), spread here with `api`.
  */
 
 import { handleObsidianBridgeCommand } from "../../lib/obsidian-control-room.js";
@@ -40,14 +42,11 @@ import { registerPromptSupplements } from "./register-prompt-supplements.js";
 import { registerMemoryTools, registerMemoryCapability } from "./register-tools.js";
 import { registerDeferredFeatureCronBootstrap, registerUnsafeDirectCronGuard } from "./register-cron.js";
 import { registerGatewayShutdownServices, registerNeoServiceLifecycle, registerNeoWorkerWarmUp, registerObsidianBridgeLifecycle } from "./register-gateway.js";
-import { dbg, runSpeakerProposalPipeline } from "../../engine/runtime/debug-log.js";
-import { CORRECTION_PREVIEW_CHARS, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES } from "../../engine/runtime/constants.js";
-import { callLlm, callMergeCheck, withDeterministicLlmContext } from "../../engine/runtime/llm-calls.js";
-import { generateSummary, makeQuerySummarizer, normalizedLlmErrorClass, summarizeForCapture } from "../../engine/runtime/env-config.js";
-import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "../../engine/recall/namespace-recall.js";
-import { applyEpistemicStatusToLanceDb, waitForTimeoutSettlement } from "../../engine/store/memory-db.js";
-import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "../../engine/knowledge/knowledge-pending.js";
-import { appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatKnownValidityLabel, guardUnsafeDirectCronTurn, parseConfirmationCommand, rememberPendingConfirmation, resolveConfirmationIdentity, textSuggestsGroupOrigin } from "../../engine/commands/command-helpers.js";
+import { CORRECTION_PREVIEW_CHARS } from "../../engine/runtime/constants.js";
+import { callLlm } from "../../engine/runtime/llm-calls.js";
+import { makeQuerySummarizer } from "../../engine/runtime/env-config.js";
+import { applyEpistemicStatusToLanceDb } from "../../engine/store/memory-db.js";
+import { buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, guardUnsafeDirectCronTurn, parseConfirmationCommand, rememberPendingConfirmation, resolveConfirmationIdentity } from "../../engine/commands/command-helpers.js";
 import { createEngine } from "../../engine/create-engine.js";
 import { internalsOf } from "../../engine/internals.js";
 import { createHostServices } from "../../lib/host-services.js";
@@ -62,7 +61,10 @@ import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/r
  * @param {object} api OpenClaw plugin API.
  * @param {object} [registrationDependencies] Test-injection dependencies
  *   (importRouting, commandRuntimeHooks, hostEvents, skillWorkshop,
- *   handleObsidianBridgeCommand, shareCard) — the contract register() always had.
+ *   handleObsidianBridgeCommand, shareCard) — the contract register() always had —
+ *   plus `engineInternals`, test-only: forwarded as createEngine's
+ *   `testOptions.internals` (e.g. a stub embedder), so it reaches every
+ *   registration that reads the engine's objects.
  * @returns {void}
  */
 export function registerPlur1bus(api, registrationDependencies = {}) {
@@ -76,6 +78,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     skillWorkshop: registeredSkillWorkshop,
     handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand,
     shareCard: registeredShareCard = shareCard,
+    engineInternals,
   } = registrationDependencies;
   if (importRouting !== undefined && typeof importRouting !== "function") {
     throw new TypeError("importRouting must be a function");
@@ -92,6 +95,9 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   if (typeof registeredShareCard !== "function") {
     throw new TypeError("shareCard must be a function when provided");
   }
+  if (engineInternals !== undefined && (engineInternals === null || typeof engineInternals !== "object" || Array.isArray(engineInternals))) {
+    throw new TypeError("engineInternals must be an object when provided");
+  }
   if (
     registeredSkillWorkshop !== undefined
     && registeredSkillWorkshop !== null
@@ -100,6 +106,12 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     throw new TypeError("skillWorkshop must be an object when provided");
   }
   setHostSdkLoader(loadOpenClawPluginSdkRuntime);
+  // The capabilities below are built — inspectCronNativeCapabilities runs,
+  // the skill-workshop client and the reactions checker are constructed —
+  // before createEngine resolves and validates the plugin config. The old
+  // register() ran them after its first config reads; an invalid config now
+  // still probes once, then throws with zero registrations (a Task 13b
+  // deviation, recorded in Task 13c).
   const host = createHostServices(api, {
     events: hostEvents,
     ...(importRouting ? { routing: importRouting } : {}),
@@ -123,36 +135,19 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       resolveNeoHooksConfig: (commandConfig) => resolveNeoHooksConfig(api, commandConfig),
       commandRuntimeHooks,
       handleObsidianBridgeCommand: registeredObsidianCommandHandler,
-      shareCard: registeredShareCard,
     },
   });
-  const engine = createEngine(host, api.pluginConfig || {});
+  const engine = createEngine(host, api.pluginConfig || {}, engineInternals ? { internals: engineInternals } : {});
   const internals = internalsOf(engine);
   const {
-    NEO_EMBED_TIMEOUT,
-    NEO_HOOK_DRAIN_MARGIN_MS,
-    NEO_HOOK_DRAIN_MIN_MS,
-    NEO_RECALL_PRELUDE_LOG_MS,
     REPLY_OUTCOME_SYNC_LOG_MS,
-    TTL_MAP,
     activeEmbeddingFingerprintId,
-    adaptiveBudgetCfg,
     autoCapture,
     autoRecall,
-    autoRecallMinScore,
     automaticWorkspacePolicyDecision,
     baseDbPath,
     bridgeService,
-    candidateTopK,
-    candidateVisibleForStore,
-    canonicalEnabled,
-    canonicalMaxItems,
-    canonicalMinScore,
-    captureSummaryLlmCfg,
     cfg,
-    checkpointStore,
-    classifyEmotionForStore,
-    classifyHostIncognitoSession,
     closeResources,
     collectSkillWorkshopDashboard,
     commandBodies,
@@ -160,61 +155,25 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     confirmationIndex,
     confirmationStore,
     controlHealth,
-    conversationInsightsLlmCfg,
     coordinatesLocalModelGeneration,
     cronDirectDispatchReady,
     dashboardSkillAction,
-    dedupEnabled,
-    dedupJaccard,
-    detectReactionsCapabilityCached,
     dimensions,
-    dreamEchoLlmCfg,
-    dreamNarrativeCfg,
-    dreamNarrativeLlmCfg,
-    duplicateThreshold,
-    durableMergeEpistemicMetadata,
-    durableMergeLineage,
-    durableMergeWriteKey,
     embeddings,
     emitCommandRuntimeHook,
-    emotionIntensityHalfLifeFactor,
     emotionalPool,
-    episodeExtractionLlmCfg,
-    epistemicCutoffBoot,
-    findSafeDuplicateForValidity,
-    flashbulbEncodingEnabled,
-    forgetThreshold,
     gcEnabled,
     getMemoryTurnRoutes,
     getNeoStore,
-    halfLifeOverrides,
     hostRoutingLoader,
-    jobs,
     llmResultCache,
-    markNeoRecallInjection,
-    maxPromptMemories,
-    memoryAccountTopology,
     memoryDbAdapter,
-    memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
-    mergingAutoApply,
     mergingEnabled,
-    mergingLlmCfg,
-    mergingThreshold,
-    metaCognitionEnabled,
-    metaCognitionIntervalMs,
-    metaCognitionLlmReport,
-    metaCognitionSessionThreshold,
-    metaReflectionState,
     modelPreparationCoordinator,
     namespaceLayout,
-    neoAgentEndBudgetMs,
     neoCfg,
-    neoEmbeddingAutoDrainEnabled,
-    neoEmbeddingDrainImpact,
-    neoEmbeddingDrainMaxItems,
     neoEnabled,
-    neoGlobalRecall,
     neoRequester,
     neoRoot,
     neoWorkerRuntime,
@@ -224,20 +183,13 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     obsidianBridgeEnabled,
     obsidianVaultsConfirmed,
     openClawSkillWorkshop,
-    overlayLlmCfg,
-    personaDirectiveMaxChars,
-    personaVoiceLlmCfg,
     pool,
-    queryRefinerEnabled,
-    recallMinScore,
     recallQueryLlmCfg,
     reembeddingConfigMutationAvailable,
     reembeddingCoordinator,
     reembeddingStateStore,
     reembeddingSwitchRecovery,
     reembeddingSwitchRuntime,
-    rememberNeoWorkspace,
-    reminderAutoExtract,
     replyOutcomeDynamics,
     replyOutcomeEnabled,
     replyOutcomeMaxAgeMs,
@@ -247,42 +199,20 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     replyOutcomeMaxOutcomeLogEntries,
     replyOutcomeMaxReplyChars,
     requiresActiveSharedModelOwner,
-    rerankCandidates,
     reranker,
     rerankerCfg,
     resolveCommandLocale,
     resolveCommandLocaleRecall,
-    resolveStoreScopeAccess,
-    resolveTemperamentName,
-    runMinimalBeforePromptMaintenance,
     runNeoGlobalSearch,
-    runtimeScheduler,
     schicht15Enabled,
-    schicht15LlmCfg,
-    schicht15MaxPromotions,
-    schicht15MinImportance,
     scopedEmbeddingServer,
-    semanticCompressionCfg,
-    semanticLensCfg,
     sessionWorkspaceKeys,
     sharedMemoryPool,
     skillActivationDeps,
-    skillLedgerDirForAgent,
-    skillMinerEnabled,
-    snapshotNeoMessages,
-    snapshotNeoString,
-    softBudgetFallback,
-    softBudgetMs,
-    summaryMaxWords,
     temporalContextEnabled,
-    tombstoneMemoryWithAudit,
-    traceCfg,
-    traceEnabled,
-    traceInPrompt,
     turnRouteState,
     vectorDim,
     wikiLlmCfg,
-    withDurableMerge,
     workspacePolicyGuard,
     workspacePolicyStore,
     runPlur1busCommand: runPlur1busCommandWithIdentity,
@@ -533,68 +463,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   if (autoCapture) {
     host.logger.info(`memory-lancedb-namespaced: enabling autoCapture`);
 
-    registerCaptureHook({
-      api,
-      EPISODED_TURN_ID_MEMORY,
-      MAX_POSTPROCESSING_RETRIES,
-      NEO_HOOK_DRAIN_MARGIN_MS,
-      NEO_HOOK_DRAIN_MIN_MS,
-      baseDbPath,
-      callLlm,
-      captureSummaryLlmCfg,
-      cfg,
-      checkpointStore,
-      classifyEmotionForStore,
-      classifyHostIncognitoSession,
-      conversationInsightsLlmCfg,
-      dreamEchoLlmCfg,
-      dreamNarrativeCfg,
-      dreamNarrativeLlmCfg,
-      duplicateThreshold,
-      embeddings,
-      emotionIntensityHalfLifeFactor,
-      emotionalPool,
-      episodeExtractionLlmCfg,
-      epistemicCutoffBoot,
-      flashbulbEncodingEnabled,
-      generateSummary,
-      getNeoStore,
-      halfLifeOverrides,
-      host,
-      jobs,
-      memoryWorkspaceAliases,
-      mergingEnabled,
-      metaCognitionEnabled,
-      metaCognitionIntervalMs,
-      metaCognitionLlmReport,
-      metaCognitionSessionThreshold,
-      metaReflectionState,
-      neoAgentEndBudgetMs,
-      neoCfg,
-      neoEmbeddingAutoDrainEnabled,
-      neoEmbeddingDrainImpact,
-      neoEmbeddingDrainMaxItems,
-      neoEnabled,
-      neoRoot,
-      neoWorkerRuntime,
-      neoWorkspaceAliases,
-      personaVoiceLlmCfg,
-      pool,
-      rememberNeoWorkspace,
-      reminderAutoExtract,
-      resolveTemperamentName,
-      runSpeakerProposalPipeline,
-      runtimeScheduler,
-      skillMinerEnabled,
-      snapshotNeoMessages,
-      snapshotNeoString,
-      summarizeForCapture,
-      summaryMaxWords,
-      textSuggestsGroupOrigin,
-      vectorDim,
-      waitForTimeoutSettlement,
-      workspacePolicyGuard,
-    });
+    registerCaptureHook({ api, ...internals.captureContext, captureTurn: internals.getCaptureTurn() });
   }
 
   // Reply-based Outcome Tracking: Assistant-Antwort an das Pending-Outcome anhängen.
@@ -623,81 +492,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   // Tools (per-Agent via Factory)
   // ========================================================================
 
-  registerMemoryTools({
-    KNOWLEDGE_LOCK_FILE,
-    TTL_MAP,
-    adaptiveBudgetCfg,
-    api,
-    appendConflictLog,
-    appendCurationLog,
-    baseDbPath,
-    callLlm,
-    callMergeCheck,
-    candidateTopK,
-    candidateVisibleForStore,
-    canonicalEnabled,
-    canonicalMaxItems,
-    canonicalMinScore,
-    cfg,
-    classifyEmotionForStore,
-    dbg,
-    dedupEnabled,
-    dedupJaccard,
-    duplicateThreshold,
-    durableMergeEpistemicMetadata,
-    durableMergeLineage,
-    durableMergeWriteKey,
-    embeddings,
-    emotionIntensityHalfLifeFactor,
-    emotionalPool,
-    epistemicCutoffBoot,
-    findSafeDuplicateForValidity,
-    flashbulbEncodingEnabled,
-    forgetThreshold,
-    formatKnownValidityLabel,
-    generateSummary,
-    getNeoStore,
-    halfLifeOverrides,
-    host,
-    makeQuerySummarizer,
-    maxPromptMemories,
-    memoryWorkspaceAliases,
-    mergingAutoApply,
-    mergingEnabled,
-    mergingLlmCfg,
-    mergingThreshold,
-    namespaceLayout,
-    normalizeBoundedRecallInteger,
-    normalizedLlmErrorClass,
-    pool,
-    queryRefinerEnabled,
-    readKnowledgePendingSnapshot,
-    recallMinScore,
-    recallQueryLlmCfg,
-    removeKnowledgePending,
-    rerankCandidates,
-    reranker,
-    rerankerCfg,
-    resolveRuntimeRecallBudget,
-    resolveStoreScopeAccess,
-    runMergedNamespaceRecall,
-    runtimeScheduler,
-    schicht15Enabled,
-    schicht15LlmCfg,
-    schicht15MaxPromotions,
-    schicht15MinImportance,
-    sharedMemoryPool,
-    softBudgetFallback,
-    softBudgetMs,
-    summaryMaxWords,
-    tombstoneMemoryWithAudit,
-    traceCfg,
-    traceEnabled,
-    trackKnowledgePending,
-    withDeterministicLlmContext,
-    withDurableMerge,
-    workspacePolicyGuard,
-  });
+  registerMemoryTools({ api, ...internals.toolContext, toolFactory: internals.getToolFactory() });
 
   // Reply-based Outcome Tracking: vor dem Recall die vorherige Pending-Antwort abschließen.
   if (replyOutcomeEnabled && typeof api.on === "function") {
@@ -744,84 +539,13 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
 
     registerRecallHook({
       api,
-      MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
-      NEO_EMBED_TIMEOUT,
-      NEO_RECALL_PRELUDE_LOG_MS,
-      adaptiveBudgetCfg,
-      autoRecallMinScore,
-      automaticWorkspacePolicyDecision,
-      buildMaintenanceNudges,
-      callLlm,
-      candidateTopK,
-      canonicalEnabled,
-      canonicalMaxItems,
-      canonicalMinScore,
-      cfg,
-      checkpointStore,
-      dbg,
-      dedupEnabled,
-      dedupJaccard,
-      detectReactionsCapabilityCached,
-      embeddings,
-      emotionalPool,
-      gcEnabled,
-      getMemoryTurnRoutes,
-      getNeoStore,
-      host,
-      hostRoutingLoader,
-      makeQuerySummarizer,
-      markNeoRecallInjection,
-      maxPromptMemories,
-      memoryAccountTopology,
-      memoryTextContradictionLlmCfg,
-      memoryWorkspaceAliases,
-      mergingEnabled,
-      namespaceLayout,
-      neoEnabled,
-      neoGlobalRecall,
-      neoRequester,
-      neoWorkerRuntime,
-      normalizeBoundedRecallInteger,
-      normalizedLlmErrorClass,
-      overlayLlmCfg,
-      personaDirectiveMaxChars,
-      personaVoiceLlmCfg,
-      pool,
-      queryRefinerEnabled,
-      recallQueryLlmCfg,
+      ...internals.recallContext,
       // Test-only hook (Task 19 fix round): the golden-prefix probe sets
       // `api.__recallTimingSinkForTests` on its stub api object so it can
       // read the pipeline's per-phase timings; no real OpenClaw host ever
       // sets this property, so `recallTimingSink` is always `null` here in
       // production and `createPromptContextAssembler` treats it as a no-op.
       recallTimingSink: api.__recallTimingSinkForTests ?? null,
-      replyOutcomeDynamics,
-      replyOutcomeEnabled,
-      replyOutcomeMaxAssistantChars,
-      replyOutcomeMaxMemoryIds,
-      rerankCandidates,
-      reranker,
-      rerankerCfg,
-      resolveCommandLocaleRecall,
-      resolveRuntimeRecallBudget,
-      runMergedNamespaceRecall,
-      runMinimalBeforePromptMaintenance,
-      runNeoGlobalSearch,
-      runtimeScheduler,
-      schicht15Enabled,
-      semanticCompressionCfg,
-      semanticLensCfg,
-      sharedMemoryPool,
-      skillLedgerDirForAgent,
-      skillMinerEnabled,
-      softBudgetFallback,
-      softBudgetMs,
-      summaryMaxWords,
-      temporalContextEnabled,
-      traceCfg,
-      traceEnabled,
-      traceInPrompt,
-      workspacePolicyGuard,
     });
   } else if (neoEnabled || schicht15Enabled || gcEnabled) {
     // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.

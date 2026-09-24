@@ -5,7 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { createChannelRegistry, DEFAULT_CHANNELS, memoryContextFromPrincipal, principalFromMemoryContext } from "../engine/identity/principal.js";
+import { createChannelRegistry, DEFAULT_CHANNELS, libChatKind, memoryContextFromPrincipal, principalFromMemoryContext } from "../engine/identity/principal.js";
 import { agentContextFromCommand, agentContextFromHook } from "../adapter/openclaw/turn-principal.js";
 import { createPlur1busCommandRunner } from "../engine/commands/plur1bus-command.js";
 import {
@@ -136,6 +136,34 @@ describe("memoryContextFromPrincipal", () => {
       () => memoryContextFromPrincipal({ ...proved, workspace: "workspace:v1:someone-elses" }, { workspaceDir: wsConflict }),
       /conflicting workspace identity/,
     );
+  });
+
+  // Task 13c (Task 10 carry-over): the contract's ChatKind maps onto the lib's.
+  it("maps the contract's ChatKind onto the lib's private/group vocabulary", () => {
+    const kindOf = (kind) => memoryContextFromPrincipal({ ...proved, chat: { id: "c1", kind } }, { workspaceDir: wsProved, workspaceAliases: provedWorkspaceAliases }).chatKind;
+    assert.deepEqual(["direct", "dm", "group", "channel", "carrier"].map(kindOf), ["private", "private", "group", "group", "unknown"]);
+    assert.deepEqual(["direct", "dm", "group", "channel"].map(libChatKind), ["private", "private", "group", "group"]);
+    const back = principalFromMemoryContext(memoryContextFromPrincipal(proved, { workspaceDir: wsProved, workspaceAliases: provedWorkspaceAliases }), "proved");
+    assert.equal(back.chat.kind, "direct", "the round trip returns a contract ChatKind");
+  });
+
+  it("validates accountId and chat.id like the other claimed fields", () => {
+    for (const bad of [{ accountId: "a".repeat(200) }, { accountId: { toString: () => "x" } }, { chat: { id: "c".repeat(200), kind: "direct" } }]) {
+      const ctx = memoryContextFromPrincipal({ ...proved, ...bad }, { workspaceDir: wsInferred });
+      assert.equal(ctx.trust, "inferred");
+      assert.equal(ctx.userPrincipal, "");
+    }
+    const numeric = memoryContextFromPrincipal({ ...proved, chat: { id: 12345, kind: "group" } }, { workspaceDir: wsProved, workspaceAliases: provedWorkspaceAliases });
+    assert.equal(numeric.chatId, "12345");
+    assert.equal(numeric.trust, "proved");
+  });
+
+  it("a claimed user without both channel and accountId degrades to inferred", () => {
+    for (const partial of [{ channel: "" }, { accountId: "" }]) {
+      const ctx = memoryContextFromPrincipal({ ...proved, ...partial }, { workspaceDir: wsInferred });
+      assert.equal(ctx.trust, "inferred");
+      assert.equal(ctx.userPrincipal, "");
+    }
   });
 
   it("resolves the claimed workspace through a matching alias without conflict", () => {

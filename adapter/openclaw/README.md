@@ -74,8 +74,19 @@ travel as `host.capabilities`, built in `plugin.js`: `registrationMode`,
 `coordinatesLocalModelGeneration`, `resolvePath`, `cronDirectDispatchReady`,
 `skillWorkshop`, `detectReactions`, `createEmbeddingSelectionMutator`,
 `configMutationNotice`, `resolveNeoHooksConfig`, and the test-injection
-`commandRuntimeHooks`, `handleObsidianBridgeCommand` and `shareCard`.
+`commandRuntimeHooks` and `handleObsidianBridgeCommand` (the `shareCard`
+test injection stays in `plugin.js`, which hands it to `registerChatCommands`).
 `api.config` inside the engine became `host.config()`.
+
+From Task 13c the recall, capture and tool contexts are the engine's own
+registration views (`internals.recallContext`, `captureContext`,
+`toolContext`), which `plugin.js` spreads with `api`. The capture handler and
+the tool factory are built once by the engine (`internals.getCaptureTurn()`,
+`internals.getToolFactory()`) and shared with `Engine.capture` and
+`Engine.tools`; the recall hook keeps its own assembler because it carries the
+adapter's turn-principal resolver. `plugin.register(api, { engineInternals })`
+is the test-only path to `createEngine`'s `testOptions.internals` (the golden
+driver hands it its stub embedder).
 
 What still reads `api` in this directory, and why:
 
