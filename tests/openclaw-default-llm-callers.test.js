@@ -169,7 +169,9 @@ async function observeOfficialTurn(api, { agentId, workspaceDir, runId, prompt, 
 }
 
 test("generic chat callers declare owner-specific OpenClaw routes", () => {
-  const source = repoSource("index.js");
+  // Task 13b: the route descriptors are built in engine/create-engine.js
+  // (register()'s construction half, index.js before).
+  const source = readRuntimeSources().engine.createEngine;
   const routeOwners = [
     ["captureSummaryLlmCfg", "capture-summary"],
     ["recallQueryLlmCfg", "recall-query-summary"],

@@ -9,14 +9,17 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import plugin from "../index.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// Task 13b split register() into adapter/openclaw/plugin.js (registration)
+// and engine/create-engine.js (construction); the old index.js register()
+// scope these guards read is those two files now. index.js is the shell.
+function registerSources() {
+  const { adapter, engine } = readRuntimeSources();
+  return { plugin: adapter.plugin, createEngine: engine.createEngine };
+}
 
 // Five functions took their own `api` parameter — the real OpenClaw plugin
 // capability surface (they also called `api.registerGatewayMethod`,
@@ -50,19 +53,19 @@ function exemptLineNumbers(source, exemptFunctions = HOST_LOGGER_EXEMPT_FUNCTION
 const HOST_RUNTIME_EXEMPT_FUNCTIONS = [...HOST_LOGGER_EXEMPT_FUNCTIONS];
 
 describe("PR-02b host logger", () => {
-  it("index.js no longer reads api.logger outside the pre-register api-surface helpers", () => {
-    const source = readFileSync(join(root, "index.js"), "utf8");
-    const lines = source.split("\n");
-    const exempt = exemptLineNumbers(source);
-    const hits = lines
-      .map((line, i) => [i, line])
-      .filter(([i, line]) => !exempt.has(i) && /(?<![.\w$])api\s*\.\s*logger/.test(line));
-    assert.deepEqual(hits.map(([i, line]) => `${i + 1}: ${line.trim()}`), []);
+  it("register() (plugin.js + create-engine.js) no longer reads api.logger outside the pre-register api-surface helpers", () => {
+    for (const [name, source] of Object.entries(registerSources())) {
+      const lines = source.split("\n");
+      const exempt = exemptLineNumbers(source);
+      const hits = lines
+        .map((line, i) => [i, line])
+        .filter(([i, line]) => !exempt.has(i) && /(?<![.\w$])api\s*\.\s*logger/.test(line));
+      assert.deepEqual(hits.map(([i, line]) => `${name} ${i + 1}: ${line.trim()}`), []);
+    }
   });
 
-  it("index.js constructs HostServices", () => {
-    const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /createHostServices\s*\(\s*api\s*,/);
+  it("the plugin constructs HostServices", () => {
+    assert.match(registerSources().plugin, /createHostServices\s*\(\s*api\s*,/);
   });
 
   it("registers against a host whose logger has only one method", () => {
@@ -80,14 +83,16 @@ describe("PR-02b host logger", () => {
     assert.doesNotThrow(() => plugin.register(api, {}));
   });
 
-  it("index.js reaches the host runtime through HostServices", () => {
-    const source = readFileSync(join(root, "index.js"), "utf8");
-    const lines = source.split("\n");
-    const exempt = exemptLineNumbers(source, HOST_RUNTIME_EXEMPT_FUNCTIONS);
-    const hits = lines
-      .map((line, i) => [i, line])
-      .filter(([i, line]) => !exempt.has(i) && /runtimeIfUsable\s*\(\s*api\s*\)/.test(line));
-    assert.deepEqual(hits.map(([i, line]) => `${i + 1}: ${line.trim()}`), []);
-    assert.match(source, /host\.runtime/);
+  it("register() (plugin.js + create-engine.js) reaches the host runtime through HostServices", () => {
+    const sources = registerSources();
+    for (const [name, source] of Object.entries(sources)) {
+      const lines = source.split("\n");
+      const exempt = exemptLineNumbers(source, HOST_RUNTIME_EXEMPT_FUNCTIONS);
+      const hits = lines
+        .map((line, i) => [i, line])
+        .filter(([i, line]) => !exempt.has(i) && /runtimeIfUsable\s*\(\s*api\s*\)/.test(line));
+      assert.deepEqual(hits.map(([i, line]) => `${name} ${i + 1}: ${line.trim()}`), []);
+    }
+    assert.match(sources.createEngine, /host\.runtime/);
   });
 });

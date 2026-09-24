@@ -292,8 +292,11 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.deepEqual(sideEffects, { processed: 0, idle: 0, dispatched: 0 });
     assert.ok(enabled.some((hook) => hook.name === "before_prompt_build"));
     assert.ok(enabled.some((hook) => hook.name === "agent_end"));
-    const source = readRuntimeSources().index;
-    assert.doesNotMatch(source, /api\.on\(["']message_received["']/);
+    // Task 13b: registrations live in adapter/openclaw/plugin.js and the
+    // register-* modules now, so the ban covers every runtime source.
+    for (const source of readRuntimeSources().all) {
+      assert.doesNotMatch(source, /api\.on\(["']message_received["']/);
+    }
   });
 
   it("threads the canonical context through every current ACL adapter family", () => {
@@ -311,13 +314,14 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.match(sources["telegram-commands/memory-query.js"], /filterMemoriesByAcl\(ctx, results\)/);
     assert.match(sources["recall-pipeline.js"], /checkAccess\(aclCtx, r\.entry\)/);
 
-    const { index: indexSource, engine, adapter } = readRuntimeSources();
+    const { engine, adapter } = readRuntimeSources();
     // PR-03g: the two registered command handlers that resolve the canonical
-    // context now live in the adapter (2 -> 0 in index.js); the store and
-    // recall call sites below stay in index.js and stay pinned to it.
+    // context now live in the adapter (2 -> 0 in index.js); the store call
+    // site below moved with register()'s construction half into
+    // engine/create-engine.js (Task 13b) and stays pinned there.
     const commandsSource = adapter.commands;
     assert.match(commandsSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
-    assert.match(indexSource, /const storeAccessCtx = memoryCtx/);
+    assert.match(engine.createEngine, /const storeAccessCtx = memoryCtx/);
     // PR-03h: the model-facing recall call site moved with the tool factory
     // into engine/tools/memory-tools.js (index.js 1 -> 0); the bridge store
     // call site above stays in index.js and stays pinned to it.

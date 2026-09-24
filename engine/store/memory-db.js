@@ -92,7 +92,7 @@ class MemoryDB {
    * @param {string} dbPath LanceDB agent path.
    * @param {number} vectorDim Vector dimension.
    * @param {object} [logger] Optional logger.
-   * @param {{readOnly?: boolean, pathGuard?: (() => void), directoryCapability?: object|null, secureDirectoryRequired?: boolean, beforeLanceOperation?: ((operation: string, capability: object|null) => void), lancedbProvider?: (() => Promise<object>|object)}} [options] Non-mutating mode, trusted directory routing, and an injectable DB provider for lifecycle tests.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void), directoryCapability?: object|null, secureDirectoryRequired?: boolean, beforeLanceOperation?: ((operation: string, capability: object|null) => void), lancedbProvider?: (() => Promise<object>|object), halfLifeOverrides?: Record<string, number>}} [options] Non-mutating mode, trusted directory routing, an injectable DB provider for lifecycle tests, and the configured recall.halfLifeDaysMap that search() resolves a row's missing halfLifeDays against.
    */
   constructor(dbPath, vectorDim, logger = null, {
     readOnly = false,
@@ -101,6 +101,7 @@ class MemoryDB {
     secureDirectoryRequired = false,
     beforeLanceOperation = null,
     lancedbProvider = null,
+    halfLifeOverrides = {},
   } = {}) {
     if (pathGuard !== null && typeof pathGuard !== "function") {
       throw new TypeError("MemoryDB pathGuard must be a function");
@@ -128,6 +129,7 @@ class MemoryDB {
     this.secureDirectoryRequired = secureDirectoryRequired === true;
     this.beforeLanceOperation = beforeLanceOperation;
     this.lancedbProvider = lancedbProvider;
+    this.halfLifeOverrides = halfLifeOverrides && typeof halfLifeOverrides === "object" ? halfLifeOverrides : {};
     this.db = null;
     this.table = null;
     this.initPromise = null;
@@ -1033,7 +1035,7 @@ class MemoryDB {
         retrievalCount: r.retrievalCount ?? 0,
         lastRetrievedAt: r.lastRetrievedAt ?? 0,
         memoryStrength: r.memoryStrength ?? 1.0,
-        halfLifeDays: r.halfLifeDays ?? resolveHalfLifeDays(r.category, r.memoryClass, halfLifeOverrides),
+        halfLifeDays: r.halfLifeDays ?? resolveHalfLifeDays(r.category, r.memoryClass, this.halfLifeOverrides),
         lastStrengthenedAt: r.lastStrengthenedAt ?? 0,
         lastDynamicsAt: r.lastDynamicsAt ?? 0,
         memoryClass: r.memoryClass || "standard",

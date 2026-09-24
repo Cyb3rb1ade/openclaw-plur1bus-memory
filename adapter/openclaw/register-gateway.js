@@ -34,7 +34,6 @@
  * value as `lifecycleRegistered`.
  */
 
-import { flushMetrics } from "../../lib/metrics.js";
 import { registerScopedEmbeddingIpcServiceAfterLifecycle } from "../../lib/providers/scoped-embedding-ipc.js";
 import {
   registerGatewayShutdown,
@@ -128,47 +127,25 @@ export function registerNeoServiceLifecycle(ctx) {
  * Register lifecycle ownership and the four services that depend on it.
  * Must be the last statement of `register()`.
  *
- * @param {object} ctx Registration context: the engine context plus `api`.
+ * @param {object} ctx Registration context: `api`, the engine's `closeResources`,
+ *   and the five members the after-lifecycle services read.
  * @returns {void}
  */
 export function registerGatewayShutdownServices(ctx) {
   const {
     api,
-    clearInitializedTurnRoutes,
+    closeResources,
     coordinatesLocalModelGeneration,
     embeddings,
-    legacyMigrationShutdown,
-    llmResultCache,
-    localModelGeneration,
-    memoryDbAdapter,
     modelPreparationCoordinator,
-    pool,
-    reembeddingCoordinator,
     reembeddingSwitchRecovery,
-    reranker,
     scopedEmbeddingServer,
-    sharedMemoryPool,
   } = ctx;
 
-  const gatewayShutdownRegistered = registerGatewayShutdown(api, {
-    memoryDbAdapter,
-    pool: {
-      shutdown: async () => {
-        legacyMigrationShutdown.abort();
-        await pool.shutdown();
-      },
-    },
-    sharedMemoryPool,
-    clearTurnRoutes: clearInitializedTurnRoutes,
-    flushMetrics,
-    llmResultCache,
-    scopedEmbeddingServer,
-    embeddings,
-    reranker,
-    modelPreparationCoordinator,
-    reembeddingCoordinator,
-    localModelGeneration,
-  });
+  // The engine owns the closer (engine/lifecycle/close-resources.js,
+  // built in createEngine() over the same resources this call used to list);
+  // Engine.close() and the host's cleanup share its one promise.
+  const gatewayShutdownRegistered = registerGatewayShutdown(api, { closeResources });
   registerLocalModelOwnershipServiceAfterLifecycle(api, {
     enabled: coordinatesLocalModelGeneration
       && typeof embeddings?.activateSharedModelOwner === "function",

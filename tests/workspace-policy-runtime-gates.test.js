@@ -13,17 +13,24 @@ import { readRuntimeSources } from "./helpers/runtime-sources.js";
 // not just the ones still textually present in index.js. The adapter
 // contributes no match to any of them, so it is not in the reduction; the
 // registration anchors it does own are asserted against it directly.
-const { index: indexSource, engine, adapter } = readRuntimeSources();
+//
+// Task 13b split register() itself: its construction half is
+// engine/create-engine.js (already one of the engine sources) and its
+// registration half — including the two reply-outcome handlers that call
+// automaticWorkspacePolicyDecision(...) — is adapter/openclaw/plugin.js, which
+// therefore joins the reduction in index.js's place.
+const { engine, adapter } = readRuntimeSources();
 const engineSources = Object.values(engine);
 const commandsSource = adapter.commands;
 const memoryToolsSource = engine.memoryTools;
-const allRuntimeSources = [indexSource, ...engineSources];
+const pluginSource = adapter.plugin;
+const allRuntimeSources = [pluginSource, ...engineSources];
 describe("workspace policy runtime gates", () => {
   it("constructs one policy store and guard below the PLUR1BUS state root", () => {
-    assert.match(indexSource, /createWorkspacePolicyStore\(\{\s*stateRoot: baseDbPath,/);
-    assert.match(indexSource, /const memoryMaintenanceGate = createMemoryMaintenanceGate\(\{\s*externalStatus:/);
-    assert.match(indexSource, /createWorkspacePolicyGuard\(\{/);
-    assert.match(indexSource, /maintenanceGate: memoryMaintenanceGate,/);
+    assert.match(engine.createEngine, /createWorkspacePolicyStore\(\{\s*stateRoot: baseDbPath,/);
+    assert.match(engine.createEngine, /const memoryMaintenanceGate = createMemoryMaintenanceGate\(\{\s*externalStatus:/);
+    assert.match(engine.createEngine, /createWorkspacePolicyGuard\(\{/);
+    assert.match(engine.createEngine, /maintenanceGate: memoryMaintenanceGate,/);
   });
 
   it("guards the complete five-tool surface before execute", () => {
@@ -36,7 +43,7 @@ describe("workspace policy runtime gates", () => {
       0
     );
     assert.ok(guardCalls >= 2);
-    const indexDecisionCalls = (indexSource.match(/automaticWorkspacePolicyDecision\(/g) || []).length;
+    const indexDecisionCalls = (pluginSource.match(/automaticWorkspacePolicyDecision\(/g) || []).length;
     const engineDecisionCalls = engineSources.reduce(
       (sum, source) => sum + (source.match(/automaticWorkspacePolicyDecision\(/g) || []).length,
       0

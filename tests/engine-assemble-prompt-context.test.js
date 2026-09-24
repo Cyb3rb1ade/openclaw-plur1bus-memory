@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { createPromptContextAssembler } from "../engine/recall/assemble-prompt-context.js";
 import { SCENARIOS } from "./fixtures/golden-prefix/scenarios.js";
 import { runScenario } from "./helpers/golden-prefix-driver.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -105,8 +106,9 @@ describe("engine/recall/assemble-prompt-context", () => {
       assert.match(source, /recordNamespacePhases:\s*Boolean\(recallTimingSink\)/);
     });
 
-    it("index.js only ever supplies a real recallTimingSink through a test-only api property, so recordNamespacePhases is false for every real OpenClaw host", () => {
-      const source = readFileSync(join(root, "index.js"), "utf8");
+    it("the plugin only ever supplies a real recallTimingSink through a test-only api property, so recordNamespacePhases is false for every real OpenClaw host", () => {
+      // Task 13b: the recall-hook registration moved from index.js into adapter/openclaw/plugin.js.
+      const source = readRuntimeSources().adapter.plugin;
       assert.match(source, /recallTimingSink:\s*api\.__recallTimingSinkForTests\s*\?\?\s*null/);
     });
   });

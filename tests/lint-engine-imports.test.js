@@ -320,12 +320,29 @@ describe("lint-engine-imports", () => {
     assert.match(result.out, /computed specifier/);
   });
 
-  it("exempts exactly one file from the computed-import rule (the LanceDB/OpenAI package loader)", () => {
+  it("exempts exactly two files from the computed-import rule (the LanceDB/OpenAI package loaders)", () => {
     const source = readFileSync(script, "utf8");
     const declarations = source.match(/const COMPUTED_IMPORT_ALLOW = new Set\(\[([^\]]*)\]\);/g) || [];
     assert.equal(declarations.length, 1, "one COMPUTED_IMPORT_ALLOW declaration");
     const entries = [...declarations[0].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-    assert.deepEqual(entries, ["engine/store/lancedb-loader.js"]);
+    assert.deepEqual(entries, ["engine/store/lancedb-loader.js", "lib/providers/embedding-openai.js"]);
+  });
+
+  it("allows a computed import in the allowlisted lib/ file on the engine graph, still flags any other reached lib/ file", (t) => {
+    const loader = 'const P = "/x/node_modules/pkg/index.js";\nexport async function load() {\n  return import(P);\n}\n';
+    const allowed = run(fixture(t, {
+      "engine/a.js": 'import { load } from "../lib/providers/embedding-openai.js";\nexport { load };\n',
+      "lib/providers/embedding-openai.js": loader,
+    }));
+    assert.equal(allowed.status, 0, allowed.out);
+    const flagged = run(fixture(t, {
+      "engine/a.js": 'import { load } from "../lib/providers/embedding-openai.js";\nimport { load as other } from "../lib/providers/other.js";\nexport { load, other };\n',
+      "lib/providers/embedding-openai.js": loader,
+      "lib/providers/other.js": loader,
+    }));
+    assert.equal(flagged.status, 1);
+    assert.match(flagged.out, /lib\/providers\/other\.js: import\(\) with a computed specifier/);
+    assert.doesNotMatch(flagged.out, /embedding-openai\.js: import\(\)/);
   });
 
   it("allows a computed import only in the allowlisted file, still flags it in any other engine file", (t) => {

@@ -61,6 +61,9 @@ const ENGINE_PATHS = Object.freeze({
   namespaceRecall: "engine/recall/namespace-recall.js",
   runtimeReranker: "engine/providers/runtime-reranker.js",
   semanticDiscovery: "engine/runtime/semantic-discovery.js",
+  createEngine: "engine/create-engine.js",
+  internals: "engine/internals.js",
+  closeResources: "engine/lifecycle/close-resources.js",
 });
 
 /** OpenClaw adapter modules, by short name. */
@@ -77,6 +80,7 @@ const ADAPTER_PATHS = Object.freeze({
   turnRoute: "adapter/openclaw/register-turn-route.js",
   turnPrincipal: "adapter/openclaw/turn-principal.js",
   hostProbes: "adapter/openclaw/host-probes.js",
+  plugin: "adapter/openclaw/plugin.js",
 });
 
 function listJsFiles(relativeDir) {

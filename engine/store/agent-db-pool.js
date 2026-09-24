@@ -16,10 +16,28 @@ import { MAX_BACKGROUND_LIFECYCLE_ERRORS, MemoryDB, deriveExpectedCanonicalTarge
 /** Per-agent MemoryDB cache with callback-scoped operation leases. */
 export class AgentDbPool {
   /**
+   * A subclass whose instances default their constructor options to
+   * `defaults` (explicit options still win). MultiNamespacePool and
+   * SharedMemoryPool construct pools from a class they are handed, so this is
+   * how createEngine() gives every pool it opens the same settings.
+   *
+   * @param {{halfLifeOverrides?: Record<string, number>}} defaults Option defaults.
+   * @returns {typeof AgentDbPool} The bound subclass.
+   */
+  static withOptions(defaults) {
+    const Base = this;
+    return class extends Base {
+      constructor(basePath, vectorDim, logger = null, options = {}) {
+        super(basePath, vectorDim, logger, { ...defaults, ...options });
+      }
+    };
+  }
+
+  /**
    * @param {string} basePath Validated namespace base path.
    * @param {number} vectorDim Vector dimension.
    * @param {object} [logger] Optional logger.
-   * @param {{readOnly?: boolean, pathGuard?: (() => void), secureRouting?: boolean, parentDirectoryCapability?: object|null, baseSegment?: string|null}} [options] Non-mutating mode and optional descriptor-bound namespace route.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void), secureRouting?: boolean, parentDirectoryCapability?: object|null, baseSegment?: string|null, halfLifeOverrides?: Record<string, number>}} [options] Non-mutating mode, optional descriptor-bound namespace route, and the recall.halfLifeDaysMap every MemoryDB it opens receives.
    */
   constructor(basePath, vectorDim, logger = null, {
     readOnly = false,
@@ -27,6 +45,7 @@ export class AgentDbPool {
     secureRouting = null,
     parentDirectoryCapability = null,
     baseSegment = null,
+    halfLifeOverrides = {},
   } = {}) {
     if (pathGuard !== null && typeof pathGuard !== "function") {
       throw new TypeError("AgentDbPool pathGuard must be a function");
@@ -55,6 +74,7 @@ export class AgentDbPool {
     this.logger = logger;
     this.readOnly = readOnly === true;
     this.pathGuard = pathGuard;
+    this.halfLifeOverrides = halfLifeOverrides;
     this.secureRouting = stableRouting;
     this.parentRouted = parentRouted;
     this.parentDirectoryCapability = parentDirectoryCapability;
@@ -170,6 +190,7 @@ export class AgentDbPool {
     try {
       db = new MemoryDB(dbPath, this.vectorDim, this.logger, {
         readOnly: this.readOnly,
+        halfLifeOverrides: this.halfLifeOverrides,
         pathGuard: this.secureRouting
           ? () => this._assertSecureAgentCapability(id, directoryCapability)
           : () => this._assertAgentPath(id),

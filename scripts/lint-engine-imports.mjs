@@ -124,16 +124,22 @@ const IMPORT_PATTERNS = [
 const COMPUTED_IMPORT = /\bimport\s*\(\s*(?!["'])\S/;
 
 /**
- * Engine files exempt from COMPUTED_IMPORT, and from no other rule. Keep this
- * to exactly the files named here, each with its reason:
+ * Engine-graph files exempt from COMPUTED_IMPORT, and from no other rule. Keep
+ * this to exactly the files named here, each with its reason. It is consulted
+ * both for `engine/**` sources and for the `lib/**` files rule 6's walk
+ * reaches:
  *
  * - engine/store/lancedb-loader.js — getLanceDB()/getOpenAI() fall back to
  *   importing the LanceDB/OpenAI *packages* from the plugin's own
  *   node_modules or the legacy stock checkout by absolute path. These are
  *   package-location fallbacks, not host code; injecting the loaders through
  *   host capabilities instead is a PR-14 item.
+ * - lib/providers/embedding-openai.js — the same getOpenAI() fallback pattern
+ *   (plugin node_modules, then the legacy stock checkout, by absolute path).
+ *   On the engine graph since createEngine() constructs the OpenAI embedding
+ *   provider; same reason, same PR-14 item.
  */
-const COMPUTED_IMPORT_ALLOW = new Set(["engine/store/lancedb-loader.js"]);
+const COMPUTED_IMPORT_ALLOW = new Set(["engine/store/lancedb-loader.js", "lib/providers/embedding-openai.js"]);
 
 /** A member read of `api` off any receiver: `host.api`, `services.api.on`, … */
 const DOTTED_API_REFERENCE = /\.\s*api\b/;
@@ -305,7 +311,7 @@ while (queue.length > 0) {
     const code = stripComments(line);
     if (ENV_READ_TOKEN.test(code) && OPENCLAW_TOKEN.test(code)) violations.push(`env: ${rel}:${index + 1}: process.env.OPENCLAW_* read on the engine graph (via ${chain.join(" -> ")})`);
     if (!rel.startsWith("engine/") && OPENCLAW_LOAD.test(code)) violations.push(`transitive: ${chain.join(" -> ")}: loads the openclaw package (${line.trim()})`);
-    if (!rel.startsWith("engine/") && COMPUTED_IMPORT.test(code)) violations.push(`transitive: ${chain.join(" -> ")}: import() with a computed specifier — the static import-graph walker cannot follow it (${line.trim()})`);
+    if (!rel.startsWith("engine/") && !COMPUTED_IMPORT_ALLOW.has(rel) && COMPUTED_IMPORT.test(code)) violations.push(`transitive: ${chain.join(" -> ")}: import() with a computed specifier — the static import-graph walker cannot follow it (${line.trim()})`);
   });
   for (const spec of importsOf(source)) {
     const targetAbs = resolveModule(file, spec);

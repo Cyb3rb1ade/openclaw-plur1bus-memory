@@ -494,7 +494,14 @@ describe("deterministic LLM result-cache allowlist", () => {
   });
 
   it("binds every private index transform to its exact scope, purpose, and deterministic config", () => {
-    const { index: source, engine, adapter } = readRuntimeSources();
+    const { engine, adapter } = readRuntimeSources();
+    // Step 9 part 2 (Task 13b) moved register()'s construction half — the
+    // bridge store path, the emotion route and the result cache — from
+    // index.js into engine/create-engine.js; its registration half (which
+    // only hands these values to the register-* modules) went to
+    // adapter/openclaw/plugin.js. `source` is the construction file.
+    const source = engine.createEngine;
+    const pluginSource = adapter.plugin;
     // Step 9 part 1 (engine extraction M1b-1) moved the four private
     // transforms out of index.js: summarizeForCapture and makeQuerySummarizer
     // to engine/runtime/env-config.js, callMergeCheck to
@@ -505,7 +512,7 @@ describe("deterministic LLM result-cache allowlist", () => {
     const captureSection = sourceSection(engine.envConfig, "async function summarizeForCapture", "// Baut eine querySummarizer-Funktion");
     const recallSection = sourceSection(engine.envConfig, "function makeQuerySummarizer", "\nexport {");
     const mergeSection = sourceSection(engine.llmCalls, "async function callMergeCheck", "\nexport {");
-    const bridgeStoreSection = sourceSection(source, "async function storeMemoryFromToolParams", "if (obsidianBridgeEnabled)");
+    const bridgeStoreSection = sourceSection(source, "async function storeMemoryFromToolParams", "const bridgeService = obsidianBridgeEnabled");
     // PR-03h (engine-extraction M1a) moved the five model-facing tools out of
     // index.js into engine/tools/memory-tools.js; both tool sections follow
     // them. The `names: ["memory_recall"` metadata that used to terminate the
@@ -533,8 +540,10 @@ describe("deterministic LLM result-cache allowlist", () => {
     // "never the merging route" guards apply to both files.
     const captureTurnSource = engine.captureTurn;
     assert.doesNotMatch(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
+    assert.doesNotMatch(pluginSource, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
     assert.doesNotMatch(captureTurnSource, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
     assert.doesNotMatch(source, /makeQuerySummarizer\(mergingLlmCfg/);
+    assert.doesNotMatch(pluginSource, /makeQuerySummarizer\(mergingLlmCfg/);
     assert.doesNotMatch(memoryToolsSource, /makeQuerySummarizer\(mergingLlmCfg/);
     assert.match(captureTurnSource, /summarizeForCapture\([\s\S]{0,250}?captureSummaryLlmCfg/);
     // PR-03d (engine-extraction M1a) moved the recall assembly's
@@ -552,6 +561,7 @@ describe("deterministic LLM result-cache allowlist", () => {
     assert.doesNotMatch(registerCommandsSource, /makeQuerySummarizer\(mergingLlmCfg/);
     assert.equal(
       countMatches(source, summarizerPattern)
+        + countMatches(pluginSource, summarizerPattern)
         + countMatches(assemblePromptContextSource, summarizerPattern)
         + countMatches(registerCommandsSource, summarizerPattern)
         + countMatches(memoryToolsSource, summarizerPattern),
@@ -584,7 +594,7 @@ describe("deterministic LLM result-cache allowlist", () => {
       ["engine/runtime/env-config.js", "function makeQuerySummarizer", ["@param {string} agentId", "@returns {Function|null}"]],
       ["engine/runtime/llm-calls.js", "async function callMergeCheck", ["@param {string} agentId", "@returns {Promise<object|null>}"]],
       ["engine/knowledge/knowledge-pending.js", "async function updateKnowledgeMd", ["@param {string} agentId", "@returns {Promise<void>}"]],
-      ["index.js", "(messages, context = {}) =>", ["@param {Array<object>} messages", "@param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]", "@returns {Promise<string|null>}"]],
+      ["engine/create-engine.js", "(messages, context = {}) =>", ["@param {Array<object>} messages", "@param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]", "@returns {Promise<string|null>}"]],
       ["lib/jobs/conflict-resolver.js", "async function resolveConflictPair", ["@param {string} agentId", "@returns {Promise<object>}"]],
       ["lib/jobs/conflict-resolver.js", "export async function runConflictResolver", ["@param {string} [opts.agentId]", "@returns {Promise<object>}"]],
       ["lib/jobs/memory-compaction.js", "async function callMergeCheck", ["@param {string} agentId", "@returns {Promise<object|null>}"]],

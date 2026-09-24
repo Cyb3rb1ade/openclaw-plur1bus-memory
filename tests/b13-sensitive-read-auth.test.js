@@ -103,9 +103,11 @@ describe("B13 sensitive command-read authorization matrix", () => {
     // PR-03f (engine-extraction M1a) moved the /plur1bus dispatcher out of
     // index.js into engine/commands/plur1bus-command.js; the scan spans both
     // so every dispatched action stays classified, not just the ones still
-    // textually present in index.js.
-    const { index, engine } = readRuntimeSources();
-    const source = index + engine.plur1busCommand;
+    // textually present in index.js. Task 13b: register() is
+    // adapter/openclaw/plugin.js + engine/create-engine.js now, so those two
+    // replace index.js (the entry shell) in the scan.
+    const { adapter, engine } = readRuntimeSources();
+    const source = adapter.plugin + engine.createEngine + engine.plur1busCommand;
     const observed = new Set([...source.matchAll(/if \(action(?:Key)? === "([a-z-]+)"/g)].map((match) => match[1]));
     const classes = {
       "public-help": new Set(),

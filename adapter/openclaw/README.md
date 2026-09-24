@@ -20,8 +20,9 @@ write "the host's `registerTool`" instead.
 | `register-recall-hook.js` | `before_prompt_build` (auto-recall on) |
 | `register-maintenance-hook.js` | `before_prompt_build` (auto-recall off) |
 | `register-capture-hook.js` | `agent_end` auto-capture, `before_compaction` checkpoint |
-| `register-commands.js` | the 15 `plur1bus_*` commands, `/state`, `/enable`, `/disable`, the control-UI descriptor and control-health pair, the critical-push claiming hooks, and the four `lib/setup/*-plugin-runtime.js` delegations |
-| `register-tools.js` | the five model-facing tools |
+| `plugin.js` | `register()` itself (Task 13b): validates the registration dependencies, builds `HostServices` with the OpenClaw-only `capabilities`, calls `createEngine(host, config)`, then makes every registration below in the old order; also the reply-outcome `agent_end` / `before_prompt_build` pair and `/wiki` |
+| `register-commands.js` | the 15 `plur1bus_*` commands, `/state`, `/enable`, `/disable`, the control-UI descriptor and control-health pair, the critical-push claiming hooks, the four `lib/setup/*-plugin-runtime.js` delegations, and `skill_proposal_changed` (`registerSkillProposalListener`) |
+| `register-tools.js` | the five model-facing tools, and the memory-slot runtime (`registerMemoryCapability`) |
 | `register-prompt-supplements.js` | the static system-prompt supplement and the Neo corpus supplement |
 | `register-gateway.js` | a lone `gateway_start` (Neo warm-up) plus two `gateway_start`/`gateway_stop` pairs (Obsidian bridge, Neo service), the shutdown owner and the four after-lifecycle service registrations |
 | `register-cron.js` | the unsafe direct feature-cron guard and the deferred feature-cron bootstrap |
@@ -59,7 +60,45 @@ registration, and the four `…AfterLifecycle` calls must follow
 `lifecycleRegistered`. A regression here shows up as a hung `npm test` or a
 leaked handle, not as an assertion failure.
 
-## Deliberately still in `index.js` after M1a
+## After Task 13b (M1b-1 step 9, part 2)
+
+`index.js` is the entry shell (`openclaw.plugin.json` `extensions` and
+`package.json` `main` point at it; the default export and the 19 named exports
+stay importable from it). `register()` is `plugin.js` here, and every object
+it used to build is constructed by `engine/create-engine.js` and held in one
+`EngineInternals` (`engine/internals.js`), which `plugin.js` reads through
+`internalsOf(engine)` — the transitional seam PR-14 removes.
+
+The OpenClaw-only construction inputs the old `register()` read off `api`
+travel as `host.capabilities`, built in `plugin.js`: `registrationMode`,
+`coordinatesLocalModelGeneration`, `resolvePath`, `cronDirectDispatchReady`,
+`skillWorkshop`, `detectReactions`, `createEmbeddingSelectionMutator`,
+`configMutationNotice`, `resolveNeoHooksConfig`, and the test-injection
+`commandRuntimeHooks`, `handleObsidianBridgeCommand` and `shareCard`.
+`api.config` inside the engine became `host.config()`.
+
+What still reads `api` in this directory, and why:
+
+| Site | Why it stays here | Owner |
+|---|---|---|
+| `runOperatorCommand` and the `registerPluginCommand` registry (`plugin.js`) | They wrap `api.registerCommand`'s specs; `runOperatorCommand` hands handlers `api.config` exactly as a channel would. | PR-04 |
+| `/wiki` (`plugin.js`) | Registered through `registerPluginCommand`, not the command table; still passes `api` to `runWikiCommand`. | PR-04 |
+| reply-outcome recording (`agent_end`) and completion (`before_prompt_build`) (`plugin.js`) | Both fold into `Engine.capture`'s close-out (`engine-extraction.md` §a.1). | PR-04 |
+| `skill_proposal_changed` (`register-commands.js`) | Optional host capability; becomes `Host.onSkillProposalChanged`. | PR-04 |
+| the control-UI descriptor and the control-health pair (`register-commands.js`) | Inside the same `registerGatewayMethod` block that builds the projection callback. | PR-13 |
+| the critical-push claiming hooks (`register-commands.js`) | Map to a new `Host.registerTurnInterceptor`. | PR-04 |
+| `recallTimingSink: api.__recallTimingSinkForTests` (`plugin.js`) | Test-only probe property; no real host sets it. | — |
+
+The engine's close path is `engine/lifecycle/close-resources.js`
+(`createResourceCloser`, idempotent). `registerGatewayShutdownServices` hands
+that one closer to `registerGatewayShutdown`, so the host's runtime-lifecycle
+cleanup, its `gateway_stop` handler and `Engine.close({ budgetMs })` share one
+promise.
+
+## Before Task 13b: what M1a left in `index.js`
+
+Kept for the record; every row below moved in Task 13b (see above).
+
 
 Line numbers are against the current `index.js` (7 662 lines; re-derive them
 with grep before trusting a range here — they drift with every task that
