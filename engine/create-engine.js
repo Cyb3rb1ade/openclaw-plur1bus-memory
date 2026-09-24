@@ -1330,7 +1330,12 @@ export function createEngine(host, config, testOptions = {}) {
     temperaments: emotionCfg.temperaments || {},
     moodInfluence: emotionMoodInfluence,
   });
-  const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
+  // One embedder for the whole engine: a test-only testOptions.internals
+  // embedder replaces the provider here, at its construction site, so every
+  // consumer built below (the DB adapter, the store helper, the command
+  // runner, the scoped IPC server, the resource closer) and the registration
+  // views use the same object. No real provider is constructed then.
+  const embeddings = testOptions.internals?.embeddings ?? (normalizedEmbeddingCfg.provider === "local-transformers"
     ? (requiresActiveSharedModelOwner
         ? new ReloadSafeIpcScopedEmbeddingProvider({
             stateRoot: baseDbPath,
@@ -1378,7 +1383,7 @@ export function createEngine(host, config, testOptions = {}) {
         embeddingCacheMaxBytes: cfg.runtime?.embeddingCacheMaxBytes,
         cacheBasePath: baseDbPath,
         logger: host.logger,
-      });
+      }));
   const scopedEmbeddingServer = coordinatesLocalModelGeneration
     && normalizedEmbeddingCfg.provider === "local-transformers"
     ? createScopedEmbeddingIpcServer({
@@ -2604,7 +2609,13 @@ export function createEngine(host, config, testOptions = {}) {
   ]);
   const resolveCronMemoryContext = async (commandCtx) => {
     const agentId = safeAgentId(commandCtx?.agentId || "default");
-    const workspaceDir = await host.runtime.agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
+    // The OpenClaw runtime's resolver when the host has one (unchanged path);
+    // otherwise the contract's HostServices.workspaceDir, so internal jobs run
+    // on a host without an OpenClaw runtime (the harness scheduler, M1b-3).
+    const resolver = host.runtime?.agent?.resolveAgentWorkspaceDir;
+    const workspaceDir = typeof resolver === "function"
+      ? await resolver(commandCtx?.config, agentId)
+      : await host.workspaceDir(agentId);
     return resolveMemoryRequestContext({
       agentId,
       workspaceDir,
@@ -3360,7 +3371,9 @@ export function createEngine(host, config, testOptions = {}) {
         host.events.emit("recall.completed", { agentId, timing: result.timing, degraded: result.degraded });
         return result;
       } catch (error) {
-        return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: detailOf(error) } });
+        // An abort that lands before the assembler runs (e.g. during
+        // host.workspaceDir) is still an abort, not a bad query.
+        return recallResult({ degraded: { reason: q.signal.aborted ? "aborted" : "invalid-query", capability: "recall", detail: detailOf(error) } });
       }
     },
     capture(t) {

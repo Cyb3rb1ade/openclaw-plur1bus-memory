@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import plugin, { MemoryDB } from "../../index.js";
+import { LocalTransformersEmbeddingProvider } from "../../lib/providers/embedding-local-transformers.js";
 import { writePlur1busStartNotice } from "../../lib/setup/feature-profiles.js";
 
 /** 2026-01-15T12:00:00Z — every scenario is evaluated at this instant. */
@@ -61,9 +62,9 @@ export function topicVector(topic) {
  * A deterministic embedding provider, handed to the engine through its
  * internals seam (createEngine's testOptions.internals, via plugin.register's
  * `engineInternals`) in place of the local-transformers provider, so nothing
- * can reach the real model. Task 13c replaced the earlier prototype patch with
- * it; the golden corpus stayed byte-identical and a tripwire on the real
- * provider's _computeBatch/_embedBatchForPurpose saw zero calls.
+ * can reach the real model; sealRealEmbedder() below is the tripwire behind
+ * it. Task 13c replaced the earlier prototype stub with it; the golden corpus
+ * stayed byte-identical.
  *
  * `hang: true` makes every call settle only (by rejecting) when
  * `options.signal` aborts, exercising the abort path (PR-05); `probe`, when
@@ -96,6 +97,22 @@ function stubProvider(topicOf, { hang = false, probe = null } = {}) {
     embedBatch: (texts, _retries, options) => batch(texts, options),
     shutdown: async () => {},
   };
+}
+
+/**
+ * A permanent tripwire: `_computeBatch` is the one method of the real
+ * local-transformers provider that would load the model. While a scenario
+ * runs it throws, so no scenario can silently reach the real model even if
+ * a future code path bypasses the injected stubProvider.
+ * @returns {() => void} restore function
+ */
+function sealRealEmbedder() {
+  const proto = LocalTransformersEmbeddingProvider.prototype;
+  const original = proto._computeBatch;
+  proto._computeBatch = async () => {
+    throw new Error("golden-prefix driver: real embedder reached");
+  };
+  return () => { proto._computeBatch = original; };
 }
 
 const routingCapability = Object.freeze({
@@ -233,10 +250,12 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
   const previousHome = process.env.OPENCLAW_HOME;
   // Every global mutation and every temp dir is installed inside the `try`, with
   // its handle declared out here, so a throw at any point still unwinds all of
-  // them. Installing before the `try` would leak globalThis.Date into the rest
-  // of the process if a mkdtempSync failed.
+  // them. Installing before the `try` would leak globalThis.Date and the sealed
+  // provider prototype into the rest of the process if a mkdtempSync failed.
   /** @type {(() => void)|null} */
   let restoreClock = null;
+  /** @type {(() => void)|null} */
+  let restoreEmbedder = null;
   let baseDbPath = "";
   let workspaceDir = "";
   let stateDir = "";
@@ -247,6 +266,7 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
     stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
     process.env.OPENCLAW_HOME = stateDir;
     restoreClock = useFrozenClock ? freezeClock() : () => {};
+    restoreEmbedder = sealRealEmbedder();
     const engineEmbeddings = stubProvider(topicOf, { hang: scenario.hangEmbedder === true, probe: embedderProbe });
     mkdirSync(join(workspaceDir, "memory"), { recursive: true });
     if (scenario.startNotice) writePlur1busStartNotice(stateDir, { text: scenario.startNotice });
@@ -310,6 +330,7 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
   } finally {
     if (previousHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = previousHome;
+    restoreEmbedder?.();
     restoreClock?.();
     if (baseDbPath) rmSync(baseDbPath, { recursive: true, force: true });
     if (workspaceDir) rmSync(workspaceDir, { recursive: true, force: true });

@@ -10,7 +10,7 @@
 import type {
   AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   Deferral, Degraded, Engine, EngineConfig, EngineEventName, HostServices,
-  JobName, JobRegistry, JobRun, JobTrigger, Principal, RecallQuery, RecallResult,
+  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, Principal, RecallQuery, RecallResult,
   RecallTiming, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
@@ -79,6 +79,10 @@ declare const result: RecallResult;
 assertTrue<Exact<(typeof result)["deferrals"], Deferral[]>>();
 assertTrue<Exact<(typeof result)["deferrals"][number]["kind"], "clipped" | "dropped">>();
 assertTrue<Exact<(typeof result)["deferrals"][number]["reason"], "global-cap" | "memories-cap">>();
+assertTrue<Exact<Deferral["block"], ContextBlock["name"]>>();
+assertTrue<Exact<Deferral["from"], number>>();
+assertTrue<Exact<Deferral["to"], number>>();
+assertTrue<Exact<keyof Deferral, "block" | "kind" | "from" | "to" | "reason">>();
 assertTrue<Exact<(typeof result)["timing"], RecallTiming>>();
 assertTrue<Exact<(typeof result)["timing"]["totalMs"], number>>();
 assertTrue<Exact<(typeof result)["timing"]["phases"], Record<string, unknown> | null>>();
@@ -127,3 +131,4 @@ void hostWithRouting;
 const hostWithCapabilities: HostServices = { ...minimalHost, capabilities: { resolvePath: (p: string) => p, registrationMode: "full", skillWorkshop: null } };
 void hostWithCapabilities;
 assertTrue<Exact<NonNullable<HostServices["capabilities"]>["registrationMode"], string | undefined>>();
+assertTrue<Exact<HostCapabilities["resolvePath"], ((path: string) => string) | undefined>>();

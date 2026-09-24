@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { createEngine } from "../engine/create-engine.js";
+import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
 import { readRuntimeSources } from "./helpers/runtime-sources.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -105,6 +106,51 @@ describe("Engine", () => {
     await assert.rejects(() => engine.checkpoint("agent-a", "reboot"), /unknown checkpoint reason/);
     await assert.rejects(() => engine.checkpoint("../etc", "manual"), /Invalid agent ID/);
     await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("internal jobs resolve the workspace without an OpenClaw runtime (fix round 1)", async () => {
+    const workspace = makeTempDir("ec-ws-");
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => workspace });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder() } });
+    const gc = await engine.jobs.run("gc-run", "agent-a", { trigger: "harness" });
+    assert.deepEqual([gc.outcome, gc.reason], ["skipped", "gc_disabled"]);
+    for (const spec of engine.jobs.list()) {
+      if (spec.name === "light-dream") continue;
+      const run = await engine.jobs.run(spec.name, "agent-a", { trigger: "harness" });
+      assert.ok(!(run.outcome === "failed" && run.reason === "error:TypeError"), `${spec.name} failed with a TypeError: ${run.error?.message}`);
+    }
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("recall() aborted while the host resolves the workspace comes back aborted (fix round 1)", async () => {
+    const host = createStubHost({
+      stateDir: makeTempDir("ec-state-"),
+      workspaceDir: () => new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })),
+    });
+    const controller = new AbortController();
+    const { signal } = controller;
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder() } });
+    const pending = engine.recall({ query: "what happened while I was away", principal, agent, signal });
+    setTimeout(() => controller.abort(new Error("caller gave up")), 20);
+    const result = await pending;
+    assert.equal(result.degraded.reason, "aborted");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("one embedder serves the whole engine (fix round 1)", async () => {
+    const embedder = flatEmbedder();
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")), { internals: { embeddings: embedder } });
+    const internals = internalsOf(engine);
+    assert.equal(internals.embeddings, embedder);
+    assert.equal(internals.recallContext.embeddings, embedder);
+    assert.equal(internals.captureContext.embeddings, embedder);
+    assert.equal(internals.toolContext.embeddings, embedder);
+    // Consumers built at construction time hold the same object: the
+    // resource closer shuts down the injected embedder, not a real provider.
+    let shutdowns = 0;
+    embedder.shutdown = async () => { shutdowns += 1; };
+    await engine.close({ budgetMs: 5_000 });
+    assert.equal(shutdowns, 1);
   });
 
   it("capture() returns a handle immediately", async () => {
