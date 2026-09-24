@@ -36,3 +36,19 @@ export function recallResult({ blocks = [], capChars = UNCAPPED, degraded = null
     deferrals,
   };
 }
+
+/**
+ * A copy of a RecallResult whose blocks and deferrals are fresh objects, so a
+ * value held by the recall cache is never handed out (or mutated) by
+ * reference.
+ * @param {object|undefined|null} value
+ * @returns {object|undefined|null}
+ */
+export function copyRecallResult(value) {
+  if (!value || typeof value !== "object") return value;
+  return {
+    ...value,
+    ...(Array.isArray(value.blocks) ? { blocks: value.blocks.map((block) => ({ ...block })) } : {}),
+    ...(Array.isArray(value.deferrals) ? { deferrals: value.deferrals.map((deferral) => ({ ...deferral })) } : {}),
+  };
+}

@@ -153,6 +153,43 @@ describe("Engine", () => {
     assert.equal(shutdowns, 1);
   });
 
+  it("recall() cache never crosses principals, an aborted recall stays degraded, and cached blocks are copies (final review C1)", async () => {
+    // One embedder that answers until `mode.hang` flips, then only settles on abort.
+    const mode = { hang: false };
+    const flat = flatEmbedder();
+    const probe = { calls: 0, abortedAt: null };
+    const hanging = hangingEmbedder(probe);
+    const switching = {
+      embed: (...args) => (mode.hang ? hanging.embed(...args) : flat.embed(...args)),
+      embedQuery: (...args) => (mode.hang ? hanging.embedQuery(...args) : flat.embedQuery(...args)),
+      embedPassage: (...args) => (mode.hang ? hanging.embedPassage(...args) : flat.embedPassage(...args)),
+      embedBatch: async (texts) => flat.embedBatch(texts),
+      shutdown: async () => {},
+    };
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-") });
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: switching } });
+    const userA = { ...provedPrincipal, user: `user:v1:${"a".repeat(64)}` };
+    const userB = { ...provedPrincipal, user: `user:v1:${"b".repeat(64)}` };
+    const query = "what did we decide about the roadmap";
+    const first = await engine.recall({ query, principal: userA, agent, signal: AbortSignal.timeout(8_000) });
+    assert.equal(first.degraded, null);
+    assert.ok(first.blocks.length > 0, "the first recall produced blocks to cache");
+
+    mode.hang = true;
+    const other = await engine.recall({ query, principal: userB, agent, signal: AbortSignal.timeout(150) });
+    assert.deepEqual(other.degraded, { reason: "aborted", capability: "recall" }, "a timed-out recall is degraded, never served as a clean result");
+    assert.deepEqual(other.blocks, [], "user B never receives user A's cached blocks");
+
+    const again = await engine.recall({ query, principal: userA, agent, signal: AbortSignal.timeout(150) });
+    assert.deepEqual(again.degraded, { reason: "aborted", capability: "recall" }, "a cached answer after an abort still says aborted");
+    assert.deepEqual(again.blocks.map((b) => b.name), first.blocks.map((b) => b.name), "the same principal may reuse its own cache");
+    for (let i = 0; i < again.blocks.length; i += 1) assert.notEqual(again.blocks[i], first.blocks[i], "cached blocks are copies");
+    again.blocks[0].text = "mutated by the caller";
+    const third = await engine.recall({ query, principal: userA, agent, signal: AbortSignal.timeout(150) });
+    assert.notEqual(third.blocks[0].text, "mutated by the caller", "a caller's mutation never reaches the cache");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
   it("capture() returns a handle immediately", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
     const started = Date.now();

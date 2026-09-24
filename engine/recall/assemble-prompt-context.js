@@ -39,7 +39,7 @@ import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
 import { resolveCompactedAt } from "../checkpoint/checkpoint-store.js";
 import { emitEngineEvent } from "../events.js";
-import { ABORTED, contextBlock, recallResult } from "./recall-result.js";
+import { ABORTED, contextBlock, copyRecallResult, recallResult } from "./recall-result.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { applySemanticLensToRecall } from "../../lib/semantic-lens-index.js";
 import { formatTimeContext, getLastActivity, recordActivity } from "../../lib/session-time.js";
@@ -160,7 +160,25 @@ export function createPromptContextAssembler(ctx) {
     if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return recallResult();
     const agentIdForCache = hookCtx?.agentId || "default";
     const sessionKeyForCache = hookCtx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
-    const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
+    const promptForCache = String(event?.prompt || "").slice(0, 500);
+    // A caller-resolved memory context (Engine.recall) keys the cache by the
+    // whole principal, never by agent + text alone: two principals asking
+    // the same agent the same thing must never share a cached answer. The
+    // OpenClaw hook path (no memoryCtx) keeps its session-scoped key.
+    const cacheKey = opts.memoryCtx
+      ? `principal:${JSON.stringify([
+        opts.memoryCtx.agentId ?? agentIdForCache,
+        opts.memoryCtx.workspaceIdentity ?? "",
+        opts.memoryCtx.userPrincipal ?? "",
+        opts.memoryCtx.channel ?? "",
+        opts.memoryCtx.accountId ?? "",
+        opts.memoryCtx.chatId ?? "",
+        opts.memoryCtx.chatKind ?? "",
+        opts.memoryCtx.trust ?? "",
+        sessionKeyForCache,
+        promptForCache,
+      ])}`
+      : `${agentIdForCache}:${sessionKeyForCache}:${promptForCache}`;
     const phaseTimer = createRecallPhaseTimer({
       softBudgetMs,
       hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
@@ -1235,7 +1253,18 @@ export function createPromptContextAssembler(ctx) {
       if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
         host.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
       }
-      const result = withTiming(scheduledRecall.value ?? recallResult());
+      // Always a copy: the scheduler caches the very object it resolved with.
+      const value = copyRecallResult(scheduledRecall.value) ?? recallResult();
+      // A caller abort answered from the cache is still an abort: the blocks
+      // are served (spec 3.2 — return what is already complete), but the
+      // result never claims to be a clean recall.
+      if (scheduledRecall.aborted && scheduledRecall.fromCache) {
+        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: ABORTED });
+        const result = withTiming({ ...value, degraded: ABORTED });
+        emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+        return result;
+      }
+      const result = withTiming(value);
       emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
       return result;
     }
