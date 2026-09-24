@@ -108,14 +108,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### M1b-1 — die Engine-API (`createEngine`)
 
-Contract-Version **1.4.0** (von 1.0.0 über 1.1.0/1.2.0/1.3.0, siehe oben, auf
-1.4.0 gehoben — der komplette `Engine`-Umfang von `createEngine`). Details in
-`docs/engine-api.md`.
+Contract-Version **1.4.1** (von 1.0.0 über 1.1.0/1.2.0/1.3.0, siehe oben, auf
+1.4.0 gehoben — der komplette `Engine`-Umfang von `createEngine` —, dann 1.4.1:
+`JobTrigger` kennt `"unknown"` für die Crash-Zeile eines unlesbaren
+Start-Markers). Details in `docs/engine-api.md`.
 
 #### Hinzugefügt
 
 - **`engine/create-engine.js`** — `createEngine(host, config, testOptions?)`
-  baut den vollen 1.4.0-`Engine`-Umfang aus einem reinen `HostServices`-Objekt
+  baut den vollen 1.4.1-`Engine`-Umfang aus einem reinen `HostServices`-Objekt
   ohne OpenClaw-`api` im Aufrufgraphen (`createEngine(createStubHost(),
   config)` ist genau das, was `tests/engine-contract.test.js` prüft).
   `index.js` ist auf 55 Zeilen geschrumpft (Konstruktion, ein
@@ -161,20 +162,49 @@ Contract-Version **1.4.0** (von 1.0.0 über 1.1.0/1.2.0/1.3.0, siehe oben, auf
 
 - **Job-Semantik (PR-08):** ein `incomplete`-Job-Lauf wird bis zu zweimal neu
   versucht (`MAX_ATTEMPTS = 3` insgesamt), bevor er als `abandoned` markiert
-  wird (mit Diary-Zeile, sofern Diary aktiv); `already_processed` gilt nur
-  noch nach einem vorherigen `completed`-Eintrag für denselben Schlüssel,
-  nicht mehr nach `incomplete`/`failed`/`abandoned`; `rem`/`deep`-Phasen
-  teilen sich einen Circuit-Breaker von 3 LLM-Sitzungen pro Agent und
-  UTC-Kalendertag (Wiederholungsversuche zählen mit); jeder Job-Lauf erzeugt
-  eine Ledger-Zeile, auch ein Skip.
+  wird (mit Diary-Zeile, sofern Diary aktiv); `already_processed` gilt, sobald
+  irgendeine Ledger-Zeile den Schlüssel als erledigt führt (`keys`, gesetzt
+  über `markCompletedKey`) — unabhängig vom Ausgang dieser Zeile, also auch
+  nach einem `failed`-Lauf, der den Schlüssel schon markiert hatte —, und ein
+  nach den Wiederholungen aufgegebener Schlüssel zählt ebenfalls als
+  erledigt (Skip mit Grund `abandoned`); eine `incomplete`-Zeile allein macht
+  einen Schlüssel nie erledigt. `rem`/`deep`-Phasen teilen sich einen
+  Circuit-Breaker von 3 LLM-Sitzungen pro Agent und UTC-Kalendertag
+  (Wiederholungsversuche zählen mit, laufende Sitzungen ebenfalls — eine
+  Reservierung im Speicher vor dem Job-Körper); ein Singleton- oder
+  `rem`/`deep`-Job, der für denselben Agenten schon läuft, wird nicht doppelt
+  gestartet (`skipped`/`already_running`); jeder Job-Lauf erzeugt eine
+  Ledger-Zeile, auch ein Skip.
 - **Recall-Abbruch (spec §3.2):** ein abgebrochener oder per Timeout
-  beendeter Recall liefert jetzt die bereits fertigen Blöcke zurück
-  (`degraded.reason: "aborted"`/`"timeout"`) statt gar nichts — die sieben
-  Golden-Szenarien laufen nie in einen Timeout, das Oracle bleibt also
+  beendeter Recall liefert jetzt die Blöcke zurück, die zum Abbruchzeitpunkt
+  bereits fertig waren, zusammen mit `degraded.reason: "aborted"`/`"timeout"`,
+  statt gar nichts — auch dann, wenn der Scheduler die Antwort aus seinem
+  Recall-Cache liefert. Der Cache ist auf dem `Engine.recall`-Pfad nach dem
+  ganzen Principal geschlüsselt (nie über Principals hinweg) und gibt immer
+  Kopien heraus; ein abgebrochener Recall markiert keine fälligen Reminder
+  als präsentiert und schreibt keinen späten Wert mehr in den Cache. Die
+  sieben Golden-Szenarien laufen nie in einen Timeout, das Oracle bleibt also
   unverändert.
-- **Rerank-Budget:** ein einziges Signal bindet Embedder, Reranker und
-  LanceDB-Abfrage gemeinsam (`raceAbort(reranker.rerank(...), rerankAbort,
-  …)`) — ein Timeout-Owner statt eines zweiten, unabhängigen Timers.
+- **Recall-Fehler sind sichtbar:** Druck-Abwurf, volle Queue, Scheduler-Fehler
+  und ein Fehler im Store-Abschnitt kommen als `degraded` (`"pressure"`,
+  `"queue-full"`, `"error"`) statt als `degraded: null` zurück; der
+  OpenClaw-Join und das Golden-Oracle sind davon unberührt.
+- **Rerank-Budget:** der Reranker bekommt ein einziges Signal — das
+  Aufrufer-Signal plus den einen `rerankerTimeoutMs`-Timer — und wird gegen
+  genau dieses Signal gerannt (`raceAbort(reranker.rerank(...), rerankAbort,
+  …)`): ein Timeout-Owner statt eines zweiten, unabhängigen Timers. Embedder
+  und LanceDB-Abfrage haben keinen eigenen Timer; sie sind über dasselbe
+  Aufrufer-Signal per `raceAbort` begrenzt.
+- **`Engine`-Oberfläche (Final Review):** `Engine.capture` fragt den
+  Host-Routing-Klassifikator nicht erneut, wenn der Host den Turn mit
+  `incognito: false` selbst klassifiziert hat (ein Host ohne Routing
+  speicherte sonst nichts), und meldet in `stored` die tatsächlich
+  gespeicherte Anzahl; Light-Dream und Dream-Echo nutzen den Principal des
+  Aufrufers statt eines benutzerlosen Hook-Kontexts; `Engine.jobs.run` reicht
+  nur `trigger`, `signal` und `dryRun` weiter (`dryRun` → `skipped`/
+  `dry_run_unsupported`, das Signal wird nur vor dem Start beachtet);
+  `Engine.close()` lehnt nie ab, danach antworten `recall`/`capture` mit
+  `"engine-closed"` und `jobs.run` lehnt mit `Error("engine closed")` ab.
 - `run-state.json`'s historische REM-Abschlüsse werden einmalig in das
   Ledger migriert (`engine/jobs/run-state-migration.js`); danach wird die
   alte Datei nicht mehr gelesen.
