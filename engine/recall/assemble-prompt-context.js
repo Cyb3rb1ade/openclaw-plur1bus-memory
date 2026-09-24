@@ -1272,9 +1272,11 @@ export function createPromptContextAssembler(ctx) {
       // A caller abort answered from the cache is still an abort: the blocks
       // are served (spec 3.2 — return what is already complete), but the
       // result never claims to be a clean recall.
-      if (scheduledRecall.aborted && scheduledRecall.fromCache) {
-        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: ABORTED });
-        const result = withTiming({ ...value, degraded: ABORTED });
+      // The same holds for the scheduler's own timeout answered from the cache.
+      if ((scheduledRecall.aborted || scheduledRecall.timedOut) && scheduledRecall.fromCache) {
+        const cachedDegraded = scheduledRecall.aborted ? ABORTED : { reason: "timeout", capability: "recall" };
+        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: cachedDegraded });
+        const result = withTiming({ ...value, degraded: cachedDegraded });
         emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
         return result;
       }

@@ -190,6 +190,26 @@ describe("Engine", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
+  it("recall() answered from the cache after the scheduler's own timeout says timeout, not clean (final re-review note 1)", async () => {
+    const mode = { hang: false };
+    const flat = flatEmbedder();
+    const hanging = hangingEmbedder({ calls: 0, abortedAt: null });
+    const pick = (name) => (...args) => (mode.hang ? hanging[name](...args) : flat[name](...args));
+    const switching = { embed: pick("embed"), embedQuery: pick("embedQuery"), embedPassage: pick("embedPassage"), embedBatch: async (texts) => flat.embedBatch(texts), shutdown: async () => {} };
+    const host = createStubHost({ stateDir: makeTempDir("ec-state-") });
+    const cfg = { ...config(makeTempDir("ec-db-")), runtime: { recallTimeoutMs: 400 } };
+    const engine = createEngine(host, cfg, { internals: { embeddings: switching } });
+    const query = "which release notes are still open";
+    const first = await engine.recall({ query, principal: provedPrincipal, agent, signal: AbortSignal.timeout(8_000) });
+    assert.equal(first.degraded, null);
+    assert.ok(first.blocks.length > 0, "the first recall produced blocks to cache");
+    mode.hang = true;
+    const again = await engine.recall({ query, principal: provedPrincipal, agent, signal: AbortSignal.timeout(8_000) });
+    assert.deepEqual(again.degraded, { reason: "timeout", capability: "recall" });
+    assert.deepEqual(again.blocks.map((b) => b.name), first.blocks.map((b) => b.name), "the principal's own cached blocks are served");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
   it("recall() reports an inner store failure as degraded error, not a clean result (final review I6)", async () => {
     const failing = flatEmbedder();
     failing.embedQuery = async () => { throw new Error("vector store unavailable"); };
