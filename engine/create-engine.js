@@ -113,6 +113,7 @@ import { flushMetrics } from "../lib/metrics.js";
 import { createMemoryOpsContext } from "./memory-ops/context.js";
 import { createMemoryRead } from "./memory-ops/read.js";
 import { createMemoryWrite } from "./memory-ops/write.js";
+import { memoryOpError } from "./memory-ops/errors.js";
 
 /**
  * Build the engine: every store, provider, route, scheduler and command body
@@ -1426,9 +1427,15 @@ export function createEngine(host, config, testOptions = {}) {
   });
 
   // Typed MemoryOps (contract 1.5.0, E1). One context instance is shared by
-  // every MemoryOps member (Tasks 4-7); it is also exposed on internals as
-  // memoryOpsContext so later tasks (forget/correct/share/state) reuse it.
-  const memoryOpsContext = createMemoryOpsContext({ host, logger: host.logger, getWorkspaceAliases: () => internals.memoryWorkspaceAliases ?? memoryWorkspaceAliases });
+  // every MemoryOps member; it is also exposed on internals as memoryOpsContext.
+  // isClosed reads the engine's `closing` flag (set by closeEngine below) so a
+  // MemoryOp that started before close() still refuses before it mutates.
+  const memoryOpsContext = createMemoryOpsContext({
+    host,
+    logger: host.logger,
+    getWorkspaceAliases: () => internals.memoryWorkspaceAliases ?? memoryWorkspaceAliases,
+    isClosed: () => closing != null,
+  });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,
     pool,
@@ -3380,6 +3387,9 @@ export function createEngine(host, config, testOptions = {}) {
 
   // What recall/capture answer once close() was called (final review m4).
   const ENGINE_CLOSED = Object.freeze({ reason: "engine-closed", detail: "engine closed" });
+  const assertMemoryOpen = () => {
+    if (closing) throw memoryOpError("storage", "engine is closed");
+  };
 
   // The Engine (types/engine.d.ts, contract 1.5.0).
   const engine = {
@@ -3500,14 +3510,16 @@ export function createEngine(host, config, testOptions = {}) {
     }),
     embedding: embeddingService,
     admin: adminOps,
-    // Typed MemoryOps surface (contract 1.5.0, E1 Task 2). Tasks 3-7 replace each stub.
+    // Typed MemoryOps surface (contract 1.5.0, E1). After close() every member
+    // rejects with MemoryOpError "storage" before it touches a store, so a
+    // late call can neither reopen LanceDB nor write an archive or tombstone.
     memory: Object.freeze({
-      list: (q, p, a) => internals.memoryRead.list(q, p, a),
-      show: (id, p, a) => internals.memoryRead.show(id, p, a),
-      forget: (id, p, a) => internals.memoryWrite.forget(id, p, a),
-      correct: (id, newText, p, a) => internals.memoryWrite.correct(id, newText, p, a),
-      share: (id, target, p, a, opts) => internals.memoryWrite.share(id, target, p, a, opts),
-      state: (p, a) => internals.memoryRead.state(p, a),
+      list: async (q, p, a) => { assertMemoryOpen(); return internals.memoryRead.list(q, p, a); },
+      show: async (id, p, a) => { assertMemoryOpen(); return internals.memoryRead.show(id, p, a); },
+      forget: async (id, p, a) => { assertMemoryOpen(); return internals.memoryWrite.forget(id, p, a); },
+      correct: async (id, newText, p, a) => { assertMemoryOpen(); return internals.memoryWrite.correct(id, newText, p, a); },
+      share: async (id, target, p, a, opts) => { assertMemoryOpen(); return internals.memoryWrite.share(id, target, p, a, opts); },
+      state: async (p, a) => { assertMemoryOpen(); return internals.memoryRead.state(p, a); },
     }),
     events: Object.freeze({
       on(name, handler) {

@@ -437,6 +437,37 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
   });
 });
 
+describe("Engine.memory after close() (E1 final review I2)", () => {
+  it("every member rejects with storage \"engine is closed\"; forget writes no archive and no tombstone", async () => {
+    const stateDir = makeTempDir("e1-write-state-");
+    const baseDbPath = freshBaseDbPath("e1-write-");
+    const host = stubHostForDestructiveOps(stateDir);
+    const engine = createEngine(host, { ...config(baseDbPath), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-closed";
+    const id = await seedAndGetId(engine, agentId, "The spare car key hangs behind the pantry door.", "spare car key", principalForDestructive);
+    const principal = principalForDestructive(agentId);
+
+    await engine.close({ budgetMs: 5_000 });
+
+    const closedError = (err) => err.name === "MemoryOpError" && err.code === "storage" && err.message === "engine is closed";
+    await assert.rejects(() => engine.memory.forget(id, principal, agent), closedError);
+    await assert.rejects(() => engine.memory.correct(id, "The key moved.", principal, agent), closedError);
+    await assert.rejects(() => engine.memory.share(id, "workspace", principal, agent), closedError);
+    await assert.rejects(() => engine.memory.show(id, principal, agent), closedError);
+    await assert.rejects(() => engine.memory.list({ since: 0 }, principal, agent), closedError);
+    await assert.rejects(() => engine.memory.state(principal, agent), closedError);
+
+    assert.equal(existsSync(join(stateDir, "memory", "_archive", agentId)), false, "no archive written after close");
+    assert.equal(readTombstonesFromRegistry(baseDbPath, agentId).length, 0, "no tombstone registry entry after close");
+
+    // The card is still live for a fresh engine over the same store.
+    const reopened = createEngine(host, config(baseDbPath), { internals: { embeddings: flatEmbedder() } });
+    const card = await reopened.memory.show(id, principal, agent);
+    assert.equal(card.id, id);
+    await reopened.close({ budgetMs: 5_000 });
+  });
+});
+
 describe("Engine.memory.share (E1 Task 6)", () => {
   it("(a) share to workspace returns sharedId, and a second agent in the same workspace lists it with scope 'workspace'", async () => {
     const stateDir = makeTempDir("e1-share-state-");

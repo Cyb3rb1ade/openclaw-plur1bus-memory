@@ -137,6 +137,7 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       throw memoryOpError("not-found", messageForCode("not-found"));
     }
 
+    opsContext.assertOpen?.();
     const result = await forgetCard(memoryDbAdapter, agentId, safeId, {
       lang: "en",
       workspaceDir,
@@ -187,6 +188,7 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       throw memoryOpError("not-found", messageForCode("not-found"));
     }
 
+    opsContext.assertOpen?.();
     const result = await correctCard(memoryDbAdapter, agentId, safeId, trimmed, {
       lang: "en",
       workspaceDir,
@@ -258,6 +260,7 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       throw memoryOpError("not-found", messageForCode("not-found"));
     }
 
+    opsContext.assertOpen?.();
     const result = await shareCard(pool, sharedMemoryPool, embeddings, agentId, safeId, {
       targetScope: target,
       allowSensitiveShare: allowSensitive === true,

@@ -9,7 +9,7 @@ const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
  * `getWorkspaceAliases` returns the engine's current workspace alias snapshot, so MemoryOps resolve a
  * principal exactly like recall/capture/checkpoint do. Every failure surfaces as a MemoryOpError.
  */
-export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () => undefined }) {
+export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () => undefined, isClosed = () => false }) {
   // Archive-first backups land in `<stateDir>/memory/_archive` unless the host
   // names its own location (host.capabilities.memoryArchiveDir, read per call):
   // the OpenClaw adapter hands over the directory /forget and /correct have
@@ -24,8 +24,16 @@ export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () 
     }
     return typeof hostDir === "string" && hostDir ? hostDir : join(host.stateDir, "memory", "_archive");
   };
+  // Once the engine is closing, every MemoryOp refuses with "storage" (E1 final
+  // review I2). resolve() checks on entry; the write members check again right
+  // before they mutate, for a call that was already past resolve() when close() began.
+  const assertOpen = () => {
+    if (isClosed()) throw memoryOpError("storage", "engine is closed");
+  };
   return {
+    assertOpen,
     async resolve(p, a, { destructive = false, target = null } = {}) {
+      assertOpen();
       if (!p || typeof p.agentId !== "string" || !AGENT_ID.test(p.agentId)) throw memoryOpError("invalid-input", "principal.agentId is invalid");
       if (!a || typeof a.origin !== "string") throw memoryOpError("invalid-input", "agent context is required");
       if (destructive && (a.origin !== "user" || a.background !== false)) {
