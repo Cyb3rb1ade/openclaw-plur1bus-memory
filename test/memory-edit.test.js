@@ -203,6 +203,61 @@ test('correctCard fängt updateCard-Error ab und gibt generische Nachricht', asy
   }
 });
 
+// fix round 1, E1-R10: a non-throwing updateCard refusal must never be
+// reported as success, must map to the right code, and must not write a
+// `memory.updated` audit line (the mutation never happened).
+test('correctCard meldet tombstone_blocked von updateCard als code "conflict", nicht ok:true', async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-correct-conflict-'));
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'plur1bus-correct-ws-'));
+  try {
+    const fakeDb = {
+      getCard: async (a, id) => ({ id, title: 'T', text: 'alt', status: 'active' }),
+      updateCard: async () => ({ ok: false, action: 'tombstone_blocked', reason: 'tombstone_blocked', id: 'card-1' }),
+    };
+    const result = await correctCard(fakeDb, 'agent', 'card-1', 'neu', { archiveDir: tmpRoot, workspaceDir });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.code, 'conflict');
+    assert.ok(!existsSync(join(workspaceDir, '.adaptive-learning', 'destructive-ops.jsonl')), 'kein Audit-Eintrag bei ok:false');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+test('correctCard meldet eine andere nicht-werfende updateCard-Ablehnung als code "storage"', async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-correct-other-'));
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'plur1bus-correct-ws2-'));
+  try {
+    const fakeDb = {
+      getCard: async (a, id) => ({ id, title: 'T', text: 'alt', status: 'active' }),
+      updateCard: async () => ({ ok: false, reason: 'no-table' }),
+    };
+    const result = await correctCard(fakeDb, 'agent', 'card-1', 'neu', { archiveDir: tmpRoot, workspaceDir });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.code, 'storage');
+    assert.ok(!existsSync(join(workspaceDir, '.adaptive-learning', 'destructive-ops.jsonl')), 'kein Audit-Eintrag bei ok:false');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+test('correctCard gibt bei Erfolg additiv newId aus updateCard zurück', async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-correct-newid-'));
+  try {
+    const fakeDb = {
+      getCard: async (a, id) => ({ id, title: 'T', text: 'alt', status: 'active' }),
+      updateCard: async () => ({ ok: true, id: 'new-card-id', previousId: 'card-1' }),
+    };
+    const result = await correctCard(fakeDb, 'agent', 'card-1', 'neu', { archiveDir: tmpRoot });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.newId, 'new-card-id');
+    assert.strictEqual(result.id, 'card-1');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 // ─── renderCandidateChoice ──────────────────────────────────────────────
 
 // ─── db-adapter updateCard mit Embedder ─────────────────────────────────

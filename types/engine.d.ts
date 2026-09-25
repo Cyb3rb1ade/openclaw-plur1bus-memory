@@ -476,6 +476,7 @@ export interface MemoryListQuery {
 
 export interface MemoryListResult { agentId: AgentId; items: MemoryCard[]; truncated: boolean }
 export interface MemoryForgetResult { id: string; archived: boolean; tombstoneId: string | null; alreadyForgotten: boolean }
+/** `id` is the id of the corrected (new, live) version — `correct` supersedes the old row, and the caller's old id is no longer live (fix round 1, E1-R8). */
 export interface MemoryCorrectResult { id: string; archived: true }
 export interface MemoryShareResult { sourceId: string; sharedId: string; target: "workspace" | "user" }
 export interface MemoryState {

@@ -47,3 +47,22 @@ test("the workspace alias snapshot is consulted on every resolve", async () => {
   await createMemoryOpsContext({ host, getWorkspaceAliases: () => { calls += 1; return undefined; } }).resolve(P, USER);
   assert.equal(calls, 1);
 });
+
+// fix round 1, E1-R10: a destructive op writes an audit line under
+// workspaceDir (lib/sql-safety.js's appendDestructiveOpLog), which fails
+// closed for a falsy workspaceDir — refused here, before any mutation,
+// instead of surfacing later as that op's own generic "storage" failure.
+for (const falsyWorkspaceDir of [undefined, null, ""]) {
+  test(`destructive op refused before any mutation when workspaceDir resolves to ${JSON.stringify(falsyWorkspaceDir)}`, async () => {
+    const noWorkspaceHost = { stateDir, workspaceDir: async () => falsyWorkspaceDir };
+    await assert.rejects(
+      createMemoryOpsContext({ host: noWorkspaceHost }).resolve(P, USER, { destructive: true }),
+      (e) => isMemoryOpError(e) && e.code === "invalid-input",
+    );
+  });
+}
+test("a non-destructive op tolerates a falsy workspaceDir (list/show never write the destructive-op audit log)", async () => {
+  const noWorkspaceHost = { stateDir, workspaceDir: async () => undefined };
+  const r = await createMemoryOpsContext({ host: noWorkspaceHost }).resolve(P, USER, {});
+  assert.equal(r.agentId, "bernd");
+});

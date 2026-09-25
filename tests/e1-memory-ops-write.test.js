@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { createEngine } from "../engine/create-engine.js";
+import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 import { readTombstonesFromRegistry } from "../lib/tombstone.js";
@@ -106,6 +107,19 @@ async function seedAndGetId(engine, agentId, text, topic, principalFactory = pri
   return listed.items[0].id;
 }
 
+// Direct row mutation, the way tests/e1-memory-ops-read.test.js's patchRow
+// seeds non-active statuses: through the engine's own write pool, never a
+// second capture.
+async function patchRow(engine, agentId, id, patch) {
+  await internalsOf(engine).pool.withDb(agentId, (db) => db.update(id, patch));
+}
+
+// A raw, ACL-free read of exactly the row's current text/status, to assert a
+// refused forget/correct left the card untouched.
+async function rawCard(engine, agentId, id) {
+  return internalsOf(engine).pool.withDb(agentId, (db) => db.getById(id));
+}
+
 describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
   it("(a),(b),(h) forget archives the card, tombstones it, and is idempotent on a second call", async () => {
     const stateDir = makeTempDir("e1-write-state-");
@@ -145,9 +159,9 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
   });
 
   it("(c) forget(randomUUID()) is not-found", async () => {
-    const host = createStubHost({ stateDir: makeTempDir("e1-write-state-") });
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
     const engine = createEngine(host, config(freshBaseDbPath("e1-write-")), { internals: { embeddings: flatEmbedder() } });
-    const principal = principalFor("agent-c");
+    const principal = principalForDestructive("agent-c");
 
     await assert.rejects(
       () => engine.memory.forget(randomUUID(), principal, agent),
@@ -158,18 +172,18 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
   });
 
   it("(d) forget of anna's card as bernd is not-found", async () => {
-    const host = createStubHost({ stateDir: makeTempDir("e1-write-state-") });
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
     const engine = createEngine(host, { ...config(freshBaseDbPath("e1-write-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
-    const id = await seedAndGetId(engine, "anna", "Anna's passport renewal is due in November.", "passport renewal");
+    const id = await seedAndGetId(engine, "anna", "Anna's passport renewal is due in November.", "passport renewal", principalForDestructive);
 
-    const berndPrincipal = principalFor("bernd");
+    const berndPrincipal = principalForDestructive("bernd");
     await assert.rejects(
       () => engine.memory.forget(id, berndPrincipal, agent),
       (err) => err.code === "not-found",
     );
 
     // The card is still listed for anna.
-    const annaListed = await engine.memory.list({ topic: "passport renewal" }, principalFor("anna"), agent);
+    const annaListed = await engine.memory.list({ topic: "passport renewal" }, principalForDestructive("anna"), agent);
     assert.ok(annaListed.items.some((c) => c.id === id));
 
     await engine.close({ budgetMs: 5_000 });
@@ -202,18 +216,14 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
 
     const principal = principalForDestructive(agentId);
     const corrected = await engine.memory.correct(id, "The conference room booking system is called SpaceHub now.", principal, agent);
-    assert.equal(corrected.id, id);
     assert.equal(corrected.archived, true);
 
     // correctCard's storage layer (lib/db-adapter.js's updateCard) is a
-    // version-chain update: the old id is superseded (not-found via show,
-    // same anti-oracle rule as the read-test (h) fixture) and the corrected
-    // text lives at a new id. `show` on the *current* card — found the same
-    // way any caller would, via `list` — is what must reflect the correction.
-    const listed = await engine.memory.list({ topic: "conference room booking" }, principal, agent);
-    const current = listed.items.find((c) => /SpaceHub/.test(c.text));
-    assert.ok(current, "the corrected text is listed");
-    const card = await engine.memory.show(current.id, principal, agent);
+    // version-chain update: the old id is superseded and the corrected text
+    // lives at a new id, which `correct` now returns additively as the
+    // result's `id` (fix round 1, E1-R8; see the dedicated (E1-R8) test for
+    // the old-id/new-id contrast).
+    const card = await engine.memory.show(corrected.id, principal, agent);
     assert.match(card.text, /SpaceHub/);
 
     const archiveAgentDir = join(stateDir, "memory", "_archive", agentId);
@@ -224,16 +234,146 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
   });
 
   it("(g) correct(id, '   ') is invalid-input", async () => {
-    const host = createStubHost({ stateDir: makeTempDir("e1-write-state-") });
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
     const engine = createEngine(host, { ...config(freshBaseDbPath("e1-write-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
     const agentId = "agent-g";
-    const id = await seedAndGetId(engine, agentId, "The office thermostat is set to 21 degrees in winter.", "office thermostat");
+    const id = await seedAndGetId(engine, agentId, "The office thermostat is set to 21 degrees in winter.", "office thermostat", principalForDestructive);
 
-    const principal = principalFor(agentId);
+    const principal = principalForDestructive(agentId);
     await assert.rejects(
       () => engine.memory.correct(id, "   ", principal, agent),
       (err) => err.code === "invalid-input",
     );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(E1-R7) forget/correct of a superseded card are not-found", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-write-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-r7";
+    const id = await seedAndGetId(engine, agentId, "The old printer driver install notes are in the wiki.", "printer driver install notes", principalForDestructive);
+
+    // /correct's own supersede path (lib/safe-update.js, lib/db-adapter.js)
+    // sets exactly this status — same fixture as read-test (h).
+    await patchRow(engine, agentId, id, { status: "superseded" });
+
+    const principal = principalForDestructive(agentId);
+    await assert.rejects(
+      () => engine.memory.forget(id, principal, agent),
+      (err) => err.code === "not-found",
+    );
+    await assert.rejects(
+      () => engine.memory.correct(id, "new text for the superseded id", principal, agent),
+      (err) => err.code === "not-found",
+    );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(E1-R8) correct returns the new version's id: show(result.id) has the new text, show(oldId) is not-found, and forget(result.id) removes it", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-write-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-r8";
+    const oldId = await seedAndGetId(engine, agentId, "The lab freezer temperature log is checked weekly.", "lab freezer temperature log", principalForDestructive);
+
+    const principal = principalForDestructive(agentId);
+    const corrected = await engine.memory.correct(oldId, "The lab freezer temperature log is checked daily now.", principal, agent);
+    assert.notEqual(corrected.id, oldId, "correct returns the NEW version's id, not the superseded one");
+    assert.equal(corrected.archived, true);
+
+    const newCard = await engine.memory.show(corrected.id, principal, agent);
+    assert.match(newCard.text, /checked daily now/);
+
+    await assert.rejects(
+      () => engine.memory.show(oldId, principal, agent),
+      (err) => err.code === "not-found",
+    );
+
+    const forgotten = await engine.memory.forget(corrected.id, principal, agent);
+    assert.equal(forgotten.archived, true);
+    const listed = await engine.memory.list({ topic: "lab freezer temperature log" }, principal, agent);
+    assert.ok(!listed.items.some((c) => c.id === corrected.id), "the corrected text is gone after forgetting its new id");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(E1-R9) forgetting an already-forgotten card twice returns the SAME tombstoneId", async () => {
+    const stateDir = makeTempDir("e1-write-state-");
+    const baseDbPath = freshBaseDbPath("e1-write-");
+    const host = stubHostForDestructiveOps(stateDir);
+    const engine = createEngine(host, { ...config(baseDbPath), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-r9";
+    const id = await seedAndGetId(engine, agentId, "The recycling pickup moved to Wednesdays this month.", "recycling pickup", principalForDestructive);
+
+    const principal = principalForDestructive(agentId);
+    const first = await engine.memory.forget(id, principal, agent);
+    const second = await engine.memory.forget(id, principal, agent);
+    assert.equal(second.alreadyForgotten, true);
+    assert.equal(second.tombstoneId, first.tombstoneId, "re-forgetting returns the same tombstone, not a new one");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(minor) crash-backfill: a card already status:deleted with no committed registry entry gets one on forget", async () => {
+    const stateDir = makeTempDir("e1-write-state-");
+    const baseDbPath = freshBaseDbPath("e1-write-");
+    const host = stubHostForDestructiveOps(stateDir);
+    const engine = createEngine(host, { ...config(baseDbPath), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-backfill";
+    const id = await seedAndGetId(engine, agentId, "The backup generator is tested on the first of the month.", "backup generator", principalForDestructive);
+
+    // Simulate a crash between the LanceDB tombstone mutation (db.tombstoneCard,
+    // which sets exactly this status/epistemicStatus) and the registry commit:
+    // the row is "deleted" but readTombstonesFromRegistry has no entry for it.
+    await patchRow(engine, agentId, id, { status: "deleted", epistemicStatus: "invalidated" });
+    assert.equal(
+      readTombstonesFromRegistry(baseDbPath, agentId).filter((t) => t.memoryId === id).length,
+      0,
+      "no registry entry exists yet",
+    );
+
+    const principal = principalForDestructive(agentId);
+    const forgotten = await engine.memory.forget(id, principal, agent);
+    assert.equal(forgotten.archived, false, "the LanceDB mutation already happened");
+    assert.equal(forgotten.alreadyForgotten, true);
+    assert.equal(typeof forgotten.tombstoneId, "string");
+    assert.ok(forgotten.tombstoneId.length > 0);
+
+    const committed = readTombstonesFromRegistry(baseDbPath, agentId)
+      .filter((t) => t.status === "committed" && t.memoryId === id);
+    assert.equal(committed.length, 1, "the backfill committed exactly one registry entry");
+    assert.equal(committed[0].tombstoneId, forgotten.tombstoneId);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(minor) ACL: forget/correct of a same-agent, foreign-user-scoped card are not-found and leave it unchanged", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-write-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-acl";
+    const id = await seedAndGetId(engine, agentId, "The shared calendar invite code is posted in the wiki.", "shared calendar invite code", principalForDestructive);
+
+    // Re-scope the card to another user (same agent). checkAccess's "user"
+    // branch denies unless ctx.userPrincipal matches ownerUserId exactly
+    // (lib/acl-middleware.js); principalForDestructive claims no user at all,
+    // so this is denied for "missing_principal" — same not-found either way.
+    const foreignOwner = `user:v1:${"a".repeat(64)}`;
+    await patchRow(engine, agentId, id, { scope: "user", ownerUserId: foreignOwner });
+
+    const principal = principalForDestructive(agentId);
+    await assert.rejects(
+      () => engine.memory.forget(id, principal, agent),
+      (err) => err.code === "not-found",
+    );
+    await assert.rejects(
+      () => engine.memory.correct(id, "an attempted correction of a foreign-user card", principal, agent),
+      (err) => err.code === "not-found",
+    );
+
+    const unchanged = await rawCard(engine, agentId, id);
+    assert.equal(unchanged.status, "active");
+    assert.match(unchanged.text, /shared calendar invite code/);
 
     await engine.close({ budgetMs: 5_000 });
   });

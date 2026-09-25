@@ -23,6 +23,13 @@ export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () 
       } catch {
         throw memoryOpError("invalid-input", "unknown agent");
       }
+      // fix round 1, E1-R10: a destructive op writes an audit line under
+      // workspaceDir (appendDestructiveOpLog) and a falsy workspaceDir would
+      // otherwise surface only much later, as that op's own generic
+      // "storage"/"audit failed" — refuse it here, before any mutation.
+      if (destructive && !workspaceDir) {
+        throw memoryOpError("invalid-input", "agent has no workspace");
+      }
       let memoryCtx;
       try {
         const workspaceAliases = getWorkspaceAliases();
