@@ -105,6 +105,211 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   reinen Zeichenschnitt zurück, wenn kein einziger Record mehr passt
   (Fix-Runde 1, betrifft nur das Golden-Prefix-Szenario `recall-truncated`).
 
+## [7.16.9] — 2026-09-25
+
+### Behoben
+
+- **Träume werden nie mehr als Critical gepusht.** Bernhardines Light-Dream über
+  Eva („Ich stehe in einem Raum ohne Wände …“) kam als „Persönliche Beziehung“
+  in Evas Critical-Push. Die Dream-Engine speichert Träume mit
+  `origin: "dream"` / `memoryClass: "dream"` und dem Speicher-Default
+  `type: "memory"`; `findRecentUnclassified` hielt sie für frische Karten, der
+  Klassifizierer sah in der Erzählung eine Beziehung, und die
+  Quellrollen-Sperre griff nicht, weil ein Traum keine `sourceMessageRole` hat.
+  Jetzt schließt die Kandidatenabfrage Träume aus, und der Job überspringt sie
+  zusätzlich vor der Klassifikation (`skippedDreams` im Ergebnis), auch mit
+  Wichtigkeitssignal. Neuer Helfer `isDreamCard()` in `lib/critical-review.js`.
+
+## [7.16.8] — 2026-09-24
+
+### Hinzugefügt
+
+- **Dashboard: Modell je Subagent, ein Aufklappfeld pro Workspace.** Unter der
+  Aufgaben-Matrix steht die Karte „Subagent models“ mit je einem `<details>`
+  für Bernd, Bernhardine und Heisenberg. Darin jeder Subagent des Workspaces mit
+  derselben Zeile wie in der Karte „Chat model“ (bekannte und per
+  `modelPolicy.allow` freigegebene Modelle, „Profile default“, laufendes Modell).
+  Speichern nutzt den bestehenden Pfad (`chatModels.<agent>` plus
+  `agents.entries.<agent>.model.primary`, Entpinnen aktiver Sitzungen) und ist
+  über `model-profile.cjs` neustartfest. Zuordnung: Workspace-Pfad des
+  Chat-Agenten, sonst Namenspräfix, sonst der Standard-Workspace; Workspaces
+  ohne Chat-Agenten (cron, faxpert) bleiben draußen.
+
+## [7.16.7] — 2026-09-24
+
+### Behoben
+
+- **Feature-Crons zeigen nicht mehr auf gelöschte Plugin-Kopien.** Seit OpenClaw
+  2026.9.6 lädt der Gateway Plugins aus Capture-Kopien unter
+  `<state>/tmp/plugin-captures/…` und räumt alte Kopien weg. PLUR1BUS schrieb den
+  Pfad seines Cron-Runners aus dem Ladeort in die Feature-Crons. Nach dem Update
+  am 24.09.26 zeigten 31 von 40 Crons auf eine gelöschte Kopie und scheiterten mit
+  `MODULE_NOT_FOUND`. Liegt der Ladeort in einer Capture-Kopie, schreibt PLUR1BUS
+  jetzt den Pfad der festen Installation `<state>/extensions/memory-lancedb-namespaced/…`
+  desselben State-Verzeichnisses, sofern es sie gibt.
+
+## [7.16.6] — 2026-09-23
+
+### Behoben
+
+- **Gekürzter Gedächtnis-Kontext bleibt wohlgeformt** (aus PR #185). Beide
+  Kürzungen, `truncateMemoryContext` (`lib/relevant-memory-context.js`, die bei
+  Standardeinstellungen greift) und `applyGlobalInjectBudget`
+  (`lib/inject-budget.js`), schnitten an einer beliebigen Zeichenposition und
+  hinterließen ein halb offenes `<memory-record>`-Element oder einen nie
+  geschlossenen Wrapper. Sie schneiden jetzt hinter dem letzten vollständigen
+  `</memory-record>`, schließen jedes an dieser Stelle noch offene Element (aus
+  dem Tag-Strom gelesen, nicht aus einer festen Namensliste) und hängen
+  `<!-- memory context truncated -->` genau einmal an. Ein droppable Block ohne
+  Records wird ganz verworfen statt angeschnitten.
+
+### Hinzugefügt
+
+- **`recall.memoriesMaxChars`** (Standard 12 000, verhaltensneutral) macht den
+  inneren Cap einstellbar, der `recall.globalInjectMaxChars` (17 000) bisher
+  unerreichbar machte. Das Zusammenspiel beider Werte steht in
+  `docs/configuration.md`.
+
+## [7.16.5] — 2026-09-23
+
+### Behoben
+
+- **Das Speichern auf der Chat-Modell-Karte legte den Gateway lahm.** Die Karte
+  schrieb die Konfiguration und löste danach noch die Session-Pins. Die
+  Konfigurationsänderung betrifft PLUR1BUS' eigenen Eintrag, also ersetzt
+  OpenClaw das Plugin beim folgenden Reload, und das verweigert es, solange der
+  Aufruf des Plugins noch läuft („cannot replace itself from its own active
+  call“). Am 23.09.26 blieb der Gateway danach ohne Telegram-Zustellung für
+  Bernd, bis er neu gestartet wurde. Jetzt wird die Wahl zuerst an der
+  laufenden Konfiguration geprüft, dann werden die Pins gelöst, und das
+  Schreiben kommt als letzter Schritt. Eine abgelehnte Wahl löst keine Pins mehr.
+
+### Geändert
+
+- **Der Leichtschlaf zeigt auf OpenClaws Gedächtnisseite, wann er zuletzt lief.**
+  Er hat keinen Zeitplan, weil PLUR1BUS ihn nach einem Gespräch anstößt, und die
+  Szene zeigte deshalb nur einen Strich. Jetzt hält PLUR1BUS je Agent in
+  `dreaming-phase-runs.json` neben der Datenbank fest, wann ein Leichtschlaf
+  abgeschlossen wurde, und der `dreaming`-Provider meldet das als
+  `lastRunAtMs`. Ein Host mit der Naht aus openclaw/openclaw#155860 zeigt dann
+  „zuletzt HH:MM"; ein Lesefehler kostet nur diesen Zeitstempel.
+
+## [7.16.4] — 2026-09-23
+
+### Hinzugefügt
+
+- **Chat-Modell pro Workspace im Dashboard.** Eine neue Karte „Chat model" zeigt
+  je Chat-Agent (den Agenten mit Heartbeat, nicht ihren Subagenten) das laufende
+  Modell und bietet die Modelle an, die der Agent kennt und
+  `agents.defaults.modelPolicy.allow` freigibt. Speichern schreibt die Wahl nach
+  `chatModels.<agent>` und setzt `agents.entries.<agent>.model.primary`, die
+  Fallbacks bleiben. Aktive Sitzungen dieses Agenten werden mit der Host-Funktion
+  `applyModelOverrideToSessionEntry` entpinnt, damit sie ab ihrem nächsten Turn
+  folgen; Heartbeat-Sitzungen und gesperrte Sitzungen bleiben unberührt.
+  `sessions.patch` mit einem Modell wird bewusst nicht benutzt, weil es nebenbei
+  die Agenten-Konfiguration umschreibt. „Profile default" hebt die Wahl auf; der
+  laufende Primary bleibt dann bis zum nächsten Gateway-Start stehen.
+
+  `chatModels` ist die Stelle, an der ein Startskript, das Agentenmodelle aus
+  einem Profil neu schreibt, die Wahl erkennen und stehen lassen kann.
+
+## [7.16.3] — 2026-09-23
+
+### Hinzugefügt
+
+- **PLUR1BUS meldet OpenClaws Gedächtnisseite seinen tatsächlichen Schlafplan.**
+  Die Memory-Capability trägt jetzt einen `dreaming`-Provider für die optionale
+  Naht, die in openclaw/openclaw#155860 vorgeschlagen ist. Er liest die real
+  eingetragenen Feature-Crons aus dem Cron-Dienst des Gateways — REM
+  (`rem-dream`) und Tiefschlaf (`consolidate-daily`) je Agent mit ihrem eigenen,
+  versetzten Ausdruck und den Laufzeiten — und meldet den Leichtschlaf als
+  ereignisgesteuert mit leerem `cron`, weil er nach einem Gespräch läuft und
+  keiner Uhr folgt. Quelle sind die Jobs selbst, nicht der Plan: ein von Hand
+  verschobener Job erscheint so, wie er läuft.
+
+  Ein Host ohne diese Naht ignoriert das Feld; auf dem veröffentlichten
+  OpenClaw ändert sich nichts. Fehlt der Cron-Dienst oder scheitert die Abfrage,
+  meldet der Provider `null`, und der Host behält seine eigene Auflösung.
+
+## [7.16.2] — 2026-09-22
+
+### Geändert
+
+- **Der Schlafplan auf OpenClaws Gedächtnisseite lässt sich jetzt bedienen.** Die
+  Seite baut ihre Anzeige aus `doctor.memory.status`, und der Host füllt die aus
+  der `dreaming`-Sektion des Slot-Eigentümers — also unserer. Weil unser Schema
+  `additionalProperties: false` setzt, waren `frequency` und `timezone` bisher
+  unzulässig, und die Seite zeigte ersatzweise ihren eingebauten Standard
+  `0 3 * * *` für alle drei Phasen. Beide Schlüssel stehen jetzt im Manifest,
+  ohne eigenen Default, damit ein ungesetzter Wert weiterhin dem Host gehört.
+  Die Beschreibung von `dreaming.enabled` benennt außerdem, was der Schalter
+  wirklich bewirkt: Hält PLUR1BUS den Memory-Slot, schaltet der Host memory-core
+  ohnehin ab, und `true` sorgt nur dafür, dass die Seite nicht länger
+  „Deaktiviert“ behauptet.
+
+  Eine Einschränkung bleibt: Der Host kennt genau ein Cron-Feld für alle drei
+  Phasen. PLUR1BUS fährt REM und Tiefschlaf als eigene Feature-Crons je Agent und
+  den Leichtschlaf ereignisgesteuert nach einem Gespräch. Der angezeigte Wert ist
+  deshalb ein Hinweis, kein Fahrplan.
+
+## [7.16.1] — 2026-09-22
+
+### Hinzugefügt
+
+- **PLUR1BUS bietet seine öffentlichen Gedächtnis-Artefakte an.** Die
+  Memory-Capability trägt jetzt `publicArtifacts.listArtifacts`, die Naht, über
+  die Begleit-Plugins wie das mitgelieferte `memory-wiki` die Workspaces
+  auflisten. Ohne sie meldete `openclaw wiki bridge import` „0 artifacts across
+  0 workspaces“ — die Bridge fragt nie selbst das Dateisystem, also blieben
+  `indexDailyNotes` und `indexDreamReports` wirkungslos, wie viele Notizen auch
+  vorlagen. Der Aufruf reicht an die SDK-Fassade
+  `openclaw/plugin-sdk/memory-host-core` durch; der Host entscheidet, was
+  öffentlich ist, und wir filtern nichts nach. Sichtbar werden damit `MEMORY.md`,
+  die Markdown-Notizen unter `memory/`, die Traumberichte und der
+  materialisierte Event-Log.
+
+## [7.16.0] — 2026-09-22
+
+### Hinzugefügt
+
+- **Die Recall-Breite ist im Dashboard einstellbar.** Zwei Regler auf der
+  Recall-Karte: `recall.candidateTopK` bestimmt, wie viele Zeilen die
+  Vektorsuche vor dem Ranking holt, `recall.maxPromptMemories`, wie viele
+  Erinnerungen danach in den Prompt gehen. Beide nehmen 5 bis 100, ganzzahlig.
+
+  Die Obergrenze ist keine gewählte Zahl, sondern die Klemme der Pipeline
+  selbst (`hardCandidateLimit` in `lib/recall-pipeline.js` deckelt auf 100):
+  Ein höherer Wert erreichte die Vektorsuche gar nicht und hätte eine
+  Einstellung vorgetäuscht, die nirgends ankommt. Die Vorgaben 40 und 12
+  spiegeln die Schema-Standards, damit die unkonfigurierte Karte keine andere
+  Zahl anzeigt, als die Pipeline rechnet.
+
+  Beide sind Betriebsentscheidungen, keine gemessenen Schwellwerte — die
+  Grenze, die der Kommentarkopf von `lib/dashboard-settings.js` zieht. Anlass
+  sind die LOCOMO-Läufe vom 20.09.2026: 89,2 % Belegquote bei 15 Erinnerungen
+  aus 40 Kandidaten, und kein zweiter gemessener Punkt im Feld. Der Bereich
+  zwischen 40 und 100 Kandidaten ist unbetreten; der Reranker wählt dort aus
+  einem breiteren Feld, was Ranking-Zeit kostet und keinen Kontext.
+
+### Behoben
+
+- **Der Traum-Abschluss laedt das OpenClaw-SDK nicht mehr aus dem Test heraus.**
+  `lightDream` reicht jetzt `importHostEvents` an `emitDreamCompletedEvent`
+  durch. Der Injektionspunkt gab es dort schon, er war nur nicht verdrahtet,
+  also lief jeder Testlauf ueber den echten SDK-Pfad: 305 ms fuer den Load und
+  1929 ms fuer das erste Host-Event je Prozess, prozessweit einmalig.
+
+  Damit riss `tests/abort-commit-barriers.test.js` seine 2000-ms-Frist, bevor
+  der `dream-echo`-Aufruf ueberhaupt startete — der Test scheiterte im Aufbau
+  und pruefte die Barrieren, die er absichern soll, faktisch nicht. Sichtbar
+  war das nur auf Hosts mit installiertem OpenClaw; ohne das Paket scheitert
+  der Loader nach 20 ms, die fail-open-Behandlung greift, und der Lauf war
+  gruen. Deshalb blieb es in der CI unbemerkt.
+
+  Produktiv aendert sich nichts: Ohne uebergebene Bruecke greift weiterhin der
+  Standardpfad, und im langlebigen Gateway faellt der Lazy-Load einmal beim
+  ersten Traum nach einem Neustart an.
+
 ## [7.15.4] — 2026-09-21
 
 ### Behoben

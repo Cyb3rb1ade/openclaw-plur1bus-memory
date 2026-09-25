@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.15.4 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.16.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
 
-Current source version: **7.15.4**, running in production on OpenClaw
+Current source version: **7.16.0**, running in production on OpenClaw
 `2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
@@ -28,6 +28,24 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.16.0 — recall width is an operator setting
+
+Two number fields on the Recall card. `recall.candidateTopK` sets how many rows
+the vector search fetches before ranking; `recall.maxPromptMemories` sets how
+many memories reach the prompt once ranking is done. Both take 5 to 100.
+
+The ceiling is not a chosen round number: `hardCandidateLimit` in
+`lib/recall-pipeline.js` caps the fetch at 100, so a larger value would never
+reach the search and the field would promise a setting that goes nowhere. The
+defaults, 40 and 12, mirror the schema defaults so an unconfigured card cannot
+show a different number from the one the pipeline uses.
+
+Both are operator decisions rather than measured thresholds, which is the line
+`lib/dashboard-settings.js` draws in its header. The LOCOMO runs of 2026-09-20
+reached 89.2 % evidence coverage with 15 memories drawn from 40 candidates and
+never measured a second point in the field; the range between 40 and 100
+candidates is unexplored. Widening it costs reranking time, not context.
 
 ### New in v7.15.4 — the gc cap is checked against the set gc actually prunes
 
