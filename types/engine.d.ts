@@ -482,7 +482,8 @@ export interface MemoryShareResult { sourceId: string; sharedId: string; target:
 export interface MemoryState {
   agentId: AgentId;
   cards: { agentPrivate: number | null; workspace: number | null; user: number | null };
-  tombstones: number;
+  /** `null` means the tombstone registry was unreadable, never "zero tombstones". */
+  tombstones: number | null;
   archiveDir: string;
 }
 

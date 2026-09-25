@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { tombstoneRegistryDir } from "../lib/tombstone.js";
 
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
@@ -313,6 +314,64 @@ describe("Engine.memory.state (E1 Task 7)", () => {
     const after = await engine.memory.state(principal, agent);
     assert.equal(after.cards.agentPrivate, 1);
     assert.equal(after.tombstones, 1);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(fix round 1, E1-R11) a row with status active and epistemicStatus invalidated is excluded by list AND state", async () => {
+    const host = createStubHost({ stateDir: makeTempDir("e1-state-state-") });
+    const engine = createEngine(host, { ...config(makeTempDir("e1-state-db-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-state-invalidated";
+    await seed(engine, agentId, "The backup generator fuel needs topping up before winter.");
+    await seed(engine, agentId, "The recycling pickup moved to Thursdays this month.");
+
+    const principal = principalFor(agentId);
+    const listedBefore = await engine.memory.list({ topic: "backup generator" }, principal, agent);
+    assert.ok(listedBefore.items.length >= 1);
+    const id = listedBefore.items[0].id;
+
+    const beforeState = await engine.memory.state(principal, agent);
+    assert.equal(beforeState.cards.agentPrivate, 2);
+
+    // status stays "active" — only epistemicStatus flips to "invalidated".
+    // isRecallEntryLive (lib/recall-pipeline.js) excludes this independently
+    // of status, and state()'s SQL filter must mirror that NULL-safely.
+    await patchRow(engine, agentId, id, { status: "active", epistemicStatus: "invalidated" });
+
+    const listedAfter = await engine.memory.list({ topic: "backup generator" }, principal, agent);
+    assert.ok(!listedAfter.items.some((c) => c.id === id), "list excludes the invalidated row");
+    await assert.rejects(
+      () => engine.memory.show(id, principal, agent),
+      (err) => err.code === "not-found",
+      "show excludes the invalidated row",
+    );
+
+    const afterState = await engine.memory.state(principal, agent);
+    assert.equal(afterState.cards.agentPrivate, 1, "state's live count agrees with list/show");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(fix round 1, E1-R11) tombstones is null when the registry is unreadable, not 0", async () => {
+    const stateDir = makeTempDir("e1-state-state-");
+    const host = stubHostForDestructiveOps(stateDir);
+    const dbRoot = makeTempDir("e1-state-db-root-");
+    const baseDbPath = join(dbRoot, "lancedb-namespaced");
+    const engine = createEngine(host, { ...config(baseDbPath), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-state-badregistry";
+    await seed(engine, agentId, "The attic insulation was replaced two summers ago.", principalForDestructive);
+
+    const principal = principalForDestructive(agentId);
+
+    // Puts a DIRECTORY where the registry reader expects this agent's
+    // `<agentId>.jsonl` file (lib/tombstone.js's registryFile/
+    // tombstoneRegistryDir): existsSync(file) sees it and readFileSync(file)
+    // fails with EISDIR — a cheap, deterministic "registry unreadable"
+    // without ever writing a corrupt tombstone line.
+    mkdirSync(join(tombstoneRegistryDir(baseDbPath), `${agentId}.jsonl`), { recursive: true });
+
+    const state = await engine.memory.state(principal, agent);
+    assert.equal(state.tombstones, null);
 
     await engine.close({ budgetMs: 5_000 });
   });

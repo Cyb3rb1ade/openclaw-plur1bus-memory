@@ -113,6 +113,9 @@ assertTrue<Exact<MemoryOps["forget"], (id: string, p: Principal, a: AgentContext
 assertTrue<Exact<MemoryOps["correct"], (id: string, newText: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryCorrectResult>>>();
 assertTrue<Exact<MemoryOps["share"], (id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }) => Promise<import("./engine.js").MemoryShareResult>>>();
 assertTrue<Exact<MemoryOps["state"], (p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryState>>>();
+// E1 Task 7 fix round 1 (E1-R11): tombstones is number | null — null means
+// the registry was unreadable, never laundered into "zero tombstones".
+assertTrue<Exact<import("./engine.js").MemoryState["tombstones"], number | null>>();
 // The channel registry and the three new engine events.
 assertTrue<Exact<ReturnType<Engine["channels"]["list"]>, string[]>>();
 assertTrue<Exact<Extract<EngineEventName, `recall.${string}`>, "recall.degraded" | "recall.block-clipped" | "recall.block-dropped" | "recall.completed">>();

@@ -40,18 +40,57 @@ function toMemoryCard(card, { includeScore }) {
   return out;
 }
 
-// Same live-card lifecycle predicate memory-query.js's queryMemoryDbCandidates
-// pushes into LanceDB (contract 1.5.0 Task 7): a forgotten/archived/superseded
-// row's non-"active", non-null status drops it, and an expired TTL drops it —
-// pushed into countRows() itself so state() never materializes the rows.
-function lifecycleFilterSql(now) {
-  return `(status = 'active' OR status IS NULL) AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > ${now})`;
+// state()'s live-card predicate must agree with list()/show(), i.e. with
+// isRecallEntryLive() (lib/recall-pipeline.js), not just with the lifecycle
+// SQL memory-query.js's queryMemoryDbCandidates pushes into LanceDB (fix
+// round 1, E1-R11). isRecallEntryLive checks four things:
+//   1. status is "active" or null/absent           — lifecycle SQL below
+//   2. epistemicStatus is not "invalidated"         — lifecycle SQL below
+//   3. expiresAt (TTL) has not passed               — lifecycle SQL below
+//   4. isEntryValidAt(entry, validAt)                — deliberately NOT mirrored
+// (4) is a real check in the function, but neither list() nor show() ever
+// pass a validAt to isRecallEntryLive (both call sites use the 2-arg form,
+// `isRecallEntryLive(card, now)`), so isEntryValidAt's own `validAt == null
+// -> return true` short-circuit makes it a no-op at every call site state()
+// must agree with: a row with a future validFrom or a past validUntil is
+// still "live" to list()/show() today. Filtering it out here would make
+// state()'s count disagree with what list() actually returns for the same
+// agent — the one thing this function must never do. If list()/show() ever
+// start threading a real validAt through, this predicate must grow the same
+// `(validFrom = 0 OR validFrom <= now) AND (validUntil = 0 OR validUntil > now)`
+// clause they would then push (see validTimeVectorPredicate in
+// lib/recall-pipeline.js), not before.
+//
+// `epistemicStatus IS NULL OR epistemicStatus != 'invalidated'` mirrors
+// normalizeEpistemicStatus()'s NULL-safety (lib/epistemic-status.js): only a
+// literal stored "invalidated" excludes a row, never an absent/unset value.
+// `!= 'invalidated'` alone is three-valued in SQL and would silently drop
+// every row with no epistemicStatus set — the same NULL-safety hazard
+// engine/store/memory-db.js's `_buildRecentGraphWhere` (:929) documents and
+// guards against. The column itself is optional on older tables (documented
+// at the same site), so it is included in the filter only when this table's
+// live schema actually has it.
+function lifecycleFilterSql(db, now) {
+  const fields = db.schemaFieldNames;
+  const hasColumn = (name) => !fields || fields.size === 0 || fields.has(name);
+  const parts = [
+    "(status = 'active' OR status IS NULL)",
+    `(expiresAt IS NULL OR expiresAt = 0 OR expiresAt > ${now})`,
+  ];
+  if (hasColumn("epistemicStatus")) {
+    parts.push("(epistemicStatus IS NULL OR epistemicStatus != 'invalidated')");
+  }
+  return parts.join(" AND ");
 }
 
 /**
  * Counts live rows in one already-open MemoryDB. Returns 0 for an
  * uninitialized/tableless DB (nothing captured yet), never throws — callers
- * decide null-vs-0 based on pool reachability, not on this helper.
+ * decide null-vs-0 based on pool reachability, not on this helper. Every
+ * condition here is pushed into LanceDB's own countRows(filter) — none of
+ * isRecallEntryLive's checks need a projected-query/JS-predicate fallback,
+ * since all of them (or their no-op equivalent, see lifecycleFilterSql above)
+ * are expressible as SQL.
  */
 async function countLiveRows(db, now) {
   const initialized = await db.init();
@@ -61,7 +100,13 @@ async function countLiveRows(db, now) {
   if (typeof db.table.checkoutLatest === "function") {
     await db.table.checkoutLatest();
   }
-  return db.table.countRows(lifecycleFilterSql(now));
+  // Not routed through MemoryDB's own `_read(promise, label)` timeout/label
+  // wrapper (engine/store/memory-db.js): that method is a class-internal
+  // convention with no external caller today (queryMemoryDbCandidates calls
+  // `db.table.countRows`/`vectorSearch` directly too, same as here), and
+  // reaching for it from outside the class would mean exposing a
+  // currently-private method rather than a small local wrap — left as-is.
+  return db.table.countRows(lifecycleFilterSql(db, now));
 }
 
 /**
@@ -202,13 +247,16 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
       ),
     ]);
 
-    let tombstones = 0;
+    // MemoryState.tombstones is `number | null` (fix round 1): `null` means
+    // the registry was unreadable (corrupt/torn/inaccessible), never
+    // laundered into "zero tombstones" — a state()-only cue to the caller.
+    let tombstones = null;
     try {
       tombstones = readTombstonesFromRegistry(baseDbPath, agentId)
         .filter((t) => t.status === "committed").length;
     } catch (err) {
       logger?.warn?.(`memory-ops.state: tombstone registry read failed for agent '${agentId}': ${err?.message || err}`);
-      tombstones = 0;
+      tombstones = null;
     }
 
     return { agentId, cards: { agentPrivate, workspace, user }, tombstones, archiveDir };
