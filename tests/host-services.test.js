@@ -139,4 +139,10 @@ describe("createStubHost", () => {
     assert.deepEqual(host.config(), { k: 1 });
     assert.equal(typeof host.runtime.config.current, "function");
   });
+
+  it("honours configPath and routing overrides without re-copying them via STUB_HANDLED_KEYS extras", async () => {
+    const host = createStubHost({ configPath: () => "/x.json", routing: async () => ({}) });
+    assert.equal(host.configPath(), "/x.json");
+    assert.deepEqual(await host.routing(), {});
+  });
 });

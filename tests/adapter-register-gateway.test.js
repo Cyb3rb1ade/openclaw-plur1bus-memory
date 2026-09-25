@@ -138,25 +138,19 @@ describe("registerGatewayShutdownServices", () => {
   it("registers the gateway_stop owner before the four after-lifecycle services", () => {
     const api = makeApi();
     api.registerCli = undefined;
+    const closeResources = async () => {};
     registerGatewayShutdownServices({
       api,
-      clearInitializedTurnRoutes: () => {},
+      closeResources,
       coordinatesLocalModelGeneration: false,
       embeddings: null,
-      legacyMigrationShutdown: { abort() {} },
-      llmResultCache: null,
-      localModelGeneration: null,
-      memoryDbAdapter: null,
       modelPreparationCoordinator: null,
-      pool: { shutdown: async () => {} },
-      reembeddingCoordinator: null,
       reembeddingSwitchRecovery: null,
-      reranker: null,
       scopedEmbeddingServer: null,
-      sharedMemoryPool: null,
     });
     const stops = api.registrations.filter((r) => r.name === "gateway_stop");
     assert.equal(stops.length, 1, "lifecycle ownership registers exactly one gateway_stop handler");
+    assert.equal(stops[0].handler, closeResources, "the host's gateway_stop runs the engine's own closer");
     assert.equal(
       stops[0].options?.timeoutMs,
       30_000,

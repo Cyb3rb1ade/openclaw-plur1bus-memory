@@ -204,7 +204,8 @@ describe("Schema-Erweiterung", () => {
 });
 
 describe("Schreibpfade vertragen die neue Spalte", () => {
-  const quelle = readRuntimeSources().index;
+  // MemoryDB.store() lebt seit step 9 (Teil 1) in engine/store/memory-db.js.
+  const quelle = readRuntimeSources().engine.memoryDb;
   const safeUpdate = readFileSync(new URL("../lib/safe-update.js", import.meta.url), "utf8");
 
   it("setzt den Standardwert zentral in store(), nicht je Zeilenbauer", () => {

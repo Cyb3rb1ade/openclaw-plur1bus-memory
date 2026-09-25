@@ -352,6 +352,9 @@ describe("Golden-Set: runRecallPipeline reranker", () => {
       makeRow({ id: "first", text: "first by score", distance: 0.1 }),
       makeRow({ id: "second", text: "second by score", distance: 0.2 }),
     ];
+    // PR-09 fix round 1: this stub deliberately ignores its own signal — it
+    // proves the pipeline's own bound (via raceAbort on rerankSignal) still
+    // cuts off a provider that never reacts, not just a cooperative one.
     const reranker = {
       async rerank() {
         await new Promise(r => setTimeout(r, 50));

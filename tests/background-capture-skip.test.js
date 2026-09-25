@@ -74,11 +74,12 @@ describe("shouldSkipAutoCaptureForInternalTurn", () => {
     // PR-03e (engine-extraction M1a) moved the agent_end auto-capture body out
     // of index.js into engine/capture/capture-turn.js; index.js keeps only the
     // registration. The ordering guard follows the body, and `ctx` is the
-    // handler's second parameter there, now named `hookCtx`.
-    const indexSource = readRuntimeSources().index;
-    const autoCaptureStart = indexSource.indexOf("if (autoCapture) {");
-    const registrationAt = indexSource.indexOf("registerCaptureHook({", autoCaptureStart);
-    assert.ok(autoCaptureStart >= 0 && registrationAt >= 0, "index.js still registers auto-capture");
+    // handler's second parameter there, now named `hookCtx`. Task 13b moved
+    // the registration itself from index.js into adapter/openclaw/plugin.js.
+    const pluginSource = readRuntimeSources().adapter.plugin;
+    const autoCaptureStart = pluginSource.indexOf("if (autoCapture) {");
+    const registrationAt = pluginSource.indexOf("registerCaptureHook({", autoCaptureStart);
+    assert.ok(autoCaptureStart >= 0 && registrationAt >= 0, "adapter/openclaw/plugin.js still registers auto-capture");
 
     const source = readRuntimeSources().engine.captureTurn;
     const handlerStart = source.indexOf("return async function captureTurn(");

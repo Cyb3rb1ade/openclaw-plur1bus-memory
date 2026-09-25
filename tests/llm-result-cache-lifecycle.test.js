@@ -249,18 +249,23 @@ describe("LLM result cache lifecycle", () => {
 
   it("wires the real plugin dependencies into the shutdown boundary", () => {
     // PR-03i: the shutdown owner and the four after-lifecycle services moved
-    // into the OpenClaw adapter; index.js keeps only the call that must stay
-    // the last statement of register().
-    const source = readRuntimeSources().adapter.gateway;
-    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*scopedEmbeddingServer,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,\s*localModelGeneration,?\s*\}\);/s);
+    // into the OpenClaw adapter. Task 13b: the resource list became the
+    // engine's own closer (createEngine -> createResourceCloser), and the
+    // adapter hands that one closer to registerGatewayShutdown.
+    const { adapter, engine } = readRuntimeSources();
+    assert.match(adapter.gateway, /registerGatewayShutdown\(api,\s*\{\s*closeResources\s*\}\);/);
+    const source = engine.createEngine;
+    assert.match(source, /createResourceCloser\(\{\s*logger:\s*host\.logger,\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*scopedEmbeddingServer,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,\s*localModelGeneration,?\s*\}\);/s);
   });
 
   it("starts optional model preparation only after shutdown ownership and hook registration", () => {
-    // PR-03i split this ordering across two files. index.js still decides
-    // *when* lifecycle ownership is taken (last statement of register(),
-    // after every hook registration); adapter/openclaw/register-gateway.js
-    // decides that model preparation starts after that ownership.
-    const { index: source, adapter } = readRuntimeSources();
+    // PR-03i split this ordering across two files. register() — since Task
+    // 13b adapter/openclaw/plugin.js — still decides *when* lifecycle
+    // ownership is taken (last statement, after every hook registration);
+    // adapter/openclaw/register-gateway.js decides that model preparation
+    // starts after that ownership.
+    const { adapter } = readRuntimeSources();
+    const source = adapter.plugin;
     const gatewaySource = adapter.gateway;
     const shutdownOwnership = source.indexOf("registerGatewayShutdownServices({");
     const finalPromptHook = source.lastIndexOf('api.on("before_prompt_build"');
@@ -274,8 +279,12 @@ describe("LLM result cache lifecycle", () => {
   });
 
   it("routes scoped local providers through activation-owned private IPC", () => {
-    const { index: source, adapter } = readRuntimeSources();
-    assert.match(source, /requiresActiveSharedModelOwner\s*=\s*typeof api\.registrationMode === "string"\s*&&\s*api\.registrationMode !== "full"/s);
+    // Task 13b: the construction is engine/create-engine.js; the registration
+    // mode reaches it as host.capabilities.registrationMode from the plugin.
+    const { engine, adapter } = readRuntimeSources();
+    const source = engine.createEngine;
+    assert.match(adapter.plugin, /registrationMode:\s*api\.registrationMode,/);
+    assert.match(source, /requiresActiveSharedModelOwner\s*=\s*typeof capabilities\.registrationMode === "string"\s*&&\s*capabilities\.registrationMode !== "full"/s);
     assert.match(source, /requiresActiveSharedModelOwner[\s\S]*?new ReloadSafeIpcScopedEmbeddingProvider\(\{[\s\S]*?stateRoot:\s*baseDbPath/s);
     assert.match(
       source,

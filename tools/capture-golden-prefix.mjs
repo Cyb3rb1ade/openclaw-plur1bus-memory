@@ -5,24 +5,28 @@
  * to write anything unless both runs are byte-identical. Run once, on
  * unmodified main. Never re-run to "fix" a failing golden test.
  *
- * Usage: node tools/capture-golden-prefix.mjs [--force]
+ * Usage: node tools/capture-golden-prefix.mjs [--force] [--only=name[,name]]
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SCENARIOS } from "../tests/fixtures/golden-prefix/scenarios.js";
+import { JOB_SCENARIOS, SCENARIOS } from "../tests/fixtures/golden-prefix/scenarios.js";
 import { runScenario } from "../tests/helpers/golden-prefix-driver.js";
+import { runJobScenario } from "../tests/helpers/golden-jobs-driver.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "..", "tests", "fixtures", "golden-prefix", "expected");
 const force = process.argv.includes("--force");
+const onlyArg = process.argv.find((arg) => arg.startsWith("--only="));
+const only = onlyArg ? new Set(onlyArg.slice("--only=".length).split(",").filter(Boolean)) : null;
 
 mkdirSync(outDir, { recursive: true });
 
 let failures = 0;
 for (const scenario of SCENARIOS) {
+  if (only && !only.has(scenario.name)) continue;
   const first = await runScenario(scenario);
   const second = await runScenario(scenario);
   if (first !== second) {
@@ -47,8 +51,34 @@ for (const scenario of SCENARIOS) {
   console.log(`wrote ${target} (${first.length} chars)`);
 }
 
+for (const scenario of JOB_SCENARIOS) {
+  if (only && !only.has(scenario.name)) continue;
+  const first = await runJobScenario(scenario);
+  const second = await runJobScenario(scenario);
+  if (first !== second) {
+    console.error(`NON-DETERMINISTIC: ${scenario.name}`);
+    console.error(`  run 1: ${JSON.stringify(first)}`);
+    console.error(`  run 2: ${JSON.stringify(second)}`);
+    failures += 1;
+    continue;
+  }
+  if (first === null) {
+    console.error(`EMPTY: ${scenario.name} produced no output; fix the scenario`);
+    failures += 1;
+    continue;
+  }
+  const target = join(outDir, `${scenario.name}.txt`);
+  if (existsSync(target) && !force) {
+    console.error(`REFUSING to overwrite existing oracle ${target} (pass --force only if you know why)`);
+    failures += 1;
+    continue;
+  }
+  writeFileSync(target, first, "utf8");
+  console.log(`wrote ${target} (${first.length} chars)`);
+}
+
 if (failures > 0) {
   console.error(`${failures} scenario(s) failed; no partial oracle is trustworthy`);
   process.exit(1);
 }
-console.log(`captured ${SCENARIOS.length} scenarios`);
+console.log(`captured ${SCENARIOS.length + JOB_SCENARIOS.length} scenarios`);

@@ -36,6 +36,70 @@ import { trySafeWarn } from "../../lib/safe-logging.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
 
 /**
+ * Classifies a light-dream JobRun's effect on capture post-processing
+ * (fix round 1, PR-08 review). `ledger_unwritable` is a ledger-storage
+ * problem, not a dreaming failure or an incomplete dream: it must not hold
+ * the capture watermark or spend the capture postProcessing retry budget
+ * (`MAX_POSTPROCESSING_RETRIES`) — it is treated exactly like a skipped
+ * dream. Any other `failed` run is a real dreaming failure and keeps the
+ * prior behaviour (watermark held, warned every time).
+ * @param {{outcome: string, reason?: string}} dreamRun
+ * @returns {{advance: boolean, warnKind: "ledger_unwritable"|"failed"|null}}
+ */
+export function classifyLightDreamOutcome(dreamRun) {
+  if (dreamRun.outcome === "completed") return { advance: true, warnKind: null };
+  if (dreamRun.outcome === "failed" && dreamRun.reason === "ledger_unwritable") {
+    return { advance: true, warnKind: "ledger_unwritable" };
+  }
+  if (dreamRun.outcome === "failed") return { advance: false, warnKind: "failed" };
+  return { advance: false, warnKind: null };
+}
+
+/**
+ * Builds a per-agent, warn-once-per-agent latch for the `ledger_unwritable`
+ * light-dream case (fix round 1): an unwritable ledger is a standing
+ * condition, not a per-turn event, so every turn re-triggering it must not
+ * re-log — only the first occurrence per agent does, for the lifetime of
+ * this `createTurnCapture` closure.
+ * @param {{warn?: (m: string) => void}} logger
+ * @returns {(agentId: string) => void}
+ */
+/**
+ * The request context and ACL bindings a light dream writes its insights
+ * under. A caller-resolved memory context (Engine.capture's Principal) is
+ * used as is; only without one does the hook context get re-resolved
+ * (`resolveFallback`, the adapter path — unchanged).
+ * @param {object|null|undefined} memoryCtx
+ * @param {() => object} resolveFallback
+ * @returns {{requestContext: object|null, aclBindings: object|null}}
+ */
+export function lightDreamIdentity(memoryCtx, resolveFallback) {
+  let requestContext = memoryCtx ?? null;
+  if (!requestContext) {
+    try {
+      requestContext = resolveFallback();
+    } catch (_) {
+      requestContext = null;
+    }
+  }
+  const aclBindings = requestContext
+    ? (requestContext.userPrincipal
+      ? { scope: "user", agentId: requestContext.agentId, workspaceIdentity: "", ownerUserId: requestContext.userPrincipal }
+      : { scope: "workspace", agentId: requestContext.agentId, workspaceIdentity: requestContext.workspaceIdentity, ownerUserId: "" })
+    : null;
+  return { requestContext, aclBindings };
+}
+
+export function createLightDreamLedgerWarnOnce(logger) {
+  const warned = new Set();
+  return (agentId) => {
+    if (warned.has(agentId)) return;
+    warned.add(agentId);
+    logger.warn?.(`memory-lancedb-namespaced: light dream ledger unwritable for agent ${agentId}; dreaming is paused for this agent until it recovers`);
+  };
+}
+
+/**
  * Build the `agent_end` auto-capture handler from an already-resolved engine
  * context. Every binding the moved body closes over is destructured once,
  * here, at registration time.
@@ -70,6 +134,7 @@ export function createTurnCapture(ctx) {
     getNeoStore,
     halfLifeOverrides,
     host,
+    jobs = null,
     memoryWorkspaceAliases,
     mergingEnabled,
     metaCognitionEnabled,
@@ -104,20 +169,32 @@ export function createTurnCapture(ctx) {
     workspacePolicyGuard,
   } = ctx;
 
+  jobs?.bind("light-dream", async (_name, jobCtx) => {
+    const work = jobCtx.input?.work;
+    if (typeof work !== "function") return jobCtx.skip("no_turns");
+    return { dreamed: await work() };
+  });
+
   // Per-registration one-shot warning latches (were index.js:10357-10358).
   // They are rebound at turn time, so they stay inside the closure rather
   // than travelling through the context object by value.
   let warnedMissingCaptureSessionKey = false;
   let warnedIncognitoClassifierDegraded = false;
+  const warnLightDreamLedgerUnwritable = createLightDreamLedgerWarnOnce(host.logger);
 
-  return async function captureTurn(event, hookCtx) {
+  return async function captureTurn(event, hookCtx, opts = {}) {
     const sessionKey = hookCtx?.sessionKey ?? event?.sessionKey;
     // A turn without a session key cannot be an incognito session: the host
     // identifies incognito *by* that key. Both the host types and every
     // other consumer in this file treat sessionKey as optional, so a
     // missing key must not silently drop the turn — that would disable the
     // plugin's core function. Classify only when a key is actually present.
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
+    // An Engine caller (TurnRecord.incognito === false) has already
+    // classified the turn on the host side: the host routing classifier is
+    // skipped, so a host without routing still captures.
+    if (opts.incognitoClassified === true) {
+      // classified by the caller
+    } else if (typeof sessionKey === "string" && sessionKey.trim()) {
       try {
         if (await classifyHostIncognitoSession(sessionKey)) {
           host.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
@@ -132,7 +209,7 @@ export function createTurnCapture(ctx) {
             "incognito classifier unavailable; durable capture is disabled for keyed sessions until it recovers",
           ));
         }
-        return undefined;
+        return opts.memoryCtx ? { ok: false, reason: "incognito-unclassifiable" } : undefined;
       }
     } else if (!warnedMissingCaptureSessionKey) {
       warnedMissingCaptureSessionKey = true;
@@ -143,32 +220,36 @@ export function createTurnCapture(ctx) {
     host.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
 
     const agentId = hookCtx?.agentId || "default";
-    const background = isBackgroundTurn(event, hookCtx);
-    if (shouldSkipAutoCaptureForInternalTurn(event, hookCtx)) {
+    const background = opts.agentContext ? opts.agentContext.background === true : isBackgroundTurn(event, hookCtx);
+    if (opts.agentContext ? opts.agentContext.origin !== "user" : shouldSkipAutoCaptureForInternalTurn(event, hookCtx)) {
       host.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
       return undefined;
     }
     let memoryCtx = null;
-    try {
-      memoryCtx = resolveMemoryRequestContext({
-        agentId,
-        workspaceDir: hookCtx?.workspaceDir,
-        workspaceKey: hookCtx?.workspaceKey,
-        workspaceId: hookCtx?.workspaceId,
-        userId: hookCtx?.userId ?? hookCtx?.senderId,
-        channel: hookCtx?.channel ?? hookCtx?.messageProvider,
-        accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
-        chatId: hookCtx?.chatId,
-        sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
-        sessionId: hookCtx?.sessionId ?? event?.sessionId,
-      }, { workspaceAliases: memoryWorkspaceAliases });
-    } catch (err) {
-      host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+    if (opts.memoryCtx) {
+      memoryCtx = opts.memoryCtx;
+    } else {
+      try {
+        memoryCtx = resolveMemoryRequestContext({
+          agentId,
+          workspaceDir: hookCtx?.workspaceDir,
+          workspaceKey: hookCtx?.workspaceKey,
+          workspaceId: hookCtx?.workspaceId,
+          userId: hookCtx?.userId ?? hookCtx?.senderId,
+          channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+          accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+          chatId: hookCtx?.chatId,
+          sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
+          sessionId: hookCtx?.sessionId ?? event?.sessionId,
+        }, { workspaceAliases: memoryWorkspaceAliases });
+      } catch (err) {
+        host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+      }
     }
     if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
     // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
-    return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+    return runtimeScheduler.enqueueCapture(agentId, { background, ...(opts.signal ? { signal: opts.signal } : {}) }, async (signal) => {
       const captureStartedAt = Date.now();
       const throwIfCaptureAborted = () => {
         if (!signal?.aborted) return;
@@ -564,6 +645,7 @@ export function createTurnCapture(ctx) {
             await db.store(row);
             storedMemoryRows.push(row);
             stored++;
+            if (opts.report) opts.report.stored = stored;
             host.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
           } catch (err) {
             const settlement = await waitForTimeoutSettlement(err);
@@ -583,6 +665,7 @@ export function createTurnCapture(ctx) {
         throwIfCaptureAborted();
 
         host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+        if (opts.report) Object.assign(opts.report, { stored, skipped });
 
         // Speaker naming pipeline: propose display names from merged diarization segments.
         await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
@@ -729,26 +812,16 @@ export function createTurnCapture(ctx) {
                   } catch (_) { /* try next */ }
                 }
               }
-              let lightRequestContext = null;
-              try {
-                lightRequestContext = resolveMemoryRequestContext({
-                  agentId,
-                  workspaceDir: hookCtx?.workspaceDir,
-                  workspaceKey: hookCtx?.workspaceKey,
-                  userId: hookCtx?.userId ?? hookCtx?.senderId,
-                  channel: hookCtx?.channel ?? hookCtx?.messageProvider,
-                  accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
-                  chatId: hookCtx?.chatId,
-                }, { workspaceAliases: memoryWorkspaceAliases });
-              } catch (_) {
-                lightRequestContext = null;
-              }
-              const lightAclBindings = lightRequestContext
-                ? (lightRequestContext.userPrincipal
-                  ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
-                  : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
-                : null;
-              postProcessing.push(lightDream({
+              const { requestContext: lightRequestContext, aclBindings: lightAclBindings } = lightDreamIdentity(opts.memoryCtx, () => resolveMemoryRequestContext({
+                agentId,
+                workspaceDir: hookCtx?.workspaceDir,
+                workspaceKey: hookCtx?.workspaceKey,
+                userId: hookCtx?.userId ?? hookCtx?.senderId,
+                channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+                accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+                chatId: hookCtx?.chatId,
+              }, { workspaceAliases: memoryWorkspaceAliases }));
+              const lightDreamWork = () => lightDream({
                 turns: normalizedTurns,
                 neoStore,
                 db,
@@ -804,10 +877,22 @@ export function createTurnCapture(ctx) {
                   host.logger.debug?.(`memory-lancedb-namespaced: light dream run not recorded: ${String(runErr)}`);
                 });
                 return true;
-              }).catch((dreamErr) => {
-                host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
-                return false;
-              }));
+              });
+              postProcessing.push(jobs
+                ? jobs.run("light-dream", agentId, { trigger: "capture", signal, input: { work: lightDreamWork } })
+                  .then((dreamRun) => {
+                    const { advance, warnKind } = classifyLightDreamOutcome(dreamRun);
+                    if (warnKind === "ledger_unwritable") {
+                      warnLightDreamLedgerUnwritable(agentId);
+                    } else if (warnKind === "failed") {
+                      host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamRun.error)}`);
+                    }
+                    return advance;
+                  })
+                : lightDreamWork().catch((dreamErr) => {
+                  host.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
+                  return false;
+                }));
             }
           }
 

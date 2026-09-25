@@ -8,7 +8,6 @@
  */
 
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { throwIfAborted } from "../../lib/abort.js";
 import { checkAccess } from "../../lib/acl-middleware.js";
@@ -17,14 +16,14 @@ import { ContradictionDetector } from "../../lib/contradiction-detector.js";
 import { runConversationReactivationRecall } from "../../lib/conversation-reactivation-recall.js";
 import { inferEmotionalValenceAsync } from "../../lib/emotion.js";
 import { extractMessageText, formatMoodFile } from "../../lib/emotional-state.js";
-import { applyGlobalInjectBudget } from "../../lib/inject-budget.js";
+import { planGlobalInjectBudget } from "../../lib/inject-budget.js";
 import { InterpretationOverlayStore } from "../../lib/interpretation-overlay.js";
 import { renderSkillProposalNudge } from "../../lib/jobs/skill-miner/nudge-renderer.js";
 import { getPendingProposals, lastPresentationAgeMs, recordPresentation } from "../../lib/jobs/skill-miner/proposal-writer.js";
 import { withLlmCallContext } from "../../lib/llm-result-cache.js";
 import { isLlmRouteAvailable } from "../../lib/llm-router.js";
 import { createRetrievalLedgerEntry } from "../../lib/memory-dynamics.js";
-import { resolveHostHookMemoryContext, resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
+import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { buildMoodStyleDirective } from "../../lib/mood-style-directive.js";
 import { dedupeNeoLanesAgainstTexts, formatNeoRecallContext, routeNeoRecall } from "../../lib/neo-arch.js";
 import { OPEN_THREADS_SHOWN_FILE, collectOpenThreads, formatOpenThreadsContext, normalizeTopic } from "../../lib/open-threads.js";
@@ -38,6 +37,9 @@ import { formatReminderNudge } from "../../lib/reminder-nudge.js";
 import { readPendingReminders, writePendingReminders } from "../../lib/reminder-pending.js";
 import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
+import { resolveCompactedAt } from "../checkpoint/checkpoint-store.js";
+import { emitEngineEvent } from "../events.js";
+import { ABORTED, contextBlock, copyRecallResult, recallResult } from "./recall-result.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { applySemanticLensToRecall } from "../../lib/semantic-lens-index.js";
 import { formatTimeContext, getLastActivity, recordActivity } from "../../lib/session-time.js";
@@ -52,17 +54,18 @@ import { hourInTimeZone } from "../../lib/time-window.js";
  * engine context. Every binding the moved body closes over is destructured
  * once, here, at registration time.
  *
- * `ctx.recallTimingSink`, when provided, is called once per attempted recall
- * with `{ agentId, phases, totalMs }` after the scheduled recall settles —
- * `phases` is `phaseTimer.summary()` (`lib/recall-phase-timer.js`), `totalMs`
- * is `phaseTimer.elapsedMs()`. Purely additive/observational: it never
- * changes the returned `prependContext`, defaults to `null` (a no-op), and
- * production wiring (`index.js`) only ever passes a real function through a
- * test-only property nothing in production sets — see the fix-round note at
- * that call site.
+ * Every scheduled recall fills `RecallResult.timing = { phases, totalMs,
+ * namespacePhases }` — `phases` is `phaseTimer.summary()`
+ * (`lib/recall-phase-timer.js`), `totalMs` is `phaseTimer.elapsedMs()`, and
+ * `namespacePhases` is the fine-grained per-namespace phase list collected
+ * via `runMergedNamespaceRecall`'s `onNamespacePhases` callback (always, not
+ * folded into the outer `phaseTimer` the scheduler's timeout log reads). A
+ * `recall.completed` host event carries the same `timing` alongside
+ * `agentId` and `degraded`, emitted once per scheduled recall right before
+ * it returns.
  *
  * @param {Record<string, any>} ctx Engine context; see the destructuring below.
- * @returns {(event: Record<string, any>, hookCtx: Record<string, any>) => Promise<{prependContext: string}|undefined>} The hook handler.
+ * @returns {(event: Record<string, any>, hookCtx: Record<string, any>) => Promise<object>} A RecallResult (engine/recall/recall-result.js).
  */
 export function createPromptContextAssembler(ctx) {
   const {
@@ -79,6 +82,7 @@ export function createPromptContextAssembler(ctx) {
     canonicalMaxItems,
     canonicalMinScore,
     cfg,
+    checkpointStore = null,
     dbg,
     dedupEnabled,
     dedupJaccard,
@@ -86,14 +90,11 @@ export function createPromptContextAssembler(ctx) {
     embeddings,
     emotionalPool,
     gcEnabled,
-    getMemoryTurnRoutes,
     getNeoStore,
     host,
-    hostRoutingLoader,
     makeQuerySummarizer,
     markNeoRecallInjection,
     maxPromptMemories,
-    memoryAccountTopology,
     memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
     mergingEnabled,
@@ -110,7 +111,6 @@ export function createPromptContextAssembler(ctx) {
     pool,
     queryRefinerEnabled,
     recallQueryLlmCfg,
-    recallTimingSink = null,
     replyOutcomeDynamics,
     replyOutcomeEnabled,
     replyOutcomeMaxAssistantChars,
@@ -120,6 +120,7 @@ export function createPromptContextAssembler(ctx) {
     rerankerCfg,
     resolveCommandLocaleRecall,
     resolveRuntimeRecallBudget,
+    resolveTurnPrincipal = null,
     runMergedNamespaceRecall,
     runMinimalBeforePromptMaintenance,
     runNeoGlobalSearch,
@@ -140,58 +141,84 @@ export function createPromptContextAssembler(ctx) {
     workspacePolicyGuard,
   } = ctx;
 
-  return async function assemblePromptContext(event, hookCtx) {
-    const background = isBackgroundTurn(event, hookCtx);
-    const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, hookCtx);
-    if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return undefined;
+  return async function assemblePromptContext(event, hookCtx, opts = {}) {
+    const callerSignal = opts?.signal;
+    if (!(callerSignal instanceof AbortSignal)) {
+      const degraded = { reason: "invalid-query", capability: "recall", detail: "signal is required" };
+      emitEngineEvent(host, "recall.degraded", { agentId: hookCtx?.agentId || "default", degraded });
+      return recallResult({ degraded });
+    }
+    if (callerSignal.aborted) {
+      emitEngineEvent(host, "recall.degraded", { agentId: hookCtx?.agentId || "default", degraded: ABORTED });
+      return recallResult({ degraded: ABORTED });
+    }
+    // Blocks finished before the scheduled work completes. An aborted or
+    // timed-out recall returns these (spec 3.2) instead of nothing.
+    const completed = { neo: "", start: "" };
+    const background = opts.agentContext ? opts.agentContext.background === true : isBackgroundTurn(event, hookCtx);
+    const skipInternalRecall = opts.agentContext ? opts.agentContext.origin !== "user" : shouldSkipAutoRecallForInternalTurn(event, hookCtx);
+    if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return recallResult();
     const agentIdForCache = hookCtx?.agentId || "default";
     const sessionKeyForCache = hookCtx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
-    const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
+    const promptForCache = String(event?.prompt || "").slice(0, 500);
+    // A caller-resolved memory context (Engine.recall) keys the cache by the
+    // whole principal, never by agent + text alone: two principals asking
+    // the same agent the same thing must never share a cached answer. The
+    // OpenClaw hook path (no memoryCtx) keeps its session-scoped key.
+    const cacheKey = opts.memoryCtx
+      ? `principal:${JSON.stringify([
+        opts.memoryCtx.agentId ?? agentIdForCache,
+        opts.memoryCtx.workspaceIdentity ?? "",
+        opts.memoryCtx.userPrincipal ?? "",
+        opts.memoryCtx.channel ?? "",
+        opts.memoryCtx.accountId ?? "",
+        opts.memoryCtx.chatId ?? "",
+        opts.memoryCtx.chatKind ?? "",
+        opts.memoryCtx.trust ?? "",
+        sessionKeyForCache,
+        promptForCache,
+      ])}`
+      : `${agentIdForCache}:${sessionKeyForCache}:${promptForCache}`;
     const phaseTimer = createRecallPhaseTimer({
       softBudgetMs,
       hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
       logger: host.logger,
     });
+    const namespacePhases = [];
+    // Set when the store section fails and the callback falls back to the
+    // neo/start blocks (or nothing): the result reports it as degraded
+    // instead of passing for a clean recall. Kept out of the returned value
+    // so what the scheduler caches is unchanged.
+    let innerFailure = null;
     const scheduledRecall = await runtimeScheduler.runRecall({
       background,
       cacheKey,
       priority: background ? "low" : "normal",
       phaseTimer,
+      signal: callerSignal,
     }, async (signal, timer) => {
     throwIfAborted(signal, "recall aborted");
     // P0-1: Interne/background Turns bekommen keine volle Recall-Injektion.
     if (skipInternalRecall) {
       return runMinimalBeforePromptMaintenance(event, hookCtx, { neoEnabled, gcEnabled });
     }
-    const routingCapability = await hostRoutingLoader();
-    const turnRoutes = await getMemoryTurnRoutes();
     // 7.12.30: Phasenzeiten des Vorlaufs (Identitaet, Neo-Fenster, Embedding,
     // globale Suche, Lanes). Der Host bricht den Hook nach 15 s ab; am
     // 09./10.09.2026 passierte das dutzendfach, ohne dass eine Logzeile den
     // Verbleib der Zeit zeigte.
     const recallPrelude = { startedAt: Date.now(), identityMs: 0, hookRecordMs: 0, windowMs: 0, embedMs: 0, embedTimedOut: false, globalMs: 0, lanesMs: 0 };
-    const memoryCtx = turnRoutes
-      ? await resolveHostHookMemoryContext({
-          ...hookCtx,
-          runId: hookCtx?.runId ?? event?.runId,
-          sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
-          sessionId: hookCtx?.sessionId ?? event?.sessionId,
-        }, {
-          getSessionEntry: ({ agentId, sessionKey, readConsistency }) => host.runtime.agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
-          workspaceAliases: memoryWorkspaceAliases,
-          accountTopology: memoryAccountTopology,
-          turnRoutes,
-          routingCapability,
-          logger: host.logger,
-        })
-      : resolveMemoryRequestContext({
+    const { memoryCtx } = opts.memoryCtx
+      ? { memoryCtx: opts.memoryCtx }
+      : resolveTurnPrincipal
+        ? await resolveTurnPrincipal(event, hookCtx)
+        : { memoryCtx: resolveMemoryRequestContext({
           agentId: hookCtx?.agentId,
           workspaceDir: hookCtx?.workspaceDir,
           channel: hookCtx?.messageProvider,
           chatId: hookCtx?.chatId,
           sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
           sessionId: hookCtx?.sessionId ?? event?.sessionId,
-        }, { workspaceAliases: memoryWorkspaceAliases });
+        }, { workspaceAliases: memoryWorkspaceAliases }) };
     if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
     let neoContext = "";
     let neoLanes = null;
@@ -265,13 +292,14 @@ export function createPromptContextAssembler(ctx) {
         host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
       }
     }
+    completed.neo = neoContext;
     {
       const preludeMs = Date.now() - recallPrelude.startedAt;
       const preludeLine = `plur1bus-neo: recall prelude total=${preludeMs}ms identity=${recallPrelude.identityMs}ms hookRecord=${recallPrelude.hookRecordMs}ms window=${recallPrelude.windowMs}ms embed=${recallPrelude.embedMs}ms${recallPrelude.embedTimedOut ? "(timeout)" : ""} global=${recallPrelude.globalMs}ms lanes=${recallPrelude.lanesMs}ms authenticated=${memoryCtx?.userPrincipal ? "yes" : "no"} agent=${hookCtx?.agentId || "default"}`;
       if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) host.logger.info(preludeLine);
       else host.logger.debug(preludeLine);
     }
-    if (!event.prompt || event.prompt.length < 5) return neoContext ? { prependContext: neoContext } : undefined;
+    if (!event.prompt || event.prompt.length < 5) return neoContext ? recallResult({ blocks: [contextBlock("neo", neoContext, true)] }) : undefined;
     // Skip heavy LanceDB recall for internal dreaming/sleep magic messages —
     // these cron turns don't need memory context and the recall would block
     // the event loop for each workspace, causing lane timeouts.
@@ -279,11 +307,17 @@ export function createPromptContextAssembler(ctx) {
       event.prompt === "__openclaw_memory_core_short_term_promotion_dream__" ||
       event.prompt === "__openclaw_memory_core_light_sleep__" ||
       event.prompt === "__openclaw_memory_core_rem_sleep__"
-    ) { return neoContext ? { prependContext: neoContext } : undefined; }
-    const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
+    ) { return neoContext ? recallResult({ blocks: [contextBlock("neo", neoContext, true)] }) : undefined; }
+    // consumePlur1busStartNotice deletes the one-time start notice as it reads
+    // it, so this check must run immediately before that call: an already-
+    // aborted job must degrade here, before it can consume (and thereby hide)
+    // the notice a still-pending or future job would otherwise still show.
+    throwIfAborted(signal, "recall aborted");
+    const pendingStartNotice = consumePlur1busStartNotice(host.stateDir);
     const startNoticeContext = pendingStartNotice
       ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
       : "";
+    completed.start = startNoticeContext;
     const agentId = memoryCtx.agentId;
     return pool.withWriteDb(agentId, (db) => withAccessReadDbs(
       pool,
@@ -428,6 +462,7 @@ export function createPromptContextAssembler(ctx) {
         phaseTimer: timer,
         softBudgetFallback,
         embeddings,
+        signal,
         workspaceDir: hookCtx?.workspaceDir,
         topN: maxPromptMemories,
         budget: resolveRuntimeRecallBudget(event.prompt, maxPromptMemories, adaptiveBudgetCfg),
@@ -484,13 +519,9 @@ export function createPromptContextAssembler(ctx) {
         timer,
         {
           strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1,
-          // Fix round 2: only fold per-namespace fine-grained phases into the
-          // outer timer when something will actually read them — otherwise
-          // this stays exactly the pre-fix-round behaviour (one coarse
-          // "namespace-recall" entry), including for the timeout-warning log
-          // line at lib/runtime-scheduler.js:456-476, which reads this same
-          // outer timer's summary().
-          recordNamespacePhases: Boolean(recallTimingSink),
+          onNamespacePhases: (namespace, completed) => {
+            for (const entry of completed) namespacePhases.push({ namespace, phase: entry.phase, ms: entry.ms });
+          },
         },
       );
       trace = pipelineTrace || trace;
@@ -822,7 +853,7 @@ export function createPromptContextAssembler(ctx) {
               sessionKey: hookCtx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "",
               now: Date.now(),
               logger: host.logger,
-              compactedAt: event?.compactedAt || hookCtx?.compactedAt || null,
+              compactedAt: resolveCompactedAt({ event, hookCtx, store: checkpointStore, agentId }),
               requestContext: memoryCtx,
               getMemoryById: async (memoryId) => {
                 const memory = await db.getById(memoryId);
@@ -918,6 +949,7 @@ export function createPromptContextAssembler(ctx) {
         ));
         promptSemanticLensItems = [];
       }
+      const memoryDeferrals = [];
       const memoriesContext = formatRelevantMemoriesContext(promptItems, {
         fadedThreshold: resolveFadedThreshold(recallCfg),
         // Inner cap on the <relevant-memories> block itself, independent of
@@ -933,6 +965,9 @@ export function createPromptContextAssembler(ctx) {
           maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
         },
         now: nowMs,
+        onTruncate: ({ from, to }) => {
+          memoryDeferrals.push({ block: "memories", kind: "clipped", from, to, reason: "memories-cap" });
+        },
       });
       let personaDirective = null;
       let personaEmojiPalette = null;
@@ -1022,18 +1057,22 @@ export function createPromptContextAssembler(ctx) {
           if (echoCooldownOk) {
             const { loadFreshDreamEcho, formatDreamEchoContext } = await import("../../lib/dream-echo.js");
             const { loadGovernorState, saveGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend, withGovernorLock } = await import("../../lib/proactive-governor.js");
-            let echoRequestContext = null;
-            try {
-              echoRequestContext = resolveMemoryRequestContext({
-                agentId: hookCtx?.agentId || "default",
-                workspaceDir: hookCtx.workspaceDir,
-                userId: hookCtx?.userId ?? hookCtx?.senderId,
-                channel: hookCtx?.channel ?? hookCtx?.messageProvider,
-                accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
-                chatId: hookCtx?.chatId,
-              }, { workspaceAliases: memoryWorkspaceAliases });
-            } catch (err) {
-              host.logger.debug(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
+            // A caller-resolved Principal (Engine.recall) is the read
+            // context as is; only the hook path re-resolves from hookCtx.
+            let echoRequestContext = opts.memoryCtx ?? null;
+            if (!echoRequestContext) {
+              try {
+                echoRequestContext = resolveMemoryRequestContext({
+                  agentId: hookCtx?.agentId || "default",
+                  workspaceDir: hookCtx.workspaceDir,
+                  userId: hookCtx?.userId ?? hookCtx?.senderId,
+                  channel: hookCtx?.channel ?? hookCtx?.messageProvider,
+                  accountId: hookCtx?.accountId ?? hookCtx?.channelContext?.accountId,
+                  chatId: hookCtx?.chatId,
+                }, { workspaceAliases: memoryWorkspaceAliases });
+              } catch (err) {
+                host.logger.debug(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
+              }
             }
             const echo = loadFreshDreamEcho(hookCtx.workspaceDir, { now: nowMs, requestContext: echoRequestContext });
             if (echo) {
@@ -1151,6 +1190,9 @@ export function createPromptContextAssembler(ctx) {
         }
         const allDue = [...byId.values()];
         if (allDue.length > 0) {
+          // An aborted recall injects nothing, so it must not mark anything
+          // presented (or drop it from the pending file) either.
+          throwIfAborted(signal, "recall aborted");
           reminderNudge = formatReminderNudge(allDue, { lang, tone });
           for (const r of dueFromDb) {
             await presentReminder(db, r.id).catch((err) => {
@@ -1166,6 +1208,7 @@ export function createPromptContextAssembler(ctx) {
           }
         }
       } catch (reminderErr) {
+        if (signal.aborted) throw reminderErr;
         host.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
       }
       throwIfAborted(signal, "recall aborted");
@@ -1183,54 +1226,98 @@ export function createPromptContextAssembler(ctx) {
           host.logger.debug(`plur1bus-neo: global dedupe skipped: ${String(dedupeErr)}`);
         }
       }
-      return { prependContext: applyGlobalInjectBudget({
-        blocks: [
-          { name: "neo", text: neoContext, droppable: true },
-          { name: "start", text: startNoticeContext, droppable: true },
-          { name: "memories", text: fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, droppable: true },
-          { name: "time", text: timeContext, droppable: false },
-          { name: "temporal", text: temporalContinuityContext, droppable: false },
-          { name: "reminder", text: reminderNudge, droppable: false },
-        ],
-        maxChars: cfg.recall?.globalInjectMaxChars ?? 17_000,
-      }) };
+      const blocks = [
+        contextBlock("neo", neoContext, true),
+        contextBlock("start", startNoticeContext, true),
+        contextBlock("memories", fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, true),
+        contextBlock("time", timeContext, false),
+        contextBlock("temporal", temporalContinuityContext, false),
+        contextBlock("reminder", reminderNudge, false),
+      ];
+      const capChars = cfg.recall?.globalInjectMaxChars ?? 17_000;
+      const deferrals = [...memoryDeferrals, ...planGlobalInjectBudget({ blocks, maxChars: capChars }).deferrals];
+      for (const deferral of deferrals) {
+        emitEngineEvent(host, `recall.block-${deferral.kind}`, { agentId, ...deferral });
+      }
+      return recallResult({ blocks, capChars, deferrals });
     } catch (err) {
       throwIfAborted(signal, "recall aborted");
+      innerFailure = { reason: "error", capability: "recall", detail: String(err?.message || err).slice(0, 200) };
       host.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
-      const fallbackContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
-      if (fallbackContext) return { prependContext: fallbackContext };
+      const fallbackBlocks = [contextBlock("neo", neoContext, true), contextBlock("start", startNoticeContext, true)]
+        .filter((block) => block.text);
+      if (fallbackBlocks.length > 0) return recallResult({ blocks: fallbackBlocks });
     }
     }));
     });
-    // Task 19 fix round: additive, observational only — never changes what
-    // is returned below. `phaseTimer` (created above, same object as the
-    // `timer` the callback closed over) is fully populated by now, whether
-    // the callback returned normally, hit the soft-budget fallback, timed
-    // out, or threw and was caught as `scheduledRecall.error`. Fix round 3:
-    // a caller-supplied sink is untrusted code from this function's point of
-    // view (AGENTS.md: no silent catches), so a throwing sink is caught and
-    // logged rather than breaking the turn's actual reply.
-    try {
-      recallTimingSink?.({ agentId: hookCtx?.agentId, phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs() });
-    } catch (sinkErr) {
-      dbg(sinkErr);
-    }
+    // `phaseTimer` (created above, same object as the `timer` the callback
+    // closed over) is fully populated by now, whether the callback returned
+    // normally, hit the soft-budget fallback, timed out, or threw and was
+    // caught as `scheduledRecall.error`. `namespacePhases` was collected
+    // separately, via `onNamespacePhases`, and is never folded into
+    // `phaseTimer` itself.
+    const timing = { phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs(), namespacePhases };
+    const withTiming = (result) => ({ ...result, timing });
     // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
     // Reply-Outcome-Dynamik die Tabelle anfassen.
     if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
+    const partial = () => [contextBlock("neo", completed.neo, true), contextBlock("start", completed.start, true)]
+      .filter((block) => block.text);
     if (scheduledRecall.ok) {
       if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
         host.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
       }
-      return scheduledRecall.value;
+      // Always a copy: the scheduler caches the very object it resolved with.
+      const value = copyRecallResult(scheduledRecall.value) ?? recallResult();
+      // A caller abort answered from the cache is still an abort: the blocks
+      // are served (spec 3.2 — return what is already complete), but the
+      // result never claims to be a clean recall.
+      // The same holds for the scheduler's own timeout answered from the cache.
+      if ((scheduledRecall.aborted || scheduledRecall.timedOut) && scheduledRecall.fromCache) {
+        const cachedDegraded = scheduledRecall.aborted ? ABORTED : { reason: "timeout", capability: "recall" };
+        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: cachedDegraded });
+        const result = withTiming({ ...value, degraded: cachedDegraded });
+        emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+        return result;
+      }
+      if (innerFailure && !scheduledRecall.fromCache) {
+        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: innerFailure });
+        const result = withTiming({ ...value, degraded: innerFailure });
+        emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+        return result;
+      }
+      const result = withTiming(value);
+      emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+      return result;
     }
-    if (scheduledRecall.timedOut) {
-      host.logger.warn(`memory-lancedb-namespaced: recall timed out without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
-      return undefined;
+    if (scheduledRecall.aborted || scheduledRecall.timedOut) {
+      const degraded = scheduledRecall.aborted ? ABORTED : { reason: "timeout", capability: "recall" };
+      const reasonLabel = scheduledRecall.aborted ? "aborted" : "timed out";
+      // A caller-initiated abort is the caller's decision, not a fault:
+      // debug. A timeout stays a warning.
+      const abortLine = `memory-lancedb-namespaced: recall ${reasonLabel} without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`;
+      if (scheduledRecall.aborted) host.logger.debug(abortLine);
+      else host.logger.warn(abortLine);
+      emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded });
+      const result = withTiming(recallResult({ blocks: partial(), degraded }));
+      emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+      return result;
     }
+    // Every other exit is a failure the caller must be able to tell from an
+    // empty recall: pressure shedding, a full or evicting queue, or a
+    // scheduler/callback error.
+    let failure = null;
     if (scheduledRecall.error) {
       host.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);
+      failure = { reason: "error", capability: "recall", detail: String(scheduledRecall.error?.message || scheduledRecall.error).slice(0, 200) };
+    } else if (scheduledRecall.skipped) {
+      failure = scheduledRecall.pressure
+        ? { reason: "pressure", capability: "recall", ...(scheduledRecall.reason ? { detail: String(scheduledRecall.reason) } : {}) }
+        : { reason: "queue-full", capability: "recall", ...(scheduledRecall.reason ? { detail: String(scheduledRecall.reason) } : {}) };
     }
-    return undefined;
+    if (failure) emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: failure });
+    const result = withTiming(recallResult({ degraded: failure }));
+    emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+    return result;
   };
 }

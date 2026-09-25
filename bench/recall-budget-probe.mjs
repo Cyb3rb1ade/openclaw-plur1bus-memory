@@ -39,44 +39,41 @@
  * `query_refinement`, `temporal`, `canonical`, `scoring`, `graph`,
  * `graph_hydration`, `rerank`, `budget`, `dedup`, `acl`, `finalize` — see the
  * `phaseTimer.start`/`end(...)` calls in `lib/recall-pipeline.js`) are
- * recorded on a *child* phase timer created per namespace inside `index.js`'s
- * `runMergedNamespaceRecall` — kept separate from the outer timer
- * specifically so concurrent `Promise.allSettled` namespace reads don't
- * interleave start/end calls on a shared timer. That outer timer (created in
- * `engine/recall/assemble-prompt-context.js`) previously only ever saw one
- * coarse `"namespace-recall"` block wrapping all of them combined.
- * `runMergedNamespaceRecall` now folds each finished child's phases back into
- * the outer timer via a new, purely additive `phaseTimer.record(phase, ms)`
- * method (`lib/recall-phase-timer.js`, next to `start`/`end`/`summary`),
- * qualified as `"<namespace>:<phase>"` so multiple namespaces stay
- * distinguishable (the golden fixtures only ever exercise one private
- * namespace, whose `namespace` field is `null` — printed below as
- * `private:<phase>`). `engine/recall/assemble-prompt-context.js` then calls
- * an optional `ctx.recallTimingSink?.({ agentId, phases, totalMs })` right
- * after the scheduled recall settles, with `phases = phaseTimer.summary()`
- * and `totalMs = phaseTimer.elapsedMs()`. This is additive/observational
- * only — it can never change the returned `prependContext`, defaults to
- * `null`, and `index.js` only ever passes a real function through one
- * test-only property (`api.__recallTimingSinkForTests`, read with `??`) that
- * no real OpenClaw host sets — so production behaviour is unchanged.
- * `tests/helpers/golden-prefix-driver.js`'s `runScenario` forwards its own
- * `recallTimingSink` option onto that same stub-`api` property.
+ * recorded on a *child* phase timer created per namespace inside
+ * `runMergedNamespaceRecall` (`engine/recall/namespace-recall.js`) — kept
+ * separate from the outer timer specifically so concurrent
+ * `Promise.allSettled` namespace reads don't interleave start/end calls on a
+ * shared timer. That outer timer (created in
+ * `engine/recall/assemble-prompt-context.js`) only ever sees one coarse
+ * `"namespace-recall"` block wrapping all of them combined — it is never
+ * written to by the per-namespace fold (that would corrupt the timeout log
+ * line `lib/runtime-scheduler.js` reads from it). Instead, each namespace's
+ * finished child phases are reported through `onNamespacePhases(namespace,
+ * completed)`, collected into `RecallResult.timing.namespacePhases`
+ * (`[{ namespace, phase, ms }]`) alongside `timing.phases =
+ * phaseTimer.summary()` and `timing.totalMs = phaseTimer.elapsedMs()` — on
+ * *every* scheduled recall, always, not gated behind any test-only flag.
+ * `engine/recall/assemble-prompt-context.js` emits a `recall.completed` host
+ * event, `{ agentId, timing, degraded }`, once right before it returns. This
+ * probe reads that event through `tests/helpers/golden-prefix-driver.js`'s
+ * `runScenario({ recallTimingSink })` option, which is no longer a plugin
+ * option at all — it is a `recall.completed` listener implemented in the
+ * driver, given the same `{ agentId, phases, totalMs, namespacePhases }`
+ * shape this probe always expected. Multiple namespaces stay distinguishable
+ * via `"<namespace>:<phase>"` naming (the golden fixtures only ever exercise
+ * one private namespace, whose `namespace` field is `null` — printed below
+ * as `private:<phase>`).
  *
- * Everything the sink reports (LanceDB vector search, scoring, dedup, budget
+ * Everything this probe reads (LanceDB vector search, scoring, dedup, budget
  * trimming, context formatting) is still stub-embedder work — see the header
  * this script prints, and the caveat below.
  *
  * Fix round 2 (controller review):
- *   1. The per-namespace phase fold in `runMergedNamespaceRecall` is now
- *      gated on a new `recordNamespacePhases` option (default `false`), which
- *      `engine/recall/assemble-prompt-context.js` only sets `true` when
- *      `recallTimingSink` is actually attached. Production never attaches
- *      one, so the fold now never *executes* there — not just a harmless
- *      no-op — and the outer phase timer's `summary()` (read in production by
- *      `lib/runtime-scheduler.js`'s recall-timeout warning log line) is
- *      unchanged. Verified by the full suite staying green and by
- *      `tests/recall-phase-timer.test.js`/`tests/multi-namespace-recall-runtime.test.js`
- *      staying green with no edits.
+ *   1. (Superseded by Task 14 — see above.) The per-namespace phase fold in
+ *      `runMergedNamespaceRecall` used to be gated on a test-only sink; it is
+ *      now unconditional and separate from the outer phase timer, whose
+ *      `summary()` (read in production by `lib/runtime-scheduler.js`'s
+ *      recall-timeout warning log line) stays exactly what it was before.
  *   2. The wall-clock total this probe reported before conflated fixture
  *      setup (temp dirs, the sequential `db.store()` loop, `plugin.register()`
  *      cold start) with the actual recall. `runScenario` now takes an
@@ -97,8 +94,10 @@
  *   3. `record()` and the sink/no-sink contract now have dedicated tests —
  *      see `tests/recall-phase-timer.test.js` and
  *      `tests/engine-assemble-prompt-context.test.js`.
- *   4. The sink call is now wrapped in `try { … } catch (e) { dbg(e); }` —
- *      AGENTS.md: no silent catches.
+ *   4. (Superseded by Task 14.) The sink used to be a caller-supplied
+ *      function wrapped in `try { … } catch`; it is now `RecallResult.timing`
+ *      plus the `recall.completed` host event, which cannot throw into the
+ *      assembler the way a sink could.
  *   5. The per-phase table now marks `namespace-recall` as the parent of the
  *      `private:*` rows (they are a further breakdown of that one slice, not
  *      additional time) and adds an `unattributed` row — recall minus
@@ -255,7 +254,11 @@ for (const raw of SCENARIOS) {
   let recallAttempts = 0;
   const recordPhases = (entry) => {
     recallAttempts += 1;
-    for (const { phase, ms } of entry.phases.completed) {
+    const samples = [
+      ...entry.phases.completed.map(({ phase, ms }) => ({ phase, ms })),
+      ...(entry.namespacePhases ?? []).map(({ namespace, phase, ms }) => ({ phase: `${namespace}:${phase}`, ms })),
+    ];
+    for (const { phase, ms } of samples) {
       if (!phaseSamples.has(phase)) phaseSamples.set(phase, []);
       phaseSamples.get(phase).push(ms);
     }

@@ -13,6 +13,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schemaPath = join(__dirname, "..", "openclaw.plugin.json");
 const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
@@ -253,9 +255,9 @@ describe("halfLifeDaysMap-Gruppen sind vollständig", () => {
 });
 
 describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
-  // Wir lesen index.js als Text und prüfen die Fallback-Literale
-  const indexPath = join(__dirname, "..", "index.js");
-  const indexSrc = readFileSync(indexPath, "utf8");
+  // Wir lesen die Engine-Konstruktion (engine/create-engine.js, bis Task 13b
+  // der Rumpf von index.js register()) als Text und prüfen die Fallback-Literale
+  const indexSrc = readRuntimeSources().engine.createEngine;
 
   function extractFallback(varName, expected) {
     const regex = new RegExp(
@@ -264,33 +266,33 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     // Manuelle Regex für jeden Wert, da die Variablennamen teilweise anders heißen
   }
 
-  it("index.js: dedupJaccard fallback = 0.78", () => {
+  it("engine/create-engine.js: dedupJaccard fallback = 0.78", () => {
     const m = indexSrc.match(/const\s+dedupJaccard\s*=\s*recallCfg\.dedupJaccard\s*\?\?\s*([0-9.]+)/);
     assert.ok(m, "dedupJaccard fallback nicht gefunden");
     assert.strictEqual(parseFloat(m[1]), 0.78);
   });
 
-  it("index.js: canonicalMaxItems fallback = 5", () => {
+  it("engine/create-engine.js: canonicalMaxItems fallback = 5", () => {
     const m = indexSrc.match(/const\s+canonicalMaxItems\s*=\s*recallCfg\.canonicalMaxItems\s*\?\?\s*([0-9.]+)/);
     assert.ok(m, "canonicalMaxItems fallback nicht gefunden");
     assert.strictEqual(parseFloat(m[1]), 5);
   });
 
-  it("index.js: maxPromptMemories is bounded with fallback 12", () => {
+  it("engine/create-engine.js: maxPromptMemories is bounded with fallback 12", () => {
     assert.match(indexSrc, /const\s+maxPromptMemories\s*=\s*normalizeBoundedRecallInteger\(recallCfg\.maxPromptMemories,\s*12,\s*1,\s*100\)/);
   });
 
-  it("index.js: candidateTopK is bounded with fallback 40", () => {
+  it("engine/create-engine.js: candidateTopK is bounded with fallback 40", () => {
     assert.match(indexSrc, /const\s+candidateTopK\s*=\s*normalizeBoundedRecallInteger\(recallCfg\.candidateTopK,\s*40,\s*1,\s*100\)/);
   });
 
-  it("index.js: importanceBoost fallback = 0.3", () => {
+  it("engine/create-engine.js: importanceBoost fallback = 0.3", () => {
     const m = indexSrc.match(/const\s+importanceBoost\s*=\s*recallCfg\.importanceBoost\s*\?\?\s*([0-9.]+)/);
     assert.ok(m, "importanceBoost fallback nicht gefunden");
     assert.strictEqual(parseFloat(m[1]), 0.3);
   });
 
-  it("index.js: importanceBoost is resolved for validation only, never forwarded to a recall call (entfernt 19.09.2026, Fix-Runde 1)", () => {
+  it("engine/create-engine.js: importanceBoost is resolved for validation only, never forwarded to a recall call (entfernt 19.09.2026, Fix-Runde 1)", () => {
     // Seit Task 8 liest die Pipeline diesen Wert nicht mehr. index.js darf ihn
     // zur Config-Validierung auflösen (die const-Zeile oben), aber nirgendwo
     // mehr als Objekt-Property in einen runRecallPipeline-/
@@ -298,7 +300,10 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     // (`importanceBoost,`) noch explizit (`importanceBoost: …`). Die
     // const-Deklaration selbst steht nie am Zeilenanfang (ihr geht `const `
     // voraus), daher trifft dieses Muster sie nicht.
-    const forwarded = indexSrc.match(/^\s*importanceBoost\s*[,:]/m) || [];
+    // Task 13b: the registration context literals now live in
+    // adapter/openclaw/plugin.js, so the guard covers the plugin too.
+    const forwarded = [indexSrc, readRuntimeSources().adapter.plugin]
+      .flatMap((source) => source.match(/^\s*importanceBoost\s*[,:]/m) || []);
     assert.strictEqual(
       forwarded.length,
       0,
@@ -306,7 +311,7 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     );
   });
 
-  it("index.js: summaryMaxWords fallback = 150", () => {
+  it("engine/create-engine.js: summaryMaxWords fallback = 150", () => {
     const m = indexSrc.match(/const\s+summaryMaxWords\s*=\s*cfg\.summaryMaxWords\s*\?\?\s*([0-9.]+)/);
     assert.ok(m, "summaryMaxWords fallback nicht gefunden");
     assert.strictEqual(parseFloat(m[1]), 150);

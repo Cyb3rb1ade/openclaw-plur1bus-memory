@@ -30,16 +30,16 @@ function baseCtx(overrides = {}) {
 }
 
 describe("createMinimalMaintenance", () => {
-  it("returns undefined when the workspace policy refuses the turn", async () => {
+  it("returns no blocks when the workspace policy refuses the turn", async () => {
     const handler = createMinimalMaintenance(baseCtx({
       automaticWorkspacePolicyDecision: () => ({ allowed: false }),
     }));
-    assert.equal(await handler({ prompt: "x" }, { agentId: "a", workspaceDir: "/tmp/ws" }), undefined);
+    assert.equal((await handler({ prompt: "x" }, { agentId: "a", workspaceDir: "/tmp/ws" })).blocks.length, 0);
   });
 
-  it("returns undefined when there is no workspace directory", async () => {
+  it("returns no blocks when there is no workspace directory", async () => {
     const handler = createMinimalMaintenance(baseCtx());
-    assert.equal(await handler({ prompt: "x" }, { agentId: "a" }), undefined);
+    assert.equal((await handler({ prompt: "x" }, { agentId: "a" })).blocks.length, 0);
   });
 
   it("records the neo hook dispatch when neo is enabled", async () => {
@@ -62,7 +62,7 @@ describe("createMinimalMaintenance", () => {
       host: createStubHost({ logger: { warn: (m) => warned.push(m) } }),
       getNeoStore: () => { throw new Error("neo unavailable"); },
     }));
-    assert.equal(await handler({ prompt: "x" }, { agentId: "a" }), undefined);
+    assert.equal((await handler({ prompt: "x" }, { agentId: "a" })).blocks.length, 0);
     assert.equal(warned.length, 1);
     assert.match(warned[0], /before_prompt_build dispatch tracking failed/);
   });

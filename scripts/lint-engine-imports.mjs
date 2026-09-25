@@ -23,6 +23,42 @@
  *      parameter itself (`function f(api)`, `const { api } = ctx`), which is
  *      the same coupling one indirection earlier. PR-03 moved seven such
  *      ranges and every one of them had to be checked by hand for this.
+ *   6. Transitive: every lib/** module reachable from engine/** through
+ *      relative imports obeys rule 1 too. A reached forbidden module is
+ *      reported with the chain that reaches it and is not walked further.
+ *   7. No `process.env.OPENCLAW_*` read and no literal "openclaw/…" load
+ *      specifier (import()/require()/resolve()) on that graph. Host paths come
+ *      from HostServices / lib/host-paths.js; host SDK modules from
+ *      lib/host-sdk-loader.js.
+ *
+ * Rule 7's env check (`ENV_READ`) is deliberately blunt: a line on the engine
+ * graph is flagged when it contains both `process.env` and an `OPENCLAW_`
+ * token, after stripping comments — not just the dotted/bracket member-access
+ * shapes. That also catches destructuring (`const { OPENCLAW_HOME } =
+ * process.env`, a renamed key, several keys on one line) without a
+ * destructuring-aware parser. Residual gaps, left as gaps rather than chased
+ * with more regex: an indirection that separates the two tokens across lines
+ * or variables (`const env = process.env; …; env.OPENCLAW_HOME` two
+ * statements later) is not caught, since the check is per line and textual,
+ * not a data-flow analysis. Comments are stripped before this check runs, but
+ * quoted strings are not (`stripComments`, not `stripCommentsAndStrings`):
+ * that is intentional, not an oversight — a real bracket-notation read
+ * (`process.env["OPENCLAW_CONFIG_PATH"]`) has its token *inside* a string
+ * literal, so stripping strings on this rule would silence the exact form it
+ * exists to catch. The trade-off is a string literal that merely *mentions*
+ * `process.env.OPENCLAW_HOME` (in a log message or an error string) reads as
+ * a violation too; that is a loud false positive, not a silent miss, and
+ * matches how rule 4/5's `DOTTED_API_REFERENCE`/`BARE_API_IDENTIFIER` already
+ * favour noise over blindness elsewhere in this file.
+ *
+ * `COMPUTED_IMPORT` (a non-literal `import(` argument) is checked on every
+ * module of the engine graph — both `engine/**` sources and every `lib/**`
+ * file rule 6's walk reaches — so a reached `lib/` module loading `openclaw`
+ * through a variable or template specifier is caught the same way a literal
+ * load is. What it still cannot see: a `require`/`resolve` call (rather than
+ * `import`) with a computed specifier, since only `import(` gets this check —
+ * a `require(someVar)` is spec-scoped out the same way the literal-only
+ * `IMPORT_PATTERNS` regexes already are, for `require`/`resolve` alike.
  *
  * Rules 4 and 5 are text rules over the source lines, not a syntax-aware
  * parser. Line comments, single-line block comments and simple quoted strings
@@ -71,7 +107,39 @@ const IMPORT_PATTERNS = [
   // The package is `"type": "module"` and uses no `require`, but a copied
   // snippet or a createRequire escape would otherwise slip the whole rule set.
   /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+  // `createRequire(import.meta.url)("./x.js")` chained straight into a call —
+  // no bare `require` identifier ever appears, so the pattern above misses it.
+  /\bcreateRequire\s*\([^)]*\)\s*\(\s*["']([^"']+)["']\s*\)/g,
 ];
+
+/**
+ * A dynamic `import(` call whose argument is not a plain single/double-quoted
+ * string literal — a computed specifier (a variable, a template literal, a
+ * concatenation). The static walker cannot resolve where a computed import
+ * leads, so instead of silently missing it, an occurrence on the engine graph
+ * (`engine/**` itself, and every `lib/**` file rule 6's walk reaches) is
+ * itself the violation: computed specifiers are a documented limitation of
+ * this text-based linter, and closing the hole this cheaply is worth doing.
+ */
+const COMPUTED_IMPORT = /\bimport\s*\(\s*(?!["'])\S/;
+
+/**
+ * Engine-graph files exempt from COMPUTED_IMPORT, and from no other rule. Keep
+ * this to exactly the files named here, each with its reason. It is consulted
+ * both for `engine/**` sources and for the `lib/**` files rule 6's walk
+ * reaches:
+ *
+ * - engine/store/lancedb-loader.js — getLanceDB()/getOpenAI() fall back to
+ *   importing the LanceDB/OpenAI *packages* from the plugin's own
+ *   node_modules or the legacy stock checkout by absolute path. These are
+ *   package-location fallbacks, not host code; injecting the loaders through
+ *   host capabilities instead is a PR-14 item.
+ * - lib/providers/embedding-openai.js — the same getOpenAI() fallback pattern
+ *   (plugin node_modules, then the legacy stock checkout, by absolute path).
+ *   On the engine graph since createEngine() constructs the OpenAI embedding
+ *   provider; same reason, same PR-14 item.
+ */
+const COMPUTED_IMPORT_ALLOW = new Set(["engine/store/lancedb-loader.js", "lib/providers/embedding-openai.js"]);
 
 /** A member read of `api` off any receiver: `host.api`, `services.api.on`, … */
 const DOTTED_API_REFERENCE = /\.\s*api\b/;
@@ -187,9 +255,74 @@ for (const scanRoot of ROOTS) {
         if (BARE_API_IDENTIFIER.test(code)) {
           violations.push(`${from}:${index + 1}: engine code must not name the OpenClaw \`api\` — it stays in adapter/openclaw/** and reaches the engine only as typed HostServices members (${line.trim()})`);
         }
+        // Checked against comments-only-stripped text (not strings-stripped):
+        // COMPUTED_IMPORT needs to see whether the import() argument is a
+        // real string literal or not.
+        if (!COMPUTED_IMPORT_ALLOW.has(from) && COMPUTED_IMPORT.test(stripComments(line))) {
+          violations.push(`${from}:${index + 1}: engine code must not call import() with a computed specifier — the static import-graph walker cannot follow it (${line.trim()})`);
+        }
       });
     }
     graph.set(from, edges);
+  }
+}
+
+// Rule 6/7: walk engine/** through lib/** relative imports, applying the
+// forbidden-import rule transitively and flagging `process.env.OPENCLAW_*`
+// reads and literal `openclaw/…` load specifiers on every reached module. A
+// forbidden module is reported where it is reached and not descended into
+// (spec §6 R-3), so its own imports are never re-reported.
+const ENV_READ_TOKEN = /process\.env\b/;
+const OPENCLAW_TOKEN = /OPENCLAW_[A-Z0-9_]*/;
+const OPENCLAW_LOAD = /\b(?:import|require|resolve)\s*\(\s*[`"']openclaw(?:[/`"'])/;
+const forbiddenWhy = (spec, target) => FORBIDDEN_FOR_ENGINE.find((rule) => rule.test(spec, target))?.why ?? null;
+
+/**
+ * Resolve a relative import specifier to an absolute file path, defaulting a
+ * missing extension to `.js`. Returns null for a bare package specifier.
+ * @param {string} fromFile Absolute path of the importing file.
+ * @param {string} spec Import specifier.
+ * @returns {string|null} Absolute path, or null for a bare package.
+ */
+function resolveModule(fromFile, spec) {
+  if (!spec.startsWith(".")) return null;
+  let target = resolve(dirname(fromFile), spec);
+  if (!/\.m?js$/.test(target)) target = `${target}.js`;
+  return target;
+}
+
+const reached = new Map();
+const queue = [];
+for (const [from] of graph) {
+  if (from.startsWith("engine/")) queue.push({ file: join(root, from), chain: [from] });
+}
+while (queue.length > 0) {
+  const { file, chain } = queue.shift();
+  const rel = toPosix(relative(root, file));
+  if (reached.has(rel)) continue;
+  let source;
+  try {
+    source = readFileSync(file, "utf8");
+  } catch {
+    continue;
+  }
+  reached.set(rel, chain);
+  source.split("\n").forEach((line, index) => {
+    const code = stripComments(line);
+    if (ENV_READ_TOKEN.test(code) && OPENCLAW_TOKEN.test(code)) violations.push(`env: ${rel}:${index + 1}: process.env.OPENCLAW_* read on the engine graph (via ${chain.join(" -> ")})`);
+    if (!rel.startsWith("engine/") && OPENCLAW_LOAD.test(code)) violations.push(`transitive: ${chain.join(" -> ")}: loads the openclaw package (${line.trim()})`);
+    if (!rel.startsWith("engine/") && !COMPUTED_IMPORT_ALLOW.has(rel) && COMPUTED_IMPORT.test(code)) violations.push(`transitive: ${chain.join(" -> ")}: import() with a computed specifier — the static import-graph walker cannot follow it (${line.trim()})`);
+  });
+  for (const spec of importsOf(source)) {
+    const targetAbs = resolveModule(file, spec);
+    const target = targetAbs ? toPosix(relative(root, targetAbs)) : null;
+    const why = forbiddenWhy(spec, target);
+    if (why && !rel.startsWith("engine/")) {
+      violations.push(`transitive: ${chain.concat(target ?? spec).join(" -> ")}: engine graph must not reach ${why}`);
+      continue;
+    }
+    if (why) continue; // rule 1 already reported this direct import
+    if (target && target.startsWith("lib/")) queue.push({ file: targetAbs, chain: chain.concat(target) });
   }
 }
 
@@ -225,4 +358,6 @@ if (violations.length > 0) {
   console.error(`\n${new Set(violations).size} violation(s)`);
   process.exit(1);
 }
-console.log(`lint-engine-imports: clean (${graph.size} module(s))`);
+console.log(
+  `lint-engine-imports: clean (${graph.size} module(s), ${reached.size - [...graph.keys()].filter((k) => k.startsWith("engine/")).length} lib module(s) reached)`,
+);

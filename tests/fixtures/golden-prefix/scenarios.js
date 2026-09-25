@@ -1,7 +1,7 @@
 /**
  * tests/fixtures/golden-prefix/scenarios.js
  *
- * Seven synthetic recall scenarios. `topics` maps a fixture string to the axis
+ * Eight synthetic recall scenarios. `topics` maps a fixture string to the axis
  * the stub embedder puts it on, so recall order is a property of the fixture
  * and not of a downloaded model.
  */
@@ -282,5 +282,59 @@ export const SCENARIOS = [
     config: {},
     event: eventFor("when may we release", "golden-session-7", "golden-run-7"),
     ctx: ctxFor("golden-session-7", "golden-run-7"),
+  },
+  {
+    // Signal fires mid-recall: the embedder only settles when its signal
+    // aborts, so the recall is cut after the start notice was consumed and
+    // before any memory was embedded. Spec 3.2: the aborted recall returns
+    // the blocks already complete — here exactly the start notice.
+    name: "recall-aborted",
+    agentId: AGENT,
+    workspaceKey: WORKSPACE,
+    startNotice: "PLUR1BUS is set up. This notice is shown once.",
+    hangEmbedder: true,
+    topics: {
+      "what happened while I was away": "away",
+      "The user travelled to Lisbon in December.": "away",
+      "Lisbon trip": "away",
+    },
+    memories: [
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        text: "The user travelled to Lisbon in December.",
+        summary: "Lisbon trip",
+        category: "fact",
+        ageDays: 20,
+      },
+    ],
+    config: { runtime: { recallTimeoutMs: 300 } },
+    event: eventFor("what happened while I was away", "golden-session-8", "golden-run-8"),
+    ctx: ctxFor("golden-session-8", "golden-run-8"),
+  },
+];
+
+/**
+ * Job-ledger scenarios: the ledger rows (and the dream diary) a sequence of
+ * sweeps leaves behind, under a virtual clock. Written once, like the prefix
+ * oracle.
+ */
+export const JOB_SCENARIOS = [
+  {
+    // REM produces no narrative four nights running inside one REM week:
+    // incomplete (attempt 1), incomplete (2), abandoned (3, reason written to
+    // DREAMS.md), then skipped as abandoned.
+    name: "jobs-ledger-retry",
+    agentId: AGENT,
+    job: "rem-dream",
+    runKey: `rem:${WORKSPACE}:${AGENT}:private:2026-W02`,
+    // Explicit, machine-independent timezone: the diary line must not
+    // depend on the CI host's TZ (fix round 1, item 2).
+    timezone: "UTC",
+    sweeps: [
+      Date.UTC(2026, 0, 13, 0, 15),
+      Date.UTC(2026, 0, 14, 0, 15),
+      Date.UTC(2026, 0, 15, 0, 15),
+      Date.UTC(2026, 0, 16, 0, 15),
+    ],
   },
 ];

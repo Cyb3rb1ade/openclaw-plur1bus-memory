@@ -16,6 +16,7 @@ import { performance } from "node:perf_hooks";
 
 import plugin, { MemoryDB } from "../../index.js";
 import { LocalTransformersEmbeddingProvider } from "../../lib/providers/embedding-local-transformers.js";
+import { writePlur1busStartNotice } from "../../lib/setup/feature-profiles.js";
 
 /** 2026-01-15T12:00:00Z — every scenario is evaluated at this instant. */
 export const FROZEN_NOW = Date.UTC(2026, 0, 15, 12, 0, 0);
@@ -58,33 +59,60 @@ export function topicVector(topic) {
 }
 
 /**
- * Seals the local-transformers provider so nothing can reach the real model.
+ * A deterministic embedding provider, handed to the engine through its
+ * internals seam (createEngine's testOptions.internals, via plugin.register's
+ * `engineInternals`) in place of the local-transformers provider, so nothing
+ * can reach the real model; sealRealEmbedder() below is the tripwire behind
+ * it. Task 13c replaced the earlier prototype stub with it; the golden corpus
+ * stayed byte-identical.
  *
- * `_embedBatchForPurpose` is the single funnel every public entry point goes
- * through — `embedQuery` and `embedPassage` delegate to `embedRaw`, `embed`
- * delegates to `embedPassage`, and `embedBatch` calls it directly
- * (lib/providers/embedding-local-transformers.js:657-693) — so patching it
- * covers all five. `_computeBatch`, the one method that would load the model,
- * is replaced with a thrower: if a future call site bypasses the funnel the
- * scenario fails loudly instead of silently downloading weights.
- *
+ * `hang: true` makes every call settle only (by rejecting) when
+ * `options.signal` aborts, exercising the abort path (PR-05); `probe`, when
+ * given, records call counts and the abort instant.
  * @param {(text: string) => string} topicOf
+ * @param {{hang?: boolean, probe?: {calls: number, abortedAt: number|null}|null}} [opts]
+ * @returns {object}
+ */
+function stubProvider(topicOf, { hang = false, probe = null } = {}) {
+  const batch = async (texts, options = {}) => {
+    if (probe) probe.calls += 1;
+    if (hang) {
+      return await new Promise((_, reject) => {
+        const signal = options?.signal;
+        if (!signal) return; // no signal: hangs until the scenario's timeout; the recall still resolves via the scheduler
+        signal.addEventListener("abort", () => {
+          if (probe) probe.abortedAt = performance.now();
+          reject(signal.reason);
+        }, { once: true });
+      });
+    }
+    return texts.map((text) => topicVector(topicOf(text)));
+  };
+  const one = async (text, options) => (await batch([text], options))[0];
+  return {
+    embed: one,
+    embedQuery: one,
+    embedPassage: one,
+    embedRaw: (text, _purpose, _retries, options) => one(text, options),
+    embedBatch: (texts, _retries, options) => batch(texts, options),
+    shutdown: async () => {},
+  };
+}
+
+/**
+ * A permanent tripwire: `_computeBatch` is the one method of the real
+ * local-transformers provider that would load the model. While a scenario
+ * runs it throws, so no scenario can silently reach the real model even if
+ * a future code path bypasses the injected stubProvider.
  * @returns {() => void} restore function
  */
-function stubEmbedder(topicOf) {
+function sealRealEmbedder() {
   const proto = LocalTransformersEmbeddingProvider.prototype;
-  const originalBatchForPurpose = proto._embedBatchForPurpose;
-  const originalComputeBatch = proto._computeBatch;
-  proto._embedBatchForPurpose = async (texts) => (
-    (Array.isArray(texts) ? texts : [texts]).map((text) => topicVector(topicOf(text)))
-  );
+  const original = proto._computeBatch;
   proto._computeBatch = async () => {
     throw new Error("golden-prefix driver: real embedder reached");
   };
-  return () => {
-    proto._embedBatchForPurpose = originalBatchForPurpose;
-    proto._computeBatch = originalComputeBatch;
-  };
+  return () => { proto._computeBatch = original; };
 }
 
 const routingCapability = Object.freeze({
@@ -103,13 +131,8 @@ const routingCapability = Object.freeze({
 
 /**
  * @param {object} pluginConfig
- * @param {((entry: {agentId: string, phases: object, totalMs: number}) => void)|null} [recallTimingSink]
- *   Forwarded as `api.__recallTimingSinkForTests`, the one test-only property
- *   `index.js` reads with `??` when building the recall-hook ctx
- *   (`recallTimingSink: api.__recallTimingSinkForTests ?? null`). No real
- *   OpenClaw host ever sets this property.
  */
-function makeApi(pluginConfig, recallTimingSink = null) {
+function makeApi(pluginConfig) {
   const handlers = new Map();
   const noop = () => {};
   return {
@@ -126,7 +149,6 @@ function makeApi(pluginConfig, recallTimingSink = null) {
       return { dispose: noop };
     },
     handlers,
-    __recallTimingSinkForTests: recallTimingSink,
   };
 }
 
@@ -176,27 +198,55 @@ export function baseConfig(baseDbPath, overrides = {}) {
 
 /**
  * @param {object} scenario
- * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number}) => void)|null, onTiming?: ((entry: {setupMs: number, recallMs: number, totalMs: number}) => void)|null}} [options]
+ * @param {{freezeClock?: boolean, recallTimingSink?: ((entry: {agentId: string, phases: object, totalMs: number, namespacePhases: object[]}) => void)|null, onTiming?: ((entry: {setupMs: number, recallMs: number, totalMs: number}) => void)|null, hostEvents?: {emit: (name: string, payload: unknown) => void}|null}} [options]
  *   `freezeClock: false` keeps the real clock, which the latency probe needs;
- *   the golden test leaves it on. `recallTimingSink`, when given, is threaded
- *   onto the stub `api` as `__recallTimingSinkForTests` (see `makeApi`) and
- *   called once per attempted recall with the pipeline's phase timings.
+ *   the golden test leaves it on. `recallTimingSink`, when given, is not a
+ *   plugin option at all any more (`RecallResult.timing` replaced it) — it is
+ *   implemented here as a `recall.completed` host-event listener, called once
+ *   per attempted recall with the pipeline's phase timings from that event's
+ *   `timing` payload.
  *   `onTiming`, when given, is called once, right before this function
  *   returns normally (not on a thrown error), with `setupMs` (temp dirs,
- *   clock/embedder stubs, the fixture `db.store()` loop, `plugin.register()`)
+ *   clock stub, the fixture `db.store()` loop, `plugin.register()`)
  *   measured separately from `recallMs` (just the one `before_prompt_build`
  *   hook invocation) — fix round 2: the wall-clock total the probe reported
  *   before this conflated both, and setup dominates at larger `--scale`.
+ *   `hostEvents`: forwarded to plugin.register as the hostEvents dependency.
+ *   `embedderProbe`: forwarded to `stubProvider`'s `probe` option (PR-05,
+ *   `recall-aborted`); records embedder call count and abort timing.
+ *   `callerSignal` (fix round 2): when given, this exact `AbortSignal` is
+ *   handed to the assembler in place of the adapter's own
+ *   `AbortSignal.timeout(recallTimeoutMs + 250)` — `register-recall-hook.js`
+ *   calls `AbortSignal.timeout` fresh on every `before_prompt_build`
+ *   invocation, so patching the global for just the one `hook(...)` call
+ *   below swaps in the caller's real signal without touching production code.
+ *   This is what lets a test drive a genuine caller-initiated abort through
+ *   the real assembler/scheduler/pipeline, instead of mocking `runRecall`.
+ *   `abortAfterMs` (fix round 3): prefer this over building your own
+ *   `callerSignal` with a `setTimeout` armed before calling `runScenario` —
+ *   that timer would start ticking before this function's own setup (temp
+ *   dirs, fixture `db.store()` writes, `plugin.register()` — tens of ms, more
+ *   at scale), landing the abort at an unpredictable point in the recall
+ *   itself instead of right after it starts. Given a number of milliseconds,
+ *   this function creates its own `AbortController` and arms the timer
+ *   immediately before the one `hook(...)` call, so the delay is measured
+ *   from the start of the actual recall. Takes precedence over `callerSignal`
+ *   when both are given.
+ *
+ *   NOTE: the `AbortSignal.timeout` patch this implies is a global,
+ *   non-reentrant stub — it is installed and restored around one
+ *   `hook(...)` call and is not safe for concurrent `runScenario` calls
+ *   (with `callerSignal` or `abortAfterMs`) racing in the same process.
  * @returns {Promise<string|null>} the exact prependContext, or null when the
  *   handler returned undefined.
  */
-export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null } = {}) {
+export async function runScenario(scenario, { freezeClock: useFrozenClock = true, recallTimingSink = null, onTiming = null, hostEvents = null, embedderProbe = null, callerSignal = null, abortAfterMs = null } = {}) {
   const topics = new Map(Object.entries(scenario.topics || {}));
   const topicOf = (text) => topics.get(String(text)) ?? String(text);
   const previousHome = process.env.OPENCLAW_HOME;
   // Every global mutation and every temp dir is installed inside the `try`, with
   // its handle declared out here, so a throw at any point still unwinds all of
-  // them. Installing before the `try` would leak globalThis.Date and the patched
+  // them. Installing before the `try` would leak globalThis.Date and the sealed
   // provider prototype into the rest of the process if a mkdtempSync failed.
   /** @type {(() => void)|null} */
   let restoreClock = null;
@@ -212,8 +262,10 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
     stateDir = mkdtempSync(join(tmpdir(), "plur1bus-golden-state-"));
     process.env.OPENCLAW_HOME = stateDir;
     restoreClock = useFrozenClock ? freezeClock() : () => {};
-    restoreEmbedder = stubEmbedder(topicOf);
+    restoreEmbedder = sealRealEmbedder();
+    const engineEmbeddings = stubProvider(topicOf, { hang: scenario.hangEmbedder === true, probe: embedderProbe });
     mkdirSync(join(workspaceDir, "memory"), { recursive: true });
+    if (scenario.startNotice) writePlur1busStartNotice(stateDir, { text: scenario.startNotice });
     if (scenario.knowledge) {
       const knowledgePath = join(workspaceDir, "memory", "KNOWLEDGE.md");
       writeFileSync(knowledgePath, scenario.knowledge);
@@ -237,14 +289,42 @@ export async function runScenario(scenario, { freezeClock: useFrozenClock = true
         workspaceKey: scenario.workspaceKey,
       });
     }
-    const api = makeApi(baseConfig(baseDbPath, scenario.config), recallTimingSink);
-    plugin.register(api, { importRouting: async () => routingCapability });
+    const api = makeApi(baseConfig(baseDbPath, scenario.config));
+    const listeners = [hostEvents, recallTimingSink && {
+      emit: (name, payload) => {
+        if (name === "recall.completed") recallTimingSink({ agentId: payload.agentId, phases: payload.timing.phases, totalMs: payload.timing.totalMs, namespacePhases: payload.timing.namespacePhases });
+      },
+    }].filter(Boolean);
+    const events = listeners.length ? { emit: (name, payload) => { for (const l of listeners) l.emit(name, payload); } } : null;
+    plugin.register(api, { importRouting: async () => routingCapability, ...(events ? { hostEvents: events } : {}), engineInternals: { embeddings: engineEmbeddings } });
     const hooks = api.handlers.get("before_prompt_build");
     const hook = hooks?.at(-1);
     if (typeof hook !== "function") throw new Error(`${scenario.name}: before_prompt_build not registered`);
     const setupMs = performance.now() - setupStartedAt;
     const recallStartedAt = performance.now();
-    const result = await hook(scenario.event, { ...scenario.ctx, workspaceDir });
+    let restoreAbortTimeout = null;
+    // abortAfterMs arms its timer here, immediately before hook(...), not
+    // when runScenario was called — so the delay is measured from the start
+    // of the actual recall, not from before this function's own setup work
+    // (fix round 3).
+    const effectiveCallerSignal = abortAfterMs !== null
+      ? (() => {
+          const controller = new AbortController();
+          setTimeout(() => controller.abort(), abortAfterMs);
+          return controller.signal;
+        })()
+      : callerSignal;
+    if (effectiveCallerSignal) {
+      const originalTimeout = AbortSignal.timeout;
+      AbortSignal.timeout = () => effectiveCallerSignal;
+      restoreAbortTimeout = () => { AbortSignal.timeout = originalTimeout; };
+    }
+    let result;
+    try {
+      result = await hook(scenario.event, { ...scenario.ctx, workspaceDir });
+    } finally {
+      restoreAbortTimeout?.();
+    }
     const recallMs = performance.now() - recallStartedAt;
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
     onTiming?.({ setupMs, recallMs, totalMs: setupMs + recallMs });

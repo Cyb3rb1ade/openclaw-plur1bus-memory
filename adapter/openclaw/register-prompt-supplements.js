@@ -1,7 +1,8 @@
 /**
  * adapter/openclaw/register-prompt-supplements.js
  *
- * The static system-prompt supplement (was index.js:7082-7087) and the Neo
+ * Registers the static system-prompt supplement (built by
+ * engine/recall/system-supplement.js, was index.js:7082-7087) and the Neo
  * corpus supplement (was index.js:7090-7166). The supplement returns
  * constants, which is what makes the system prompt stable per turn and
  * therefore cacheable (ADR-010).
@@ -11,7 +12,7 @@
 
 import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
 import { routeNeoRecall, workspaceKeyFromContext } from "../../lib/neo-arch.js";
-import { buildRecallSafetyPreamble } from "../../lib/relevant-memory-context.js";
+import { buildSystemSupplement } from "../../engine/recall/system-supplement.js";
 
 /**
  * @param {object} ctx Registration context: the engine context plus `api`.
@@ -33,20 +34,17 @@ export function registerPromptSupplements(ctx) {
     sessionWorkspaceKeys,
   } = ctx;
 
+  // The supplement text is the engine's (engine/recall/system-supplement.js);
+  // Engine.systemSupplement() returns the same lines.
   if (!neoEnabled && typeof api.registerMemoryPromptSupplement === "function") {
     // Wenn Neo deaktiviert ist, gibt es keinen anderen Pfad für den vollen
     // Action-Safety-Header. Compact-Marker in relevant-memory-context reicht
     // nicht — explizit registrieren.
-    api.registerMemoryPromptSupplement(() => [buildRecallSafetyPreamble()]);
+    api.registerMemoryPromptSupplement(() => buildSystemSupplement({ neoEnabled }));
   }
 
   if (neoEnabled && typeof api.registerMemoryPromptSupplement === "function") {
-    api.registerMemoryPromptSupplement(() => [
-      buildRecallSafetyPreamble(),
-      "Dynamic PLUR1BUS recall is injected once per turn by the configured auto-recall hook; do not duplicate the same recall block.",
-      "Use active/promoted BehaviorCards as operating preferences only when they do not conflict with current user instructions.",
-      "Assistant-authored memories are evidence of prior output, not validated truth unless confirmed by user, tool, test, or curation.",
-    ]);
+    api.registerMemoryPromptSupplement(() => buildSystemSupplement({ neoEnabled }));
   }
 
   if (neoEnabled && typeof api.registerMemoryCorpusSupplement === "function") {

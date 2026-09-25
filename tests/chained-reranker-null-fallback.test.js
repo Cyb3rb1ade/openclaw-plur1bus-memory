@@ -45,4 +45,30 @@ describe("ChainedRerankerProvider mit null-Fallback", () => {
     const result = await provider.rerank("query", fakeDocuments, 2);
     assert.strictEqual(result.length, 2);
   });
+
+  it("stops after the first abort: an aborted signal never invokes the fallback (fix round 1)", async () => {
+    let fallbackCalls = 0;
+    let warnedTryingFallback = false;
+    const controller = new AbortController();
+    const abortingPrimary = {
+      id: "cohere",
+      rerank: (_q, _d, _n, { signal } = {}) => new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        controller.abort(new Error("caller gone"));
+      }),
+    };
+    const fallback = {
+      id: "local",
+      rerank: async () => { fallbackCalls += 1; return []; },
+    };
+    const provider = new ChainedRerankerProvider(abortingPrimary, fallback, {
+      warn: (msg) => { if (msg.includes("Trying fallback")) warnedTryingFallback = true; },
+    });
+    await assert.rejects(
+      () => provider.rerank("query", fakeDocuments, 2, { signal: controller.signal }),
+      /caller gone/,
+    );
+    assert.strictEqual(fallbackCalls, 0, "fallback must never run after an abort");
+    assert.strictEqual(warnedTryingFallback, false, "no 'Trying fallback' log after an abort");
+  });
 });

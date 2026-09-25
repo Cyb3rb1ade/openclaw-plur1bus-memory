@@ -8,14 +8,13 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { createPlur1busCommandRunner } from "../engine/commands/plur1bus-command.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const source = readFileSync(join(root, "engine", "commands", "plur1bus-command.js"), "utf8");
+const { engine } = readRuntimeSources();
+const source = engine.plur1busCommand;
+const jobBodiesSource = engine.internalJobBodies;
 
 const INTERNAL_JOBS = [
   "consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream",
@@ -40,11 +39,32 @@ describe("engine/commands/plur1bus-command", () => {
     }
   });
 
+  it("still has a subKey branch for each internal job in the moved bodies", () => {
+    for (const job of INTERNAL_JOBS) {
+      assert.match(
+        jobBodiesSource,
+        new RegExp(`subKey === "${job}"`),
+        `internal job ${job} must have a subKey branch in internal-job-bodies.js`,
+      );
+    }
+  });
+
   it("checks authorization before dispatching an action", () => {
     const body = source.slice(source.indexOf("return async function"));
     const authAt = body.indexOf("checkAuth");
     const dispatchAt = body.indexOf('actionKey === "internal"');
     assert.ok(authAt >= 0 && dispatchAt >= 0);
     assert.ok(authAt < dispatchAt, "deny-by-classification must run before any internal dispatch");
+  });
+
+  it("rem-dream's abandonment diary honours the narrative config's opt-out and timezone (fix round 1, item 2 & 3)", () => {
+    assert.match(jobBodiesSource, /dreamNarrativeCfg\?\.diary === false/, "diary-disabled must be read from dreamNarrativeCfg");
+    assert.match(
+      jobBodiesSource,
+      /setDiaryTarget\(diaryDisabled \? null : \(memoryCtx\?\.workspaceDir \|\| null\), \{/,
+      "the diary target must become null when the diary is disabled",
+    );
+    assert.match(jobBodiesSource, /timezone: dreamNarrativeCfg\?\.timezone \?\? null/, "the configured timezone must reach the job context");
+    assert.match(jobBodiesSource, /disabled: diaryDisabled/, "the disabled flag must reach the job context so an abandonment records diary_disabled, not no_workspace");
   });
 });

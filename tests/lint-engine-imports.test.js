@@ -14,7 +14,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -67,7 +67,7 @@ describe("lint-engine-imports", () => {
     });
     const result = run(base);
     assert.equal(result.status, 0, result.out);
-    assert.match(result.out, /clean \(2 module\(s\)\)/);
+    assert.match(result.out, /clean \(2 module\(s\), 0 lib module\(s\) reached\)/);
   });
 
   it("rejects engine code importing the adapter lifecycle", (t) => {
@@ -217,5 +217,152 @@ describe("lint-engine-imports", () => {
     });
     const result = run(base);
     assert.equal(result.status, 0, result.out);
+  });
+
+  it("follows engine imports through lib/ and rejects a transitive openclaw import", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import { b } from "../lib/b.js";\nexport const a = b;\n',
+      "lib/b.js": 'import { c } from "./c.js";\nexport const b = c;\n',
+      "lib/c.js": 'export async function c() { return import("openclaw/plugin-sdk/routing"); }\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/a\.js -> lib\/b\.js -> lib\/c\.js/);
+    assert.match(result.out, /openclaw/);
+  });
+
+  it("reports a reached forbidden lib file once and does not descend into it", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/x.js";\n',
+      "lib/x.js": 'import "./setup/foo-plugin-runtime.js";\n',
+      "lib/setup/foo-plugin-runtime.js": 'import "openclaw";\nimport "../runtime-shutdown.js";\n',
+      "lib/runtime-shutdown.js": "export {};\n",
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/setup\/foo-plugin-runtime\.js/);
+    assert.doesNotMatch(result.out, /runtime-shutdown/, "the forbidden file's own imports are not walked");
+  });
+
+  it("rejects process.env.OPENCLAW_* anywhere on the engine graph", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": 'export const home = process.env.OPENCLAW_HOME;\nexport const cfg = process.env["OPENCLAW_CONFIG_PATH"];\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/b\.js:1/);
+    assert.match(result.out, /lib\/b\.js:2/);
+  });
+
+  it("ignores env reads and openclaw imports in lib files the engine never reaches", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": "export const a = 1;\n",
+      "lib/unreached.js": 'import "openclaw";\nexport const x = process.env.OPENCLAW_HOME;\n',
+    });
+    assert.equal(run(base).status, 0);
+  });
+
+  it("does not flag an OPENCLAW_ mention inside a comment", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": "// was process.env.OPENCLAW_HOME before G1\nexport const a = 1;\n",
+    });
+    assert.equal(run(base).status, 0);
+  });
+
+  it("rejects a computed import() specifier in engine code", (t) => {
+    const base = fixture(t, {
+      "engine/dyn.js": 'export async function load(name) {\n  return import(`../lib/${name}.js`);\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /engine\/dyn\.js:2/);
+    assert.match(result.out, /computed specifier/);
+  });
+
+  it("sees a createRequire(...)(\"...\") chained call, not just require()", (t) => {
+    const base = fixture(t, {
+      "engine/req.js": 'import { createRequire } from "node:module";\nexport const host = createRequire(import.meta.url)("openclaw");\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /must not import the openclaw package/);
+  });
+
+  it("rejects a destructured process.env.OPENCLAW_* read, plain and renamed", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": 'const { OPENCLAW_HOME } = process.env;\nconst { OPENCLAW_HOME: home } = process.env;\nexport { OPENCLAW_HOME, home };\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/b\.js:1/);
+    assert.match(result.out, /lib\/b\.js:2/);
+  });
+
+  it("does not catch process.env aliased into a variable read on a later line (documented gap)", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": "const env = process.env;\nexport const home = env.OPENCLAW_HOME;\n",
+    });
+    const result = run(base);
+    assert.equal(result.status, 0, result.out);
+  });
+
+  it("extends the computed-import check to a reached lib/ file", (t) => {
+    const base = fixture(t, {
+      "engine/a.js": 'import "../lib/b.js";\n',
+      "lib/b.js": 'export async function load(name) {\n  return import(`./${name}.js`);\n}\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lib\/b\.js/);
+    assert.match(result.out, /computed specifier/);
+  });
+
+  it("exempts exactly two files from the computed-import rule (the LanceDB/OpenAI package loaders)", () => {
+    const source = readFileSync(script, "utf8");
+    const declarations = source.match(/const COMPUTED_IMPORT_ALLOW = new Set\(\[([^\]]*)\]\);/g) || [];
+    assert.equal(declarations.length, 1, "one COMPUTED_IMPORT_ALLOW declaration");
+    const entries = [...declarations[0].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    assert.deepEqual(entries, ["engine/store/lancedb-loader.js", "lib/providers/embedding-openai.js"]);
+  });
+
+  it("allows a computed import in the allowlisted lib/ file on the engine graph, still flags any other reached lib/ file", (t) => {
+    const loader = 'const P = "/x/node_modules/pkg/index.js";\nexport async function load() {\n  return import(P);\n}\n';
+    const allowed = run(fixture(t, {
+      "engine/a.js": 'import { load } from "../lib/providers/embedding-openai.js";\nexport { load };\n',
+      "lib/providers/embedding-openai.js": loader,
+    }));
+    assert.equal(allowed.status, 0, allowed.out);
+    const flagged = run(fixture(t, {
+      "engine/a.js": 'import { load } from "../lib/providers/embedding-openai.js";\nimport { load as other } from "../lib/providers/other.js";\nexport { load, other };\n',
+      "lib/providers/embedding-openai.js": loader,
+      "lib/providers/other.js": loader,
+    }));
+    assert.equal(flagged.status, 1);
+    assert.match(flagged.out, /lib\/providers\/other\.js: import\(\) with a computed specifier/);
+    assert.doesNotMatch(flagged.out, /embedding-openai\.js: import\(\)/);
+  });
+
+  it("allows a computed import only in the allowlisted file, still flags it in any other engine file", (t) => {
+    const loader = 'const P = "/x/node_modules/pkg/index.js";\nexport async function load() {\n  return import(P);\n}\n';
+    const allowed = run(fixture(t, { "engine/store/lancedb-loader.js": loader }));
+    assert.equal(allowed.status, 0, allowed.out);
+    const flagged = run(fixture(t, {
+      "engine/store/lancedb-loader.js": loader,
+      "engine/store/other-loader.js": loader,
+    }));
+    assert.equal(flagged.status, 1);
+    assert.match(flagged.out, /engine\/store\/other-loader\.js:3: .*computed specifier/);
+    assert.doesNotMatch(flagged.out, /engine\/store\/lancedb-loader\.js/);
+  });
+
+  it("the allowlisted file is still held to the api rules", (t) => {
+    const result = run(fixture(t, {
+      "engine/store/lancedb-loader.js": 'export function f(host) { return host.api.on; }\n',
+    }));
+    assert.equal(result.status, 1);
+    assert.match(result.out, /lancedb-loader\.js:1: engine code must not read the HostServices/);
   });
 });

@@ -30,7 +30,7 @@ import { pickTone, resolveLocale, t } from "../../lib/i18n.js";
 import { INPUT_LIMITS, validateCommandArgs, validateCorrectionText, validateSemanticCommandArgs } from "../../lib/input-limits.js";
 import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
 import { applyRetrievalReinforcement } from "../../lib/memory-dynamics.js";
-import { resolveHostCommandMemoryContext, resolveSessionOwnerMemoryContext } from "../../lib/memory-request-context.js";
+import { resolveHostCommandMemoryContext, resolveSessionOwnerMemoryContext, resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { embeddingDimensionProfiles } from "../../lib/providers/dimensions.js";
 import { checkRuntimePressure } from "../../lib/runtime-pressure-gate.js";
 import { safeUpdate } from "../../lib/safe-update.js";
@@ -49,10 +49,15 @@ import { safeUuid } from "../../lib/sql-safety.js";
 import { listFeatures, renderFeatureList, renderToggleResult, toggleFeature } from "../../lib/telegram-commands/feature-toggle.js";
 import { correctCard, forgetCard, parseCorrection, renderCandidateChoice, resolveCandidates } from "../../lib/telegram-commands/memory-edit.js";
 import { formatResults as formatMemoryResults, parseMemoryFeedback, parseQuery as parseMemoryQuery, queryMemoryAcrossAccessPools } from "../../lib/telegram-commands/memory-query.js";
-import { activateSkillProposal, rejectSkillProposal, rejectSkillProposalWithWorkshop, retireActiveSkill } from "../../lib/telegram-commands/skill-commands.js";
+import { activateSkillProposal, rejectSkillProposal, rejectSkillProposalWithWorkshop, retireActiveSkill, createSkillWorkshopLifecycleSynchronizer } from "../../lib/telegram-commands/skill-commands.js";
 import { runSpeakerClearCommand, runSpeakerConfirmCommand, runSpeakerListCommand, runSpeakerNameCommand, runSpeakerProposalsCommand, runSpeakerRejectCommand } from "../../lib/telegram-commands/speaker-mapping.js";
 import { collectStatusData } from "../../lib/telegram-commands/status-data.js";
 import { renderStatus } from "../../lib/telegram-commands/status.js";
+import { resolve } from "node:path";
+import { markProposalStatus, patchProposal } from "../../lib/jobs/skill-miner/proposal-writer.js";
+import { listNeoWorkspaceKeys } from "../../lib/neo-arch.js";
+import { safeWarn } from "../../lib/safe-logging.js";
+import { applyEpistemicStatusToLanceDb } from "../../engine/store/memory-db.js";
 
 /**
  * Register every PLUR1BUS chat command on the OpenClaw plugin api.
@@ -60,8 +65,8 @@ import { renderStatus } from "../../lib/telegram-commands/status.js";
  * @param {Record<string, any>} ctx Registration context: the engine context
  *   plus `api`, `host` and the `registerPluginCommand` wrapper.
  * @returns {Record<string, Function>} The ten command bodies and helpers that
- *   `index.js` declares as `let` above `createPlur1busCommandRunner(…)` and
- *   rebinds from this return value; PR-03f's thunks read them at command time.
+ *   adapter/openclaw/plugin.js copies into the engine's shared `commandBodies`
+ *   object (engine/create-engine.js); PR-03f's thunks read them at command time.
  */
 export function registerChatCommands(ctx) {
   const {
@@ -1320,4 +1325,89 @@ export function registerChatCommands(ctx) {
     resolveDenialLocale,
     resolveRegisteredMemoryContext,
   };
+}
+
+/**
+ * Keep the local skill-proposal ledger in step with OpenClaw's Skill Workshop
+ * (`skill_proposal_changed`; was inline in index.js register()). Optional host
+ * capability: registers nothing without `api.on`.
+ *
+ * @param {Record<string, any>} ctx Registration context: EngineInternals plus `api`.
+ * @returns {void}
+ */
+export function registerSkillProposalListener(ctx) {
+  const {
+    api,
+    host,
+    memoryWorkspaceAliases,
+    neoRoot,
+    pool,
+  } = ctx;
+  if (typeof api.on === "function") {
+    const synchronizeSkillWorkshopLifecycle = createSkillWorkshopLifecycleSynchronizer({
+      resolveProposalWorkspaces: ({ eventWorkspaceDir }) => [
+        eventWorkspaceDir,
+        ...listNeoWorkspaceKeys(neoRoot).map((workspaceKey) =>
+          resolve(neoRoot, "workspaces", workspaceKey)),
+      ],
+      onApplied: async ({ workspaceDir, eventWorkspaceDir, agentId, localProposal, workshopEvent }) => {
+        const lifecycleMemoryCtx = resolveMemoryRequestContext({
+          agentId,
+          workspaceDir: eventWorkspaceDir,
+        }, { workspaceAliases: memoryWorkspaceAliases });
+        return activateSkillProposal(workspaceDir, localProposal.id, {
+          agentId,
+          logger: host.logger,
+          committedWorkshopEvent: workshopEvent,
+          memoryCtx: lifecycleMemoryCtx,
+          loadEvidenceRecord: async (memoryId) => pool.withAuthoritativeReadDb(
+            agentId,
+            async (db) => db.getById(memoryId),
+          ),
+          applyEpistemicStatus: async (memoryId, nextStatus) => pool.withWriteDb(
+            agentId,
+            (db) => applyEpistemicStatusToLanceDb(db, memoryId, nextStatus, {
+              ctx: lifecycleMemoryCtx,
+              actor: "openclaw-skill-workshop",
+              // "system" was never a legal tier, so every evidence
+              // transition of an externally applied skill failed and the
+              // local record stayed at activation_partial for good.
+              actorTier: "system:skill-workshop",
+              authorized: false,
+              workspaceDir: eventWorkspaceDir,
+              reason: "skill-workshop-lifecycle",
+            }),
+          ),
+        });
+      },
+      onRejected: async ({ workspaceDir, localProposal }) => {
+        const marked = markProposalStatus(workspaceDir, localProposal.id, "rejected");
+        if (!marked.ok) return marked;
+        return patchProposal(workspaceDir, localProposal.id, {
+          openClawWorkshop: {
+            ...localProposal.openClawWorkshop,
+            status: "rejected",
+          },
+        });
+      },
+    });
+    api.on(
+      "skill_proposal_changed",
+      async (event, context) => {
+        try {
+          return await synchronizeSkillWorkshopLifecycle(event, context);
+        } catch (error) {
+          safeWarn(host.logger, "skill-workshop-lifecycle", error, {
+            proposalId: event?.proposal?.id,
+            action: event?.action,
+          });
+          throw error;
+        }
+      },
+      {
+        registrationId: "plur1bus-skill-workshop-lifecycle-v1",
+        timeoutMs: 30_000,
+      },
+    );
+  }
 }

@@ -14,6 +14,10 @@ results/*smoke*
 # (B6-Budgetentscheidung) — bewusst eingecheckt, kein Wegwerf-Probelauf.
 !results/2026-09-22-recall-budget-probe.md
 
+# Ausnahme: Task 14's Re-Run desselben Reports gegen RecallResult.timing
+# (recall.completed statt recallTimingSink) — ebenfalls bewusst eingecheckt.
+!results/2026-09-24-recall-budget-probe.md
+
 # Alles, was Produktiverinnerungen enthält — NIEMALS einchecken.
 # Die Stichproben der Emotions-Analyse tragen echte Texte aus den Stores
 # (medizinische Daten, persönliche Geschichte).

@@ -35,10 +35,13 @@
  * silently missing from the output). The cause is the driver's shared
  * *process*-global mutable state, restored per scenario in a try/finally:
  * `globalThis.Date` (freezeClock), `LocalTransformersEmbeddingProvider
- * .prototype._embedBatchForPurpose`/`_computeBatch` (stubEmbedder), and
- * `process.env.OPENCLAW_HOME`. Two scenarios racing means one's teardown
- * (restoreEmbedder/restoreClock, or restoring OPENCLAW_HOME) can run while
- * another is still mid-flight and depending on its own patched values —
+ * .prototype._computeBatch` (a permanent tripwire that throws if a scenario
+ * ever reaches the real model; Task 13c moved the actual stub embedder off
+ * this prototype and into `createEngine`'s `testOptions.internals` instead,
+ * so `_computeBatch` is the only method still patched here as a prototype
+ * stub), and `process.env.OPENCLAW_HOME`. Two scenarios racing means one's
+ * teardown (restoreEmbedder/restoreClock, or restoring OPENCLAW_HOME) can run
+ * while another is still mid-flight and depending on its own patched values —
  * this is a test-harness hazard in how these globals are shared, not a
  * production ranking non-determinism. Since it reproduces only by bypassing
  * node:test's own scheduling (not through any `--test-concurrency` value
@@ -54,8 +57,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SCENARIOS } from "./fixtures/golden-prefix/scenarios.js";
+import { JOB_SCENARIOS, SCENARIOS } from "./fixtures/golden-prefix/scenarios.js";
 import { runScenario } from "./helpers/golden-prefix-driver.js";
+import { runJobScenario } from "./helpers/golden-jobs-driver.js";
 
 const expectedDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "golden-prefix", "expected");
 
@@ -66,6 +70,13 @@ describe("golden prefix corpus", () => {
       const actual = await runScenario(scenario);
       assert.equal(typeof actual, "string", `${scenario.name} returned no prependContext`);
       assert.equal(actual, expected);
+    });
+  }
+
+  for (const scenario of JOB_SCENARIOS) {
+    it(`${scenario.name} leaves the recorded ledger byte for byte`, async () => {
+      const expected = readFileSync(join(expectedDir, `${scenario.name}.txt`), "utf8");
+      assert.equal(await runJobScenario(scenario), expected);
     });
   }
 

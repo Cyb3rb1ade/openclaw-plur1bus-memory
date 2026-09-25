@@ -107,6 +107,40 @@ describe("local Transformers.js lifecycle", () => {
     await requestScoped.shutdown();
   });
 
+  it("keeps a pending compute alive across an aborted call and drains it before shutdown (PR-05 fix round 1)", async () => {
+    const provider = new LocalTransformersEmbeddingProvider({
+      dimensions: 2,
+      embeddingCacheEnabled: false,
+    });
+    const order = [];
+    let resolveCompute;
+    const computeGate = new Promise((resolve) => { resolveCompute = resolve; });
+    provider._computeBatch = async (input) => {
+      order.push("compute-started");
+      await computeGate;
+      order.push("compute-settled");
+      return input.map(() => [1, 0]);
+    };
+
+    const controller = new AbortController();
+    const call = provider.embedBatch(["alpha"], 3, { signal: controller.signal });
+    // Let `_computeBatch` actually start before aborting, otherwise the
+    // already-aborted branch never reaches `work` at all.
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    await assert.rejects(call, (error) => error.name === "AbortError");
+    order.push("call-rejected");
+
+    let shutdownSettled = false;
+    const shutdown = provider.shutdown().then(() => { shutdownSettled = true; order.push("shutdown-settled"); });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "shutdown must wait for the pending compute, not just the aborted call");
+
+    resolveCompute();
+    await shutdown;
+    assert.deepStrictEqual(order, ["compute-started", "call-rejected", "compute-settled", "shutdown-settled"]);
+  });
+
   it("rejects an owner-required scoped load until the active full runtime claims the pool", async () => {
     let pipelineLoads = 0;
     const loadTransformers = async () => ({
@@ -548,6 +582,63 @@ describe("local Transformers.js lifecycle", () => {
 
     releaseInference();
     await Promise.all([inference, shutdown]);
+    assert.deepEqual(calls, ["rerank.start", "rerank.end", "reranker.dispose"]);
+  });
+
+  it("never scores when the rerank call is already aborted (fix round 1)", async () => {
+    let scoringCalls = 0;
+    const pipeline = Object.assign(async () => {
+      scoringCalls += 1;
+      return [{ score: 0.9 }];
+    }, { async dispose() {} });
+    const provider = new LocalTransformersRerankerProvider({
+      model: "fixture/reranker",
+      loadTransformers: async () => ({ pipeline: async () => pipeline }),
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("caller gone"));
+
+    await assert.rejects(
+      () => provider.rerank("query", ["document"], 1, { signal: controller.signal }),
+      /caller gone/,
+    );
+    assert.strictEqual(scoringCalls, 0, "an already-aborted call must never reach the classifier");
+  });
+
+  it("does not dispose a reranker pipeline while an aborted rerank's classifier is still running (fix round 1)", async () => {
+    const calls = [];
+    let signalStarted;
+    let releaseInference;
+    const started = new Promise((resolve) => { signalStarted = resolve; });
+    const blocked = new Promise((resolve) => { releaseInference = resolve; });
+    const pipeline = Object.assign(async () => {
+      calls.push("rerank.start");
+      signalStarted();
+      await blocked;
+      calls.push("rerank.end");
+      return [{ score: 0.9 }];
+    }, {
+      async dispose() { calls.push("reranker.dispose"); },
+    });
+    const provider = new LocalTransformersRerankerProvider({
+      model: "fixture/reranker",
+      loadTransformers: async () => ({ pipeline: async () => pipeline }),
+    });
+
+    const controller = new AbortController();
+    const inference = provider.rerank("query", ["document"], 1, { signal: controller.signal });
+    await started;
+    controller.abort(new Error("caller gone"));
+    // raceAbort wraps the abort in its own error (lib/abort.js); the
+    // original reason survives as `.cause`.
+    await assert.rejects(inference, (err) => err.cause?.message === "caller gone");
+
+    const shutdown = provider.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ["rerank.start"], "dispose must wait for the classifier, not the abort");
+
+    releaseInference();
+    await shutdown;
     assert.deepEqual(calls, ["rerank.start", "rerank.end", "reranker.dispose"]);
   });
 
