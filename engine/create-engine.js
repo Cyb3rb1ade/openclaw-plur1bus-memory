@@ -1427,7 +1427,7 @@ export function createEngine(host, config, testOptions = {}) {
   // Typed MemoryOps (contract 1.5.0, E1). One context instance is shared by
   // every MemoryOps member (Tasks 4-7); it is also exposed on internals as
   // memoryOpsContext so later tasks (forget/correct/share/state) reuse it.
-  const memoryOpsContext = createMemoryOpsContext({ host, logger: host.logger });
+  const memoryOpsContext = createMemoryOpsContext({ host, logger: host.logger, getWorkspaceAliases: () => internals.memoryWorkspaceAliases ?? memoryWorkspaceAliases });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,
     pool,

@@ -4,8 +4,12 @@ import { memoryOpError } from "./errors.js";
 
 const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-/** Binds MemoryOps calls to the host: Principal → memory request context, plus the fail-closed guards. */
-export function createMemoryOpsContext({ host, logger }) {
+/**
+ * Binds MemoryOps calls to the host: Principal → memory request context, plus the fail-closed guards.
+ * `getWorkspaceAliases` returns the engine's current workspace alias snapshot, so MemoryOps resolve a
+ * principal exactly like recall/capture/checkpoint do. Every failure surfaces as a MemoryOpError.
+ */
+export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () => undefined }) {
   return {
     async resolve(p, a, { destructive = false, target = null } = {}) {
       if (!p || typeof p.agentId !== "string" || !AGENT_ID.test(p.agentId)) throw memoryOpError("invalid-input", "principal.agentId is invalid");
@@ -13,8 +17,21 @@ export function createMemoryOpsContext({ host, logger }) {
       if (destructive && (a.origin !== "user" || a.background !== false)) {
         throw memoryOpError("denied", "destructive memory operations require origin \"user\" and background false");
       }
-      const workspaceDir = await host.workspaceDir(p.agentId);
-      const memoryCtx = memoryContextFromPrincipal(p, { workspaceDir, logger });
+      let workspaceDir;
+      try {
+        workspaceDir = await host.workspaceDir(p.agentId);
+      } catch {
+        throw memoryOpError("invalid-input", "unknown agent");
+      }
+      let memoryCtx;
+      try {
+        const workspaceAliases = getWorkspaceAliases();
+        memoryCtx = memoryContextFromPrincipal(p, { workspaceDir, logger, ...(workspaceAliases ? { workspaceAliases } : {}) });
+      } catch (error) {
+        // A proved principal whose claims contradict the agent's workspace (e.g. "conflicting workspace identity").
+        logger?.warn?.(`memory-ops: principal rejected: ${error?.message ?? error}`);
+        throw memoryOpError("denied", "principal does not match the agent's workspace");
+      }
       if (target && memoryCtx.trust !== "proved") throw memoryOpError("denied", `sharing to ${target} requires a proved principal`);
       return { agentId: memoryCtx.agentId, memoryCtx, workspaceDir, archiveDir: join(host.stateDir, "memory", "_archive") };
     },

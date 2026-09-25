@@ -30,3 +30,20 @@ test("invalid agent id is invalid-input", async () => {
 test("unknown error codes are a programming error", () => {
   assert.throws(() => memoryOpError("nope", "x"), TypeError);
 });
+
+test("a proved principal claiming a different workspace is denied with a MemoryOpError, not a raw error", async () => {
+  const other = makeTempDir("e1-other-ws-");
+  await assert.rejects(
+    createMemoryOpsContext({ host }).resolve({ ...P, channel: "telegram", workspace: `workspace-dir:v1:${other}` }, USER),
+    (e) => isMemoryOpError(e) && e.code === "denied",
+  );
+});
+test("a host that cannot resolve the agent's workspace yields invalid-input", async () => {
+  const failing = { stateDir, workspaceDir: async () => { throw new Error("no such agent"); } };
+  await assert.rejects(createMemoryOpsContext({ host: failing }).resolve(P, USER), (e) => isMemoryOpError(e) && e.code === "invalid-input");
+});
+test("the workspace alias snapshot is consulted on every resolve", async () => {
+  let calls = 0;
+  await createMemoryOpsContext({ host, getWorkspaceAliases: () => { calls += 1; return undefined; } }).resolve(P, USER);
+  assert.equal(calls, 1);
+});
