@@ -35,6 +35,11 @@ function toMemoryCard(card, { includeScore }) {
     origin: card.origin || null,
     epistemicStatus: card.epistemicStatus || null,
   };
+  // A shared copy names the agent that shared it and its original (E2 Task 4, D31).
+  if (scope !== "agent-private" && card.sourceAgentId) {
+    out.sharedBy = card.sourceAgentId;
+    out.sourceId = card.sourceMemoryId || undefined;
+  }
   if (includeScore && typeof card.score === "number") out.score = card.score;
   return out;
 }

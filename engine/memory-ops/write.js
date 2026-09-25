@@ -10,7 +10,7 @@
  */
 
 import { forgetCard, correctCard, shareCard } from "../../lib/telegram-commands/memory-edit.js";
-import { projectMemoryQueryCard, findMemoryAcrossAccessPools } from "../../lib/telegram-commands/memory-query.js";
+import { projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
 import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { safeUpdate } from "../../lib/safe-update.js";
@@ -18,6 +18,7 @@ import { applyRetrievalReinforcement } from "../../lib/memory-dynamics.js";
 import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
 import { CORRECTION_PREVIEW_CHARS } from "../runtime/constants.js";
 import { memoryOpError } from "./errors.js";
+import { createSharedMemoryOps, isSharer } from "./shared.js";
 
 const MAX_CORRECT_TEXT_LENGTH = 8_000;
 
@@ -47,37 +48,26 @@ function isLive(card) {
 
 /**
  * @param {{opsContext: object, memoryDbAdapter: object, baseDbPath: string, pool: object, sharedMemoryPool: object, embeddings: object, getNeoStore?: Function, logger?: object}} deps
- * @returns {{forget: Function, correct: Function, share: Function}}
+ * @returns {{forget: Function, correct: Function, share: Function, shared: {findSharedRow: Function, retractSharedRow: Function, refreshShare: Function}}}
  */
 export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, pool, sharedMemoryPool, embeddings, getNeoStore, logger }) {
+  // Shared copies (E2 Task 4, D31): retract/refresh by the sharer. Consumed
+  // here by forget/correct/share and by later tasks through `.shared`.
+  const sharedOps = createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memoryDbAdapter, embeddings, applyCorrection, logger });
+
   /**
-   * The answer for an id the caller's private pool does not hold as a live
-   * card (E1 final review I3, ruling E1-R13). forget/correct/share act on the
-   * caller's own agent-private cards only. When the id is a live card in a
-   * workspace or user pool the principal can reach, list() and show() hand it
-   * out, so "not-found" would be a lie: the answer is "denied". Changing a
-   * shared copy is an E2 follow-up (OpenClaw's /forget has the same limit).
-   * An id the principal cannot see anywhere stays "not-found" (anti-oracle);
-   * a failed shared-pool lookup is logged and also answers "not-found".
-   * @returns {Promise<never>}
+   * The shared copy behind an id the caller's private pool does not hold as a
+   * live card (E1 final review I3, ruling E1-R13; E2 Task 4, D31). When the id
+   * is a live workspace/user copy the principal can reach, each op decides
+   * what the sharer and everyone else may do with it. An id the principal
+   * cannot see anywhere stays "not-found" (anti-oracle); a failed shared-pool
+   * lookup is logged by findSharedRow and also answers "not-found".
+   * @returns {Promise<{card: object, sourceKind: string}>}
    */
-  async function refuseMissingPrivate(op, agentId, safeId, memoryCtx) {
-    let shared = null;
-    try {
-      shared = await findMemoryAcrossAccessPools({
-        privatePool: pool,
-        sharedPool: sharedMemoryPool,
-        agent: agentId,
-        id: safeId,
-        ctx: memoryCtx,
-        now: Date.now(),
-        sourceKinds: ["workspace", "user"],
-      });
-    } catch (err) {
-      logger?.warn?.(`memory-ops.${op}: shared-pool lookup failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
-    }
-    if (shared) throw memoryOpError("denied", "shared copies cannot be changed through this call yet");
-    throw memoryOpError("not-found", messageForCode("not-found"));
+  async function requireSharedRow(agentId, safeId, memoryCtx) {
+    const found = await sharedOps.findSharedRow({ agentId, memoryCtx, id: safeId });
+    if (!found) throw memoryOpError("not-found", messageForCode("not-found"));
+    return found;
   }
 
   /**
@@ -161,7 +151,10 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
     // crash-backfill of a half-committed forget). Any other non-live state
     // is not-found, same as show() — unless the id is a shared copy.
     if (!card || (card.status !== "deleted" && !isLive(card))) {
-      await refuseMissingPrivate("forget", agentId, safeId, memoryCtx);
+      const shared = await requireSharedRow(agentId, safeId, memoryCtx);
+      if (!isSharer(shared.card, agentId)) throw memoryOpError("denied", "only the sharing agent can retract a shared copy");
+      opsContext.assertOpen?.();
+      return sharedOps.retractSharedRow({ agentId, memoryCtx, workspaceDir, archiveDir, card: shared.card, reason: "MemoryOps.forget" });
     }
 
     opsContext.assertOpen?.();
@@ -212,7 +205,11 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       throw memoryOpError("storage", messageForCode("storage"));
     }
     if (!card || !isLive(card)) {
-      await refuseMissingPrivate("correct", agentId, safeId, memoryCtx);
+      const shared = await requireSharedRow(agentId, safeId, memoryCtx);
+      if (!isSharer(shared.card, agentId)) throw memoryOpError("denied", "shared copies are changed through a proposal (memory.propose)");
+      opsContext.assertOpen?.();
+      const { sharedId } = await sharedOps.refreshShare({ agentId, memoryCtx, workspaceDir, archiveDir, card: shared.card, newText: trimmed, reason: "MemoryOps.correct" });
+      return { id: sharedId, archived: true };
     }
 
     opsContext.assertOpen?.();
@@ -284,7 +281,8 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       throw memoryOpError("storage", messageForCode("storage"));
     }
     if (!card || !isLive(card)) {
-      await refuseMissingPrivate("share", agentId, safeId, memoryCtx);
+      await requireSharedRow(agentId, safeId, memoryCtx);
+      throw memoryOpError("denied", "a shared copy cannot be shared again");
     }
 
     opsContext.assertOpen?.();
@@ -301,5 +299,5 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
     return { sourceId: safeId, sharedId: result.sharedId, target };
   }
 
-  return { forget, correct, share };
+  return { forget, correct, share, shared: sharedOps };
 }

@@ -57,6 +57,7 @@ export const DEPLOY_FILES = [
   "engine/memory-ops/errors.js",
   "engine/memory-ops/read.js",
   "engine/memory-ops/write.js",
+  "engine/memory-ops/shared.js",
   "engine/providers/legacy-providers.js",
   "engine/providers/runtime-reranker.js",
   "engine/recall/assemble-prompt-context.js",
