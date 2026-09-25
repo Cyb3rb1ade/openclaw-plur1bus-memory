@@ -5,6 +5,21 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.9] — 2026-09-25
+
+### Behoben
+
+- **Träume werden nie mehr als Critical gepusht.** Bernhardines Light-Dream über
+  Eva („Ich stehe in einem Raum ohne Wände …“) kam als „Persönliche Beziehung“
+  in Evas Critical-Push. Die Dream-Engine speichert Träume mit
+  `origin: "dream"` / `memoryClass: "dream"` und dem Speicher-Default
+  `type: "memory"`; `findRecentUnclassified` hielt sie für frische Karten, der
+  Klassifizierer sah in der Erzählung eine Beziehung, und die
+  Quellrollen-Sperre griff nicht, weil ein Traum keine `sourceMessageRole` hat.
+  Jetzt schließt die Kandidatenabfrage Träume aus, und der Job überspringt sie
+  zusätzlich vor der Klassifikation (`skippedDreams` im Ergebnis), auch mit
+  Wichtigkeitssignal. Neuer Helfer `isDreamCard()` in `lib/critical-review.js`.
+
 ## [7.16.8] — 2026-09-24
 
 ### Hinzugefügt
