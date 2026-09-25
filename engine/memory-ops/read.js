@@ -6,8 +6,7 @@
  * reshaped into the typed `MemoryCard`/`MemoryListResult` contract (contract 1.5.0).
  */
 
-import { queryMemoryAcrossAccessPools, projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
-import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
+import { queryMemoryAcrossAccessPools, findMemoryAcrossAccessPools } from "../../lib/telegram-commands/memory-query.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { readTombstonesFromRegistry } from "../../lib/tombstone.js";
 import { memoryOpError } from "./errors.js";
@@ -204,31 +203,31 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
       throw memoryOpError("invalid-input", "id must be a valid memory id");
     }
 
-    let card;
+    let found;
     try {
-      // getCard(..., { ctx }) already runs checkAccess internally and
-      // returns null for a denied card (lib/db-adapter.js) — no second,
-      // redundant ACL check here.
-      card = await memoryDbAdapter.getCard(agentId, safeId, { ctx: memoryCtx });
+      // The same pools, ACL and liveness test list() applies (E1 final review
+      // I3): every id list() hands out resolves here, whether it lives in the
+      // agent's private pool or in a workspace/user pool the principal can
+      // reach. A non-"active" status (archived, superseded, deleted, …), an
+      // invalidated epistemic status, an expired TTL, an ACL denial or a pool
+      // the principal cannot reach are all the same "not-found" (anti-oracle).
+      found = await findMemoryAcrossAccessPools({
+        privatePool: pool,
+        sharedPool: sharedMemoryPool,
+        agent: agentId,
+        id: safeId,
+        ctx: memoryCtx,
+        now: Date.now(),
+      });
     } catch (err) {
-      logger?.warn?.(`memory-ops.show: getCard failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
+      logger?.warn?.(`memory-ops.show: lookup failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
       throw memoryOpError("storage", "memory read failed");
     }
 
-    if (!card) {
+    if (!found) {
       throw memoryOpError("not-found", "memory not found");
     }
-    const projected = projectMemoryQueryCard(card);
-    // Same liveness test list() applies to every candidate row (fix round 1,
-    // anti-oracle): a non-"active" status (archived, superseded, deleted, …),
-    // an invalidated epistemic status, an expired TTL, or a Valid-Time window
-    // that excludes "now" are all indistinguishable "not-found" — never a
-    // different code or message per reason.
-    if (!isRecallEntryLive(projected, Date.now())) {
-      throw memoryOpError("not-found", "memory not found");
-    }
-
-    return toMemoryCard(projected, { includeScore: false });
+    return toMemoryCard(found.card, { includeScore: false });
   }
 
   async function state(p, a) {

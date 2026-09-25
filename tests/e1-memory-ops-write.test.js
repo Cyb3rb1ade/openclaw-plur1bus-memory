@@ -437,6 +437,46 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
   });
 });
 
+describe("Engine.memory on a workspace-shared card (E1 final review I3)", () => {
+  it("anna lists and shows bernd's workspace-shared card; her forget/correct/share are denied; a random id is not-found", async () => {
+    const stateDir = makeTempDir("e1-share-state-");
+    const host = stubHostForSharedWorkspace(stateDir);
+    const baseDbPath = freshBaseDbPath("e1-share-");
+    const engine = createEngine(host, { ...config(baseDbPath), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const sourceId = await seedAndGetId(engine, "bernd", "The team's printer toner is ordered from the stationery portal.", "printer toner", principalForDestructive);
+    const { sharedId } = await engine.memory.share(sourceId, "workspace", principalForDestructive("bernd"), agent);
+
+    const anna = principalForDestructive("anna");
+    const listed = await engine.memory.list({ since: 0 }, anna, agent);
+    const listedCard = listed.items.find((c) => c.id === sharedId);
+    assert.ok(listedCard, "anna lists the shared card");
+    assert.equal(listedCard.scope, "workspace");
+
+    const shown = await engine.memory.show(sharedId, anna, agent);
+    assert.equal(shown.id, sharedId);
+    assert.equal(shown.scope, "workspace");
+
+    const deniedShared = (err) => err.name === "MemoryOpError" && err.code === "denied"
+      && err.message === "shared copies cannot be changed through this call yet";
+    await assert.rejects(() => engine.memory.forget(sharedId, anna, agent), deniedShared);
+    await assert.rejects(() => engine.memory.correct(sharedId, "The toner comes from elsewhere now.", anna, agent), deniedShared);
+    await assert.rejects(() => engine.memory.share(sharedId, "workspace", anna, agent), deniedShared);
+
+    const unknown = randomUUID();
+    await assert.rejects(() => engine.memory.show(unknown, anna, agent), (err) => err.code === "not-found");
+    await assert.rejects(() => engine.memory.forget(unknown, anna, agent), (err) => err.code === "not-found");
+    await assert.rejects(() => engine.memory.correct(unknown, "text", anna, agent), (err) => err.code === "not-found");
+    await assert.rejects(() => engine.memory.share(unknown, "workspace", anna, agent), (err) => err.code === "not-found");
+
+    // The refused calls changed nothing: the shared card is still listed and no tombstone exists for anna.
+    const after = await engine.memory.show(sharedId, anna, agent);
+    assert.equal(after.text, shown.text);
+    assert.equal(readTombstonesFromRegistry(baseDbPath, "anna").length, 0);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+});
+
 describe("Engine.memory after close() (E1 final review I2)", () => {
   it("every member rejects with storage \"engine is closed\"; forget writes no archive and no tombstone", async () => {
     const stateDir = makeTempDir("e1-write-state-");

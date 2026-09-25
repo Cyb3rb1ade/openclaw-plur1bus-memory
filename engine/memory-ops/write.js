@@ -10,7 +10,7 @@
  */
 
 import { forgetCard, correctCard, shareCard } from "../../lib/telegram-commands/memory-edit.js";
-import { projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
+import { projectMemoryQueryCard, findMemoryAcrossAccessPools } from "../../lib/telegram-commands/memory-query.js";
 import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { safeUpdate } from "../../lib/safe-update.js";
@@ -50,6 +50,36 @@ function isLive(card) {
  * @returns {{forget: Function, correct: Function, share: Function}}
  */
 export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, pool, sharedMemoryPool, embeddings, getNeoStore, logger }) {
+  /**
+   * The answer for an id the caller's private pool does not hold as a live
+   * card (E1 final review I3, ruling E1-R13). forget/correct/share act on the
+   * caller's own agent-private cards only. When the id is a live card in a
+   * workspace or user pool the principal can reach, list() and show() hand it
+   * out, so "not-found" would be a lie: the answer is "denied". Changing a
+   * shared copy is an E2 follow-up (OpenClaw's /forget has the same limit).
+   * An id the principal cannot see anywhere stays "not-found" (anti-oracle);
+   * a failed shared-pool lookup is logged and also answers "not-found".
+   * @returns {Promise<never>}
+   */
+  async function refuseMissingPrivate(op, agentId, safeId, memoryCtx) {
+    let shared = null;
+    try {
+      shared = await findMemoryAcrossAccessPools({
+        privatePool: pool,
+        sharedPool: sharedMemoryPool,
+        agent: agentId,
+        id: safeId,
+        ctx: memoryCtx,
+        now: Date.now(),
+        sourceKinds: ["workspace", "user"],
+      });
+    } catch (err) {
+      logger?.warn?.(`memory-ops.${op}: shared-pool lookup failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
+    }
+    if (shared) throw memoryOpError("denied", "shared copies cannot be changed through this call yet");
+    throw memoryOpError("not-found", messageForCode("not-found"));
+  }
+
   /**
    * The version write behind `correct` (E1 Task 8): the same safeUpdate path
    * the OpenClaw `/correct` command has always used, moved here so the
@@ -127,14 +157,11 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       logger?.warn?.(`memory-ops.forget: getCard failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
       throw memoryOpError("storage", messageForCode("storage"));
     }
-    if (!card) {
-      throw memoryOpError("not-found", messageForCode("not-found"));
-    }
     // A "deleted" card must still reach forgetCard below (idempotency +
     // crash-backfill of a half-committed forget). Any other non-live state
-    // is not-found, same as show().
-    if (card.status !== "deleted" && !isLive(card)) {
-      throw memoryOpError("not-found", messageForCode("not-found"));
+    // is not-found, same as show() — unless the id is a shared copy.
+    if (!card || (card.status !== "deleted" && !isLive(card))) {
+      await refuseMissingPrivate("forget", agentId, safeId, memoryCtx);
     }
 
     opsContext.assertOpen?.();
@@ -185,7 +212,7 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       throw memoryOpError("storage", messageForCode("storage"));
     }
     if (!card || !isLive(card)) {
-      throw memoryOpError("not-found", messageForCode("not-found"));
+      await refuseMissingPrivate("correct", agentId, safeId, memoryCtx);
     }
 
     opsContext.assertOpen?.();
@@ -257,7 +284,7 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       throw memoryOpError("storage", messageForCode("storage"));
     }
     if (!card || !isLive(card)) {
-      throw memoryOpError("not-found", messageForCode("not-found"));
+      await refuseMissingPrivate("share", agentId, safeId, memoryCtx);
     }
 
     opsContext.assertOpen?.();
