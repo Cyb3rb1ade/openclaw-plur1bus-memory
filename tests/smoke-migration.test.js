@@ -92,6 +92,8 @@ const TABLE_NAME = "memories";
       "previousEpistemicStatus",
       "validFrom",
       "validUntil",
+      // E1 Task 8 fix round 1: MemoryDB's own migration adds chunkGroupId too.
+      "chunkGroupId",
     ];
 
     for (const col of v6Columns) {
@@ -205,6 +207,7 @@ const TABLE_NAME = "memories";
         previousEpistemicStatus: "",
         validFrom: 0,
         validUntil: 0,
+        chunkGroupId: "",
       },
     ]);
 

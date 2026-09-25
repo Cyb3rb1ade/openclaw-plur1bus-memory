@@ -146,3 +146,4 @@ const hostWithCapabilities: HostServices = { ...minimalHost, capabilities: { res
 void hostWithCapabilities;
 assertTrue<Exact<NonNullable<HostServices["capabilities"]>["registrationMode"], string | undefined>>();
 assertTrue<Exact<HostCapabilities["resolvePath"], ((path: string) => string) | undefined>>();
+assertTrue<Exact<HostCapabilities["memoryArchiveDir"], (() => string) | undefined>>();

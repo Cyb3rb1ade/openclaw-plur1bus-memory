@@ -65,12 +65,6 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
   async function applyCorrection({ agentId, memoryCtx, workspaceDir, id, newContent, card }) {
     return pool.withDb(agentId, async (rawDb) => {
       await rawDb.init();
-      // db-adapter adds columns (chunkGroupId, 7.12.70) to a table behind this
-      // pooled MemoryDB's back; a schema cached before that makes store()
-      // drop the new field and LanceDB refuse the append ("missing=
-      // [chunkGroupId]") — e.g. for a table created earlier in this process.
-      // One schema read per correction keeps the cached field list current.
-      await rawDb.refreshSchemaFields?.();
       const vector = await embeddings.embed(newContent, { agentId });
       const neoStore = typeof getNeoStore === "function" ? getNeoStore({ agentId, workspaceDir }, {}) : undefined;
       const oldText = card?.text || card?.summary || "";

@@ -705,6 +705,11 @@ class MemoryDB {
             // that direction", not the Unix epoch.
             { name: 'validFrom', valueSql: '0' },
             { name: 'validUntil', valueSql: '0' },
+            // 7.12.70 chunking: '' = not split. db-adapter's ensureChunkColumns
+            // adds the same column through its own handle; a table MemoryDB
+            // created without it then refused every later append from this
+            // instance ("missing=[chunkGroupId]", E1 Task 8 fix round 1).
+            { name: 'chunkGroupId', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
@@ -811,6 +816,8 @@ class MemoryDB {
             // that direction", not the Unix epoch.
             validFrom: 0,
             validUntil: 0,
+            // 7.12.70 chunking; see the migration list above.
+            chunkGroupId: "",
           },
         ]), "MemoryDB.createTable", "created-table", false);
       }

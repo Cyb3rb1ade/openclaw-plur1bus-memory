@@ -256,9 +256,21 @@ Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
 - **OpenClaw-Adapter:** `/forget`, `/correct` und `/share` führen ihre
   eigentliche Änderung über `Engine.memory` aus; Parsing, Normalisierung,
   Kandidatenauswahl, Bestätigungs-Nonce, Sprache, Darstellung und `checkAuth`
-  bleiben im Adapter, die Antworttexte sind unverändert. `/memory` bleibt
-  bewusst bei `queryMemoryAcrossAccessPools` (`--explain` und die
-  Filtersyntax bildet `MemoryListQuery` nicht ab).
+  bleiben im Adapter. Ein über den `/plur1bus`-Router (auch
+  `Engine.runCommand`) erreichter Befehl behält den `AgentContext` des
+  Aufrufers; ein Subagent kann damit nichts vergessen oder korrigieren.
+  `/memory` bleibt bewusst bei `queryMemoryAcrossAccessPools` (`--explain`
+  und die Filtersyntax bildet `MemoryListQuery` nicht ab).
+- **Bewusste Antwortänderungen von `/forget`, `/correct` und `/share`:**
+  (1) beim Bestätigen antworten „nicht gefunden“ und „per ACL verweigert“
+  beide mit `*_not_found` (nicht mehr unterscheidbar); (2) die Variable in
+  `*_failed` ist jetzt eine allgemeine englische Meldung statt des
+  lokalisierten Einzelfehlers; (3) abgelöste, archivierte, abgelaufene und
+  invalidierte Ziele werden mit „nicht gefunden“ abgelehnt. Eine Ablehnung
+  `denied`, die erst nach bestandenem `checkAuth` aus der Engine kommt
+  (z. B. widersprüchliche Workspace-Identität nach einem Config-Reload),
+  antwortet mit `*_failed` statt mit dem Whitelist-Hinweis und wird mit
+  Grund geloggt.
 
 #### Behoben
 
@@ -268,10 +280,13 @@ Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
   Statuswechsel) für `getCard`/`resolveCandidates` bis zum Neustart
   unsichtbar blieb. `lancedb.connect` läuft jetzt wie in `MemoryDB` mit
   `readConsistencyInterval: 0`.
-- Eine Korrektur scheiterte an einem veralteten Spalten-Cache des
-  Pool-`MemoryDB` („missing=[chunkGroupId]“), wenn `db-adapter` die Spalte
-  erst nach dem Öffnen ergänzt hatte (etwa bei einer in diesem Prozess
-  angelegten Tabelle); `correct` liest das Schema vor dem Schreiben neu.
+- **Capture auf frischen Installationen:** eine von `MemoryDB` angelegte
+  Tabelle hatte keine Spalte `chunkGroupId` (weder in der Schema-Zeile noch
+  in `MemoryDB`s eigener Migrationsliste). Ergänzte `db-adapter` sie danach
+  über ein zweites Handle, lehnte LanceDB jeden weiteren Append dieser
+  `MemoryDB`-Instanz ab („missing=[chunkGroupId]“, der Spalten-Cache filterte
+  das Feld heraus) — Capture und Korrekturen standen bis zum Neustart.
+  `chunkGroupId` gehört jetzt zur Schema-Zeile und zur Migrationsliste.
 
 ## [7.16.9] — 2026-09-25
 

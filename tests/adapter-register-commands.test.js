@@ -133,8 +133,10 @@ async function e1Harness() {
   const workspaceDir = join(tmpRoot, "workspace");
   mkdirSync(workspaceDir, { recursive: true });
   const baseDbPath = join(tmpRoot, "lancedb-namespaced");
+  const warnings = [];
   const host = createStubHost({
     stateDir,
+    logger: { warn: (message) => warnings.push(String(message)), info() {}, debug() {}, error() {} },
     workspaceDir: async () => workspaceDir,
     runtime: { agent: { resolveAgentWorkspaceDir: async () => workspaceDir } },
     routing: async () => e1Routing,
@@ -159,7 +161,7 @@ async function e1Harness() {
   });
   const commands = new Map();
   const api = { config: {}, registerCommand(spec) { commands.set(spec.name, spec); } };
-  registerChatCommands({
+  const bodies = registerChatCommands({
     ...internals,
     CORRECTION_PREVIEW_CHARS,
     api,
@@ -176,6 +178,8 @@ async function e1Harness() {
     runOperatorCommand: async () => ({ text: "" }),
     runPlur1busCommand: async () => ({ text: "" }),
   });
+  // As plugin.js does: the router (Engine.runCommand included) calls back into these bodies.
+  Object.assign(internals.commandBodies, bodies);
   const run = (name, args) => commands.get(name).handler(e1DirectCommand(args));
   const seed = async (text, topic) => {
     const principal = { agentId: E1_AGENT, channel: "telegram", accountId: "account-a", chat: { id: "chat-a", kind: "direct" }, trust: "proved" };
@@ -194,7 +198,7 @@ async function e1Harness() {
     return listed.items[0].id;
   };
   const rawCard = (id) => internals.pool.withDb(E1_AGENT, (db) => db.getById(id));
-  return { engine, internals, calls, run, seed, rawCard, baseDbPath, stateDir };
+  return { engine, internals, calls, run, seed, rawCard, baseDbPath, stateDir, warnings };
 }
 
 const tokenOf = (text, command) => {
@@ -275,5 +279,31 @@ describe("E1 Task 8: slash commands run their final effect through Engine.memory
 
     const missing = await run("share", "66666666-6666-4666-8666-666666666666");
     assert.equal(missing.text, t("plur1bus.share_not_found", { lang: "en" }));
+  });
+  it("the /plur1bus router passes its own AgentContext through: a subagent's forget confirm is refused (E1-R12 M2) and answers forget_failed, not the whitelist hint (M1)", async () => {
+    const { calls, run, seed, rawCard, internals, warnings } = await e1Harness();
+    const id = await seed("The backup drive is labelled Orion.", "backup");
+    const token = tokenOf((await run("forget", "backup drive labelled")).text, "forget");
+
+    // The router takes the action from prefixTokens and hands the body the
+    // command context whose args are the body's own ("confirm <token>").
+    const reply = await internals.runPlur1busCommand(
+      e1DirectCommand(`confirm ${token}`), ["forget"], { agentContext: { origin: "subagent", background: false } },
+    );
+    assert.equal(calls.forget.length, 1, "the confirmation completed and reached Engine.memory.forget");
+    assert.deepEqual(calls.forget[0][2], { origin: "subagent", background: false }, "the router's AgentContext, not one re-derived from commandCtx");
+    assert.equal(reply.text, t("plur1bus.forget_failed", { lang: "en", vars: { error: "destructive memory operations require origin \"user\" and background false" } }));
+    assert.notEqual(reply.text, t("plur1bus.unauthorized", { lang: "en" }));
+    assert.ok(warnings.some((w) => w.includes("/forget refused by Engine.memory after checkAuth")), "the denial reason is logged");
+    assert.equal((await rawCard(id)).status, "active", "nothing was forgotten");
+  });
+
+  it("Engine.runCommand with { origin: \"subagent\" } does not forget", async () => {
+    const { engine, run, seed, rawCard } = await e1Harness();
+    const id = await seed("The spare bike lock code is taped inside the shed.", "bike");
+    const token = tokenOf((await run("forget", "spare bike lock")).text, "forget");
+    const principal = { agentId: E1_AGENT, channel: "telegram", accountId: "account-a", chat: { id: "chat-a", kind: "direct" }, trust: "proved" };
+    await engine.runCommand("plur1bus", `forget confirm ${token}`, principal, { origin: "subagent", background: false });
+    assert.equal((await rawCard(id)).status, "active");
   });
 });

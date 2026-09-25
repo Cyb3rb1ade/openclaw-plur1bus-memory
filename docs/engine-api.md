@@ -151,14 +151,23 @@ keep parsing, LLM input normalisation, candidate disambiguation, the nonce
 confirmation store, locale, rendering and `checkAuth` in
 `adapter/openclaw/register-commands.js`; only the final effect runs through
 `Engine.memory`, under `principalFromMemoryContext(memoryCtx, trust)` and
-`agentContextFromCommand(commandCtx)`. A context from
+`agentContextFromCommand(commandCtx)` — or, for a body reached through the
+`/plur1bus` router (`Engine.runCommand` included), the router's own
+`AgentContext`, so a subagent's command never becomes a `"user"` forget. A context from
 `resolveHostCommandMemoryContext` counts as `"proved"` (it throws on any
 disagreement between the host's route facts, session and conversation binding
 instead of degrading); a context that already carries `trust` keeps it.
-`MemoryOpError.code` maps back to the unchanged replies: `not-found` →
-`*_not_found`, `denied` → the `checkAuth` denial, anything else →
-`*_failed` (for `/share`: `not-found`/`conflict` → `share_not_found`,
-`approval-required` → the confirmation flow). `/memory` deliberately stays on
+`MemoryOpError.code` maps back to the existing reply keys: `not-found` →
+`*_not_found`, anything else → `*_failed` (for `/share`:
+`not-found`/`conflict` → `share_not_found`, `approval-required` → the
+confirmation flow). A `denied` arrives only after the adapter's `checkAuth`
+passed (a principal round trip that fails, a non-user origin), so it answers
+`*_failed` rather than the whitelist hint of `plur1bus.unauthorized`, and its
+reason is logged. Three reply changes are deliberate: at confirmation time
+not-found and ACL-denied both answer `*_not_found`; the variable in
+`*_failed` is the generic English `MemoryOpError` message instead of the
+localized per-case error; and superseded, archived, expired and invalidated
+targets are refused as not-found. `/memory` deliberately stays on
 `queryMemoryAcrossAccessPools`: its `--explain` flag and filter syntax are not
 modelled by `MemoryListQuery`. `/correct trust …` (epistemic-status
 transitions) is not a MemoryOps member and keeps its own path.

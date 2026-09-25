@@ -265,8 +265,11 @@ export function registerChatCommands(ctx) {
   );
   // A slash command a person typed is { origin: "user", background: false };
   // a cron-channel command stays { origin: "cron", background: true } and the
-  // engine refuses the destructive op (fail-closed).
-  const commandAgentContext = (commandCtx) => agentContextFromCommand(commandCtx);
+  // engine refuses the destructive op (fail-closed). A body reached through
+  // the /plur1bus router (Engine.runCommand included) gets the router's own
+  // AgentContext instead of re-deriving one from the command context
+  // (E1-R12 M2): a subagent's runCommand must not become a "user" forget.
+  const commandAgentContext = (commandCtx, suppliedAgentContext = null) => suppliedAgentContext ?? agentContextFromCommand(commandCtx);
   /** Runs one Engine.memory call; a MemoryOpError becomes `{ ok: false, code, error }`, anything else rethrows. */
   const runMemoryOp = async (op) => {
     try {
@@ -278,12 +281,16 @@ export function registerChatCommands(ctx) {
   };
   /**
    * The localized reply for a refused forget/correct: not-found → the
-   * command's `*_not_found` key, denied → the same denial reply checkAuth
-   * gives, every other code → the command's `*_failed` key.
+   * command's `*_not_found` key, every other code → the command's `*_failed`
+   * key. A `denied` here arrives after checkAuth already passed (the
+   * principal round trip, e.g. a conflicting workspace identity after a
+   * config reload, or a non-user origin), so it is not answered with the
+   * whitelist hint of plur1bus.unauthorized; the reason goes to the log
+   * (E1-R12 M1).
    */
-  const memoryOpFailureReply = (command, outcome, { commandCtx, lang, tone, query }) => {
+  const memoryOpFailureReply = (command, outcome, { lang, tone, query }) => {
     if (outcome.code === "not-found") return { text: t(`plur1bus.${command}_not_found`, { lang, tone, vars: { query } }) };
-    if (outcome.code === "denied") return { text: t("plur1bus.unauthorized", resolveDenialLocale(commandCtx)) };
+    if (outcome.code === "denied") host.logger.warn(`memory-lancedb-namespaced: /${command} refused by Engine.memory after checkAuth: ${outcome.error}`);
     return { text: t(`plur1bus.${command}_failed`, { lang, tone, vars: { error: outcome.error } }) };
   };
 
@@ -722,7 +729,7 @@ export function registerChatCommands(ctx) {
     }
   };
 
-  const runForgetCommand = async (commandCtx, suppliedMemoryCtx = null) => {
+  const runForgetCommand = async (commandCtx, suppliedMemoryCtx = null, suppliedAgentContext = null) => {
     try {
       const deniedLen = checkSemanticArgsLength(commandCtx);
       if (deniedLen) return deniedLen;
@@ -750,8 +757,8 @@ export function registerChatCommands(ctx) {
           nonce: confirmation.nonce,
         });
         if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
-        const outcome = await runMemoryOp(() => engineMemory.forget(pending.targetId, commandPrincipal(memoryCtx), commandAgentContext(commandCtx)));
-        if (!outcome.ok) return memoryOpFailureReply("forget", outcome, { commandCtx, lang, tone, query: pending.targetId });
+        const outcome = await runMemoryOp(() => engineMemory.forget(pending.targetId, commandPrincipal(memoryCtx), commandAgentContext(commandCtx, suppliedAgentContext)));
+        if (!outcome.ok) return memoryOpFailureReply("forget", outcome, { lang, tone, query: pending.targetId });
         return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
       }
 
@@ -785,7 +792,7 @@ export function registerChatCommands(ctx) {
     }
   };
 
-  const runCorrectCommand = async (commandCtx, suppliedMemoryCtx = null) => {
+  const runCorrectCommand = async (commandCtx, suppliedMemoryCtx = null, suppliedAgentContext = null) => {
     try {
       const deniedLen = checkSemanticArgsLength(commandCtx);
       if (deniedLen) return deniedLen;
@@ -852,8 +859,8 @@ export function registerChatCommands(ctx) {
         // Engine.memory.correct writes the new version through the same
         // safeUpdate path this command always used (fresh summary, evidence
         // line, Neo reconsolidation, reinforcement; engine/memory-ops/write.js).
-        const outcome = await runMemoryOp(() => engineMemory.correct(pending.targetId, newText, commandPrincipal(memoryCtx), commandAgentContext(commandCtx)));
-        if (!outcome.ok) return memoryOpFailureReply("correct", outcome, { commandCtx, lang, tone, query: pending.targetId });
+        const outcome = await runMemoryOp(() => engineMemory.correct(pending.targetId, newText, commandPrincipal(memoryCtx), commandAgentContext(commandCtx, suppliedAgentContext)));
+        if (!outcome.ok) return memoryOpFailureReply("correct", outcome, { lang, tone, query: pending.targetId });
         return { text: t("plur1bus.correct_done", { lang, tone, vars: { id: pending.targetId } }) };
       }
 
@@ -1164,8 +1171,9 @@ export function registerChatCommands(ctx) {
     // Both branches answer the same shape, so the replies below are shared:
     // not-found and conflict (the source changed while sharing — the old
     // `sourceDenied` bucket) → share_not_found, approval-required → the
-    // confirmation flow, denied → the checkAuth denial, anything else →
-    // share_failed.
+    // confirmation flow, anything else → share_failed. A `denied` arrives
+    // after checkAuth passed, so it is logged and answered share_failed, not
+    // with the whitelist hint (E1-R12 M1).
     const runShare = async (memoryCtx, sourceId, targetScope, allowSensitive) => {
       if (registeredShareCard) {
         const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
@@ -1188,10 +1196,11 @@ export function registerChatCommands(ctx) {
         approvalRequired: outcome.code === "approval-required",
         notFound: outcome.code === "not-found" || outcome.code === "conflict",
         denied: outcome.code === "denied",
+        error: outcome.error,
       };
     };
     const shareFailure = (result) => {
-      if (result.denied) return { text: t("plur1bus.unauthorized", resolveDenialLocale(commandCtx)) };
+      if (result.denied) host.logger.warn(`memory-lancedb-namespaced: /share refused by Engine.memory after checkAuth: ${result.error}`);
       return fail(result.notFound ? "plur1bus.share_not_found" : "plur1bus.share_failed");
     };
     try {
