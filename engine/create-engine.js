@@ -115,6 +115,7 @@ import { createMemoryOpsContext } from "./memory-ops/context.js";
 import { createMemoryRead } from "./memory-ops/read.js";
 import { createMemoryWrite } from "./memory-ops/write.js";
 import { memoryOpError } from "./memory-ops/errors.js";
+import { createObsidianOps } from "./admin/obsidian.js";
 
 // Nothing in this file otherwise reads the plugin's own package.json version
 // (grepped repo-wide before adding this); the store schema marker records it
@@ -3374,6 +3375,19 @@ export function createEngine(host, config, testOptions = {}) {
     serve: async () => ({ dispose() {} }),
   });
 
+  // AdminOps.obsidian (1.6.0, E2 Task 7): host-neutral vault detect/prepare/confirm,
+  // explicit paths only, no host runtime. Reuses the same MemoryOps opsContext
+  // (fail-closed principal/agent resolution) and the engine's existing
+  // confirmationStore Map (the one the /plur1bus dispatcher and its command
+  // handlers already share) — no second confirmation mechanism.
+  const obsidianOps = createObsidianOps({
+    opsContext: memoryOpsContext,
+    baseDbPath,
+    confirmationStore,
+    getObsidianBridgeConfig: () => cfg.obsidianBridge || {},
+    logger: host.logger,
+  });
+
   // AdminOps: the existing coordinators behind the contract's method names;
   // an operation with no engine-side implementation yet rejects.
   // share/forget (1.6.0, deprecated) are aliases of Engine.memory.share/forget —
@@ -3399,9 +3413,9 @@ export function createEngine(host, config, testOptions = {}) {
       set: async (...args) => internals.workspacePolicyStore.set(...args),
     }),
     obsidian: Object.freeze({
-      detect: notInM1b1("admin.obsidian.detect"),
-      prepare: notInM1b1("admin.obsidian.prepare"),
-      confirm: notInM1b1("admin.obsidian.confirm"),
+      detect: async (...args) => { assertMemoryOpen(); return obsidianOps.detect(...args); },
+      prepare: async (...args) => { assertMemoryOpen(); return obsidianOps.prepare(...args); },
+      confirm: async (...args) => { assertMemoryOpen(); return obsidianOps.confirm(...args); },
     }),
     migrate: async (from, to) => { assertMemoryOpen(); return storeMigrator.migrate(from, to); },
   });
