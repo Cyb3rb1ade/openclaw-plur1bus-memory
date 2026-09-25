@@ -7,7 +7,7 @@
  */
 
 import { queryMemoryAcrossAccessPools, projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
-import { checkAccess } from "../../lib/acl-middleware.js";
+import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { memoryOpError } from "./errors.js";
 
@@ -15,17 +15,6 @@ const DEFAULT_LIMIT = 20;
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 100;
 const MAX_TOPIC_LENGTH = 2_000;
-
-// computeCutoff (lib/db-adapter.js) only understands a small fixed vocabulary
-// of named ranges ("today" | "yesterday" | "this_week" | "this_month" |
-// "month:<name>"); it has no notion of an arbitrary epoch-ms lower bound.
-// `this_month` is the widest of those named windows (30 rolling days), so a
-// `since` query asks the legacy time path for that widest window and this
-// module re-applies the caller's real `since`/`until` bound in JS afterwards.
-// A `since` older than 30 days will not surface memories the legacy query
-// never fetched in the first place — a known limitation of the existing
-// time-range vocabulary, out of scope for this task's file list.
-const SINCE_QUERY_RANGE = "this_month";
 
 const KNOWN_SCOPES = new Set(["agent-private", "workspace", "user"]);
 
@@ -70,9 +59,15 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     const rawLimit = Number.isFinite(q?.limit) ? Math.floor(q.limit) : DEFAULT_LIMIT;
     const limit = Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, rawLimit));
 
+    const now = Date.now();
+    // computeCutoff (lib/db-adapter.js) accepts an explicit { from, to }
+    // epoch-ms range additively alongside its named ranges (E1 Task 4 fix
+    // round 1): MemoryListQuery.since/.until are arbitrary epoch ms, not the
+    // legacy vocabulary's named windows, so this passes the caller's real
+    // bound straight through instead of laundering it through one of those.
     const parsed = hasTopic
       ? { mode: "topic", topic: q.topic, filters: undefined, explain: false }
-      : { mode: "time", range: SINCE_QUERY_RANGE, explain: false };
+      : { mode: "time", range: { from: q.since, to: typeof q.until === "number" && Number.isFinite(q.until) ? q.until : now }, explain: false };
 
     let items;
     try {
@@ -83,21 +78,11 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
         agent: agentId,
         parsed,
         ctx: memoryCtx,
-        now: Date.now(),
+        now,
       });
     } catch (err) {
       logger?.warn?.(`memory-ops.list: query failed for agent '${agentId}': ${err?.message || err}`);
       throw memoryOpError("storage", "memory read failed");
-    }
-
-    if (hasSince) {
-      const until = typeof q.until === "number" && Number.isFinite(q.until) ? q.until : null;
-      items = items.filter((card) => {
-        const created = toEpochMsOrNull(card.createdAt);
-        if (created === null || created < q.since) return false;
-        if (until !== null && created > until) return false;
-        return true;
-      });
     }
 
     const truncated = items.length > limit;
@@ -117,20 +102,29 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
 
     let card;
     try {
+      // getCard(..., { ctx }) already runs checkAccess internally and
+      // returns null for a denied card (lib/db-adapter.js) — no second,
+      // redundant ACL check here.
       card = await memoryDbAdapter.getCard(agentId, safeId, { ctx: memoryCtx });
     } catch (err) {
       logger?.warn?.(`memory-ops.show: getCard failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
       throw memoryOpError("storage", "memory read failed");
     }
 
-    if (!card || card.status === "deleted") {
+    if (!card) {
       throw memoryOpError("not-found", "memory not found");
     }
-    if (!checkAccess(memoryCtx, card).allowed) {
+    const projected = projectMemoryQueryCard(card);
+    // Same liveness test list() applies to every candidate row (fix round 1,
+    // anti-oracle): a non-"active" status (archived, superseded, deleted, …),
+    // an invalidated epistemic status, an expired TTL, or a Valid-Time window
+    // that excludes "now" are all indistinguishable "not-found" — never a
+    // different code or message per reason.
+    if (!isRecallEntryLive(projected, Date.now())) {
       throw memoryOpError("not-found", "memory not found");
     }
 
-    return toMemoryCard(projectMemoryQueryCard(card), { includeScore: false });
+    return toMemoryCard(projected, { includeScore: false });
   }
 
   return { list, show };

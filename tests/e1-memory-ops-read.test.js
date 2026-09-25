@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
 import { createEngine } from "../engine/create-engine.js";
+import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -53,6 +54,13 @@ async function seed(engine, agentId, text) {
   }).done;
   assert.equal(outcome.reason, undefined, `capture not skipped: ${outcome.reason}`);
   assert.ok(outcome.stored >= 1, `capture stored at least one fact (${outcome.stored})`);
+}
+
+// Direct row mutation, the way tests/gc-superseded-scan.test.js seeds
+// non-active statuses: through the engine's own write pool, never a second
+// capture (a status/createdAt change is not something MemoryOps writes yet).
+async function patchRow(engine, agentId, id, patch) {
+  await internalsOf(engine).pool.withDb(agentId, (db) => db.update(id, patch));
 }
 
 describe("Engine.memory.list / .show (E1 Task 4)", () => {
@@ -132,6 +140,76 @@ describe("Engine.memory.list / .show (E1 Task 4)", () => {
       () => engine.memory.show(id, berndPrincipal, agent),
       (err) => err.code === "not-found",
     );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(g) show(id) is not-found once the card is archived (fix round 1, anti-oracle)", async () => {
+    const host = createStubHost({ stateDir: makeTempDir("e1-read-state-") });
+    const engine = createEngine(host, { ...config(makeTempDir("e1-read-db-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-g";
+    await seed(engine, agentId, "The archived note about the old printer driver is no longer needed.");
+
+    const principal = principalFor(agentId);
+    const listed = await engine.memory.list({ topic: "printer driver" }, principal, agent);
+    assert.ok(listed.items.length >= 1);
+    const id = listed.items[0].id;
+
+    // GC's own archival path (lib/garbage-collector.js) sets exactly this
+    // status. The patch goes through the engine's own write pool, a separate
+    // LanceDB connection from memoryDbAdapter's cached read table, so show()
+    // is not called before the patch (that would cache the pre-patch table).
+    await patchRow(engine, agentId, id, { status: "archived" });
+    await assert.rejects(
+      () => engine.memory.show(id, principal, agent),
+      (err) => err.code === "not-found",
+    );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(h) show(id) is not-found once the card is superseded (fix round 1, anti-oracle)", async () => {
+    const host = createStubHost({ stateDir: makeTempDir("e1-read-state-") });
+    const engine = createEngine(host, { ...config(makeTempDir("e1-read-db-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-h";
+    await seed(engine, agentId, "The old office address was 12 Baker Street before the move.");
+
+    const principal = principalFor(agentId);
+    const listed = await engine.memory.list({ topic: "office address" }, principal, agent);
+    assert.ok(listed.items.length >= 1);
+    const id = listed.items[0].id;
+
+    // /correct's own supersede path (lib/safe-update.js, lib/db-adapter.js)
+    // sets exactly this status. As in (g), show() is not called before the
+    // patch — memoryDbAdapter's table cache must not observe the pre-patch row.
+    await patchRow(engine, agentId, id, { status: "superseded" });
+    await assert.rejects(
+      () => engine.memory.show(id, principal, agent),
+      (err) => err.code === "not-found",
+    );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(i) list({ since }) honours an explicit epoch bound past the legacy 30-day window (fix round 1)", async () => {
+    const host = createStubHost({ stateDir: makeTempDir("e1-read-state-") });
+    const engine = createEngine(host, { ...config(makeTempDir("e1-read-db-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-i";
+    await seed(engine, agentId, "Ninety days ago the team migrated the old ticketing system.");
+
+    const principal = principalFor(agentId);
+    const listed = await engine.memory.list({ topic: "ticketing system" }, principal, agent);
+    assert.ok(listed.items.length >= 1);
+    const id = listed.items[0].id;
+
+    const ninetyDaysAgo = Date.now() - 90 * 86_400_000;
+    await patchRow(engine, agentId, id, { createdAt: ninetyDaysAgo });
+
+    const includesIt = await engine.memory.list({ since: Date.now() - 100 * 86_400_000 }, principal, agent);
+    assert.ok(includesIt.items.some((c) => c.id === id), "a since 100 days back reaches a 90-day-old fact");
+
+    const excludesIt = await engine.memory.list({ since: Date.now() - 60 * 86_400_000 }, principal, agent);
+    assert.ok(!excludesIt.items.some((c) => c.id === id), "a since 60 days back excludes a 90-day-old fact");
 
     await engine.close({ budgetMs: 5_000 });
   });
