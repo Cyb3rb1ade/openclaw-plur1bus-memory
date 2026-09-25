@@ -110,6 +110,8 @@ import { createRuntimeRerankerProvider } from "./providers/runtime-reranker.js";
 import { ENGINE_INTERNALS } from "./internals.js";
 import { createResourceCloser } from "./lifecycle/close-resources.js";
 import { flushMetrics } from "../lib/metrics.js";
+import { createMemoryOpsContext } from "./memory-ops/context.js";
+import { createMemoryRead } from "./memory-ops/read.js";
 
 /**
  * Build the engine: every store, provider, route, scheduler and command body
@@ -1419,6 +1421,19 @@ export function createEngine(host, config, testOptions = {}) {
     embedder: {
       embed: async (text) => embeddings.embed(text),
     },
+    logger: host.logger,
+  });
+
+  // Typed MemoryOps (contract 1.5.0, E1). One context instance is shared by
+  // every MemoryOps member (Tasks 4-7); it is also exposed on internals as
+  // memoryOpsContext so later tasks (forget/correct/share/state) reuse it.
+  const memoryOpsContext = createMemoryOpsContext({ host, logger: host.logger });
+  const memoryRead = createMemoryRead({
+    opsContext: memoryOpsContext,
+    pool,
+    sharedMemoryPool,
+    embeddings,
+    memoryDbAdapter,
     logger: host.logger,
   });
 
@@ -2947,6 +2962,8 @@ export function createEngine(host, config, testOptions = {}) {
     maxPromptMemories,
     memoryAccountTopology,
     memoryDbAdapter,
+    memoryOpsContext,
+    memoryRead,
     memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
     mergingAutoApply,
@@ -3471,8 +3488,8 @@ export function createEngine(host, config, testOptions = {}) {
     admin: adminOps,
     // Typed MemoryOps surface (contract 1.5.0, E1 Task 2). Tasks 3-7 replace each stub.
     memory: Object.freeze({
-      list: notInM1b1("memory.list"),
-      show: notInM1b1("memory.show"),
+      list: (q, p, a) => internals.memoryRead.list(q, p, a),
+      show: (id, p, a) => internals.memoryRead.show(id, p, a),
       forget: notInM1b1("memory.forget"),
       correct: notInM1b1("memory.correct"),
       share: notInM1b1("memory.share"),
