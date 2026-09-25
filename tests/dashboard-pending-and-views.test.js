@@ -185,3 +185,16 @@ test("der Re-Embedding-Workflow nennt den ersten Schritt im Ruhezustand 'next', 
   assert.match(html, /<span>Dry run<\/span><span class="badge badge-next">next<\/span>/);
   assert.doesNotMatch(html, /<span>Dry run<\/span><span class="badge badge-current">/);
 });
+
+test("je Chat-Workspace ein Aufklappfeld mit den Modellen seiner Subagenten", async () => {
+  const hostConfig = host(1);
+  hostConfig.agents.defaults.workspace = "/ws/main";
+  hostConfig.agents.entries.main.workspace = "/ws/main";
+  hostConfig.agents.entries.developer = { name: "Developer", workspace: "/ws/main", model: { primary: "openai/base" } };
+  hostConfig.agents.entries["developer-verifier"] = { model: { primary: "openai/base" } };
+  const page = await render({ hostConfig });
+  assert.match(page, /<details class="matrix-tasks"[^>]*><summary>Subagents of Bernd \(2\)<\/summary>/);
+  assert.match(page, /name="agent" value="developer"[\s\S]{0,300}?<select name="chat_model" aria-label="Chat model for developer"/);
+  assert.match(page, /name="agent" value="developer-verifier"/);
+  assert.doesNotMatch(page, /Subagents of Bernd[\s\S]*?name="agent" value="main"[\s\S]*?<\/details>/, "der Chat-Agent selbst gehoert nicht in die Liste");
+});

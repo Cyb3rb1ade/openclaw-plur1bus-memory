@@ -39,8 +39,8 @@ import { normalizeCommandInput } from "../../lib/semantic-input.js";
 import { resolveEffectiveConfig } from "../../lib/setup/config-contract.js";
 import { createCompactionRunner, isPartitionId } from "../../lib/setup/control-ui-compaction.js";
 import { registerControlUiRuntime } from "../../lib/setup/control-ui-plugin-runtime.js";
-import { applyControlUiWriteAction, createCaptureChunkingMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
-import { registerFeatureCronNativeDispatch } from "../../lib/setup/feature-cron-plugin-runtime.js";
+import { applyControlUiWriteAction, createCaptureChunkingMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
+import { registerFeatureCronNativeDispatch, loadOpenClawPluginSdkRuntime } from "../../lib/setup/feature-cron-plugin-runtime.js";
 import { resolveAgentWorkspaceDir } from "../../lib/setup/memory-host-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "../../lib/setup/obsidian-vault-plugin-runtime.js";
 import { registerReembeddingRuntime } from "../../lib/setup/reembedding-plugin-runtime.js";
@@ -418,6 +418,11 @@ export function registerChatCommands(ctx) {
   const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
     const confirmations = createConfirmationStore();
     const setFeatureModel = createFeatureModelMutator({ api });
+    const setChatModel = createChatModelMutator({
+      api,
+      getHostConfig: () => host.runtime?.config?.current?.() ?? api.config ?? {},
+      loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
+    });
     const setCaptureChunking = createCaptureChunkingMutator({ api });
     const setSetting = createSettingMutator({
       api,
@@ -468,6 +473,7 @@ export function registerChatCommands(ctx) {
           confirmations,
           setReranker,
           setFeatureModel,
+          setChatModel,
           setCaptureChunking,
           setSetting,
           setEmbeddingProfile,

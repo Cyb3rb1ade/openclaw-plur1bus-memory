@@ -218,6 +218,8 @@ import { createEmotionalStatePool } from "./lib/emotional-state.js";
 import { applyDynamicsDefaults, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
 import { buildRemPartitions } from "./lib/dreaming/rem-dream.js";
+import { createDreamingStatusProvider, readLightDreamRun } from "./lib/dreaming/dreaming-status-provider.js";
+import { listPluginPublicArtifacts } from "./lib/setup/feature-cron-plugin-runtime.js";
 import {
   completePendingReplyOutcomes,
   lastMessageText,
@@ -4307,6 +4309,24 @@ const plugin = {
     const host = createHostServices(api);
     pluginLogger = host.logger;
     if (typeof api.registerMemoryCapability === "function") {
+      // The dreaming provider needs the gateway's cron service, which only
+      // arrives with gateway_start. The feature-cron hook further down is
+      // conditional on featureCronSetup, so this capture stands on its own.
+      let gatewayCronGetter = null;
+      if (typeof api.on === "function") {
+        api.on("gateway_start", (_event, gatewayContext) => {
+          if (typeof gatewayContext?.getCron === "function") {
+            gatewayCronGetter = () => gatewayContext.getCron();
+          }
+        });
+      }
+      const dreamingStatusProvider = createDreamingStatusProvider({
+        getPluginConfig: () => cfg,
+        getCron: () => gatewayCronGetter?.(),
+        // Lazy: baseDbPath is resolved further down in register().
+        readLastLightRun: (agentId) => readLightDreamRun({ baseDbPath, agentId }),
+        logger: host.logger,
+      });
       // The host asks the memory-slot owner for a runtime; without it the
       // Memory page reports "memory plugin unavailable". Everything the
       // runtime touches is created further down in this function, so the
@@ -4378,6 +4398,16 @@ const plugin = {
         deterministicRecallToolName: "memory_recall",
         supportsPrivateTranscriptRecall: false,
         runtime: memoryHostRuntime,
+        // Companion plugins (the bundled memory wiki) enumerate our workspaces
+        // through this seam instead of reading our layout. Without it their
+        // bridge reports zero workspaces and every file-level index toggle
+        // stays dark, however many notes are on disk.
+        publicArtifacts: {
+          listArtifacts: (params) => listPluginPublicArtifacts(params),
+        },
+        // Optional seam (openclaw/openclaw#155860): the per-agent sleep plan
+        // PLUR1BUS actually runs. Hosts without the seam ignore it.
+        dreaming: dreamingStatusProvider,
       });
     } else {
       host.logger.info(
