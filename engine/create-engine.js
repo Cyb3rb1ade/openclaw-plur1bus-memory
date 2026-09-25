@@ -3364,7 +3364,6 @@ export function createEngine(host, config, testOptions = {}) {
     baseDbPath,
     confirmationStore,
     getObsidianBridgeConfig: () => cfg.obsidianBridge || {},
-    host,
     logger: host.logger,
   });
 

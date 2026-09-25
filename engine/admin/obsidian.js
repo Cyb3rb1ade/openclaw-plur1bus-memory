@@ -109,12 +109,11 @@ function dedupeByNormalizedPath(candidates) {
  * @param {string} options.baseDbPath
  * @param {Map<string, object>} options.confirmationStore The engine's existing pending-confirmation Map.
  * @param {() => object} options.getObsidianBridgeConfig Returns the engine config's obsidianBridge section.
- * @param {object} options.host
  * @param {object} [options.logger]
  * @param {() => number} [options.clock]
  * @returns {{detect: Function, prepare: Function, confirm: Function}}
  */
-export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, getObsidianBridgeConfig, host, logger, clock = Date.now }) {
+export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, getObsidianBridgeConfig, logger, clock = Date.now }) {
   const home = homedir();
   // nonce -> { vaultPath, expiresAt }. Separate from confirmationStore: this
   // Map only remembers which vault path a nonce prepared, so confirm() can
@@ -221,11 +220,21 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
       throw memoryOpError("not-found", "confirmation not found or expired");
     }
 
+    const boundCtx = boundMemoryCtx(memoryCtx);
+    // ObsidianConfirmResult.alreadyConfirmed means "a receipt for this
+    // agent/workspace/vault already existed BEFORE this confirm" (ruling R6).
+    // confirmVaultConfirmation()'s own `alreadyConfirmed` is computed via
+    // isOwnedVaultConfirmed() AFTER it has already written the receipt, so it
+    // reads true on every successful confirm -- not what this result field is
+    // meant to convey. Read the pre-confirm state ourselves and ignore the
+    // lib's value, rather than changing the shared lib for every caller.
+    const alreadyConfirmed = isOwnedVaultConfirmed({ baseDbPath, memoryCtx: boundCtx, vaultPath: record.vaultPath });
+
     const result = confirmVaultConfirmation({
       callbackData,
       confirmationStore,
       baseDbPath,
-      memoryCtx: boundMemoryCtx(memoryCtx),
+      memoryCtx: boundCtx,
       vaultPath: record.vaultPath,
     });
 
@@ -246,7 +255,7 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
       confirmed: true,
       vaultPath: record.vaultPath,
       vaultDigest: result.receipt?.vaultDigest,
-      alreadyConfirmed: result.alreadyConfirmed === true,
+      alreadyConfirmed,
     };
   }
 

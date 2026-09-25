@@ -147,18 +147,14 @@ describe("Engine.admin.obsidian", () => {
     // Wrong identity confirming a real nonce.
     await assert.rejects(engine.admin.obsidian.confirm(prepared.nonce, otherUser, agent), (err) => err.code === "denied");
 
-    // Correct identity confirms. Note: confirmVaultConfirmation()
-    // (lib/obsidian-vault-confirmation-flow.js) computes `alreadyConfirmed`
-    // via isOwnedVaultConfirmed() AFTER the receipt is written, so it is
-    // `true` on every successful confirm (first or repeat) once the receipt
-    // exists on disk -- not a signal of "this was a no-op repeat". We forward
-    // that field verbatim rather than reinterpreting it.
+    // Correct identity confirms. alreadyConfirmed means "a receipt already
+    // existed BEFORE this confirm" (ruling R6) -- false the first time.
     const confirmed = await engine.admin.obsidian.confirm(prepared.nonce, p, agent);
     assert.deepEqual(confirmed, {
       confirmed: true,
       vaultPath: vaultDir,
       vaultDigest: prepared.vaultDigest,
-      alreadyConfirmed: true,
+      alreadyConfirmed: false,
     });
 
     // A receipt was written under baseDbPath/.plur1bus-authority/obsidian-vaults/<agent>/.
