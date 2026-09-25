@@ -16,6 +16,13 @@ test("archive dir is <stateDir>/memory/_archive (same as OpenClaw's ~/.openclaw/
   assert.equal(r.archiveDir, join(stateDir, "memory", "_archive"));
   assert.equal(r.agentId, "bernd");
 });
+test("a host-named archive dir (capabilities.memoryArchiveDir, read per call) wins over <stateDir>/memory/_archive", async () => {
+  let dir = join(ws, "legacy-archive");
+  const ctx = createMemoryOpsContext({ host: { ...host, capabilities: { memoryArchiveDir: () => dir } } });
+  assert.equal((await ctx.resolve(P, USER, {})).archiveDir, join(ws, "legacy-archive"));
+  dir = "";
+  assert.equal((await ctx.resolve(P, USER, {})).archiveDir, join(stateDir, "memory", "_archive"), "an empty answer falls back to the default");
+});
 for (const a of [{ origin: "cron", background: true }, { origin: "subagent", background: false }, { origin: "user", background: true }, { origin: "user" }]) {
   test(`destructive op refused for ${JSON.stringify(a)}`, async () => {
     await assert.rejects(createMemoryOpsContext({ host }).resolve(P, a, { destructive: true }), (e) => isMemoryOpError(e) && e.code === "denied");

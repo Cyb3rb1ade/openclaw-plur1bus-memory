@@ -1445,6 +1445,8 @@ export function createEngine(host, config, testOptions = {}) {
     pool,
     sharedMemoryPool,
     embeddings,
+    // E1 Task 8: correct writes through safeUpdate with the Neo store, as /correct always did.
+    getNeoStore,
     logger: host.logger,
   });
 

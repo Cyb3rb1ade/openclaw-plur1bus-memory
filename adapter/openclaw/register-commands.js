@@ -29,11 +29,9 @@ import { recordFeedback } from "../../lib/feedback-log.js";
 import { pickTone, resolveLocale, t } from "../../lib/i18n.js";
 import { INPUT_LIMITS, validateCommandArgs, validateCorrectionText, validateSemanticCommandArgs } from "../../lib/input-limits.js";
 import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
-import { applyRetrievalReinforcement } from "../../lib/memory-dynamics.js";
 import { resolveHostCommandMemoryContext, resolveSessionOwnerMemoryContext, resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { embeddingDimensionProfiles } from "../../lib/providers/dimensions.js";
 import { checkRuntimePressure } from "../../lib/runtime-pressure-gate.js";
-import { safeUpdate } from "../../lib/safe-update.js";
 import { createConfirmation, isAuthorized } from "../../lib/security.js";
 import { normalizeCommandInput } from "../../lib/semantic-input.js";
 import { resolveEffectiveConfig } from "../../lib/setup/config-contract.js";
@@ -47,7 +45,7 @@ import { registerReembeddingRuntime } from "../../lib/setup/reembedding-plugin-r
 import { registerWorkspacePolicyRuntime } from "../../lib/setup/workspace-policy-plugin-runtime.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { listFeatures, renderFeatureList, renderToggleResult, toggleFeature } from "../../lib/telegram-commands/feature-toggle.js";
-import { correctCard, forgetCard, parseCorrection, renderCandidateChoice, resolveCandidates, shareFailureCode } from "../../lib/telegram-commands/memory-edit.js";
+import { parseCorrection, renderCandidateChoice, resolveCandidates, shareFailureCode } from "../../lib/telegram-commands/memory-edit.js";
 import { formatResults as formatMemoryResults, parseMemoryFeedback, parseQuery as parseMemoryQuery, queryMemoryAcrossAccessPools } from "../../lib/telegram-commands/memory-query.js";
 import { activateSkillProposal, rejectSkillProposal, rejectSkillProposalWithWorkshop, retireActiveSkill, createSkillWorkshopLifecycleSynchronizer } from "../../lib/telegram-commands/skill-commands.js";
 import { runSpeakerClearCommand, runSpeakerConfirmCommand, runSpeakerListCommand, runSpeakerNameCommand, runSpeakerProposalsCommand, runSpeakerRejectCommand } from "../../lib/telegram-commands/speaker-mapping.js";
@@ -58,6 +56,9 @@ import { markProposalStatus, patchProposal } from "../../lib/jobs/skill-miner/pr
 import { listNeoWorkspaceKeys } from "../../lib/neo-arch.js";
 import { safeWarn } from "../../lib/safe-logging.js";
 import { applyEpistemicStatusToLanceDb } from "../../engine/store/memory-db.js";
+import { principalFromMemoryContext } from "../../engine/identity/principal.js";
+import { isMemoryOpError } from "../../engine/memory-ops/errors.js";
+import { agentContextFromCommand } from "./turn-principal.js";
 
 /**
  * Register every PLUR1BUS chat command on the OpenClaw plugin api.
@@ -88,7 +89,7 @@ export function registerChatCommands(ctx) {
     embeddings,
     emitCommandRuntimeHook,
     emotionalPool,
-    getNeoStore,
+    engineMemory,
     host,
     hostRoutingLoader,
     llmResultCache,
@@ -242,6 +243,48 @@ export function registerChatCommands(ctx) {
     const v = validateSemanticCommandArgs(commandCtx.args);
     if (!v.ok) return { text: `❌ ${v.error}` };
     return null;
+  };
+
+  // ── E1 Task 8: the final effect of /forget, /correct and /share runs
+  // through Engine.memory (contract 1.5.0). Parsing, input normalisation,
+  // candidate disambiguation, the nonce confirmation store, locale,
+  // rendering and checkAuth stay here; only the mutation moved.
+  //
+  // The Principal a command's effect runs under. A context
+  // resolveRegisteredMemoryContext built carries no `trust` field: it comes
+  // from resolveHostCommandMemoryContext, which cross-checks the host's route
+  // facts, session key and conversation binding and throws on any
+  // disagreement instead of degrading — the host-authenticated identity this
+  // adapter has always used for destructive commands and user-pool shares, so
+  // it is "proved". A context that does carry `trust` (Engine.runCommand
+  // builds one with memoryContextFromPrincipal) keeps exactly that value; an
+  // "inferred" one is never promoted.
+  const commandPrincipal = (memoryCtx) => principalFromMemoryContext(
+    memoryCtx,
+    memoryCtx?.trust === undefined || memoryCtx.trust === "proved" ? "proved" : "inferred",
+  );
+  // A slash command a person typed is { origin: "user", background: false };
+  // a cron-channel command stays { origin: "cron", background: true } and the
+  // engine refuses the destructive op (fail-closed).
+  const commandAgentContext = (commandCtx) => agentContextFromCommand(commandCtx);
+  /** Runs one Engine.memory call; a MemoryOpError becomes `{ ok: false, code, error }`, anything else rethrows. */
+  const runMemoryOp = async (op) => {
+    try {
+      return { ok: true, value: await op() };
+    } catch (err) {
+      if (isMemoryOpError(err)) return { ok: false, code: err.code, error: err.message };
+      throw err;
+    }
+  };
+  /**
+   * The localized reply for a refused forget/correct: not-found → the
+   * command's `*_not_found` key, denied → the same denial reply checkAuth
+   * gives, every other code → the command's `*_failed` key.
+   */
+  const memoryOpFailureReply = (command, outcome, { commandCtx, lang, tone, query }) => {
+    if (outcome.code === "not-found") return { text: t(`plur1bus.${command}_not_found`, { lang, tone, vars: { query } }) };
+    if (outcome.code === "denied") return { text: t("plur1bus.unauthorized", resolveDenialLocale(commandCtx)) };
+    return { text: t(`plur1bus.${command}_failed`, { lang, tone, vars: { error: outcome.error } }) };
   };
 
   const runFeatureToggle = async (commandCtx, enable, suppliedMemoryCtx = null) => {
@@ -654,6 +697,10 @@ export function registerChatCommands(ctx) {
       const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: host.logger, lang, tone });
       if (normalized.error) return { text: `❌ ${normalized.error}` };
       const parsed = parseMemoryQuery(normalized.canonicalText);
+      // Deliberately not Engine.memory.list (E1 Task 8): /memory needs
+      // `--explain` and the filter syntax parseMemoryQuery understands, which
+      // MemoryListQuery does not model. It reads through the same ACL-filtered
+      // access pools list() uses.
       const items = await queryMemoryAcrossAccessPools({
         privatePool: pool,
         sharedPool: sharedMemoryPool,
@@ -703,18 +750,8 @@ export function registerChatCommands(ctx) {
           nonce: confirmation.nonce,
         });
         if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
-        const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, {
-          lang,
-          tone,
-          workspaceDir: memoryCtx.workspaceDir,
-          logger: host.logger,
-          ctx: memoryCtx,
-          baseDbPath,
-          actor: memoryCtx?.userPrincipal || memoryCtx?.userId || "telegram:/forget",
-          actorType: "human",
-          reason: "user /forget command",
-        });
-        if (!result.ok) return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: result.error } }) };
+        const outcome = await runMemoryOp(() => engineMemory.forget(pending.targetId, commandPrincipal(memoryCtx), commandAgentContext(commandCtx)));
+        if (!outcome.ok) return memoryOpFailureReply("forget", outcome, { commandCtx, lang, tone, query: pending.targetId });
         return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
       }
 
@@ -812,58 +849,11 @@ export function registerChatCommands(ctx) {
         if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
         const validated = validateCorrectionText(newText);
         if (!validated.ok) return { text: `❌ ${validated.error}` };
-        const result = await correctCard(memoryDbAdapter, agentId, pending.targetId, newText, {
-          lang,
-          tone,
-          workspaceDir: memoryCtx.workspaceDir,
-          logger: host.logger,
-          ctx: memoryCtx,
-          updateMemory: async ({ id, newContent }) => {
-            return pool.withDb(agentId, async (rawDb) => {
-              await rawDb.init();
-              const vector = await embeddings.embed(newContent, { agentId });
-              const neoStore = getNeoStore(commandCtx, {});
-              const { newId } = await safeUpdate(
-                rawDb,
-                id,
-                { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
-                {
-                  updateSource: "telegram:/correct",
-                  // payload.oldText ist der gespeicherte Vorher-Text (nicht
-                  // der Suchbegriff), gekappt damit die Beweiszeile bei
-                  // langen Erinnerungen nicht ausufert.
-                  updateEvidence: pending.payload?.oldText
-                    ? `User corrected "${sanitizeMemoryTextForPrompt(pending.payload.oldText, CORRECTION_PREVIEW_CHARS)}" to "${newContent}"`
-                    : `User correction via /correct`,
-                  confidence: 1,
-                },
-                {
-                  neoStore,
-                  logger: host.logger,
-                  // Bewusst übersprungen: /correct ist eine per Nonce
-                  // bestätigte Nutzeraktion, und der Bestätigungsdialog
-                  // zeigt Alt- und Neu-Text im Klartext. Eine hohe
-                  // semantische Drift ist hier also gewollt und informiert
-                  // abgesegnet — das Gate würde legitime große Korrekturen
-                  // mit einer Exception blockieren. Die Drift wird trotzdem
-                  // als `semanticDrift` ins Reconsolidation-Event geschrieben.
-                  skipDriftGate: true,
-                  workspaceAliases: memoryCtx.workspaceAliases,
-                },
-              );
-              // newId === id on idempotent skip; reinforcement still valid
-              try {
-                const correctedCard = await rawDb.getById(newId);
-                if (correctedCard) {
-                  await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
-                }
-              } catch (err) {
-                host.logger.warn(`[/correct] reinforcement failed: ${err?.message}`);
-              }
-            });
-          },
-        });
-        if (!result.ok) return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: result.error } }) };
+        // Engine.memory.correct writes the new version through the same
+        // safeUpdate path this command always used (fresh summary, evidence
+        // line, Neo reconsolidation, reinforcement; engine/memory-ops/write.js).
+        const outcome = await runMemoryOp(() => engineMemory.correct(pending.targetId, newText, commandPrincipal(memoryCtx), commandAgentContext(commandCtx)));
+        if (!outcome.ok) return memoryOpFailureReply("correct", outcome, { commandCtx, lang, tone, query: pending.targetId });
         return { text: t("plur1bus.correct_done", { lang, tone, vars: { id: pending.targetId } }) };
       }
 
@@ -1166,6 +1156,44 @@ export function registerChatCommands(ctx) {
     // Task 6), which the typed MemoryOps `share` reuses for its own
     // "not-found" mapping; behaviour here is unchanged.
     const sourceDenied = shareFailureCode;
+    // E1 Task 8: the share itself runs through Engine.memory.share. The
+    // registration seam `shareCard` (plugin.js) stays only because
+    // tests/b13-share-runtime.test.js drives the whole command against its
+    // own in-memory stores through it; when a test injects one, the command
+    // uses that primitive as before, and plugin.js hands over null otherwise.
+    // Both branches answer the same shape, so the replies below are shared:
+    // not-found and conflict (the source changed while sharing — the old
+    // `sourceDenied` bucket) → share_not_found, approval-required → the
+    // confirmation flow, denied → the checkAuth denial, anything else →
+    // share_failed.
+    const runShare = async (memoryCtx, sourceId, targetScope, allowSensitive) => {
+      if (registeredShareCard) {
+        const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
+          targetScope, ...(allowSensitive ? { allowSensitiveShare: true } : {}), ctx: memoryCtx, logger: host.logger,
+        });
+        if (result.ok) return { ok: true, sharedId: result.sharedId };
+        return {
+          ok: false,
+          approvalRequired: Boolean(result.error?.startsWith("share.explicit approval required")),
+          notFound: sourceDenied(result.error),
+          denied: false,
+        };
+      }
+      const outcome = await runMemoryOp(() => engineMemory.share(
+        sourceId, targetScope, commandPrincipal(memoryCtx), commandAgentContext(commandCtx), { allowSensitive },
+      ));
+      if (outcome.ok) return { ok: true, sharedId: outcome.value.sharedId };
+      return {
+        ok: false,
+        approvalRequired: outcome.code === "approval-required",
+        notFound: outcome.code === "not-found" || outcome.code === "conflict",
+        denied: outcome.code === "denied",
+      };
+    };
+    const shareFailure = (result) => {
+      if (result.denied) return { text: t("plur1bus.unauthorized", resolveDenialLocale(commandCtx)) };
+      return fail(result.notFound ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+    };
     try {
       const deniedLen = checkArgsLength(commandCtx);
       if (deniedLen) return deniedLen;
@@ -1203,10 +1231,8 @@ export function registerChatCommands(ctx) {
         });
         denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
         if (denied) return denied;
-        const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
-          targetScope, allowSensitiveShare: true, ctx: memoryCtx, logger: host.logger,
-        });
-        if (!result.ok) return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+        const result = await runShare(memoryCtx, sourceId, targetScope, true);
+        if (!result.ok) return shareFailure(result);
         return fail("plur1bus.share_done", { id: result.sharedId });
       }
 
@@ -1220,11 +1246,9 @@ export function registerChatCommands(ctx) {
       });
       const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
       if (denied) return denied;
-      const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
-        targetScope, ctx: memoryCtx, logger: host.logger,
-      });
+      const result = await runShare(memoryCtx, sourceId, targetScope, false);
       if (result.ok) return fail("plur1bus.share_done", { id: result.sharedId });
-      if (result.error?.startsWith("share.explicit approval required")) {
+      if (result.approvalRequired) {
         const identity = resolveConfirmationIdentity(memoryCtx);
         if (!identity.userId) return fail("plur1bus.share_user_required");
         emitCommandRuntimeHook("onShareConfirmationIdentity", {
@@ -1238,7 +1262,7 @@ export function registerChatCommands(ctx) {
         rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
         return fail("plur1bus.share_confirm_text", { token: pending.nonce });
       }
-      return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+      return shareFailure(result);
     } catch (error) {
       return fail("plur1bus.share_failed");
     }

@@ -311,6 +311,51 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
+  it("(E1 Task 8) correct writes through safeUpdate: fresh summary, evidence naming the stored text, reinforcement", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-write-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-t8";
+    const oldId = await seedAndGetId(engine, agentId, "The bike shed key hangs by the back door.", "bike shed key", principalForDestructive);
+    const before = await rawCard(engine, agentId, oldId);
+
+    const principal = principalForDestructive(agentId);
+    const corrected = await engine.memory.correct(oldId, "The bike shed key now hangs in the hallway cabinet.", principal, agent);
+    const row = await rawCard(engine, agentId, corrected.id);
+    assert.equal(row.summary, "The bike shed key now hangs in the hallway cabinet.", "summary follows the new text (updateCard kept the stale one)");
+    assert.equal(row.updateSource, "user_correction");
+    assert.equal(row.updateEvidence, `User corrected "${before.text}" to "The bike shed key now hangs in the hallway cabinet."`);
+    assert.equal(Number(row.retrievalCount), Number(before.retrievalCount ?? 0) + 1, "the new version is reinforced once");
+    assert.equal(row.previousVersion, oldId);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(E1 Task 8) correct to the text of a forgotten memory is conflict and leaves the card live", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-write-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-write-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-t8c";
+    const principal = principalForDestructive(agentId);
+    await seed(engine, agentId, "The spare router password is taped under the desk.", principalForDestructive);
+    await seed(engine, agentId, "The guest network name is Harbour.", principalForDestructive);
+    // The flat embedder scores every card alike, so pick each id by its text.
+    const { items } = await engine.memory.list({ topic: "router guest network" }, principal, agent);
+    const forgottenId = items.find((c) => /spare router/.test(c.text))?.id;
+    const liveId = items.find((c) => /Harbour/.test(c.text))?.id;
+    assert.ok(forgottenId && liveId && forgottenId !== liveId, "both seeded cards are listed");
+    const forgottenRow = await rawCard(engine, agentId, forgottenId);
+    await engine.memory.forget(forgottenId, principal, agent);
+
+    await assert.rejects(
+      () => engine.memory.correct(liveId, forgottenRow.text, principal, agent),
+      (err) => err.code === "conflict",
+    );
+    const live = await rawCard(engine, agentId, liveId);
+    assert.equal(live.status, "active");
+    assert.match(live.text, /Harbour/);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
   it("(E1-R9) forgetting an already-forgotten card twice returns the SAME tombstoneId", async () => {
     const stateDir = makeTempDir("e1-write-state-");
     const baseDbPath = freshBaseDbPath("e1-write-");

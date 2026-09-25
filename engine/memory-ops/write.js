@@ -13,6 +13,10 @@ import { forgetCard, correctCard, shareCard } from "../../lib/telegram-commands/
 import { projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
 import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { safeUuid } from "../../lib/sql-safety.js";
+import { safeUpdate } from "../../lib/safe-update.js";
+import { applyRetrievalReinforcement } from "../../lib/memory-dynamics.js";
+import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
+import { CORRECTION_PREVIEW_CHARS } from "../runtime/constants.js";
 import { memoryOpError } from "./errors.js";
 
 const MAX_CORRECT_TEXT_LENGTH = 8_000;
@@ -42,10 +46,75 @@ function isLive(card) {
 }
 
 /**
- * @param {{opsContext: object, memoryDbAdapter: object, baseDbPath: string, pool: object, sharedMemoryPool: object, embeddings: object, logger?: object}} deps
+ * @param {{opsContext: object, memoryDbAdapter: object, baseDbPath: string, pool: object, sharedMemoryPool: object, embeddings: object, getNeoStore?: Function, logger?: object}} deps
  * @returns {{forget: Function, correct: Function, share: Function}}
  */
-export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, pool, sharedMemoryPool, embeddings, logger }) {
+export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, pool, sharedMemoryPool, embeddings, getNeoStore, logger }) {
+  /**
+   * The version write behind `correct` (E1 Task 8): the same safeUpdate path
+   * the OpenClaw `/correct` command has always used, moved here so the
+   * command can run through `Engine.memory.correct` without losing it —
+   * a fresh summary from the new text, an evidence line naming the stored
+   * before-text, the Neo reconsolidation event and graph-edge rewrite, and
+   * retrieval reinforcement of the new version. `db-adapter.updateCard`
+   * (the previous engine path) kept the stale summary and wrote none of that.
+   * A tombstone refusal from the store comes back as a non-throwing
+   * `tombstone_blocked` result, which correctCard maps to "conflict".
+   * @returns {Promise<{ok: false, action: string} | {ok: true, newId: string}>}
+   */
+  async function applyCorrection({ agentId, memoryCtx, workspaceDir, id, newContent, card }) {
+    return pool.withDb(agentId, async (rawDb) => {
+      await rawDb.init();
+      // db-adapter adds columns (chunkGroupId, 7.12.70) to a table behind this
+      // pooled MemoryDB's back; a schema cached before that makes store()
+      // drop the new field and LanceDB refuse the append ("missing=
+      // [chunkGroupId]") — e.g. for a table created earlier in this process.
+      // One schema read per correction keeps the cached field list current.
+      await rawDb.refreshSchemaFields?.();
+      const vector = await embeddings.embed(newContent, { agentId });
+      const neoStore = typeof getNeoStore === "function" ? getNeoStore({ agentId, workspaceDir }, {}) : undefined;
+      const oldText = card?.text || card?.summary || "";
+      let newId;
+      try {
+        ({ newId } = await safeUpdate(
+          rawDb,
+          id,
+          { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
+          {
+            updateSource: "user_correction",
+            updateEvidence: oldText
+              ? `User corrected "${sanitizeMemoryTextForPrompt(oldText, CORRECTION_PREVIEW_CHARS)}" to "${newContent}"`
+              : "User correction via /correct",
+            confidence: 1,
+          },
+          {
+            neoStore,
+            logger,
+            // A correction is a confirmed user action whose confirmation shows
+            // old and new text in full: high semantic drift is intended there,
+            // and the gate would block legitimate large corrections. The drift
+            // is still recorded as `semanticDrift` on the reconsolidation event.
+            skipDriftGate: true,
+            workspaceAliases: memoryCtx.workspaceAliases,
+          },
+        ));
+      } catch (err) {
+        if (err?.action === "tombstone_blocked" || err?.reason === "tombstone_blocked") {
+          return { ok: false, action: "tombstone_blocked" };
+        }
+        throw err;
+      }
+      // newId === id on an idempotent skip; reinforcement is still valid.
+      try {
+        const corrected = await rawDb.getById(newId);
+        if (corrected) await rawDb.update(newId, applyRetrievalReinforcement(corrected, Date.now()));
+      } catch (err) {
+        logger?.warn?.(`memory-ops.correct: reinforcement failed: ${err?.message || err}`);
+      }
+      return { ok: true, newId };
+    });
+  }
+
   async function forget(id, p, a) {
     const { agentId, memoryCtx, workspaceDir, archiveDir } = await opsContext.resolve(p, a, { destructive: true });
 
@@ -134,6 +203,7 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
       actor: memoryCtx.userPrincipal || `principal:${agentId}`,
       actorType: "human",
       reason: "MemoryOps.correct",
+      updateMemory: ({ id: targetId, newContent, card: stored }) => applyCorrection({ agentId, memoryCtx, workspaceDir, id: targetId, newContent, card: stored }),
     });
 
     if (!result.ok) {

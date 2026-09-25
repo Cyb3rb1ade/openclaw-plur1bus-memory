@@ -10,6 +10,20 @@ const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
  * principal exactly like recall/capture/checkpoint do. Every failure surfaces as a MemoryOpError.
  */
 export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () => undefined }) {
+  // Archive-first backups land in `<stateDir>/memory/_archive` unless the host
+  // names its own location (host.capabilities.memoryArchiveDir, read per call):
+  // the OpenClaw adapter hands over the directory /forget and /correct have
+  // always written to, so routing them through MemoryOps moves nothing (E1 Task 8).
+  const archiveDirOf = () => {
+    let hostDir = "";
+    try {
+      hostDir = typeof host.capabilities?.memoryArchiveDir === "function" ? host.capabilities.memoryArchiveDir() : "";
+    } catch (error) {
+      logger?.warn?.(`memory-ops: host archive dir unavailable: ${error?.message ?? error}`);
+      throw memoryOpError("storage", "archive directory unavailable");
+    }
+    return typeof hostDir === "string" && hostDir ? hostDir : join(host.stateDir, "memory", "_archive");
+  };
   return {
     async resolve(p, a, { destructive = false, target = null } = {}) {
       if (!p || typeof p.agentId !== "string" || !AGENT_ID.test(p.agentId)) throw memoryOpError("invalid-input", "principal.agentId is invalid");
@@ -40,7 +54,7 @@ export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () 
         throw memoryOpError("denied", "principal does not match the agent's workspace");
       }
       if (target && memoryCtx.trust !== "proved") throw memoryOpError("denied", `sharing to ${target} requires a proved principal`);
-      return { agentId: memoryCtx.agentId, memoryCtx, workspaceDir, archiveDir: join(host.stateDir, "memory", "_archive") };
+      return { agentId: memoryCtx.agentId, memoryCtx, workspaceDir, archiveDir: archiveDirOf() };
     },
   };
 }
