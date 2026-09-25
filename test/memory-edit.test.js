@@ -345,6 +345,9 @@ function evalWhere(row, expr) {
   // `spalte IS NULL` — Wert fehlt oder ist null
   m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NULL$/i);
   if (m) return row[m[1]] === undefined || row[m[1]] === null;
+  // `spalte != 'wert'` — ein fehlender Wert zählt als leer, also ungleich
+  m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*!=\s*'([^']*)'$/);
+  if (m) return String(row[m[1]] ?? '') !== m[2];
   // `spalte = 'wert'`, inklusive leerem String
   m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']*)'$/);
   if (m) return String(row[m[1]] ?? '') === m[2];

@@ -17,6 +17,8 @@ import {
   validatePluginCommandRequest,
   executePluginCommandCli,
   validateFeatureCronRequest,
+  loadOpenClawPluginSdkRuntime,
+  listPluginPublicArtifacts,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import { runFeatureCronRunner } from "../scripts/run-feature-cron.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -390,6 +392,54 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
         runFeatureCommand: async () => ({ text: "NO_REPLY" }),
       }),
       /registerCli/i,
+    );
+  });
+});
+
+describe("PLUR1BUS öffentliche Gedächtnis-Artefakte", () => {
+  it("reicht die Artefaktliste der SDK-Fassade unverändert durch", async () => {
+    const artifacts = [
+      { kind: "memory-root", relativePath: "MEMORY.md" },
+      { kind: "daily-note", relativePath: "memory/2026-09-22.md" },
+    ];
+    const seen = [];
+    const cfg = { agents: { main: {} } };
+
+    const result = await listPluginPublicArtifacts({ cfg }, {
+      importHostCore: async () => ({
+        async listMemoryHostPublicArtifacts(params) {
+          seen.push(params);
+          return artifacts;
+        },
+      }),
+    });
+
+    // Die Fassade entscheidet, was öffentlich ist. Wir filtern nichts nach,
+    // sonst weicht unsere Sicht von der des Hosts ab.
+    assert.deepEqual(result, artifacts);
+    assert.equal(seen.length, 1);
+    assert.deepEqual(seen[0], { cfg });
+  });
+
+  it("meldet einen klaren Fehler, wenn die Fassade die Funktion nicht anbietet", async () => {
+    await assert.rejects(
+      () => listPluginPublicArtifacts({ cfg: {} }, { importHostCore: async () => ({}) }),
+      /memory-host-core/,
+    );
+  });
+
+  it("kennt memory-host-core als erlaubte SDK-Fähigkeit", async () => {
+    // Ohne den Eintrag in der Fähigkeitsliste bricht der Lader ab, bevor er
+    // überhaupt nach dem Host-Paket sucht. Genau das prüfen wir hier.
+    await assert.rejects(
+      () => loadOpenClawPluginSdkRuntime("nicht-vorhandene-faehigkeit"),
+      /unsupported OpenClaw Plugin SDK runtime capability/,
+    );
+    await assert.rejects(
+      () => loadOpenClawPluginSdkRuntime("memory-host-core", {
+        packageManifestPath: join(makeTempDir("sdk-capability-"), "package.json"),
+      }),
+      (error) => !/unsupported OpenClaw Plugin SDK runtime capability/.test(String(error?.message)),
     );
   });
 });

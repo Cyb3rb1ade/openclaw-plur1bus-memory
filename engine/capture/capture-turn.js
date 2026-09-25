@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { deriveBudgetedSignal, isAbortError, isBudgetExhaustion, throwIfAborted } from "../../lib/abort.js";
 import { categorizeMemoryWithReason } from "../../lib/categorize.js";
 import { lightDream, writeLightDreamToVault } from "../../lib/dreaming/light-dream.js";
+import { recordLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
 import { serializeEmotionalValence } from "../../lib/emotion.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "../../lib/episode-watermark.js";
 import { extractEpisodesWithState, writeEpisodeToVault } from "../../lib/episodes.js";
@@ -870,6 +871,11 @@ export function createTurnCapture(ctx) {
                 const mergedDreams = [...processedDreams.slice(-100), digestHash];
                 throwIfAborted(signal, "light dream commit aborted");
                 neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+                // Light sleep has no schedule; its last run is the only
+                // time the Memory page can show for it.
+                recordLightDreamRun({ baseDbPath, agentId }).catch((runErr) => {
+                  host.logger.debug?.(`memory-lancedb-namespaced: light dream run not recorded: ${String(runErr)}`);
+                });
                 return true;
               });
               postProcessing.push(jobs

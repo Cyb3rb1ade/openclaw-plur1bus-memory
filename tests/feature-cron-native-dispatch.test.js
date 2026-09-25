@@ -249,3 +249,21 @@ describe("native capability probe budget", () => {
     assert.deepStrictEqual(seen, [["cron", NATIVE_PROBE_TIMEOUT_MS], ["plur1bus-feature-cron", NATIVE_PROBE_TIMEOUT_MS]]);
   });
 });
+
+describe("Runner-Pfad bei Capture-Kopien (OpenClaw 2026.9.6)", async () => {
+  const { stableFeatureCronRunnerPath } = await import("../lib/setup/feature-cron-native.js");
+  const capture = "/srv/state/tmp/plugin-captures/1fc1/captures/openclaw-plugin-build-Bq14oR/package-0/node_modules/memory-lancedb-namespaced/scripts/run-feature-cron.mjs";
+  const installed = "/srv/state/extensions/memory-lancedb-namespaced/scripts/run-feature-cron.mjs";
+
+  it("zeigt aus einer Capture-Kopie auf die feste Installation desselben State-Verzeichnisses", () => {
+    assert.equal(stableFeatureCronRunnerPath(capture, (path) => path === installed), installed);
+  });
+
+  it("behält den Ladeort, wenn es keine feste Installation gibt", () => {
+    assert.equal(stableFeatureCronRunnerPath(capture, () => false), capture);
+  });
+
+  it("lässt einen normalen Installationspfad unverändert", () => {
+    assert.equal(stableFeatureCronRunnerPath(installed, () => true), installed);
+  });
+});

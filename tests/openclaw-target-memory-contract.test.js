@@ -53,6 +53,19 @@ describe("OpenClaw target release exclusive memory contract", () => {
       false,
       "PLUR1BUS must default OpenClaw's memory-core dreaming sidecar off to avoid duplicate dreaming",
     );
+    // The Memory page renders its sleep plan from doctor.memory.status, and the
+    // host builds that from the slot owner's dreaming section: one shared cron
+    // expression for all three phases plus a timezone. Without these keys the
+    // schema rejects them (additionalProperties: false) and the page falls back
+    // to its built-in "0 3 * * *", which is nobody's actual schedule.
+    const dreamingSchema = manifest.configSchema.properties.dreaming.properties;
+    assert.equal(dreamingSchema.frequency?.type, "string");
+    assert.equal(dreamingSchema.timezone?.type, "string");
+    assert.equal(
+      Object.hasOwn(dreamingSchema.frequency, "default"),
+      false,
+      "an unset frequency must stay unset so the host default stands, not a value we invented",
+    );
   });
 
   it("registers one deterministic memory capability and the declared embedding adapters", async () => {
@@ -72,6 +85,17 @@ describe("OpenClaw target release exclusive memory contract", () => {
     assert.equal(api._memoryCapabilities.length, 1);
     assert.equal(api._memoryCapabilities[0].deterministicRecallToolName, "memory_recall");
     assert.equal(api._memoryCapabilities[0].supportsPrivateTranscriptRecall, false);
+    // The bundled memory wiki enumerates our workspaces through this seam.
+    // Without it its bridge import reports zero workspaces, not just zero
+    // artifacts, because it never asks the filesystem itself.
+    assert.equal(
+      typeof api._memoryCapabilities[0].publicArtifacts?.listArtifacts,
+      "function",
+    );
+    // Optional seam proposed in openclaw/openclaw#155860: lets the Memory page
+    // show the per-agent dreaming schedule PLUR1BUS actually runs. Hosts
+    // without it ignore the field.
+    assert.equal(typeof api._memoryCapabilities[0].dreaming?.getStatus, "function");
     assert.deepEqual(api._embeddingProviders.map((adapter) => adapter.id), [
       "plur1bus-openai",
       "plur1bus-openai-compatible",

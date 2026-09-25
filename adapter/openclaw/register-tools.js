@@ -15,6 +15,8 @@ import { withAccessReadDbs } from "../../lib/shared-memory.js";
 import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
 import { resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "../../engine/recall/namespace-recall.js";
+import { createDreamingStatusProvider, readLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
+import { listPluginPublicArtifacts } from "../../lib/setup/feature-cron-plugin-runtime.js";
 
 /**
  * @param {object} ctx Registration context: the engine's tool view plus
@@ -44,6 +46,7 @@ export function registerMemoryCapability(internals, api) {
     candidateTopK,
     canonicalMaxItems,
     canonicalMinScore,
+    cfg,
     controlHealth,
     dedupEnabled,
     dedupJaccard,
@@ -64,6 +67,24 @@ export function registerMemoryCapability(internals, api) {
     summaryMaxWords,
   } = internals;
   if (typeof api.registerMemoryCapability === "function") {
+    // 7.16.3/7.16.5 (ported from index.js in the #186 merge): the dreaming
+    // provider needs the gateway's cron service, which only arrives with
+    // gateway_start. The feature-cron hook is conditional on featureCronSetup,
+    // so this capture stands on its own.
+    let gatewayCronGetter = null;
+    if (typeof api.on === "function") {
+      api.on("gateway_start", (_event, gatewayContext) => {
+        if (typeof gatewayContext?.getCron === "function") {
+          gatewayCronGetter = () => gatewayContext.getCron();
+        }
+      });
+    }
+    const dreamingStatusProvider = createDreamingStatusProvider({
+      getPluginConfig: () => cfg,
+      getCron: () => gatewayCronGetter?.(),
+      readLastLightRun: (agentId) => readLightDreamRun({ baseDbPath, agentId }),
+      logger: host.logger,
+    });
     // The host asks the memory-slot owner for a runtime; without it the
     // Memory page reports "memory plugin unavailable". Everything the
     // runtime touches is built by createEngine() before this runs, and the
@@ -135,6 +156,16 @@ export function registerMemoryCapability(internals, api) {
       deterministicRecallToolName: "memory_recall",
       supportsPrivateTranscriptRecall: false,
       runtime: memoryHostRuntime,
+      // Companion plugins (the bundled memory wiki) enumerate our workspaces
+      // through this seam instead of reading our layout. Without it their
+      // bridge reports zero workspaces and every file-level index toggle
+      // stays dark, however many notes are on disk.
+      publicArtifacts: {
+        listArtifacts: (params) => listPluginPublicArtifacts(params),
+      },
+      // Optional seam (openclaw/openclaw#155860): the per-agent sleep plan
+      // PLUR1BUS actually runs. Hosts without the seam ignore it.
+      dreaming: dreamingStatusProvider,
     });
   } else {
     host.logger.info(
