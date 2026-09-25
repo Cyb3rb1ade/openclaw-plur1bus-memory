@@ -10,15 +10,13 @@
  */
 
 import { forgetCard, correctCard, shareCard } from "../../lib/telegram-commands/memory-edit.js";
-import { projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
-import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { safeUpdate } from "../../lib/safe-update.js";
 import { applyRetrievalReinforcement } from "../../lib/memory-dynamics.js";
 import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
 import { CORRECTION_PREVIEW_CHARS } from "../runtime/constants.js";
 import { memoryOpError } from "./errors.js";
-import { createSharedMemoryOps, isSharer } from "./shared.js";
+import { createSharedMemoryOps, isSharer, isLive } from "./shared.js";
 
 const MAX_CORRECT_TEXT_LENGTH = 8_000;
 
@@ -34,26 +32,14 @@ function messageForCode(code) {
 }
 
 /**
- * The same liveness gate `show` applies (engine/memory-ops/read.js): a
- * non-"active" status other than "deleted" (superseded, archived, …), an
- * invalidated epistemic status, an expired TTL, or a Valid-Time window that
- * excludes "now" are all indistinguishable "not-found" (fix round 1, E1-R7,
- * anti-oracle). `forget`'s own idempotency/crash-backfill path needs a
- * `status === "deleted"` card to keep reaching `forgetCard`, so that one
- * status is the caller's job to special-case, not this helper's.
- */
-function isLive(card) {
-  return isRecallEntryLive(projectMemoryQueryCard(card), Date.now());
-}
-
-/**
- * @param {{opsContext: object, memoryDbAdapter: object, baseDbPath: string, pool: object, sharedMemoryPool: object, embeddings: object, getNeoStore?: Function, logger?: object}} deps
+ * @param {{opsContext: object, memoryDbAdapter: object, baseDbPath: string, pool: object, sharedMemoryPool: object, embeddings: object, getNeoStore?: Function, logger?: object, shareCopy?: Function}} deps
+ *   `shareCopy` is a test seam for the re-share step of a shared-copy refresh (defaults to shareCard).
  * @returns {{forget: Function, correct: Function, share: Function, shared: {findSharedRow: Function, retractSharedRow: Function, refreshShare: Function}}}
  */
-export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, pool, sharedMemoryPool, embeddings, getNeoStore, logger }) {
+export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, pool, sharedMemoryPool, embeddings, getNeoStore, logger, shareCopy }) {
   // Shared copies (E2 Task 4, D31): retract/refresh by the sharer. Consumed
   // here by forget/correct/share and by later tasks through `.shared`.
-  const sharedOps = createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memoryDbAdapter, embeddings, applyCorrection, logger });
+  const sharedOps = createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memoryDbAdapter, embeddings, baseDbPath, applyCorrection, logger, ...(shareCopy ? { shareCopy } : {}) });
 
   /**
    * The shared copy behind an id the caller's private pool does not hold as a

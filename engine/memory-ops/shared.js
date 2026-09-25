@@ -9,16 +9,34 @@
  *     db-adapter's tombstoneCard writes — plus a destructive-op audit line.
  *     Deliberately NOT written to lib/tombstone.js's registry: the registry
  *     blocks re-capture of forgotten content, and the original stays live.
- *   - refresh (correct): correct the private original, retract the old copy,
- *     share the corrected original to the same scope.
+ *   - refresh (correct): correct the private original (archive-first, like
+ *     E1's correct), share the corrected original to the same scope, then
+ *     retract the old copy.
  * Every other agent changes a shared copy through a proposal (Tasks 5, 6).
  */
 
-import { archiveCard, shareCard } from "../../lib/telegram-commands/memory-edit.js";
+import { archiveCard, correctCard, shareCard } from "../../lib/telegram-commands/memory-edit.js";
 import { findMemoryAcrossAccessPools, projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
 import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { appendDestructiveOpLog, safeUuid } from "../../lib/sql-safety.js";
 import { isMemoryOpError, memoryOpError } from "./errors.js";
+
+const ORIGINAL_NOT_LIVE = "the original of this shared copy is no longer live; retract it instead";
+
+/**
+ * The same liveness gate `show` applies (engine/memory-ops/read.js): a
+ * non-"active" status other than "deleted" (superseded, archived, …), an
+ * invalidated epistemic status, an expired TTL, or a Valid-Time window that
+ * excludes "now" are all indistinguishable "not-found" (fix round 1, E1-R7,
+ * anti-oracle). `forget`'s own idempotency/crash-backfill path needs a
+ * `status === "deleted"` card to keep reaching `forgetCard`, so that one
+ * status is the caller's job to special-case, not this helper's.
+ * @param {object} card A stored or projected memory row.
+ * @returns {boolean}
+ */
+export function isLive(card) {
+  return isRecallEntryLive(projectMemoryQueryCard(card), Date.now());
+}
 
 /**
  * @param {{sourceAgentId?: string}} card A projected shared-pool card.
@@ -30,10 +48,12 @@ export function isSharer(card, agentId) {
 }
 
 /**
- * @param {{opsContext: object, pool: object, sharedMemoryPool: object, memoryDbAdapter: object, embeddings: object, applyCorrection: Function, logger?: object}} deps
+ * @param {{opsContext: object, pool: object, sharedMemoryPool: object, memoryDbAdapter: object, embeddings: object, baseDbPath: string, applyCorrection: Function, logger?: object, shareCopy?: Function}} deps
+ *   `shareCopy` has shareCard's signature and defaults to it; it is the seam
+ *   tests use to make the re-share step of a refresh fail.
  * @returns {{findSharedRow: Function, retractSharedRow: Function, refreshShare: Function}}
  */
-export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memoryDbAdapter, embeddings, applyCorrection, logger }) {
+export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memoryDbAdapter, embeddings, baseDbPath, applyCorrection, logger, shareCopy = shareCard }) {
   /**
    * The live, ACL-visible workspace/user copy with this id, or null. A failed
    * lookup is logged and answers null, so the caller's answer stays the
@@ -87,6 +107,7 @@ export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memo
         if (typeof db.table?.checkoutLatest === "function") await db.table.checkoutLatest();
         const where = `id = "${safe}"`;
         const rows = await db.table.query().where(where).limit(1).toArray();
+        // The row vanished between findSharedRow and this lease: same anti-oracle answer as an unknown id.
         if (rows.length === 0) throw memoryOpError("not-found", "memory not found");
         if (String(rows[0].status || "") === "deleted") return true;
         await db.table.update({ where, values: { status: "deleted", epistemicStatus: "invalidated" } });
@@ -114,9 +135,19 @@ export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memo
   }
 
   /**
-   * Corrects the sharer's private original, retracts the old copy and shares
-   * the corrected original to the same scope. The content was already shared
-   * with approval; the sharer's refresh renews it (allowSensitiveShare).
+   * Refreshes a shared copy (the sharer's `correct`), in this order:
+   *   1. correct the private original through the same archive-first path
+   *      E1's `correct` uses (correctCard: archive, safeUpdate via
+   *      applyCorrection, `memory.updated` audit line) — ruling R7;
+   *   2. share the corrected original to the same scope (the content was
+   *      already shared with approval; the sharer's refresh renews it);
+   *   3. retract the old copy.
+   * Sharing before retracting means a failure leaves at worst two copies,
+   * never none; the retract can always be repeated. A failure after step 1
+   * throws `storage` with a fixed message and `detail` naming the ids left
+   * behind: `{ sourceId, sharedId }` where sharedId is the copy that is
+   * still live (the old one if step 2 failed, the new one if step 3
+   * failed), plus `staleSharedId` (the old copy) when step 3 failed.
    * @returns {Promise<{sourceId: string, sharedId: string, retractedId: string}>}
    */
   async function refreshShare({ agentId, memoryCtx, workspaceDir, archiveDir, card, newText, reason }) {
@@ -129,35 +160,53 @@ export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memo
         throw memoryOpError("storage", "memory write failed");
       }
     }
-    if (!original || !isRecallEntryLive(projectMemoryQueryCard(original), Date.now())) {
-      throw memoryOpError("conflict", "the original of this shared copy is no longer live; retract it instead");
+    if (!original || !isLive(original)) {
+      throw memoryOpError("conflict", ORIGINAL_NOT_LIVE);
     }
 
     opsContext.assertOpen?.();
-    let corrected;
-    try {
-      corrected = await applyCorrection({ agentId, memoryCtx, workspaceDir, id: original.id, newContent: newText, card: original });
-    } catch (err) {
-      logger?.warn?.(`memory-ops.shared.refresh: correcting the original failed for agent '${agentId}'/'${original.id}': ${err?.message || err}`);
-      throw memoryOpError("storage", "memory write failed");
-    }
-    if (!corrected?.ok) {
-      if (corrected?.action === "tombstone_blocked") throw memoryOpError("conflict", "memory update conflicts with an existing tombstone");
-      throw memoryOpError("storage", "memory write failed");
-    }
-    const newId = corrected.newId;
-
-    await retractSharedRow({ agentId, memoryCtx, workspaceDir, archiveDir, card, reason });
-
-    const shared = await shareCard(pool, sharedMemoryPool, embeddings, agentId, newId, {
-      targetScope: card.scope,
-      allowSensitiveShare: true,
-      ctx: memoryCtx,
+    const corrected = await correctCard(memoryDbAdapter, agentId, original.id, newText, {
+      lang: "en",
+      workspaceDir,
       logger,
+      ctx: memoryCtx,
+      baseDbPath,
+      archiveDir,
+      actor: memoryCtx.userPrincipal || `principal:${agentId}`,
+      actorType: "human",
+      reason: reason || "MemoryOps.correct",
+      updateMemory: ({ id: targetId, newContent, card: stored }) => applyCorrection({ agentId, memoryCtx, workspaceDir, id: targetId, newContent, card: stored }),
     });
-    if (!shared.ok) {
-      logger?.warn?.(`memory-ops.shared.refresh: re-share failed for agent '${agentId}' (old copy '${card.id}' retracted, corrected original '${newId}'): ${shared.error || shared.code || "unknown"}`);
-      throw memoryOpError("storage", "share refresh failed after correcting the original");
+    if (!corrected.ok) {
+      // Same mapping as write.js's correct; a not-found here means the
+      // original died between the liveness check and correctCard.
+      if (corrected.code === "conflict") throw memoryOpError("conflict", "memory update conflicts with an existing tombstone");
+      if (corrected.code === "not-found") throw memoryOpError("conflict", ORIGINAL_NOT_LIVE);
+      throw memoryOpError("storage", "memory write failed");
+    }
+    const newId = corrected.newId ?? corrected.id;
+
+    let shared;
+    try {
+      shared = await shareCopy(pool, sharedMemoryPool, embeddings, agentId, newId, {
+        targetScope: card.scope,
+        allowSensitiveShare: true,
+        ctx: memoryCtx,
+        logger,
+      });
+    } catch (err) {
+      shared = { ok: false, error: err?.message || String(err) };
+    }
+    if (!shared?.ok) {
+      logger?.warn?.(`memory-ops.shared.refresh: re-share failed for agent '${agentId}' (corrected original '${newId}', old copy '${card.id}' still live): ${shared?.error || shared?.code || "unknown"}`);
+      throw memoryOpError("storage", "share refresh failed after correcting the original", { sourceId: newId, sharedId: card.id });
+    }
+
+    try {
+      await retractSharedRow({ agentId, memoryCtx, workspaceDir, archiveDir, card, reason });
+    } catch (err) {
+      logger?.warn?.(`memory-ops.shared.refresh: retracting old copy '${card.id}' failed for agent '${agentId}' (new copy '${shared.sharedId}'): ${err?.message || err}`);
+      throw memoryOpError("storage", "share refresh failed to retract the previous copy", { sourceId: newId, sharedId: shared.sharedId, staleSharedId: card.id });
     }
     return { sourceId: newId, sharedId: shared.sharedId, retractedId: card.id };
   }
