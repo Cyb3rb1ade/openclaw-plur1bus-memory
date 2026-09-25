@@ -209,6 +209,70 @@ Start-Markers). Details in `docs/engine-api.md`.
   Ledger migriert (`engine/jobs/run-state-migration.js`); danach wird die
   alte Datei nicht mehr gelesen.
 
+### E1 — Contract 1.5.0 (typisierte MemoryOps)
+
+Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
+„Typed MemoryOps“.
+
+#### Hinzugefügt
+
+- **`Engine.memory`** mit sechs Mitgliedern (`engine/memory-ops/`): `list`
+  (genau eines von `topic` oder `since`/`until`, `limit` Standard 20, höchstens
+  100), `show`, `forget`, `correct`, `share` (Ziel `"workspace"` oder
+  `"user"`, `{ allowSensitive }` nach einer Bestätigung) und `state`. Jedes
+  Mitglied nimmt `Principal` und `AgentContext` explizit und löst sie wie
+  `recall`/`capture` auf; `forget`, `correct` und `share` verlangen
+  `origin: "user"` und `background: false`, `share` zusätzlich einen
+  `"proved"`-Principal mit der Ziel-Identität.
+- **Fehler-Codes:** jedes Mitglied lehnt mit einem `MemoryOpError` ab
+  (`code` stabil, `message` englisch und log-sicher, nie Kartentext):
+  `not-found` (auch „existiert, aber nicht sichtbar“, „nicht mehr live“ und
+  „vergessen“ — bewusst nicht unterscheidbar), `denied`, `invalid-input`,
+  `approval-required`, `conflict`, `storage`.
+- **`HostCapabilities.memoryArchiveDir()`** (optional, pro Aufruf gelesen): ein
+  Host kann das Archivverzeichnis der MemoryOps selbst nennen.
+
+#### Geändert
+
+- **`runCommand` ist deprecated** (entfällt mit Contract 2.0); ein Host liest
+  und ändert Erinnerungen über `Engine.memory`.
+- **Archive liegen unter `<stateDir>/memory/_archive`**, sofern der Host
+  nichts anderes nennt. Für OpenClaw ändert sich nichts: der Adapter reicht
+  über `memoryArchiveDir` das bisherige Verzeichnis durch
+  (`~/.openclaw/memory/_archive` bzw. `$OPENCLAW_HOME/.openclaw/memory/_archive`).
+- **`correct` liefert die ID der neuen, lebenden Version** (E1-R8), nicht die
+  übergebene, jetzt abgelöste ID.
+- **`correct` schreibt über `safeUpdate`** (`lib/safe-update.js`) statt über
+  `db-adapter.updateCard`: frische Zusammenfassung aus dem neuen Text,
+  Evidenzzeile mit dem gespeicherten Vorher-Text, Neo-Reconsolidation-Event,
+  Retrieval-Verstärkung — genau der Pfad, den `/correct` schon immer nahm.
+  `updateSource` ist dabei `"user_correction"` statt `"telegram:/correct"`
+  (beide gelten in `lib/memory-text-contradiction.js` als autoritativ).
+- **`computeCutoff` akzeptiert neben den benannten Bereichen `{ from, to }`**
+  (Epoch-ms); `list` mit `since`/`until` vor mehr als 30 Tagen wird dadurch
+  nicht mehr stillschweigend abgeschnitten.
+- **`MemoryState.tombstones` ist `number | null`**: `null` heißt „Registry
+  unlesbar“, nie „keine Tombstones“.
+- **OpenClaw-Adapter:** `/forget`, `/correct` und `/share` führen ihre
+  eigentliche Änderung über `Engine.memory` aus; Parsing, Normalisierung,
+  Kandidatenauswahl, Bestätigungs-Nonce, Sprache, Darstellung und `checkAuth`
+  bleiben im Adapter, die Antworttexte sind unverändert. `/memory` bleibt
+  bewusst bei `queryMemoryAcrossAccessPools` (`--explain` und die
+  Filtersyntax bildet `MemoryListQuery` nicht ab).
+
+#### Behoben
+
+- **`db-adapter` sah Schreibvorgänge anderer LanceDB-Handles nicht:** die
+  gecachte Tabelle behielt die Version beim Öffnen, sodass eine über den
+  Agenten-Pool geschriebene Zeile (die neue Version eines `/correct`, ein
+  Statuswechsel) für `getCard`/`resolveCandidates` bis zum Neustart
+  unsichtbar blieb. `lancedb.connect` läuft jetzt wie in `MemoryDB` mit
+  `readConsistencyInterval: 0`.
+- Eine Korrektur scheiterte an einem veralteten Spalten-Cache des
+  Pool-`MemoryDB` („missing=[chunkGroupId]“), wenn `db-adapter` die Spalte
+  erst nach dem Öffnen ergänzt hatte (etwa bei einer in diesem Prozess
+  angelegten Tabelle); `correct` liest das Schema vor dem Schreiben neu.
+
 ## [7.16.9] — 2026-09-25
 
 ### Behoben
