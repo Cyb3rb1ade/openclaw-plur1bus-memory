@@ -77,6 +77,11 @@
         data.settings.filter(setting => (setting.group || "Features") === group).map(setting => React.createElement("div", { key: setting.id, className: "pb-setting-row" },
         React.createElement("div", null, React.createElement("label", { htmlFor: "pb-" + setting.id }, setting.label || setting.id),
           React.createElement("p", { id: "pb-help-" + setting.id, className: "pb-setting-help" }, setting.description || "Setting for the active profile.")),
+        Number.isInteger(setting.minimum) ? React.createElement("div", null,
+          React.createElement("output", { htmlFor: "pb-" + setting.id }, String(setting.value)),
+          React.createElement("input", { id: "pb-" + setting.id, type: "range", min: setting.minimum, max: setting.maximum,
+            step: 1, value: setting.value, disabled: busy, "aria-describedby": "pb-help-" + setting.id,
+            onChange: event => preview(setting.id, Number(event.target.value)) })) :
         React.createElement("select", { id: "pb-" + setting.id, "aria-describedby": "pb-help-" + setting.id, disabled: busy, value: String(setting.choices.indexOf(setting.value)),
           onChange: event => preview(setting.id, setting.choices[Number(event.target.value)]) },
         setting.choices.map((value, index) => React.createElement("option", { key: index, value: String(index) },

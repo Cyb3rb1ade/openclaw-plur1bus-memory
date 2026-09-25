@@ -48,4 +48,17 @@ cursor = 0;
 data = { settings: [{ id: 'autoCapture', label: 'Automatisch speichern', group: 'Speicherung', value: true, choices: [true, false] }] };
 const settingsTree = settingsNode.type();
 assert.match(text(settingsTree), /Speicherung.*Automatisch speichern.*Enabled.*Disabled/);
+cursor = 0;
+data = { settings: [{ id: 'recall.maxPromptMemories', label: 'Erinnerungen im Prompt', group: 'Recall',
+  value: 12, minimum: 5, maximum: 100, description: 'Begrenzt den Prompt.' }] };
+const numericTree = settingsNode.type();
+function elements(tree, type) {
+  if (!tree || typeof tree !== 'object') return [];
+  return [...(tree.type === type ? [tree] : []), ...(Array.isArray(tree) ? tree : tree.children || []).flatMap(child => elements(child, type))];
+}
+const slider = elements(numericTree, 'input')[0];
+assert.equal(slider.props.type, 'range');
+assert.equal(slider.props.value, 12);
+assert.equal(slider.props['aria-describedby'], 'pb-help-recall.maxPromptMemories');
+assert.equal(text(elements(numericTree, 'output')[0]), '12');
 console.log('Distributed web UI renders scoped primary-agent counts, unknowns and retained Workshop.');

@@ -25,7 +25,7 @@ from .cognition import (
 )
 from .cognitive_prompt import fresh_dream_echo, style_directive
 from .code_index import query_code_index, rebuild_code_index
-from .critical import CRITICAL_TYPES, NON_CRITICAL_TYPE, classify_critical, is_confirmed
+from .critical import CRITICAL_TYPES, NON_CRITICAL_TYPE, classify_critical, is_confirmed, is_dream_card
 from .critical_review import (
     assign_short_refs,
     decode_critical_cursor,
@@ -1152,6 +1152,8 @@ class Plur1busDomain:
     def _classify_materialized_memory(self, record: dict[str, Any], metadata: dict[str, Any],
                                      selector: _ScopeSelector) -> None:
         """Classify an inserted memory at most once, including explicit repair."""
+        if is_dream_card(record) or is_dream_card(metadata):
+            return
         state_dir = self._scope_state_dir(selector)
         source_role = str(record.get("sourceRole") or "")
         # A delayed writer must not create a review proposal for a record that

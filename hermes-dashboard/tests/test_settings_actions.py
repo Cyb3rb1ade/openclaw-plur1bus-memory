@@ -10,6 +10,29 @@ from test_plur1bus_dashboard import _load_api
 from plur1bus_hermes.namespaces import binding_from_scope
 
 
+def test_numeric_recall_settings_preserve_integer_through_review_and_save(tmp_path):
+    api = _load_api()
+    path = tmp_path / "plugins/plur1bus/config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{}")
+    view = SimpleNamespace(hermes_home=tmp_path, data_dir=tmp_path / "data", profile="default",
+        agent_id="default", config={}, scope_binding=binding_from_scope("default"),
+        _writer_route=SimpleNamespace(path=tmp_path / "data/lancedb/default"))
+    app = FastAPI()
+    app.include_router(api.router)
+    headers = {"X-Hermes-Session-Token": "test-token"}
+    with patch("hermes_cli.web_server._SESSION_TOKEN", "test-token"), patch.object(api, "_active_runtime_view", return_value=view), TestClient(app) as client:
+        current = client.get("/desktop/settings", headers=headers).json()
+        body = {"identifier": "recall.candidateTopK", "value": 60, "revision": current["revision"]}
+        reviewed = client.post("/desktop/settings/preview", json=body, headers=headers)
+        assert reviewed.status_code == 200
+        assert type(reviewed.json()["value"]) is int
+        body["nonce"] = reviewed.json()["nonce"]
+        assert client.post("/desktop/settings", json=body, headers=headers).status_code == 200
+        stored = json.loads(path.read_text())["profileSettings"]["default"]["recall"]["candidateTopK"]
+        assert type(stored) is int and stored == 60
+
+
 def test_settings_authentication_review_and_replay(tmp_path):
     api = _load_api()
     config = {"llm": {"model": "local", "apiKey": "private-secret"}}

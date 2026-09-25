@@ -178,7 +178,7 @@ class _RetrievalPreview(BaseModel):
 class _SettingChange(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     identifier: str = Field(max_length=100)
-    value: bool | str
+    value: bool | str | int
     revision: str = Field(pattern="^[a-f0-9]{64}$")
     nonce: str = Field(default="", max_length=128)
 

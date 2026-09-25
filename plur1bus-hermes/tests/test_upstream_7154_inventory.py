@@ -22,7 +22,7 @@ def test_complete_7154_delta_is_retained_and_documented():
         if path == "tests/release-750-compat.test.js":
             continue
         if path.startswith(("lib/", "tests/")) or path == "index.js":
-            assert (ROOT / path).read_text() == git("show", TARGET + ":" + path), path
+            assert (ROOT / path).read_text() == git("show", "v7.16.9:" + path), path
     assert all(commit in review for commit in commits)
 
 

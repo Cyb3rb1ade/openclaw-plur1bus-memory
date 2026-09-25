@@ -34,7 +34,12 @@ LABELS = {
     "dailyConsolidation.decayMode": "Konsolidierung: Verfallsberechnung",
 }
 ENUMS = {"dailyConsolidation.decayMode": ("batch", "rows")}
+INTEGERS = {"recall.candidateTopK": (40, 5, 100), "recall.maxPromptMemories": (12, 5, 100)}
+LABELS.update({"recall.candidateTopK": "Suchkandidaten vor dem Ranking",
+               "recall.maxPromptMemories": "Erinnerungen im Prompt"})
 HELP = {
+    "recall.candidateTopK": "5 bis 100 Kandidaten je Suchpfad vor dem Ranking, Standard 40. Mehr Kandidaten können Ranking-Zeit kosten; sie landen nicht automatisch im Prompt.",
+    "recall.maxPromptMemories": "Höchstens 5 bis 100 Erinnerungen im Prompt, Standard 12. Mehr Treffer können mehr Kontext-Tokens verbrauchen; das Zeichenbudget begrenzt zusätzlich.",
     "autoCapture": "Neue Gesprächsinhalte automatisch für das Langzeitgedächtnis verarbeiten. Manuelles Speichern bleibt davon unabhängig.",
     "autoRecall": "Passende Erinnerungen automatisch in den Gesprächskontext einfügen. Abschalten löscht keine gespeicherten Inhalte.",
     "merging.enabled": "Inhaltlich verwandte Erinnerungen auf eine Zusammenführung prüfen. Die bestehenden Sicherheits- und Freigaberegeln gelten weiter.",
@@ -93,6 +98,11 @@ def public_settings(view):
         value = _get(view.config, key, choices[0])
         settings.append({"id": key, "value": value if value in choices else choices[0], "choices": list(choices)})
     router = view.config.get("llmRouter") or {}
+    for key, (default, minimum, maximum) in INTEGERS.items():
+        value = _get(view.config, key, default)
+        value = max(minimum, min(maximum, value)) if type(value) is int else default
+        settings.append({"id": key, "value": value, "choices": list(range(minimum, maximum + 1)),
+                         "minimum": minimum, "maximum": maximum})
     overrides = (router.get("agentModels") or {}).get(view.agent_id) or {}
     catalog = configured_routes(view.config)
     for task in MODEL_TASKS:
@@ -117,6 +127,10 @@ def validate_change(view, identifier, value):
     """Reject unknown fields, coerced booleans and models without owned routes."""
     if identifier in BOOLEANS and type(value) is bool:
         return
+    if identifier in INTEGERS and type(value) is int:
+        _, minimum, maximum = INTEGERS[identifier]
+        if minimum <= value <= maximum:
+            return
     if identifier == "capture.mode" and isinstance(value, str) and value in {"ganz", "beides", "geteilt"}:
         return
     if identifier in ENUMS and isinstance(value, str) and value in ENUMS[identifier]:

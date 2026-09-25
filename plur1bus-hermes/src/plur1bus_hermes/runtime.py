@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from html import escape
 import copy
 import logging
 import math
@@ -31,7 +32,7 @@ from .epistemic import (
     is_missing_epistemic_status_column_error,
     is_recallable_epistemic,
 )
-from .inject_budget import apply_global_inject_budget
+from .inject_budget import apply_global_inject_budget, trim_memory_items
 from .llm_cache import LlmResultCache
 from .semantic_input import prepare_semantic_input
 from .namespaces import (
@@ -1099,7 +1100,7 @@ class Plur1busRuntime:
             LOGGER.warning("additive recall worker failed (%s)", type(error).__name__)
             return rows
 
-    def recall(self, query: str, limit: int = 5, explain: bool = False, *, valid_at: Any = None,
+    def recall(self, query: str, limit: int | None = None, explain: bool = False, *, valid_at: Any = None,
                session_id: str = "", full_text: bool = False) -> str:
         """Pin storage for the whole synchronous read, including late host prefetches."""
         if self._closing or self._closed:
@@ -1113,7 +1114,7 @@ class Plur1busRuntime:
         finally:
             lease.close()
 
-    def _recall(self, query: str, limit: int = 5, explain: bool = False, *, valid_at: Any = None,
+    def _recall(self, query: str, limit: int | None = None, explain: bool = False, *, valid_at: Any = None,
                 session_id: str = "", full_text: bool = False) -> str:
         """Recall active, unexpired memories, optionally at an asserted valid time."""
         parsed_valid_at = None
@@ -1125,7 +1126,12 @@ class Plur1busRuntime:
         if prepared["requiresSource"]:
             return str(prepared["message"])
         semantic_query = str(prepared["text"])
-        adaptive_limit = min(12, max(limit, 8 if len(semantic_query) > 1200 else limit))
+        recall_config = self.config.get("recall") or {}
+        def bounded(value, default):
+            return max(1, min(100, value)) if type(value) is int else default
+        prompt_limit = bounded(recall_config.get("maxPromptMemories"), 12)
+        adaptive_limit = min(prompt_limit, bounded(limit, prompt_limit))
+        candidate_limit = bounded(recall_config.get("candidateTopK"), 40)
         vector = self._embedding.embed(semantic_query, purpose="query")
         recall_tables = self._recall_tables()
         temporal_range = parse_temporal_range(semantic_query)
@@ -1199,18 +1205,18 @@ class Plur1busRuntime:
                 )
             ]
 
-        private_rows = search_namespaces(vector, heuristic_legacy_where, adaptive_limit * 3)
+        private_rows = search_namespaces(vector, heuristic_legacy_where, candidate_limit)
         shared_rows: list[dict[str, Any]] = []
         try:
             shared_rows = self._shared_pools.recall_rows(
-                vector, adaptive_limit * 2, valid_at=parsed_valid_at, now_ms=now_ms,
+                vector, candidate_limit, valid_at=parsed_valid_at, now_ms=now_ms,
             )
         except TypeError as error:
             # Compatibility for externally injected pre-7.10 pool adapters;
             # native SharedPoolStore always receives the lifecycle predicates.
             if "valid_at" not in str(error) and "now_ms" not in str(error):
                 raise
-            shared_rows = self._shared_pools.recall_rows(vector, adaptive_limit * 2)
+            shared_rows = self._shared_pools.recall_rows(vector, candidate_limit)
 
         selected_legacy_where = heuristic_legacy_where
         using_heuristic = temporal_range is not None
@@ -1222,7 +1228,7 @@ class Plur1busRuntime:
             )
             selected_legacy_where = base_legacy_where
             using_heuristic = False
-            private_rows = search_namespaces(vector, base_legacy_where, adaptive_limit * 3)
+            private_rows = search_namespaces(vector, base_legacy_where, candidate_limit)
             rows = lifecycle_rows(private_rows + shared_rows)
         if not rows and not recall_tables:
             return ""
@@ -1240,7 +1246,7 @@ class Plur1busRuntime:
         if poor_first_pass and refined_query and refined_query != semantic_query.lower():
             refined_vector = self._embedding.embed(refined_query, purpose="query")
             refined_rows = search_namespaces(
-                refined_vector, selected_legacy_where, adaptive_limit * 2,
+                refined_vector, selected_legacy_where, candidate_limit,
                 query_variant="refined",
             )
             if using_heuristic:
@@ -1289,11 +1295,13 @@ class Plur1busRuntime:
             if (is_entry_live(row, now_ms) and is_entry_valid_at(row, parsed_valid_at)
                 and is_recallable_epistemic(row))
         ]
-        recalled = "\n".join(
-            f"- {str(row['content']) if full_text else str(row['content'])[:2000]} {validity_label(row)}".rstrip()
+        rows = rows[:adaptive_limit]
+        memory_items = [
+            f"- {escape(str(row['content']) if full_text else str(row['content'])[:2000])} {validity_label(row)}".rstrip()
             for row in rows
             if row.get("content")
-        )
+        ]
+        recalled = trim_memory_items(memory_items, recall_config.get("memoriesMaxChars", 12_000))
         overlay = self._domain.recall_overlay(semantic_query, rows, acl_bindings=self.scope_binding.as_dict())
         contradiction = self._domain.contradiction_context(rows, acl_bindings=self.scope_binding.as_dict())
         overlay = "\n\n".join(block for block in (contradiction, overlay) if block)
@@ -1323,7 +1331,7 @@ class Plur1busRuntime:
             max_chars = 17_000
         output = apply_global_inject_budget(
             blocks=[
-                {"name": "memories", "text": recalled, "droppable": True},
+                {"name": "memories", "text": recalled, "items": memory_items, "droppable": True},
                 {"name": "overlay", "text": overlay, "droppable": True},
                 {"name": "explanation", "text": explanation, "droppable": True},
                 {"name": "cognitive", "text": cognitive_blocks, "droppable": True},
@@ -1334,7 +1342,7 @@ class Plur1busRuntime:
         # Credit only primary rows whose complete rendered line survived the
         # global budget. A full worker queue never delays or breaks recall.
         eligible = [row for row in deduplicated if row.get("content") and
-                    (str(row["content"]) if full_text else str(row["content"])[:2000]) in output]
+                    escape(str(row["content"]) if full_text else str(row["content"])[:2000]) in output]
         metadata_path = getattr(self._domain, "_metadata_path", None)
         if eligible and isinstance(metadata_path, Path) and (metadata_path / "metadata.lance").is_dir():
             try:

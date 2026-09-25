@@ -25,10 +25,10 @@ class Upstream761InventoryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("`" + path + "`", review)
                 if path.startswith(("lib/", "tests/")) and path != "tests/release-750-compat.test.js":
-                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.15.4:" + path))
+                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.16.9:" + path))
 
     def test_dependency_graph_matches_official_release(self):
-        upstream = json.loads(git("show", "v7.15.4:package-lock.json"))
+        upstream = json.loads(git("show", "v7.16.9:package-lock.json"))
         current = json.loads((ROOT / "package-lock.json").read_text())
         current["version"] = upstream["version"]
         current["packages"][""]["version"] = upstream["packages"][""]["version"]
@@ -51,6 +51,9 @@ class Upstream761InventoryTests(unittest.TestCase):
         # Keep every other historical artifact byte-exact.
         changed_715.update({"hermes-dashboard/plur1bus/dashboard/dist/style.css",
                             "hermes-dashboard/plur1bus/desktop/test-harness.mjs"})
+        # Reviewed .16.9 native Critical and record-boundary budget ports.
+        changed_715.update({"plur1bus-hermes/src/plur1bus_hermes/critical.py",
+                            "plur1bus-hermes/src/plur1bus_hermes/inject_budget.py"})
         for path in paths:
             if Path(path).name in metadata or path in changed_769 or path in changed_715:
                 continue

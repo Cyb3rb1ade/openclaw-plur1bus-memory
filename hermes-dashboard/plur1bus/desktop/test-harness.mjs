@@ -40,6 +40,16 @@ function elements(tree, type) {
 const toggle = elements(featureTree, 'input')[0];
 assert.equal(toggle[1].role, 'switch');
 assert.equal(toggle[1]['aria-describedby'], 'pb-help-autoCapture');
+hookValues = [{ settings: [{ id: 'recall.candidateTopK', value: 40, minimum: 5, maximum: 100,
+  label: 'Suchkandidaten', description: 'Kandidaten vor dem Ranking', group: 'Gedächtnisfunktionen' }] }];
+hookCursor = 0;
+const numericTree = plugin.namespace.FeatureSettings({ rest: async () => ({}) });
+const slider = elements(numericTree, 'input')[0];
+assert.equal(slider[1].type, 'range');
+assert.equal(slider[1].min, 5);
+assert.equal(slider[1].max, 100);
+assert.equal(slider[1]['aria-describedby'], 'pb-help-recall.candidateTopK');
+assert.equal(plainText(elements(numericTree, 'output')[0]), '40');
 hookValues = ['settings', { loading: false, status: { version: '7.15.4' }, proposals: [] }];
 hookCursor = 0;
 const pageTree = plugin.namespace.Partition({ rest: async () => ({}), profile: 'alpha' });

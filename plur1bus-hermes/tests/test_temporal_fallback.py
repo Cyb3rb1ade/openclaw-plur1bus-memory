@@ -132,7 +132,7 @@ class TemporalFallbackPolicyTests(unittest.TestCase):
             self.assertIn("scopeKey", table.where_calls[1])
             self.assertIn("status = 'active'", table.where_calls[1])
             self.assertIn("expiresAt", table.where_calls[1])
-            self.assertEqual(table.limits, [15, 15])
+            self.assertEqual(table.limits, [40, 40])
 
     def test_partial_success_suppresses_private_and_shared_fallback_rows(self) -> None:
         """One eligible heuristic row selects the policy for the whole recall."""

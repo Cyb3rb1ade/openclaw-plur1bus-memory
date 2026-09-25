@@ -24,5 +24,5 @@ def test_complete_commit_and_file_inventory():
         if path == "tests/release-750-compat.test.js":
             continue  # Hermes version is independently pinned in the .747 gate.
         if path.startswith(("lib/", "tests/", "scripts/")) or path == "index.js":
-            expected = "v7.15.4"
+            expected = "v7.16.9"
             assert (ROOT / path).read_text() == git("show", expected + ":" + path), path

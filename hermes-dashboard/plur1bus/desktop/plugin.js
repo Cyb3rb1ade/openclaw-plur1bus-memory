@@ -467,6 +467,10 @@ function FeatureSettings({ rest }) {
       typeof setting.value === 'boolean' ? h('div', { className: 'pb-toggle' }, setting.value ? 'An' : 'Aus',
         h('input', { id: `pb-${setting.id}`, type: 'checkbox', role: 'switch', checked: setting.value, disabled: busy,
           'aria-describedby': `pb-help-${setting.id}`, onChange: event => { void preview(setting.id, event.target.checked); } })) :
+      Number.isInteger(setting.minimum) ? h('div', null, h('output', { htmlFor: `pb-${setting.id}` }, String(setting.value)), h('input', { id: `pb-${setting.id}`, className: 'pb-setting-control', type: 'range',
+        min: setting.minimum, max: setting.maximum, step: 1, value: setting.value, disabled: busy,
+        'aria-valuetext': String(setting.value), 'aria-describedby': `pb-help-${setting.id}`,
+        onChange: event => { void preview(setting.id, Number(event.target.value)); } })) :
       h('select', { id: `pb-${setting.id}`, className: 'pb-setting-control', 'aria-describedby': `pb-help-${setting.id}`, disabled: busy, value: String(setting.choices.indexOf(setting.value)),
         onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
       setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))))))),

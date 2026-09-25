@@ -105,6 +105,7 @@ class _FakeRecallTable:
         return self
 
     def limit(self, count):
+        self.limit_count = count
         return self
 
     def to_list(self):
@@ -121,9 +122,9 @@ class RuntimeInjectBudgetWiringTests(unittest.TestCase):
         runtime._shared_pools.recall_rows = lambda vector, limit: []  # type: ignore[method-assign]
         return runtime
 
-    def test_default_budget_allows_more_than_the_old_hard_cap(self) -> None:
+    def test_configured_inner_budget_allows_more_than_the_old_hard_cap(self) -> None:
         with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            runtime = self._runtime(directory, {})
+            runtime = self._runtime(directory, {"recall": {"memoriesMaxChars": 17000}})
             resources.callback(runtime.shutdown)
             rows = [
                 {"id": str(index), "content": f"Karte {index} " + "x" * 1800, "_distance": 0.1}

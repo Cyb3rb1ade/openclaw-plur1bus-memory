@@ -11,6 +11,25 @@ from __future__ import annotations
 from typing import Any
 
 _TRIM_MARGIN = 8
+TRUNCATION_MARKER = "\n<!-- memory context truncated -->"
+
+
+def trim_memory_items(items: list[str], max_chars: object) -> str:
+    """Keep only complete native memory records; never split text or markup."""
+    text = "\n".join(items)
+    if type(max_chars) not in (int, float) or not 0 < max_chars < float("inf"):
+        return text
+    if len(text) <= max_chars:
+        return text
+    kept = []
+    size = len(TRUNCATION_MARKER)
+    for item in items:
+        needed = len(item) + bool(kept)
+        if size + needed > int(max_chars):
+            break
+        kept.append(item)
+        size += needed
+    return "\n".join(kept) + TRUNCATION_MARKER if kept else ""
 
 
 def apply_global_inject_budget(
@@ -28,6 +47,7 @@ def apply_global_inject_budget(
             "name": str((block or {}).get("name") or ""),
             "text": str((block or {}).get("text") or ""),
             "droppable": (block or {}).get("droppable") is True,
+            "items": (block or {}).get("items"),
         }
         for block in (blocks or [])
     ]
@@ -51,5 +71,14 @@ def apply_global_inject_budget(
         if len(block["text"]) <= overflow + _TRIM_MARGIN:
             current.pop(index)
             continue
-        current[index] = {**block, "text": block["text"][: max(0, len(block["text"]) - overflow - _TRIM_MARGIN)]}
+        allowed = max(0, len(block["text"]) - overflow - _TRIM_MARGIN)
+        # Native memories carry complete record boundaries. Structured overlays
+        # have no safe partial boundary, so drop the whole block on overflow.
+        if isinstance(block["items"], list):
+            trimmed = trim_memory_items(block["items"], allowed)
+        elif "<" in block["text"]:
+            trimmed = ""
+        else:
+            trimmed = block["text"][:allowed]
+        current[index] = {**block, "text": trimmed}
     return join(current)

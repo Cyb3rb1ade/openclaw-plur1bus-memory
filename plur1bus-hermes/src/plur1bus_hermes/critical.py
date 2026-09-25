@@ -138,6 +138,11 @@ def _contains_concrete_secret(text: str) -> bool:
     )
 
 
+def is_dream_card(record: dict[str, Any]) -> bool:
+    """Dream provenance always excludes a card from critical review."""
+    return record.get("origin") == "dream" or record.get("memoryClass") == "dream"
+
+
 def classify_critical(
     text: str,
     metadata: dict[str, Any],
@@ -155,7 +160,7 @@ def classify_critical(
     """
     # Classification may be invoked from an asynchronous capture path.  A
     # non-active record is never eligible for a new critical-review proposal.
-    if str(status or "active") != "active":
+    if str(status or "active") != "active" or is_dream_card(metadata):
         return {
             "eligible": False,
             "reason": "not_critical",
