@@ -1435,6 +1435,7 @@ export function createEngine(host, config, testOptions = {}) {
     sharedMemoryPool,
     embeddings,
     memoryDbAdapter,
+    baseDbPath,
     logger: host.logger,
   });
   const memoryWrite = createMemoryWrite({
@@ -3501,7 +3502,7 @@ export function createEngine(host, config, testOptions = {}) {
       forget: (id, p, a) => internals.memoryWrite.forget(id, p, a),
       correct: (id, newText, p, a) => internals.memoryWrite.correct(id, newText, p, a),
       share: notInM1b1("memory.share"),
-      state: notInM1b1("memory.state"),
+      state: (p, a) => internals.memoryRead.state(p, a),
     }),
     events: Object.freeze({
       on(name, handler) {

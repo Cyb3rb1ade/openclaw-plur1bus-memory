@@ -9,6 +9,7 @@
 import { queryMemoryAcrossAccessPools, projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
 import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { safeUuid } from "../../lib/sql-safety.js";
+import { readTombstonesFromRegistry } from "../../lib/tombstone.js";
 import { memoryOpError } from "./errors.js";
 
 const DEFAULT_LIMIT = 20;
@@ -39,11 +40,69 @@ function toMemoryCard(card, { includeScore }) {
   return out;
 }
 
+// Same live-card lifecycle predicate memory-query.js's queryMemoryDbCandidates
+// pushes into LanceDB (contract 1.5.0 Task 7): a forgotten/archived/superseded
+// row's non-"active", non-null status drops it, and an expired TTL drops it —
+// pushed into countRows() itself so state() never materializes the rows.
+function lifecycleFilterSql(now) {
+  return `(status = 'active' OR status IS NULL) AND (expiresAt IS NULL OR expiresAt = 0 OR expiresAt > ${now})`;
+}
+
 /**
- * @param {{opsContext: object, pool: object, sharedMemoryPool: object, embeddings: object, memoryDbAdapter: object, logger?: object}} deps
- * @returns {{list: Function, show: Function}}
+ * Counts live rows in one already-open MemoryDB. Returns 0 for an
+ * uninitialized/tableless DB (nothing captured yet), never throws — callers
+ * decide null-vs-0 based on pool reachability, not on this helper.
  */
-export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embeddings, memoryDbAdapter, logger }) {
+async function countLiveRows(db, now) {
+  const initialized = await db.init();
+  if (initialized === false || !db.table) return 0;
+  // Same stale-reader guard queryMemoryDbCandidates applies: rejoin the live
+  // head before counting so a just-completed forget/correct is reflected.
+  if (typeof db.table.checkoutLatest === "function") {
+    await db.table.checkoutLatest();
+  }
+  return db.table.countRows(lifecycleFilterSql(now));
+}
+
+/**
+ * Sums live-card counts across every namespace the private pool leases for
+ * this agent (normally exactly one). Never throws: a pool that fails to open
+ * for this principal reports `null`, matching the shared-pool contract below.
+ */
+async function countPrivateLiveCards(privatePool, agentId, now, logger) {
+  try {
+    return await privatePool.withReadDbs(agentId, async (dbs) => {
+      let total = 0;
+      for (const { db } of dbs) total += await countLiveRows(db, now);
+      return total;
+    });
+  } catch (err) {
+    logger?.warn?.(`memory-ops.state: agent-private count failed for agent '${agentId}': ${err?.message || err}`);
+    return null;
+  }
+}
+
+/**
+ * Counts live cards in one shared pool (workspace or user) via the given
+ * lease function. The lease itself hands back `db: null` when this principal
+ * has no claim on that scope (no workspaceIdentity / no userPrincipal) — that
+ * is "not reachable", reported as `null`, distinct from a reachable-but-empty
+ * pool (which counts as 0). A lease/open failure also reports `null`, never throws.
+ */
+async function countSharedLiveCards(leaseFn, memoryCtx, now, scope, agentId, logger) {
+  try {
+    return await leaseFn(memoryCtx, async (db) => (db ? countLiveRows(db, now) : null));
+  } catch (err) {
+    logger?.warn?.(`memory-ops.state: ${scope} count failed for agent '${agentId}': ${err?.message || err}`);
+    return null;
+  }
+}
+
+/**
+ * @param {{opsContext: object, pool: object, sharedMemoryPool: object, embeddings: object, memoryDbAdapter: object, baseDbPath: string, logger?: object}} deps
+ * @returns {{list: Function, show: Function, state: Function}}
+ */
+export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embeddings, memoryDbAdapter, baseDbPath, logger }) {
   async function list(q, p, a) {
     const { agentId, memoryCtx } = await opsContext.resolve(p, a);
 
@@ -127,5 +186,33 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     return toMemoryCard(projected, { includeScore: false });
   }
 
-  return { list, show };
+  async function state(p, a) {
+    const { agentId, memoryCtx, archiveDir } = await opsContext.resolve(p, a);
+    const now = Date.now();
+
+    const [agentPrivate, workspace, user] = await Promise.all([
+      countPrivateLiveCards(pool, agentId, now, logger),
+      countSharedLiveCards(
+        (ctx, fn) => sharedMemoryPool.withWorkspaceReadDb(ctx, fn),
+        memoryCtx, now, "workspace", agentId, logger,
+      ),
+      countSharedLiveCards(
+        (ctx, fn) => sharedMemoryPool.withUserReadDb(ctx, fn),
+        memoryCtx, now, "user", agentId, logger,
+      ),
+    ]);
+
+    let tombstones = 0;
+    try {
+      tombstones = readTombstonesFromRegistry(baseDbPath, agentId)
+        .filter((t) => t.status === "committed").length;
+    } catch (err) {
+      logger?.warn?.(`memory-ops.state: tombstone registry read failed for agent '${agentId}': ${err?.message || err}`);
+      tombstones = 0;
+    }
+
+    return { agentId, cards: { agentPrivate, workspace, user }, tombstones, archiveDir };
+  }
+
+  return { list, show, state };
 }

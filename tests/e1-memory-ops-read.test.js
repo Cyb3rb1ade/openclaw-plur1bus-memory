@@ -278,3 +278,42 @@ describe("Engine.memory.list / .show (E1 Task 4)", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 });
+
+describe("Engine.memory.state (E1 Task 7)", () => {
+  it("counts live agent-private cards, drops a forgotten one, and reports the tombstone", async () => {
+    const stateDir = makeTempDir("e1-state-state-");
+    const host = stubHostForDestructiveOps(stateDir);
+    const engine = createEngine(
+      host,
+      { ...config(join(makeTempDir("e1-state-db-root-"), "lancedb-namespaced")), autoCapture: true },
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-state";
+    await seed(engine, agentId, "The spare key is hidden under the third flowerpot on the porch.", principalForDestructive);
+    await seed(engine, agentId, "The Wi-Fi router needs a reboot every couple of weeks.", principalForDestructive);
+
+    const principal = principalForDestructive(agentId);
+
+    const before = await engine.memory.state(principal, agent);
+    assert.equal(before.agentId, agentId);
+    assert.equal(before.cards.agentPrivate, 2);
+    // No workspace/user principal claimed (principalForDestructive), so both
+    // shared pools are unreachable for this principal, never counted as 0.
+    assert.equal(before.cards.workspace, null);
+    assert.equal(before.cards.user, null);
+    assert.equal(before.tombstones, 0);
+    assert.equal(before.archiveDir, join(stateDir, "memory", "_archive"));
+
+    const listed = await engine.memory.list({ topic: "spare key" }, principal, agent);
+    assert.ok(listed.items.length >= 1);
+    const id = listed.items[0].id;
+    const forgotten = await engine.memory.forget(id, principal, agent);
+    assert.equal(forgotten.archived, true);
+
+    const after = await engine.memory.state(principal, agent);
+    assert.equal(after.cards.agentPrivate, 1);
+    assert.equal(after.tombstones, 1);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+});
