@@ -16,7 +16,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemoryWithReason } from "../lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "../lib/memory-fact-quality.js";
@@ -103,6 +103,7 @@ import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmError
 import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "./recall/namespace-recall.js";
 import { applyEpistemicStatusToLanceDb, waitForTimeoutSettlement } from "./store/memory-db.js";
 import { AgentDbPool } from "./store/agent-db-pool.js";
+import { STORE_SCHEMA_VERSION, createStoreMigrator, writeStoreSchemaMarker } from "./store/schema-version.js";
 import { CONTROL_HEALTH_CACHE_TTL_MS, CONTROL_HEALTH_FAILED_RETRY_MS, CONTROL_HEALTH_MAX_PARTITIONS, CONTROL_HEALTH_REFRESH_INTERVAL_MS, createControlHealthRowInspector, listControlHealthPartitions } from "./store/control-health.js";
 import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
 import { aggregateSkillMinerRuns, appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, formatKnownValidityLabel, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore, textSuggestsGroupOrigin } from "./commands/command-helpers.js";
@@ -114,6 +115,12 @@ import { createMemoryOpsContext } from "./memory-ops/context.js";
 import { createMemoryRead } from "./memory-ops/read.js";
 import { createMemoryWrite } from "./memory-ops/write.js";
 import { memoryOpError } from "./memory-ops/errors.js";
+
+// Nothing in this file otherwise reads the plugin's own package.json version
+// (grepped repo-wide before adding this); the store schema marker records it
+// alongside the schema version for forensic purposes, so it is read once,
+// here, at module load.
+const ENGINE_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 /**
  * Build the engine: every store, provider, route, scheduler and command body
@@ -298,6 +305,20 @@ export function createEngine(host, config, testOptions = {}) {
       }
     }
   }
+
+  // Store schema version marker (E2 Task 2, contract 1.6.0): a fresh
+  // baseDbPath (missing, or present but empty) starts current — there is
+  // nothing on disk yet to migrate. An existing, non-empty store with no
+  // marker stays at LEGACY_STORE_SCHEMA_VERSION ("0") until the owner runs
+  // admin.migrate. This must run before anything else touches baseDbPath,
+  // and writing a fresh marker must not change golden-prefix output (it
+  // touches no LanceDB table).
+  const baseDbPathIsFreshStore = !existsSync(baseDbPath)
+    || readdirSync(baseDbPath).length === 0;
+  if (baseDbPathIsFreshStore) {
+    writeStoreSchemaMarker(baseDbPath, STORE_SCHEMA_VERSION, { engineVersion: ENGINE_VERSION });
+  }
+  const storeMigrator = createStoreMigrator({ baseDbPath, logger: host.logger, engineVersion: ENGINE_VERSION });
 
   const obsidianBridgeEnabled = obsidianBridgeCfg.enabled !== false;
 
@@ -3382,7 +3403,7 @@ export function createEngine(host, config, testOptions = {}) {
       prepare: notInM1b1("admin.obsidian.prepare"),
       confirm: notInM1b1("admin.obsidian.confirm"),
     }),
-    migrate: notInM1b1("admin.migrate"),
+    migrate: async (from, to) => { assertMemoryOpen(); return storeMigrator.migrate(from, to); },
   });
   internals.embeddingService = embeddingService;
   internals.adminOps = adminOps;
@@ -3404,7 +3425,13 @@ export function createEngine(host, config, testOptions = {}) {
     },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
     async status() {
-      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.6.0" };
+      return {
+        ready: true,
+        degraded: null,
+        agents: openedAgents.size,
+        contract: "1.6.0",
+        storeSchema: { current: storeMigrator.current(), expected: STORE_SCHEMA_VERSION },
+      };
     },
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {

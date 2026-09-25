@@ -73,6 +73,7 @@ export const DEPLOY_FILES = [
   "engine/store/control-health.js",
   "engine/store/lancedb-loader.js",
   "engine/store/memory-db.js",
+  "engine/store/schema-version.js",
   "engine/tools/memory-tools.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",

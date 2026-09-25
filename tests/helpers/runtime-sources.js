@@ -63,6 +63,7 @@ const ENGINE_PATHS = Object.freeze({
   legacyProviders: "engine/providers/legacy-providers.js",
   llmCalls: "engine/runtime/llm-calls.js",
   memoryDb: "engine/store/memory-db.js",
+  schemaVersion: "engine/store/schema-version.js",
   namespaceRecall: "engine/recall/namespace-recall.js",
   runtimeReranker: "engine/providers/runtime-reranker.js",
   semanticDiscovery: "engine/runtime/semantic-discovery.js",
