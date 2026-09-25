@@ -155,9 +155,12 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     if (hasTopic === hasSince) {
       throw memoryOpError("invalid-input", "exactly one of topic and since must be set");
     }
-    if (hasTopic && (q.topic.length < 1 || q.topic.length > MAX_TOPIC_LENGTH)) {
+    if (hasTopic && (q.topic.trim().length < 1 || q.topic.length > MAX_TOPIC_LENGTH)) {
       throw memoryOpError("invalid-input", `topic must be between 1 and ${MAX_TOPIC_LENGTH} characters`);
     }
+    const hasUntil = typeof q?.until === "number" && Number.isFinite(q.until);
+    if (hasTopic && hasUntil) throw memoryOpError("invalid-input", "until is only valid with since");
+    if (hasSince && hasUntil && q.until < q.since) throw memoryOpError("invalid-input", "until must not be before since");
 
     const rawLimit = Number.isFinite(q?.limit) ? Math.floor(q.limit) : DEFAULT_LIMIT;
     const limit = Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, rawLimit));
@@ -170,7 +173,7 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     // bound straight through instead of laundering it through one of those.
     const parsed = hasTopic
       ? { mode: "topic", topic: q.topic, filters: undefined, explain: false }
-      : { mode: "time", range: { from: q.since, to: typeof q.until === "number" && Number.isFinite(q.until) ? q.until : now }, explain: false };
+      : { mode: "time", range: { from: q.since, to: hasUntil ? q.until : now }, explain: false };
 
     let items;
     try {
@@ -182,6 +185,10 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
         parsed,
         ctx: memoryCtx,
         now,
+        // limit + 1 per pool (E1 final review I4): each pool returns its own
+        // newest (or best-scoring) limit + 1 rows, the merge orders them
+        // globally, and a limit + 1st survivor means more cards matched.
+        hardLimit: limit + 1,
       });
     } catch (err) {
       logger?.warn?.(`memory-ops.list: query failed for agent '${agentId}': ${err?.message || err}`);

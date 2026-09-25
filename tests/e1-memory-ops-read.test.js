@@ -275,6 +275,50 @@ describe("Engine.memory.list / .show (E1 Task 4)", () => {
       () => engine.memory.list({ topic: "x", since: 1 }, principal, agent),
       (err) => err.code === "invalid-input",
     );
+    // final review M6: a whitespace-only topic, until with a topic, and until before since.
+    for (const q of [{ topic: "   " }, { topic: "x", until: 5 }, { since: 10, until: 5 }]) {
+      await assert.rejects(() => engine.memory.list(q, principal, agent), (err) => err.code === "invalid-input", JSON.stringify(q));
+    }
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(I4) time mode returns the newest cards across a long window, with a truthful truncated", async () => {
+    const host = createStubHost({ stateDir: makeTempDir("e1-read-state-") });
+    const engine = createEngine(host, { ...config(makeTempDir("e1-read-db-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-i4";
+    await seed(engine, agentId, "The seed fact that gives the table its ownership columns.");
+    const principal = principalFor(agentId);
+    const [seedCard] = (await engine.memory.list({ since: 0 }, principal, agent)).items;
+    // The seed row is the template for 120 more rows, one hour apart and all
+    // older than the seed itself, stored in ascending createdAt order (the
+    // storage order a plain LanceDB scan returns).
+    const start = Date.now() - 200 * 3_600_000;
+    const ids = [];
+    await internalsOf(engine).pool.withDb(agentId, async (db) => {
+      const template = await db.getById(seedCard.id);
+      for (let i = 0; i < 120; i++) {
+        const id = randomUUID();
+        ids.push(id);
+        const { _distance, ...fields } = template;
+        await db.store({ ...fields, id, text: `Numbered fact ${i}.`, summary: `Numbered fact ${i}.`, vector: Array.from(template.vector), createdAt: start + i * 3_600_000 });
+      }
+    });
+    // Newest first: the seed, then the numbered facts from 119 down.
+    const expected = [seedCard.id, ...ids.slice().reverse()];
+
+    const hundred = await engine.memory.list({ since: 0, limit: 100 }, principal, agent);
+    assert.equal(hundred.items.length, 100);
+    assert.equal(hundred.truncated, true, "121 cards matched");
+    assert.deepEqual(hundred.items.map((c) => c.id), expected.slice(0, 100));
+
+    const twenty = await engine.memory.list({ since: 0, limit: 20 }, principal, agent);
+    assert.equal(twenty.truncated, true);
+    assert.deepEqual(twenty.items.map((c) => c.id), expected.slice(0, 20));
+
+    const window = await engine.memory.list({ since: start, until: start + 9 * 3_600_000, limit: 100 }, principal, agent);
+    assert.equal(window.truncated, false, "exactly the ten cards in the window");
+    assert.deepEqual(window.items.map((c) => c.id), ids.slice(0, 10).reverse());
 
     await engine.close({ budgetMs: 5_000 });
   });
