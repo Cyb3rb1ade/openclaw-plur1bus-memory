@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.5.0** · frozen at 1.0.0 on 2026-09-22, amended six times
+**Contract version 1.6.0** · frozen at 1.0.0 on 2026-09-22, amended seven times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and

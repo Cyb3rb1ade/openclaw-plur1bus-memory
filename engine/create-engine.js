@@ -3355,9 +3355,11 @@ export function createEngine(host, config, testOptions = {}) {
 
   // AdminOps: the existing coordinators behind the contract's method names;
   // an operation with no engine-side implementation yet rejects.
+  // share/forget (1.6.0, deprecated) are aliases of Engine.memory.share/forget —
+  // same code path as engine.memory below, not a second implementation.
   const adminOps = Object.freeze({
-    share: notInM1b1("admin.share"),
-    forget: notInM1b1("admin.forget"),
+    share: async (id, target, p, a, opts) => { assertMemoryOpen(); return internals.memoryWrite.share(id, target, p, a, opts); },
+    forget: async (id, p, a) => { assertMemoryOpen(); return internals.memoryWrite.forget(id, p, a); },
     reembedding: Object.freeze({
       plan: (...args) => internals.reembeddingCoordinator.plan(...args),
       apply: (...args) => internals.reembeddingCoordinator.apply(...args),
@@ -3391,9 +3393,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.5.0).
+  // The Engine (types/engine.d.ts, contract 1.6.0).
   const engine = {
-    contract: "1.5.0",
+    contract: "1.6.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3402,7 +3404,7 @@ export function createEngine(host, config, testOptions = {}) {
     },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
     async status() {
-      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.5.0" };
+      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.6.0" };
     },
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
