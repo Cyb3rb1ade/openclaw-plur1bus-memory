@@ -10,8 +10,8 @@
 import type {
   AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   Deferral, Degraded, Engine, EngineConfig, EngineEventName, HostServices,
-  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, Principal, RecallQuery, RecallResult,
-  RecallTiming, TurnOrigin, TurnRecord,
+  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpErrorCode,
+  Principal, RecallQuery, RecallResult, RecallTiming, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
 
@@ -102,7 +102,17 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.4.1">>();
+assertTrue<Exact<ContractVersion, "1.5.0">>();
+
+// 1.5.0: typed MemoryOps surface (E1 Task 2).
+assertTrue<Exact<Engine["memory"], MemoryOps>>();
+assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage">>();
+assertTrue<Exact<MemoryOps["list"], (q: import("./engine.js").MemoryListQuery, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryListResult>>>();
+assertTrue<Exact<MemoryOps["show"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryCard>>>();
+assertTrue<Exact<MemoryOps["forget"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryForgetResult>>>();
+assertTrue<Exact<MemoryOps["correct"], (id: string, newText: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryCorrectResult>>>();
+assertTrue<Exact<MemoryOps["share"], (id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }) => Promise<import("./engine.js").MemoryShareResult>>>();
+assertTrue<Exact<MemoryOps["state"], (p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryState>>>();
 // The channel registry and the three new engine events.
 assertTrue<Exact<ReturnType<Engine["channels"]["list"]>, string[]>>();
 assertTrue<Exact<Extract<EngineEventName, `recall.${string}`>, "recall.degraded" | "recall.block-clipped" | "recall.block-dropped" | "recall.completed">>();

@@ -42,12 +42,12 @@ const provedPrincipal = { ...principal, trust: "proved" };
 const agent = { origin: "user", background: false };
 
 describe("Engine", () => {
-  it("reports contract 1.4.1, 18 jobs, the tools and a status", async () => {
+  it("reports contract 1.5.0, 18 jobs, the tools and a status", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
-    assert.equal(engine.contract, "1.4.1");
+    assert.equal(engine.contract, "1.5.0");
     assert.equal(engine.jobs.list().length, 18);
     assert.deepEqual(engine.tools.map((t) => t.name).sort(), ["knowledge_update", "memory_forget", "memory_recall", "memory_search", "memory_store"]);
-    assert.equal((await engine.status()).contract, "1.4.1");
+    assert.equal((await engine.status()).contract, "1.5.0");
     assert.ok(engine.systemSupplement().length >= 1);
     await engine.close({ budgetMs: 5_000 });
   });
@@ -372,5 +372,16 @@ describe("Engine", () => {
     const { engine } = readRuntimeSources();
     assert.ok(!/new AgentDbPool\(/.test(engine.createEngine), "createEngine constructs a bare AgentDbPool");
     assert.ok(/const targetPool = new EngineAgentDbPool\(/.test(engine.createEngine), "withTargetGenerationDb uses EngineAgentDbPool");
+  });
+
+  it("contract 1.5.0 exposes a typed MemoryOps surface", async () => {
+    const engine = createEngine(createStubHost(), {});
+    assert.equal(engine.contract, "1.5.0");
+    assert.equal((await engine.status()).contract, "1.5.0");
+    for (const m of ["list", "show", "forget", "correct", "share", "state"]) {
+      assert.equal(typeof engine.memory[m], "function", `engine.memory.${m}`);
+    }
+    assert.ok(Object.isFrozen(engine.memory));
+    await engine.close();
   });
 });
