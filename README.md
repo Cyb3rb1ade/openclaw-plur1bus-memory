@@ -35,6 +35,24 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.16.0 — recall width is an operator setting
+
+Two number fields on the Recall card. `recall.candidateTopK` sets how many rows
+the vector search fetches before ranking; `recall.maxPromptMemories` sets how
+many memories reach the prompt once ranking is done. Both take 5 to 100.
+
+The ceiling is not a chosen round number: `hardCandidateLimit` in
+`lib/recall-pipeline.js` caps the fetch at 100, so a larger value would never
+reach the search and the field would promise a setting that goes nowhere. The
+defaults, 40 and 12, mirror the schema defaults so an unconfigured card cannot
+show a different number from the one the pipeline uses.
+
+Both are operator decisions rather than measured thresholds, which is the line
+`lib/dashboard-settings.js` draws in its header. The LOCOMO runs of 2026-09-20
+reached 89.2 % evidence coverage with 15 memories drawn from 40 candidates and
+never measured a second point in the field; the range between 40 and 100
+candidates is unexplored. Widening it costs reranking time, not context.
+
 ### New in v7.15.4 — the gc cap is checked against the set gc actually prunes
 
 The cap may never drop below the largest store an agent currently holds, and the
@@ -783,7 +801,11 @@ value. The schema rejects it. Jina reranking is a local model, selected through
   allowed.
 - **A global inject budget** (`recall.globalInjectMaxChars`, default 17000) trims
   memories before time and reminder context, so a large recall can no longer
-  crowd the rest of the prompt out.
+  crowd the rest of the prompt out. An inner budget on the memories block
+  itself, `recall.memoriesMaxChars` (default 12000), caps
+  `formatRelevantMemoriesContext`'s own output before the global budget ever
+  sees it — see `docs/configuration.md`'s "Prompt-Injektions-Budgets" for how
+  the two relate.
 - **Two new curation commands.** `/plur1bus curation resolve <keep|drop>` ends a
   neo `conflict` without any hard filter, and `/plur1bus curation drop-injected`
   demotes only *injected* behaviour conflicts after a preview and a nonce —

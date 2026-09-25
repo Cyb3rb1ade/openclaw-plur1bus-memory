@@ -204,6 +204,8 @@ export const DEPLOY_FILES = [
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
   "lib/dreaming/dream-diary.js",
+  "lib/dreaming/dreaming-status-provider.js",
+  "lib/chat-model.js",
   "lib/episode-watermark.js",
   "lib/episodes.js",
   "lib/jobs/auto-accept-stale-criticals.js",

@@ -50,7 +50,7 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
-import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
+import { registerFeatureCronNativeDispatch, listPluginPublicArtifacts, loadOpenClawPluginSdkRuntime } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { catalogModelIds, featureModelOverrides, grantModelPermission } from "./lib/featureModels.js";
@@ -66,6 +66,7 @@ import {
   createSettingMutator,
   createEmbeddingProfileMutator,
   createFeatureModelMutator,
+  createChatModelMutator,
   createFormTokenStore,
   createRerankerMutator,
   applyControlUiWriteAction,
@@ -371,6 +372,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
+import { createDreamingStatusProvider, readLightDreamRun, recordLightDreamRun } from "./lib/dreaming/dreaming-status-provider.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesWithState, writeEpisodeToVault, rebuildEpisode, findEpisodeCardPath } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
@@ -4444,6 +4446,24 @@ const plugin = {
     });
     pluginLogger = api.logger;
     if (typeof api.registerMemoryCapability === "function") {
+      // The dreaming provider needs the gateway's cron service, which only
+      // arrives with gateway_start. The feature-cron hook further down is
+      // conditional on featureCronSetup, so this capture stands on its own.
+      let gatewayCronGetter = null;
+      if (typeof api.on === "function") {
+        api.on("gateway_start", (_event, gatewayContext) => {
+          if (typeof gatewayContext?.getCron === "function") {
+            gatewayCronGetter = () => gatewayContext.getCron();
+          }
+        });
+      }
+      const dreamingStatusProvider = createDreamingStatusProvider({
+        getPluginConfig: () => cfg,
+        getCron: () => gatewayCronGetter?.(),
+        // Lazy: baseDbPath is resolved further down in register().
+        readLastLightRun: (agentId) => readLightDreamRun({ baseDbPath, agentId }),
+        logger: api.logger,
+      });
       // The host asks the memory-slot owner for a runtime; without it the
       // Memory page reports "memory plugin unavailable". Everything the
       // runtime touches is created further down in this function, so the
@@ -4515,6 +4535,16 @@ const plugin = {
         deterministicRecallToolName: "memory_recall",
         supportsPrivateTranscriptRecall: false,
         runtime: memoryHostRuntime,
+        // Companion plugins (the bundled memory wiki) enumerate our workspaces
+        // through this seam instead of reading our layout. Without it their
+        // bridge reports zero workspaces and every file-level index toggle
+        // stays dark, however many notes are on disk.
+        publicArtifacts: {
+          listArtifacts: (params) => listPluginPublicArtifacts(params),
+        },
+        // Optional seam (openclaw/openclaw#155860): the per-agent sleep plan
+        // PLUR1BUS actually runs. Hosts without the seam ignore it.
+        dreaming: dreamingStatusProvider,
       });
     } else {
       api.logger?.info?.(
@@ -9382,6 +9412,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
           const confirmations = createConfirmationStore();
           const setFeatureModel = createFeatureModelMutator({ api });
+          const setChatModel = createChatModelMutator({
+            api,
+            getHostConfig: () => runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {},
+            loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
+          });
           const setCaptureChunking = createCaptureChunkingMutator({ api });
           const setSetting = createSettingMutator({
             api,
@@ -9432,6 +9467,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 confirmations,
                 setReranker,
                 setFeatureModel,
+                setChatModel,
                 setCaptureChunking,
                 setSetting,
                 setEmbeddingProfile,
@@ -11039,6 +11075,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     const mergedDreams = [...processedDreams.slice(-100), digestHash];
                     throwIfAborted(signal, "light dream commit aborted");
                     neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+                    // Light sleep has no schedule; its last run is the only
+                    // time the Memory page can show for it.
+                    recordLightDreamRun({ baseDbPath, agentId }).catch((runErr) => {
+                      api.logger.debug?.(`memory-lancedb-namespaced: light dream run not recorded: ${String(runErr)}`);
+                    });
                     return true;
                   }).catch((dreamErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
@@ -13053,6 +13094,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }
           const memoriesContext = formatRelevantMemoriesContext(promptItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
+            // Inner cap on the <relevant-memories> block itself, independent of
+            // (and hit first by) recall.globalInjectMaxChars — see
+            // docs/configuration.md "Recall-Pipeline" for how the two relate.
+            maxTotalChars: recallCfg.memoriesMaxChars ?? 12_000,
             overlays,
             matchedPattern,
             semanticLensMemories: promptSemanticLensItems,
