@@ -136,6 +136,7 @@ test('forgetCard scheitert wenn Card nicht existiert', async () => {
     const result = await forgetCard(fakeDb, 'agent', '11111111-1111-4111-8111-111111111111', { archiveDir: tmpRoot, lang: 'de' });
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /nicht gefunden/i);
+    assert.strictEqual(result.code, 'not-found');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -155,6 +156,7 @@ test('forgetCard tombstoned NICHT wenn Archive-Schreiben fehlschlägt', async ()
     const result = await forgetCard(fakeDb, 'agent', '11111111-1111-4111-8111-111111111111', { archiveDir: fakeFile });
     assert.strictEqual(result.ok, false, 'sollte fehlschlagen');
     assert.strictEqual(tombstoned, false, 'tombstoneCard wurde NICHT aufgerufen');
+    assert.strictEqual(result.code, 'storage');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -195,6 +197,7 @@ test('correctCard fängt updateCard-Error ab und gibt generische Nachricht', asy
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /internal error/i);
     assert.doesNotMatch(result.error, /Phase 4b|gesperrt/i);
+    assert.strictEqual(result.code, 'storage');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }

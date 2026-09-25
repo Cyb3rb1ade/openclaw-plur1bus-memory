@@ -112,6 +112,7 @@ import { createResourceCloser } from "./lifecycle/close-resources.js";
 import { flushMetrics } from "../lib/metrics.js";
 import { createMemoryOpsContext } from "./memory-ops/context.js";
 import { createMemoryRead } from "./memory-ops/read.js";
+import { createMemoryWrite } from "./memory-ops/write.js";
 
 /**
  * Build the engine: every store, provider, route, scheduler and command body
@@ -1434,6 +1435,12 @@ export function createEngine(host, config, testOptions = {}) {
     sharedMemoryPool,
     embeddings,
     memoryDbAdapter,
+    logger: host.logger,
+  });
+  const memoryWrite = createMemoryWrite({
+    opsContext: memoryOpsContext,
+    memoryDbAdapter,
+    baseDbPath,
     logger: host.logger,
   });
 
@@ -2964,6 +2971,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryDbAdapter,
     memoryOpsContext,
     memoryRead,
+    memoryWrite,
     memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
     mergingAutoApply,
@@ -3490,8 +3498,8 @@ export function createEngine(host, config, testOptions = {}) {
     memory: Object.freeze({
       list: (q, p, a) => internals.memoryRead.list(q, p, a),
       show: (id, p, a) => internals.memoryRead.show(id, p, a),
-      forget: notInM1b1("memory.forget"),
-      correct: notInM1b1("memory.correct"),
+      forget: (id, p, a) => internals.memoryWrite.forget(id, p, a),
+      correct: (id, newText, p, a) => internals.memoryWrite.correct(id, newText, p, a),
       share: notInM1b1("memory.share"),
       state: notInM1b1("memory.state"),
     }),

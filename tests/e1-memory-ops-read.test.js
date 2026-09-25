@@ -5,6 +5,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
@@ -36,10 +38,31 @@ function principalFor(agentId) {
   return { agentId, workspace: "workspace:v1:main", channel: "telegram", accountId: "default", chat: { id: "c1", kind: "direct" }, trust: "proved" };
 }
 
+// engine.memory.forget writes an audit line under `<workspaceDir>/.adaptive-learning`
+// (lib/sql-safety.js's appendDestructiveOpLog) and fails closed when
+// workspaceDir is falsy — createStubHost's default `workspaceDir` resolves to
+// `undefined`. A real, writable per-agent path is needed for case (d); a
+// claimed `workspace` identity would conflict with the canonical identity
+// that real directory resolves to (engine/identity/principal.js), so this
+// principal leaves `workspace` unclaimed (same as tests/e1-memory-ops-write.test.js).
+function stubHostForDestructiveOps(stateDir) {
+  return createStubHost({
+    stateDir,
+    workspaceDir: async (agentId) => {
+      const dir = join(stateDir, "workspaces", agentId);
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    },
+  });
+}
+function principalForDestructive(agentId) {
+  return { agentId, channel: "telegram", accountId: "default", chat: { id: "c1", kind: "direct" }, trust: "proved" };
+}
+
 const agent = { origin: "user", background: false };
 
-async function seed(engine, agentId, text) {
-  const principal = principalFor(agentId);
+async function seed(engine, agentId, text, principalFactory = principalFor) {
+  const principal = principalFactory(agentId);
   const outcome = await engine.capture({
     agentId,
     principal,
@@ -122,8 +145,32 @@ describe("Engine.memory.list / .show (E1 Task 4)", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
-  // (d) is enabled by Task 5 (memory.forget).
-  it.todo("(d) show(id) is not-found after engine.memory.forget(id)", { todo: "enabled by Task 5" });
+  it("(d) show(id) is not-found after engine.memory.forget(id)", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-read-state-"));
+    // A forget test's baseDbPath must nest under its OWN fresh root, not
+    // directly under the shared OS tmp dir: the tombstone registry lives
+    // beside baseDbPath's PARENT (lib/tombstone.js), keyed only by agentId —
+    // see tests/e1-memory-ops-write.test.js's freshBaseDbPath for the full
+    // rationale.
+    const engine = createEngine(host, { ...config(join(makeTempDir("e1-read-db-root-"), "lancedb-namespaced")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-d";
+    await seed(engine, agentId, "The garage door code was changed last week to 4471.", principalForDestructive);
+
+    const principal = principalForDestructive(agentId);
+    const listed = await engine.memory.list({ topic: "garage door code" }, principal, agent);
+    assert.ok(listed.items.length >= 1);
+    const id = listed.items[0].id;
+
+    const forgotten = await engine.memory.forget(id, principal, agent);
+    assert.equal(forgotten.archived, true);
+
+    await assert.rejects(
+      () => engine.memory.show(id, principal, agent),
+      (err) => err.code === "not-found",
+    );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
 
   it("(e) a card captured by agent anna is not-found for principal agent bernd", async () => {
     const host = createStubHost({ stateDir: makeTempDir("e1-read-state-") });
