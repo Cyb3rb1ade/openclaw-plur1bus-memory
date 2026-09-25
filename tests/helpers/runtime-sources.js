@@ -37,6 +37,8 @@ const ENGINE_PATHS = Object.freeze({
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
   events: "engine/events.js",
   principal: "engine/identity/principal.js",
+  memoryOpsContext: "engine/memory-ops/context.js",
+  memoryOpsErrors: "engine/memory-ops/errors.js",
   internalJobBodies: "engine/jobs/internal-job-bodies.js",
   jobLedger: "engine/jobs/job-ledger.js",
   jobRegistry: "engine/jobs/job-registry.js",

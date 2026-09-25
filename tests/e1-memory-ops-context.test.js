@@ -1,13 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeTempDir } from "./helpers/temp-dir.js";
 import { createMemoryOpsContext } from "../engine/memory-ops/context.js";
 import { isMemoryOpError, memoryOpError } from "../engine/memory-ops/errors.js";
 
-const stateDir = mkdtempSync(join(tmpdir(), "e1-ctx-"));
-const ws = mkdtempSync(join(tmpdir(), "e1-ws-"));
+const stateDir = makeTempDir("e1-ctx-");
+const ws = makeTempDir("e1-ws-");
 const host = { stateDir, workspaceDir: async () => ws };
 const P = { agentId: "bernd", workspace: `workspace-dir:v1:${ws}`, channel: "cli", accountId: "host", chat: { id: "cli:u", kind: "direct" }, trust: "proved" };
 const USER = { origin: "user", background: false };
