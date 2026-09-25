@@ -280,6 +280,32 @@ describe("Engine.memory.list / .show (E1 Task 4)", () => {
   });
 });
 
+describe("Engine.memory: a miss before the first capture is not cached (E1 final review I1)", () => {
+  it("show and forget before an agent's first capture, then capture: show and forget find the card", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-read-state-"));
+    const engine = createEngine(host, { ...config(join(makeTempDir("e1-read-db-root-"), "lancedb-namespaced")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const agentId = "agent-i1";
+    const principal = principalForDestructive(agentId);
+
+    // Both calls reach lib/db-adapter.js's resolveRawTable while the agent has
+    // no directory or table yet; forget still reads through it after I3.
+    await assert.rejects(() => engine.memory.show(randomUUID(), principal, agent), (err) => err.code === "not-found");
+    await assert.rejects(() => engine.memory.forget(randomUUID(), principal, agent), (err) => err.code === "not-found");
+
+    await seed(engine, agentId, "The bike lock combination is written inside the toolbox lid.", principalForDestructive);
+    const listed = await engine.memory.list({ topic: "bike lock" }, principal, agent);
+    assert.ok(listed.items.length >= 1);
+    const id = listed.items[0].id;
+
+    const card = await engine.memory.show(id, principal, agent);
+    assert.equal(card.id, id);
+    const forgotten = await engine.memory.forget(id, principal, agent);
+    assert.equal(forgotten.archived, true);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+});
+
 describe("Engine.memory.state (E1 Task 7)", () => {
   it("counts live agent-private cards, drops a forgotten one, and reports the tombstone", async () => {
     const stateDir = makeTempDir("e1-state-state-");
