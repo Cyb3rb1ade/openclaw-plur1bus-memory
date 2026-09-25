@@ -37,6 +37,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/host-probes.js",
   "adapter/openclaw/plugin.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
+  "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
   "engine/checkpoint/checkpoint-store.js",
   "engine/commands/command-helpers.js",

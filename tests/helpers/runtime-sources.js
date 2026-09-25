@@ -41,6 +41,7 @@ const ENGINE_PATHS = Object.freeze({
   memoryOpsErrors: "engine/memory-ops/errors.js",
   memoryOpsRead: "engine/memory-ops/read.js",
   memoryOpsWrite: "engine/memory-ops/write.js",
+  adminObsidian: "engine/admin/obsidian.js",
   internalJobBodies: "engine/jobs/internal-job-bodies.js",
   jobLedger: "engine/jobs/job-ledger.js",
   jobRegistry: "engine/jobs/job-registry.js",
