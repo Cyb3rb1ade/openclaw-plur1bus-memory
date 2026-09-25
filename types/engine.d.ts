@@ -2,7 +2,7 @@
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
  * Contract version 1.5.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended five times under the policy below — see the changelog at the end
+ * amended six times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -467,10 +467,11 @@ export interface MemoryCard {
 }
 
 export interface MemoryListQuery {
-  /** Topic query (semantic + lexical). Exactly one of `topic` and `since` is required. */
+  /** Topic query (vector search, best first). Exactly one of `topic` and `since` is required. */
   topic?: string;
-  /** Epoch ms lower bound for a time listing. */
+  /** Epoch ms lower bound for a time listing (newest first). */
   since?: number;
+  /** Epoch ms upper bound; only with `since`, and not before it. Default: now. */
   until?: number;
   /** Default 20, maximum 100. */
   limit?: number;
@@ -486,9 +487,17 @@ export interface MemoryState {
   cards: { agentPrivate: number | null; workspace: number | null; user: number | null };
   /** `null` means the tombstone registry was unreadable, never "zero tombstones". */
   tombstones: number | null;
+  /** The archive root (e.g. `<stateDir>/memory/_archive`); per-agent archives land in `<archiveDir>/<agentId>/`. */
   archiveDir: string;
 }
 
+/**
+ * Every member rejects with MemoryOpError `storage` ("engine is closed") after `Engine.close()`.
+ * `list` and `show` read the agent-private pool plus the workspace and user pools the principal
+ * can reach. `forget`, `correct` and `share` act on the caller's own agent-private cards only:
+ * a card the caller can see only as a shared (workspace/user) copy answers `denied`
+ * ("shared copies cannot be changed through this call yet"); changing shared copies is an E2 follow-up.
+ */
 export interface MemoryOps {
   list(q: MemoryListQuery, p: Principal, a: AgentContext): Promise<MemoryListResult>;
   show(id: string, p: Principal, a: AgentContext): Promise<MemoryCard>;

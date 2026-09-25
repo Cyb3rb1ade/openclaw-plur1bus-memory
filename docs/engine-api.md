@@ -118,12 +118,20 @@ The implementation lives in `engine/memory-ops/` (`context.js`, `errors.js`,
 
 | Member | Returns | Notes |
 |---|---|---|
-| `list(q, p, a)` | `MemoryListResult` | exactly one of `q.topic` (semantic + lexical, results carry `score`) and `q.since` (epoch ms, optional `q.until`); `limit` defaults to 20, maximum 100; `truncated` says more matched. Reads the same ACL-filtered access pools `/memory` uses. |
-| `show(id, p, a)` | `MemoryCard` | the same liveness test as `list` (`isRecallEntryLive`): superseded, archived, forgotten, invalidated, expired or foreign rows are all `not-found`. |
+| `list(q, p, a)` | `MemoryListResult` | exactly one of `q.topic` (vector search, results carry `score`, best first) and `q.since` (epoch ms, optional `q.until` not before it; newest first); `limit` defaults to 20, maximum 100; `truncated` says more matched. Reads the same ACL-filtered access pools `/memory` uses; every pool contributes its best or newest `limit + 1` rows and the merge orders them globally. |
+| `show(id, p, a)` | `MemoryCard` | reads the same pools as `list` (agent-private, and the workspace and user pools the principal can reach), with the same ACL and liveness test (`isRecallEntryLive`), so every id `list` returns resolves; superseded, archived, forgotten, invalidated, expired or foreign rows are all `not-found`. |
 | `forget(id, p, a)` | `MemoryForgetResult` | archive-first, then a two-phase tombstone (attempted → committed) and a `memory.deleted` audit line. Forgetting one's own already-forgotten card again answers `alreadyForgotten: true` with the same `tombstoneId`. |
 | `correct(id, newText, p, a)` | `MemoryCorrectResult` | archive-first, then a version-chain update through `lib/safe-update.js` (new row, old row superseded, summary re-derived from the new text, `updateSource: "user_correction"` and an evidence line naming the stored text, the Neo reconsolidation event, retrieval reinforcement). **`id` is the new, live version's id**; the id passed in is superseded. |
 | `share(id, target, p, a, opts?)` | `MemoryShareResult` | copies a card into the `"workspace"` or `"user"` pool; needs a `"proved"` principal that carries that identity. A sensitive card (category, core, `neverForget`, importance ≥ 0.9) is refused with `approval-required` until the caller repeats the call with `{ allowSensitive: true }` after the person confirmed. |
 | `state(p, a)` | `MemoryState` | live card counts per scope (`null` when a scope cannot be counted), the tombstone count (`null` when the registry is unreadable, never a false zero) and the archive directory. |
+
+**`forget`, `correct` and `share` act on the caller's own agent-private
+cards only** (1.5.0). An id that is a live card in a workspace or user pool
+the principal can reach (so `list` and `show` return it) answers `denied`
+with the message "shared copies cannot be changed through this call yet",
+not `not-found`; an id the principal cannot see anywhere stays `not-found`.
+Changing a shared copy is an E2 follow-up; OpenClaw's `/forget` has the same
+limit today.
 
 **Failures are typed.** Every member rejects with a `MemoryOpError` (`name:
 "MemoryOpError"`, a stable `code`, an English, log-safe `message` that never
@@ -133,11 +141,11 @@ carries card text or a raw storage error; `isMemoryOpError` in
 | `code` | When |
 |---|---|
 | `not-found` | no such card, or one the caller may not see, or one that is not live — deliberately indistinguishable (anti-oracle) |
-| `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity |
-| `invalid-input` | a malformed id, principal or agent id, an empty or over-long `newText` (1–8 000 characters after trim), an unknown `share` target, an agent without a workspace directory for a destructive member |
+| `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy |
+| `invalid-input` | a malformed id, principal or agent id, an empty or over-long `newText` (1–8 000 characters after trim), an unknown `share` target, an agent without a workspace directory for a destructive member; for `list` an empty or whitespace-only `topic`, `until` with `topic`, or `until` before `since` |
 | `approval-required` | `share` of a sensitive card without `allowSensitive: true` |
 | `conflict` | `correct` to a text that matches a forgotten memory in the same scope (tombstone guard), or a share source that changed while it was being copied |
-| `storage` | the store, the archive or the audit log failed; nothing is reported as done |
+| `storage` | the store, the archive or the audit log failed; nothing is reported as done. Also every member after `engine.close()` ("engine is closed"), before any store is touched |
 
 **Where archives go.** Archive-first backups land in
 `<stateDir>/memory/_archive/<agentId>/` unless the host names its own

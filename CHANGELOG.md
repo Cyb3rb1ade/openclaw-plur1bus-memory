@@ -271,8 +271,49 @@ Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
   (z. B. widersprüchliche Workspace-Identität nach einem Config-Reload),
   antwortet mit `*_failed` statt mit dem Whitelist-Hinweis und wird mit
   Grund geloggt.
+- **Audit-Einträge von `/forget` und `/correct` (OpenClaw-Parität):** der
+  Akteur ist jetzt `userPrincipal` oder, ohne ihn, `principal:<agentId>`
+  (bisher bei `/forget` `userPrincipal`, `userId` oder `"telegram:/forget"`;
+  bei `/correct` leer). Der Grund lautet `"MemoryOps.forget"` bzw.
+  `"MemoryOps.correct"` (bisher `"user /forget command"` bzw. keiner).
+- **Neo-Partition von `/correct` (OpenClaw-Parität):** der Neo-Store für das
+  Reconsolidation-Event und die Kanten-Umschreibung wird jetzt aus
+  `{ agentId, workspaceDir }` abgeleitet statt aus dem vollen
+  Befehlskontext; die Session→Workspace-Zuordnung von
+  `workspaceKeyFromContext` wird dabei nicht mehr gelesen. Ist eine Session
+  an einen anderen als den Standard-Neo-Workspace gebunden, können Event und
+  Kanten-Umschreibung in einer anderen Partition landen als bisher. Die
+  Session-Fakten wieder durchzureichen ist ein E2-Folgepunkt.
+- **`show` liest alle erreichbaren Pools:** wie `list` den privaten Pool des
+  Agenten, den Workspace- und den User-Pool (gleiche ACL, gleicher
+  Liveness-Test); jede ID, die `list` ausgibt, findet `show` auch.
+- **`forget`, `correct` und `share` ändern nur eigene agent-private Karten.**
+  Für eine Karte, die nur in einem geteilten Pool (Workspace oder User)
+  liegt und die der Aufrufer sehen kann, antworten sie jetzt mit `denied`
+  („shared copies cannot be changed through this call yet“) statt mit
+  `not-found`; eine Karte, die der Aufrufer gar nicht sehen kann, bleibt
+  `not-found`. Geteilte Kopien zu ändern ist ein E2-Folgepunkt (OpenClaws
+  `/forget` hat heute dieselbe Grenze).
+- **`list` im Zeitmodus liefert die neuesten Karten:** jeder Pool liefert
+  seine neuesten `limit + 1` Zeilen, die Zusammenführung sortiert global
+  nach `createdAt` absteigend, und `truncated` ist genau dann `true`, wenn
+  mehr Karten passen. Bisher nahm jede Quelle bei mehr als 100 Treffern die
+  ältesten 100 in Speicherreihenfolge, und `truncated` blieb `false`. `list`
+  lehnt außerdem ein leeres oder nur aus Leerzeichen bestehendes `topic`,
+  `until` zusammen mit `topic` und `until` vor `since` mit `invalid-input` ab.
+- **`Engine.memory` nach `close()`:** jedes Mitglied lehnt mit
+  `MemoryOpError` `storage` („engine is closed“) ab, bevor es einen Store
+  berührt; ein später Aufruf öffnet LanceDB nicht wieder und schreibt weder
+  Archiv noch Tombstone.
 
 #### Behoben
+
+- **`db-adapter` merkte sich eine fehlende Tabelle für immer:** fehlte das
+  Agenten-Verzeichnis oder die Tabelle noch (oder schlug das Öffnen fehl),
+  cachte `resolveRawTable` `null` ohne es je zu verwerfen. Ein einziges
+  `show`/`forget` vor dem ersten Capture eines Agenten ließ `getCard` danach
+  bis zum Neustart für alle seine Karten `not-found` antworten. Ein
+  Fehlschlag gilt jetzt nur noch für den laufenden Aufruf.
 
 - **`db-adapter` sah Schreibvorgänge anderer LanceDB-Handles nicht:** die
   gecachte Tabelle behielt die Version beim Öffnen, sodass eine über den
