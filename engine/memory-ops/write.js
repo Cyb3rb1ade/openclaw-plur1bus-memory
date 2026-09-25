@@ -9,7 +9,7 @@
  * origin "user" + background false before either does anything.
  */
 
-import { forgetCard, correctCard } from "../../lib/telegram-commands/memory-edit.js";
+import { forgetCard, correctCard, shareCard } from "../../lib/telegram-commands/memory-edit.js";
 import { projectMemoryQueryCard } from "../../lib/telegram-commands/memory-query.js";
 import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
 import { safeUuid } from "../../lib/sql-safety.js";
@@ -23,6 +23,7 @@ function messageForCode(code) {
     case "not-found": return "memory not found";
     case "storage": return "memory write failed";
     case "conflict": return "memory update conflicts with an existing tombstone";
+    case "approval-required": return "sharing this memory requires explicit approval";
     default: return "memory operation failed";
   }
 }
@@ -41,10 +42,10 @@ function isLive(card) {
 }
 
 /**
- * @param {{opsContext: object, memoryDbAdapter: object, baseDbPath: string, logger?: object}} deps
- * @returns {{forget: Function, correct: Function}}
+ * @param {{opsContext: object, memoryDbAdapter: object, baseDbPath: string, pool: object, sharedMemoryPool: object, embeddings: object, logger?: object}} deps
+ * @returns {{forget: Function, correct: Function, share: Function}}
  */
-export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, logger }) {
+export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, pool, sharedMemoryPool, embeddings, logger }) {
   async function forget(id, p, a) {
     const { agentId, memoryCtx, workspaceDir, archiveDir } = await opsContext.resolve(p, a, { destructive: true });
 
@@ -144,5 +145,67 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, log
     return { id: result.newId ?? result.id ?? safeId, archived: true };
   }
 
-  return { forget, correct };
+  /**
+   * @param {string} id
+   * @param {"workspace"|"user"} target
+   * @param {object} p Principal
+   * @param {object} a AgentContext
+   * @param {{allowSensitive?: boolean}} [opts]
+   * @returns {Promise<{sourceId: string, sharedId: string, target: "workspace"|"user"}>} MemoryShareResult
+   */
+  async function share(id, target, p, a, { allowSensitive = false } = {}) {
+    if (target !== "workspace" && target !== "user") {
+      throw memoryOpError("invalid-input", "target must be \"workspace\" or \"user\"");
+    }
+
+    const { agentId, memoryCtx } = await opsContext.resolve(p, a, { destructive: true, target });
+
+    // Mirrors the adapter's requireWorkspace/requireUser (E1 Task 6): the
+    // resolved memory context must actually carry the identity `target`
+    // names, not merely a proved principal (which opsContext.resolve already
+    // enforced above via its own `target` check).
+    if (target === "workspace" && !memoryCtx.workspaceIdentity) {
+      throw memoryOpError("denied", "sharing to a workspace requires a workspace-bound principal");
+    }
+    if (target === "user" && !memoryCtx.userPrincipal) {
+      throw memoryOpError("denied", "sharing to a user requires a channel/account-bound authenticated user");
+    }
+
+    let safeId;
+    try {
+      safeId = safeUuid(id);
+    } catch {
+      throw memoryOpError("invalid-input", "id must be a valid memory id");
+    }
+
+    let card;
+    try {
+      // Same call show()/forget()/correct() make: ACL-filtered (returns null
+      // for a denied card), then the same liveness gate as show() — a
+      // superseded/archived/invalidated/expired/already-forgotten source is
+      // not-found, same anti-oracle answer shareCard's own "active"-only
+      // check does not by itself provide (E1-R6/E1-R7).
+      card = await memoryDbAdapter.getCard(agentId, safeId, { ctx: memoryCtx });
+    } catch (err) {
+      logger?.warn?.(`memory-ops.share: getCard failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
+      throw memoryOpError("storage", messageForCode("storage"));
+    }
+    if (!card || !isLive(card)) {
+      throw memoryOpError("not-found", messageForCode("not-found"));
+    }
+
+    const result = await shareCard(pool, sharedMemoryPool, embeddings, agentId, safeId, {
+      targetScope: target,
+      allowSensitiveShare: allowSensitive === true,
+      ctx: memoryCtx,
+      logger,
+    });
+
+    if (!result.ok) {
+      throw memoryOpError(result.code ?? "storage", messageForCode(result.code ?? "storage"));
+    }
+    return { sourceId: safeId, sharedId: result.sharedId, target };
+  }
+
+  return { forget, correct, share };
 }

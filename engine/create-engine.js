@@ -1442,6 +1442,9 @@ export function createEngine(host, config, testOptions = {}) {
     opsContext: memoryOpsContext,
     memoryDbAdapter,
     baseDbPath,
+    pool,
+    sharedMemoryPool,
+    embeddings,
     logger: host.logger,
   });
 
@@ -3501,7 +3504,7 @@ export function createEngine(host, config, testOptions = {}) {
       show: (id, p, a) => internals.memoryRead.show(id, p, a),
       forget: (id, p, a) => internals.memoryWrite.forget(id, p, a),
       correct: (id, newText, p, a) => internals.memoryWrite.correct(id, newText, p, a),
-      share: notInM1b1("memory.share"),
+      share: (id, target, p, a, opts) => internals.memoryWrite.share(id, target, p, a, opts),
       state: (p, a) => internals.memoryRead.state(p, a),
     }),
     events: Object.freeze({

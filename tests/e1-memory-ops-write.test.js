@@ -1,5 +1,6 @@
 /**
  * tests/e1-memory-ops-write.test.js — E1 Task 5: Engine.memory.forget / .correct.
+ * Also covers E1 Task 6: Engine.memory.share.
  */
 
 import { describe, it } from "node:test";
@@ -76,6 +77,18 @@ function stubHostForDestructiveOps(stateDir) {
       return dir;
     },
   });
+}
+
+// share's "second agent in the same workspace" case needs two agents whose
+// canonical workspace identity is the SAME (lib/memory-request-context.js's
+// resolveCanonicalWorkspacePrincipal derives it from host.workspaceDir's
+// REAL directory when no explicit workspace claim is made). The stub host
+// here hands every agent the identical real directory, so two distinct
+// agentIds still resolve to one workspace pool key.
+function stubHostForSharedWorkspace(stateDir) {
+  const dir = join(stateDir, "workspaces", "shared-ws");
+  mkdirSync(dir, { recursive: true });
+  return createStubHost({ stateDir, workspaceDir: async () => dir });
 }
 
 const agent = { origin: "user", background: false };
@@ -374,6 +387,126 @@ describe("Engine.memory.forget / .correct (E1 Task 5)", () => {
     const unchanged = await rawCard(engine, agentId, id);
     assert.equal(unchanged.status, "active");
     assert.match(unchanged.text, /shared calendar invite code/);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+});
+
+describe("Engine.memory.share (E1 Task 6)", () => {
+  it("(a) share to workspace returns sharedId, and a second agent in the same workspace lists it with scope 'workspace'", async () => {
+    const stateDir = makeTempDir("e1-share-state-");
+    const host = stubHostForSharedWorkspace(stateDir);
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const ownerId = "share-owner";
+    const id = await seedAndGetId(engine, ownerId, "The team's shared VPN config lives in the ops repo.", "shared VPN config", principalForDestructive);
+
+    const ownerPrincipal = principalForDestructive(ownerId);
+    const shared = await engine.memory.share(id, "workspace", ownerPrincipal, agent);
+    assert.equal(shared.sourceId, id);
+    assert.equal(shared.target, "workspace");
+    assert.equal(typeof shared.sharedId, "string");
+    assert.ok(shared.sharedId.length > 0);
+
+    // A second, different agent whose workspace identity resolves to the
+    // SAME workspace (stubHostForSharedWorkspace hands every agent the
+    // identical real directory) lists the card through the shared workspace
+    // pool, not its own (empty) private one.
+    const otherId = "share-other";
+    const otherListed = await engine.memory.list({ topic: "shared VPN config" }, principalForDestructive(otherId), agent);
+    const sharedCard = otherListed.items.find((c) => c.id === shared.sharedId);
+    assert.ok(sharedCard, "the second agent sees the shared card");
+    assert.equal(sharedCard.scope, "workspace");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(b) a sensitive card is approval-required, and { allowSensitive: true } succeeds", async () => {
+    const stateDir = makeTempDir("e1-share-state-");
+    const host = stubHostForSharedWorkspace(stateDir);
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const ownerId = "share-sensitive";
+    const id = await seedAndGetId(engine, ownerId, "The safe combination is written in the back of the notebook.", "safe combination", principalForDestructive);
+
+    // sensitiveShareReason (lib/telegram-commands/memory-edit.js) flags this
+    // category, exactly like the existing b13-share-runtime.test.js fixture.
+    await patchRow(engine, ownerId, id, { category: "secret" });
+
+    const principal = principalForDestructive(ownerId);
+    await assert.rejects(
+      () => engine.memory.share(id, "workspace", principal, agent),
+      (err) => err.code === "approval-required",
+    );
+
+    const shared = await engine.memory.share(id, "workspace", principal, agent, { allowSensitive: true });
+    assert.equal(typeof shared.sharedId, "string");
+    assert.ok(shared.sharedId.length > 0);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(c) an inferred principal is denied", async () => {
+    const host = stubHostForSharedWorkspace(makeTempDir("e1-share-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const ownerId = "share-inferred";
+    const id = await seedAndGetId(engine, ownerId, "The office wifi password rotates monthly.", "office wifi password", principalForDestructive);
+
+    // No `trust: "proved"` at all: memoryContextFromPrincipal degrades this
+    // straight to an "inferred" context (engine/identity/principal.js).
+    const inferredPrincipal = { agentId: ownerId };
+    await assert.rejects(
+      () => engine.memory.share(id, "workspace", inferredPrincipal, agent),
+      (err) => err.code === "denied",
+    );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(d) target: 'everyone' is invalid-input", async () => {
+    const host = stubHostForSharedWorkspace(makeTempDir("e1-share-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const ownerId = "share-badtarget";
+    const id = await seedAndGetId(engine, ownerId, "The printer on the third floor jams on legal-size paper.", "printer jams", principalForDestructive);
+
+    const principal = principalForDestructive(ownerId);
+    await assert.rejects(
+      () => engine.memory.share(id, "everyone", principal, agent),
+      (err) => err.code === "invalid-input",
+    );
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(e) sharing anna's card as bernd is not-found", async () => {
+    const host = stubHostForDestructiveOps(makeTempDir("e1-share-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const id = await seedAndGetId(engine, "anna", "Anna's storage unit code is taped inside the closet door.", "storage unit code", principalForDestructive);
+
+    const berndPrincipal = principalForDestructive("bernd");
+    await assert.rejects(
+      () => engine.memory.share(id, "workspace", berndPrincipal, agent),
+      (err) => err.code === "not-found",
+    );
+
+    // The card is still listed, unshared, for anna.
+    const annaListed = await engine.memory.list({ topic: "storage unit code" }, principalForDestructive("anna"), agent);
+    assert.ok(annaListed.items.some((c) => c.id === id));
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(E1-R7) sharing a superseded card is not-found", async () => {
+    const host = stubHostForSharedWorkspace(makeTempDir("e1-share-state-"));
+    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const ownerId = "share-superseded";
+    const id = await seedAndGetId(engine, ownerId, "The old build server was decommissioned last quarter.", "old build server", principalForDestructive);
+
+    await patchRow(engine, ownerId, id, { status: "superseded" });
+
+    const principal = principalForDestructive(ownerId);
+    await assert.rejects(
+      () => engine.memory.share(id, "workspace", principal, agent),
+      (err) => err.code === "not-found",
+    );
 
     await engine.close({ budgetMs: 5_000 });
   });

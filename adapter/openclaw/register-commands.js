@@ -47,7 +47,7 @@ import { registerReembeddingRuntime } from "../../lib/setup/reembedding-plugin-r
 import { registerWorkspacePolicyRuntime } from "../../lib/setup/workspace-policy-plugin-runtime.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { listFeatures, renderFeatureList, renderToggleResult, toggleFeature } from "../../lib/telegram-commands/feature-toggle.js";
-import { correctCard, forgetCard, parseCorrection, renderCandidateChoice, resolveCandidates } from "../../lib/telegram-commands/memory-edit.js";
+import { correctCard, forgetCard, parseCorrection, renderCandidateChoice, resolveCandidates, shareFailureCode } from "../../lib/telegram-commands/memory-edit.js";
 import { formatResults as formatMemoryResults, parseMemoryFeedback, parseQuery as parseMemoryQuery, queryMemoryAcrossAccessPools } from "../../lib/telegram-commands/memory-query.js";
 import { activateSkillProposal, rejectSkillProposal, rejectSkillProposalWithWorkshop, retireActiveSkill, createSkillWorkshopLifecycleSynchronizer } from "../../lib/telegram-commands/skill-commands.js";
 import { runSpeakerClearCommand, runSpeakerConfirmCommand, runSpeakerListCommand, runSpeakerNameCommand, runSpeakerProposalsCommand, runSpeakerRejectCommand } from "../../lib/telegram-commands/speaker-mapping.js";
@@ -1162,7 +1162,10 @@ export function registerChatCommands(ctx) {
   const runShareCommand = async (commandCtx) => {
     const { lang, tone } = resolveCommandLocale(commandCtx);
     const fail = (key, vars = {}) => ({ text: t(key, { lang, tone, vars }) });
-    const sourceDenied = (error) => /^(?:share\.(?:card_not_found|source_not_live|source_scope_denied|source_owner_conflict|source_changed)|access denied:)/.test(String(error || ""));
+    // Moved into lib/telegram-commands/memory-edit.js as shareFailureCode (E1
+    // Task 6), which the typed MemoryOps `share` reuses for its own
+    // "not-found" mapping; behaviour here is unchanged.
+    const sourceDenied = shareFailureCode;
     try {
       const deniedLen = checkArgsLength(commandCtx);
       if (deniedLen) return deniedLen;
