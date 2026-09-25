@@ -10,7 +10,7 @@
 import type {
   AdminOps, AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   Deferral, Degraded, Engine, EngineConfig, EngineEventName, EngineStatus, HostServices,
-  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpErrorCode,
+  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
   MemoryProposalStatus, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
   SchemaVersion, TurnOrigin, TurnRecord,
 } from "./engine.js";
@@ -108,6 +108,9 @@ assertTrue<Exact<ContractVersion, "1.6.0">>();
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
 assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage">>();
+// 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
+assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
+assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();
 assertTrue<Exact<MemoryOps["list"], (q: import("./engine.js").MemoryListQuery, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryListResult>>>();
 assertTrue<Exact<MemoryOps["show"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryCard>>>();
 assertTrue<Exact<MemoryOps["forget"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryForgetResult>>>();

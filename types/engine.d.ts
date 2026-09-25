@@ -36,7 +36,7 @@
  *            1.4.0 — Engine surface of createEngine (M1b-1): ContextBlock.chars; RecallResult.timing (replaces timings) and .deferrals; RecallQuery.budget optional; JobRun/JobRegistry/JobSpec per spec 3.3 (outcome gains "abandoned"); CheckpointReason gains "session-end"; Engine.close({ budgetMs }); Engine.channels; HostServices.capabilities?; EngineEventName gains recall.block-clipped/-dropped, recall.completed; createEngine testOptions.
  *            1.4.1 — JobTrigger gains "unknown" (a crash row recovered from a corrupt, unreadable start marker; M1b-1 final review m2).
  *            1.5.0 — MemoryOps types, Engine.memory (E1 Task 2); runCommand deprecated; MemoryState.tombstones number | null (E1-R11); HostCapabilities.memoryArchiveDir? (E1 Task 8).
- *            1.6.0 — AdminOps.share/forget alias Engine.memory (deprecated); ObsidianOps with explicit paths; migrate over a store schema marker; MemoryOps.propose/proposals (D31); MemoryCard.sharedBy/sourceId; "memory.proposal" event; EngineStatus.storeSchema (E2).
+ *            1.6.0 — AdminOps.share/forget alias Engine.memory (deprecated); ObsidianOps with explicit paths; migrate over a store schema marker; MemoryOps.propose/proposals (D31); MemoryCard.sharedBy/sourceId; MemoryOpError.detail; "memory.proposal" event; EngineStatus.storeSchema (E2).
  */
 
 export type ContractVersion = "1.6.0";
@@ -482,7 +482,11 @@ export type MemoryOpErrorCode =
   | "conflict" | "storage";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
-export interface MemoryOpError extends Error { readonly code: MemoryOpErrorCode }
+export interface MemoryOpError extends Error {
+  readonly code: MemoryOpErrorCode;
+  /** 1.6.0: non-secret ids a caller needs to recover (e.g. a half-finished shared-copy refresh). */
+  readonly detail?: Readonly<Record<string, string>>;
+}
 
 export type MemoryScope = "agent-private" | "workspace" | "user";
 
