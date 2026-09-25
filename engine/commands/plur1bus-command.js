@@ -1207,10 +1207,14 @@ export function createPlur1busCommandRunner(ctx) {
       return runMemoryCommand(commandCtx, memoryCtx);
     }
     if (actionKey === "forget") {
-      return runForgetCommand(commandCtx, memoryCtx);
+      // The caller's AgentContext travels with the memory context, so the
+      // engine's destructive-origin guard sees who really asked (E1-R12 M2).
+      return runForgetCommand(commandCtx, memoryCtx, agentContext);
     }
     if (actionKey === "correct") {
-      return runCorrectCommand(commandCtx, memoryCtx);
+      // The caller's AgentContext travels with the memory context, so the
+      // engine's destructive-origin guard sees who really asked (E1-R12 M2).
+      return runCorrectCommand(commandCtx, memoryCtx, agentContext);
     }
     if (actionKey === "critical") {
       return runCriticalCommand(commandCtx, memoryCtx);

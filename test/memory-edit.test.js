@@ -136,6 +136,7 @@ test('forgetCard scheitert wenn Card nicht existiert', async () => {
     const result = await forgetCard(fakeDb, 'agent', '11111111-1111-4111-8111-111111111111', { archiveDir: tmpRoot, lang: 'de' });
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /nicht gefunden/i);
+    assert.strictEqual(result.code, 'not-found');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -155,6 +156,7 @@ test('forgetCard tombstoned NICHT wenn Archive-Schreiben fehlschlägt', async ()
     const result = await forgetCard(fakeDb, 'agent', '11111111-1111-4111-8111-111111111111', { archiveDir: fakeFile });
     assert.strictEqual(result.ok, false, 'sollte fehlschlagen');
     assert.strictEqual(tombstoned, false, 'tombstoneCard wurde NICHT aufgerufen');
+    assert.strictEqual(result.code, 'storage');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
@@ -195,6 +197,62 @@ test('correctCard fängt updateCard-Error ab und gibt generische Nachricht', asy
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /internal error/i);
     assert.doesNotMatch(result.error, /Phase 4b|gesperrt/i);
+    assert.strictEqual(result.code, 'storage');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+// fix round 1, E1-R10: a non-throwing updateCard refusal must never be
+// reported as success, must map to the right code, and must not write a
+// `memory.updated` audit line (the mutation never happened).
+test('correctCard meldet tombstone_blocked von updateCard als code "conflict", nicht ok:true', async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-correct-conflict-'));
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'plur1bus-correct-ws-'));
+  try {
+    const fakeDb = {
+      getCard: async (a, id) => ({ id, title: 'T', text: 'alt', status: 'active' }),
+      updateCard: async () => ({ ok: false, action: 'tombstone_blocked', reason: 'tombstone_blocked', id: 'card-1' }),
+    };
+    const result = await correctCard(fakeDb, 'agent', 'card-1', 'neu', { archiveDir: tmpRoot, workspaceDir });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.code, 'conflict');
+    assert.ok(!existsSync(join(workspaceDir, '.adaptive-learning', 'destructive-ops.jsonl')), 'kein Audit-Eintrag bei ok:false');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+test('correctCard meldet eine andere nicht-werfende updateCard-Ablehnung als code "storage"', async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-correct-other-'));
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'plur1bus-correct-ws2-'));
+  try {
+    const fakeDb = {
+      getCard: async (a, id) => ({ id, title: 'T', text: 'alt', status: 'active' }),
+      updateCard: async () => ({ ok: false, reason: 'no-table' }),
+    };
+    const result = await correctCard(fakeDb, 'agent', 'card-1', 'neu', { archiveDir: tmpRoot, workspaceDir });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.code, 'storage');
+    assert.ok(!existsSync(join(workspaceDir, '.adaptive-learning', 'destructive-ops.jsonl')), 'kein Audit-Eintrag bei ok:false');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+test('correctCard gibt bei Erfolg additiv newId aus updateCard zurück', async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-correct-newid-'));
+  try {
+    const fakeDb = {
+      getCard: async (a, id) => ({ id, title: 'T', text: 'alt', status: 'active' }),
+      updateCard: async () => ({ ok: true, id: 'new-card-id', previousId: 'card-1' }),
+    };
+    const result = await correctCard(fakeDb, 'agent', 'card-1', 'neu', { archiveDir: tmpRoot });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.newId, 'new-card-id');
+    assert.strictEqual(result.id, 'card-1');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }

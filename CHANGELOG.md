@@ -209,6 +209,132 @@ Start-Markers). Details in `docs/engine-api.md`.
   Ledger migriert (`engine/jobs/run-state-migration.js`); danach wird die
   alte Datei nicht mehr gelesen.
 
+### E1 — Contract 1.5.0 (typisierte MemoryOps)
+
+Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
+„Typed MemoryOps“.
+
+#### Hinzugefügt
+
+- **`Engine.memory`** mit sechs Mitgliedern (`engine/memory-ops/`): `list`
+  (genau eines von `topic` oder `since`/`until`, `limit` Standard 20, höchstens
+  100), `show`, `forget`, `correct`, `share` (Ziel `"workspace"` oder
+  `"user"`, `{ allowSensitive }` nach einer Bestätigung) und `state`. Jedes
+  Mitglied nimmt `Principal` und `AgentContext` explizit und löst sie wie
+  `recall`/`capture` auf; `forget`, `correct` und `share` verlangen
+  `origin: "user"` und `background: false`, `share` zusätzlich einen
+  `"proved"`-Principal mit der Ziel-Identität.
+- **Fehler-Codes:** jedes Mitglied lehnt mit einem `MemoryOpError` ab
+  (`code` stabil, `message` englisch und log-sicher, nie Kartentext):
+  `not-found` (auch „existiert, aber nicht sichtbar“, „nicht mehr live“ und
+  „vergessen“ — bewusst nicht unterscheidbar), `denied`, `invalid-input`,
+  `approval-required`, `conflict`, `storage`.
+- **`HostCapabilities.memoryArchiveDir()`** (optional, pro Aufruf gelesen): ein
+  Host kann das Archivverzeichnis der MemoryOps selbst nennen.
+
+#### Geändert
+
+- **`runCommand` ist deprecated** (entfällt mit Contract 2.0); ein Host liest
+  und ändert Erinnerungen über `Engine.memory`.
+- **Archive liegen unter `<stateDir>/memory/_archive`**, sofern der Host
+  nichts anderes nennt. Für OpenClaw ändert sich nichts: der Adapter reicht
+  über `memoryArchiveDir` das bisherige Verzeichnis durch
+  (`~/.openclaw/memory/_archive` bzw. `$OPENCLAW_HOME/.openclaw/memory/_archive`).
+- **`correct` liefert die ID der neuen, lebenden Version** (E1-R8), nicht die
+  übergebene, jetzt abgelöste ID.
+- **`correct` schreibt über `safeUpdate`** (`lib/safe-update.js`) statt über
+  `db-adapter.updateCard`: frische Zusammenfassung aus dem neuen Text,
+  Evidenzzeile mit dem gespeicherten Vorher-Text, Neo-Reconsolidation-Event,
+  Retrieval-Verstärkung — genau der Pfad, den `/correct` schon immer nahm.
+  `updateSource` ist dabei `"user_correction"` statt `"telegram:/correct"`
+  (beide gelten in `lib/memory-text-contradiction.js` als autoritativ).
+- **`computeCutoff` akzeptiert neben den benannten Bereichen `{ from, to }`**
+  (Epoch-ms); `list` mit `since`/`until` vor mehr als 30 Tagen wird dadurch
+  nicht mehr stillschweigend abgeschnitten.
+- **`MemoryState.tombstones` ist `number | null`**: `null` heißt „Registry
+  unlesbar“, nie „keine Tombstones“.
+- **`/memory` mit Zeitangabe** (heute, gestern, ein Monat …) listet jetzt die
+  neuesten Erinnerungen zuerst; vorher war die Reihenfolge bei vielen
+  Treffern zufällig.
+- **`/share` auf eine geteilte Kopie** antwortet weiter mit „nicht gefunden“;
+  `Engine.memory` selbst meldet dafür `denied` (geteilte Kopien lassen sich
+  über diesen Aufruf noch nicht ändern, Folgearbeit in E2).
+- **OpenClaw-Adapter:** `/forget`, `/correct` und `/share` führen ihre
+  eigentliche Änderung über `Engine.memory` aus; Parsing, Normalisierung,
+  Kandidatenauswahl, Bestätigungs-Nonce, Sprache, Darstellung und `checkAuth`
+  bleiben im Adapter. Ein über den `/plur1bus`-Router (auch
+  `Engine.runCommand`) erreichter Befehl behält den `AgentContext` des
+  Aufrufers; ein Subagent kann damit nichts vergessen oder korrigieren.
+  `/memory` bleibt bewusst bei `queryMemoryAcrossAccessPools` (`--explain`
+  und die Filtersyntax bildet `MemoryListQuery` nicht ab).
+- **Bewusste Antwortänderungen von `/forget`, `/correct` und `/share`:**
+  (1) beim Bestätigen antworten „nicht gefunden“ und „per ACL verweigert“
+  beide mit `*_not_found` (nicht mehr unterscheidbar); (2) die Variable in
+  `*_failed` ist jetzt eine allgemeine englische Meldung statt des
+  lokalisierten Einzelfehlers; (3) abgelöste, archivierte, abgelaufene und
+  invalidierte Ziele werden mit „nicht gefunden“ abgelehnt. Eine Ablehnung
+  `denied`, die erst nach bestandenem `checkAuth` aus der Engine kommt
+  (z. B. widersprüchliche Workspace-Identität nach einem Config-Reload),
+  antwortet mit `*_failed` statt mit dem Whitelist-Hinweis und wird mit
+  Grund geloggt.
+- **Audit-Einträge von `/forget` und `/correct` (OpenClaw-Parität):** der
+  Akteur ist jetzt `userPrincipal` oder, ohne ihn, `principal:<agentId>`
+  (bisher bei `/forget` `userPrincipal`, `userId` oder `"telegram:/forget"`;
+  bei `/correct` leer). Der Grund lautet `"MemoryOps.forget"` bzw.
+  `"MemoryOps.correct"` (bisher `"user /forget command"` bzw. keiner).
+- **Neo-Partition von `/correct` (OpenClaw-Parität):** der Neo-Store für das
+  Reconsolidation-Event und die Kanten-Umschreibung wird jetzt aus
+  `{ agentId, workspaceDir }` abgeleitet statt aus dem vollen
+  Befehlskontext; die Session→Workspace-Zuordnung von
+  `workspaceKeyFromContext` wird dabei nicht mehr gelesen. Ist eine Session
+  an einen anderen als den Standard-Neo-Workspace gebunden, können Event und
+  Kanten-Umschreibung in einer anderen Partition landen als bisher. Die
+  Session-Fakten wieder durchzureichen ist ein E2-Folgepunkt.
+- **`show` liest alle erreichbaren Pools:** wie `list` den privaten Pool des
+  Agenten, den Workspace- und den User-Pool (gleiche ACL, gleicher
+  Liveness-Test); jede ID, die `list` ausgibt, findet `show` auch.
+- **`forget`, `correct` und `share` ändern nur eigene agent-private Karten.**
+  Für eine Karte, die nur in einem geteilten Pool (Workspace oder User)
+  liegt und die der Aufrufer sehen kann, antworten sie jetzt mit `denied`
+  („shared copies cannot be changed through this call yet“) statt mit
+  `not-found`; eine Karte, die der Aufrufer gar nicht sehen kann, bleibt
+  `not-found`. Geteilte Kopien zu ändern ist ein E2-Folgepunkt (OpenClaws
+  `/forget` hat heute dieselbe Grenze).
+- **`list` im Zeitmodus liefert die neuesten Karten:** jeder Pool liefert
+  seine neuesten `limit + 1` Zeilen, die Zusammenführung sortiert global
+  nach `createdAt` absteigend, und `truncated` ist genau dann `true`, wenn
+  mehr Karten passen. Bisher nahm jede Quelle bei mehr als 100 Treffern die
+  ältesten 100 in Speicherreihenfolge, und `truncated` blieb `false`. `list`
+  lehnt außerdem ein leeres oder nur aus Leerzeichen bestehendes `topic`,
+  `until` zusammen mit `topic` und `until` vor `since` mit `invalid-input` ab.
+- **`Engine.memory` nach `close()`:** jedes Mitglied lehnt mit
+  `MemoryOpError` `storage` („engine is closed“) ab, bevor es einen Store
+  berührt; ein später Aufruf öffnet LanceDB nicht wieder und schreibt weder
+  Archiv noch Tombstone.
+
+#### Behoben
+
+- **`db-adapter` merkte sich eine fehlende Tabelle für immer:** fehlte das
+  Agenten-Verzeichnis oder die Tabelle noch (oder schlug das Öffnen fehl),
+  cachte `resolveRawTable` `null` ohne es je zu verwerfen. Ein einziges
+  `show`/`forget` vor dem ersten Capture eines Agenten ließ `getCard` danach
+  bis zum Neustart für alle seine Karten `not-found` antworten. Ein
+  Fehlschlag gilt jetzt nur noch für den laufenden Aufruf.
+
+- **`db-adapter` sah Schreibvorgänge anderer LanceDB-Handles nicht:** die
+  gecachte Tabelle behielt die Version beim Öffnen, sodass eine über den
+  Agenten-Pool geschriebene Zeile (die neue Version eines `/correct`, ein
+  Statuswechsel) für `getCard`/`resolveCandidates` bis zum Neustart
+  unsichtbar blieb. `lancedb.connect` läuft jetzt wie in `MemoryDB` mit
+  `readConsistencyInterval: 0`.
+- **Capture auf frischen Installationen:** eine von `MemoryDB` angelegte
+  Tabelle hatte keine Spalte `chunkGroupId` (weder in der Schema-Zeile noch
+  in `MemoryDB`s eigener Migrationsliste). Ergänzte `db-adapter` sie danach
+  über ein zweites Handle, lehnte LanceDB jeden weiteren Append dieser
+  `MemoryDB`-Instanz ab („missing=[chunkGroupId]“, der Spalten-Cache filterte
+  das Feld heraus) — Capture und Korrekturen standen bis zum Neustart.
+  `chunkGroupId` gehört jetzt zur Schema-Zeile und zur Migrationsliste.
+
 ## [7.16.9] — 2026-09-25
 
 ### Behoben

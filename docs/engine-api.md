@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.4.1** · frozen at 1.0.0 on 2026-09-22, amended five times
+**Contract version 1.5.0** · frozen at 1.0.0 on 2026-09-22, amended six times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -36,7 +36,7 @@ against one shape.
 > adapters move together in a single PR, so the contract, its gate and its two
 > consumers are never in disagreement at any commit.
 
-Five amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
+Six amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
 own changelog:
 
 - **1.1.0** — `SecurePathResult.reason` gains `"acl-tool-unavailable"` (Task 5).
@@ -56,6 +56,16 @@ own changelog:
   trustworthy trigger (M1b-1 final review). Consumed by
   `engine/jobs/job-registry.js` and `engine/create-engine.js` in the same
   commit.
+- **1.5.0** — typed MemoryOps (engine PR E1): `Engine.memory` with the six
+  members `list`/`show`/`forget`/`correct`/`share`/`state`, the types
+  `MemoryOps`, `MemoryCard`, `MemoryListQuery`, `MemoryListResult`,
+  `MemoryForgetResult`, `MemoryCorrectResult`, `MemoryShareResult`,
+  `MemoryState`, `MemoryScope`, `MemoryOpError`/`MemoryOpErrorCode`;
+  `MemoryState.tombstones` is `number | null`; the optional host capability
+  `HostCapabilities.memoryArchiveDir()`; `runCommand` is deprecated (removed
+  in 2.0). The OpenClaw adapter's `/forget`, `/correct` and `/share` run
+  their final effect through `Engine.memory` in the same PR. See
+  [Typed MemoryOps](#typed-memoryops-enginememory-150) below.
 
 ## The two halves
 
@@ -74,9 +84,9 @@ payload)`, read by every `emitEngineEvent` call in `engine/**`), `clock`
 
 **`Engine`** — what the engine gives a host. Lifecycle (`open`, `close`,
 `status`), the turn path (`systemSupplement`, `recall`, `capture`,
-`checkpoint`), the model-facing surface (`tools`, `commands`, `runCommand`),
-and the background surface (`jobs`, `embedding`, `admin`, `events`,
-`channels`). `engine/create-engine.js`'s `createEngine(host, config,
+`checkpoint`), the memory surface (`memory`, 1.5.0), the model-facing surface
+(`tools`, `commands`, and the deprecated `runCommand`), and the background
+surface (`jobs`, `embedding`, `admin`, `events`, `channels`). `engine/create-engine.js`'s `createEngine(host, config,
 testOptions?)` builds one; `testOptions.internals` overrides members of the
 engine's internal object after construction (e.g. a stub embedder) and is
 test-only.
@@ -94,6 +104,85 @@ test-only.
 - **One rerank timer, not two.** The reranker gets one signal (`rerankSignal(signal, rerankerTimeoutMs)`: the caller's signal plus the single `rerankerTimeoutMs` timer) and is raced against that same signal (`raceAbort(reranker.rerank(...), rerankAbort, "reranker timeout")`) — "one timeout owner" means one timer, not that nothing bounds a provider that ignores its own signal. The embedder and the LanceDB reads have no timer of their own: they are bounded by the caller's signal through `raceAbort` in the providers and in `lib/recall-pipeline.js`.
 - **Every job run produces a ledger row, including a skip.** `<baseDbPath>/_jobs/<agentId>/ledger.jsonl` (one `JobRun` per line, append-only) plus `<baseDbPath>/_jobs/<agentId>/running/<runId>.started` marker files that exist exactly while a body runs — a marker with no matching row at the next process start is a crash, logged and recorded as `failed`/`crash`. The root is `<baseDbPath>/_jobs`, not `stateDir` (a deliberate deviation from spec §3.3's literal wording, Task 7: it keeps the ledger inside the same directory tests already isolate per agent via `baseDbPath`, which the harness controls anyway). `incomplete` outcomes retry up to `MAX_ATTEMPTS = 3` total attempts (the original run plus two retries, `engine/jobs/job-registry.js`); the third `incomplete` becomes `outcome: "abandoned"`, `reason: "abandoned_after_retries:<original reason>"`, with a diary line (when the diary is enabled) recording the abandonment. `rem`/`deep` phases share a per-agent, per-UTC-day breaker (`BREAKER_LIMIT = 3` LLM sessions, `sweepKey(ms)` = the UTC calendar day of `startedAt`): a session is any non-pre-skipped `rem`/`deep` run, retries included (a retried run is still a session, since it still spends an LLM call); once the sweep's count reaches the limit, further `rem`/`deep` runs come back `skipped`/`circuit_open` without attempting the body. The count includes sessions still in flight (an in-memory reservation taken before the body and released when the run finishes), so concurrent starts cannot overrun the limit. A `JobSpec.singleton` job, and a `rem`/`deep` job, already running for the same agent is not started twice: the second start comes back `skipped`/`already_running` (recorded like any other skip, never an LLM session). `already_processed` is decided by the body from the ledger: a key counts as processed when any ledger row recorded it as completed (`keys`, via `markCompletedKey`) — whatever that row's outcome, so a `failed` run that had already marked its key counts too — or when the key was abandoned after retries (the skip's reason is then `abandoned`); an `incomplete` row alone never makes a key processed. Historical `run-state.json` REM completions are migrated into the ledger once (`engine/jobs/run-state-migration.js`): each `completed[runKey]` entry becomes a ledger row with `cost: { ms: 0 }`, `migrated: true`, `llmSession: false` (migrated rows never count toward the breaker); the old file is never read again once migration has appended its rows for a given key.
 - **`checkpoint(agentId, reason)` and `compactedAt`.** `CheckpointReason` is `"compaction" | "session-end" | "shutdown" | "manual"` (`CHECKPOINT_REASONS`, `engine/checkpoint/checkpoint-store.js`); an unknown reason throws `TypeError` before any write. A `RecallQuery.compactedAt` (or a host event's own `compactedAt`) tells the recall assembler when the transcript was last compacted, for reactivation logic that keys off "time since the last compaction" rather than off wall-clock idle time alone — an explicit value on the query always wins over whatever the checkpoint store itself would infer.
+
+## Typed MemoryOps (`Engine.memory`, 1.5.0)
+
+`Engine.memory` is the typed way to read and edit an agent's memory; it
+replaces string commands (`runCommand("plur1bus", "forget …")`) for every host
+that is not OpenClaw's own chat surface. Each member takes the caller's
+`Principal` and `AgentContext` explicitly and resolves them through the same
+`memoryContextFromPrincipal` as `recall`/`capture` (with the engine's
+workspace aliases), so ACL, scope and trust behave exactly as on the turn path.
+The implementation lives in `engine/memory-ops/` (`context.js`, `errors.js`,
+`read.js`, `write.js`).
+
+| Member | Returns | Notes |
+|---|---|---|
+| `list(q, p, a)` | `MemoryListResult` | exactly one of `q.topic` (vector search, results carry `score`, best first) and `q.since` (epoch ms, optional `q.until` not before it; newest first); `limit` defaults to 20, maximum 100; `truncated` says more matched. Reads the same ACL-filtered access pools `/memory` uses; every pool contributes its best or newest `limit + 1` rows and the merge orders them globally. |
+| `show(id, p, a)` | `MemoryCard` | reads the same pools as `list` (agent-private, and the workspace and user pools the principal can reach), with the same ACL and liveness test (`isRecallEntryLive`), so every id `list` returns resolves; superseded, archived, forgotten, invalidated, expired or foreign rows are all `not-found`. |
+| `forget(id, p, a)` | `MemoryForgetResult` | archive-first, then a two-phase tombstone (attempted → committed) and a `memory.deleted` audit line. Forgetting one's own already-forgotten card again answers `alreadyForgotten: true` with the same `tombstoneId`. |
+| `correct(id, newText, p, a)` | `MemoryCorrectResult` | archive-first, then a version-chain update through `lib/safe-update.js` (new row, old row superseded, summary re-derived from the new text, `updateSource: "user_correction"` and an evidence line naming the stored text, the Neo reconsolidation event, retrieval reinforcement). **`id` is the new, live version's id**; the id passed in is superseded. |
+| `share(id, target, p, a, opts?)` | `MemoryShareResult` | copies a card into the `"workspace"` or `"user"` pool; needs a `"proved"` principal that carries that identity. A sensitive card (category, core, `neverForget`, importance ≥ 0.9) is refused with `approval-required` until the caller repeats the call with `{ allowSensitive: true }` after the person confirmed. |
+| `state(p, a)` | `MemoryState` | live card counts per scope (`null` when a scope cannot be counted), the tombstone count (`null` when the registry is unreadable, never a false zero) and the archive directory. |
+
+**`forget`, `correct` and `share` act on the caller's own agent-private
+cards only** (1.5.0). An id that is a live card in a workspace or user pool
+the principal can reach (so `list` and `show` return it) answers `denied`
+with the message "shared copies cannot be changed through this call yet",
+not `not-found`; an id the principal cannot see anywhere stays `not-found`.
+Changing a shared copy is an E2 follow-up; OpenClaw's `/forget` has the same
+limit today.
+
+**Failures are typed.** Every member rejects with a `MemoryOpError` (`name:
+"MemoryOpError"`, a stable `code`, an English, log-safe `message` that never
+carries card text or a raw storage error; `isMemoryOpError` in
+`engine/memory-ops/errors.js`):
+
+| `code` | When |
+|---|---|
+| `not-found` | no such card, or one the caller may not see, or one that is not live — deliberately indistinguishable (anti-oracle) |
+| `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy |
+| `invalid-input` | a malformed id, principal or agent id, an empty or over-long `newText` (1–8 000 characters after trim), an unknown `share` target, an agent without a workspace directory for a destructive member; for `list` an empty or whitespace-only `topic`, `until` with `topic`, or `until` before `since` |
+| `approval-required` | `share` of a sensitive card without `allowSensitive: true` |
+| `conflict` | `correct` to a text that matches a forgotten memory in the same scope (tombstone guard), or a share source that changed while it was being copied |
+| `storage` | the store, the archive or the audit log failed; nothing is reported as done. Also every member after `engine.close()` ("engine is closed"), before any store is touched |
+
+**Where archives go.** Archive-first backups land in
+`<stateDir>/memory/_archive/<agentId>/` unless the host names its own
+directory through `HostServices.capabilities.memoryArchiveDir()` (read per
+call). The OpenClaw adapter passes the directory `/forget` and `/correct` have
+always written to (`~/.openclaw/memory/_archive`, or
+`$OPENCLAW_HOME/.openclaw/memory/_archive`), so nothing moves for OpenClaw.
+
+**The OpenClaw adapter as a consumer.** `/forget`, `/correct` and `/share`
+keep parsing, LLM input normalisation, candidate disambiguation, the nonce
+confirmation store, locale, rendering and `checkAuth` in
+`adapter/openclaw/register-commands.js`; only the final effect runs through
+`Engine.memory`, under `principalFromMemoryContext(memoryCtx, trust)` and
+`agentContextFromCommand(commandCtx)` — or, for a body reached through the
+`/plur1bus` router (`Engine.runCommand` included), the router's own
+`AgentContext`, so a subagent's command never becomes a `"user"` forget. A context from
+`resolveHostCommandMemoryContext` counts as `"proved"` (it throws on any
+disagreement between the host's route facts, session and conversation binding
+instead of degrading); a context that already carries `trust` keeps it.
+`MemoryOpError.code` maps back to the existing reply keys: `not-found` →
+`*_not_found`, anything else → `*_failed` (for `/share`:
+`not-found`/`conflict` → `share_not_found`, `approval-required` → the
+confirmation flow). A `denied` arrives only after the adapter's `checkAuth`
+passed (a principal round trip that fails, a non-user origin), so it answers
+`*_failed` rather than the whitelist hint of `plur1bus.unauthorized`, and its
+reason is logged. Three reply changes are deliberate: at confirmation time
+not-found and ACL-denied both answer `*_not_found`; the variable in
+`*_failed` is the generic English `MemoryOpError` message instead of the
+localized per-case error; and superseded, archived, expired and invalidated
+targets are refused as not-found. `/memory` deliberately stays on
+`queryMemoryAcrossAccessPools`: its `--explain` flag and filter syntax are not
+modelled by `MemoryListQuery`. `/correct trust …` (epistemic-status
+transitions) is not a MemoryOps member and keeps its own path.
+
+**`runCommand` is deprecated** (1.5.0) and removed in contract 2.0: string
+commands are the OpenClaw adapter's own chat surface, and a host that needs to
+read or edit memory uses `Engine.memory`.
 
 ## What is implemented in M1b-1
 
@@ -126,7 +215,8 @@ own hooks with OpenClaw's own hook signatures; it is removed at PR-14.
 bare `createEngine(customHost, config)` with no `adapter/openclaw/**`
 involved):
 
-- `runCommand(name, args, principal, agent)` answers only `"plur1bus"`; any
+- `runCommand(name, args, principal, agent)` (deprecated since 1.5.0 — use
+  `Engine.memory`) answers only `"plur1bus"`; any
   other command name comes back `{ details: { reason: "unknown-command" } }`.
   Even for `"plur1bus"`, the six user-facing command bodies (and their
   auth/locale helpers) are still built by the OpenClaw adapter
@@ -137,16 +227,17 @@ involved):
 - `admin.share`, `admin.forget`, `admin.obsidian.{detect,prepare,confirm}`
   and `admin.migrate` all reject with `"<name> is not available in M1b-1"` —
   they have no engine-side implementation yet (only `admin.reembedding.*` and
-  `admin.workspacePolicy.*` are wired to real coordinators).
+  `admin.workspacePolicy.*` are wired to real coordinators). Sharing and
+  forgetting a memory work through `Engine.memory.share`/`.forget` (1.5.0).
 - `embedding.probe()` and `embedding.serve()` are placeholders: `probe()`
   always resolves `{ ok: true, cached: false }` without actually exercising
   the provider, and `serve()` returns a no-op `Disposable` without opening any
   IPC address.
 - `status()` is static: it reports `{ ready: true, degraded: null, agents:
-  openedAgents.size, contract: "1.4.1" }` unconditionally — it does not probe
+  openedAgents.size, contract: "1.5.0" }` unconditionally — it does not probe
   the store, the embedder or any other dependency for actual health.
 
-Everything else — `recall`, `capture`, `checkpoint`, `jobs.run`/`history`,
+Everything else — `recall`, `capture`, `checkpoint`, `memory.*` (1.5.0), `jobs.run`/`history`,
 `tools`, `embedding.embed`/`rerank`/`identities`, `channels`,
 `admin.reembedding.*`, `admin.workspacePolicy.*` — works against a plain
 `HostServices` with no adapter involved, per `tests/engine-contract.test.js`.
@@ -276,13 +367,13 @@ short allowlist of host-coupled `lib/` files — `lib/setup/*-plugin-runtime.js`
 `lib/providers/scoped-embedding-ipc.js`, `lib/host-services.js` itself — may
 reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 `types/`, so `types/engine.conformance.ts` fails the build the moment it and
-`types/engine.d.ts` disagree — checked at contract 1.4.1).
+`types/engine.d.ts` disagree — checked at contract 1.5.0).
 
 ## Module layout after M1b-1
 
 | Path | Holds |
 |---|---|
-| `engine/create-engine.js` | `createEngine(host, config, testOptions?)` — builds every context object, the nine views, and the 1.4.1 `Engine` surface |
+| `engine/create-engine.js` | `createEngine(host, config, testOptions?)` — builds every context object, the nine views, and the 1.5.0 `Engine` surface |
 | `engine/internals.js` | `ENGINE_INTERNALS`/`internalsOf(engine)` — the adapter-only seam onto `EngineInternals` |
 | `engine/events.js` | `emitEngineEvent(host, name, payload)` |
 | `engine/lifecycle/close-resources.js` | the shutdown owner `Engine.close({ budgetMs })` calls |
@@ -293,6 +384,10 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/recall/system-supplement.js` | `Engine.systemSupplement()`'s static prefix |
 | `engine/capture/capture-turn.js` | auto-capture, `Engine.capture()`'s body |
 | `engine/checkpoint/checkpoint-store.js` | `CHECKPOINT_REASONS`, `Engine.checkpoint()`'s store |
+| `engine/memory-ops/context.js` | `createMemoryOpsContext` — `Principal` → memory context, the destructive/share guards, the archive directory |
+| `engine/memory-ops/errors.js` | `memoryOpError`, `isMemoryOpError`, the six codes |
+| `engine/memory-ops/read.js` | `Engine.memory.list`/`show`/`state` |
+| `engine/memory-ops/write.js` | `Engine.memory.forget`/`correct`/`share` |
 | `engine/identity/principal.js` | `memoryContextFromPrincipal` — `Principal`/`AgentContext` as explicit inputs, the channel registry |
 | `engine/jobs/job-registry.js` | `createJobRegistry` — the 18 engine-owned jobs, retry/abandon/breaker, `MAX_ATTEMPTS`, `BREAKER_LIMIT`, `sweepKey` |
 | `engine/jobs/job-ledger.js` | the append-only `ledger.jsonl` + started-markers, crash detection |

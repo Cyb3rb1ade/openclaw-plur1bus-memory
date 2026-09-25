@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.4.1 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended five times under the policy below — see the changelog at the end
+ * Contract version 1.5.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended six times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -35,9 +35,10 @@
  *            1.3.0 — HostServices.configPath(), HostServices.routing?, HostServices.pathOverrides? (G1 closure, M1b-1 Task 11).
  *            1.4.0 — Engine surface of createEngine (M1b-1): ContextBlock.chars; RecallResult.timing (replaces timings) and .deferrals; RecallQuery.budget optional; JobRun/JobRegistry/JobSpec per spec 3.3 (outcome gains "abandoned"); CheckpointReason gains "session-end"; Engine.close({ budgetMs }); Engine.channels; HostServices.capabilities?; EngineEventName gains recall.block-clipped/-dropped, recall.completed; createEngine testOptions.
  *            1.4.1 — JobTrigger gains "unknown" (a crash row recovered from a corrupt, unreadable start marker; M1b-1 final review m2).
+ *            1.5.0 — MemoryOps types, Engine.memory (E1 Task 2); runCommand deprecated; MemoryState.tombstones number | null (E1-R11); HostCapabilities.memoryArchiveDir? (E1 Task 8).
  */
 
-export type ContractVersion = "1.4.1";
+export type ContractVersion = "1.5.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -187,6 +188,8 @@ export interface HostPathOverrides {
 export interface HostCapabilities {
   resolvePath?(path: string): string;
   registrationMode?: string;
+  /** 1.5.0: where MemoryOps forget/correct write archive-first backups; read per call. Default `<stateDir>/memory/_archive`. */
+  memoryArchiveDir?(): string;
   [capability: string]: unknown;
 }
 
@@ -440,6 +443,71 @@ export interface AdminOps {
   migrate(from: SchemaVersion, to: SchemaVersion): Promise<MigrationResult>;
 }
 
+/** Reason codes a MemoryOps call can fail with. `not-found` also covers
+ *  "exists but you may not see it" and "tombstoned" (anti-oracle). */
+export type MemoryOpErrorCode =
+  | "not-found" | "denied" | "invalid-input" | "approval-required"
+  | "conflict" | "storage";
+
+/** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
+export interface MemoryOpError extends Error { readonly code: MemoryOpErrorCode }
+
+export type MemoryScope = "agent-private" | "workspace" | "user";
+
+export interface MemoryCard {
+  id: string;
+  scope: MemoryScope;
+  text: string;
+  summary: string;
+  createdAt: number | null;
+  origin: string | null;
+  epistemicStatus: string | null;
+  /** Present on list results from a topic query; absent on show. */
+  score?: number;
+}
+
+export interface MemoryListQuery {
+  /** Topic query (vector search, best first). Exactly one of `topic` and `since` is required. */
+  topic?: string;
+  /** Epoch ms lower bound for a time listing (newest first). */
+  since?: number;
+  /** Epoch ms upper bound; only with `since`, and not before it. Default: now. */
+  until?: number;
+  /** Default 20, maximum 100. */
+  limit?: number;
+}
+
+export interface MemoryListResult { agentId: AgentId; items: MemoryCard[]; truncated: boolean }
+export interface MemoryForgetResult { id: string; archived: boolean; tombstoneId: string | null; alreadyForgotten: boolean }
+/** `id` is the id of the corrected (new, live) version — `correct` supersedes the old row, and the caller's old id is no longer live (fix round 1, E1-R8). */
+export interface MemoryCorrectResult { id: string; archived: true }
+export interface MemoryShareResult { sourceId: string; sharedId: string; target: "workspace" | "user" }
+export interface MemoryState {
+  agentId: AgentId;
+  cards: { agentPrivate: number | null; workspace: number | null; user: number | null };
+  /** `null` means the tombstone registry was unreadable, never "zero tombstones". */
+  tombstones: number | null;
+  /** The archive root (e.g. `<stateDir>/memory/_archive`); per-agent archives land in `<archiveDir>/<agentId>/`. */
+  archiveDir: string;
+}
+
+/**
+ * Every member rejects with MemoryOpError `storage` ("engine is closed") after `Engine.close()`.
+ * `list` and `show` read the agent-private pool plus the workspace and user pools the principal
+ * can reach. `forget`, `correct` and `share` act on the caller's own agent-private cards only:
+ * a card the caller can see only as a shared (workspace/user) copy answers `denied`
+ * ("shared copies cannot be changed through this call yet"); changing shared copies is an E2 follow-up.
+ */
+export interface MemoryOps {
+  list(q: MemoryListQuery, p: Principal, a: AgentContext): Promise<MemoryListResult>;
+  show(id: string, p: Principal, a: AgentContext): Promise<MemoryCard>;
+  forget(id: string, p: Principal, a: AgentContext): Promise<MemoryForgetResult>;
+  correct(id: string, newText: string, p: Principal, a: AgentContext): Promise<MemoryCorrectResult>;
+  /** `allowSensitive` is the caller's explicit confirmation after an `approval-required` refusal. */
+  share(id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }): Promise<MemoryShareResult>;
+  state(p: Principal, a: AgentContext): Promise<MemoryState>;
+}
+
 export type EngineEventName =
   | "dream.completed" | "job.run" | "acl.denied" | "recall.degraded" | "embedding.identity.changed"
   | "recall.block-clipped" | "recall.block-dropped" | "recall.completed";
@@ -480,9 +548,11 @@ export interface Engine {
   /** Non-blocking. */
   capture(t: TurnRecord): CaptureHandle;
   checkpoint(agentId: AgentId, reason: CheckpointReason): Promise<CheckpointResult>;
+  memory: MemoryOps;
 
   tools: ToolSpec[];
   commands: CommandSpec[];
+  /** @deprecated since 1.5.0; string commands are adapter-internal. Removed in contract 2.0 (E6). Use Engine.memory. */
   runCommand(name: string, args: string, principal: Principal, agent: AgentContext): Promise<CommandResult>;
 
   jobs: JobRegistry;

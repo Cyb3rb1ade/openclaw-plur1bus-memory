@@ -20,7 +20,7 @@
  */
 
 import { handleObsidianBridgeCommand } from "../../lib/obsidian-control-room.js";
-import { shareCard } from "../../lib/telegram-commands/memory-edit.js";
+import { resolveDefaultArchiveDir, shareCard } from "../../lib/telegram-commands/memory-edit.js";
 import { setHostSdkLoader } from "../../lib/host-sdk-loader.js";
 import { loadOpenClawPluginSdkRuntime } from "../../lib/setup/feature-cron-plugin-runtime.js";
 import { reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap, inspectCronNativeCapabilities, makeReactionsCapabilityChecker, resolveNeoHooksConfig } from "./host-probes.js";
@@ -135,6 +135,9 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       resolveNeoHooksConfig: (commandConfig) => resolveNeoHooksConfig(api, commandConfig),
       commandRuntimeHooks,
       handleObsidianBridgeCommand: registeredObsidianCommandHandler,
+      // MemoryOps archive-first backups stay where /forget and /correct have
+      // always put them (~/.openclaw/memory/_archive, or under OPENCLAW_HOME).
+      memoryArchiveDir: resolveDefaultArchiveDir,
     },
   });
   const engine = createEngine(host, api.pluginConfig || {}, engineInternals ? { internals: engineInternals } : {});
@@ -355,7 +358,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
         embeddings,
         emitCommandRuntimeHook,
         emotionalPool,
-        getNeoStore,
+        engineMemory: engine.memory,
         host,
         hostRoutingLoader,
         llmResultCache,
@@ -376,7 +379,9 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
         reembeddingStateStore,
         reembeddingSwitchRuntime,
         registerPluginCommand,
-        registeredShareCard,
+        // Test seam only (tests/b13-share-runtime.test.js): a production
+        // registration shares through engine.memory.share.
+        registeredShareCard: registeredShareCard === shareCard ? null : registeredShareCard,
         rememberPendingConfirmation,
         reranker,
         rerankerCfg,

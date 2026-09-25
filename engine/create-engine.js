@@ -5,7 +5,7 @@
  * Task 13b. Every object it builds is a member of one EngineInternals; the
  * OpenClaw adapter registers views over it (engine/internals.js), a harness
  * or any other host uses the Engine surface returned at the end
- * (types/engine.d.ts, contract 1.4.1).
+ * (types/engine.d.ts, contract 1.5.0).
  *
  * OpenClaw-only construction inputs arrive as `host.capabilities`
  * (registrationMode, coordinatesLocalModelGeneration, resolvePath,
@@ -110,12 +110,16 @@ import { createRuntimeRerankerProvider } from "./providers/runtime-reranker.js";
 import { ENGINE_INTERNALS } from "./internals.js";
 import { createResourceCloser } from "./lifecycle/close-resources.js";
 import { flushMetrics } from "../lib/metrics.js";
+import { createMemoryOpsContext } from "./memory-ops/context.js";
+import { createMemoryRead } from "./memory-ops/read.js";
+import { createMemoryWrite } from "./memory-ops/write.js";
+import { memoryOpError } from "./memory-ops/errors.js";
 
 /**
  * Build the engine: every store, provider, route, scheduler and command body
  * the old register() built, in the same order, with no host registration.
  *
- * @param {object} host HostServices (types/engine.d.ts, contract 1.4.1).
+ * @param {object} host HostServices (types/engine.d.ts, contract 1.5.0).
  * @param {object} config The plugin config (EngineConfig).
  * @param {{internals?: object}} [testOptions] Test-only: overrides applied to EngineInternals after construction.
  * @returns {object} Engine (types/engine.d.ts), plus the adapter-only internals seam (engine/internals.js).
@@ -1419,6 +1423,37 @@ export function createEngine(host, config, testOptions = {}) {
     embedder: {
       embed: async (text) => embeddings.embed(text),
     },
+    logger: host.logger,
+  });
+
+  // Typed MemoryOps (contract 1.5.0, E1). One context instance is shared by
+  // every MemoryOps member; it is also exposed on internals as memoryOpsContext.
+  // isClosed reads the engine's `closing` flag (set by closeEngine below) so a
+  // MemoryOp that started before close() still refuses before it mutates.
+  const memoryOpsContext = createMemoryOpsContext({
+    host,
+    logger: host.logger,
+    getWorkspaceAliases: () => internals.memoryWorkspaceAliases ?? memoryWorkspaceAliases,
+    isClosed: () => closing != null,
+  });
+  const memoryRead = createMemoryRead({
+    opsContext: memoryOpsContext,
+    pool,
+    sharedMemoryPool,
+    embeddings,
+    memoryDbAdapter,
+    baseDbPath,
+    logger: host.logger,
+  });
+  const memoryWrite = createMemoryWrite({
+    opsContext: memoryOpsContext,
+    memoryDbAdapter,
+    baseDbPath,
+    pool,
+    sharedMemoryPool,
+    embeddings,
+    // E1 Task 8: correct writes through safeUpdate with the Neo store, as /correct always did.
+    getNeoStore,
     logger: host.logger,
   });
 
@@ -2947,6 +2982,9 @@ export function createEngine(host, config, testOptions = {}) {
     maxPromptMemories,
     memoryAccountTopology,
     memoryDbAdapter,
+    memoryOpsContext,
+    memoryRead,
+    memoryWrite,
     memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
     mergingAutoApply,
@@ -3349,10 +3387,13 @@ export function createEngine(host, config, testOptions = {}) {
 
   // What recall/capture answer once close() was called (final review m4).
   const ENGINE_CLOSED = Object.freeze({ reason: "engine-closed", detail: "engine closed" });
+  const assertMemoryOpen = () => {
+    if (closing) throw memoryOpError("storage", "engine is closed");
+  };
 
-  // The Engine (types/engine.d.ts, contract 1.4.1).
+  // The Engine (types/engine.d.ts, contract 1.5.0).
   const engine = {
-    contract: "1.4.1",
+    contract: "1.5.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3361,7 +3402,7 @@ export function createEngine(host, config, testOptions = {}) {
     },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
     async status() {
-      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.4.1" };
+      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.5.0" };
     },
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
@@ -3469,6 +3510,17 @@ export function createEngine(host, config, testOptions = {}) {
     }),
     embedding: embeddingService,
     admin: adminOps,
+    // Typed MemoryOps surface (contract 1.5.0, E1). After close() every member
+    // rejects with MemoryOpError "storage" before it touches a store, so a
+    // late call can neither reopen LanceDB nor write an archive or tombstone.
+    memory: Object.freeze({
+      list: async (q, p, a) => { assertMemoryOpen(); return internals.memoryRead.list(q, p, a); },
+      show: async (id, p, a) => { assertMemoryOpen(); return internals.memoryRead.show(id, p, a); },
+      forget: async (id, p, a) => { assertMemoryOpen(); return internals.memoryWrite.forget(id, p, a); },
+      correct: async (id, newText, p, a) => { assertMemoryOpen(); return internals.memoryWrite.correct(id, newText, p, a); },
+      share: async (id, target, p, a, opts) => { assertMemoryOpen(); return internals.memoryWrite.share(id, target, p, a, opts); },
+      state: async (p, a) => { assertMemoryOpen(); return internals.memoryRead.state(p, a); },
+    }),
     events: Object.freeze({
       on(name, handler) {
         if (!listeners.has(name)) listeners.set(name, new Set());
