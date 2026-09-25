@@ -253,6 +253,12 @@ Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
   nicht mehr stillschweigend abgeschnitten.
 - **`MemoryState.tombstones` ist `number | null`**: `null` heißt „Registry
   unlesbar“, nie „keine Tombstones“.
+- **`/memory` mit Zeitangabe** (heute, gestern, ein Monat …) listet jetzt die
+  neuesten Erinnerungen zuerst; vorher war die Reihenfolge bei vielen
+  Treffern zufällig.
+- **`/share` auf eine geteilte Kopie** antwortet weiter mit „nicht gefunden“;
+  `Engine.memory` selbst meldet dafür `denied` (geteilte Kopien lassen sich
+  über diesen Aufruf noch nicht ändern, Folgearbeit in E2).
 - **OpenClaw-Adapter:** `/forget`, `/correct` und `/share` führen ihre
   eigentliche Änderung über `Engine.memory` aus; Parsing, Normalisierung,
   Kandidatenauswahl, Bestätigungs-Nonce, Sprache, Darstellung und `checkAuth`

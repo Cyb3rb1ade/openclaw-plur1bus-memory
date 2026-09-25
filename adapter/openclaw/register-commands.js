@@ -1194,13 +1194,16 @@ export function registerChatCommands(ctx) {
       return {
         ok: false,
         approvalRequired: outcome.code === "approval-required",
-        notFound: outcome.code === "not-found" || outcome.code === "conflict",
+        // A visible shared copy is refused as "denied" by Engine.memory; /share keeps
+        // its pre-E1 reply for it (share_not_found), like other non-owned sources (N1).
+        notFound: outcome.code === "not-found" || outcome.code === "conflict"
+          || (outcome.code === "denied" && /shared copies cannot be changed/.test(String(outcome.error ?? ""))),
         denied: outcome.code === "denied",
         error: outcome.error,
       };
     };
     const shareFailure = (result) => {
-      if (result.denied) host.logger.warn(`memory-lancedb-namespaced: /share refused by Engine.memory after checkAuth: ${result.error}`);
+      if (result.denied && !result.notFound) host.logger.warn(`memory-lancedb-namespaced: /share refused by Engine.memory after checkAuth: ${result.error}`);
       return fail(result.notFound ? "plur1bus.share_not_found" : "plur1bus.share_failed");
     };
     try {
