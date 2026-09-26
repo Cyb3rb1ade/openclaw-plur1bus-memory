@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { join } from "node:path";
@@ -735,5 +735,144 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       await provider?.shutdown();
       await server.shutdown();
     }
+  });
+
+  it("refuses a second unclaimed owner on another address of the same stateRoot", async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const firstAddress = explicitUnixAddress();
+    const secondAddress = explicitUnixAddress();
+    const base = { stateRoot, embeddings: e3Embeddings(), fingerprintId: ACTIVE_FINGERPRINT_ID, claim: false };
+    const first = createScopedEmbeddingIpcServer({ ...base, address: firstAddress });
+    const second = createScopedEmbeddingIpcServer({ ...base, address: secondAddress });
+    let provider = null;
+    try {
+      await first.start();
+      provider = e3Client(stateRoot, firstAddress);
+      assert.deepEqual(await provider.embedQuery("q"), [1, 0]);
+      const tokenBefore = readFileSync(first.tokenPath, "utf8");
+      await assert.rejects(second.start(), /owner is already active/);
+      await second.shutdown();
+      assert.equal(existsSync(secondAddress.address), false);
+      assert.equal(readFileSync(first.tokenPath, "utf8"), tokenBefore);
+      assert.deepEqual(await provider.embedPassage("first still served"), [0, 1]);
+    } finally {
+      await provider?.shutdown();
+      await second.shutdown();
+      await first.shutdown();
+    }
+  });
+
+  it("refuses an unclaimed owner beside a live claimed legacy owner of the same stateRoot", async () => {
+    const stateRoot = createStateRoot("e3-ipc-legacy-");
+    const address = explicitUnixAddress();
+    const legacy = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+    });
+    const unclaimed = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address,
+      claim: false,
+    });
+    let provider = null;
+    try {
+      await legacy.start();
+      provider = new IpcScopedEmbeddingProvider({
+        stateRoot, model: "fixture/e5", dimensions: 2, fingerprintId: ACTIVE_FINGERPRINT_ID,
+      });
+      const tokenBefore = readFileSync(legacy.tokenPath, "utf8");
+      await assert.rejects(unclaimed.start(), /owner is already active/);
+      await unclaimed.shutdown();
+      assert.equal(existsSync(address.address), false);
+      assert.equal(readFileSync(legacy.tokenPath, "utf8"), tokenBefore);
+      assert.deepEqual(await provider.embedQuery("legacy still served"), [1, 0]);
+    } finally {
+      await provider?.shutdown();
+      await unclaimed.shutdown();
+      await legacy.shutdown();
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a live foreign listener at the explicit address without touching it or the token directory", async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const address = explicitUnixAddress();
+    const directory = resolveScopedEmbeddingIpcPaths(stateRoot).directory;
+    writeFileSync(join(directory, "sentinel"), "keep");
+    const foreign = createServer((socket) => socket.destroy());
+    await new Promise((resolve, reject) => {
+      foreign.once("error", reject);
+      foreign.listen(address.address, resolve);
+    });
+    const server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address,
+      claim: false,
+    });
+    try {
+      const before = readdirSync(directory).sort();
+      await assert.rejects(server.start(), /owner is already active/);
+      await server.shutdown();
+      assert.equal(lstatSync(address.address).isSocket(), true);
+      assert.deepEqual(readdirSync(directory).sort(), before);
+      assert.equal(readFileSync(join(directory, "sentinel"), "utf8"), "keep");
+    } finally {
+      await server.shutdown();
+      await new Promise((resolve) => foreign.close(resolve));
+    }
+  });
+
+  it("refuses a dangling symlink or a regular file at the explicit address and leaves it untouched", async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const tokenPath = resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath;
+    const dangling = explicitUnixAddress();
+    symlinkSync(join(dangling.address, "..", "missing-target"), dangling.address);
+    const regular = explicitUnixAddress();
+    writeFileSync(regular.address, "not a socket");
+    for (const address of [dangling, regular]) {
+      const server = createScopedEmbeddingIpcServer({
+        stateRoot,
+        embeddings: e3Embeddings(),
+        fingerprintId: ACTIVE_FINGERPRINT_ID,
+        address,
+        claim: false,
+      });
+      await assert.rejects(server.start(), /refusing unsafe scoped embedding socket path/);
+      await server.shutdown();
+      assert.equal(existsSync(tokenPath), false);
+    }
+    assert.equal(lstatSync(dangling.address).isSymbolicLink(), true);
+    assert.equal(readFileSync(regular.address, "utf8"), "not a socket");
+  });
+
+  it("rejects invalid address and claim options", () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const base = { stateRoot, embeddings: e3Embeddings(), fingerprintId: ACTIVE_FINGERPRINT_ID };
+    for (const address of [
+      null,
+      "/tmp/e.sock",
+      { kind: "tcp", address: "127.0.0.1:1" },
+      { kind: "unix-socket", address: "" },
+      { kind: "abstract-socket" },
+    ]) {
+      assert.throws(() => createScopedEmbeddingIpcServer({ ...base, address }), /IPC address is invalid/);
+    }
+    for (const claim of ["yes", 1, null]) {
+      assert.throws(
+        () => createScopedEmbeddingIpcServer({ ...base, address: explicitUnixAddress(), claim }),
+        /claim must be a boolean/,
+      );
+    }
+    assert.throws(
+      () => new IpcScopedEmbeddingProvider({
+        stateRoot, model: "fixture/e5", dimensions: 2, fingerprintId: ACTIVE_FINGERPRINT_ID, address: { kind: "tcp", address: "x" },
+      }),
+      /IPC address is invalid/,
+    );
   });
 });
