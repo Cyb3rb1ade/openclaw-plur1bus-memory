@@ -18,6 +18,7 @@
  * @param {(() => Promise<void>)|null} [options.clearTurnRoutes] Clear an initialized turn registry without creating one.
  * @param {() => Promise<void>} options.flushMetrics
  * @param {{close: () => Promise<void>}} options.llmResultCache
+ * @param {{shutdown: () => Promise<void>}|null} [options.embeddingServer] EmbeddingService.serve()'s server; stopped first.
  * @param {{shutdown: () => Promise<void>}|null} [options.scopedEmbeddingServer]
  * @param {{shutdown: () => Promise<void>}|null} [options.embeddings]
  * @param {{shutdown: () => Promise<void>}|null} [options.reranker]
@@ -34,6 +35,7 @@ export function createResourceCloser({
   clearTurnRoutes = null,
   flushMetrics,
   llmResultCache,
+  embeddingServer = null,
   scopedEmbeddingServer = null,
   embeddings = null,
   reranker = null,
@@ -50,6 +52,12 @@ export function createResourceCloser({
         try { await operation(); } catch (err) { logger.warn?.(`${label}: ${err?.message}`); }
       };
       const localModelResources = (async () => {
+        if (typeof embeddingServer?.shutdown === "function") {
+          await cleanup(
+            "memory-lancedb-namespaced: served embedding IPC shutdown failed",
+            () => embeddingServer.shutdown(),
+          );
+        }
         if (typeof scopedEmbeddingServer?.shutdown === "function") {
           await cleanup(
             "memory-lancedb-namespaced: scoped embedding IPC shutdown failed",
