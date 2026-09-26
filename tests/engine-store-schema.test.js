@@ -85,6 +85,31 @@ describe("store schema marker (engine wiring)", () => {
   });
 });
 
+describe("store schema marker (final review)", () => {
+  it("a marker write that fails answers storage with a fixed message", async () => {
+    const baseDbPath = join(makeTempDir("ess-rofail-"), "lancedb-namespaced");
+    mkdirSync(baseDbPath, { recursive: true });
+    writeFileSync(join(baseDbPath, "some-legacy-file.txt"), "pretend this is an old store");
+    const warnings = [];
+    const logger = { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} };
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ess-state-"), logger }), config(baseDbPath));
+    try {
+      // A directory where the marker's temp file goes: the write fails (even as root).
+      mkdirSync(`${schemaMarkerPath(baseDbPath)}.tmp`);
+      await assert.rejects(engine.admin.migrate("0", "1"), (e) => {
+        assert.equal(e.name, "MemoryOpError");
+        assert.equal(e.code, "storage");
+        assert.equal(e.message, "store migration failed");
+        return true;
+      });
+      assert.ok(warnings.some((w) => w.includes("admin.migrate")), "the raw error is logged");
+      assert.deepEqual((await engine.status()).storeSchema, { current: "0", expected: "1" });
+    } finally {
+      await engine.close({ budgetMs: 5_000 });
+    }
+  });
+});
+
 describe("store schema marker (unit)", () => {
   it("writeStoreSchemaMarker leaves no .tmp file behind and readStoreSchemaVersion reads it back", () => {
     const baseDbPath = join(makeTempDir("ess-unit-"), "store");

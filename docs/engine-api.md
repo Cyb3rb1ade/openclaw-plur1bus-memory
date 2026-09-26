@@ -228,9 +228,26 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   `invalid-input` when `sharedId` names one of the caller's own live private
   cards (that is a `correct`, not a proposal) or when the sharer is the
   caller itself (the sharer corrects the original directly), `not-found` for
-  a shared id the caller cannot read, and `conflict` when the same caller
-  already has a pending proposal open against that copy. Filing a proposal
-  never changes the shared copy — only the sharer's `proposals.accept` does.
+  a shared id the caller cannot read, `denied` ("this shared copy has no
+  recorded sharer") for a legacy shared row without `sourceAgentId` or
+  `sourceMemoryId` (before any store write), and `conflict` when the same
+  caller already has a pending proposal open against that copy — or is
+  filing one concurrently (an in-process claim keyed on sharer, lowercased
+  `sharedId` and proposer spans the duplicate check and the write). Filing a
+  proposal never changes the shared copy — only the sharer's
+  `proposals.accept` does.
+- **A proposal belongs to the shared pool of its copy.** `propose` records
+  the pool key of the copy it targets (the workspace pool key for a
+  workspace copy, the user pool key for a user copy — the same keys
+  `lib/shared-memory-pool.js` leases). The key is internal: it is stored in
+  the proposal file but stripped from every returned `MemoryProposal`, so
+  the contract type is unchanged. `proposals.list`/`.accept`/`.reject` reach
+  a proposal only when its pool key is one the caller's principal can reach
+  (its workspace pool and, with a user principal, its user pool); otherwise
+  `list` omits it and `accept`/`reject` answer `not-found` before any
+  `stale` marking. The same sharer agent under another user principal
+  therefore neither sees nor resolves the first user's user-scope proposals
+  (anti-oracle). A proposal file without a pool key is unreachable.
 - **Proposals are a durable, one-file-per-proposal JSON store**
   (`engine/memory-ops/proposal-store.js`), not a LanceDB table: each lives at
   `<dirname(baseDbPath)>/_proposals/<sharerAgentId>/<id>.json` — a sibling of
@@ -241,7 +258,8 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   the rest of a listing (anti-oracle).
 - **`proposals.list(q, p, a)`** shows the caller only proposals it filed or
   received: its own directory (as sharer) in full, plus every other agent's
-  directory filtered to proposals this agent filed (as proposer). Optional
+  directory filtered to proposals this agent filed (as proposer), both
+  limited to pools the principal can reach (above). Optional
   `q.status` filters to one of `"pending" | "accepted" | "rejected" |
   "stale"`; `limit` defaults to 20, maximum 100, same as `MemoryListQuery`.
 - **`proposals.accept(proposalId, p, a)`** is sharer-only — anyone else's
@@ -263,7 +281,9 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   copy and original.
 - **`proposals.reject(proposalId, p, a, opts?)`** is sharer-only the same
   way; it only records `status: "rejected"` and an optional `resolutionNote`
-  (max 500 characters) — the shared copy is never touched.
+  (max 500 characters) — the shared copy is never touched. If the audit line
+  fails after the rejection was recorded, `reject` rejects `storage` with
+  `detail: { proposalId }`.
 - **`memory.proposal` event** (`EngineEventName`, 1.6.0) fires once when a
   proposal is filed (`status: "pending"`) and once when it is resolved
   (`"accepted" | "rejected" | "stale"`), each time with `{ proposalId,
@@ -287,15 +307,17 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
     normalised path: any vaults `discoverObsidianWorkspaces` finds from the
     engine's own `obsidianBridge` config (`source: "config"`), the caller's
     workspace directory (`source: "workspace"`), and up to 20 caller-supplied
-    candidate paths (`source: "candidate"`, `invalid-input` beyond that).
+    candidate paths (`source: "candidate"`, `invalid-input` beyond that;
+    candidates need a `"proved"` principal, `denied` otherwise — the config
+    and workspace sources stay available to any caller).
     Every path accepts `~`, `~/…`, a bare relative path (resolved against the
     caller's home directory) or an absolute path (`expandVaultPath`). Each
     candidate reports `isVault` (a `.obsidian/workspace.json` or
     `.obsidian/app.json` marker exists) and `confirmed` (a receipt for this
     agent, workspace and vault already exists).
   - `prepare(vaultPath, p, a)` needs a `"proved"` principal with a user
-    (`denied` otherwise) and an existing directory (`invalid-input`
-    otherwise); it issues a nonce good for **10 minutes**
+    (`denied` otherwise, checked before any filesystem probe) and an
+    existing directory (`invalid-input` otherwise); it issues a nonce good for **10 minutes**
     (`lib/obsidian-vault-confirmation-flow.js`'s
     `prepareVaultConfirmation`, the same `lib/security.js`
     `createConfirmation` every other confirmation flow uses — no third
@@ -316,6 +338,11 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
     libraries' `userId` field locally in `engine/admin/obsidian.js` (the
     Principal-derived memory context never populates `userId` itself),
     applied identically at `prepare` and `confirm` time.
+  - No raw filesystem error leaves `detect`/`prepare`/`confirm`: a failure
+    inside the confirmation libraries (vault digest, receipt read or write)
+    is logged with `logger.warn` and answers `not-found` ("vault not found",
+    no path) when the vault directory has vanished, `storage` ("vault
+    confirmation failed") otherwise.
 - **`AdminOps.migrate(from, to)`** (`engine/store/schema-version.js`, "variant
   a" of the owner's schema-migration ruling) advances a small on-disk marker,
   not the LanceDB table shape itself: `<baseDbPath>/_schema.json`, `{
@@ -328,7 +355,9 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   owner confirms the store has that shape. `migrate` rejects `conflict` when
   `from` does not match the store's current version, `invalid-input` for a
   downgrade or an unknown target version, and `storage` when the marker file
-  exists but cannot be parsed. `migrate(v, v)` is a same-version no-op:
+  exists but cannot be parsed, or when a migration step or the marker write
+  fails ("store migration failed"; the raw error goes to `logger.warn`
+  only). `migrate(v, v)` is a same-version no-op:
   `{ from, to, applied: false }` without touching the marker.
   `EngineStatus.storeSchema` (1.6.0) reports `{ current, expected }` so a
   host can tell a legacy store apart from one already on the version this

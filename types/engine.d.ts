@@ -577,9 +577,11 @@ export interface MemoryProposalEvent {
  * `forget`, `correct` and `share` act on the caller's own agent-private cards. On a shared (workspace/user)
  * copy (D31): `forget` by the sharing agent retracts the copy (archive-first, soft delete; `tombstoneId` is
  * null because the original stays live); `correct` by the sharing agent refreshes it (corrects the original,
- * retracts the old copy, shares the new one; the result id is the new copy); any other agent answers `denied`
- * and files `propose` instead; `share` of a copy is always `denied`. Proposals never change a memory until
- * the sharer calls `proposals.accept`.
+ * shares the new version, then retracts the old copy; the result id is the new copy); any other agent answers
+ * `denied` and files `propose` instead; `share` of a copy is always `denied`. Proposals never change a memory
+ * until the sharer calls `proposals.accept`. A proposal belongs to the shared pool of its copy: `proposals.*`
+ * reach it only through a principal that can reach that pool (otherwise `list` omits it and `accept`/`reject`
+ * answer `not-found`).
  */
 export interface MemoryOps {
   list(q: MemoryListQuery, p: Principal, a: AgentContext): Promise<MemoryListResult>;

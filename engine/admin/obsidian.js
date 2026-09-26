@@ -21,7 +21,7 @@ import {
   vaultConfirmationCallbackForNonce,
 } from "../../lib/obsidian-vault-confirmation-flow.js";
 import { safeUuid } from "../../lib/sql-safety.js";
-import { memoryOpError } from "../memory-ops/errors.js";
+import { isMemoryOpError, memoryOpError } from "../memory-ops/errors.js";
 
 const MAX_CANDIDATES = 20;
 const MAX_PENDING = 64;
@@ -122,6 +122,24 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
   // MAX_PENDING (oldest evicted) on every prepare()/confirm() call.
   const pending = new Map();
 
+  /**
+   * Runs one filesystem-backed step of the vault confirmation libs
+   * (digest, receipt read/write) and maps a raw fs error onto the fixed
+   * vocabulary: a vault directory that is gone answers `not-found` ("vault
+   * not found"), anything else `storage` with a fixed message. The raw error
+   * (with its path) goes to logger.warn only, never to the caller.
+   */
+  function guardVaultFs(opName, vaultPath, run) {
+    try {
+      return run();
+    } catch (err) {
+      if (isMemoryOpError(err)) throw err;
+      logger?.warn?.(`admin.obsidian.${opName}: vault filesystem step failed: ${err?.code || ""} ${err?.message || err}`);
+      if (!isExistingDirectory(vaultPath)) throw memoryOpError("not-found", "vault not found");
+      throw memoryOpError("storage", "vault confirmation failed");
+    }
+  }
+
   function sweepPending() {
     const now = clock();
     for (const [nonce, record] of pending) {
@@ -138,6 +156,11 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
 
     let candidateInputs = [];
     if (opts.candidates !== undefined) {
+      // Probing arbitrary caller-named paths is for a proved principal only;
+      // the config and workspace sources stay available to any caller.
+      if (memoryCtx.trust !== "proved") {
+        throw memoryOpError("denied", "vault candidates require a proved principal");
+      }
       if (!Array.isArray(opts.candidates) || opts.candidates.length > MAX_CANDIDATES) {
         throw memoryOpError("invalid-input", "candidates must be an array of at most 20 strings");
       }
@@ -158,7 +181,7 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
       const directoryExists = isExistingDirectory(path);
       const isVault = directoryExists && isVaultDirectory(path);
       const confirmed = directoryExists
-        && isOwnedVaultConfirmed({ baseDbPath, memoryCtx: boundMemoryCtx(memoryCtx), vaultPath: path });
+        && guardVaultFs("detect", path, () => isOwnedVaultConfirmed({ baseDbPath, memoryCtx: boundMemoryCtx(memoryCtx), vaultPath: path }));
       return { path, isVault, confirmed, source };
     });
 
@@ -168,21 +191,23 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
   async function prepare(vaultPath, p, a) {
     const { memoryCtx } = await opsContext.resolve(p, a, { destructive: true });
     const expanded = expandVaultPath(vaultPath, home);
-    if (!isExistingDirectory(expanded)) {
-      throw memoryOpError("invalid-input", "vault path is not a directory");
-    }
+    // The identity check comes before any filesystem probe: an unproved
+    // caller learns nothing about which paths exist.
     if (memoryCtx.trust !== "proved" || !memoryCtx.userPrincipal) {
       throw memoryOpError("denied", "vault confirmation requires a proved principal with a user");
     }
+    if (!isExistingDirectory(expanded)) {
+      throw memoryOpError("invalid-input", "vault path is not a directory");
+    }
 
     sweepPending();
-    const result = prepareVaultConfirmation({
+    const result = guardVaultFs("prepare", expanded, () => prepareVaultConfirmation({
       baseDbPath,
       memoryCtx: boundMemoryCtx(memoryCtx),
       vaultPath: expanded,
       confirmationStore,
       expiryMinutes: EXPIRY_MINUTES,
-    });
+    }));
     if (!result.ok) {
       // Only reason prepareVaultConfirmation() returns ok:false today is
       // identity_binding_required (missing agentId/workspaceIdentity/conversation
@@ -228,15 +253,18 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
     // reads true on every successful confirm -- not what this result field is
     // meant to convey. Read the pre-confirm state ourselves and ignore the
     // lib's value, rather than changing the shared lib for every caller.
-    const alreadyConfirmed = isOwnedVaultConfirmed({ baseDbPath, memoryCtx: boundCtx, vaultPath: record.vaultPath });
+    const alreadyConfirmed = guardVaultFs("confirm", record.vaultPath, () => isOwnedVaultConfirmed({ baseDbPath, memoryCtx: boundCtx, vaultPath: record.vaultPath }));
 
-    const result = confirmVaultConfirmation({
+    // confirmVaultConfirmation digests the vault (ownedVaultDigest) and
+    // writes the receipt (recordOwnedVaultConfirmation); both can throw raw
+    // fs errors, e.g. when the vault directory vanished after prepare.
+    const result = guardVaultFs("confirm", record.vaultPath, () => confirmVaultConfirmation({
       callbackData,
       confirmationStore,
       baseDbPath,
       memoryCtx: boundCtx,
       vaultPath: record.vaultPath,
-    });
+    }));
 
     if (!result.ok) {
       if (CONFIRM_NOT_FOUND_REASONS.has(result.reason)) {

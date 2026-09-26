@@ -13,7 +13,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { memoryOpError } from "../memory-ops/errors.js";
+import { isMemoryOpError, memoryOpError } from "../memory-ops/errors.js";
 
 /** The schema version this engine build writes. */
 export const STORE_SCHEMA_VERSION = "1";
@@ -86,6 +86,17 @@ export function writeStoreSchemaMarker(baseDbPath, version, { engineVersion, clo
  * @returns {{ current(): (string|null), migrate(from: string, to: string): Promise<{from: string, to: string, applied: boolean}> }}
  */
 export function createStoreMigrator({ baseDbPath, logger, engineVersion, clock = Date.now }) {
+  // A raw fs error from a migration step or the marker write never reaches
+  // the caller: it is logged and surfaced as `storage` with a fixed message.
+  async function runGuarded(label, run) {
+    try {
+      return await run();
+    } catch (error) {
+      if (isMemoryOpError(error)) throw error;
+      logger?.warn?.(`admin.migrate: ${label} failed: ${error?.code || ""} ${error?.message || error}`);
+      throw memoryOpError("storage", "store migration failed");
+    }
+  }
   return {
     current() {
       return readStoreSchemaVersion(baseDbPath, { logger });
@@ -117,9 +128,9 @@ export function createStoreMigrator({ baseDbPath, logger, engineVersion, clock =
         if (typeof step !== "function") {
           throw memoryOpError("invalid-input", `no migration step registered for ${v}->${v + 1}`);
         }
-        await step({ baseDbPath, logger });
+        await runGuarded(`step ${v}->${v + 1}`, () => step({ baseDbPath, logger }));
       }
-      writeStoreSchemaMarker(baseDbPath, String(to), { engineVersion, clock });
+      await runGuarded("marker write", () => writeStoreSchemaMarker(baseDbPath, String(to), { engineVersion, clock }));
       return { from: String(from), to: String(to), applied: true };
     },
   };

@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -173,6 +173,51 @@ describe("Engine.admin.obsidian", () => {
     const preparedAgain = await engine.admin.obsidian.prepare(vaultDir, p, agent);
     const confirmedAgain = await engine.admin.obsidian.confirm(preparedAgain.nonce, p, agent);
     assert.equal(confirmedAgain.alreadyConfirmed, true);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("final review: a vault that vanished between prepare and confirm answers not-found without a path", async () => {
+    const stateDir = makeTempDir("e2t7-state-");
+    const workspace = makeVaultDir(stateDir, "workspace-v");
+    const vaultDir = makeVaultDir(stateDir, "vault-gone");
+    const warnings = [];
+    const host = createStubHost({ stateDir, workspaceDir: async () => workspace, logger: { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} } });
+    const engine = createEngine(host, config(freshBaseDbPath("e2t7-")));
+    const p = principalFor("agent-g");
+
+    const prepared = await engine.admin.obsidian.prepare(vaultDir, p, agent);
+    rmSync(vaultDir, { recursive: true, force: true });
+
+    await assert.rejects(engine.admin.obsidian.confirm(prepared.nonce, p, agent), (err) => {
+      assert.equal(err.name, "MemoryOpError");
+      assert.equal(err.code, "not-found");
+      assert.equal(err.message, "vault not found");
+      assert.ok(!err.message.includes(stateDir), "no path in the message");
+      return true;
+    });
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("final review: prepare checks the principal before the filesystem; detect candidates need a proved principal", async () => {
+    const stateDir = makeTempDir("e2t7-state-");
+    const vaultDir = makeVaultDir(stateDir, "vault-h");
+    const host = stubHostWithVaultWorkspace(stateDir, vaultDir);
+    const engine = createEngine(host, config(freshBaseDbPath("e2t7-")));
+    const p = principalFor("agent-h");
+    const inferred = { ...p, trust: "inferred" };
+
+    // A missing path with an inferred principal: denied, not a directory probe.
+    await assert.rejects(engine.admin.obsidian.prepare(join(stateDir, "missing"), inferred, agent), (err) => err.code === "denied");
+    // A proved principal without a user: denied too.
+    const { user: _user, ...noUser } = p;
+    await assert.rejects(engine.admin.obsidian.prepare(join(stateDir, "missing"), noUser, agent), (err) => err.code === "denied");
+
+    await assert.rejects(engine.admin.obsidian.detect(inferred, agent, { candidates: [vaultDir] }), (err) => err.code === "denied");
+    // Config/workspace sources stay available to any caller.
+    const plain = await engine.admin.obsidian.detect(inferred, agent);
+    assert.ok(plain.vaults.some((v) => v.source === "workspace"));
 
     await engine.close({ budgetMs: 5_000 });
   });
