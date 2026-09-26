@@ -206,6 +206,7 @@ import {
   classifierPartialFailureWarning,
 } from "./lib/internal-cron-reply.js";
 import { expireStaleCriticals as runExpireStaleCriticals } from "./lib/jobs/auto-accept-stale-criticals.js";
+import { isLightVoiceTurn, LIGHT_MODEL, LIGHT_VOICE_GUIDANCE } from "./lib/voice-mode.js";
 import {
   CRITICAL_BUTTON_NAMESPACE,
   criticalDecisionLine,
@@ -12446,6 +12447,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const background = isBackgroundTurn(event, ctx);
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
         if (ctx?.workspaceDir && !automaticWorkspacePolicyDecision(event, ctx).allowed) return undefined;
+        // 7.17.0: Light in Discord-Sprachräumen — kein Recall, keine
+        // Zusatzblöcke, nur die kurze Sprach-Anweisung. Capture bleibt.
+        if (isLightVoiceTurn(ctx, baseDbPath)) return { prependContext: LIGHT_VOICE_GUIDANCE };
         const agentIdForCache = ctx?.agentId || "default";
         const sessionKeyForCache = ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
         const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
@@ -13518,6 +13522,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       api.on("before_prompt_build", async (_event, ctx) => {
         const agentId = ctx?.agentId;
         if (!automaticWorkspacePolicyDecision(_event, ctx).allowed) return undefined;
+        if (isLightVoiceTurn(ctx, baseDbPath)) return { prependContext: LIGHT_VOICE_GUIDANCE };
         if (neoEnabled) {
           try {
             const neoStore = getNeoStore(ctx, _event);
@@ -13605,6 +13610,19 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
         if (nudge || conflictNudge || startNoticeContext || timeContext || temporalContinuityContext || reminderNudge) {
           return { prependContext: [startNoticeContext, nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
+        }
+      });
+    }
+
+    // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku. Nie per
+    // sessions.patch mit model — das schriebe die Agent-Konfiguration um.
+    if (typeof api.on === "function") {
+      api.on("before_model_resolve", async (_event, ctx) => {
+        try {
+          return isLightVoiceTurn(ctx, baseDbPath) ? { ...LIGHT_MODEL } : undefined;
+        } catch (error) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: voice light model override failed: ${error?.message || error}`);
+          return undefined;
         }
       });
     }
