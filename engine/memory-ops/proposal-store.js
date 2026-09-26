@@ -135,13 +135,18 @@ export function createProposalStore({ baseDbPath, logger, clock = Date.now } = {
    * Every proposal the agent filed or received: its own directory (as
    * sharer) in full, plus every other sharer's directory filtered to
    * proposals this agent filed (as proposer). Newest first; corrupt files
-   * are skipped and counted, never thrown for a listing.
+   * are skipped and counted, never thrown for a listing. Only proposals
+   * whose `poolKey` is in `poolKeys` (the shared pools the caller's
+   * principal can reach) are returned — the same agent under another
+   * principal must not see them (anti-oracle); a proposal without a
+   * `poolKey` is never reachable.
    * @param {string} agentId
-   * @param {{status?: string|null, limit: number}} opts
+   * @param {{status?: string|null, limit: number, poolKeys?: Iterable<string>}} opts
    * @returns {{items: object[], truncated: boolean, unreadable: number}}
    */
-  function listFor(agentId, { status = null, limit } = {}) {
+  function listFor(agentId, { status = null, limit, poolKeys = [] } = {}) {
     ensureRoot();
+    const reachable = new Set(poolKeys);
     const safeAgent = safeAgentId(agentId);
     let unreadable = 0;
     const collected = [];
@@ -180,6 +185,7 @@ export function createProposalStore({ baseDbPath, logger, clock = Date.now } = {
           continue;
         }
         if (!roleFilter(proposal)) continue;
+        if (typeof proposal.poolKey !== "string" || !reachable.has(proposal.poolKey)) continue;
         if (status && proposal.status !== status) continue;
         collected.push(proposal);
       }
@@ -224,7 +230,9 @@ export function createProposalStore({ baseDbPath, logger, clock = Date.now } = {
         logger?.warn?.(`memory-ops.proposals.store: corrupt proposal file '${join(dir, entry)}': ${err?.message || err}`);
         continue;
       }
-      if (proposal.status === "pending" && proposal.sharedId === sharedId && proposal.proposerAgentId === proposerAgentId) {
+      if (proposal.status === "pending"
+        && String(proposal.sharedId).toLowerCase() === String(sharedId).toLowerCase()
+        && proposal.proposerAgentId === proposerAgentId) {
         return proposal;
       }
     }

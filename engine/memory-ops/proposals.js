@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { appendDestructiveOpLog, safeUuid } from "../../lib/sql-safety.js";
+import { userPoolKey, workspacePoolKey } from "../../lib/memory-request-context.js";
 import { emitEngineEvent } from "../events.js";
 import { memoryOpError, isMemoryOpError } from "./errors.js";
 import { isSharer, isLive } from "./shared.js";
@@ -21,6 +22,34 @@ const MAX_NOTE_LENGTH = 500;
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 100;
 const PROPOSAL_STATUSES = new Set(["pending", "accepted", "rejected", "stale"]);
+
+/**
+ * The shared pools a principal can reach — the same keys lib/shared-memory-pool.js
+ * leases for it: its workspace pool and, with a user principal, its user pool.
+ * A proposal is visible and resolvable only through one of these (anti-oracle:
+ * the same agent under another principal cannot reach another user's pool).
+ * @param {{workspaceIdentity?: string, userPrincipal?: string}} memoryCtx
+ * @returns {Set<string>}
+ */
+function reachablePoolKeys(memoryCtx) {
+  const keys = new Set();
+  if (memoryCtx?.workspaceIdentity) keys.add(workspacePoolKey(memoryCtx.workspaceIdentity));
+  if (memoryCtx?.userPrincipal) keys.add(userPoolKey(memoryCtx.userPrincipal));
+  return keys;
+}
+
+/** The pool a shared copy of this scope lives in, for this caller; "" when it has none. */
+function poolKeyForScope(scope, memoryCtx) {
+  if (scope === "workspace" && memoryCtx?.workspaceIdentity) return workspacePoolKey(memoryCtx.workspaceIdentity);
+  if (scope === "user" && memoryCtx?.userPrincipal) return userPoolKey(memoryCtx.userPrincipal);
+  return "";
+}
+
+/** The contract's MemoryProposal: the internal `poolKey` is never returned. */
+function publicProposal(proposal) {
+  const { poolKey: _poolKey, ...rest } = proposal;
+  return rest;
+}
 
 /**
  * @param {{opsContext: object, sharedOps: {findSharedRow: Function, refreshShare: Function}, store: object, memoryDbAdapter: object, host: object, logger?: object, clock?: () => number}} deps
@@ -68,6 +97,15 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
     if (!found) throw memoryOpError("not-found", "memory not found");
     const { card } = found;
 
+    // A legacy shared row that predates share provenance names no sharer to
+    // file the proposal under (and no original to refresh on accept).
+    if (typeof card.sourceAgentId !== "string" || card.sourceAgentId === ""
+      || typeof card.sourceMemoryId !== "string" || card.sourceMemoryId === "") {
+      throw memoryOpError("denied", "this shared copy has no recorded sharer");
+    }
+    const poolKey = poolKeyForScope(card.scope, memoryCtx);
+    if (!poolKey) throw memoryOpError("not-found", "memory not found");
+
     if (isSharer(card, agentId)) {
       throw memoryOpError("invalid-input", "the sharer corrects the original directly");
     }
@@ -75,6 +113,23 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
       throw memoryOpError("invalid-input", "no change");
     }
 
+    // In-process claim over findPending → create, so two concurrent filings
+    // by the same proposer against the same copy cannot both pass the
+    // duplicate check; the loser answers conflict. Released in `finally`.
+    const fileKey = `${card.sourceAgentId}\u0000${safeId.toLowerCase()}\u0000${agentId}`;
+    if (filing.has(fileKey)) throw memoryOpError("conflict", "a proposal by this agent is already pending");
+    filing.add(fileKey);
+    try {
+      return fileProposal({ agentId, memoryCtx, workspaceDir, safeId, card, poolKey, trimmed, note });
+    } finally {
+      filing.delete(fileKey);
+    }
+  }
+
+  // sharer + lowercased sharedId + proposer of every filing in progress.
+  const filing = new Set();
+
+  function fileProposal({ agentId, memoryCtx, workspaceDir, safeId, card, poolKey, trimmed, note }) {
     let pending;
     try {
       pending = store.findPending({ sharerAgentId: card.sourceAgentId, sharedId: safeId, proposerAgentId: agentId });
@@ -102,6 +157,7 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
       resolvedAt: null,
       resultId: null,
       resolutionNote: null,
+      poolKey,
     };
 
     try {
@@ -133,7 +189,7 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
   }
 
   async function list(q, p, a) {
-    const { agentId } = await opsContext.resolve(p, a);
+    const { agentId, memoryCtx } = await opsContext.resolve(p, a);
 
     if (q?.status !== undefined && !PROPOSAL_STATUSES.has(q.status)) {
       throw memoryOpError("invalid-input", `status must be one of ${[...PROPOSAL_STATUSES].join(", ")}`);
@@ -148,14 +204,14 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
 
     let result;
     try {
-      result = store.listFor(agentId, { status: q?.status ?? null, limit });
+      result = store.listFor(agentId, { status: q?.status ?? null, limit, poolKeys: reachablePoolKeys(memoryCtx) });
     } catch (err) {
       if (isMemoryOpError(err)) throw err;
       logger?.warn?.(`memory-ops.proposals.list: listFor failed for agent '${agentId}': ${err?.message || err}`);
       throw memoryOpError("storage", "proposal list failed");
     }
 
-    return { agentId, items: result.items, truncated: result.truncated, unreadable: result.unreadable };
+    return { agentId, items: result.items.map(publicProposal), truncated: result.truncated, unreadable: result.unreadable };
   }
 
   // Proposal ids currently being accepted/rejected in this process: a second
@@ -166,9 +222,11 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
   /**
    * The sharer's pending proposal, or the matching MemoryOpError. Proposals
    * are filed under the sharer, so `store.get(agentId, …)` answers null for
-   * anyone else — the same anti-oracle `not-found` as an unknown id.
+   * anyone else — the same anti-oracle `not-found` as an unknown id. A
+   * proposal in a pool the caller's principal cannot reach (or with no
+   * recorded pool) is the same `not-found`, checked before anything else.
    */
-  function loadPending(agentId, safeId, opName) {
+  function loadPending(agentId, memoryCtx, safeId, opName) {
     let proposal;
     try {
       proposal = store.get(agentId, safeId);
@@ -178,6 +236,9 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
       throw memoryOpError("storage", "proposal read failed");
     }
     if (!proposal || proposal.sharerAgentId !== agentId) throw memoryOpError("not-found", "proposal not found");
+    if (typeof proposal.poolKey !== "string" || !reachablePoolKeys(memoryCtx).has(proposal.poolKey)) {
+      throw memoryOpError("not-found", "proposal not found");
+    }
     if (proposal.status !== "pending") throw memoryOpError("conflict", `proposal is ${proposal.status}`);
     return proposal;
   }
@@ -235,12 +296,12 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
     const { agentId, memoryCtx, workspaceDir, archiveDir } = await opsContext.resolve(p, a, { destructive: true });
     const safeId = parseProposalId(proposalId);
 
-    loadPending(agentId, safeId, "accept");
+    loadPending(agentId, memoryCtx, safeId, "accept");
     claim(safeId);
     try {
       // Re-read under the claim: a resolve that finished between the check
       // above and the claim must not be applied twice.
-      const proposal = loadPending(agentId, safeId, "accept");
+      const proposal = loadPending(agentId, memoryCtx, safeId, "accept");
 
       // throwOnError: a failed lookup is `storage` (proposal stays pending);
       // only a definite absence marks the proposal stale.
@@ -315,10 +376,10 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
       note = opts.note;
     }
 
-    loadPending(agentId, safeId, "reject");
+    loadPending(agentId, memoryCtx, safeId, "reject");
     claim(safeId);
     try {
-      const proposal = loadPending(agentId, safeId, "reject");
+      const proposal = loadPending(agentId, memoryCtx, safeId, "reject");
       opsContext.assertOpen?.();
       const rejected = { ...proposal, status: "rejected", resolvedAt: clock(), resolutionNote: note };
       saveResolved(rejected, "reject");
@@ -329,7 +390,12 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
         actor: memoryCtx.userPrincipal || `principal:${agentId}`,
         at: new Date().toISOString(),
       });
-      if (!auditOk) throw memoryOpError("storage", "audit failed");
+      if (!auditOk) {
+        // The rejection is already recorded: name it so the caller is not
+        // left with a bare storage error (mirrors accept's appliedDetail).
+        logger?.warn?.(`memory-ops.proposals.reject: proposal '${safeId}' was rejected but the audit append failed`);
+        throw memoryOpError("storage", "audit failed", { proposalId: safeId });
+      }
 
       emitResolved(rejected);
       return { proposalId: safeId, status: "rejected" };

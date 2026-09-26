@@ -9,7 +9,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -452,6 +452,148 @@ describe("Engine.memory.proposals.accept / .reject (E2 Task 6, D31)", () => {
     assert.equal(listed.items.find((x) => x.id === P).status, "pending");
     const copy = await engine.memory.show(S, bernd, userAgent);
     assert.equal(copy.text, "The umbrella stand is by the lift.", "the copy is unchanged");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final-review fixes (E2): pool-scoped proposals, legacy shared rows,
+// concurrent duplicate filing, reject's audit failure.
+// ---------------------------------------------------------------------------
+
+describe("Engine.memory proposals — final-review fixes (E2)", () => {
+  const USER_Y = `user:v1:${"a".repeat(64)}`;
+  const USER_Z = `user:v1:${"c".repeat(64)}`;
+
+  it("(F1) a user-scope proposal is scoped to its pool: another principal of the same sharer agent neither lists nor resolves it", async () => {
+    const { engine } = setup("e2-fix-pool-");
+    const annaY = principal("anna", { user: USER_Y });
+    const annaZ = principal("anna", { user: USER_Z });
+    const berndY = principal("bernd", { user: USER_Y });
+    const berndZ = principal("bernd", { user: USER_Z });
+    const F = await seedAndGetId(engine, "anna", "The dentist appointment card is on the fridge.", "dentist card");
+    const { sharedId: S } = await engine.memory.share(F, "user", annaY, userAgent);
+    const { proposalId: P } = await engine.memory.propose(S, "The dentist card moved to the pinboard.", berndY, userAgent);
+
+    const forAnnaY = await engine.memory.proposals.list({}, annaY, userAgent);
+    assert.deepEqual(forAnnaY.items.map((x) => x.id), [P]);
+    assert.equal("poolKey" in forAnnaY.items[0], false, "the pool key stays internal");
+    const forBerndY = await engine.memory.proposals.list({}, berndY, userAgent);
+    assert.deepEqual(forBerndY.items.map((x) => x.id), [P]);
+
+    // The same agents under another user principal cannot reach the user pool.
+    assert.equal((await engine.memory.proposals.list({}, annaZ, userAgent)).items.length, 0);
+    assert.equal((await engine.memory.proposals.list({}, berndZ, userAgent)).items.length, 0);
+    assert.equal((await engine.memory.proposals.list({}, principal("anna"), userAgent)).items.length, 0);
+
+    await assert.rejects(() => engine.memory.proposals.accept(P, annaZ, userAgent), code("not-found"));
+    await assert.rejects(() => engine.memory.proposals.reject(P, annaZ, userAgent), code("not-found"));
+    const still = await engine.memory.proposals.list({}, annaY, userAgent);
+    assert.equal(still.items[0].status, "pending", "refused resolves leave it pending (never stale)");
+
+    const accepted = await engine.memory.proposals.accept(P, annaY, userAgent);
+    assert.equal(accepted.proposalId, P);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(F1b) a proposal file without a pool key is unreachable: not listed, not resolvable", async () => {
+    const { baseDbPath, engine } = setup("e2-fix-nopool-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const F = await seedAndGetId(engine, "anna", "The parking permits renew in January.", "parking permits");
+    const { sharedId: S } = await engine.memory.share(F, "workspace", anna, userAgent);
+    const { proposalId: P } = await engine.memory.propose(S, "The parking permits renew in March.", bernd, userAgent);
+
+    const file = join(dirname(baseDbPath), "_proposals", "anna", `${P}.json`);
+    const onDisk = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(typeof onDisk.poolKey, "string", "propose records the pool key");
+    delete onDisk.poolKey;
+    writeFileSync(file, JSON.stringify(onDisk));
+
+    assert.equal((await engine.memory.proposals.list({}, anna, userAgent)).items.length, 0);
+    assert.equal((await engine.memory.proposals.list({}, bernd, userAgent)).items.length, 0);
+    await assert.rejects(() => engine.memory.proposals.accept(P, anna, userAgent), code("not-found"));
+    await assert.rejects(() => engine.memory.proposals.reject(P, anna, userAgent), code("not-found"));
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).status, "pending");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(F5) propose on a legacy shared row with no recorded sharer is denied before any store write", async () => {
+    const { baseDbPath, engine } = setup("e2-fix-legacy-");
+    const internals = internalsOf(engine);
+    const writes = [];
+    const realStore = createProposalStore({ baseDbPath });
+    const store = { ...realStore, create: (x) => { writes.push(x); return realStore.create(x); } };
+    const id = randomUUID();
+    for (const legacy of [
+      { id, scope: "workspace", text: "legacy text", sourceAgentId: "", sourceMemoryId: randomUUID() },
+      { id, scope: "workspace", text: "legacy text", sourceAgentId: "anna", sourceMemoryId: "" },
+    ]) {
+      const proposals = createMemoryProposals({
+        opsContext: internals.memoryOpsContext,
+        sharedOps: { findSharedRow: async () => ({ card: legacy, sourceKind: "workspace" }) },
+        store,
+        memoryDbAdapter: internals.memoryDbAdapter,
+        host: internals.host,
+      });
+      await assert.rejects(() => proposals.propose(id, "new text", principal("bernd"), userAgent),
+        (err) => code("denied")(err) && err.message === "this shared copy has no recorded sharer");
+    }
+    assert.equal(writes.length, 0);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(F6) concurrent duplicate proposals by the same proposer on the same copy: exactly one is filed, the other conflicts", async () => {
+    const { engine } = setup("e2-fix-dup-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const F = await seedAndGetId(engine, "anna", "The lobby lights switch off at ten.", "lobby lights");
+    const { sharedId: S } = await engine.memory.share(F, "workspace", anna, userAgent);
+
+    const results = await Promise.allSettled([
+      engine.memory.propose(S, "The lobby lights switch off at eleven.", bernd, userAgent),
+      engine.memory.propose(S, "The lobby lights switch off at midnight.", bernd, userAgent),
+    ]);
+    assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+    const refused = results.filter((r) => r.status === "rejected");
+    assert.equal(refused.length, 1);
+    assert.ok(code("conflict")(refused[0].reason), `loser conflicts: ${refused[0].reason?.message}`);
+    assert.equal((await engine.memory.proposals.list({}, anna, userAgent)).items.length, 1);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(F7) reject: an audit failure after the rejection was recorded answers storage naming the proposal", async () => {
+    const { workspaceDir, engine } = setup("e2-fix-rejaudit-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const F = await seedAndGetId(engine, "anna", "The coat hooks are by the entrance.", "coat hooks");
+    const { sharedId: S } = await engine.memory.share(F, "workspace", anna, userAgent);
+    const { proposalId: P } = await engine.memory.propose(S, "The coat hooks are by the kitchen.", bernd, userAgent);
+
+    // Replace the audit log with a directory: the append fails (even as root).
+    const auditFile = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
+    rmSync(auditFile, { force: true });
+    mkdirSync(auditFile, { recursive: true });
+
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    let caught;
+    try {
+      await assert.rejects(() => engine.memory.proposals.reject(P, anna, userAgent), (err) => {
+        caught = err;
+        return code("storage")(err) && err.message === "audit failed";
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.deepEqual({ ...caught.detail }, { proposalId: P });
+    const listed = await engine.memory.proposals.list({}, anna, userAgent);
+    assert.equal(listed.items.find((x) => x.id === P).status, "rejected");
 
     await engine.close({ budgetMs: 5_000 });
   });
