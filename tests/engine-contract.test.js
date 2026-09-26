@@ -5,6 +5,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
@@ -42,12 +43,12 @@ const provedPrincipal = { ...principal, trust: "proved" };
 const agent = { origin: "user", background: false };
 
 describe("Engine", () => {
-  it("reports contract 1.5.0, 18 jobs, the tools and a status", async () => {
+  it("reports contract 1.6.0, 18 jobs, the tools and a status", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
-    assert.equal(engine.contract, "1.5.0");
+    assert.equal(engine.contract, "1.6.0");
     assert.equal(engine.jobs.list().length, 18);
     assert.deepEqual(engine.tools.map((t) => t.name).sort(), ["knowledge_update", "memory_forget", "memory_recall", "memory_search", "memory_store"]);
-    assert.equal((await engine.status()).contract, "1.5.0");
+    assert.equal((await engine.status()).contract, "1.6.0");
     assert.ok(engine.systemSupplement().length >= 1);
     await engine.close({ budgetMs: 5_000 });
   });
@@ -339,7 +340,7 @@ describe("Engine", () => {
   });
 
   it("open(), channels and the embedding and admin surfaces are present", async () => {
-    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder() } });
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => makeTempDir("ec-ws-") }), config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder() } });
     const store = await engine.open("agent-a");
     assert.equal(store.agentId, "agent-a");
     assert.equal((await engine.status()).agents, 1);
@@ -349,7 +350,13 @@ describe("Engine", () => {
     assert.ok(engine.channels.list().includes("telegram"));
     const [vector] = await engine.embedding.embed(["hello"], { kind: "query", identity: null, signal: AbortSignal.timeout(1_000) });
     assert.equal(vector.length, 384);
-    await assert.rejects(() => engine.admin.share("x", "workspace", provedPrincipal, { nonce: "n" }), /not available in M1b-1/);
+    const userAgent = { origin: "user", background: false };
+    // No `workspace` claim: the canonical workspace identity comes from the
+    // stub host's real workspaceDir, same as tests/e1-memory-ops-write.test.js's
+    // principalForDestructive (a claimed "workspace:v1:main" would conflict with it).
+    const { workspace: _workspace, ...principalNoWorkspaceClaim } = provedPrincipal;
+    await assert.rejects(() => engine.admin.forget(randomUUID(), principalNoWorkspaceClaim, userAgent), (e) => e.code === "not-found");
+    assert.equal(typeof engine.admin.share, "function");
     await engine.close({ budgetMs: 5_000 });
   });
 
@@ -374,13 +381,16 @@ describe("Engine", () => {
     assert.ok(/const targetPool = new EngineAgentDbPool\(/.test(engine.createEngine), "withTargetGenerationDb uses EngineAgentDbPool");
   });
 
-  it("contract 1.5.0 exposes a typed MemoryOps surface", async () => {
+  it("contract 1.6.0 exposes a typed MemoryOps surface", async () => {
     const engine = createEngine(createStubHost(), {});
-    assert.equal(engine.contract, "1.5.0");
-    assert.equal((await engine.status()).contract, "1.5.0");
-    for (const m of ["list", "show", "forget", "correct", "share", "state"]) {
+    assert.equal(engine.contract, "1.6.0");
+    assert.equal((await engine.status()).contract, "1.6.0");
+    for (const m of ["list", "show", "forget", "correct", "share", "state", "propose"]) {
       assert.equal(typeof engine.memory[m], "function", `engine.memory.${m}`);
     }
+    assert.equal(typeof engine.memory.proposals.list, "function", "engine.memory.proposals.list");
+    assert.equal(typeof engine.memory.proposals.accept, "function", "engine.memory.proposals.accept");
+    assert.equal(typeof engine.memory.proposals.reject, "function", "engine.memory.proposals.reject");
     assert.ok(Object.isFrozen(engine.memory));
     await engine.close();
   });

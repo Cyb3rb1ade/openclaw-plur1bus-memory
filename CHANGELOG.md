@@ -335,6 +335,110 @@ Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
   das Feld heraus) — Capture und Korrekturen standen bis zum Neustart.
   `chunkGroupId` gehört jetzt zur Schema-Zeile und zur Migrationsliste.
 
+### E2 — Contract 1.6.0 (Admin-Ops ohne Host-Runtime, geteilte Kopien, Vorschläge)
+
+Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
+„Shared copies and change proposals“ und „AdminOps in 1.6.0“.
+
+#### Hinzugefügt
+
+- **`AdminOps.share`/`.forget`** sind jetzt deprecated Aliase von
+  `Engine.memory.share`/`.forget` (entfallen mit Contract 2.0) — derselbe
+  Codepfad, keine zweite Implementierung.
+- **`AdminOps.obsidian`** (`engine/admin/obsidian.js`), host-neutral mit
+  expliziten Pfaden, ohne Host-Runtime: `detect(p, a, opts?)` fasst
+  konfigurierte, Workspace- und bis zu 20 aufrufer-eigene Kandidatenpfade
+  zusammen (`~`, `~/…`, relative und absolute Pfade werden gegen das
+  Home-Verzeichnis des Aufrufers aufgelöst) und meldet je Kandidat `isVault`
+  und `confirmed` (aufrufer-eigene Kandidaten nur für einen „proved“-
+  Principal, sonst `denied`; Konfigurations- und Workspace-Quellen stehen
+  jedem Aufrufer offen); `prepare(vaultPath, p, a)` prüft zuerst — vor jedem
+  Dateisystemzugriff —, ob ein „proved“-Principal mit Nutzer vorliegt, und
+  stellt eine 10 Minuten gültige Nonce aus (über
+  dieselbe `lib/security.js`-Bestätigung wie jeder andere Confirmation-Flow —
+  kein dritter Mechanismus); `confirm(nonce, p, a)` verbraucht die Nonce beim
+  ersten Erfolg und schreibt die Quittung erst danach unter
+  `<baseDbPath>/.plur1bus-authority/obsidian-vaults/`. Rohe
+  Dateisystemfehler verlassen `detect`/`prepare`/`confirm` nie: ein
+  inzwischen verschwundenes Vault-Verzeichnis antwortet `not-found` („vault
+  not found“, ohne Pfad), jeder andere Fehler `storage` mit fester Meldung;
+  der Rohfehler geht nur an `logger.warn`.
+- **`AdminOps.migrate(from, to)`** (`engine/store/schema-version.js`)
+  schreibt einen kleinen Schema-Marker (`<baseDbPath>/_schema.json`), nicht
+  die LanceDB-Tabellenform selbst; ein Store ohne Marker gilt als
+  `LEGACY_STORE_SCHEMA_VERSION` ("0"). Der einzige registrierte Schritt,
+  `"0->1"`, ist ein No-op (die Spalten von Contract 1.5.0 wendet
+  `memory-db.js`s eigene LanceDB-Migration schon beim ersten Öffnen an) und
+  markiert nur, dass der Betreiber die Store-Form bestätigt hat. Scheitert
+  ein Migrationsschritt oder das Schreiben des Markers, antwortet `migrate`
+  `storage` („store migration failed“); der Rohfehler geht nur ins Log.
+  **`EngineStatus.storeSchema`** (`{ current, expected }`) macht diesen
+  Zustand sichtbar.
+- **Geteilte Kopien: Regeln für die teilende Instanz** (`engine/memory-ops/
+  shared.js`, Spec-Entscheidung D31): `forget` auf eine geteilte Kopie durch
+  den teilenden Agenten **entzieht** sie (archive-first, dann derselbe
+  Soft-Delete wie `tombstoneCard`; `tombstoneId` ist immer `null`, denn die
+  Zeile landet bewusst nicht in `lib/tombstone.js`s Registry — das Original
+  bleibt lebendig und erfassbar). `correct` auf dieselbe Kopie
+  **erneuert** sie: erst das private Original korrigieren (derselbe
+  Archive-first-Pfad wie E1s `correct`), dann die korrigierte Fassung erneut
+  in denselben Scope teilen, zuletzt die alte Kopie entziehen — in dieser
+  Reihenfolge, damit ein Fehlschlag nie beide Kopien verliert. Ein
+  Fehlschlag nach Schritt 1 lehnt mit `storage` und `detail: { sourceId,
+  sharedId }` ab (plus `staleSharedId`, wenn der letzte Schritt scheitert).
+- **`MemoryOpError.detail`** (nicht-geheime IDs, z. B. für eine
+  halb-fertige Kopie-Erneuerung).
+- **Änderungsvorschläge für jeden anderen Leser** (`engine/memory-ops/
+  proposal-store.js`, `proposals.js`, Spec-Entscheidung D31):
+  `MemoryOps.propose(sharedId, newText, p, a, opts?)` legt einen Vorschlag
+  gegen eine geteilte Kopie an, die der Aufrufer lesen, aber nicht ändern
+  darf; lehnt `invalid-input` ab, wenn `sharedId` eine eigene lebende
+  private Karte des Aufrufers ist oder der Aufrufer selbst der Teilende ist,
+  `not-found` für eine nicht lesbare geteilte ID, `denied` für eine
+  Legacy-Kopie ohne `sourceAgentId`/`sourceMemoryId` („this shared copy has
+  no recorded sharer“, vor jedem Schreibzugriff), `conflict` bei einem schon
+  offenen oder gleichzeitig eingereichten eigenen Vorschlag gegen dieselbe
+  Kopie. Jeder Vorschlag gehört zum geteilten Pool seiner Kopie
+  (Workspace- bzw. User-Pool, intern als Pool-Schlüssel festgehalten, nie
+  zurückgegeben): `proposals.list` zeigt nur Vorschläge aus Pools, die der
+  Principal des Aufrufers erreicht, und `accept`/`reject` antworten für
+  jeden anderen `not-found` — vor jeder `stale`-Markierung. Derselbe Agent
+  unter einem anderen Nutzer sieht also die User-Pool-Vorschläge des ersten
+  nicht (Anti-Orakel). Vorschläge liegen
+  dateibasiert unter `<dirname(baseDbPath)>/_proposals/<sharerAgentId>/
+  <id>.json` (atomar geschrieben, ein defektes Nachbarfile zählt in
+  `unreadable` statt die Liste zu verstecken). `proposals.list(q, p, a)`
+  zeigt nur selbst eingereichte oder empfangene Vorschläge, optional nach
+  `status` gefiltert. `proposals.accept`/`.reject` sind ausschließlich der
+  teilenden Instanz vorbehalten (jede andere ID antwortet `not-found`);
+  `accept` markiert eine geteilte Kopie, die verschwunden ist oder deren
+  Text sich seit dem Vorschlag geändert hat, als `stale` und lehnt
+  `conflict` ab, statt sie zu überschreiben; ein Fehlschlag beim Erneuern
+  oder beim Nachschlagen der Kopie (`storage`) lässt den Vorschlag
+  `pending`. Scheitert nach erfolgreicher Erneuerung das Festhalten der
+  Annahme oder die Audit-Zeile, antwortet `accept` `storage` mit `detail:
+  { proposalId, id, sourceId }`. `reject` protokolliert nur die Ablehnung
+  und eine optionale Notiz; scheitert danach die Audit-Zeile, antwortet es
+  `storage` mit `detail: { proposalId }`.
+- **`"memory.proposal"`-Event** (`EngineEventName`): einmal beim Einreichen
+  (`status: "pending"`) und einmal bei der Auflösung (`"accepted"` /
+  `"rejected"` / `"stale"`), mit `{ proposalId, status, sharerAgentId,
+  proposerAgentId, sharedId }`.
+- **`MemoryCard.sharedBy`/`.sourceId`** (nur auf Workspace-/User-Kopien): die
+  teilende Instanz und die ID ihres privaten Originals.
+
+#### Geändert
+
+- **`Engine.close()` wartet jetzt auf laufende Memory-Operationen** (E2 Task
+  3): jedes `memory.*`- und die memory-gestützten `admin.*`-Mitglieder
+  (`share`/`forget`/`obsidian.*`/`migrate`) werden während der Ausführung
+  verfolgt; `close({ budgetMs })` wartet zuerst auf diese (`Promise.
+  allSettled`), bevor Stores geschlossen werden — innerhalb desselben
+  Budgets, das schon für langsame Ressourcen galt. Ein Aufruf, der erst nach
+  Beginn von `close()` eintrifft, wird sofort mit `storage` („engine is
+  closed“) abgelehnt statt am Drain teilzunehmen; kein Store schließt unter
+  einer laufenden Operation.
+
 ## [7.16.9] — 2026-09-25
 
 ### Behoben

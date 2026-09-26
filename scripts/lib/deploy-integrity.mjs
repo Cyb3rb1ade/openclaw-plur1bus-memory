@@ -37,6 +37,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/host-probes.js",
   "adapter/openclaw/plugin.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
+  "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
   "engine/checkpoint/checkpoint-store.js",
   "engine/commands/command-helpers.js",
@@ -57,6 +58,9 @@ export const DEPLOY_FILES = [
   "engine/memory-ops/errors.js",
   "engine/memory-ops/read.js",
   "engine/memory-ops/write.js",
+  "engine/memory-ops/shared.js",
+  "engine/memory-ops/proposal-store.js",
+  "engine/memory-ops/proposals.js",
   "engine/providers/legacy-providers.js",
   "engine/providers/runtime-reranker.js",
   "engine/recall/assemble-prompt-context.js",
@@ -73,6 +77,7 @@ export const DEPLOY_FILES = [
   "engine/store/control-health.js",
   "engine/store/lancedb-loader.js",
   "engine/store/memory-db.js",
+  "engine/store/schema-version.js",
   "engine/tools/memory-tools.js",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",

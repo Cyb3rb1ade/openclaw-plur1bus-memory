@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.5.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended six times under the policy below — see the changelog at the end
+ * Contract version 1.6.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended seven times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -36,9 +36,10 @@
  *            1.4.0 — Engine surface of createEngine (M1b-1): ContextBlock.chars; RecallResult.timing (replaces timings) and .deferrals; RecallQuery.budget optional; JobRun/JobRegistry/JobSpec per spec 3.3 (outcome gains "abandoned"); CheckpointReason gains "session-end"; Engine.close({ budgetMs }); Engine.channels; HostServices.capabilities?; EngineEventName gains recall.block-clipped/-dropped, recall.completed; createEngine testOptions.
  *            1.4.1 — JobTrigger gains "unknown" (a crash row recovered from a corrupt, unreadable start marker; M1b-1 final review m2).
  *            1.5.0 — MemoryOps types, Engine.memory (E1 Task 2); runCommand deprecated; MemoryState.tombstones number | null (E1-R11); HostCapabilities.memoryArchiveDir? (E1 Task 8).
+ *            1.6.0 — AdminOps.share/forget alias Engine.memory (deprecated); ObsidianOps with explicit paths; migrate over a store schema marker; MemoryOps.propose/proposals (D31); MemoryCard.sharedBy/sourceId; MemoryOpError.detail; "memory.proposal" event; EngineStatus.storeSchema (E2).
  */
 
-export type ContractVersion = "1.5.0";
+export type ContractVersion = "1.6.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -427,19 +428,50 @@ export interface CommandResult {
   details?: Record<string, unknown>;
 }
 
-export interface ShareResult { id: string; targetId: string; reembedded: boolean }
-export interface ForgetResult { id: string; archived: boolean; tombstoneId: string }
+/** @deprecated 1.6.0: `ShareResult`/`ForgetResult` are the MemoryOps result types; removed with 2.0 (E6). */
+export type ShareResult = MemoryShareResult;
+export type ForgetResult = MemoryForgetResult;
+/** `applied` is false when `from === to`. Both are decimal strings ("0" = a store written before any marker existed). */
 export interface MigrationResult { from: SchemaVersion; to: SchemaVersion; applied: boolean }
 
+export interface ObsidianVaultCandidate {
+  /** Absolute, normalised path. Input may be `~/…` or home-relative; the engine expands it. */
+  path: string;
+  /** `.obsidian/workspace.json` or `.obsidian/app.json` exists. */
+  isVault: boolean;
+  /** A confirmation receipt for this agent, workspace and vault exists (lib/obsidian-vault-authority.js). */
+  confirmed: boolean;
+  source: "config" | "workspace" | "candidate";
+}
+export interface ObsidianDetectResult { agentId: AgentId; vaults: ObsidianVaultCandidate[] }
+export interface ObsidianPrepareResult { nonce: string; expiresAt: number; vaultPath: string; vaultDigest: string }
+export interface ObsidianConfirmResult { confirmed: true; vaultPath: string; vaultDigest: string; alreadyConfirmed: boolean }
+
+/**
+ * Host-neutral Obsidian setup: explicit paths, no host runtime. `prepare` and `confirm` are
+ * user-originated (`a.origin === "user"`, `a.background === false`) and need a proved principal
+ * with a user; the nonce expires after 10 minutes and is consumed by the first `confirm`.
+ * Every member rejects with MemoryOpError (`not-found`, `denied`, `invalid-input`, `storage`).
+ */
+export interface ObsidianOps {
+  detect(p: Principal, a: AgentContext, opts?: { candidates?: string[] }): Promise<ObsidianDetectResult>;
+  prepare(vaultPath: string, p: Principal, a: AgentContext): Promise<ObsidianPrepareResult>;
+  confirm(nonce: string, p: Principal, a: AgentContext): Promise<ObsidianConfirmResult>;
+}
+
 export interface AdminOps {
-  share(sourceId: string, target: "workspace" | "user", p: Principal, confirm: { nonce: string }): Promise<ShareResult>;
-  forget(id: string, p: Principal): Promise<ForgetResult>;
+  /** @deprecated 1.6.0: alias of `Engine.memory.share`; removed with 2.0 (E6). */
+  share(id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }): Promise<MemoryShareResult>;
+  /** @deprecated 1.6.0: alias of `Engine.memory.forget`; removed with 2.0 (E6). */
+  forget(id: string, p: Principal, a: AgentContext): Promise<MemoryForgetResult>;
   reembedding: {
     plan(): Promise<unknown>; apply(): Promise<unknown>; resume(): Promise<unknown>;
     rollback(): Promise<unknown>; status(): Promise<unknown>; switch(): Promise<unknown>;
   };
   workspacePolicy: { get(): Promise<unknown>; list(): Promise<unknown>; set(patch: unknown): Promise<unknown> };
-  obsidian: { detect(): Promise<unknown>; prepare(): Promise<unknown>; confirm(): Promise<unknown> };
+  obsidian: ObsidianOps;
+  /** Store schema migration (E2, variant a). Rejects with MemoryOpError: `conflict` when `from` is not the store's
+   *  current version, `invalid-input` for an unknown or downgrading `to`, `storage` when the marker is unreadable. */
   migrate(from: SchemaVersion, to: SchemaVersion): Promise<MigrationResult>;
 }
 
@@ -450,7 +482,11 @@ export type MemoryOpErrorCode =
   | "conflict" | "storage";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
-export interface MemoryOpError extends Error { readonly code: MemoryOpErrorCode }
+export interface MemoryOpError extends Error {
+  readonly code: MemoryOpErrorCode;
+  /** 1.6.0: non-secret ids a caller needs to recover (e.g. a half-finished shared-copy refresh). */
+  readonly detail?: Readonly<Record<string, string>>;
+}
 
 export type MemoryScope = "agent-private" | "workspace" | "user";
 
@@ -464,6 +500,9 @@ export interface MemoryCard {
   epistemicStatus: string | null;
   /** Present on list results from a topic query; absent on show. */
   score?: number;
+  /** 1.6.0, only on workspace/user copies: the sharing agent and its original card. */
+  sharedBy?: AgentId;
+  sourceId?: string;
 }
 
 export interface MemoryListQuery {
@@ -491,12 +530,58 @@ export interface MemoryState {
   archiveDir: string;
 }
 
+export type MemoryProposalStatus = "pending" | "accepted" | "rejected" | "stale";
+export interface MemoryProposal {
+  id: string;
+  /** The shared copy the proposal was filed against and the sharer's original behind it. */
+  sharedId: string;
+  sourceId: string;
+  target: "workspace" | "user";
+  sharerAgentId: AgentId;
+  proposerAgentId: AgentId;
+  oldText: string;
+  newText: string;
+  note: string | null;
+  createdAt: number;
+  status: MemoryProposalStatus;
+  resolvedAt: number | null;
+  /** accepted: the id of the refreshed shared copy. */
+  resultId: string | null;
+  resolutionNote: string | null;
+}
+export interface MemoryProposeResult { proposalId: string; sharedId: string; sharerAgentId: AgentId }
+export interface MemoryProposalListQuery { status?: MemoryProposalStatus; /** Default 20, maximum 100. */ limit?: number }
+export interface MemoryProposalListResult {
+  agentId: AgentId;
+  /** Proposals the agent filed or received, newest first. */
+  items: MemoryProposal[];
+  truncated: boolean;
+  /** Proposal files that could not be parsed; never silently dropped. */
+  unreadable: number;
+}
+/** `id` is the refreshed shared copy, `sourceId` the corrected original (both new ids). */
+export interface MemoryProposalAcceptResult { proposalId: string; id: string; sourceId: string }
+export interface MemoryProposalRejectResult { proposalId: string; status: "rejected" }
+
+export interface MemoryProposalEvent {
+  proposalId: string;
+  status: MemoryProposalStatus;
+  sharerAgentId: AgentId;
+  proposerAgentId: AgentId;
+  sharedId: string;
+}
+
 /**
  * Every member rejects with MemoryOpError `storage` ("engine is closed") after `Engine.close()`.
- * `list` and `show` read the agent-private pool plus the workspace and user pools the principal
- * can reach. `forget`, `correct` and `share` act on the caller's own agent-private cards only:
- * a card the caller can see only as a shared (workspace/user) copy answers `denied`
- * ("shared copies cannot be changed through this call yet"); changing shared copies is an E2 follow-up.
+ * `list` and `show` read the agent-private pool plus the workspace and user pools the principal can reach.
+ * `forget`, `correct` and `share` act on the caller's own agent-private cards. On a shared (workspace/user)
+ * copy (D31): `forget` by the sharing agent retracts the copy (archive-first, soft delete; `tombstoneId` is
+ * null because the original stays live); `correct` by the sharing agent refreshes it (corrects the original,
+ * shares the new version, then retracts the old copy; the result id is the new copy); any other agent answers
+ * `denied` and files `propose` instead; `share` of a copy is always `denied`. Proposals never change a memory
+ * until the sharer calls `proposals.accept`. A proposal belongs to the shared pool of its copy: `proposals.*`
+ * reach it only through a principal that can reach that pool (otherwise `list` omits it and `accept`/`reject`
+ * answer `not-found`).
  */
 export interface MemoryOps {
   list(q: MemoryListQuery, p: Principal, a: AgentContext): Promise<MemoryListResult>;
@@ -506,11 +591,19 @@ export interface MemoryOps {
   /** `allowSensitive` is the caller's explicit confirmation after an `approval-required` refusal. */
   share(id: string, target: "workspace" | "user", p: Principal, a: AgentContext, opts?: { allowSensitive?: boolean }): Promise<MemoryShareResult>;
   state(p: Principal, a: AgentContext): Promise<MemoryState>;
+  /** File a change proposal against a shared copy the caller can read but does not own (`a.origin === "user"`). */
+  propose(sharedId: string, newText: string, p: Principal, a: AgentContext, opts?: { note?: string }): Promise<MemoryProposeResult>;
+  proposals: {
+    list(q: MemoryProposalListQuery, p: Principal, a: AgentContext): Promise<MemoryProposalListResult>;
+    /** Sharer only (anyone else: `not-found`). Refreshes the copy with the proposal's text. */
+    accept(proposalId: string, p: Principal, a: AgentContext): Promise<MemoryProposalAcceptResult>;
+    reject(proposalId: string, p: Principal, a: AgentContext, opts?: { note?: string }): Promise<MemoryProposalRejectResult>;
+  };
 }
 
 export type EngineEventName =
   | "dream.completed" | "job.run" | "acl.denied" | "recall.degraded" | "embedding.identity.changed"
-  | "recall.block-clipped" | "recall.block-dropped" | "recall.completed";
+  | "recall.block-clipped" | "recall.block-dropped" | "recall.completed" | "memory.proposal";
 
 export interface EngineEvents {
   on(event: EngineEventName, handler: (payload: unknown) => void): Disposable;
@@ -521,6 +614,7 @@ export interface EngineStatus {
   degraded: Degraded | null;
   agents: number;
   contract: ContractVersion;
+  storeSchema: { current: SchemaVersion | null; expected: SchemaVersion };
 }
 
 export interface AgentStore {

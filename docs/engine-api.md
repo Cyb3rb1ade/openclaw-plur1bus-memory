@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.5.0** · frozen at 1.0.0 on 2026-09-22, amended six times
+**Contract version 1.6.0** · frozen at 1.0.0 on 2026-09-22, amended seven times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -36,7 +36,7 @@ against one shape.
 > adapters move together in a single PR, so the contract, its gate and its two
 > consumers are never in disagreement at any commit.
 
-Six amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
+Seven amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
 own changelog:
 
 - **1.1.0** — `SecurePathResult.reason` gains `"acl-tool-unavailable"` (Task 5).
@@ -66,6 +66,18 @@ own changelog:
   in 2.0). The OpenClaw adapter's `/forget`, `/correct` and `/share` run
   their final effect through `Engine.memory` in the same PR. See
   [Typed MemoryOps](#typed-memoryops-enginememory-150) below.
+- **1.6.0** — admin ops without a host runtime, shared-copy rules and change
+  proposals (engine PR E2, spec decision D31): `AdminOps.share`/`.forget`
+  become deprecated aliases of `Engine.memory.share`/`.forget`; `ObsidianOps`
+  (`AdminOps.obsidian.{detect,prepare,confirm}`) with explicit paths, no host
+  runtime; `AdminOps.migrate` over a store schema marker
+  (`EngineStatus.storeSchema`); `MemoryOps.propose`/`.proposals.
+  {list,accept,reject}` for changing a shared copy the caller does not own;
+  `MemoryCard.sharedBy`/`.sourceId`; `MemoryOpError.detail`; the
+  `"memory.proposal"` event. See
+  [Shared copies and change proposals](#shared-copies-and-change-proposals-160-d31)
+  and [AdminOps in 1.6.0](#adminops-in-160-obsidian-migrate-the-deprecated-aliases)
+  below.
 
 ## The two halves
 
@@ -184,10 +196,177 @@ transitions) is not a MemoryOps member and keeps its own path.
 commands are the OpenClaw adapter's own chat surface, and a host that needs to
 read or edit memory uses `Engine.memory`.
 
+## Shared copies and change proposals (1.6.0, D31)
+
+1.5.0 left changing a shared (workspace/user) copy undefined — `forget`,
+`correct` and `share` answered `denied` for any id that lived only in a
+shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
+`proposal-store.js`, `proposals.js`) fills that in:
+
+- **The sharing agent still owns the copy.** `forget(id, …)` on a shared row
+  the caller shared (`card.sourceAgentId === agentId`) **retracts** it:
+  archive-first, then the same soft delete `tombstoneCard` writes
+  (`status: "deleted"`, `epistemicStatus: "invalidated"`), plus a
+  `share-retract` audit line. `MemoryForgetResult.tombstoneId` is always
+  `null` for a retraction — the row is deliberately **not** written to
+  `lib/tombstone.js`'s registry, because the registry blocks re-capture of
+  forgotten content and the sharer's private original stays live and
+  capturable. `correct(id, newText, …)` on the same row **refreshes** it, in
+  this order: (1) correct the private original through the same
+  archive-first path E1's `correct` uses; (2) re-share the corrected
+  original to the same scope; (3) retract the old copy. Sharing before
+  retracting means a failure leaves at worst two live copies, never none —
+  the retract step can always be repeated. A failure after step 1 rejects
+  `storage` with `detail: { sourceId, sharedId }` naming the ids left behind
+  (`sharedId` is whichever copy is still live: the old one if step 2 failed,
+  the new one if step 3 failed), plus `staleSharedId` (the old copy) when
+  step 3 is the one that failed. `MemoryOpError.detail` (1.6.0, non-secret
+  ids only) exists for exactly this case.
+- **Any other agent files a proposal instead of being denied outright.**
+  `MemoryOps.propose(sharedId, newText, p, a, opts?)` needs `origin: "user"`,
+  `background: false` like every destructive member; it rejects
+  `invalid-input` when `sharedId` names one of the caller's own live private
+  cards (that is a `correct`, not a proposal) or when the sharer is the
+  caller itself (the sharer corrects the original directly), `not-found` for
+  a shared id the caller cannot read, `denied` ("this shared copy has no
+  recorded sharer") for a legacy shared row without `sourceAgentId` or
+  `sourceMemoryId` (before any store write), and `conflict` when the same
+  caller already has a pending proposal open against that copy — or is
+  filing one concurrently (an in-process claim keyed on sharer, lowercased
+  `sharedId` and proposer spans the duplicate check and the write). Filing a
+  proposal never changes the shared copy — only the sharer's
+  `proposals.accept` does.
+- **A proposal belongs to the shared pool of its copy.** `propose` records
+  the pool key of the copy it targets (the workspace pool key for a
+  workspace copy, the user pool key for a user copy — the same keys
+  `lib/shared-memory-pool.js` leases). The key is internal: it is stored in
+  the proposal file but stripped from every returned `MemoryProposal`, so
+  the contract type is unchanged. `proposals.list`/`.accept`/`.reject` reach
+  a proposal only when its pool key is one the caller's principal can reach
+  (its workspace pool and, with a user principal, its user pool); otherwise
+  `list` omits it and `accept`/`reject` answer `not-found` before any
+  `stale` marking. The same sharer agent under another user principal
+  therefore neither sees nor resolves the first user's user-scope proposals
+  (anti-oracle). A proposal file without a pool key is unreachable.
+- **Proposals are a durable, one-file-per-proposal JSON store**
+  (`engine/memory-ops/proposal-store.js`), not a LanceDB table: each lives at
+  `<dirname(baseDbPath)>/_proposals/<sharerAgentId>/<id>.json` — a sibling of
+  the LanceDB root, the same layout `lib/tombstone.js` uses for
+  `_tombstones`. Writes are atomic (an exclusive-flag temp file, fsynced,
+  then renamed onto the final path); a corrupt neighbor file is counted in
+  `MemoryProposalListResult.unreadable` and skipped, never allowed to hide
+  the rest of a listing (anti-oracle).
+- **`proposals.list(q, p, a)`** shows the caller only proposals it filed or
+  received: its own directory (as sharer) in full, plus every other agent's
+  directory filtered to proposals this agent filed (as proposer), both
+  limited to pools the principal can reach (above). Optional
+  `q.status` filters to one of `"pending" | "accepted" | "rejected" |
+  "stale"`; `limit` defaults to 20, maximum 100, same as `MemoryListQuery`.
+- **`proposals.accept(proposalId, p, a)`** is sharer-only — anyone else's
+  `proposalId` (including the proposer's own) answers `not-found`, since
+  proposals are looked up under the caller's own agent id. A pending
+  proposal whose shared copy is gone, or whose text no longer matches the
+  proposal's `oldText` (the sharer refreshed or retracted it since filing),
+  is never applied over the new content: it is marked `stale` and the call
+  rejects `conflict`. Otherwise it refreshes the shared copy with the
+  proposal's `newText` through the same `refreshShare` path the sharer's own
+  `correct` uses; any failure there leaves the proposal `pending` (so
+  `accept` can be retried) and surfaces the refresh error, `detail` included,
+  unchanged. Only a definite absence marks a proposal `stale`: a failed
+  shared-copy lookup rejects `storage` and leaves it `pending`. A successful
+  accept records `resultId` (the new shared copy's id) and emits
+  `memory.proposal` with `status: "accepted"`; if recording the acceptance
+  (or its audit line) fails after the copy was refreshed, `accept` rejects
+  `storage` with `detail: { proposalId, id, sourceId }` naming the refreshed
+  copy and original.
+- **`proposals.reject(proposalId, p, a, opts?)`** is sharer-only the same
+  way; it only records `status: "rejected"` and an optional `resolutionNote`
+  (max 500 characters) — the shared copy is never touched. If the audit line
+  fails after the rejection was recorded, `reject` rejects `storage` with
+  `detail: { proposalId }`.
+- **`memory.proposal` event** (`EngineEventName`, 1.6.0) fires once when a
+  proposal is filed (`status: "pending"`) and once when it is resolved
+  (`"accepted" | "rejected" | "stale"`), each time with `{ proposalId,
+  status, sharerAgentId, proposerAgentId, sharedId }`.
+- **`MemoryCard.sharedBy`/`.sourceId`** (1.6.0) appear only on a
+  workspace/user copy: the agent that shared it and the id of its private
+  original, so a reader can tell a shared card apart from an agent-private
+  one and a proposer can name the right `sharedId`.
+
+## AdminOps in 1.6.0: obsidian, migrate, the deprecated aliases
+
+- **`AdminOps.share`/`.forget` are deprecated aliases of `Engine.memory.share`/
+  `.forget`** (1.6.0, removed with 2.0) — the same code path, not a second
+  implementation; `engine/create-engine.js` wires both `admin.share`/`.forget`
+  and `memory.share`/`.forget` to the same `internals.memoryWrite` members.
+- **`AdminOps.obsidian`** (`engine/admin/obsidian.js`) is host-neutral vault
+  setup with explicit paths and no host runtime — the harness names a vault
+  path itself rather than the engine walking a host's own workspace
+  discovery:
+  - `detect(p, a, opts?)` is read-only. It merges, de-duplicated by
+    normalised path: any vaults `discoverObsidianWorkspaces` finds from the
+    engine's own `obsidianBridge` config (`source: "config"`), the caller's
+    workspace directory (`source: "workspace"`), and up to 20 caller-supplied
+    candidate paths (`source: "candidate"`, `invalid-input` beyond that;
+    candidates need a `"proved"` principal, `denied` otherwise — the config
+    and workspace sources stay available to any caller).
+    Every path accepts `~`, `~/…`, a bare relative path (resolved against the
+    caller's home directory) or an absolute path (`expandVaultPath`). Each
+    candidate reports `isVault` (a `.obsidian/workspace.json` or
+    `.obsidian/app.json` marker exists) and `confirmed` (a receipt for this
+    agent, workspace and vault already exists).
+  - `prepare(vaultPath, p, a)` needs a `"proved"` principal with a user
+    (`denied` otherwise, checked before any filesystem probe) and an
+    existing directory (`invalid-input` otherwise); it issues a nonce good for **10 minutes**
+    (`lib/obsidian-vault-confirmation-flow.js`'s
+    `prepareVaultConfirmation`, the same `lib/security.js`
+    `createConfirmation` every other confirmation flow uses — no third
+    confirmation mechanism) and remembers which vault path that nonce
+    prepared, so `confirm` does not need the caller to repeat it.
+  - `confirm(nonce, p, a)` consumes the nonce on its first successful call:
+    an unknown, expired or already-consumed nonce answers `not-found`; a
+    nonce whose stored identity binding does not match the confirming
+    principal (a different user or chat) answers `denied`. On success it
+    writes a receipt under
+    `<baseDbPath>/.plur1bus-authority/obsidian-vaults/` — only after
+    `validateConfirmation` inside `confirmVaultConfirmation` actually
+    succeeded, never before. `ObsidianConfirmResult.alreadyConfirmed` is
+    computed from the pre-confirm state (whether a receipt already existed
+    **before** this call), not from the confirmation library's own
+    post-write flag, which reads `true` on every successful confirm.
+    Identity binding uses `memoryCtx.userPrincipal` mapped onto the shared
+    libraries' `userId` field locally in `engine/admin/obsidian.js` (the
+    Principal-derived memory context never populates `userId` itself),
+    applied identically at `prepare` and `confirm` time.
+  - No raw filesystem error leaves `detect`/`prepare`/`confirm`: a failure
+    inside the confirmation libraries (vault digest, receipt read or write)
+    is logged with `logger.warn` and answers `not-found` ("vault not found",
+    no path) when the vault directory has vanished, `storage` ("vault
+    confirmation failed") otherwise.
+- **`AdminOps.migrate(from, to)`** (`engine/store/schema-version.js`, "variant
+  a" of the owner's schema-migration ruling) advances a small on-disk marker,
+  not the LanceDB table shape itself: `<baseDbPath>/_schema.json`, `{
+  schemaVersion, writtenAt, engineVersion }`, written atomically (temp file,
+  then rename). A store with no marker reads as `LEGACY_STORE_SCHEMA_VERSION`
+  ("0") — every store this engine build has ever written already has the
+  column set contract 1.5.0 needs (LanceDB's own migration in
+  `memory-db.js` applies it the first time a table opens), so the one
+  registered step, `"0->1"`, is a no-op that only writes the marker once its
+  owner confirms the store has that shape. `migrate` rejects `conflict` when
+  `from` does not match the store's current version, `invalid-input` for a
+  downgrade or an unknown target version, and `storage` when the marker file
+  exists but cannot be parsed, or when a migration step or the marker write
+  fails ("store migration failed"; the raw error goes to `logger.warn`
+  only). `migrate(v, v)` is a same-version no-op:
+  `{ from, to, applied: false }` without touching the marker.
+  `EngineStatus.storeSchema` (1.6.0) reports `{ current, expected }` so a
+  host can tell a legacy store apart from one already on the version this
+  engine build expects.
+
 ## What is implemented in M1b-1
 
 `createEngine(host, config, testOptions?)` (`engine/create-engine.js`)
-constructs the full 1.4.1 `Engine` surface described above from a plain
+constructs the full 1.6.0 `Engine` surface described above from a plain
 `HostServices` object with no OpenClaw `api` anywhere in its call graph —
 `createEngine(createStubHost(), config)` is exactly how the engine's own
 tests build one, and `tests/engine-contract.test.js` proves it end to end.
@@ -224,23 +403,33 @@ involved):
   host that never registered that adapter, the dispatcher's guard returns
   `{ details: { reason: "commands-unavailable", capability: "commands" } }`
   instead of throwing.
-- `admin.share`, `admin.forget`, `admin.obsidian.{detect,prepare,confirm}`
-  and `admin.migrate` all reject with `"<name> is not available in M1b-1"` —
-  they have no engine-side implementation yet (only `admin.reembedding.*` and
-  `admin.workspacePolicy.*` are wired to real coordinators). Sharing and
-  forgetting a memory work through `Engine.memory.share`/`.forget` (1.5.0).
+- `admin.reembedding.rollback` and `admin.reembedding.switch` reject with
+  `"<name> is not available in M1b-1"` when the host gave the engine no
+  config-mutation capability (`internals.reembeddingSwitchRuntime` unset) —
+  the only two `admin.*` members still without a full implementation.
+  Everything else under `admin.*` is wired to a real coordinator or store as
+  of 1.6.0 (E2): `admin.share`/`.forget` are deprecated aliases of
+  `Engine.memory.share`/`.forget`; `admin.obsidian.{detect,prepare,confirm}`
+  and `admin.migrate` have their own engine-side implementations (see
+  [AdminOps in 1.6.0](#adminops-in-160-obsidian-migrate-the-deprecated-aliases)
+  above); `admin.reembedding.{plan,apply,resume,status}` and
+  `admin.workspacePolicy.*` were already wired to real coordinators.
 - `embedding.probe()` and `embedding.serve()` are placeholders: `probe()`
   always resolves `{ ok: true, cached: false }` without actually exercising
   the provider, and `serve()` returns a no-op `Disposable` without opening any
   IPC address.
-- `status()` is static: it reports `{ ready: true, degraded: null, agents:
-  openedAgents.size, contract: "1.5.0" }` unconditionally — it does not probe
-  the store, the embedder or any other dependency for actual health.
+- `status()` reports `{ ready: true, degraded: null, agents:
+  openedAgents.size, contract: "1.6.0", storeSchema: { current, expected } }`
+  — `storeSchema` (1.6.0) is the one part of the status that does probe the
+  store (it reads the schema marker), the rest is still static and does not
+  probe the embedder or any other dependency for actual health.
 
-Everything else — `recall`, `capture`, `checkpoint`, `memory.*` (1.5.0), `jobs.run`/`history`,
-`tools`, `embedding.embed`/`rerank`/`identities`, `channels`,
-`admin.reembedding.*`, `admin.workspacePolicy.*` — works against a plain
-`HostServices` with no adapter involved, per `tests/engine-contract.test.js`.
+Everything else — `recall`, `capture`, `checkpoint`, `memory.*` (1.5.0/1.6.0),
+`jobs.run`/`history`, `tools`, `embedding.embed`/`rerank`/`identities`,
+`channels`, `admin.reembedding.plan`/`apply`/`resume`/`status`,
+`admin.workspacePolicy.*`, `admin.share`/`.forget`/`.obsidian.*`/`.migrate` —
+works against a plain `HostServices` with no adapter involved, per
+`tests/engine-contract.test.js`.
 
 ## Hosting rules
 
@@ -262,6 +451,16 @@ Everything else — `recall`, `capture`, `checkpoint`, `memory.*` (1.5.0), `jobs
   `degraded.reason: "engine-closed"`, a capture handle's `done` resolves
   `{ stored: 0, skipped: 1, reason: "engine-closed" }`, and `jobs.run`
   rejects with `Error("engine closed")`.
+- **`close()` drains in-flight memory operations first (E2 Task 3).** Every
+  `Engine.memory`/`admin` member that runs through the shared `MemoryOps`
+  context (`memory.*`, `admin.share`/`.forget`/`.obsidian.*`/`.migrate`) is
+  tracked while it runs; `close({ budgetMs })` awaits every still-running one
+  (`Promise.allSettled`, never rejecting on one of their failures) before it
+  tears down the stores, all inside the same `budgetMs` race a slow resource
+  close already used — a call already past its guard when `close()` starts
+  is never cut off mid-write, and no store closes under a lease. A call that
+  arrives after `close()` began is refused immediately (`storage`, "engine is
+  closed") rather than joining the drain.
 
 ## `RecallQuery` fields the engine ignores
 
@@ -295,7 +494,8 @@ Covered above under "Rules the types encode"; summarised here for reference:
 
 `EngineEventName`: `dream.completed`, `job.run`, `acl.denied`,
 `recall.degraded`, `embedding.identity.changed`, `recall.block-clipped`,
-`recall.block-dropped`, `recall.completed`. The five recall-shaped ones:
+`recall.block-dropped`, `recall.completed`, `memory.proposal`. The five
+recall-shaped ones:
 
 - **`recall.block-clipped`** / **`recall.block-dropped`** — one per
   `Deferral` the global-inject-budget join produces, `{ agentId, ...deferral
@@ -320,6 +520,11 @@ Covered above under "Rules the types encode"; summarised here for reference:
   attempt regardless of which caller triggered it — `Engine.recall` does not
   emit a second copy of its own.
 - **`job.run`** — one per job run, carrying the same shape as the ledger row.
+- **`memory.proposal`** (1.6.0) — one per proposal lifecycle transition:
+  `{ proposalId, status, sharerAgentId, proposerAgentId, sharedId }`, fired
+  once when `MemoryOps.propose` files a proposal (`status: "pending"`) and
+  once when `proposals.accept`/`.reject` resolves it (`"accepted"` /
+  `"rejected"` / `"stale"` — the last when `accept` finds the copy stale).
 
 ## Host-neutral `lib/` rules and the lint's residual gaps
 
@@ -388,6 +593,11 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/memory-ops/errors.js` | `memoryOpError`, `isMemoryOpError`, the six codes |
 | `engine/memory-ops/read.js` | `Engine.memory.list`/`show`/`state` |
 | `engine/memory-ops/write.js` | `Engine.memory.forget`/`correct`/`share` |
+| `engine/memory-ops/shared.js` | `createSharedMemoryOps` — shared-copy retract/refresh (D31), `isLive`/`isSharer` |
+| `engine/memory-ops/proposal-store.js` | `createProposalStore` — the one-file-per-proposal JSON store under `_proposals/<sharerAgentId>/` |
+| `engine/memory-ops/proposals.js` | `createMemoryProposals` — `MemoryOps.propose`/`.proposals.{list,accept,reject}`, `memory.proposal` event |
+| `engine/admin/obsidian.js` | `createObsidianOps` — `AdminOps.obsidian.{detect,prepare,confirm}` |
+| `engine/store/schema-version.js` | `createStoreMigrator` — `AdminOps.migrate`, the `_schema.json` marker |
 | `engine/identity/principal.js` | `memoryContextFromPrincipal` — `Principal`/`AgentContext` as explicit inputs, the channel registry |
 | `engine/jobs/job-registry.js` | `createJobRegistry` — the 18 engine-owned jobs, retry/abandon/breaker, `MAX_ATTEMPTS`, `BREAKER_LIMIT`, `sweepKey` |
 | `engine/jobs/job-ledger.js` | the append-only `ledger.jsonl` + started-markers, crash detection |

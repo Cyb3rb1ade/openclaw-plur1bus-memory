@@ -8,10 +8,11 @@
  */
 
 import type {
-  AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
-  Deferral, Degraded, Engine, EngineConfig, EngineEventName, HostServices,
-  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpErrorCode,
-  Principal, RecallQuery, RecallResult, RecallTiming, TurnOrigin, TurnRecord,
+  AdminOps, AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
+  Deferral, Degraded, Engine, EngineConfig, EngineEventName, EngineStatus, HostServices,
+  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
+  MemoryProposalStatus, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
+  SchemaVersion, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
 
@@ -102,11 +103,14 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.5.0">>();
+assertTrue<Exact<ContractVersion, "1.6.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
 assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage">>();
+// 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
+assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
+assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();
 assertTrue<Exact<MemoryOps["list"], (q: import("./engine.js").MemoryListQuery, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryListResult>>>();
 assertTrue<Exact<MemoryOps["show"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryCard>>>();
 assertTrue<Exact<MemoryOps["forget"], (id: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryForgetResult>>>();
@@ -119,6 +123,23 @@ assertTrue<Exact<import("./engine.js").MemoryState["tombstones"], number | null>
 // The channel registry and the three new engine events.
 assertTrue<Exact<ReturnType<Engine["channels"]["list"]>, string[]>>();
 assertTrue<Exact<Extract<EngineEventName, `recall.${string}`>, "recall.degraded" | "recall.block-clipped" | "recall.block-dropped" | "recall.completed">>();
+
+// 1.6.0: AdminOps.share/forget alias Engine.memory; ObsidianOps; migrate; MemoryOps.propose/proposals (E2 Task 1).
+assertTrue<Exact<Engine["admin"], AdminOps>>();
+assertTrue<Exact<AdminOps["share"], MemoryOps["share"]>>();
+assertTrue<Exact<AdminOps["forget"], MemoryOps["forget"]>>();
+assertTrue<Exact<AdminOps["obsidian"], ObsidianOps>>();
+assertTrue<Exact<ObsidianOps["detect"], (p: Principal, a: AgentContext, opts?: { candidates?: string[] }) => Promise<import("./engine.js").ObsidianDetectResult>>>();
+assertTrue<Exact<ObsidianOps["prepare"], (vaultPath: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").ObsidianPrepareResult>>>();
+assertTrue<Exact<ObsidianOps["confirm"], (nonce: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").ObsidianConfirmResult>>>();
+assertTrue<Exact<AdminOps["migrate"], (from: SchemaVersion, to: SchemaVersion) => Promise<import("./engine.js").MigrationResult>>>();
+assertTrue<Exact<MemoryOps["propose"], (sharedId: string, newText: string, p: Principal, a: AgentContext, opts?: { note?: string }) => Promise<import("./engine.js").MemoryProposeResult>>>();
+assertTrue<Exact<MemoryOps["proposals"]["list"], (q: import("./engine.js").MemoryProposalListQuery, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryProposalListResult>>>();
+assertTrue<Exact<MemoryOps["proposals"]["accept"], (proposalId: string, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryProposalAcceptResult>>>();
+assertTrue<Exact<MemoryOps["proposals"]["reject"], (proposalId: string, p: Principal, a: AgentContext, opts?: { note?: string }) => Promise<import("./engine.js").MemoryProposalRejectResult>>>();
+assertTrue<Exact<MemoryProposalStatus, "pending" | "accepted" | "rejected" | "stale">>();
+assertTrue<Exact<Extract<EngineEventName, `memory.${string}`>, "memory.proposal">>();
+assertTrue<Exact<EngineStatus["storeSchema"], { current: SchemaVersion | null; expected: SchemaVersion }>>();
 
 // A minimal host satisfies HostServices: everything optional stays optional.
 const minimalHost: HostServices = {

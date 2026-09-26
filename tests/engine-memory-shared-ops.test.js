@@ -1,0 +1,206 @@
+/**
+ * tests/engine-memory-shared-ops.test.js — E2 Task 4 (spec decision D31):
+ * shared copies carry `sharedBy`/`sourceId`; only the sharing agent retracts
+ * (forget) or refreshes (correct) a shared copy; every other agent is denied,
+ * and an agent outside the pool sees not-found.
+ */
+
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+
+import { internalsOf } from "../engine/internals.js";
+import { createMemoryWrite } from "../engine/memory-ops/write.js";
+import { readTombstonesFromRegistry } from "../lib/tombstone.js";
+import {
+  USER_PRINCIPAL, archiveCount, archiveFiles, auditLines, code, cronAgent,
+  deniedWith, principal, seedAndGetId, setup, userAgent,
+} from "./helpers/shared-workspace-engine.js";
+
+async function assertRetractWorks({ engine, stateDir, baseDbPath, workspaceDir, sourceId, sharedId, anna, scope, viewer }) {
+  const tombstonesBefore = readTombstonesFromRegistry(baseDbPath, "anna").length;
+  const archivesBefore = archiveCount(stateDir, "anna");
+
+  const result = await engine.memory.forget(sharedId, anna, userAgent);
+  assert.deepEqual(result, { id: sharedId, archived: true, tombstoneId: null, alreadyForgotten: false });
+
+  assert.equal(archiveCount(stateDir, "anna"), archivesBefore + 1, "the shared copy was archived under anna");
+  await assert.rejects(() => engine.memory.show(sharedId, viewer, userAgent), code("not-found"));
+  const original = await engine.memory.show(sourceId, anna, userAgent);
+  assert.equal(original.id, sourceId, "the original stays live");
+  await assert.rejects(() => engine.memory.forget(sharedId, anna, userAgent), code("not-found"));
+
+  assert.equal(readTombstonesFromRegistry(baseDbPath, "anna").length, tombstonesBefore, "no tombstone registry entry for a retract");
+  const line = auditLines(workspaceDir).find((l) => l.op === "share-retract" && l.id === sharedId);
+  assert.ok(line, "a share-retract audit line was written");
+  assert.equal(line.scope, scope);
+  assert.equal(line.sourceMemoryId, sourceId);
+  assert.equal(typeof line.actor, "string");
+  assert.equal(typeof line.at, "string");
+}
+
+describe("Engine.memory on shared copies (E2 Task 4, D31)", () => {
+  it("(a)-(c) sharedBy/sourceId on the copy; non-sharers are denied or not-found; the sharer retracts", async () => {
+    const { stateDir, baseDbPath, workspaceDir, engine } = setup("e2-shared-a-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const carol = principal("carol");
+    const F = await seedAndGetId(engine, "anna", "The office plants are watered every Tuesday morning.", "office plants");
+    const { sharedId } = await engine.memory.share(F, "workspace", anna, userAgent);
+
+    // (a)
+    const seen = await engine.memory.show(sharedId, bernd, userAgent);
+    assert.equal(seen.scope, "workspace");
+    assert.equal(seen.sharedBy, "anna");
+    assert.equal(seen.sourceId, F);
+    const own = await engine.memory.show(F, anna, userAgent);
+    assert.equal("sharedBy" in own, false);
+    assert.equal("sourceId" in own, false);
+    const listed = await engine.memory.list({ since: 0 }, bernd, userAgent);
+    assert.equal(listed.items.find((c) => c.id === sharedId)?.sharedBy, "anna", "list carries sharedBy too");
+
+    // (b)
+    await assert.rejects(() => engine.memory.forget(sharedId, bernd, userAgent), deniedWith("only the sharing agent can retract a shared copy"));
+    await assert.rejects(() => engine.memory.correct(sharedId, "x", bernd, userAgent), deniedWith("shared copies are changed through a proposal (memory.propose)"));
+    await assert.rejects(() => engine.memory.share(sharedId, "workspace", bernd, userAgent), deniedWith("a shared copy cannot be shared again"));
+    await assert.rejects(() => engine.memory.share(sharedId, "workspace", anna, userAgent), deniedWith("a shared copy cannot be shared again"));
+    await assert.rejects(() => engine.memory.show(sharedId, carol, userAgent), code("not-found"));
+    await assert.rejects(() => engine.memory.forget(sharedId, carol, userAgent), code("not-found"));
+    const unchanged = await engine.memory.show(sharedId, bernd, userAgent);
+    assert.equal(unchanged.text, seen.text, "refused calls changed nothing");
+
+    // (c)
+    await assertRetractWorks({ engine, stateDir, baseDbPath, workspaceDir, sourceId: F, sharedId, anna, scope: "workspace", viewer: bernd });
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(d) the sharer's correct refreshes the copy: new original, new copy, old copy retracted", async () => {
+    const { stateDir, workspaceDir, engine } = setup("e2-shared-d-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const G = await seedAndGetId(engine, "anna", "The team lunch is booked at the harbour bistro.", "team lunch");
+    const { sharedId: S2 } = await engine.memory.share(G, "workspace", anna, userAgent);
+    const archivesBefore = archiveCount(stateDir, "anna");
+
+    const result = await engine.memory.correct(S2, "G corrected", anna, userAgent);
+    assert.equal(result.archived, true);
+    const S3 = result.id;
+    assert.notEqual(S3, S2);
+
+    // Archive-first for both the original (correctCard) and the retracted copy.
+    const files = archiveFiles(stateDir, "anna");
+    assert.equal(files.length, archivesBefore + 2);
+    assert.ok(files.some((f) => f.endsWith(`-${G}.json`)), "the original was archived before its correction");
+    assert.ok(files.some((f) => f.endsWith(`-${S2}.json`)), "the old copy was archived before its retract");
+    const lines = auditLines(workspaceDir);
+    assert.ok(lines.some((l) => l.event === "memory.updated" && l.memoryId === G), "the original's correction was audited");
+    assert.ok(lines.some((l) => l.op === "share-retract" && l.id === S2), "the old copy's retract was audited");
+
+    const refreshed = await engine.memory.show(S3, bernd, userAgent);
+    assert.equal(refreshed.text, "G corrected");
+    assert.equal(refreshed.sharedBy, "anna");
+    await assert.rejects(() => engine.memory.show(S2, bernd, userAgent), code("not-found"));
+    await assert.rejects(() => engine.memory.show(G, anna, userAgent), code("not-found"));
+
+    const annaList = await engine.memory.list({ topic: "G corrected" }, anna, userAgent);
+    const newOriginal = annaList.items.find((c) => c.id === refreshed.sourceId);
+    assert.ok(newOriginal, "the new original is listed");
+    assert.equal(newOriginal.scope, "agent-private");
+    assert.equal(newOriginal.text, "G corrected");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(d2) a failed re-share leaves the original corrected and the old copy live, and names both ids", async () => {
+    const { baseDbPath, engine } = setup("e2-shared-d2-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const G = await seedAndGetId(engine, "anna", "The coffee beans are delivered on Mondays.", "coffee beans");
+    const { sharedId: S2 } = await engine.memory.share(G, "workspace", anna, userAgent);
+
+    const internals = internalsOf(engine);
+    const warnings = [];
+    const failingWrite = createMemoryWrite({
+      opsContext: internals.memoryOpsContext,
+      memoryDbAdapter: internals.memoryDbAdapter,
+      baseDbPath,
+      pool: internals.pool,
+      sharedMemoryPool: internals.sharedMemoryPool,
+      embeddings: internals.embeddings,
+      logger: { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} },
+      shareCopy: async () => ({ ok: false, error: "share.store_error: injected", code: "storage" }),
+    });
+
+    let caught;
+    await assert.rejects(() => failingWrite.correct(S2, "Coffee beans now arrive on Thursdays.", anna, userAgent), (err) => {
+      caught = err;
+      return code("storage")(err) && err.message === "share refresh failed after correcting the original";
+    });
+    assert.equal(caught.detail.sharedId, S2, "detail names the still-live old copy");
+    assert.equal(typeof caught.detail.sourceId, "string");
+    assert.notEqual(caught.detail.sourceId, G);
+    assert.ok(warnings.some((w) => w.includes(caught.detail.sourceId) && w.includes(S2)), "the failure is logged with both ids");
+
+    const newOriginal = await engine.memory.show(caught.detail.sourceId, anna, userAgent);
+    assert.equal(newOriginal.text, "Coffee beans now arrive on Thursdays.", "the original was corrected");
+    await assert.rejects(() => engine.memory.show(G, anna, userAgent), code("not-found"));
+    const oldCopy = await engine.memory.show(S2, bernd, userAgent);
+    assert.equal(oldCopy.id, S2, "the old copy is still live");
+
+    // The sharer can still retract the leftover copy.
+    const retracted = await engine.memory.forget(S2, anna, userAgent);
+    assert.equal(retracted.archived, true);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(e) correct of a copy whose original is gone is conflict; retract still works", async () => {
+    const { engine } = setup("e2-shared-e-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const H = await seedAndGetId(engine, "anna", "The parking permits renew at the end of March.", "parking permits");
+    const { sharedId: S4 } = await engine.memory.share(H, "workspace", anna, userAgent);
+    await engine.memory.forget(H, anna, userAgent);
+
+    await assert.rejects(() => engine.memory.correct(S4, "x", anna, userAgent), (err) => code("conflict")(err)
+      && err.message === "the original of this shared copy is no longer live; retract it instead");
+    const still = await engine.memory.show(S4, bernd, userAgent);
+    assert.equal(still.id, S4, "the refused refresh left the copy live");
+
+    const retracted = await engine.memory.forget(S4, anna, userAgent);
+    assert.equal(retracted.archived, true);
+    await assert.rejects(() => engine.memory.show(S4, bernd, userAgent), code("not-found"));
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(f) a background retract is denied and changes nothing", async () => {
+    const { engine } = setup("e2-shared-f-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const F = await seedAndGetId(engine, "anna", "The fire drill is scheduled for the first Friday.", "fire drill");
+    const { sharedId } = await engine.memory.share(F, "workspace", anna, userAgent);
+
+    await assert.rejects(() => engine.memory.forget(sharedId, anna, cronAgent), code("denied"));
+    const still = await engine.memory.show(sharedId, bernd, userAgent);
+    assert.equal(still.id, sharedId);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(g) a user-scope copy is retracted through the user pool", async () => {
+    const { stateDir, baseDbPath, workspaceDir, engine } = setup("e2-shared-g-");
+    const anna = principal("anna", { user: USER_PRINCIPAL });
+    const F2 = await seedAndGetId(engine, "anna", "The dentist reminder card sits on the fridge door.", "dentist reminder");
+    const { sharedId } = await engine.memory.share(F2, "user", anna, userAgent);
+
+    const seen = await engine.memory.show(sharedId, anna, userAgent);
+    assert.equal(seen.scope, "user");
+    assert.equal(seen.sharedBy, "anna");
+    assert.equal(seen.sourceId, F2);
+
+    await assertRetractWorks({ engine, stateDir, baseDbPath, workspaceDir, sourceId: F2, sharedId, anna, scope: "user", viewer: anna });
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+});

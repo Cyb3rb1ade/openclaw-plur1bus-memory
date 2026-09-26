@@ -456,11 +456,11 @@ describe("Engine.memory on a workspace-shared card (E1 final review I3)", () => 
     assert.equal(shown.id, sharedId);
     assert.equal(shown.scope, "workspace");
 
-    const deniedShared = (err) => err.name === "MemoryOpError" && err.code === "denied"
-      && err.message === "shared copies cannot be changed through this call yet";
-    await assert.rejects(() => engine.memory.forget(sharedId, anna, agent), deniedShared);
-    await assert.rejects(() => engine.memory.correct(sharedId, "The toner comes from elsewhere now.", anna, agent), deniedShared);
-    await assert.rejects(() => engine.memory.share(sharedId, "workspace", anna, agent), deniedShared);
+    // E2 Task 4 (D31): anna is not the sharer, so each op names its own refusal.
+    const deniedShared = (message) => (err) => err.name === "MemoryOpError" && err.code === "denied" && err.message === message;
+    await assert.rejects(() => engine.memory.forget(sharedId, anna, agent), deniedShared("only the sharing agent can retract a shared copy"));
+    await assert.rejects(() => engine.memory.correct(sharedId, "The toner comes from elsewhere now.", anna, agent), deniedShared("shared copies are changed through a proposal (memory.propose)"));
+    await assert.rejects(() => engine.memory.share(sharedId, "workspace", anna, agent), deniedShared("a shared copy cannot be shared again"));
 
     const unknown = randomUUID();
     await assert.rejects(() => engine.memory.show(unknown, anna, agent), (err) => err.code === "not-found");

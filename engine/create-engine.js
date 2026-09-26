@@ -16,7 +16,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemoryWithReason } from "../lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "../lib/memory-fact-quality.js";
@@ -103,6 +103,7 @@ import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmError
 import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "./recall/namespace-recall.js";
 import { applyEpistemicStatusToLanceDb, waitForTimeoutSettlement } from "./store/memory-db.js";
 import { AgentDbPool } from "./store/agent-db-pool.js";
+import { STORE_SCHEMA_VERSION, createStoreMigrator, writeStoreSchemaMarker } from "./store/schema-version.js";
 import { CONTROL_HEALTH_CACHE_TTL_MS, CONTROL_HEALTH_FAILED_RETRY_MS, CONTROL_HEALTH_MAX_PARTITIONS, CONTROL_HEALTH_REFRESH_INTERVAL_MS, createControlHealthRowInspector, listControlHealthPartitions } from "./store/control-health.js";
 import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
 import { aggregateSkillMinerRuns, appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, formatKnownValidityLabel, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore, textSuggestsGroupOrigin } from "./commands/command-helpers.js";
@@ -113,7 +114,16 @@ import { flushMetrics } from "../lib/metrics.js";
 import { createMemoryOpsContext } from "./memory-ops/context.js";
 import { createMemoryRead } from "./memory-ops/read.js";
 import { createMemoryWrite } from "./memory-ops/write.js";
+import { createProposalStore } from "./memory-ops/proposal-store.js";
+import { createMemoryProposals } from "./memory-ops/proposals.js";
 import { memoryOpError } from "./memory-ops/errors.js";
+import { createObsidianOps } from "./admin/obsidian.js";
+
+// Nothing in this file otherwise reads the plugin's own package.json version
+// (grepped repo-wide before adding this); the store schema marker records it
+// alongside the schema version for forensic purposes, so it is read once,
+// here, at module load.
+const ENGINE_VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 /**
  * Build the engine: every store, provider, route, scheduler and command body
@@ -298,6 +308,20 @@ export function createEngine(host, config, testOptions = {}) {
       }
     }
   }
+
+  // Store schema version marker (E2 Task 2, contract 1.6.0): a fresh
+  // baseDbPath (missing, or present but empty) starts current — there is
+  // nothing on disk yet to migrate. An existing, non-empty store with no
+  // marker stays at LEGACY_STORE_SCHEMA_VERSION ("0") until the owner runs
+  // admin.migrate. This must run before anything else touches baseDbPath,
+  // and writing a fresh marker must not change golden-prefix output (it
+  // touches no LanceDB table).
+  const baseDbPathIsFreshStore = !existsSync(baseDbPath)
+    || readdirSync(baseDbPath).length === 0;
+  if (baseDbPathIsFreshStore) {
+    writeStoreSchemaMarker(baseDbPath, STORE_SCHEMA_VERSION, { engineVersion: ENGINE_VERSION });
+  }
+  const storeMigrator = createStoreMigrator({ baseDbPath, logger: host.logger, engineVersion: ENGINE_VERSION });
 
   const obsidianBridgeEnabled = obsidianBridgeCfg.enabled !== false;
 
@@ -1454,6 +1478,20 @@ export function createEngine(host, config, testOptions = {}) {
     embeddings,
     // E1 Task 8: correct writes through safeUpdate with the Neo store, as /correct always did.
     getNeoStore,
+    logger: host.logger,
+  });
+
+  // Change proposals (E2 Task 5, D31): a reader of a shared copy who is not
+  // its sharer files a proposal here instead of correcting it directly; the
+  // sharer accepts/rejects it later (Task 6). The store is one JSON file per
+  // proposal, keyed off baseDbPath (engine/memory-ops/proposal-store.js).
+  const proposalStore = createProposalStore({ baseDbPath, logger: host.logger });
+  const memoryProposals = createMemoryProposals({
+    opsContext: memoryOpsContext,
+    sharedOps: memoryWrite.shared,
+    store: proposalStore,
+    memoryDbAdapter,
+    host,
     logger: host.logger,
   });
 
@@ -2895,8 +2933,12 @@ export function createEngine(host, config, testOptions = {}) {
     // close() never rejects (final review m4): a resource that fails to
     // close is logged, and the engine is closed either way. The closer is
     // read from internals so a testOptions.internals override reaches it.
+    // Operations already running are awaited first (E2 Task 3); new ones are
+    // refused because `closing` is set synchronously below. Both steps stay
+    // inside the budget race.
     closing = Promise.race([
       Promise.resolve()
+        .then(() => memoryOpsContext.drain())
         .then(() => internals.closeResources())
         .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${detailOf(error)}`); }),
       new Promise((resolve) => {
@@ -2983,6 +3025,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryAccountTopology,
     memoryDbAdapter,
     memoryOpsContext,
+    memoryProposals,
     memoryRead,
     memoryWrite,
     memoryTextContradictionLlmCfg,
@@ -3353,11 +3396,26 @@ export function createEngine(host, config, testOptions = {}) {
     serve: async () => ({ dispose() {} }),
   });
 
+  // AdminOps.obsidian (1.6.0, E2 Task 7): host-neutral vault detect/prepare/confirm,
+  // explicit paths only, no host runtime. Reuses the same MemoryOps opsContext
+  // (fail-closed principal/agent resolution) and the engine's existing
+  // confirmationStore Map (the one the /plur1bus dispatcher and its command
+  // handlers already share) — no second confirmation mechanism.
+  const obsidianOps = createObsidianOps({
+    opsContext: memoryOpsContext,
+    baseDbPath,
+    confirmationStore,
+    getObsidianBridgeConfig: () => cfg.obsidianBridge || {},
+    logger: host.logger,
+  });
+
   // AdminOps: the existing coordinators behind the contract's method names;
   // an operation with no engine-side implementation yet rejects.
+  // share/forget (1.6.0, deprecated) are aliases of Engine.memory.share/forget —
+  // same code path as engine.memory below, not a second implementation.
   const adminOps = Object.freeze({
-    share: notInM1b1("admin.share"),
-    forget: notInM1b1("admin.forget"),
+    share: async (id, target, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.share(id, target, p, a, opts)); },
+    forget: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.forget(id, p, a)); },
     reembedding: Object.freeze({
       plan: (...args) => internals.reembeddingCoordinator.plan(...args),
       apply: (...args) => internals.reembeddingCoordinator.apply(...args),
@@ -3376,11 +3434,11 @@ export function createEngine(host, config, testOptions = {}) {
       set: async (...args) => internals.workspacePolicyStore.set(...args),
     }),
     obsidian: Object.freeze({
-      detect: notInM1b1("admin.obsidian.detect"),
-      prepare: notInM1b1("admin.obsidian.prepare"),
-      confirm: notInM1b1("admin.obsidian.confirm"),
+      detect: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => obsidianOps.detect(...args)); },
+      prepare: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => obsidianOps.prepare(...args)); },
+      confirm: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => obsidianOps.confirm(...args)); },
     }),
-    migrate: notInM1b1("admin.migrate"),
+    migrate: async (from, to) => { assertMemoryOpen(); return memoryOpsContext.track(() => storeMigrator.migrate(from, to)); },
   });
   internals.embeddingService = embeddingService;
   internals.adminOps = adminOps;
@@ -3391,9 +3449,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.5.0).
+  // The Engine (types/engine.d.ts, contract 1.6.0).
   const engine = {
-    contract: "1.5.0",
+    contract: "1.6.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3402,7 +3460,13 @@ export function createEngine(host, config, testOptions = {}) {
     },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
     async status() {
-      return { ready: true, degraded: null, agents: openedAgents.size, contract: "1.5.0" };
+      return {
+        ready: true,
+        degraded: null,
+        agents: openedAgents.size,
+        contract: "1.6.0",
+        storeSchema: { current: storeMigrator.current(), expected: STORE_SCHEMA_VERSION },
+      };
     },
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
@@ -3513,13 +3577,21 @@ export function createEngine(host, config, testOptions = {}) {
     // Typed MemoryOps surface (contract 1.5.0, E1). After close() every member
     // rejects with MemoryOpError "storage" before it touches a store, so a
     // late call can neither reopen LanceDB nor write an archive or tombstone.
+    // A call already running is tracked, and close() drains it first (E2 Task 3).
     memory: Object.freeze({
-      list: async (q, p, a) => { assertMemoryOpen(); return internals.memoryRead.list(q, p, a); },
-      show: async (id, p, a) => { assertMemoryOpen(); return internals.memoryRead.show(id, p, a); },
-      forget: async (id, p, a) => { assertMemoryOpen(); return internals.memoryWrite.forget(id, p, a); },
-      correct: async (id, newText, p, a) => { assertMemoryOpen(); return internals.memoryWrite.correct(id, newText, p, a); },
-      share: async (id, target, p, a, opts) => { assertMemoryOpen(); return internals.memoryWrite.share(id, target, p, a, opts); },
-      state: async (p, a) => { assertMemoryOpen(); return internals.memoryRead.state(p, a); },
+      list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.list(q, p, a)); },
+      show: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.show(id, p, a)); },
+      forget: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.forget(id, p, a)); },
+      correct: async (id, newText, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.correct(id, newText, p, a)); },
+      share: async (id, target, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.share(id, target, p, a, opts)); },
+      state: async (p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.state(p, a)); },
+      // Change proposals (E2 Tasks 5 and 6, D31): tracked like every other member.
+      propose: async (sharedId, newText, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.propose(sharedId, newText, p, a, opts)); },
+      proposals: Object.freeze({
+        list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.list(q, p, a)); },
+        accept: async (proposalId, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.accept(proposalId, p, a)); },
+        reject: async (proposalId, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.reject(proposalId, p, a, opts)); },
+      }),
     }),
     events: Object.freeze({
       on(name, handler) {
