@@ -403,9 +403,9 @@ function evalWhere(row, expr) {
   // `spalte IS NULL` — Wert fehlt oder ist null
   m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NULL$/i);
   if (m) return row[m[1]] === undefined || row[m[1]] === null;
-  // `spalte != 'wert'` — ein fehlender Wert zählt als leer, also ungleich
+  // SQL inequality excludes NULL; the caller's explicit IS NULL branch admits it.
   m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*!=\s*'([^']*)'$/);
-  if (m) return String(row[m[1]] ?? '') !== m[2];
+  if (m) return row[m[1]] != null && String(row[m[1]]) !== m[2];
   // `spalte = 'wert'`, inklusive leerem String
   m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']*)'$/);
   if (m) return String(row[m[1]] ?? '') === m[2];
@@ -490,6 +490,17 @@ test('db-adapter findRecentUnclassified: filtert leeres type + sinceMinutes', as
   assert.strictEqual(out.length, 1);
   assert.strictEqual(out[0].id, 'r1');
   assert.ok('content' in out[0], 'content-Feld für Classifier vorhanden');
+});
+
+test('fake SQL dream guard preserves ordinary and null provenance', () => {
+  const guard = "(origin IS NULL OR origin != 'dream') AND (memoryClass IS NULL OR memoryClass != 'dream')";
+  for (const row of [{}, { origin: null }, { origin: 'dm', memoryClass: 'standard' }]) {
+    assert.strictEqual(evalWhere(row, guard), true);
+  }
+  for (const row of [{ origin: 'dream' }, { memoryClass: 'dream' }]) {
+    assert.strictEqual(evalWhere(row, guard), false);
+  }
+  assert.strictEqual(evalWhere({ origin: null }, "origin != 'dream'"), false);
 });
 
 test('db-adapter updateCardType: setzt type-Spalte', async () => {
