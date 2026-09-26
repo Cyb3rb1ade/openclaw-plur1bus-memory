@@ -108,6 +108,7 @@ import { CONTROL_HEALTH_CACHE_TTL_MS, CONTROL_HEALTH_FAILED_RETRY_MS, CONTROL_HE
 import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
 import { aggregateSkillMinerRuns, appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, formatKnownValidityLabel, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore, textSuggestsGroupOrigin } from "./commands/command-helpers.js";
 import { createRuntimeRerankerProvider } from "./providers/runtime-reranker.js";
+import { createEmbeddingProbe } from "./providers/embedding-service.js";
 import { ENGINE_INTERNALS } from "./internals.js";
 import { createResourceCloser } from "./lifecycle/close-resources.js";
 import { flushMetrics } from "../lib/metrics.js";
@@ -3390,6 +3391,13 @@ export function createEngine(host, config, testOptions = {}) {
   let toolSpecs = null;
 
   // EmbeddingService over the engine's provider and reranker.
+  const embeddingProbe = createEmbeddingProbe({
+    getEmbeddings: () => internals.embeddings,
+    getIdentity: () => embeddingService.identities()[0],
+    logger: host.logger,
+    clock,
+  });
+  internals.embeddingProbe = embeddingProbe;
   const embeddingService = Object.freeze({
     async embed(texts, o = {}) {
       const provider = internals.embeddings;
@@ -3400,7 +3408,7 @@ export function createEngine(host, config, testOptions = {}) {
     rerank: (query, docs, o = {}) => (internals.reranker
       ? internals.reranker.rerank(query, docs, o.topN, { signal: o.signal })
       : Promise.resolve([])),
-    probe: async () => ({ ok: true, cached: false }),
+    probe: async (opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => embeddingProbe.probe(opts)); },
     identities: () => [Object.freeze({
       fingerprintId: internals.activeEmbeddingFingerprintId,
       provider: internals.normalizedEmbeddingCfg.provider,
