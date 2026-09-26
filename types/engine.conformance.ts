@@ -8,11 +8,11 @@
  */
 
 import type {
-  AdminOps, AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
+  AdminOps, AgentContext, AgentJobHealth, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   CriticalButtonPushArgs, CriticalButtonPushResult, Deferral, Degraded, Disposable, Engine, EngineConfig,
   EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostServices,
-  HostCapabilities, IpcAddress, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
-  MemoryProposalStatus, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
+  HostCapabilities, IpcAddress, JobLastRun, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
+  MemoryProposalStatus, ModelsStatus, ModelState, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
   SchemaVersion, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
@@ -104,11 +104,11 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.7.0">>();
+assertTrue<Exact<ContractVersion, "1.8.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
-assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage">>();
+assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported">>();
 // 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
 assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
 assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();
@@ -151,6 +151,14 @@ assertTrue<EmbeddingServeResult extends Disposable ? true : false>();
 assertTrue<Exact<HostCapabilities["pushCriticalButtons"], ((args: CriticalButtonPushArgs) => Promise<CriticalButtonPushResult | null>) | undefined>>();
 assertTrue<Exact<CriticalButtonPushArgs["warning"], string>>();
 
+// 1.8.0: status health, models, journal, shared memory, unsupported (E4 Task 1).
+assertTrue<Exact<Engine["models"]["warm"], (opts?: { signal?: AbortSignal; refresh?: boolean }) => Promise<ModelsStatus>>>();
+assertTrue<Exact<ModelState, "loading" | "ready" | "failed" | "disabled">>();
+assertTrue<Exact<EngineStatus["journal"], import("./engine.js").JournalBacklog | null>>();
+assertTrue<Exact<EngineStatus["sharedMemory"]["mode"], "fd-capability" | "verified-path" | "unavailable">>();
+assertTrue<"unsupported" extends MemoryOpErrorCode ? true : false>();
+assertTrue<Exact<AgentJobHealth["lastRuns"], Partial<Record<JobName, JobLastRun>>>>();
+
 // A minimal host satisfies HostServices: everything optional stays optional.
 const minimalHost: HostServices = {
   logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -180,3 +188,5 @@ assertTrue<Exact<HostCapabilities["resolvePath"], ((path: string) => string) | u
 assertTrue<Exact<HostCapabilities["memoryArchiveDir"], (() => string) | undefined>>();
 const hostWithButtons: HostServices = { ...minimalHost, capabilities: { pushCriticalButtons: async () => null } };
 void hostWithButtons;
+const hostWithJournal: HostServices = { ...minimalHost, capabilities: { journalBacklog: () => ({ entries: 0, oldestAt: null }) } };
+void hostWithJournal;

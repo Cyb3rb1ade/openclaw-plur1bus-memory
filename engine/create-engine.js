@@ -3489,9 +3489,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.7.0).
+  // The Engine (types/engine.d.ts, contract 1.8.0).
   const engine = {
-    contract: "1.7.0",
+    contract: "1.8.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3504,7 +3504,7 @@ export function createEngine(host, config, testOptions = {}) {
         ready: true,
         degraded: null,
         agents: openedAgents.size,
-        contract: "1.7.0",
+        contract: "1.8.0",
         storeSchema: { current: storeMigrator.current(), expected: STORE_SCHEMA_VERSION },
       };
     },

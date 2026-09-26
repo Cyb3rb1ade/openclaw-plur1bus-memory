@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.7.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended eight times under the policy below — see the changelog at the end
+ * Contract version 1.8.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended nine times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -38,9 +38,10 @@
  *            1.5.0 — MemoryOps types, Engine.memory (E1 Task 2); runCommand deprecated; MemoryState.tombstones number | null (E1-R11); HostCapabilities.memoryArchiveDir? (E1 Task 8).
  *            1.6.0 — AdminOps.share/forget alias Engine.memory (deprecated); ObsidianOps with explicit paths; migrate over a store schema marker; MemoryOps.propose/proposals (D31); MemoryCard.sharedBy/sourceId; MemoryOpError.detail; "memory.proposal" event; EngineStatus.storeSchema (E2).
  *            1.7.0 — EmbeddingService.probe(opts?) → EmbeddingProbeResult (identity, readiness, memoized); serve(address?: IpcAddress | null) → EmbeddingServeResult (real scoped IPC, in-process owner, no claim listener); HostCapabilities.pushCriticalButtons? typed (E3).
+ *            1.8.0 — EngineStatus.jobs/models/journal/sharedMemory, degraded derived from model readiness; Engine.models (status, warm); HostCapabilities.journalBacklog?; MemoryOpErrorCode "unsupported"; CaptureResult.reason "duplicate-turn" (E4).
  */
 
-export type ContractVersion = "1.7.0";
+export type ContractVersion = "1.8.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -200,6 +201,9 @@ export interface CriticalButtonPushArgs {
 /** `sent` cards went out with buttons; `unsentTexts` go out as plain cron text; `reason` is host-defined. */
 export interface CriticalButtonPushResult { sent: number; unsentTexts: string[]; reason?: string }
 
+/** 1.8.0: what the host knows about turns it journaled while the engine was unavailable. */
+export interface JournalBacklog { entries: number; oldestAt: number | null }
+
 export interface HostCapabilities {
   resolvePath?(path: string): string;
   registrationMode?: string;
@@ -209,6 +213,8 @@ export interface HostCapabilities {
    *  array → the engine replies with the plain cron text (as it does when the capability is absent or throws);
    *  `unsentTexts: []` with `sent > 0` → NO_REPLY (every card went out with buttons). */
   pushCriticalButtons?(args: CriticalButtonPushArgs): Promise<CriticalButtonPushResult | null>;
+  /** 1.8.0: read by Engine.status(); absent, throwing, invalid or slower than 50 ms → `EngineStatus.journal: null`. */
+  journalBacklog?(): JournalBacklog | null | Promise<JournalBacklog | null>;
   [capability: string]: unknown;
 }
 
@@ -315,6 +321,7 @@ export interface TurnRecord {
 export interface CaptureResult {
   stored: number;
   skipped: number;
+  /** "duplicate-turn": the same turn was already captured (Q3, E4). */
   reason?: string;
 }
 
@@ -465,6 +472,34 @@ export interface EmbeddingService {
 }
 
 /* ------------------------------------------------------------------ */
+/* Models (1.8.0)                                                      */
+/* ------------------------------------------------------------------ */
+
+export type ModelState = "loading" | "ready" | "failed" | "disabled";
+export type RerankerProbeError = "aborted" | "provider-failed" | "invalid-result";
+export interface ModelReadiness {
+  /** loading: not confirmed yet (checkedAt null) or first probe running; the embedder is never "disabled". */
+  state: ModelState;
+  /** true while a probe is in flight. */
+  warming: boolean;
+  /** Clock time of the completed probe that set `state`; null before any, and when disabled. */
+  checkedAt: number | null;
+  /** Only when state === "failed". */
+  error?: EmbeddingProbeError | RerankerProbeError;
+}
+export interface ModelsStatus {
+  embedder: ModelReadiness & { identity: EmbeddingIdentity };
+  reranker: ModelReadiness & { provider: string | null };
+}
+/** warm(): probes embedder and reranker concurrently (embedding.probe semantics: coalesced, memoized on success,
+ *  `refresh` forces new provider calls, `signal` ends only this caller's wait) and resolves the status afterwards.
+ *  Never rejects for a provider failure; rejects MemoryOpError `storage` ("engine is closed") after close(). */
+export interface ModelsService {
+  status(): ModelsStatus;
+  warm(opts?: { signal?: AbortSignal; refresh?: boolean }): Promise<ModelsStatus>;
+}
+
+/* ------------------------------------------------------------------ */
 /* Tools, commands, admin, events                                      */
 /* ------------------------------------------------------------------ */
 
@@ -536,7 +571,9 @@ export interface AdminOps {
  *  "exists but you may not see it" and "tombstoned" (anti-oracle). */
 export type MemoryOpErrorCode =
   | "not-found" | "denied" | "invalid-input" | "approval-required"
-  | "conflict" | "storage";
+  | "conflict" | "storage"
+  /** 1.8.0: the operation needs a capability this engine does not have on this platform (e.g. shared memory). */
+  | "unsupported";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
 export interface MemoryOpError extends Error {
@@ -666,12 +703,44 @@ export interface EngineEvents {
   on(event: EngineEventName, handler: (payload: unknown) => void): Disposable;
 }
 
+export interface JobLastRun {
+  runId: string; outcome: JobOutcome; reason?: string; trigger: JobTrigger;
+  startedAt: number; finishedAt: number; attempt: number;
+}
+export interface BreakerState { sweep: string; sessions: number; limit: number; open: boolean }
+export interface AgentJobHealth {
+  agentId: AgentId;
+  /** Latest finished run per job (by finishedAt); jobs that never ran are absent. */
+  lastRuns: Partial<Record<JobName, JobLastRun>>;
+  /** Jobs with a run in flight in this process, sorted. */
+  running: JobName[];
+  /** rem/deep LLM-session breaker for the current UTC sweep, in-flight sessions included. */
+  breaker: BreakerState;
+  /** Ledger lines that could not be parsed. */
+  unreadableLines: number;
+}
+export interface JobsHealth { ledger: "ok" | "unavailable"; agents: AgentJobHealth[] }
+export type SharedMemoryMode = "fd-capability" | "verified-path" | "unavailable";
+export interface SharedMemorySupport {
+  supported: boolean;
+  mode: SharedMemoryMode;
+  /** Why it is unsupported: the platform lacks a mode, the shared root failed its safety check, the Windows ACL
+   *  reader is missing, or the root's identity changed during a lease (pool refuses until restart). */
+  reason?: "platform" | "unsafe-root" | "acl-tool-unavailable" | "identity-changed";
+}
 export interface EngineStatus {
   ready: boolean;
+  /** 1.8.0: derived from models — embedder failed → {reason:"model-failed",capability:"embedding"}; embedder loading →
+   *  {reason:"models-warming",capability:"embedding"}; reranker failed → model-failed/"reranker"; reranker loading →
+   *  models-warming/"reranker"; first match wins; otherwise null. */
   degraded: Degraded | null;
   agents: number;
   contract: ContractVersion;
   storeSchema: { current: SchemaVersion | null; expected: SchemaVersion };
+  /** 1.8.0 */ jobs: JobsHealth;
+  /** 1.8.0 */ models: ModelsStatus;
+  /** 1.8.0: null when the host reports none. */ journal: JournalBacklog | null;
+  /** 1.8.0 */ sharedMemory: SharedMemorySupport;
 }
 
 export interface AgentStore {
@@ -708,6 +777,8 @@ export interface Engine {
 
   jobs: JobRegistry;
   embedding: EmbeddingService;
+  /** 1.8.0 */
+  models: ModelsService;
   admin: AdminOps;
   events: EngineEvents;
   /** The open channel vocabulary (ChannelRef): a host declares its channels. */
