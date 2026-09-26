@@ -5,6 +5,20 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.11] — 2026-09-26
+
+### Geändert
+
+- **Vergessen durch das Modell sperrt nicht mehr dauerhaft.** Das Werkzeug
+  `memory_forget` archiviert die Karte, setzt sie auf `deleted` und schreibt
+  die Audit-Zeile wie bisher, legt aber keinen Fingerabdruck mehr im
+  Tombstone-Register an. Bisher sperrte ein Vergessen durch das Modell
+  denselben Inhalt dauerhaft gegen erneutes Speichern; ein Missverständnis
+  oder eine eingeschleuste Anweisung in einer gelesenen Seite konnte so etwas
+  Unwiderrufliches auslösen. Die dauerhafte Sperre bleibt dem Menschen
+  vorbehalten (`/forget`, `lib/telegram-commands/memory-edit.js`, unverändert).
+  Bestehende Einträge im Register bleiben gültig.
+
 ## [7.16.10] — 2026-09-26
 
 ### Hinzugefügt

@@ -792,7 +792,8 @@ value. The schema rejects it. Jina reranking is a local model, selected through
 - **Forgotten stays forgotten.** Every reachable card re-insert — store, content
   update, `updateCard`, compaction, auto-capture, light-dream rewrite — checks the
   tombstone registry before `table.add`. Same-text replay by the user is still
-  allowed.
+  allowed. Since 7.16.11 only the human `/forget` writes into that registry; the
+  model's `memory_forget` hides a card without blocking its text.
 - **A global inject budget** (`recall.globalInjectMaxChars`, default 17000) trims
   memories before time and reminder context, so a large recall can no longer
   crowd the rest of the prompt out. An inner budget on the memories block
@@ -1580,7 +1581,7 @@ command; there is no standalone DB/config/credential bootstrap. Multi-Namespace,
 Neo/Obsidian aliases, Semantic Lens, CRR, the OpenClaw default LLM, and
 per-agent credentials do not change under sharing or migration.
 
-**`security.allowModelDestructiveMemoryOps`** (default `true`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state. Set this flag to `false` if you want a hard opt-out for model-driven destructive memory writes.
+**`security.allowModelDestructiveMemoryOps`** (default `true`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state. Set this flag to `false` if you want a hard opt-out for model-driven destructive memory writes. Since 7.16.11 `memory_forget` hides the card (archive, `status=deleted`, audit line) but writes no fingerprint into the tombstone registry, so a forget the model was talked into cannot block the same text for good; the durable block stays with the human `/forget`.
 
 ### Feature profiles
 
