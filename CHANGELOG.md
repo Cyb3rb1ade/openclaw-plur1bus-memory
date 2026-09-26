@@ -5,6 +5,32 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.16.10] — 2026-09-26
+
+### Hinzugefügt
+
+- **Critical Push mit Knöpfen.** Jede als wichtig erkannte Erinnerung kommt als
+  eigene Telegram-Nachricht mit „✅ Annehmen“ und „❌ Ablehnen“. Ein Tipp führt
+  denselben autorisierten Befehl aus wie `/plur1bus critical accept|reject` und
+  schreibt das Ergebnis unter die Karte, die Knöpfe verschwinden. Der Host
+  prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt nur Klicks
+  aus Direktchats, über den Bot des Agenten, dem die Karte gehört, und aus dem
+  Chat, in den dessen Push geht. Versand über den Telegram-Outbound-Adapter des
+  Hosts an dasselbe Ziel, das der Cron-Plan ableitet
+  (`lib/critical-button-delivery.js`); scheitert der Versand, gehen die übrigen
+  Karten wie bisher als Text über die Cron-Zustellung. Abschaltbar mit
+  `criticalPush.buttons: false`. „Alle annehmen/ablehnen“ bleibt per Befehl
+  oder zitierter Antwort.
+
+### Geändert
+
+- **Unbestätigte Criticals verfallen zur normalen Erinnerung.** Der nächtliche
+  Job `auto-accept-stale` akzeptierte Karten nach 24 Stunden automatisch als
+  Critical, sodass eine Fehlklassifikation ohne Antwort dauerhaft
+  hervorgehoben blieb. Jetzt setzt er sie wie ein Ablehnen auf eine normale
+  Notiz (`confirmed=1`, `type="note"`); gelöscht wird nichts. Job- und
+  Cron-Name bleiben für bestehende Installationen gleich.
+
 ## [7.16.9] — 2026-09-25
 
 ### Behoben

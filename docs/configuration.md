@@ -454,7 +454,7 @@ Konfidenz, Nutzen und der Anleitung, der der Agent folgen würde. Mit
 
 Der Miner läuft **jede Nacht um 05:00** (je Agent +15 min), also nach dem
 Speicher-Management: Konsolidierung 04:00–04:30, Persona-Evolution
-04:15–04:25, GC 04:45, auto-accept-stale 04:50–04:54. Er bewertet damit genau
+04:15–04:25, GC 04:45, auto-accept-stale (Verfall unbestätigter Criticals) 04:50–04:54. Er bewertet damit genau
 die Erinnerungen, die diese Jobs zuvor angefasst haben.
 
 Bis 7.12.49 lief er wöchentlich. Weil jeder Lauf bei `maxPerRun` gedeckelt ist
@@ -746,6 +746,20 @@ Modell-Einstellungen.
 in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
 Seit 7.12.2 zeigt der Push fuer alle anderen Typen die bereinigte Vorschau, weil
 er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
+
+Seit 7.16.10 kommt jede Karte als eigene Telegram-Nachricht mit den Knöpfen
+„✅ Annehmen“ und „❌ Ablehnen“ (`criticalPush.buttons`, Standard `true`). Ein
+Tipp führt denselben autorisierten Befehl aus wie `/plur1bus critical accept`
+bzw. `reject` und schreibt das Ergebnis unter die Karte. Der Host prüft den
+Absender vorher gegen die Telegram-Allowlist, und ein Klick zählt nur über den
+Bot des Agenten, dem die Karte gehört. Ohne Telegram-Ziel, ohne Outbound-Adapter
+oder mit `buttons: false` bleibt es bei der Textnachricht mit Befehlen. Alle auf
+einmal geht weiter per `/plur1bus critical accept all` oder zitierter Antwort.
+
+Unbestätigte Karten verfallen seit 7.16.10 nach 24 Stunden zur normalen
+Erinnerung (Job `auto-accept-stale`, Name aus Kompatibilitätsgründen
+beibehalten). Vorher wurden sie automatisch als Critical akzeptiert, sodass
+eine Fehlklassifikation ohne Antwort dauerhaft hervorgehoben blieb.
 
 `schicht15.maxPromotionsPerRun` begrenzt die KNOWLEDGE.md-Uebernahmen je
 24-Stunden-Fenster (0 = unbegrenzt). Bis 7.12.2 wurde die lebenslange Zahl

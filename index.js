@@ -203,8 +203,16 @@ import {
 import {
   formatAfterthoughtCronReply,
   formatClassifierCronReply,
+  classifierPartialFailureWarning,
 } from "./lib/internal-cron-reply.js";
-import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
+import { expireStaleCriticals as runExpireStaleCriticals } from "./lib/jobs/auto-accept-stale-criticals.js";
+import {
+  CRITICAL_BUTTON_NAMESPACE,
+  criticalDecisionLine,
+  parseCriticalButtonPayload,
+} from "./lib/critical-buttons.js";
+import { deliverCriticalButtonPush } from "./lib/critical-button-delivery.js";
+import { deriveDeliveryFromChannelConfig } from "./lib/setup/feature-cron-plan.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
   checkWikiAuth,
@@ -5011,6 +5019,9 @@ const plugin = {
     // auf dem Verhalten von vor diesem Branch.
     const memoryDynamicsCfg = cfg.memoryDynamics || {};
     const flashbulbEncodingEnabled = memoryDynamicsCfg.flashbulbEncoding === true;
+    // 7.16.10: Der Critical Push kommt nur dann mit Telegram-Knöpfen, wenn der
+    // Klick-Handler beim Host registriert ist; sonst bleibt es beim Text.
+    const criticalButtonState = { ready: false };
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
@@ -7709,12 +7720,37 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   hideTypes: cpCfg.hideTypes,
                 });
                 api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
+                // 7.16.10: eine Telegram-Nachricht je Karte mit Annehmen/
+                // Ablehnen. Nicht gesendete Karten gehen wie bisher als Text
+                // über die Cron-Zustellung raus.
+                const pushedCount = Array.isArray(result?.pushMessages) ? result.pushMessages.length : 0;
+                if (cronInternal && pushedCount > 0 && cpCfg.buttons !== false && criticalButtonState.ready) {
+                  const delivery = await deliverCriticalButtonPush({
+                    agentId: internalAgent,
+                    result,
+                    config: api.config,
+                    loadAdapter: (channel) => api.runtime?.channel?.outbound?.loadAdapter?.(channel),
+                    warning: classifierPartialFailureWarning(result),
+                    logger: api.logger,
+                  });
+                  api.logger?.info?.(`plur1bus critical[${internalAgent}]: button push sent=${delivery.sent}${delivery.reason ? ` fallback=${delivery.reason}` : ""}`);
+                  if (delivery.sent > 0) {
+                    if (delivery.unsentTexts.length === 0) return { text: "NO_REPLY" };
+                    return formatClassifierCronReply({
+                      ...result,
+                      pushMessages: delivery.unsentTexts.map((text) => ({ text })),
+                    });
+                  }
+                }
                 return cronInternal
                   ? formatClassifierCronReply(result)
                   : formatJsonCommandResult({ job: "classify-recent", ...result });
               }
               if (subKey === "auto-accept-stale") {
-                const result = await runAutoAcceptStale(memoryDbAdapter, internalAgent, { logger: api.logger, hours: 24 });
+                // Seit 7.16.10 verfallen unbestätigte Criticals zur normalen
+                // Notiz statt automatisch als Critical akzeptiert zu werden.
+                // Name und Cron bleiben für bestehende Installationen gleich.
+                const result = await runExpireStaleCriticals(memoryDbAdapter, internalAgent, { logger: api.logger, hours: 24 });
                 api.logger?.info?.(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
               }
@@ -10070,12 +10106,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             if (subKey === "accept") {
               const result = await memoryDbAdapter.markCriticalAccepted(agentId, fullId);
               if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
-              return { text: t("critical.accepted", { lang, tone }) };
+              return { text: t("critical.accepted", { lang, tone }), outcome: "accepted" };
             }
             if (subKey === "reject") {
               const result = await memoryDbAdapter.markCriticalRejected(agentId, fullId);
               if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
-              return { text: t("critical.rejected", { lang, tone }) };
+              return { text: t("critical.rejected", { lang, tone }), outcome: "rejected" };
             }
             // edit → in den vorhandenen sicheren Korrekturablauf führen.
             const card = (pending || []).find((c) => c.id === fullId);
@@ -10138,6 +10174,69 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               return undefined;
             }
           };
+          // 7.16.10: Klick auf „Annehmen“/„Ablehnen“ unter einer Push-Karte.
+          // Derselbe autorisierte Critical-Befehl wie beim Tippen oder
+          // Zitieren erledigt die Arbeit; der Host prüft den Absender vorher
+          // gegen die Telegram-Allowlist.
+          if (cfg.criticalPush?.buttons !== false && typeof api.registerInteractiveHandler === "function") {
+            const handleCriticalButton = async (ctx) => {
+              const decision = parseCriticalButtonPayload(ctx?.callback?.payload);
+              if (!decision) return { handled: false };
+              const refuse = () => ({ handled: true });
+              if (ctx.isGroup || ctx.auth?.isAuthorizedSender !== true) return refuse();
+              const senderId = String(ctx.senderId ?? "");
+              const conversationId = String(ctx.conversationId ?? ctx.callback?.chatId ?? "");
+              if (!senderId || !conversationId) return refuse();
+              // Die Karte gehört dem Agenten aus den Callback-Daten; ein Klick
+              // zählt nur über dessen eigenen Telegram-Bot und aus dem Chat,
+              // in den sein Push geht.
+              const delivery = deriveDeliveryFromChannelConfig(decision.agentId, api.config);
+              if (!delivery || delivery.accountId !== ctx.accountId || delivery.to !== conversationId) return refuse();
+              const target = `telegram:${conversationId}`;
+              let outcome = "failed";
+              try {
+                const result = await runCriticalCommand({
+                  args: `critical ${decision.action} ${decision.ref}`,
+                  agentId: decision.agentId,
+                  sessionKey: `agent:${decision.agentId}:telegram:${ctx.accountId}:direct:${conversationId}`,
+                  channel: "telegram",
+                  accountId: ctx.accountId,
+                  senderId,
+                  from: target,
+                  to: target,
+                  config: api.config,
+                  getCurrentConversationBinding: () => null,
+                  message: { from: { id: senderId }, chat: { id: conversationId, type: "private" } },
+                });
+                if (result?.outcome === "accepted" || result?.outcome === "rejected") outcome = result.outcome;
+                api.logger?.info?.(`plur1bus critical[${decision.agentId}]: button ${decision.action} ${decision.ref} -> ${outcome}`);
+              } catch (error) {
+                api.logger?.warn?.(`memory-lancedb-namespaced: critical button failed: ${error?.message || error}`);
+              }
+              const line = criticalDecisionLine(decision.ref, outcome);
+              try {
+                const base = typeof ctx.callback?.messageText === "string" ? ctx.callback.messageText : "";
+                if (base) await ctx.respond.editMessage({ text: `${base}\n\n${line}` });
+                else {
+                  await ctx.respond.clearButtons();
+                  await ctx.respond.reply({ text: line });
+                }
+              } catch (error) {
+                api.logger?.warn?.(`memory-lancedb-namespaced: critical button message update failed: ${error?.message || error}`);
+              }
+              return { handled: true };
+            };
+            try {
+              api.registerInteractiveHandler({
+                channel: "telegram",
+                namespace: CRITICAL_BUTTON_NAMESPACE,
+                handler: handleCriticalButton,
+              });
+              criticalButtonState.ready = true;
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: could not register critical buttons: ${error?.message || error}`);
+            }
+          }
           for (const hookName of ["before_dispatch", "before_agent_reply"]) {
             try {
               api.on(hookName, answerQuotedCriticalReply);

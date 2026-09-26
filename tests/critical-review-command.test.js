@@ -447,3 +447,93 @@ test("eine zitierte Push-Antwort „bitte alle akzeptieren“ wird vor dem Agent
   // A quoted message that merely carries hand-typed reference lines is not a push.
   assert.equal(await handler({ ...event, replyToBody: "Referenz: 9a075\nReferenz: 9a086" }, context), undefined);
 });
+
+test("Telegram-Knöpfe unter einer Push-Karte nehmen an bzw. lehnen ab und schreiben das Ergebnis unter die Karte", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  installEmbeddingStub(t);
+  const agentId = "critical-button-agent";
+  const acceptId = "d4563cc9-7611-4528-992a-075f8889a0a1";
+  const rejectId = "e4563cc9-7611-4528-992a-075f8889a0b2";
+  const pluginModule = await loadFreshPlugin();
+  await seedCriticalCard(pluginModule, baseDbPath, agentId, { id: acceptId, type: "beziehung", text: "Eva zieht um.", sourceMessageRole: "user" });
+  await seedCriticalCard(pluginModule, baseDbPath, agentId, { id: rejectId, type: "person", text: "Erik mag Tee.", sourceMessageRole: "user" });
+  const interactive = [];
+  const api = createApi(baseDbPath);
+  api.registerInteractiveHandler = (registration) => interactive.push(registration);
+  api.config = {
+    workspaceDir,
+    bindings: [{ agentId, match: { channel: "telegram", accountId: "default", peer: { kind: "direct", id: "4242" } } }],
+    channels: { telegram: { accounts: { default: { botToken: "x" } } } },
+  };
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  const registration = interactive.find((entry) => entry.channel === "telegram" && entry.namespace === "plurc");
+  assert.ok(registration, "the plugin registers a telegram handler for its buttons");
+
+  const tap = (payload, overrides = {}) => {
+    const edits = [];
+    const ctx = {
+      channel: "telegram",
+      accountId: "default",
+      callbackId: `cb-${payload}`,
+      conversationId: "4242",
+      senderId: "command-owner",
+      isGroup: false,
+      isForum: false,
+      auth: { isAuthorizedSender: true },
+      callback: { data: `plurc:${payload}`, namespace: "plurc", payload, messageId: 7, chatId: "4242", messageText: "Karte\nReferenz: x" },
+      respond: {
+        editMessage: async (params) => edits.push(params),
+        editButtons: async () => {},
+        clearButtons: async () => {},
+        reply: async (params) => edits.push(params),
+        deleteMessage: async () => {},
+      },
+      ...overrides,
+    };
+    return { ctx, edits };
+  };
+
+  const accept = tap(`a:${agentId}:9a0a1`);
+  assert.deepEqual(await registration.handler(accept.ctx), { handled: true });
+  assert.match(accept.edits[0].text, /✅ 9a0a1 hervorgehoben$/);
+  assert.equal(accept.edits[0].buttons, undefined, "the buttons disappear");
+  let card = await readCard(pluginModule, baseDbPath, agentId, acceptId);
+  assert.ok(card.confirmed === true || card.confirmed === 1);
+  assert.equal(card.type, "beziehung");
+
+  const reject = tap(`r:${agentId}:9a0b2`);
+  await registration.handler(reject.ctx);
+  assert.match(reject.edits[0].text, /❌ 9a0b2 normale Erinnerung$/);
+  card = await readCard(pluginModule, baseDbPath, agentId, rejectId);
+  assert.equal(card.type, "note", "reject keeps the card as a normal note");
+
+  // A second tap on an already decided card changes nothing and says so.
+  const again = tap(`a:${agentId}:9a0b2`);
+  await registration.handler(again.ctx);
+  assert.match(again.edits[0].text, /⚠️ 9a0b2 nicht mehr offen$/);
+  assert.equal((await readCard(pluginModule, baseDbPath, agentId, rejectId)).type, "note");
+
+  // Unauthorized sender, a group, or another bot's account: nothing happens.
+  for (const overrides of [
+    { auth: { isAuthorizedSender: false } },
+    { isGroup: true },
+    { accountId: "bernhardine" },
+    { conversationId: "9999" },
+  ]) {
+    const denied = tap(`a:${agentId}:9a0a1`, overrides);
+    assert.deepEqual(await registration.handler(denied.ctx), { handled: true });
+    assert.equal(denied.edits.length, 0, JSON.stringify(overrides));
+  }
+  // Foreign payloads in the namespace are left for other routing.
+  assert.deepEqual(await registration.handler(tap("x:y").ctx), { handled: false });
+});
+
+test("mit criticalPush.buttons=false registriert das Plugin keine Knöpfe", async (t) => {
+  const { baseDbPath } = withTempPaths(t);
+  const pluginModule = await loadFreshPlugin();
+  const interactive = [];
+  const api = createApi(baseDbPath, { criticalPush: { enabled: true, buttons: false } });
+  api.registerInteractiveHandler = (registration) => interactive.push(registration);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  assert.equal(interactive.length, 0);
+});
