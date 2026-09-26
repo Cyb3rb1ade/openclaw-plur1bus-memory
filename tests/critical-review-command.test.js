@@ -414,11 +414,13 @@ test("eine zitierte Push-Antwort „bitte alle akzeptieren“ wird vor dem Agent
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
   // The chat dispatch path fires before_dispatch (with the quoted text); the
   // agent-runner path fires before_agent_reply. The same handler serves both.
-  const dispatchHandler = hooks.filter((entry) => entry.name === "before_dispatch").at(-1)?.fn;
+  const dispatchHandlers = hooks.filter((entry) => entry.name === "before_dispatch").map((entry) => entry.fn);
   const handler = hooks.filter((entry) => entry.name === "before_agent_reply").at(-1)?.fn;
-  assert.equal(typeof dispatchHandler, "function", "the plugin listens before dispatch");
+  assert.ok(dispatchHandlers.length > 0, "the plugin listens before dispatch");
   assert.equal(typeof handler, "function", "the plugin listens before the agent replies");
-  assert.equal(dispatchHandler, handler, "one handler, two hooks");
+  // Seit 7.17.0 hängt auch /voice an before_dispatch; der Critical-Handler
+  // ist derselbe wie auf before_agent_reply.
+  assert.ok(dispatchHandlers.includes(handler), "one handler, two hooks");
 
   // The quoted push names both cards; the reply decides for all of them.
   const quoted = ["9a075", "9a086"].map((shortRef) => buildCriticalMessage({ shortRef, type: "gesundheit", text: "x" }, { lang: "de" }).text).join("\n\n");
@@ -538,5 +540,5 @@ test("mit criticalPush.buttons=false registriert das Plugin keine Knöpfe", asyn
   const api = createApi(baseDbPath, { criticalPush: { enabled: true, buttons: false } });
   api.registerInteractiveHandler = (registration) => interactive.push(registration);
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
-  assert.equal(interactive.length, 0);
+  assert.equal(interactive.filter((r) => r.namespace === "plurc").length, 0);
 });
