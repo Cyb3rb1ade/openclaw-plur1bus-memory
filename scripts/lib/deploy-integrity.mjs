@@ -262,6 +262,7 @@ export const DEPLOY_FILES = [
   "lib/critical-button-delivery.js",
   // 7.17.0: Persona/Light für Discord-Sprachräume.
   "lib/voice-mode.js",
+  "lib/voice-mode-switch.js",
   "lib/tombstone.js",
   "lib/registry-lock.js",
   "lib/fetch-with-timeout.js",

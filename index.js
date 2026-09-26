@@ -206,7 +206,15 @@ import {
   classifierPartialFailureWarning,
 } from "./lib/internal-cron-reply.js";
 import { expireStaleCriticals as runExpireStaleCriticals } from "./lib/jobs/auto-accept-stale-criticals.js";
-import { isLightVoiceTurn, LIGHT_MODEL, LIGHT_VOICE_GUIDANCE } from "./lib/voice-mode.js";
+import { isLightVoiceTurn, LIGHT_MODEL, LIGHT_VOICE_GUIDANCE, readVoiceMode } from "./lib/voice-mode.js";
+import {
+  applyVoiceMode,
+  buildVoiceModeMessage,
+  isOwnerSender,
+  parseVoiceButtonPayload,
+  parseVoiceCommand,
+  VOICE_BUTTON_NAMESPACE,
+} from "./lib/voice-mode-switch.js";
 import {
   CRITICAL_BUTTON_NAMESPACE,
   criticalDecisionLine,
@@ -10263,6 +10271,89 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               api.on(hookName, answerQuotedCriticalReply);
             } catch (error) {
               api.logger?.warn?.(`memory-lancedb-namespaced: could not listen on ${hookName}: ${error?.message || error}`);
+            }
+          }
+        }
+
+        // 7.17.0: /voice [light|full|status] in Discord und Knöpfe
+        // plurv:<modus>:<agent>. Die Hook-Antwort kann nur Text tragen, deshalb
+        // geht die Knopfnachricht selbst über den Discord-Adapter raus.
+        if (typeof api.on === "function") {
+          const patchVoiceSession = (params) => {
+            const patch = runtimeIfUsable(api)?.agent?.session?.patchSessionEntry;
+            if (typeof patch !== "function") throw new Error("session patch unavailable");
+            return patch({ ...params, preserveActivity: true });
+          };
+          const sendVoiceModeMessage = async ({ agentId, mode, to, accountId }) => {
+            const adapter = await api.runtime?.channel?.outbound?.loadAdapter?.("discord");
+            if (typeof adapter?.sendPayload !== "function") throw new Error("discord outbound adapter unavailable");
+            const message = buildVoiceModeMessage(agentId, mode);
+            await adapter.sendPayload({
+              cfg: api.config,
+              to,
+              ...(accountId ? { accountId } : {}),
+              text: message.text,
+              payload: { text: message.text, interactive: message.interactive },
+            });
+          };
+          const answerVoiceCommand = async (event, context) => {
+            const command = parseVoiceCommand(typeof event?.body === "string" ? event.body : event?.content);
+            if (!command) return undefined;
+            try {
+              const channel = String(context?.channelId || event?.channel || "");
+              if (channel !== "discord") {
+                return { handled: true, text: "Persona/Light gilt nur für Discord-Sprachräume." };
+              }
+              const senderId = String(context?.senderId ?? event?.senderId ?? "");
+              if (!isOwnerSender(senderId, api.config)) {
+                return { handled: true, text: "Nur der Besitzer darf den Sprachmodus umschalten." };
+              }
+              const sessionKey = String(context?.sessionKey || event?.sessionKey || "");
+              const agentId = /^agent:([^:]+):/.exec(sessionKey)?.[1] || "main";
+              let mode = readVoiceMode(baseDbPath, agentId);
+              if (command.action === "light" || command.action === "persona") {
+                const out = await applyVoiceMode({ baseDbPath, agentId, mode: command.action, config: api.config, patchSessionEntry: patchVoiceSession, by: `discord:${senderId}` });
+                mode = out.mode;
+                api.logger?.info?.(`plur1bus voice[${agentId}]: mode=${mode} patched=${out.patched} failed=${out.failed}`);
+              }
+              const to = String(context?.conversationId || "");
+              if (!to) return { handled: true, text: buildVoiceModeMessage(agentId, mode).text };
+              await sendVoiceModeMessage({ agentId, mode, to, accountId: context?.accountId });
+              return { handled: true };
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: /voice failed: ${error?.message || error}`);
+              return { handled: true, text: "Sprachmodus konnte nicht umgeschaltet werden, Details im Log." };
+            }
+          };
+          try {
+            api.on("before_dispatch", answerVoiceCommand);
+          } catch (error) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: could not listen for /voice: ${error?.message || error}`);
+          }
+          if (typeof api.registerInteractiveHandler === "function") {
+            try {
+              api.registerInteractiveHandler({
+                channel: "discord",
+                namespace: VOICE_BUTTON_NAMESPACE,
+                handler: async (ctx) => {
+                  const decision = parseVoiceButtonPayload(ctx?.interaction?.payload);
+                  if (!decision) return { handled: false };
+                  if (ctx?.auth?.isAuthorizedSender !== true || !isOwnerSender(ctx?.senderId, api.config)) return { handled: true };
+                  try {
+                    const out = await applyVoiceMode({ baseDbPath, agentId: decision.agentId, mode: decision.mode, config: api.config, patchSessionEntry: patchVoiceSession, by: `discord:${ctx.senderId}` });
+                    api.logger?.info?.(`plur1bus voice[${decision.agentId}]: button mode=${out.mode} patched=${out.patched} failed=${out.failed}`);
+                    await ctx.respond.clearComponents({ text: buildVoiceModeMessage(decision.agentId, out.mode).text });
+                    if (ctx.conversationId) {
+                      await sendVoiceModeMessage({ agentId: decision.agentId, mode: out.mode, to: ctx.conversationId, accountId: ctx.accountId });
+                    }
+                  } catch (error) {
+                    api.logger?.warn?.(`memory-lancedb-namespaced: voice button failed: ${error?.message || error}`);
+                  }
+                  return { handled: true };
+                },
+              });
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: could not register voice buttons: ${error?.message || error}`);
             }
           }
         }
