@@ -114,6 +114,8 @@ import { flushMetrics } from "../lib/metrics.js";
 import { createMemoryOpsContext } from "./memory-ops/context.js";
 import { createMemoryRead } from "./memory-ops/read.js";
 import { createMemoryWrite } from "./memory-ops/write.js";
+import { createProposalStore } from "./memory-ops/proposal-store.js";
+import { createMemoryProposals } from "./memory-ops/proposals.js";
 import { memoryOpError } from "./memory-ops/errors.js";
 import { createObsidianOps } from "./admin/obsidian.js";
 
@@ -1476,6 +1478,20 @@ export function createEngine(host, config, testOptions = {}) {
     embeddings,
     // E1 Task 8: correct writes through safeUpdate with the Neo store, as /correct always did.
     getNeoStore,
+    logger: host.logger,
+  });
+
+  // Change proposals (E2 Task 5, D31): a reader of a shared copy who is not
+  // its sharer files a proposal here instead of correcting it directly; the
+  // sharer accepts/rejects it later (Task 6). The store is one JSON file per
+  // proposal, keyed off baseDbPath (engine/memory-ops/proposal-store.js).
+  const proposalStore = createProposalStore({ baseDbPath, logger: host.logger });
+  const memoryProposals = createMemoryProposals({
+    opsContext: memoryOpsContext,
+    sharedOps: memoryWrite.shared,
+    store: proposalStore,
+    memoryDbAdapter,
+    host,
     logger: host.logger,
   });
 
@@ -3005,6 +3021,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryAccountTopology,
     memoryDbAdapter,
     memoryOpsContext,
+    memoryProposals,
     memoryRead,
     memoryWrite,
     memoryTextContradictionLlmCfg,
@@ -3563,6 +3580,12 @@ export function createEngine(host, config, testOptions = {}) {
       correct: async (id, newText, p, a) => { assertMemoryOpen(); return internals.memoryWrite.correct(id, newText, p, a); },
       share: async (id, target, p, a, opts) => { assertMemoryOpen(); return internals.memoryWrite.share(id, target, p, a, opts); },
       state: async (p, a) => { assertMemoryOpen(); return internals.memoryRead.state(p, a); },
+      // Change proposals (E2 Task 5, D31): the guard shape engine.memory
+      // already uses. accept/reject are Task 6 and stay unwired until then.
+      propose: async (sharedId, newText, p, a, opts) => { assertMemoryOpen(); return internals.memoryProposals.propose(sharedId, newText, p, a, opts); },
+      proposals: Object.freeze({
+        list: async (q, p, a) => { assertMemoryOpen(); return internals.memoryProposals.list(q, p, a); },
+      }),
     }),
     events: Object.freeze({
       on(name, handler) {

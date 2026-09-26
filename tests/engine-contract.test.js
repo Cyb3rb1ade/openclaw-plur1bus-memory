@@ -385,9 +385,10 @@ describe("Engine", () => {
     const engine = createEngine(createStubHost(), {});
     assert.equal(engine.contract, "1.6.0");
     assert.equal((await engine.status()).contract, "1.6.0");
-    for (const m of ["list", "show", "forget", "correct", "share", "state"]) {
+    for (const m of ["list", "show", "forget", "correct", "share", "state", "propose"]) {
       assert.equal(typeof engine.memory[m], "function", `engine.memory.${m}`);
     }
+    assert.equal(typeof engine.memory.proposals.list, "function", "engine.memory.proposals.list");
     assert.ok(Object.isFrozen(engine.memory));
     await engine.close();
   });
