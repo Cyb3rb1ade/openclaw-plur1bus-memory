@@ -2917,8 +2917,12 @@ export function createEngine(host, config, testOptions = {}) {
     // close() never rejects (final review m4): a resource that fails to
     // close is logged, and the engine is closed either way. The closer is
     // read from internals so a testOptions.internals override reaches it.
+    // Operations already running are awaited first (E2 Task 3); new ones are
+    // refused because `closing` is set synchronously below. Both steps stay
+    // inside the budget race.
     closing = Promise.race([
       Promise.resolve()
+        .then(() => memoryOpsContext.drain())
         .then(() => internals.closeResources())
         .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${detailOf(error)}`); }),
       new Promise((resolve) => {
@@ -3393,8 +3397,8 @@ export function createEngine(host, config, testOptions = {}) {
   // share/forget (1.6.0, deprecated) are aliases of Engine.memory.share/forget —
   // same code path as engine.memory below, not a second implementation.
   const adminOps = Object.freeze({
-    share: async (id, target, p, a, opts) => { assertMemoryOpen(); return internals.memoryWrite.share(id, target, p, a, opts); },
-    forget: async (id, p, a) => { assertMemoryOpen(); return internals.memoryWrite.forget(id, p, a); },
+    share: async (id, target, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.share(id, target, p, a, opts)); },
+    forget: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.forget(id, p, a)); },
     reembedding: Object.freeze({
       plan: (...args) => internals.reembeddingCoordinator.plan(...args),
       apply: (...args) => internals.reembeddingCoordinator.apply(...args),
@@ -3413,11 +3417,11 @@ export function createEngine(host, config, testOptions = {}) {
       set: async (...args) => internals.workspacePolicyStore.set(...args),
     }),
     obsidian: Object.freeze({
-      detect: async (...args) => { assertMemoryOpen(); return obsidianOps.detect(...args); },
-      prepare: async (...args) => { assertMemoryOpen(); return obsidianOps.prepare(...args); },
-      confirm: async (...args) => { assertMemoryOpen(); return obsidianOps.confirm(...args); },
+      detect: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => obsidianOps.detect(...args)); },
+      prepare: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => obsidianOps.prepare(...args)); },
+      confirm: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => obsidianOps.confirm(...args)); },
     }),
-    migrate: async (from, to) => { assertMemoryOpen(); return storeMigrator.migrate(from, to); },
+    migrate: async (from, to) => { assertMemoryOpen(); return memoryOpsContext.track(() => storeMigrator.migrate(from, to)); },
   });
   internals.embeddingService = embeddingService;
   internals.adminOps = adminOps;
@@ -3556,13 +3560,14 @@ export function createEngine(host, config, testOptions = {}) {
     // Typed MemoryOps surface (contract 1.5.0, E1). After close() every member
     // rejects with MemoryOpError "storage" before it touches a store, so a
     // late call can neither reopen LanceDB nor write an archive or tombstone.
+    // A call already running is tracked, and close() drains it first (E2 Task 3).
     memory: Object.freeze({
-      list: async (q, p, a) => { assertMemoryOpen(); return internals.memoryRead.list(q, p, a); },
-      show: async (id, p, a) => { assertMemoryOpen(); return internals.memoryRead.show(id, p, a); },
-      forget: async (id, p, a) => { assertMemoryOpen(); return internals.memoryWrite.forget(id, p, a); },
-      correct: async (id, newText, p, a) => { assertMemoryOpen(); return internals.memoryWrite.correct(id, newText, p, a); },
-      share: async (id, target, p, a, opts) => { assertMemoryOpen(); return internals.memoryWrite.share(id, target, p, a, opts); },
-      state: async (p, a) => { assertMemoryOpen(); return internals.memoryRead.state(p, a); },
+      list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.list(q, p, a)); },
+      show: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.show(id, p, a)); },
+      forget: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.forget(id, p, a)); },
+      correct: async (id, newText, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.correct(id, newText, p, a)); },
+      share: async (id, target, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.share(id, target, p, a, opts)); },
+      state: async (p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.state(p, a)); },
     }),
     events: Object.freeze({
       on(name, handler) {

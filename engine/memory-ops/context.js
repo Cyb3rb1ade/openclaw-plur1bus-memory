@@ -30,8 +30,25 @@ export function createMemoryOpsContext({ host, logger, getWorkspaceAliases = () 
   const assertOpen = () => {
     if (isClosed()) throw memoryOpError("storage", "engine is closed");
   };
+  // In-flight tracking (E2 Task 3): the Engine.memory members and the
+  // memory-backed Engine.admin members (share/forget aliases, migrate,
+  // obsidian.*) run through track(); closeEngine drains the set before it
+  // shuts the stores down, within its budget.
+  const activeOperations = new Set();
+  const track = (run) => {
+    const promise = Promise.resolve().then(run);
+    // The tracked copy never rejects: the caller handles the real promise.
+    const settled = promise.then(() => {}, () => {});
+    activeOperations.add(settled);
+    settled.then(() => activeOperations.delete(settled));
+    return promise;
+  };
+  const drain = async () => { await Promise.allSettled([...activeOperations]); };
   return {
     assertOpen,
+    activeOperations,
+    track,
+    drain,
     async resolve(p, a, { destructive = false, target = null } = {}) {
       assertOpen();
       if (!p || typeof p.agentId !== "string" || !AGENT_ID.test(p.agentId)) throw memoryOpError("invalid-input", "principal.agentId is invalid");
