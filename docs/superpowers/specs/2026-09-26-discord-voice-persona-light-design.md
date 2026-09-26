@@ -26,7 +26,15 @@ Light gilt nur in Sprachraum-Sitzungen. Geschriebene Discord-Nachrichten laufen 
 - NVIDIA-Schlüssel (`/root/.openclaw/.env.nemotron`), per Riva-Konfigurationsabfrage geprüft:
   - Parakeet 1.1B RNNT multilingual (`71203149-d3b7-4460-8231-1be2543a1fca`): Deutsch, offline und streaming.
   - Magpie TTS multilingual (`877104f7-e885-42b9-8de8-f6e4c6303969`): Deutsch, 22 050 Hz, Stimmen `DE-DE.Diego`, `.Jason`, `.Leo`, `.Mia`, `.Pascal`, `.Ray`.
-  - Nemotron ASR Streaming (`bb0837de-…`) kann nur `en-US`. Ungeeignet. (Nebenbefund: die laufende Sprachnachrichten-Bridge auf Port 8020 nutzt genau dieses Modell; getrennt zu prüfen, nicht Teil dieses Umbaus.)
+  - Nemotron ASR Streaming (`bb0837de-…`) kann nur `en-US`. Ungeeignet.
+- Eine Parakeet-Bridge existiert bereits und läuft: `parakeet-stt-bridge.service`, Port 8000, `de-DE`, OpenAI-kompatibel, Sprechererkennung per Standard an (`PARAKEET_DIARIZE_DEFAULT=1`). `tools.media.audio` zeigt auf sie, Sprachnachrichten werden damit erkannt.
+- Nachgeprüft im Host-Code (Bericht 26.09.): Der `stt-tts`-Modus nimmt die Spracherkennung **nur** aus `tools.media.audio`, es gibt keinen eigenen Endpunkt pro Sprachraum. Er schickt `segment.wav` (48 kHz, Stereo, PCM) mit `model`, optional `language`/`prompt`, ohne `diarize`, und liest `{text}`.
+- Sprachausgabe: `voice.tts` wird über das oberste `tts` gelegt. Der OpenAI-Anbieter ruft `POST {baseUrl}/audio/speech` mit `{model, input, voice, response_format, speed?, instructions?}`, verlangt für Discord `response_format: "opus"` (Ogg/Opus) und braucht einen nicht leeren `apiKey`, auch bei lokaler Adresse. Schlägt die Sprachausgabe fehl, steht nur ein Log-Eintrag da; es wird **kein** Text gepostet.
+- Im `stt-tts`-Modus wird nur die **Endantwort** gesprochen; ein Satz vor einem Werkzeugaufruf fällt weg. Ist `reasoningLevel` an, würden Denk-Texte mitgesprochen.
+- Sprachzüge tragen im Hook-Kontext `messageProvider: "discord-voice"`; der Sitzungsschlüssel ist `agent:main:discord:channel:<Sprachraum-ID>`. `before_dispatch` feuert für Sprachzüge nicht, wohl aber für Textnachrichten im Chat des Sprachraums (`conversationId: "channel:<Sprachraum-ID>"`). Ein Ereignis für Beitreten oder Verlassen gibt es für Plugins nicht.
+- Thinking pro Sitzung: `api.runtime.agent.session.patchSessionEntry({agentId, sessionKey, update})` mit `thinkingLevel`. `before_model_resolve` liefert `providerOverride` und `modelOverride` getrennt.
+- Discord-Knöpfe: `registerInteractiveHandler({channel: "discord", …})` wird vom Host bedient; gesendet über `loadAdapter("discord").sendPayload` mit `payload.interactive` (Block `buttons`, `action: {type: "callback", value}`). Knöpfe gelten 30 Minuten und je einmal.
+- `commands.ownerAllowFrom` ersetzt für Sprachräume `allowFrom`; Einträge `discord:user:<id>` werden verworfen, `discord:<id>` gilt.
 - Plugin-Hooks: `before_model_resolve` darf das Modell pro Lauf übersteuern, `before_prompt_build` Kontext weglassen. Thinking lässt sich nicht per Hook, aber per Sitzungs-Override (`thinkingLevel`) setzen. Ein `sessions.patch` mit `model` schreibt die Agent-Konfiguration um und ist deshalb verboten; `thinkingLevel` allein tut das nicht.
 - Alle Anthropic-Katalogeinträge tragen `reasoning: true`. Ein Modellwechsel allein schaltet Thinking nicht ab.
 
@@ -36,7 +44,7 @@ Light gilt nur in Sprachraum-Sitzungen. Geschriebene Discord-Nachrichten laufen 
 Discord-Sprachraum
   │  Audio (Opus)
   ▼
-OpenClaw discord voice, mode stt-tts ──► tools.media.audio ──► [Parakeet-Bridge :8021] ──► NVIDIA Parakeet (de-DE)
+OpenClaw discord voice, mode stt-tts ──► tools.media.audio ──► [Parakeet-Bridge :8000, vorhanden] ──► NVIDIA Parakeet (de-DE)
   │  Transkript als Nutzerzug in der Sprachraum-Sitzung
   ▼
 Agent main ──(PLUR1BUS: Persona oder Light)──► Antworttext
@@ -53,18 +61,17 @@ Sprachnachricht: message-Werkzeug ──► tts (OpenAI-kompatibel) ──► [M
 - `channels.discord.voice`:
   - `mode: "stt-tts"` statt Realtime; der `realtime`-Block bleibt stehen, wird aber nicht genutzt.
   - `followUsers: ["discord:1323072788939935867"]`, `followUsersEnabled: false` als Start.
-  - `tts`: Anbieter `openai` mit `baseUrl` auf die Magpie-Bridge.
+  - Sprachausgabe über das oberste `tts`: Anbieter `openai`, `baseUrl` `http://127.0.0.1:8025/v1`, `apiKey` `local`, `voice` `DE-DE.Leo`, `responseFormat` `opus`. Gilt für Sprachräume und Sprachnachrichten.
   - `allowedChannels`: beide Sprachräume.
 - `commands.ownerAllowFrom` bekommt `discord:1323072788939935867`, damit Sprachzüge und `/vc` den Besitzer eindeutig kennen.
 - `allowFrom: ["*"]` wird im Zuge dessen auf den Besitzer eingeengt, sofern nichts anderes davon abhängt (vor dem Umstellen prüfen, wer auf dem Server schreibt).
 - Die genauen Schlüssel werden beim Bauen gegen das Schema von 2026.9.6 geprüft (`openclaw config` mit Trockenlauf).
 
-### Baustein 2: Parakeet-Bridge (Port 8021)
+### Baustein 2: Parakeet-Bridge (vorhanden, Port 8000)
 
-- Neues Python-Programm `/root/.openclaw/tools/nvidia-riva-bridge/parakeet_transcribe_bridge.py`, Unit `nemotron-asr-stream.service` wird darauf umgestellt und umbenannt in `parakeet-transcribe-bridge.service`.
-- OpenAI-kompatibel: `POST /v1/audio/transcriptions` (multipart, Feld `file`, `model` ignoriert), Antwort `{"text": "..."}`. `GET /health`.
-- Audio per ffmpeg nach 16 kHz mono PCM, Riva offline-Erkennung gegen Parakeet mit `de-DE`, Zeichensetzung an.
-- Nur auf `127.0.0.1`.
+- Keine neue Bridge. Die vorhandene `parakeet_stt_bridge.py` bleibt der Erkennungsweg für Sprachnachrichten und Sprachräume.
+- Eine kleine Änderung: Für Anfragen mit dem Dateinamen `segment.wav` (so benennt der Discord-Sprachmodus seine Stücke) wird die Sprechererkennung übersprungen, weil jedes Stück schon genau einem Sprecher gehört und die Erkennung nur Zeit kostet. Ein ausdrückliches `diarize`-Feld gewinnt weiterhin.
+- Die tote Unit `nemotron-asr-stream.service` wird deaktiviert (Baustein 7).
 
 ### Baustein 3: Magpie-Bridge (Port 8025)
 
@@ -76,20 +83,20 @@ Sprachnachricht: message-Werkzeug ──► tts (OpenAI-kompatibel) ──► [M
 ### Baustein 4: Persona / Light (PLUR1BUS)
 
 - Neuer Modus-Speicher je Agent, Werte `persona` (Standard) und `light`, persistiert unter `<baseDbPath>/.plur1bus-voice-mode/<agentId>.json` (atomar geschrieben). Der Modus bleibt, bis er umgeschaltet wird.
-- Erkennung einer Sprachraum-Sitzung am Sitzungsschlüssel bzw. am Kanal-Kontext, den der Host für Discord-Sprachzüge setzt (beim Bauen am echten Schlüssel ablesen und im Code als eine Funktion `isDiscordVoiceSession()` kapseln).
+- Erkennung eines Sprachzugs an `ctx.messageProvider === "discord-voice"`, gekapselt in `isDiscordVoiceTurn(ctx)`.
 - Nur wenn beides zutrifft (Sprachraum-Sitzung und Modus `light`):
   - Auto-Recall und alle Zusatzblöcke im Prompt entfallen (Recall-Prelude, Semantic Lens, Reactivation, Persona-Voice-Direktive, zeitlicher Kontext). Umsetzung als ein früher Ausstieg in den bestehenden Prompt-Hooks.
-  - `before_model_resolve` liefert `anthropic/claude-haiku-4-5`.
-  - Eine kurze feste Anweisung: bei Fragen, die Erinnerungen brauchen, zuerst „Moment, ich denke kurz nach“ sagen und dann `memory_recall` nutzen.
+  - `before_model_resolve` liefert `{providerOverride: "anthropic", modelOverride: "claude-haiku-4-5"}`.
+  - Eine kurze feste Anweisung: bei Fragen, die Erinnerungen brauchen, `memory_recall` nutzen und kurz antworten. (Eine gesprochene Ansage vorher ist im `stt-tts`-Modus nicht möglich, weil nur die Endantwort gesprochen wird.)
 - Das Speichern (`agent_end`-Capture) läuft in beiden Modi unverändert.
-- Beim Umschalten setzt PLUR1BUS den `thinkingLevel` der Sprachraum-Sitzung auf `off` (Light) bzw. entfernt den Override (Persona, `null`). Nie `model` per `sessions.patch`.
+- Beim Umschalten setzt PLUR1BUS über `patchSessionEntry` den `thinkingLevel` der Sprachraum-Sitzungen (`agent:main:discord:channel:<id>` für jeden Raum aus `voice.allowedChannels`) auf `off` (Light) bzw. entfernt ihn (Persona). Außerdem immer `reasoningLevel: "off"` in diesen Sitzungen, damit keine Denk-Texte gesprochen werden. Nie `model`.
 
 ### Baustein 5: Umschalten
 
 - Textbefehl `/voice light` und `/voice full` in Discord. Umsetzung über denselben Weg wie die zitierten Critical-Antworten (Hook `before_dispatch`), weil `registerCommand` im Host nicht live ankommt.
-- Knopfnachricht „Persona“ / „Light“ im Textkanal des Sprachraums, gesendet beim Betreten (manuell oder durch Folgen). Klick über `registerInteractiveHandler` mit eigenem Namespace (`plurv`), analog zum Critical Push. Nach dem Klick zeigt die Nachricht den aktiven Modus.
+- Textbefehl `/voice` ohne Argument schickt eine Knopfnachricht „Persona“ / „Light“ in den Chat des Sprachraums (bzw. in den Kanal, in dem der Befehl kam). Klick über `registerInteractiveHandler({channel: "discord", namespace: "plurv"})`. Nach dem Klick zeigt die Nachricht den aktiven Modus mit frischen Knöpfen.
 - Nur der Besitzer darf umschalten (Allowlist-Prüfung des Hosts plus Abgleich mit `commands.ownerAllowFrom`).
-- Offene Machbarkeitsfrage: ob PLUR1BUS ein „Raum betreten“-Ereignis sieht. Falls nicht, sendet `/voice` ohne Argument die Knopfnachricht, und `/vc join` bleibt ohne automatische Knöpfe.
+- Ein automatisches Senden der Knöpfe beim Betreten entfällt, weil Plugins kein Beitritts-Ereignis sehen.
 
 ### Baustein 6: Serververwaltung
 
@@ -108,15 +115,15 @@ Sprachnachricht: message-Werkzeug ──► tts (OpenAI-kompatibel) ──► [M
 | Fall | Verhalten |
 |---|---|
 | Parakeet-Bridge nicht erreichbar | Sprachzug entfällt, Fehler im Log; Bridge startet begrenzt neu. |
-| Magpie-Bridge nicht erreichbar | Antwort geht als Text in den Kanal (Verhalten des Hosts beim TTS-Fehler, beim Bauen bestätigen). |
+| Magpie-Bridge nicht erreichbar | Bernd bleibt im Raum stumm, der Host schreibt `discord voice: TTS failed` ins Log. Kein Text-Ersatz (so gebaut im Host). |
 | NVIDIA-Kontingent erschöpft / Schlüssel ungültig | Bridge antwortet mit HTTP 502 und klarer Meldung, keine Schleife. |
 | Modellwechsel für Light schlägt fehl | Standardmodell mit Thinking `off`; langsamer, aber funktionsfähig. |
 | Umschalt-Klick von fremder Person | Wird ignoriert, Nachricht bleibt unverändert. |
-| Ansage vor Werkzeugaufruf wird im `stt-tts`-Modus nicht ausgesprochen | Kurze Pause statt Ansage; die Anweisung bleibt harmlos im Prompt. |
+| Gedächtnis-Nachschlagen in Light | Kurze Pause bis zur Antwort; eine Ansage vorher ist im `stt-tts`-Modus nicht möglich. |
 
 ## Tests
 
-- Bridges: Unit-Tests mit gemocktem Riva-Client (Format, Satzaufteilung, Fehler-Mapping) und je ein Livetest mit einem echten deutschen Satz hin und zurück.
+- Magpie-Bridge: `unittest`-Tests (kein pytest in der venv) mit gemocktem Riva-Aufruf (Formate, Satzaufteilung, Fehler-Mapping) und ein Livetest mit einem echten deutschen Satz. Parakeet-Bridge: ein Test, dass `segment.wav` ohne Sprechererkennung läuft.
 - PLUR1BUS: Modus-Speicher (atomar, Standard `persona`), Weglassen von Recall und Modellwechsel nur bei Sprachraum-Sitzung plus Light, Capture läuft weiter, Umschalten per Befehl und Knopf, Berechtigung, `thinkingLevel`-Patch ohne `model`.
 - Serververwaltung: nach dem Umstellen je eine harmlose Aktion pro Gruppe als Livetest (Testkanal anlegen und wieder löschen, Testrolle anlegen und wieder löschen, Präsenz setzen); Moderation nur als Trockenprüfung der Freigabe, nicht an echten Mitgliedern.
 - Livetest mit dem Besitzer: `/vc join` in „Test“, ein Satz in Persona, Umschalten auf Light, derselbe Satz, Antwortzeit vergleichen; Folgen an/aus; eine Sprachnachricht; Probehören der sechs Stimmen.
