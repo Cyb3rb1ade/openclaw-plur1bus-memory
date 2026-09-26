@@ -12,8 +12,8 @@ import { buildRefinePatch, classifyEncoding } from "../../lib/encoding-llm.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "../../lib/dreaming/rem-dream.js";
 import { ledgerBackedCompletion, remJobOutcome } from "./rem-outcome.js";
 import { findEpisodeCardPath, rebuildEpisode, writeEpisodeToVault } from "../../lib/episodes.js";
-import { formatAfterthoughtCronReply, formatClassifierCronReply } from "../../lib/internal-cron-reply.js";
-import { autoAcceptStale as runAutoAcceptStale } from "../../lib/jobs/auto-accept-stale-criticals.js";
+import { classifierPartialFailureWarning, formatAfterthoughtCronReply, formatClassifierCronReply } from "../../lib/internal-cron-reply.js";
+import { expireStaleCriticals as runExpireStaleCriticals } from "../../lib/jobs/auto-accept-stale-criticals.js";
 import { runClassifier as runCriticalClassifier } from "../../lib/jobs/critical-classifier.js";
 import { runConsolidation as runDailyConsolidation } from "../../lib/jobs/daily-consolidation.js";
 import { runFeedbackAnalyzer } from "../../lib/jobs/feedback-analyzer.js";
@@ -279,12 +279,48 @@ export function createInternalJobBodies(ctx) {
           hideTypes: cpCfg.hideTypes,
         });
         host.logger.info(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
+        // 7.16.10: eine Telegram-Nachricht je Karte mit Annehmen/Ablehnen.
+        // Nicht gesendete Karten gehen wie bisher als Text über die
+        // Cron-Zustellung raus. Den Versand macht der Host
+        // (host.capabilities.pushCriticalButtons, adapter/openclaw/plugin.js);
+        // er liefert null, solange sein Klick-Handler nicht registriert ist.
+        const pushedCount = Array.isArray(result?.pushMessages) ? result.pushMessages.length : 0;
+        const pushCriticalButtons = host.capabilities?.pushCriticalButtons;
+        if (cronInternal && pushedCount > 0 && cpCfg.buttons !== false && typeof pushCriticalButtons === "function") {
+          // Ein fremder Host kann werfen oder etwas Unvollständiges liefern;
+          // dann bleibt es bei der Textzustellung über den Cron.
+          let delivery = null;
+          try {
+            delivery = await pushCriticalButtons({
+              agentId: internalAgent,
+              result,
+              commandCtx,
+              warning: classifierPartialFailureWarning(result),
+            });
+          } catch (error) {
+            host.logger.warn(`plur1bus critical[${internalAgent}]: button push failed: ${error?.message || error}`);
+            delivery = null;
+          }
+          if (delivery) {
+            host.logger.info(`plur1bus critical[${internalAgent}]: button push sent=${delivery.sent}${delivery.reason ? ` fallback=${delivery.reason}` : ""}`);
+            if (delivery.sent > 0 && Array.isArray(delivery?.unsentTexts)) {
+              if (delivery.unsentTexts.length === 0) return { text: "NO_REPLY" };
+              return formatClassifierCronReply({
+                ...result,
+                pushMessages: delivery.unsentTexts.map((text) => ({ text })),
+              });
+            }
+          }
+        }
         return cronInternal
           ? formatClassifierCronReply(result)
           : formatJsonCommandResult({ job: "classify-recent", ...result });
       }
       if (subKey === "auto-accept-stale") {
-        const result = await runAutoAcceptStale(memoryDbAdapter, internalAgent, { logger: host.logger, hours: 24 });
+        // Seit 7.16.10 verfallen unbestätigte Criticals zur normalen
+        // Notiz statt automatisch als Critical akzeptiert zu werden.
+        // Name und Cron bleiben für bestehende Installationen gleich.
+        const result = await runExpireStaleCriticals(memoryDbAdapter, internalAgent, { logger: host.logger, hours: 24 });
         host.logger.info(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
         return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
       }

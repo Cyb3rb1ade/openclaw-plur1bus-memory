@@ -439,6 +439,34 @@ Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
   closed“) abgelehnt statt am Drain teilzunehmen; kein Store schließt unter
   einer laufenden Operation.
 
+## [7.16.10] — 2026-09-26
+
+### Hinzugefügt
+
+- **Critical Push mit Knöpfen.** Jede als wichtig erkannte Erinnerung kommt als
+  eigene Telegram-Nachricht mit „✅ Annehmen“ und „❌ Ablehnen“. Ein Tipp führt
+  denselben autorisierten Befehl aus wie `/plur1bus critical accept|reject` und
+  schreibt das Ergebnis unter die Karte, die Knöpfe verschwinden. Der Host
+  prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt einen Klick
+  nur im Direktchat mit dem Absender selbst und nur über den eigenen Bot des
+  Agenten, dem die Karte gehört. Versand über den Telegram-Outbound-Adapter des
+  Hosts an das Zustellziel des eigenen classify-recent-Crons des Agenten
+  (`resolveCronDelivery`, dasselbe Ziel wie bisher der Text), über den Bot aus
+  der eindeutigen Telegram-Bindung des Agenten
+  (`lib/critical-button-delivery.js`); scheitert der Versand, gehen die übrigen
+  Karten wie bisher als Text über die Cron-Zustellung. Abschaltbar mit
+  `criticalPush.buttons: false`. „Alle annehmen/ablehnen“ bleibt per Befehl
+  oder zitierter Antwort.
+
+### Geändert
+
+- **Unbestätigte Criticals verfallen zur normalen Erinnerung.** Der nächtliche
+  Job `auto-accept-stale` akzeptierte Karten nach 24 Stunden automatisch als
+  Critical, sodass eine Fehlklassifikation ohne Antwort dauerhaft
+  hervorgehoben blieb. Jetzt setzt er sie wie ein Ablehnen auf eine normale
+  Notiz (`confirmed=1`, `type="note"`); gelöscht wird nichts. Job- und
+  Cron-Name bleiben für bestehende Installationen gleich.
+
 ## [7.16.9] — 2026-09-25
 
 ### Behoben

@@ -76,7 +76,10 @@ The OpenClaw-only construction inputs the old `register()` read off `api`
 travel as `host.capabilities`, built in `plugin.js`: `registrationMode`,
 `coordinatesLocalModelGeneration`, `resolvePath`, `cronDirectDispatchReady`,
 `skillWorkshop`, `detectReactions`, `createEmbeddingSelectionMutator`,
-`configMutationNotice`, `resolveNeoHooksConfig`, and the test-injection
+`configMutationNotice`, `resolveNeoHooksConfig`, `pushCriticalButtons`
+(7.16.10: classify-recent's Telegram button push over the host's outbound
+adapter; `null` until `register-commands.js` has registered the click
+handler), and the test-injection
 `commandRuntimeHooks` and `handleObsidianBridgeCommand` (the `shareCard`
 test injection stays in `plugin.js`, which hands it to `registerChatCommands`).
 `api.config` inside the engine became `host.config()`.

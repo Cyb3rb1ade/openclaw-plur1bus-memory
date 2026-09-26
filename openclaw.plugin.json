@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.16.9",
+  "version": "7.16.10",
   "kind": "memory",
   "cliCommands": [
     {
@@ -2362,6 +2362,11 @@
           "enabled": {
             "type": "boolean",
             "default": true
+          },
+          "buttons": {
+            "type": "boolean",
+            "default": true,
+            "description": "Send each critical card as its own Telegram message with Accept and Reject buttons. false keeps the plain text message with commands."
           },
           "maxPerDay": {
             "type": "number",

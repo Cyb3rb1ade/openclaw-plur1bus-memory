@@ -20,6 +20,8 @@ import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { createEngine } from "../engine/create-engine.js";
+import { createStubHost } from "../lib/host-services.js";
 
 const VECTOR_DIM = 384;
 
@@ -767,6 +769,142 @@ test("Critical Push direct override works without a host runtime", async (t) => 
   assert.equal(directCalls.length, 1);
   assert.equal(directCalls[0].body.model, "direct/critical-model");
   assert.equal(stored.type, "person");
+});
+
+test("7.16.10 Critical Push sends one Telegram button message per card to the cron's own target", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  // Callback data carries the agent id, which must fit /^[A-Za-z0-9_-]{1,32}$/.
+  const agentId = `crit-btn-${randomUUID().slice(0, 8)}`;
+  cleanCriticalPushTestState(t, agentId);
+  const memoryId = "99999999-9999-4999-8999-999999999999";
+  const directCalls = [];
+  installDirectOpenAiStub(t, directCalls, "person");
+  const pluginModule = await loadFreshPlugin();
+  await seedMemory(pluginModule, baseDbPath, agentId, {
+    id: memoryId,
+    text: "Alex Example is the new project lead.",
+    unclassified: true,
+  });
+  const api = createApi(baseDbPath, {
+    criticalPush: {
+      enabled: true,
+      model: "direct/critical-model",
+      baseUrl: "https://direct-critical.invalid/v1",
+      apiKey: "direct-critical-secret",
+    },
+    emotion: { t3: { enabled: false } },
+  });
+  const interactive = [];
+  const sent = [];
+  const loadedChannels = [];
+  api.registerInteractiveHandler = (registration) => interactive.push(registration);
+  api.runtime.channel = {
+    outbound: {
+      async loadAdapter(channel) {
+        loadedChannels.push(channel);
+        return { async sendPayload(params) { sent.push(params); } };
+      },
+    },
+  };
+  api.config = {
+    workspaceDir,
+    bindings: [{ agentId, match: { channel: "telegram", accountId: "bot-a" } }],
+  };
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  assert.equal(interactive.length, 1, "the click handler is registered, so buttons are ready");
+
+  const result = await findCommand(api).handler({
+    args: "internal classify-recent",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    workspaceKey: "workspace-critical-buttons",
+    resolveCronDelivery: async () => ({ channel: "telegram", to: "4242" }),
+  });
+
+  assert.equal(result.text, "NO_REPLY", "every card went out with buttons, nothing is left for the cron text");
+  assert.deepEqual(loadedChannels, ["telegram"]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "4242");
+  assert.equal(sent[0].accountId, "bot-a", "the bot account comes from the agent's telegram binding");
+  assert.equal(sent[0].cfg, api.config);
+  const [accept, reject] = sent[0].payload.channelData.telegram.buttons[0];
+  assert.match(accept.callback_data, new RegExp(`^plurc:a:${agentId}:[0-9a-f]+$`));
+  assert.match(reject.callback_data, new RegExp(`^plurc:r:${agentId}:[0-9a-f]+$`));
+  assert.match(JSON.stringify(api.logger.calls), /button push sent=1/);
+  assert.equal(directCalls.length, 1);
+});
+
+// Engine-level: classify-recent against a stub host whose pushCriticalButtons
+// capability is absent, throws, or returns something incomplete. Every case
+// keeps the plain cron text (formatClassifierCronReply) as before 7.16.10.
+async function runClassifyRecentOnStubHost(t, capabilities) {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = `crit-cap-${randomUUID().slice(0, 8)}`;
+  cleanCriticalPushTestState(t, agentId);
+  const memoryId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  installDirectOpenAiStub(t, [], "person");
+  const pluginModule = await loadFreshPlugin();
+  await seedMemory(pluginModule, baseDbPath, agentId, {
+    id: memoryId,
+    text: "Alex Example is the new project lead.",
+    unclassified: true,
+  });
+  const logger = createLogger();
+  const host = createStubHost({
+    logger,
+    stateDir: makeTempDir("crit-cap-state-"),
+    workspaceDir: async () => workspaceDir,
+    capabilities,
+  });
+  const engine = createEngine(host, {
+    baseDbPath,
+    embedding: { provider: "local-transformers", local: { dimensions: VECTOR_DIM } },
+    autoCapture: false,
+    autoRecall: false,
+    neo: { enabled: false },
+    obsidianBridge: { enabled: false },
+    featureCronSetup: { auto: false },
+    gc: { enabled: false },
+    emotion: { t3: { enabled: false } },
+    criticalPush: {
+      enabled: true,
+      model: "direct/critical-model",
+      baseUrl: "https://direct-critical.invalid/v1",
+      apiKey: "direct-critical-secret",
+    },
+  });
+  t.after(() => engine.close());
+  const run = await engine.jobs.run("classify-recent", agentId, { trigger: "harness" });
+  assert.equal(run.outcome, "completed", JSON.stringify(run.error?.message || run.outcome));
+  return { output: run.output, logger };
+}
+
+test("engine classify-recent without a pushCriticalButtons capability replies with the cron text", async (t) => {
+  const { output } = await runClassifyRecentOnStubHost(t, undefined);
+  assert.match(output.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
+  assert.match(output.text, /\/plur1bus critical accept /);
+});
+
+test("engine classify-recent falls back to the cron text and warns when the capability throws", async (t) => {
+  const calls = [];
+  const { output, logger } = await runClassifyRecentOnStubHost(t, {
+    async pushCriticalButtons(params) {
+      calls.push(params);
+      throw new Error("third-party host exploded");
+    },
+  });
+  assert.equal(calls.length, 1, "the capability is asked once");
+  assert.match(output.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
+  assert.match(JSON.stringify(logger.calls), /button push failed: third-party host exploded/);
+});
+
+test("engine classify-recent keeps the cron text when the capability returns no unsentTexts", async (t) => {
+  const { output } = await runClassifyRecentOnStubHost(t, {
+    async pushCriticalButtons() { return { sent: 1 }; },
+  });
+  assert.match(output.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
+  assert.match(output.text, /\/plur1bus critical accept /);
 });
 
 test("Critical Push policy rejection leaves cards unclassified and diagnostics sanitized", async (t) => {
