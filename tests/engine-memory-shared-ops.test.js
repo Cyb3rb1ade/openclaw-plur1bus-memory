@@ -7,105 +7,14 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 
-import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
 import { createMemoryWrite } from "../engine/memory-ops/write.js";
-import { createStubHost } from "../lib/host-services.js";
-import { makeTempDir } from "./helpers/temp-dir.js";
 import { readTombstonesFromRegistry } from "../lib/tombstone.js";
-
-// Nested under its own temp root so the tombstone registry
-// (`dirname(baseDbPath)/_tombstones`) is per test (see tests/e1-memory-ops-write.test.js).
-function freshBaseDbPath(prefix) {
-  return join(makeTempDir(`${prefix}root-`), "lancedb-namespaced");
-}
-
-const config = (baseDbPath) => ({
-  baseDbPath,
-  embedding: { provider: "local-transformers", local: { dimensions: 384 } },
-  autoCapture: true, autoRecall: true,
-  neo: { enabled: false }, gc: { enabled: false }, obsidianBridge: { enabled: false },
-  merging: { enabled: false }, dreaming: { enabled: false }, skillMiner: { enabled: false },
-  temporalContext: { enabled: false }, conversationReactivationRecall: { enabled: false },
-  runtime: { recallTimeoutMs: 10_000 },
-  // Distinct facts with the flat embedder below.
-  duplicateThreshold: 1.01,
-});
-
-function flatEmbedder() {
-  const vector = () => Array.from({ length: 384 }, (_, i) => (i === 0 ? 1 : 0));
-  const one = async () => vector();
-  return { embed: one, embedQuery: one, embedPassage: one, embedBatch: async (texts) => texts.map(vector), shutdown: async () => {} };
-}
-
-const USER_PRINCIPAL = `user:v1:${"a".repeat(64)}`;
-
-// No `workspace` claim: the canonical identity of the host's real workspace
-// directory wins (see tests/e1-memory-ops-write.test.js principalForDestructive).
-function principal(agentId, { user } = {}) {
-  return { agentId, channel: "telegram", accountId: "default", chat: { id: "c1", kind: "direct" }, trust: "proved", ...(user ? { user } : {}) };
-}
-
-// anna and bernd share one real workspace directory (one workspace pool key);
-// carol lives in another workspace.
-function twoWorkspaceHost(stateDir) {
-  const shared = join(stateDir, "workspaces", "shared-ws");
-  const other = join(stateDir, "workspaces", "other-ws");
-  mkdirSync(shared, { recursive: true });
-  mkdirSync(other, { recursive: true });
-  return { host: createStubHost({ stateDir, workspaceDir: async (agentId) => (agentId === "carol" ? other : shared) }), workspaceDir: shared };
-}
-
-const userAgent = { origin: "user", background: false };
-const cronAgent = { origin: "cron", background: true };
-
-async function seedAndGetId(engine, agentId, text, topic) {
-  const p = principal(agentId);
-  const outcome = await engine.capture({
-    agentId,
-    principal: p,
-    agent: userAgent,
-    messages: [{ role: "user", content: text }, { role: "assistant", content: "noted." }],
-    sessionKey: `agent:${agentId}:main`,
-    incognito: false,
-    signal: AbortSignal.timeout(8_000),
-  }).done;
-  assert.equal(outcome.reason, undefined, `capture not skipped: ${outcome.reason}`);
-  assert.ok(outcome.stored >= 1);
-  const listed = await engine.memory.list({ topic }, p, userAgent);
-  const card = listed.items.find((c) => c.scope === "agent-private" && c.text.includes(text.slice(0, 20)));
-  assert.ok(card, `seeded card for '${topic}' is listed`);
-  return card.id;
-}
-
-function setup(prefix) {
-  const stateDir = makeTempDir(`${prefix}state-`);
-  const baseDbPath = freshBaseDbPath(prefix);
-  const { host, workspaceDir } = twoWorkspaceHost(stateDir);
-  const engine = createEngine(host, config(baseDbPath), { internals: { embeddings: flatEmbedder() } });
-  return { stateDir, baseDbPath, workspaceDir, engine };
-}
-
-const code = (c) => (err) => err.name === "MemoryOpError" && err.code === c;
-const deniedWith = (message) => (err) => err.name === "MemoryOpError" && err.code === "denied" && err.message === message;
-
-function auditLines(workspaceDir) {
-  const file = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
-  if (!existsSync(file)) return [];
-  return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-}
-
-function archiveFiles(stateDir, agentId) {
-  const dir = join(stateDir, "memory", "_archive", agentId);
-  return existsSync(dir) ? readdirSync(dir) : [];
-}
-
-function archiveCount(stateDir, agentId) {
-  return archiveFiles(stateDir, agentId).length;
-}
+import {
+  USER_PRINCIPAL, archiveCount, archiveFiles, auditLines, code, cronAgent,
+  deniedWith, principal, seedAndGetId, setup, userAgent,
+} from "./helpers/shared-workspace-engine.js";
 
 async function assertRetractWorks({ engine, stateDir, baseDbPath, workspaceDir, sourceId, sharedId, anna, scope, viewer }) {
   const tombstonesBefore = readTombstonesFromRegistry(baseDbPath, "anna").length;

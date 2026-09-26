@@ -18,7 +18,9 @@ import { CORRECTION_PREVIEW_CHARS } from "../runtime/constants.js";
 import { memoryOpError } from "./errors.js";
 import { createSharedMemoryOps, isSharer, isLive } from "./shared.js";
 
-const MAX_CORRECT_TEXT_LENGTH = 8_000;
+// Exported so memory-ops/proposals.js (E2 Task 5) enforces the same text
+// length limit on a proposal's newText that correct() enforces here.
+export const MAX_CORRECT_TEXT_LENGTH = 8_000;
 
 /** English messages for each machine-readable failure code (log-safe; a raw error/reason string never reaches the thrown MemoryOpError's message — fix round 1, E1-R10). */
 function messageForCode(code) {
