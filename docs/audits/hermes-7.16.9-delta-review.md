@@ -89,3 +89,12 @@ Regression coverage: `test_release_7169.py`, `test_inject_budget.py`, historical
 inventory gates and both distributed UI harnesses. Release receipts record fresh
 full-suite results and per-platform build/install verification separately;
 passing stubbed retrieval tests is not a live provider/model quality benchmark.
+
+## Upstream test repair
+
+The full Node gate exposed a stale fake SQL evaluator in
+`test/memory-edit.test.js`: it did not understand the newly used `!= 'dream'`
+predicate. The fixture now implements SQL inequality/NULL semantics, with
+positive and negative controls. Real LanceDB dream-exclusion tests were already
+passing. This test-only fix is submitted upstream as
+[PR #189](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/pull/189).

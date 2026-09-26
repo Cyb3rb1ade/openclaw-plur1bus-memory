@@ -1,5 +1,16 @@
 # Distribution acceptance history
 
+## 7.16.9-hermes.0 — release evidence boundary
+
+Source includes upstream `f23867a1de5cd5a8b94370b5172d497fad4f2427` and the native
+ports inventoried in `docs/audits/hermes-7.16.9-delta-review.md`.
+Fresh results belong to this release's `verification-*.json`,
+`verification-release-review.json`, `notarization-macos-arm64.json` and
+`SHA256SUMS`, not to earlier receipts below. macOS ARM requires Developer ID
+signing, notarization and stapling; Windows ARM/x64 launchers are explicitly
+unsigned. Linux x64/ARM64 use portable bundles. No productive local installation
+or memory migration is implied by isolated package verification.
+
 ## 7.12.70-hermes.0 — candidate, not published
 
 Includes v7.12.69 plus PR #165 and native encoding/usage adaptations.
