@@ -12,11 +12,13 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readdirSync, statSync } from "node:fs";
 
 import { emitEngineEvent } from "../events.js";
 import { appendDreamDiaryEntry } from "../../lib/dreaming/dream-diary.js";
 import { createJobLedger, LEDGER_VERSION } from "./job-ledger.js";
 import { JOB_SPECS } from "./job-specs.js";
+import { isSafeAgentId } from "../../lib/sql-safety.js";
 
 const EXIT = Symbol("plur1bus.job.exit");
 
@@ -67,9 +69,9 @@ function priorIncompleteStreak(rows, job, pendingKeys) {
 }
 
 /**
- * @param {{host: object, jobsRoot?: string|null, idFactory?: () => string}} options
+ * @param {{host: object, jobsRoot?: string|null, idFactory?: () => string, createLedger?: typeof createJobLedger}} options
  */
-export function createJobRegistry({ host, jobsRoot = null, idFactory = () => randomUUID() } = {}) {
+export function createJobRegistry({ host, jobsRoot = null, idFactory = () => randomUUID(), createLedger = createJobLedger } = {}) {
   const specs = new Map(JOB_SPECS.map((spec) => [spec.name, spec]));
   const owners = new Map();
   const clock = () => (typeof host?.clock === "function" ? host.clock() : Date.now());
@@ -84,12 +86,20 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
   // at a time.
   const inflightSessions = new Map();
   const inflightJobs = new Set();
+  // Every run in flight in this process, singleton or not (Task 2's
+  // `health().agents[].running`) — keyed by runId so `finish()` always has an
+  // exact entry to remove, never by the agentId/job pair that other jobs
+  // could share.
+  const inflightRuns = new Map();
+  // health()'s per-agent ledger cache: re-`snapshot()` only when the
+  // ledger file's `${size}:${mtimeMs}` changed since the last health() call.
+  const ledgerHealthCache = new Map();
 
   function ledgerFor(agentId) {
     if (!jobsRoot) return null;
     let ledger = ledgers.get(agentId);
     if (!ledger) {
-      ledger = createJobLedger({ root: jobsRoot, agentId, logger: host.logger });
+      ledger = createLedger({ root: jobsRoot, agentId, logger: host.logger });
       ledgers.set(agentId, ledger);
     }
     return ledger;
@@ -246,6 +256,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
   }
 
   function release(inflight) {
+    inflightRuns.delete(inflight.runId);
     if (inflight.sessionKey) {
       const left = (inflightSessions.get(inflight.sessionKey) ?? 1) - 1;
       if (left > 0) inflightSessions.set(inflight.sessionKey, left);
@@ -404,6 +415,11 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
         return finish(inflight, jobExit("failed", "ledger_unwritable", undefined), writeError, null);
       }
     }
+    // Registered once the marker is durable (or, with no ledger at all, once
+    // there is nothing left that could fail before the body runs) — health()
+    // reports this run as "running" for its agentId/job until finish()
+    // releases it, whichever exit path gets there.
+    inflightRuns.set(inflight.runId, { agentId, job: name });
     // The caller's signal is observed before start only (job bodies do not
     // yet take it — M1b-3): an already-aborted call is a recorded skip.
     if (signal?.aborted) {
@@ -465,10 +481,146 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     return finish(inflight, exit, error, ledger, snapshot);
   }
 
+  function deepFreeze(value) {
+    if (value && typeof value === "object" && !Object.isFrozen(value)) {
+      Object.freeze(value);
+      for (const key of Object.keys(value)) deepFreeze(value[key]);
+    }
+    return value;
+  }
+
+  /** Sorted, unique job names with a run in flight in this process for `agentId`. */
+  function runningJobsFor(agentId) {
+    const jobs = new Set();
+    for (const entry of inflightRuns.values()) {
+      if (entry.agentId === agentId) jobs.add(entry.job);
+    }
+    return [...jobs].sort();
+  }
+
+  /** @returns {BreakerState} */
+  function breakerFor(agentId, sweep, rows) {
+    const sessions = rows.filter((row) => row.sweep === sweep && row.llmSession === true && BREAKER_PHASES.has(row.phase)).length
+      + (inflightSessions.get(`${agentId}\u0000${sweep}`) ?? 0);
+    return { sweep, sessions, limit: BREAKER_LIMIT, open: sessions >= BREAKER_LIMIT };
+  }
+
+  /** Latest (by finishedAt) row per job, projected to JobLastRun. */
+  function lastRunsFor(rows) {
+    const byJob = new Map();
+    for (const row of rows) {
+      if (typeof row?.job !== "string" || !Number.isFinite(row.finishedAt)) continue;
+      const existing = byJob.get(row.job);
+      if (!existing || row.finishedAt > existing.finishedAt) byJob.set(row.job, row);
+    }
+    const lastRuns = {};
+    for (const [job, row] of byJob) {
+      lastRuns[job] = {
+        runId: row.runId,
+        outcome: row.outcome,
+        ...(row.reason !== undefined ? { reason: row.reason } : {}),
+        trigger: row.trigger,
+        startedAt: row.startedAt,
+        finishedAt: row.finishedAt,
+        attempt: row.attempt,
+      };
+    }
+    return lastRuns;
+  }
+
+  /**
+   * One agent's slice of `health()`. Never throws: a ledger stat/read
+   * failure other than a missing file degrades to empty `lastRuns` and
+   * `unreadableLines: 0` for this agent and reports `ok: false`, which
+   * flips the top-level `ledger` to "unavailable" without rejecting the
+   * whole call.
+   */
+  function agentHealthFor(agentId, sweep) {
+    let rows = [];
+    let unreadableLines = 0;
+    let ok = true;
+    try {
+      const ledger = ledgerFor(agentId);
+      let stat = null;
+      try {
+        stat = statSync(ledger.paths.ledger);
+      } catch (statError) {
+        if (statError?.code !== "ENOENT") throw statError;
+      }
+      if (stat) {
+        const key = `${stat.size}:${stat.mtimeMs}`;
+        const cached = ledgerHealthCache.get(agentId);
+        if (cached && cached.key === key) {
+          ({ rows, unreadable: unreadableLines } = cached);
+        } else {
+          const snap = ledger.snapshot();
+          rows = snap.rows;
+          unreadableLines = snap.unreadable;
+          ledgerHealthCache.set(agentId, { key, rows, unreadable: unreadableLines });
+        }
+      }
+    } catch (error) {
+      ok = false;
+      rows = [];
+      unreadableLines = 0;
+      host.logger.debug(`plur1bus jobs: health could not read the ledger for agent ${agentId}: ${String(error?.message || error)}`);
+    }
+    return {
+      ok,
+      entry: {
+        agentId,
+        lastRuns: ok ? lastRunsFor(rows) : {},
+        running: runningJobsFor(agentId),
+        breaker: breakerFor(agentId, sweep, rows),
+        unreadableLines,
+      },
+    };
+  }
+
+  /**
+   * @returns {object} JobsHealth (types/engine.d.ts).
+   * Synchronous, never throws. `jobsRoot === null` (no ledger configured at
+   * all) short-circuits to `{ ledger: "ok", agents: [] }` — there is nothing
+   * to read. Otherwise agents are every directory under `jobsRoot` whose
+   * name is an unmodified `safeAgentId`, unioned with any agent that has a
+   * run in flight in this process (so a first run's health is visible before
+   * its ledger directory exists on disk).
+   */
+  function health() {
+    if (jobsRoot === null) return deepFreeze({ ledger: "ok", agents: [] });
+    let names = [];
+    let ledgerAvailable = true;
+    try {
+      names = readdirSync(jobsRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && isSafeAgentId(entry.name))
+        .map((entry) => entry.name);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        names = [];
+      } else {
+        ledgerAvailable = false;
+        names = [];
+        host.logger.debug(`plur1bus jobs: health could not read jobs root ${jobsRoot}: ${String(error?.message || error)}`);
+      }
+    }
+    const agentIds = new Set(names);
+    for (const entry of inflightRuns.values()) agentIds.add(entry.agentId);
+    const sweep = sweepKey(clock());
+    const agents = [];
+    let anyAgentFailed = false;
+    for (const agentId of [...agentIds].sort()) {
+      const { ok, entry } = agentHealthFor(agentId, sweep);
+      if (!ok) anyAgentFailed = true;
+      agents.push(entry);
+    }
+    return deepFreeze({ ledger: ledgerAvailable && !anyAgentFailed ? "ok" : "unavailable", agents });
+  }
+
   return Object.freeze({
     list: () => [...specs.values()],
     bind,
     run,
+    health,
     history: async (agentId, { job, since, limit } = {}) => {
       const ledger = ledgerFor(agentId);
       if (!ledger) return [];
