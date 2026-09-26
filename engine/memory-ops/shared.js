@@ -48,21 +48,25 @@ export function isSharer(card, agentId) {
 }
 
 /**
- * @param {{opsContext: object, pool: object, sharedMemoryPool: object, memoryDbAdapter: object, embeddings: object, baseDbPath: string, applyCorrection: Function, logger?: object, shareCopy?: Function}} deps
+ * @param {{opsContext: object, pool: object, sharedMemoryPool: object, memoryDbAdapter: object, embeddings: object, baseDbPath: string, applyCorrection: Function, logger?: object, shareCopy?: Function, findAcrossPools?: Function}} deps
  *   `shareCopy` has shareCard's signature and defaults to it; it is the seam
- *   tests use to make the re-share step of a refresh fail.
+ *   tests use to make the re-share step of a refresh fail. `findAcrossPools`
+ *   has findMemoryAcrossAccessPools's signature and defaults to it; it is the
+ *   seam tests use to make the shared-copy lookup fail.
  * @returns {{findSharedRow: Function, retractSharedRow: Function, refreshShare: Function}}
  */
-export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memoryDbAdapter, embeddings, baseDbPath, applyCorrection, logger, shareCopy = shareCard }) {
+export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memoryDbAdapter, embeddings, baseDbPath, applyCorrection, logger, shareCopy = shareCard, findAcrossPools = findMemoryAcrossAccessPools }) {
   /**
    * The live, ACL-visible workspace/user copy with this id, or null. A failed
-   * lookup is logged and answers null, so the caller's answer stays the
-   * anti-oracle "not-found".
+   * lookup is logged and, by default, answers null, so the caller's answer
+   * stays the anti-oracle "not-found". With `throwOnError: true` a failed
+   * lookup throws `storage` instead, for callers (proposals.accept) that act
+   * on a definite absence and must not mistake a read error for one.
    * @returns {Promise<{card: object, sourceKind: string} | null>}
    */
-  async function findSharedRow({ agentId, memoryCtx, id }) {
+  async function findSharedRow({ agentId, memoryCtx, id, throwOnError = false }) {
     try {
-      return await findMemoryAcrossAccessPools({
+      return await findAcrossPools({
         privatePool: pool,
         sharedPool: sharedMemoryPool,
         agent: agentId,
@@ -73,6 +77,7 @@ export function createSharedMemoryOps({ opsContext, pool, sharedMemoryPool, memo
       });
     } catch (err) {
       logger?.warn?.(`memory-ops.shared: shared-pool lookup failed for agent '${agentId}'/'${id}': ${err?.message || err}`);
+      if (throwOnError) throw memoryOpError("storage", "memory read failed");
       return null;
     }
   }

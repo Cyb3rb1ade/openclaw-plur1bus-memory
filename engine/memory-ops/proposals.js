@@ -210,9 +210,18 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
     }
   }
 
+  // Keyed on the lowercased id: safeUuid accepts either case, and a
+  // case-insensitive filesystem maps both spellings to one proposal file.
+  const guardKey = (safeId) => safeId.toLowerCase();
+
   function claim(safeId) {
-    if (resolving.has(safeId)) throw memoryOpError("conflict", "proposal is being resolved");
-    resolving.add(safeId);
+    const key = guardKey(safeId);
+    if (resolving.has(key)) throw memoryOpError("conflict", "proposal is being resolved");
+    resolving.add(key);
+  }
+
+  function release(safeId) {
+    resolving.delete(guardKey(safeId));
   }
 
   /**
@@ -233,7 +242,9 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
       // above and the claim must not be applied twice.
       const proposal = loadPending(agentId, safeId, "accept");
 
-      const found = await sharedOps.findSharedRow({ agentId, memoryCtx, id: proposal.sharedId });
+      // throwOnError: a failed lookup is `storage` (proposal stays pending);
+      // only a definite absence marks the proposal stale.
+      const found = await sharedOps.findSharedRow({ agentId, memoryCtx, id: proposal.sharedId, throwOnError: true });
       let staleReason = null;
       if (!found || !isSharer(found.card, agentId)) staleReason = "shared copy is gone; proposal marked stale";
       else if (found.card.text !== proposal.oldText) staleReason = "shared copy changed since the proposal";
@@ -261,8 +272,16 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
       }
       const { sourceId, sharedId } = refreshed;
 
+      // The shared copy has changed from here on: a failure to record that
+      // names the ids so the caller is not left with a bare storage error.
+      const appliedDetail = { proposalId: safeId, id: sharedId, sourceId };
       const accepted = { ...proposal, status: "accepted", resolvedAt: clock(), resultId: sharedId };
-      saveResolved(accepted, "accept");
+      try {
+        saveResolved(accepted, "accept");
+      } catch (err) {
+        logger?.warn?.(`memory-ops.proposals.accept: proposal '${safeId}' was applied (new original '${sourceId}', new shared copy '${sharedId}') but recording it as accepted failed: ${err?.message || err}`);
+        throw memoryOpError("storage", "proposal applied but not recorded as accepted", appliedDetail);
+      }
 
       const auditOk = appendDestructiveOpLog(workspaceDir, {
         op: "memory-proposal-accept",
@@ -271,12 +290,15 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
         actor: memoryCtx.userPrincipal || `principal:${agentId}`,
         at: new Date().toISOString(),
       });
-      if (!auditOk) throw memoryOpError("storage", "audit failed");
+      if (!auditOk) {
+        logger?.warn?.(`memory-ops.proposals.accept: proposal '${safeId}' was accepted (new original '${sourceId}', new shared copy '${sharedId}') but the audit append failed`);
+        throw memoryOpError("storage", "audit failed", appliedDetail);
+      }
 
       emitResolved(accepted);
       return { proposalId: safeId, id: sharedId, sourceId };
     } finally {
-      resolving.delete(safeId);
+      release(safeId);
     }
   }
 
@@ -312,7 +334,7 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
       emitResolved(rejected);
       return { proposalId: safeId, status: "rejected" };
     } finally {
-      resolving.delete(safeId);
+      release(safeId);
     }
   }
 

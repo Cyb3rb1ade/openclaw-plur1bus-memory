@@ -396,7 +396,10 @@ Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
   `accept` markiert eine geteilte Kopie, die verschwunden ist oder deren
   Text sich seit dem Vorschlag geändert hat, als `stale` und lehnt
   `conflict` ab, statt sie zu überschreiben; ein Fehlschlag beim Erneuern
-  lässt den Vorschlag `pending`. `reject` protokolliert nur die Ablehnung
+  oder beim Nachschlagen der Kopie (`storage`) lässt den Vorschlag
+  `pending`. Scheitert nach erfolgreicher Erneuerung das Festhalten der
+  Annahme oder die Audit-Zeile, antwortet `accept` `storage` mit `detail:
+  { proposalId, id, sourceId }`. `reject` protokolliert nur die Ablehnung
   und eine optionale Notiz.
 - **`"memory.proposal"`-Event** (`EngineEventName`): einmal beim Einreichen
   (`status: "pending"`) und einmal bei der Auflösung (`"accepted"` /

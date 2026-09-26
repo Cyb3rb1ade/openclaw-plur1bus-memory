@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 
 import { internalsOf } from "../engine/internals.js";
 import { createMemoryWrite } from "../engine/memory-ops/write.js";
+import { createSharedMemoryOps } from "../engine/memory-ops/shared.js";
 import { createMemoryProposals } from "../engine/memory-ops/proposals.js";
 import { createProposalStore } from "../engine/memory-ops/proposal-store.js";
 import { code, cronAgent, principal, seedAndGetId, setup, userAgent } from "./helpers/shared-workspace-engine.js";
@@ -328,17 +329,130 @@ describe("Engine.memory.proposals.accept / .reject (E2 Task 6, D31)", () => {
       engine.memory.proposals.accept(P, anna, userAgent),
       engine.memory.proposals.reject(P, anna, userAgent),
     ]);
-    assert.equal(results[0].status, "fulfilled", `accept wins: ${results[0].reason?.message}`);
-    assert.equal(results[1].status, "rejected");
-    assert.ok(code("conflict")(results[1].reason) && results[1].reason.message === "proposal is being resolved", `concurrent reject hits the in-process guard: ${results[1].reason?.message}`);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter((r) => r.status === "rejected");
+    assert.equal(fulfilled.length, 1, "exactly one resolve succeeds");
+    assert.equal(refused.length, 1, "exactly one resolve is refused");
+    assert.ok(code("conflict")(refused[0].reason) && refused[0].reason.message === "proposal is being resolved", `the other hits the in-process guard: ${refused[0].reason?.message}`);
+    const acceptWon = results[0].status === "fulfilled";
     const listed = await engine.memory.proposals.list({}, anna, userAgent);
-    assert.equal(listed.items.find((x) => x.id === P).status, "accepted");
+    assert.equal(listed.items.find((x) => x.id === P).status, acceptWon ? "accepted" : "rejected");
 
-    const { proposalId: Q } = await engine.memory.propose(results[0].value.id, "Q text", bernd, userAgent);
+    const liveCopy = acceptWon ? results[0].value.id : S;
+    const { proposalId: Q } = await engine.memory.propose(liveCopy, "Q text", bernd, userAgent);
     await engine.close({ budgetMs: 5_000 });
 
     await assert.rejects(() => engine.memory.proposals.accept(Q, anna, userAgent), code("storage"));
     await assert.rejects(() => engine.memory.proposals.reject(Q, anna, userAgent), code("storage"));
     await assert.rejects(() => engine.memory.proposals.list({}, anna, userAgent), code("storage"));
+  });
+
+  it("(i) a failed shared-copy lookup answers storage and leaves the proposal pending (never stale)", async () => {
+    const { baseDbPath, engine } = setup("e2-accept-i-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const F = await seedAndGetId(engine, "anna", "The stationery cupboard is restocked on Fridays.", "stationery cupboard");
+    const { sharedId: S } = await engine.memory.share(F, "workspace", anna, userAgent);
+    const { proposalId: P } = await engine.memory.propose(S, "The stationery cupboard is restocked on Mondays.", bernd, userAgent);
+
+    const internals = internalsOf(engine);
+    const warnings = [];
+    const logger = { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} };
+    const failingLookup = createSharedMemoryOps({
+      opsContext: internals.memoryOpsContext,
+      pool: internals.pool,
+      sharedMemoryPool: internals.sharedMemoryPool,
+      memoryDbAdapter: internals.memoryDbAdapter,
+      embeddings: internals.embeddings,
+      baseDbPath,
+      applyCorrection: async () => { throw new Error("not reached"); },
+      logger,
+      findAcrossPools: async () => { throw new Error("injected lookup failure"); },
+    });
+    const store = createProposalStore({ baseDbPath, logger });
+    const proposals = createMemoryProposals({
+      opsContext: internals.memoryOpsContext,
+      sharedOps: failingLookup,
+      store,
+      memoryDbAdapter: internals.memoryDbAdapter,
+      host: internals.host,
+      logger,
+    });
+
+    await assert.rejects(() => proposals.accept(P, anna, userAgent), (err) => code("storage")(err) && err.message === "memory read failed");
+    assert.equal(store.get("anna", P).status, "pending", "a read error is not a definite absence");
+    assert.equal(store.get("anna", P).resolvedAt, null);
+    assert.ok(warnings.some((w) => w.includes("injected lookup failure")), "the raw error goes to the log only");
+
+    // With a working lookup the same proposal is still acceptable.
+    const accepted = await engine.memory.proposals.accept(P, anna, userAgent);
+    assert.equal(accepted.proposalId, P);
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(j) recording the acceptance fails after the refresh: storage names the applied ids", async () => {
+    const { baseDbPath, engine } = setup("e2-accept-j-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const F = await seedAndGetId(engine, "anna", "The plant shelf gets light in the afternoon.", "plant shelf");
+    const { sharedId: S } = await engine.memory.share(F, "workspace", anna, userAgent);
+    const newText = "The plant shelf gets light in the morning.";
+    const { proposalId: P } = await engine.memory.propose(S, newText, bernd, userAgent);
+
+    const internals = internalsOf(engine);
+    const warnings = [];
+    const logger = { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} };
+    const realStore = createProposalStore({ baseDbPath, logger });
+    const failingStore = {
+      ...realStore,
+      update: (proposal) => {
+        if (proposal.status === "accepted") throw new Error("injected update failure");
+        return realStore.update(proposal);
+      },
+    };
+    const proposals = createMemoryProposals({
+      opsContext: internals.memoryOpsContext,
+      sharedOps: internals.memoryWrite.shared,
+      store: failingStore,
+      memoryDbAdapter: internals.memoryDbAdapter,
+      host: internals.host,
+      logger,
+    });
+
+    let caught;
+    await assert.rejects(() => proposals.accept(P, anna, userAgent), (err) => {
+      caught = err;
+      return code("storage")(err) && err.message === "proposal applied but not recorded as accepted";
+    });
+    assert.equal(caught.detail.proposalId, P);
+    assert.equal(typeof caught.detail.id, "string");
+    assert.equal(typeof caught.detail.sourceId, "string");
+    assert.notEqual(caught.detail.id, S);
+    const applied = await engine.memory.show(caught.detail.id, bernd, userAgent);
+    assert.equal(applied.text, newText, "the shared copy the detail names carries the proposal's text");
+    assert.ok(warnings.some((w) => w.includes(P) && w.includes(caught.detail.id) && w.includes(caught.detail.sourceId)), "the failure is logged with all three ids");
+    assert.equal(realStore.get("anna", P).status, "pending");
+
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("(k) ruling R10: the sharer's original is gone — accept answers conflict and the proposal stays pending", async () => {
+    const { engine } = setup("e2-accept-k-");
+    const anna = principal("anna");
+    const bernd = principal("bernd");
+    const F = await seedAndGetId(engine, "anna", "The umbrella stand is by the lift.", "umbrella stand");
+    const { sharedId: S } = await engine.memory.share(F, "workspace", anna, userAgent);
+    const { proposalId: P } = await engine.memory.propose(S, "The umbrella stand is by the stairs.", bernd, userAgent);
+    await engine.memory.forget(F, anna, userAgent);
+
+    await assert.rejects(() => engine.memory.proposals.accept(P, anna, userAgent), (err) => code("conflict")(err)
+      && err.message === "the original of this shared copy is no longer live; retract it instead");
+    const listed = await engine.memory.proposals.list({}, anna, userAgent);
+    assert.equal(listed.items.find((x) => x.id === P).status, "pending");
+    const copy = await engine.memory.show(S, bernd, userAgent);
+    assert.equal(copy.text, "The umbrella stand is by the lift.", "the copy is unchanged");
+
+    await engine.close({ budgetMs: 5_000 });
   });
 });

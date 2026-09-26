@@ -254,8 +254,13 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   proposal's `newText` through the same `refreshShare` path the sharer's own
   `correct` uses; any failure there leaves the proposal `pending` (so
   `accept` can be retried) and surfaces the refresh error, `detail` included,
-  unchanged. A successful accept records `resultId` (the new shared copy's
-  id) and emits `memory.proposal` with `status: "accepted"`.
+  unchanged. Only a definite absence marks a proposal `stale`: a failed
+  shared-copy lookup rejects `storage` and leaves it `pending`. A successful
+  accept records `resultId` (the new shared copy's id) and emits
+  `memory.proposal` with `status: "accepted"`; if recording the acceptance
+  (or its audit line) fails after the copy was refreshed, `accept` rejects
+  `storage` with `detail: { proposalId, id, sourceId }` naming the refreshed
+  copy and original.
 - **`proposals.reject(proposalId, p, a, opts?)`** is sharer-only the same
   way; it only records `status: "rejected"` and an optional `resolutionNote`
   (max 500 characters) — the shared copy is never touched.
