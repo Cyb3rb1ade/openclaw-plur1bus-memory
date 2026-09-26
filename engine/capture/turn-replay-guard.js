@@ -22,6 +22,19 @@
  * still applies, and a capture is never blocked on the guard. A capture whose
  * result carries a `reason` (it did not complete: aborted, embedder down,
  * engine closed, ...) is not recorded, so its replay is captured.
+ *
+ * E4.1: the key is recorded as soon as the capture's rows have settled
+ * successfully — `fn` receives an `onRowsSettled` callback that the capture
+ * pipeline calls right after its store loop (rows stored, none failed),
+ * before any post-store step (speaker pipeline, meta-cognition, graph build,
+ * neo drain, scheduler settling). A process killed in that window has its
+ * turn already recorded, so the host's journal replay answers
+ * `duplicate-turn` instead of storing the row a second time; the only window
+ * left is the guard's own atomic file write. The post-store steps are
+ * best-effort: if they then fail, or the result still ends up carrying a
+ * `reason`, the turn stays recorded — its rows are stored, and a replay would
+ * only duplicate them. A capture that never calls `onRowsSettled` is
+ * recorded, as before, only when its result carries no `reason`.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -69,8 +82,10 @@ function validEntries(parsed) {
 
 /**
  * @param {{ root: string, clock?: () => number, logger?: { warn?: (m: string) => void } }} options
- * @returns {{ run(agentId: string, key: string, fn: () => Promise<{ stored: number, skipped: number, reason?: string }>, opts?: { signal?: AbortSignal }): Promise<{ stored: number, skipped: number, reason?: string }> }}
- *   (the result is a CaptureResult, types/engine.d.ts). `opts.signal`, when
+ * @returns {{ run(agentId: string, key: string, fn: (onRowsSettled: () => void) => Promise<{ stored: number, skipped: number, reason?: string }>, opts?: { signal?: AbortSignal }): Promise<{ stored: number, skipped: number, reason?: string }> }}
+ *   (the result is a CaptureResult, types/engine.d.ts). `onRowsSettled`
+ *   records the key immediately (idempotent, never throws; see E4.1 in the
+ *   module comment). `opts.signal`, when
  *   given, only bounds a *waiter's* time in the queue behind an identical
  *   in-flight capture (M4, fix wave 1): the caller's own signal aborting
  *   while waiting resolves immediately with the same `{ reason: "aborted" }`
@@ -173,12 +188,20 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
       const flight = new Promise((resolve) => { settle = resolve; });
       inFlight.set(flightKey, flight);
       let recorded = false;
-      try {
-        const result = await fn();
-        if (result && result.reason === undefined) {
+      const recordOnce = () => {
+        if (recorded) return;
+        recorded = true;
+        try {
           record(agentId, key);
-          recorded = true;
+        } catch (error) {
+          // record() already fails open on the write; this only guards the
+          // callback contract (the pipeline calls it mid-capture).
+          warn(`plur1bus: capture replay guard could not record a turn for agent=${agentId} (${String(error?.message || error).slice(0, 120)})`);
         }
+      };
+      try {
+        const result = await fn(recordOnce);
+        if (result && result.reason === undefined) recordOnce();
         return result;
       } finally {
         settle(recorded);

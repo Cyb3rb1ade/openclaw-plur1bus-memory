@@ -590,6 +590,29 @@ Contract-Version **1.8.0**. Details in `docs/engine-api.md`, Abschnitt
   zweites Mal durch die Capture-Pipeline** (keine zweite Zusammenfassung,
   keine zweite Zeile, kein zweiter Sitzungszähler; Q3).
 
+### E4.1 — Wiedergabe-Schutz merkt den Turn, sobald die Zeilen stehen
+
+Kein Contract-Wechsel (Typen bleiben bei 1.8.0).
+
+#### Behoben
+
+- **Ein Kill direkt nach dem Speichern legt bei der Journal-Wiedergabe keine
+  zweite Zeile mehr an.** Der Wiedergabe-Schutz (Q3) merkte den Turn erst,
+  nachdem der ganze Capture durchgelaufen war — also auch nach den ~300 ms
+  Nacharbeit hinter `db.store` (Sprecher-Pipeline, Meta-Kognition,
+  Graph-Aufbau, Neo-Drain, Scheduler). Ein SIGKILL in diesem Fenster (im
+  Harness-Kill-Soak reproduziert) ließ die Zeile gespeichert, den Turn aber
+  ungemerkt, und die Wiedergabe mit derselben `runId` speicherte ihn erneut.
+  Jetzt ruft die Capture-Pipeline direkt nach der Speicherschleife einen
+  internen `onRowsSettled`-Callback, sobald etwas gespeichert wurde und kein
+  Element fehlschlug; der Schutz schreibt den Schlüssel sofort (atomar wie
+  bisher). Übrig bleibt nur das Fenster des eigenen Datei-Schreibens.
+  Scheitert danach ein Nacharbeitsschritt (best-effort), bleibt der Turn
+  gemerkt. Fehlgeschlagene, abgebrochene oder unvollständige Captures werden
+  weiterhin nicht gemerkt, eine gleichzeitige identische Capture wartet wie
+  bisher und endet als `duplicate-turn`; der OpenClaw-Adapter-Pfad ist
+  unverändert.
+
 ## [7.16.11] — 2026-09-26
 
 ### Geändert

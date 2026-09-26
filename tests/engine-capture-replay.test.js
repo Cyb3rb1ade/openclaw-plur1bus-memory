@@ -105,11 +105,11 @@ const turn = ({ runId, text }) => ({
   signal: new AbortController().signal,
 });
 
-function setup({ extra = {}, embeddings = hashEmbedder(), llm, dirs } = {}) {
+function setup({ extra = {}, embeddings = hashEmbedder(), llm, dirs, internals = {} } = {}) {
   const warned = [];
   const stateDir = dirs?.stateDir ?? makeTempDir("e4-replay-state-");
   const baseDbPath = dirs?.baseDbPath ?? join(makeTempDir("e4-replay-root-"), "lancedb-namespaced");
-  const engine = createEngine(stubHost(stateDir, warned, llm), config(baseDbPath, extra), { internals: { embeddings } });
+  const engine = createEngine(stubHost(stateDir, warned, llm), config(baseDbPath, extra), { internals: { embeddings, ...internals } });
   return { engine, warned, stateDir, baseDbPath, embeddings };
 }
 
@@ -117,6 +117,19 @@ const cardsWithText = async (engine, text) => (await engine.memory.list({ since:
   .items.filter((card) => card.text === text);
 
 const DUPLICATE = { stored: 0, skipped: 1, reason: "duplicate-turn" };
+
+/** Keys persisted in the replay guard's agent file (empty when it does not exist yet). */
+function guardKeys(baseDbPath) {
+  try {
+    return JSON.parse(readFileSync(join(baseDbPath, "_capture-turns", `${AGENT}.json`), "utf8")).entries.map((e) => e.key);
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+/** Resolves with `value` after `ms`, so a hung promise fails an assertion instead of the test timeout. */
+const within = (promise, ms, value) => Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(value), ms))]);
 
 describe("Engine.capture replay guard (E4 Task 5, Q3)", () => {
   it("replaying the same turn is a duplicate-turn and does not advance the meta-reflection counter", async () => {
@@ -254,6 +267,82 @@ describe("Engine.capture replay guard (E4 Task 5, Q3)", () => {
     }
   });
 
+  it("E4.1: the turn is recorded once its rows settled, before the post-store steps (a kill there does not re-store on replay)", async () => {
+    // The speaker pipeline is the first post-store step; parking it stands in
+    // for the ~300 ms window (speaker, meta-cognition, graph, neo drain) in
+    // which the harness kill soak SIGKILLed the process.
+    let releaseSpeaker;
+    let enteredSpeaker;
+    const entered = new Promise((resolve) => { enteredSpeaker = resolve; });
+    const runSpeakerProposalPipeline = async () => {
+      enteredSpeaker();
+      await new Promise((resolve) => { releaseSpeaker = resolve; });
+    };
+    const { engine, baseDbPath } = setup({ internals: { runSpeakerProposalPipeline } });
+    try {
+      const t = turn({ runId: "journal:e41-hang", text: T });
+      const { turnKeyOf } = await import("../engine/capture/turn-replay-guard.js");
+      const handle = engine.capture(t);
+      await entered;
+      assert.equal((await cardsWithText(engine, T)).length, 1, "the row is stored before the post-store steps");
+      assert.deepEqual(guardKeys(baseDbPath), [turnKeyOf(t)], "the key is persisted while the post-store steps still run");
+
+      const replay = await within(engine.capture(turn({ runId: "journal:e41-hang", text: T })).done, 2_000, "replay hung behind the in-flight capture");
+      assert.deepEqual(replay, DUPLICATE);
+      assert.equal((await cardsWithText(engine, T)).length, 1, "no second row");
+
+      releaseSpeaker();
+      const first = await handle.done;
+      assert.ok(first.stored >= 1 && first.reason === undefined, JSON.stringify(first));
+      assert.deepEqual(guardKeys(baseDbPath), [turnKeyOf(t)]);
+    } finally {
+      releaseSpeaker?.();
+      await engine.close();
+    }
+  });
+
+  it("E4.1: a post-store step that throws leaves the turn recorded (post-store steps are best-effort)", async () => {
+    const runSpeakerProposalPipeline = async () => { throw new Error("speaker pipeline failed (synthetic)"); };
+    const { engine, baseDbPath } = setup({ internals: { runSpeakerProposalPipeline } });
+    try {
+      const t = turn({ runId: "journal:e41-throw", text: U });
+      const { turnKeyOf } = await import("../engine/capture/turn-replay-guard.js");
+      const first = await engine.capture(t).done;
+      assert.ok(first.stored >= 1, JSON.stringify(first));
+      assert.deepEqual(guardKeys(baseDbPath), [turnKeyOf(t)]);
+      const replay = await engine.capture(turn({ runId: "journal:e41-throw", text: U })).done;
+      assert.deepEqual(replay, DUPLICATE);
+      assert.equal((await cardsWithText(engine, U)).length, 1);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it("E4.1: a capture that fails before its rows settle is not recorded, so its replay is captured", async () => {
+    let speakerCalls = 0;
+    const runSpeakerProposalPipeline = async () => { speakerCalls++; };
+    const { engine, embeddings, baseDbPath } = setup({ internals: { runSpeakerProposalPipeline } });
+    try {
+      embeddings.holdBatch = true;
+      const held = new Promise((resolve) => { embeddings.onHeld = resolve; });
+      const handle = engine.capture(turn({ runId: "journal:e41-fail", text: T }));
+      await held;
+      assert.deepEqual(guardKeys(baseDbPath), [], "nothing is recorded before the rows settle");
+      embeddings.holdBatch = false;
+      handle.abort("test");
+      embeddings.release();
+      const failed = await handle.done;
+      assert.equal(failed.reason, "aborted", JSON.stringify(failed));
+      assert.equal(speakerCalls, 0, "no post-store step ran");
+      assert.deepEqual(guardKeys(baseDbPath), []);
+      const replay = await engine.capture(turn({ runId: "journal:e41-fail", text: T })).done;
+      assert.ok(replay.stored >= 1 && replay.reason === undefined, JSON.stringify(replay));
+      assert.equal(guardKeys(baseDbPath).length, 1);
+    } finally {
+      await engine.close();
+    }
+  });
+
   it("concurrent identical turns capture once", async () => {
     const { engine } = setup();
     try {
@@ -352,6 +441,39 @@ describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
     const broken = createTurnReplayGuard({ root: blocked, logger: { warn: (m) => warned.push(String(m)) } });
     assert.deepEqual(await broken.run(AGENT, "k-w", done()), { stored: 1, skipped: 0 });
     assert.ok(warned.length >= 1);
+  });
+
+  it("E4.1: onRowsSettled records the key before fn resolves; a later reason does not unrecord it; a waiter sees duplicate-turn", async () => {
+    const { createTurnReplayGuard } = await load();
+    const root = join(makeTempDir("e4-guard-early-"), "_capture-turns");
+    const guard = createTurnReplayGuard({ root, logger: { warn() {} } });
+    const keys = () => {
+      try { return JSON.parse(readFileSync(join(root, `${AGENT}.json`), "utf8")).entries.map((e) => e.key); } catch { return []; }
+    };
+    let release;
+    let settledSeen;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const first = guard.run(AGENT, "k-early", async (onRowsSettled) => {
+      onRowsSettled();
+      onRowsSettled(); // idempotent
+      settledSeen = keys();
+      await gate;
+      return { stored: 1, skipped: 0, reason: "aborted" };
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(settledSeen, ["k-early"], "persisted before fn resolved");
+    // A fresh call is answered from the record at once; it does not wait.
+    assert.deepEqual(await guard.run(AGENT, "k-early", async () => ({ stored: 1, skipped: 0 })), DUPLICATE);
+    release();
+    assert.deepEqual(await first, { stored: 1, skipped: 0, reason: "aborted" });
+    assert.deepEqual(keys(), ["k-early"], "a reason after the rows settled keeps the turn recorded");
+
+    // Not calling onRowsSettled and failing: not recorded.
+    let calls = 0;
+    const failing = async () => { calls++; return { stored: 0, skipped: 1, reason: "capture-failed" }; };
+    await guard.run(AGENT, "k-late", failing);
+    await guard.run(AGENT, "k-late", failing);
+    assert.equal(calls, 2);
   });
 
   it("a waiter's own signal aborting while it waits on an identical in-flight capture resolves immediately as aborted (M4)", async () => {

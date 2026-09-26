@@ -674,13 +674,27 @@ export function createTurnCapture(ctx) {
 
         host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
         rowsSettled = true;
+        // An item whose preparation, embedding, dedup check or write failed
+        // was not stored: the turn is incomplete, so a replay may retry it.
+        const failedItems = textPrep.filter((p) => !p.ok).length + prepared.filter((p) => !p.ok).length
+          + dedupFailed + storeFailed;
         if (opts.report) {
           Object.assign(opts.report, { stored, skipped });
-          // An item whose preparation, embedding, dedup check or write failed
-          // was not stored: the turn is incomplete, so a replay may retry it.
-          const failedItems = textPrep.filter((p) => !p.ok).length + prepared.filter((p) => !p.ok).length
-            + dedupFailed + storeFailed;
           if (failedItems > 0) opts.report.incomplete = "capture-incomplete";
+        }
+        // E4.1: the rows are in; tell Engine.capture's replay guard now,
+        // before the post-store steps below (speaker pipeline, meta-cognition,
+        // graph, the neo drain in `finally`), so a process killed in that
+        // window does not store the turn again on journal replay. Those
+        // steps are best-effort: their failure leaves the turn recorded.
+        // Only a clean store (something stored, nothing failed) qualifies;
+        // the OpenClaw adapter passes no callback.
+        if (typeof opts.onRowsSettled === "function" && stored > 0 && failedItems === 0) {
+          try {
+            opts.onRowsSettled();
+          } catch (settleErr) {
+            host.logger.warn(`memory-lancedb-namespaced: replay guard record failed for agent=${agentId}: ${String(settleErr)}`);
+          }
         }
 
         // Speaker naming pipeline: propose display names from merged diarization segments.
