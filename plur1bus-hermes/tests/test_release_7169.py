@@ -89,3 +89,14 @@ def test_numeric_settings_reject_coercion_and_out_of_range(value):
 
 def test_numeric_settings_accept_valid_integer():
     validate_change(SimpleNamespace(config={}), "recall.candidateTopK", 60)
+
+
+@pytest.mark.parametrize("config", [None, False, [], "invalid"])
+def test_non_mapping_recall_config_uses_defaults(config):
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        runtime = RuntimeInjectBudgetWiringTests()._runtime(directory, {"recall": config})
+        resources.callback(runtime.shutdown)
+        table = _FakeRecallTable([{"id": "1", "content": "safe fallback", "_distance": 0.1}])
+        runtime._recall_tables = lambda: [("default", table)]
+        assert "safe fallback" in runtime.recall("query")
+        assert table.limit_count == 40

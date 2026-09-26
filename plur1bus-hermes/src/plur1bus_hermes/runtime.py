@@ -1126,7 +1126,8 @@ class Plur1busRuntime:
         if prepared["requiresSource"]:
             return str(prepared["message"])
         semantic_query = str(prepared["text"])
-        recall_config = self.config.get("recall") or {}
+        recall_config = self.config.get("recall")
+        recall_config = recall_config if isinstance(recall_config, dict) else {}
         def bounded(value, default):
             return max(1, min(100, value)) if type(value) is int else default
         prompt_limit = bounded(recall_config.get("maxPromptMemories"), 12)
@@ -1237,7 +1238,6 @@ class Plur1busRuntime:
             and float(row["_distance"]) > 0.65
             for row in rows
         )
-        recall_config = self.config.get("recall", {})
         refinement = recall_config.get("queryRefinement", {}) if isinstance(recall_config, dict) else {}
         refinement_enabled = refinement is not False and not (
             isinstance(refinement, dict) and refinement.get("enabled") is False
@@ -1321,7 +1321,6 @@ class Plur1busRuntime:
         # structural block; the compression marker is non-droppable, and block
         # order plus priority are preserved. Time/reminder blocks never travel
         # through this string in Hermes, so nothing downstream can be eaten.
-        recall_config = self.config.get("recall")
         max_chars = (
             recall_config.get("globalInjectMaxChars")
             if isinstance(recall_config, dict)
