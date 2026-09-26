@@ -5,6 +5,21 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.17.0] — 2026-09-26
+
+### Hinzugefügt
+
+- **Persona und Light in Discord-Sprachräumen.** `/voice light` und `/voice full`
+  im Discord-Text schalten je Agent um, `/voice` allein schickt eine Nachricht
+  mit den Knöpfen „Persona“ und „Light“. Light gilt nur für Sprachzüge
+  (`messageProvider: "discord-voice"`): kein Auto-Recall und keine
+  Zusatzblöcke, pro Lauf `anthropic/claude-haiku-4-5` über
+  `before_model_resolve`, Thinking der Sprachraum-Sitzungen aus. Das Speichern
+  ins Gedächtnis läuft weiter, `memory_recall` bleibt nutzbar. Nur der Besitzer
+  aus `commands.ownerAllowFrom` darf umschalten. In Sprachraum-Sitzungen bleibt
+  `reasoningLevel` aus, damit keine Denk-Texte gesprochen werden. Das Modell der
+  Sitzung wird nie gepatcht.
+
 ## [7.16.11] — 2026-09-26
 
 ### Geändert

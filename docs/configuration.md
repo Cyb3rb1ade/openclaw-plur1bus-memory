@@ -756,6 +756,14 @@ Bot des Agenten, dem die Karte gehört. Ohne Telegram-Ziel, ohne Outbound-Adapte
 oder mit `buttons: false` bleibt es bei der Textnachricht mit Befehlen. Alle auf
 einmal geht weiter per `/plur1bus critical accept all` oder zitierter Antwort.
 
+**Discord-Sprachräume: Persona/Light (seit 7.17.0).** Der Modus steht je Agent in
+`<baseDbPath>/.plur1bus-voice-mode/<agent>.json` (Standard `persona`). `/voice`,
+`/voice light`, `/voice full` und `/voice status` im Discord-Text schalten um oder
+zeigen den Stand mit Knöpfen. Umschalten setzt über den Host `thinkingLevel` der
+Sitzungen `agent:<agent>:discord:channel:<id>` für jeden Raum aus
+`channels.discord.voice.allowedChannels`; das Modell der Sitzung wird nie
+gepatcht, Light wechselt es pro Lauf über `before_model_resolve`.
+
 Unbestätigte Karten verfallen seit 7.16.10 nach 24 Stunden zur normalen
 Erinnerung (Job `auto-accept-stale`, Name aus Kompatibilitätsgründen
 beibehalten). Vorher wurden sie automatisch als Critical akzeptiert, sodass

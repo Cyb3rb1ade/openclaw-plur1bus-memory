@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { test } from "node:test";
+import { makeTempDir } from "./helpers/temp-dir.js";
 import {
   applyVoiceMode,
   buildVoiceModeMessage,
@@ -55,7 +54,7 @@ test("only the configured Discord owner may switch", () => {
 });
 
 test("applying light stores the mode and sets thinking off in every voice session, never the model", async (t) => {
-  const base = mkdtempSync(join(tmpdir(), "plur1bus-voice-switch-"));
+  const base = makeTempDir("plur1bus-voice-switch-");
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const patches = [];
   const patchSessionEntry = async ({ agentId, sessionKey, update }) => {
@@ -86,7 +85,7 @@ test("applying light stores the mode and sets thinking off in every voice sessio
 });
 
 test("a failing session patch is counted, the mode is still stored", async (t) => {
-  const base = mkdtempSync(join(tmpdir(), "plur1bus-voice-switch-"));
+  const base = makeTempDir("plur1bus-voice-switch-");
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const out = await applyVoiceMode({
     baseDbPath: base, agentId: "main", mode: "light", config,

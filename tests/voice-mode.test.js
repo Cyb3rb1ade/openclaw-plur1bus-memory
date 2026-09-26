@@ -1,10 +1,10 @@
 // tests/voice-mode.test.js
 // Persona/Light für Discord-Sprachräume: Modus-Speicher und Erkennung (7.17.0).
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { test } from "node:test";
+import { makeTempDir } from "./helpers/temp-dir.js";
 import {
   isDiscordVoiceTurn,
   isLightVoiceTurn,
@@ -15,7 +15,7 @@ import {
 } from "../lib/voice-mode.js";
 
 function tempBase(t) {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-voice-mode-"));
+  const dir = makeTempDir("plur1bus-voice-mode-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
