@@ -74,6 +74,7 @@ const ENGINE_PATHS = Object.freeze({
   runtimeReranker: "engine/providers/runtime-reranker.js",
   semanticDiscovery: "engine/runtime/semantic-discovery.js",
   createEngine: "engine/create-engine.js",
+  statusReporter: "engine/status/status-reporter.js",
   internals: "engine/internals.js",
   closeResources: "engine/lifecycle/close-resources.js",
 });

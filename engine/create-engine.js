@@ -95,6 +95,7 @@ import { createMemoryTools } from "./tools/memory-tools.js";
 import { createChannelRegistry, memoryContextFromPrincipal } from "./identity/principal.js";
 import { createCheckpointStore } from "./checkpoint/checkpoint-store.js";
 import { createJobRegistry } from "./jobs/job-registry.js";
+import { createStatusReporter } from "./status/status-reporter.js";
 import { dbg, getPluginLogger, runSpeakerProposalPipeline, setPluginLogger } from "./runtime/debug-log.js";
 import { DEFAULT_BASE_DB_PATH, DEFAULT_MODEL, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES } from "./runtime/constants.js";
 import { runSemanticDiscoveryBatches, selectSemanticDiscoveryWorkspaces } from "./runtime/semantic-discovery.js";
@@ -3452,6 +3453,21 @@ export function createEngine(host, config, testOptions = {}) {
   internals.rerankerProbe = rerankerProbe;
   internals.modelsService = modelsService;
 
+  // StatusReporter (1.8.0, E4 Task 4): Engine.status() delegates to it —
+  // ledger-derived job health, model readiness, an optional host journal
+  // backlog, and shared-memory support, never rejecting.
+  const statusReporter = createStatusReporter({
+    jobs: internals.jobs,
+    models: modelsService,
+    sharedMemoryPool: internals.sharedMemoryPool,
+    storeMigrator,
+    expectedSchema: STORE_SCHEMA_VERSION,
+    openedAgents,
+    host,
+    contract: "1.8.0",
+  });
+  internals.statusReporter = statusReporter;
+
   // AdminOps.obsidian (1.6.0, E2 Task 7): host-neutral vault detect/prepare/confirm,
   // explicit paths only, no host runtime. Reuses the same MemoryOps opsContext
   // (fail-closed principal/agent resolution) and the engine's existing
@@ -3515,15 +3531,7 @@ export function createEngine(host, config, testOptions = {}) {
       return { agentId: id, close: async () => { openedAgents.delete(id); } };
     },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
-    async status() {
-      return {
-        ready: true,
-        degraded: null,
-        agents: openedAgents.size,
-        contract: "1.8.0",
-        storeSchema: { current: storeMigrator.current(), expected: STORE_SCHEMA_VERSION },
-      };
-    },
+    status: () => statusReporter.status(),
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
       if (closing) return recallResult({ degraded: { ...ENGINE_CLOSED, capability: "recall" } });

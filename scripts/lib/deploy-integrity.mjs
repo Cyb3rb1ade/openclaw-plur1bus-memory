@@ -75,6 +75,7 @@ export const DEPLOY_FILES = [
   "engine/runtime/env-config.js",
   "engine/runtime/llm-calls.js",
   "engine/runtime/semantic-discovery.js",
+  "engine/status/status-reporter.js",
   "engine/store/agent-db-pool.js",
   "engine/store/control-health.js",
   "engine/store/lancedb-loader.js",

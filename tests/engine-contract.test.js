@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { readRuntimeSources } from "./helpers/runtime-sources.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -48,7 +49,15 @@ describe("Engine", () => {
     assert.equal(engine.contract, "1.8.0");
     assert.equal(engine.jobs.list().length, 18);
     assert.deepEqual(engine.tools.map((t) => t.name).sort(), ["knowledge_update", "memory_forget", "memory_recall", "memory_search", "memory_store"]);
-    assert.equal((await engine.status()).contract, "1.8.0");
+    const status = await engine.status();
+    assert.equal(status.contract, "1.8.0");
+    assert.deepEqual(status.jobs, { ledger: "ok", agents: [] });
+    assert.equal(status.models.embedder.state, "loading");
+    assert.equal(status.models.reranker.state, "disabled");
+    assert.equal(status.journal, null);
+    assert.deepEqual(status.sharedMemory, stableDirectoryCapabilitiesSupported()
+      ? { supported: true, mode: "fd-capability" }
+      : { supported: false, mode: "unavailable", reason: "platform" });
     assert.ok(engine.systemSupplement().length >= 1);
     await engine.close({ budgetMs: 5_000 });
   });
