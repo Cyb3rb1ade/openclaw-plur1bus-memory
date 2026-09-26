@@ -287,15 +287,23 @@ export function createInternalJobBodies(ctx) {
         const pushedCount = Array.isArray(result?.pushMessages) ? result.pushMessages.length : 0;
         const pushCriticalButtons = host.capabilities?.pushCriticalButtons;
         if (cronInternal && pushedCount > 0 && cpCfg.buttons !== false && typeof pushCriticalButtons === "function") {
-          const delivery = await pushCriticalButtons({
-            agentId: internalAgent,
-            result,
-            commandCtx,
-            warning: classifierPartialFailureWarning(result),
-          });
+          // Ein fremder Host kann werfen oder etwas Unvollständiges liefern;
+          // dann bleibt es bei der Textzustellung über den Cron.
+          let delivery = null;
+          try {
+            delivery = await pushCriticalButtons({
+              agentId: internalAgent,
+              result,
+              commandCtx,
+              warning: classifierPartialFailureWarning(result),
+            });
+          } catch (error) {
+            host.logger.warn(`plur1bus critical[${internalAgent}]: button push failed: ${error?.message || error}`);
+            delivery = null;
+          }
           if (delivery) {
             host.logger.info(`plur1bus critical[${internalAgent}]: button push sent=${delivery.sent}${delivery.reason ? ` fallback=${delivery.reason}` : ""}`);
-            if (delivery.sent > 0) {
+            if (delivery.sent > 0 && Array.isArray(delivery?.unsentTexts)) {
               if (delivery.unsentTexts.length === 0) return { text: "NO_REPLY" };
               return formatClassifierCronReply({
                 ...result,

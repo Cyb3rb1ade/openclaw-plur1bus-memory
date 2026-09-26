@@ -450,7 +450,9 @@ Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
   prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt nur Klicks
   aus Direktchats, über den Bot des Agenten, dem die Karte gehört, und aus dem
   Chat, in den dessen Push geht. Versand über den Telegram-Outbound-Adapter des
-  Hosts an dasselbe Ziel, das der Cron-Plan ableitet
+  Hosts an das Zustellziel des eigenen classify-recent-Crons des Agenten
+  (`resolveCronDelivery`, dasselbe Ziel wie bisher der Text), über den Bot aus
+  der eindeutigen Telegram-Bindung des Agenten
   (`lib/critical-button-delivery.js`); scheitert der Versand, gehen die übrigen
   Karten wie bisher als Text über die Cron-Zustellung. Abschaltbar mit
   `criticalPush.buttons: false`. „Alle annehmen/ablehnen“ bleibt per Befehl
