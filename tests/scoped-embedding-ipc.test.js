@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 
 import {
   IpcScopedEmbeddingProvider,
+  ReloadSafeIpcScopedEmbeddingProvider,
   createScopedEmbeddingIpcServer,
   registerScopedEmbeddingIpcServiceAfterLifecycle,
   resolveScopedEmbeddingIpcPaths,
@@ -797,6 +798,58 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
     }
   });
 
+  it("refuses an unclaimed owner while a claimed legacy owner of the same stateRoot runs in another process", async () => {
+    const stateRoot = createStateRoot("e3-ipc-xproc-");
+    const address = explicitUnixAddress();
+    const tokenPath = resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath;
+    let child = null;
+    const unclaimed = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address,
+      claim: false,
+    });
+    try {
+      child = await startOwnerInChild(stateRoot);
+      const tokenBefore = readFileSync(tokenPath);
+      await assert.rejects(unclaimed.start(), /owner is already active/);
+      await unclaimed.shutdown();
+      assert.equal(existsSync(address.address), false, "the unclaimed server never listened");
+      assert.deepEqual(readFileSync(tokenPath), tokenBefore, "the legacy owner's token is byte-identical");
+    } finally {
+      await unclaimed.shutdown();
+      if (child && child.exitCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delete a token file another owner replaced, on either path", async () => {
+    const foreignToken = `${"c".repeat(64)}\n`;
+    for (const explicit of [true, false]) {
+      const stateRoot = createStateRoot("e3-ipc-foreign-token-");
+      const server = createScopedEmbeddingIpcServer({
+        stateRoot,
+        embeddings: e3Embeddings(),
+        fingerprintId: ACTIVE_FINGERPRINT_ID,
+        ...(explicit ? { address: explicitUnixAddress(), claim: false } : {}),
+      });
+      try {
+        await server.start();
+        writeFileSync(server.tokenPath, foreignToken, { mode: 0o600 });
+        await server.shutdown();
+        assert.equal(readFileSync(server.tokenPath, "utf8"), foreignToken, `foreign token kept (explicit=${explicit})`);
+      } finally {
+        await server.shutdown();
+        await rm(stateRoot, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("refuses a live foreign listener at the explicit address without touching it or the token directory", async () => {
     const stateRoot = makeTempDir("e3-ipc-");
     const address = explicitUnixAddress();
@@ -874,5 +927,14 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       }),
       /IPC address is invalid/,
     );
+    for (const Client of [IpcScopedEmbeddingProvider, ReloadSafeIpcScopedEmbeddingProvider]) {
+      assert.throws(
+        () => new Client({
+          stateRoot, model: "fixture/e5", dimensions: 2, fingerprintId: ACTIVE_FINGERPRINT_ID, address: null,
+        }),
+        /IPC address is invalid/,
+        `${Client.name} rejects address: null like the server`,
+      );
+    }
   });
 });
