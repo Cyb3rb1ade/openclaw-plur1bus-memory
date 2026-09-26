@@ -1265,11 +1265,13 @@ export function registerChatCommands(ctx) {
         notFound: outcome.code === "not-found" || outcome.code === "conflict"
           || (outcome.code === "denied" && /shared copies cannot be changed/.test(String(outcome.error ?? ""))),
         denied: outcome.code === "denied",
+        unsupported: outcome.code === "unsupported",
         error: outcome.error,
       };
     };
     const shareFailure = (result) => {
       if (result.denied && !result.notFound) host.logger.warn(`memory-lancedb-namespaced: /share refused by Engine.memory after checkAuth: ${result.error}`);
+      if (result.unsupported) return fail("plur1bus.share_unsupported");
       return fail(result.notFound ? "plur1bus.share_not_found" : "plur1bus.share_failed");
     };
     try {

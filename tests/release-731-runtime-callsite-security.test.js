@@ -11,7 +11,7 @@ import { buildRemPartition, getPreviousWeekWindow, runRemDream } from "../lib/dr
 const FROZEN_REM_NOW = new Date("2026-08-10T12:00:00.000Z");
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
-import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
+import { SharedMemoryPool, SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE } from "../lib/shared-memory-pool.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -339,11 +339,33 @@ test("unsupported directory-capability hosts reject explicit shared writes witho
   const pool = new SharedMemoryPool(baseDbPath, VECTOR_DIM, UnusedPool);
   await assert.rejects(
     pool.withWorkspaceDb(REQUEST_CONTEXT, async () => {}),
-    /stable directory capabilities are unavailable/,
+    SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE,
   );
   await assert.rejects(
     pool.withUserDb(REQUEST_CONTEXT, async () => {}),
-    /stable directory capabilities are unavailable/,
+    SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE,
+  );
+  assert.equal(existsSync(join(baseDbPath, ".plur1bus-shared")), false);
+  await pool.shutdown();
+});
+
+// The case above only runs on a platform without fd-backed directory
+// capabilities (macOS in CI); this Linux-runnable twin forces the same
+// unsupported path via the `.supported` seam so the new write-path message
+// (E4 Task 6) has real coverage on this host too, not just the gated one.
+test("an unsupported pool (forced via the .supported seam) rejects explicit shared writes without creating a shared root", async (t) => {
+  const baseDbPath = makeTempDir("release-731-forced-unsupported-shared-");
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  class UnusedPool {}
+  const pool = new SharedMemoryPool(baseDbPath, VECTOR_DIM, UnusedPool);
+  pool.supported = false;
+  await assert.rejects(
+    pool.withWorkspaceDb(REQUEST_CONTEXT, async () => {}),
+    SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE,
+  );
+  await assert.rejects(
+    pool.withUserDb(REQUEST_CONTEXT, async () => {}),
+    SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE,
   );
   assert.equal(existsSync(join(baseDbPath, ".plur1bus-shared")), false);
   await pool.shutdown();

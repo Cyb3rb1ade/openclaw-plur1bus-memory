@@ -34,6 +34,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ENGINE_PATHS = Object.freeze({
   assemblePromptContext: "engine/recall/assemble-prompt-context.js",
   captureTurn: "engine/capture/capture-turn.js",
+  turnReplayGuard: "engine/capture/turn-replay-guard.js",
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
   events: "engine/events.js",
   principal: "engine/identity/principal.js",
@@ -65,6 +66,7 @@ const ENGINE_PATHS = Object.freeze({
   knowledgePending: "engine/knowledge/knowledge-pending.js",
   lancedbLoader: "engine/store/lancedb-loader.js",
   embeddingService: "engine/providers/embedding-service.js",
+  modelReadiness: "engine/providers/model-readiness.js",
   legacyProviders: "engine/providers/legacy-providers.js",
   llmCalls: "engine/runtime/llm-calls.js",
   memoryDb: "engine/store/memory-db.js",
@@ -73,6 +75,7 @@ const ENGINE_PATHS = Object.freeze({
   runtimeReranker: "engine/providers/runtime-reranker.js",
   semanticDiscovery: "engine/runtime/semantic-discovery.js",
   createEngine: "engine/create-engine.js",
+  statusReporter: "engine/status/status-reporter.js",
   internals: "engine/internals.js",
   closeResources: "engine/lifecycle/close-resources.js",
 });

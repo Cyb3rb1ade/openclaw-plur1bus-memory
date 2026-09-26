@@ -75,22 +75,35 @@ export function createJobLedger({ root, agentId, logger }) {
         closeSync(fd);
       }
     },
-    readAll() {
-      if (!existsSync(paths.ledger)) return [];
+    // One read of ledger.jsonl: every non-empty line that fails JSON.parse or
+    // does not parse to a plain object counts toward `unreadable` (job
+    // health's unreadableLines, Task 2) — the torn-line warning itself stays
+    // warn-once, unchanged from `readAll`'s prior behaviour.
+    snapshot() {
+      if (!existsSync(paths.ledger)) return { rows: [], unreadable: 0 };
       const rows = [];
+      let unreadable = 0;
       for (const line of readFileSync(paths.ledger, "utf8").split("\n")) {
         if (!line.trim()) continue;
         try {
           const row = JSON.parse(line);
-          if (row && typeof row === "object" && !Array.isArray(row)) rows.push(row);
+          if (row && typeof row === "object" && !Array.isArray(row)) {
+            rows.push(row);
+          } else {
+            unreadable += 1;
+          }
         } catch {
+          unreadable += 1;
           if (!warnedTorn) {
             warnedTorn = true;
             logger.warn(`plur1bus jobs: ignoring an unreadable line in ${paths.ledger}`);
           }
         }
       }
-      return rows;
+      return { rows, unreadable };
+    },
+    readAll() {
+      return this.snapshot().rows;
     },
     orphanMarkers() {
       if (!existsSync(paths.markers)) return [];

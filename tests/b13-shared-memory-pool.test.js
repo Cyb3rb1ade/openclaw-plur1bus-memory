@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
+import { SharedMemoryPool, SHARED_MEMORY_UNSUPPORTED, SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE } from "../lib/shared-memory-pool.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 import { workspacePoolKey } from "../lib/memory-request-context.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
@@ -30,8 +30,8 @@ describe("B13 shared memory pool", () => {
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       if (!sharedCapabilitiesSupported) {
-        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), /stable directory capabilities are unavailable/);
-        await assert.rejects(pool.withUserDb(userA, async () => {}), /stable directory capabilities are unavailable/);
+        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE);
+        await assert.rejects(pool.withUserDb(userA, async () => {}), SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE);
         await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.equal(db, null));
         assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
         await pool.shutdown();
@@ -55,7 +55,7 @@ describe("B13 shared memory pool", () => {
       await assert.rejects(pool.withWorkspaceDb({}, async () => {}), /bound workspace/);
       await assert.rejects(pool.withUserDb({}, async () => {}), /authenticated user principal/);
       if (!sharedCapabilitiesSupported) {
-        await assert.rejects(pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async () => {}), /stable directory capabilities are unavailable/);
+        await assert.rejects(pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async () => {}), SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE);
         assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
       } else {
         await pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async (db) => assert.equal(db.path.includes("../victim"), false));
@@ -83,7 +83,7 @@ describe("B13 shared memory pool", () => {
       await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.equal(db, null));
       assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
       if (!sharedCapabilitiesSupported) {
-        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), /stable directory capabilities are unavailable/);
+        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE);
         assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
         await pool.shutdown();
         return;
@@ -120,7 +120,7 @@ describe("B13 shared memory pool", () => {
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       if (!sharedCapabilitiesSupported) {
-        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), /stable directory capabilities are unavailable/);
+        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE);
         await pool.shutdown();
         return;
       }
@@ -130,6 +130,22 @@ describe("B13 shared memory pool", () => {
       let settled = false; const stopping = pool.shutdown().then(() => { settled = true; });
       await new Promise((resolve) => setImmediate(resolve)); assert.equal(settled, false);
       release(); await running; await stopping; assert.equal(settled, true);
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+
+  it("an unsupported pool reports its support and throws a typed error", async () => {
+    const base = makeTempDir("b13-shared-", "/tmp");
+    try {
+      const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
+      pool.supported = false;
+      assert.deepEqual(pool.support(), { supported: false, mode: "unavailable", reason: "platform" });
+      await assert.rejects(
+        pool.withWorkspaceDb(workspaceA, async () => {}),
+        (err) => err.code === SHARED_MEMORY_UNSUPPORTED && err.message === "shared memory is not supported on this platform",
+      );
+      await pool.withUserReadDb(userA, async (db) => assert.equal(db, null));
+      assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
+      await pool.shutdown();
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
 });

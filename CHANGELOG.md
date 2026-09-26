@@ -511,6 +511,85 @@ Contract-Version **1.7.0**. Details in `docs/engine-api.md`, Abschnitt
   `{ isVault: false, confirmed: false }` gemeldet statt den ganzen Aufruf mit
   `not-found` scheitern zu lassen (R11).
 
+### E4 — Contract 1.8.0 (Status, Modelle, Journal-Rückstand, Shared-Memory-Plattformen)
+
+Contract-Version **1.8.0**. Details in `docs/engine-api.md`, Abschnitt
+„Status, models and shared memory in 1.8.0".
+
+#### Hinzugefügt
+
+- **`Engine.status()`** meldet Job-Gesundheit aus dem Ledger (letzter Lauf je
+  Job, Breaker, laufende Jobs, unlesbare Zeilen), Modellbereitschaft,
+  Journal-Rückstand des Hosts und Shared-Memory-Unterstützung — Contract
+  1.8.0. Bleibt lesend und billig (öffnet nie LanceDB, legt nie ein
+  Verzeichnis an, lädt kein Modell, ruft keinen Provider) und lehnt nie ab:
+  ein Ledger-Lesefehler markiert nur `jobs.ledger: "unavailable"`, ein
+  fehlender oder hängender `journalBacklog`-Host-Capability-Aufruf wird nach
+  50 ms auf `journal: null` abgeschnitten, statt `status()` zu verzögern.
+  `degraded` ist jetzt echt abgeleitet (fehlgeschlagener oder noch nicht
+  bestätigter Embedder/Reranker), nicht mehr immer `null`.
+- **`Engine.models`** (`status()`, `warm({ signal })`) — `ModelState`
+  (`"loading" | "ready" | "failed" | "disabled"`) für Embedder und, falls
+  konfiguriert, Reranker. `loading` mit `checkedAt: null` heißt „noch nicht
+  geprüft", nicht „lädt gerade" (Ruling C1). **`Engine.models.warm()`**
+  wärmt Embedder und Reranker explizit an — ein Host ruft es nach dem Start
+  im Hintergrund auf, um `status()` von „noch nicht geprüft" auf
+  `ready`/`failed` zu bringen und einen `models-warming`-Degraded-Grund
+  aufzulösen. Ein abgebrochenes `warm()` lässt das Modell beim vorherigen
+  Zustand, markiert es nie als `failed`.
+- **`HostCapabilities.journalBacklog?()`** (optional): ein Host meldet seinen
+  eigenen Journal-Rückstand; `status()` liest ihn mit 50-ms-Deckel, ein
+  `null`-Ergebnis des Hosts ist eine gültige „nichts ausstehend"-Antwort,
+  kein Fehler.
+- **Wiedergabe-Schutz für Turns (Q3).** Ein per Journal erneut eingespielter
+  Turn wird vor der Capture-Pipeline erkannt (Schlüssel: SHA-256 aus
+  `agentId`, `runId`, `sessionKey`, `messages`), 7 Tage bzw. 512 Einträge je
+  Agent gemerkt, und beantwortet mit `reason: "duplicate-turn"` ohne
+  Store-Zugriff. Ein fehlgeschlagener oder abgebrochener Capture wird
+  **nicht** gemerkt, damit seine Wiedergabe erneut versucht wird (bewusster
+  Kompromiss: ein teilweise fehlgeschlagener Turn mit einem schon
+  gespeicherten Element kann bei Wiedergabe eine zweite Zeile anlegen). Ein
+  Host ohne stabile `runId` je Journal-Zeile riskiert einen falschen
+  `duplicate-turn` für eine identische Nachricht in derselben Sitzung
+  innerhalb der 7 Tage — der Harness-Journal (2a-H3) vergibt eine stabile
+  `runId`.
+- **`CaptureResult.reason`** gewinnt `"aborted"`, `"capture-failed"` und
+  `"capture-incomplete"` (typisierter Pfad) neben `"duplicate-turn"`: ein
+  `{ stored: 0, skipped: 0 }` ohne `reason` bleibt der saubere Fall, in dem
+  nichts speicherwürdig war — ein Turn, dessen Elemente alle fehlschlugen,
+  bekommt jetzt einen dieser drei Gründe statt still als sauber zu gelten.
+- **`MemoryOpErrorCode` gewinnt `"unsupported"`.** `Engine.memory.share` und
+  `proposals.accept` lehnen damit ab, bevor eine Zeile, ein Archiv oder ein
+  `.plur1bus-shared`-Verzeichnis angefasst wird, wenn die Plattform keinen
+  Shared-Memory-Modus hat (`detail: { capability: "shared-memory", reason:
+  "platform" }`); geteilte Lesezugriffe bleiben unverändert leer/`null`.
+  **`EngineStatus.sharedMemory`** meldet dieselbe Tatsache vorab
+  (`{ supported, mode, reason? }`); Linux bleibt unverändert beim
+  Descriptor-Alias-Modus (`fd-capability`).
+- **ADR 0001** (`docs/adr/0001-shared-memory-on-macos-and-windows.md`): warum
+  macOS und Windows heute keinen Shared-Memory-Modus haben, und der
+  empfohlene, noch nicht umgesetzte `verified-path`-Modus, um das zu
+  schließen (Owner-Entscheidung ausstehend). `SharedMemoryMode` führt
+  `"verified-path"` schon jetzt in seiner Union — reserviert, bis der Modus
+  ausgeliefert wird.
+
+#### Geändert
+
+- **Teilen ohne Shared-Memory-Unterstützung antwortet mit `unsupported`
+  statt `storage`; `/share` sagt, warum** (`plur1bus.share_unsupported`
+  statt der allgemeinen Fehlermeldung) — ein Host kann diese Antwort
+  gesondert behandeln, ein erneuter Versuch hilft auf dieser Plattform
+  ohnehin nie.
+- **`status()` ist nicht mehr statisch.** `contract` steht jetzt auf
+  `"1.8.0"`; `jobs`, `models`, `journal`, `sharedMemory` und `degraded`
+  spiegeln den tatsächlichen Zustand statt fester Platzhalterwerte.
+
+#### Behoben
+
+- **Ein erneut eingespielter Turn (Journal-Replay) läuft nicht mehr ein
+  zweites Mal durch die Capture-Pipeline** (keine zweite Zusammenfassung,
+  keine zweite Zeile, kein zweiter Sitzungszähler; Q3).
+
 ## [7.16.11] — 2026-09-26
 
 ### Geändert

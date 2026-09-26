@@ -29,6 +29,7 @@ function messageForCode(code) {
     case "storage": return "memory write failed";
     case "conflict": return "memory update conflicts with an existing tombstone";
     case "approval-required": return "sharing this memory requires explicit approval";
+    case "unsupported": return "shared memory is not supported on this platform";
     default: return "memory operation failed";
   }
 }
@@ -247,6 +248,14 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
     }
     if (target === "user" && !memoryCtx.userPrincipal) {
       throw memoryOpError("denied", "sharing to a user requires a channel/account-bound authenticated user");
+    }
+
+    // Platform property, not data-dependent: answers before any anti-oracle
+    // lookup (getCard) or write, so an id that doesn't even exist still gets
+    // "unsupported" rather than "not-found" (E4-R2/Task 6).
+    const sharedMemorySupport = sharedMemoryPool.support();
+    if (!sharedMemorySupport.supported) {
+      throw memoryOpError("unsupported", messageForCode("unsupported"), { capability: "shared-memory", reason: sharedMemorySupport.reason });
     }
 
     let safeId;

@@ -39,6 +39,7 @@ export const DEPLOY_FILES = [
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
+  "engine/capture/turn-replay-guard.js",
   "engine/checkpoint/checkpoint-store.js",
   "engine/commands/command-helpers.js",
   "engine/commands/plur1bus-command.js",
@@ -62,6 +63,7 @@ export const DEPLOY_FILES = [
   "engine/memory-ops/proposal-store.js",
   "engine/memory-ops/proposals.js",
   "engine/providers/embedding-service.js",
+  "engine/providers/model-readiness.js",
   "engine/providers/legacy-providers.js",
   "engine/providers/runtime-reranker.js",
   "engine/recall/assemble-prompt-context.js",
@@ -74,6 +76,7 @@ export const DEPLOY_FILES = [
   "engine/runtime/env-config.js",
   "engine/runtime/llm-calls.js",
   "engine/runtime/semantic-discovery.js",
+  "engine/status/status-reporter.js",
   "engine/store/agent-db-pool.js",
   "engine/store/control-health.js",
   "engine/store/lancedb-loader.js",

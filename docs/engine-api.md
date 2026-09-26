@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.7.0** · frozen at 1.0.0 on 2026-09-22, amended eight times
+**Contract version 1.8.0** · frozen at 1.0.0 on 2026-09-22, amended nine times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -89,6 +89,23 @@ own changelog:
   the whole call (R11). `HostCapabilities.pushCriticalButtons` is typed. See
   [EmbeddingService in 1.7.0](#embeddingservice-in-170-probe-and-serve)
   below.
+- **1.8.0** — `Engine.status()` real, `Engine.models`, journal backlog, a
+  turn-replay guard, and typed `unsupported` for shared memory on a platform
+  with no mode (engine PR E4): `EngineStatus` gains `jobs` (ledger-derived
+  job health), `models` (embedder/reranker readiness), `journal` (a host's
+  own backlog, capped at 50 ms), `sharedMemory` (support and mode), and a
+  real `degraded` derivation instead of always `null`; `Engine.models` with
+  `status()` and `warm({ signal })`; `HostCapabilities.journalBacklog?()`;
+  `CaptureResult.reason` gains `"aborted"`, `"capture-failed"` and
+  `"capture-incomplete"`, and a replayed turn (same `agentId`, `runId`,
+  `sessionKey` and `messages` within 7 days) is recognised before the
+  capture pipeline runs and answers `"duplicate-turn"` without a second
+  summary, row or session count; `MemoryOpErrorCode` gains `"unsupported"`,
+  answered by `Engine.memory.share`/`.proposals.accept` (and the OpenClaw
+  `/share` reply) on a platform whose shared-memory mode is `"unavailable"`,
+  before any row, archive or `.plur1bus-shared` directory is touched. See
+  [Status, models and shared memory in 1.8.0](#status-models-and-shared-memory-in-180)
+  below.
 
 ## The two halves
 
@@ -118,7 +135,7 @@ test-only.
 
 - **`recall()` never throws.** A failure comes back as `degraded: { reason, capability }` with whatever blocks were assembled. The turn is never blocked. `degraded.reason` is one of `"invalid-query"` (missing signal, bad principal), `"aborted"` (the caller's signal), `"timeout"` (the scheduler's own budget), `"pressure"` (shed under memory pressure), `"queue-full"` (the recall queue was full or evicted the job), `"error"` (a scheduler error, or the store section failed and only the neo/start blocks came back) or `"engine-closed"` (called after `close()`); `null` means a clean recall, never a failure.
 - **`signal` is mandatory** on `RecallQuery` and `TurnRecord`. A missing or already-aborted signal degrades immediately (`degraded.reason` `"invalid-query"`/`"aborted"`) rather than throwing or hanging.
-- **`capture()` returns immediately.** The caller gets a `CaptureHandle` with a `done` promise it may await or abandon. `capture()` fails closed on `incognito`: `TurnRecord.incognito` is a required field, and any value other than `false` (including a caller who leaves it unset) resolves `done` to `{ stored: 0, skipped: 1, reason: "incognito" }` without touching a store. `incognito: false` is the host's own classification and is final: the engine does not consult the host routing classifier (`HostServices.routing`) again, so a host without routing still captures a turn that carries a `sessionKey`. (Were that classifier ever consulted from an Engine caller and fail, the turn is not stored and the reason is `"incognito-unclassifiable"`.) `CaptureResult.stored` is the number of records the capture pipeline actually stored for the turn (0 or more; `skipped` is the pipeline's own count of texts it passed over); a turn the pipeline finds nothing worth storing in resolves `{ stored: 0, skipped: 0 }` with no `reason` (a clean capture, not a failure); a turn that is not captured at all resolves `{ stored: 0, skipped: 1, reason }` — `"incognito"`, `"principal-agent-mismatch"`, `"engine-closed"`, or whatever the capture pipeline itself reports.
+- **`capture()` returns immediately.** The caller gets a `CaptureHandle` with a `done` promise it may await or abandon. `capture()` fails closed on `incognito`: `TurnRecord.incognito` is a required field, and any value other than `false` (including a caller who leaves it unset) resolves `done` to `{ stored: 0, skipped: 1, reason: "incognito" }` without touching a store. `incognito: false` is the host's own classification and is final: the engine does not consult the host routing classifier (`HostServices.routing`) again, so a host without routing still captures a turn that carries a `sessionKey`. (Were that classifier ever consulted from an Engine caller and fail, the turn is not stored and the reason is `"incognito-unclassifiable"`.) `CaptureResult.stored` is the number of records the capture pipeline actually stored for the turn (0 or more; `skipped` is the pipeline's own count of texts it passed over); a turn the pipeline finds nothing worth storing in, with every item cleanly considered and none of them failing, resolves `{ stored: 0, skipped: 0 }` with no `reason` — a clean capture, not a failure. `{ stored: 0, skipped: 0 }` is **not** a blanket "nothing went wrong" signal, though: as of 1.8.0 a turn whose items all failed (embedder down, dedup or write failure) resolves with `reason: "capture-incomplete"` instead, `"aborted"` for a cancellation before any row settled, or `"capture-failed"` for any other pipeline error on the typed path — see [Turn replay (Q3)](#turn-replay-q3-a-replayed-capture-does-not-run-twice) below for these and for `"duplicate-turn"`. A turn that is not captured at all resolves `{ stored: 0, skipped: 1, reason }` — `"incognito"`, `"principal-agent-mismatch"`, `"engine-closed"`, `"duplicate-turn"`, or whatever the capture pipeline itself reports.
 - **The six blocks are the output shape, and they are data — the host joins them.** `neo`, `start` and `memories` are droppable; `time`, `temporal` and `reminder` are not. `RecallResult.blocks`/`capChars` are plain data; nothing in `engine/**` concatenates them into a prompt string. `adapter/openclaw/join-recall.js`'s `prependContextFromRecall(result)` is the OpenClaw host's own join-and-cap step (`lib/inject-budget.js`'s `applyGlobalInjectBudget`), producing the `{ prependContext }` shape `before_prompt_build` expects; a harness host does its own equivalent joining.
 - **`UserPrincipal` stays `user:v1:sha256([channel, accountId, userId])`.** The hash is an on-disk pool directory name; changing it orphans every `user`-scoped row.
 - **`trust: "inferred"` degrades to agent-private and never throws.** `engine/identity/principal.js`'s `memoryContextFromPrincipal` gives a `"proved"` principal the same defence-in-depth `lib/memory-request-context.js` already applies to a host hook (user format `/^user:v1:[0-9a-f]{64}$/`, channel must be registered, chat kind normalized, workspace resolved through the canonical resolver with the conflicting-workspace-identity check); when any of that fails, or the principal is `"inferred"`, the memory context falls back to the unclaimed, agent-private base context rather than throwing — the same fail-open-to-degraded behaviour `resolveHostHookMemoryContext`'s `catch` block already had. `AgentContext.origin` from a caller of `Engine.recall`/`capture`/`runCommand` is taken as given; a hook-derived origin resolved inside the adapter (e.g. a background job body) never claims `"cron"` for itself — that origin is reserved for `agentContextFromCommand`, and a background hook turn maps to `"system"`.
@@ -524,10 +541,199 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   (or after a failed start) only while the file still holds its own token,
   so the earlier owner no longer deletes the later owner's token.
 
+## Status, models and shared memory in 1.8.0
+
+`Engine.status()` (`engine/status/status-reporter.js`, `createStatusReporter`)
+stopped being a static object in 1.8.0: it now assembles `EngineStatus` from
+the engine's own live sub-systems, stays **read-only and cheap** (never
+creates a directory, opens LanceDB, loads a model or calls a provider), and
+**never rejects** — every piece below is wrapped so one broken dependency
+degrades only its own field, not the whole call.
+
+### `EngineStatus.jobs` — ledger-derived job health
+
+`jobs.health()` (`engine/jobs/job-registry.js`) reads each agent's
+`ledger.jsonl` through a **stat-keyed cache**: a `${size}:${mtimeMs}` of the
+ledger file is checked before re-reading it, so a poll that finds nothing
+changed re-parses nothing — a months-old ledger does not cost a full re-read
+on every call. A missing ledger file is not an error (`rows: []`); any other
+stat/read failure marks that agent's ledger unreadable and flips the
+top-level `ledger` to `"unavailable"` without throwing. `unreadableLines`
+counts, per agent, the ledger lines that failed to parse as JSON or parsed to
+something other than a plain object (the same warn-once torn-line handling
+`job-ledger.js` already had). `lastRuns[job]` is the row with the greatest
+`finishedAt` for that job. `running` lists the job names with a run **in
+flight in this process** — it is not read from the ledger and does not
+reflect another process's in-flight runs. `breaker` (`{ sweep, sessions,
+limit, open }`) is scoped to `sweepKey(clock())`, the **current UTC calendar
+day** at call time; `sessions` counts that sweep's `rem`/`deep` ledger rows
+with `llmSession: true` plus any such session still in flight, so a call near
+midnight UTC can see the count reset between two polls a moment apart.
+
+### `EngineStatus.degraded` — precedence
+
+`degraded` is `null` on a clean status, otherwise `{ reason, capability }`.
+The checks run in a fixed order and the first match wins:
+
+1. the embedder has `state: "failed"` → `{ reason: "model-failed",
+   capability: "embedding" }`;
+2. the embedder has `state: "loading"` (no attempt has completed yet — this
+   is where a fresh, never-warmed engine starts, and stays, until
+   `Engine.models.warm()` runs at least once; it does **not** mean a probe
+   is currently in flight, see below) → `{ reason: "models-warming",
+   capability: "embedding" }`;
+3. the reranker has `state: "failed"` → `{ reason: "model-failed",
+   capability: "reranker" }`;
+4. the reranker has `state: "loading"` (same meaning as step 2) → `{
+   reason: "models-warming", capability: "reranker" }`;
+5. otherwise `null`.
+
+**A fresh, never-warmed engine therefore reports `degraded: { reason:
+"models-warming", capability: "embedding" }` from the moment it opens until
+a host's first `warm()` call completes** — `tests/engine-contract.test.js`
+pins exactly this. A host that wants a clean `degraded: null` on startup
+calls `Engine.models.warm()` in the background right after `open`/`ready`.
+
+A **disabled** reranker (no reranker configured) is neither `"failed"` nor
+`"loading"`, so it never degrades the status. `jobs.health().ledger ===
+"unavailable"` and a `null` `journal` do **not** feed into `degraded` — an
+unreadable ledger or a missing/timed-out journal capability are visible in
+their own fields, not folded into this derivation.
+
+### `EngineStatus.models` — embedder and reranker readiness
+
+`Engine.models.status()` reports `ModelState` (`"loading" | "ready" |
+"failed" | "disabled"`) for the embedder and, when a reranker is configured,
+the reranker, each with `checkedAt` and, on `"failed"`, `error`.
+
+- **`"loading"` always has `checkedAt: null`, and means "no attempt has
+  completed yet"** (controller ruling C1) — this is the state before the
+  very first probe for that model finishes, whether or not one is currently
+  running. `readinessOf` (`engine/providers/model-readiness.js`) derives
+  `checkedAt` only from the last **completed** attempt: with no completed
+  attempt yet, `checkedAt` is `null` regardless of the model's `warming`
+  flag. `"loading"` is not a fifth state and, by itself, does not tell you
+  whether a probe is in flight — read `warming` for that (below).
+- **There is no "loading with a `checkedAt`" state.** Once any attempt for a
+  model has completed, its state becomes `"ready"` or `"failed"` and **stays**
+  one of those two from then on — a later re-probe (`Engine.models.warm({
+  signal })` called again, e.g. `opts.refresh` on the underlying probe) never
+  reverts the state back to `"loading"`. While that re-probe runs, `warming:
+  true` is set on top of the model's current `"ready"`/`"failed"` state and
+  `checkedAt` still reflects the previous completed attempt, not the one in
+  progress.
+- **`Engine.models.warm({ signal })`** is the explicit way to run a probe. A
+  host normally calls it once in the background right after `open`/`ready`;
+  that first call is what turns a fresh embedder from `"loading"`
+  (`checkedAt: null`) into `"ready"` or `"failed"`, and is how a host clears
+  a `"models-warming"` `degraded` reason (see above). Calling `status()`
+  alone never triggers a probe.
+- **`"ready"`** is the most recent completed attempt succeeding;
+  **`"failed"`** is the most recent completed attempt failing, with `error`
+  set to the raw `EmbeddingProbeError`/`RerankerProbeError` code. An aborted
+  attempt (the caller's own `signal`) is never recorded as the last
+  completed attempt, so it cannot turn a model `"failed"` or change
+  `checkedAt`; only a real completed attempt can. An aborted `warm()`
+  therefore leaves the model exactly where it was before the call —
+  `"loading"` if nothing had completed yet, `"ready"`/`"failed"` (with the
+  same `checkedAt`) if a prior attempt had. A failed reranker never marks
+  the embedder failed, and vice versa: the two are independent probes.
+- **`"disabled"`** is the reranker's state when the host configured no
+  reranker at all; it is not a failure and does not degrade the status.
+- `status()` still resolves normally after `close()`.
+
+### `EngineStatus.journal` — a host's own backlog, on a budget
+
+`HostCapabilities.journalBacklog?()` (optional) lets a host report its own
+outstanding journal work — for example, lines a harness has written but not
+yet handed to `Engine.capture`. `status()` calls it, when present, with a
+**50 ms cap** (`JOURNAL_BACKLOG_TIMEOUT_MS`): a capability that throws
+synchronously or asynchronously, or that has not settled after 50 ms,
+resolves `journal: null` rather than delaying or failing `status()`. The
+cap uses a real (`ref`'d) timer, not `AbortSignal.timeout()`, so a hung
+capability cannot leave the call pending past its deadline even when nothing
+else keeps the event loop alive.
+
+`journal` is `null` when the host provides no capability, when the call
+times out or throws, and — a valid answer, not an error — when the host's
+own capability literally returns `null` ("nothing outstanding to report");
+none of these log more than once per distinct failure reason. A valid,
+in-time result is normalized to exactly `{ entries, oldestAt }` (`entries` a
+non-negative integer, `oldestAt` a finite number or `null`); any other shape
+also becomes `null`, logged once.
+
+### `EngineStatus.sharedMemory` and the `unsupported` `MemoryOpError`
+
+`sharedMemoryPool.support()` reports `{ supported, mode }` (mode
+`"fd-capability"` or `"unavailable"`), plus `reason: "platform"` when
+unsupported — a pure, filesystem-free read of the mode `SharedMemoryPool`
+selected at construction (`stableDirectoryCapabilitiesSupported()`), never a
+live probe. **Linux is unchanged**: the descriptor-alias routing in
+`lib/directory-capability.js` (`fd-capability`) stays the only Linux mode in
+every task of this plan. **macOS and Windows** have no such routing today
+(no `/proc`, no path syntax through an open handle) and report `{ supported:
+false, mode: "unavailable", reason: "platform" }`; see
+[ADR 0001](adr/0001-shared-memory-on-macos-and-windows.md) for why,
+and for the verified-path mode recommended (but not yet implemented) to
+close that gap. `SharedMemoryMode` already includes `"verified-path"` in its
+union — **reserved; not produced until the verified-path mode ships** (the
+owner's decision on the ADR is pending; `sharedMemoryPool.support()` never
+returns it today).
+
+Where a platform has no shared-memory mode, `Engine.memory.share` and
+`proposals.accept` reject with a typed `MemoryOpError` — `code:
+"unsupported"`, `detail: { capability: "shared-memory", reason: "platform"
+}` — **before** any row, archive or `.plur1bus-shared` directory is touched.
+The two members order this check differently against their own lookups:
+**`share`** treats it as a platform property, not data-dependent, and checks
+it ahead of every anti-oracle lookup (`getCard`), so a nonexistent source id
+on an unsupported platform still answers `"unsupported"`, never
+`"not-found"`. **`proposals.accept`** resolves and authorises the proposal
+first (`loadPending`) and only then checks `sharedMemoryPool.support()` — a
+proposal id that does not exist, or belongs to another sharer, answers
+`"not-found"` exactly as it would on a supported platform; only a proposal
+that does resolve then hits `"unsupported"` before its shared copy is
+touched. Shared reads (`withUserReadDb`/`withWorkspaceReadDb`) are
+unaffected by this error path: they already answered empty/`null` on an
+unsupported platform, and still do. The OpenClaw `/share` reply says why
+(`plur1bus.share_unsupported`) instead of the generic `share_failed` text
+when the outcome is `"unsupported"`.
+
+### Turn replay (Q3): a replayed capture does not run twice
+
+Before the capture pipeline runs, `Engine.capture` checks a per-agent replay
+guard (`engine/capture/turn-replay-guard.js`) keyed on `sha256(agentId, runId
+?? null, sessionKey ?? null, messages)` — the same turn, replayed (for
+example after a journal replay following a process restart), is recognised
+and answers `{ stored: 0, skipped: 1, reason: "duplicate-turn" }` without a
+second summary, a second row, or a second session count. Keys are persisted
+per agent (surviving a restart) for **7 days**, capped at the **512** most
+recent per agent (oldest dropped first).
+
+A capture that **fails or is only partly completed is not recorded** as a
+replay key, so replaying it runs the capture pipeline again — this is a
+deliberate trade-off: a turn that stored one summarised item and then failed
+partway can, on replay, store a second row for the part that already
+succeeded, rather than silently losing the failure. `CaptureResult.reason`
+reflects this on the typed path: `"aborted"` (the capture was cancelled
+before its rows settled), `"capture-failed"` (any other pipeline error), or
+`"capture-incomplete"` (at least one item failed text prep, embedding, the
+dedup check or its write, but the turn was not aborted or fully failed) —
+alongside the existing `"duplicate-turn"`. A `{ stored: 0, skipped: 0 }`
+result with **no** `reason` is a clean capture that genuinely found nothing
+worth storing, not a failure.
+
+**A turn without `runId` is keyed on `agentId`, `sessionKey` and `messages`
+alone.** An identical message replayed in the same session within the 7-day
+window would then read as a false `"duplicate-turn"` even without a real
+replay. Hosts should give every journal line a stable `runId` (the harness's
+own journal does, per 2a-H3) so the key is unambiguous; a host that cannot
+should expect this caveat.
+
 ## What is implemented in M1b-1
 
 `createEngine(host, config, testOptions?)` (`engine/create-engine.js`)
-constructs the full 1.7.0 `Engine` surface described above from a plain
+constructs the full 1.8.0 `Engine` surface described above from a plain
 `HostServices` object with no OpenClaw `api` anywhere in its call graph —
 `createEngine(createStubHost(), config)` is exactly how the engine's own
 tests build one, and `tests/engine-contract.test.js` proves it end to end.
@@ -575,17 +781,21 @@ involved):
   [AdminOps in 1.6.0](#adminops-in-160-obsidian-migrate-the-deprecated-aliases)
   above); `admin.reembedding.{plan,apply,resume,status}` and
   `admin.workspacePolicy.*` were already wired to real coordinators.
-- `status()` reports `{ ready: true, degraded: null, agents:
-  openedAgents.size, contract: "1.7.0", storeSchema: { current, expected } }`
-  — `storeSchema` (1.6.0) is the one part of the status that does probe the
-  store (it reads the schema marker); it does not yet reflect `probe()`'s
-  readiness (deferred to E4), and the rest is still static and does not
-  probe any other dependency for actual health.
+- `status()` reports `{ ready: true, degraded, agents: openedAgents.size,
+  contract: "1.8.0", storeSchema: { current, expected }, jobs, models,
+  journal, sharedMemory }` — as of 1.8.0 (E4) `jobs`, `models`, `journal`,
+  `sharedMemory` and `degraded` are real, derived from the ledger, the model
+  probes, the host's own journal capability and the shared-memory pool's
+  mode; see
+  [Status, models and shared memory in 1.8.0](#status-models-and-shared-memory-in-180)
+  above. `storeSchema` (1.6.0) is unchanged: the one part of the status that
+  does probe the store, reading the schema marker.
 
 Everything else — `recall`, `capture`, `checkpoint`, `memory.*` (1.5.0/1.6.0),
-`jobs.run`/`history`, `tools`, `embedding.embed`/`rerank`/`identities`/
-`probe`/`serve` (1.7.0), `channels`, `admin.reembedding.plan`/`apply`/`resume`/
-`status`, `admin.workspacePolicy.*`, `admin.share`/`.forget`/`.obsidian.*`/`.migrate` —
+`jobs.run`/`history`, `jobs.health` (1.8.0), `tools`, `embedding.embed`/
+`rerank`/`identities`/`probe`/`serve` (1.7.0), `models.status`/`.warm`
+(1.8.0), `channels`, `admin.reembedding.plan`/`apply`/`resume`/`status`,
+`admin.workspacePolicy.*`, `admin.share`/`.forget`/`.obsidian.*`/`.migrate` —
 works against a plain `HostServices` with no adapter involved, per
 `tests/engine-contract.test.js`.
 
@@ -626,6 +836,23 @@ works against a plain `HostServices` with no adapter involved, per
   throws, or one whose call resolves `null` or a result with `sent === 0`,
   leaves the job on the plain cron text delivery unchanged — a missing or
   failing capability degrades to text, it never fails the job.
+- **`HostCapabilities.journalBacklog?` is optional and capped (1.8.0).**
+  `status()` calls it, when the host provides it, with a 50 ms budget; a
+  host whose capability is slow, throws, or answers an invalid shape costs
+  `status()` nothing beyond that cap — `EngineStatus.journal` simply comes
+  back `null`. A host with no journal of its own (or no need to report a
+  backlog) can leave the capability unset entirely; `journal: null` then
+  means "not reported", not "empty".
+- **A platform without a shared-memory mode answers `unsupported`, not
+  `storage` (1.8.0).** `Engine.memory.share` and `proposals.accept` check
+  `sharedMemoryPool.support()` before touching anything, and reject with
+  `MemoryOpError` `code: "unsupported"`, `detail: { capability:
+  "shared-memory", reason }` when it is unsupported — a host should route
+  this to a distinct user-facing message (the OpenClaw adapter's
+  `plur1bus.share_unsupported`) rather than the generic failure text, since
+  retrying never helps on that platform. `EngineStatus.sharedMemory` reports
+  the same fact ahead of time, so a host can grey out sharing UI without
+  waiting for a failed call.
 
 ## `RecallQuery` fields the engine ignores
 

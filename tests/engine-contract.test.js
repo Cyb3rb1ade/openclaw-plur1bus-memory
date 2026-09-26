@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { readRuntimeSources } from "./helpers/runtime-sources.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -43,12 +44,20 @@ const provedPrincipal = { ...principal, trust: "proved" };
 const agent = { origin: "user", background: false };
 
 describe("Engine", () => {
-  it("reports contract 1.7.0, 18 jobs, the tools and a status", async () => {
+  it("reports contract 1.8.0, 18 jobs, the tools and a status", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
-    assert.equal(engine.contract, "1.7.0");
+    assert.equal(engine.contract, "1.8.0");
     assert.equal(engine.jobs.list().length, 18);
     assert.deepEqual(engine.tools.map((t) => t.name).sort(), ["knowledge_update", "memory_forget", "memory_recall", "memory_search", "memory_store"]);
-    assert.equal((await engine.status()).contract, "1.7.0");
+    const status = await engine.status();
+    assert.equal(status.contract, "1.8.0");
+    assert.deepEqual(status.jobs, { ledger: "ok", agents: [] });
+    assert.equal(status.models.embedder.state, "loading");
+    assert.equal(status.models.reranker.state, "disabled");
+    assert.equal(status.journal, null);
+    assert.deepEqual(status.sharedMemory, stableDirectoryCapabilitiesSupported()
+      ? { supported: true, mode: "fd-capability" }
+      : { supported: false, mode: "unavailable", reason: "platform" });
     assert.ok(engine.systemSupplement().length >= 1);
     await engine.close({ budgetMs: 5_000 });
   });
@@ -381,10 +390,10 @@ describe("Engine", () => {
     assert.ok(/const targetPool = new EngineAgentDbPool\(/.test(engine.createEngine), "withTargetGenerationDb uses EngineAgentDbPool");
   });
 
-  it("contract 1.7.0 exposes a typed MemoryOps surface", async () => {
+  it("contract 1.8.0 exposes a typed MemoryOps surface", async () => {
     const engine = createEngine(createStubHost(), {});
-    assert.equal(engine.contract, "1.7.0");
-    assert.equal((await engine.status()).contract, "1.7.0");
+    assert.equal(engine.contract, "1.8.0");
+    assert.equal((await engine.status()).contract, "1.8.0");
     for (const m of ["list", "show", "forget", "correct", "share", "state", "propose"]) {
       assert.equal(typeof engine.memory[m], "function", `engine.memory.${m}`);
     }

@@ -88,6 +88,7 @@ import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 import { createPlur1busCommandRunner } from "./commands/plur1bus-command.js";
 import { createTurnCapture } from "./capture/capture-turn.js";
+import { createTurnReplayGuard, turnKeyOf } from "./capture/turn-replay-guard.js";
 import { createPromptContextAssembler } from "./recall/assemble-prompt-context.js";
 import { recallResult } from "./recall/recall-result.js";
 import { buildSystemSupplement } from "./recall/system-supplement.js";
@@ -95,6 +96,7 @@ import { createMemoryTools } from "./tools/memory-tools.js";
 import { createChannelRegistry, memoryContextFromPrincipal } from "./identity/principal.js";
 import { createCheckpointStore } from "./checkpoint/checkpoint-store.js";
 import { createJobRegistry } from "./jobs/job-registry.js";
+import { createStatusReporter } from "./status/status-reporter.js";
 import { dbg, getPluginLogger, runSpeakerProposalPipeline, setPluginLogger } from "./runtime/debug-log.js";
 import { DEFAULT_BASE_DB_PATH, DEFAULT_MODEL, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES } from "./runtime/constants.js";
 import { runSemanticDiscoveryBatches, selectSemanticDiscoveryWorkspaces } from "./runtime/semantic-discovery.js";
@@ -109,6 +111,7 @@ import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, r
 import { aggregateSkillMinerRuns, appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, formatKnownValidityLabel, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore, textSuggestsGroupOrigin } from "./commands/command-helpers.js";
 import { createRuntimeRerankerProvider } from "./providers/runtime-reranker.js";
 import { createEmbeddingProbe, createEmbeddingServing } from "./providers/embedding-service.js";
+import { createModelsService, createRerankerProbe } from "./providers/model-readiness.js";
 import { ENGINE_INTERNALS } from "./internals.js";
 import { createResourceCloser } from "./lifecycle/close-resources.js";
 import { flushMetrics } from "../lib/metrics.js";
@@ -1509,6 +1512,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryDbAdapter,
     host,
     logger: host.logger,
+    sharedMemoryPool,
   });
 
   // 7.12.48: Das Skill-Ledger liegt je ACL-Partition unter dem Neo-Store.
@@ -3403,6 +3407,10 @@ export function createEngine(host, config, testOptions = {}) {
     throw new Error(`${name} is not available in M1b-1`);
   };
   const openedAgents = new Set();
+  // Q3 (E4 Task 5): a journal replay of a turn already captured answers
+  // `duplicate-turn` before the capture pipeline runs (no second summary,
+  // row or meta-reflection session count), across restarts too.
+  const replayGuard = createTurnReplayGuard({ root: join(baseDbPath, "_capture-turns"), clock, logger: host.logger });
   const channels = createChannelRegistry();
   let toolSpecs = null;
 
@@ -3435,6 +3443,37 @@ export function createEngine(host, config, testOptions = {}) {
     // Not tracked: embeddingServing.shutdown() (run by close) waits for the serve chain.
     serve: async (address) => { assertMemoryOpen(); return embeddingServing.serve(address); },
   });
+
+  // ModelsService (1.8.0, E4 Task 3): embedder and reranker readiness, and
+  // Engine.models.warm() as the warm-up entry point.
+  const getReranker = () => internals.reranker ?? null;
+  const getRerankerProvider = () => (internals.reranker ? (internals.rerankerCfg?.provider ?? null) : null);
+  const rerankerProbe = createRerankerProbe({ getReranker, logger: host.logger, clock });
+  const modelsService = createModelsService({
+    embeddingProbe,
+    rerankerProbe,
+    getIdentity: () => embeddingService.identities()[0],
+    getReranker,
+    getRerankerProvider,
+  });
+  internals.rerankerProbe = rerankerProbe;
+  internals.modelsService = modelsService;
+
+  // StatusReporter (1.8.0, E4 Task 4): Engine.status() delegates to it —
+  // ledger-derived job health, model readiness, an optional host journal
+  // backlog, and shared-memory support, never rejecting.
+  const statusReporter = createStatusReporter({
+    jobs: internals.jobs,
+    models: modelsService,
+    getIdentity: () => embeddingService.identities()[0],
+    sharedMemoryPool: internals.sharedMemoryPool,
+    storeMigrator,
+    expectedSchema: STORE_SCHEMA_VERSION,
+    openedAgents,
+    host,
+    contract: "1.8.0",
+  });
+  internals.statusReporter = statusReporter;
 
   // AdminOps.obsidian (1.6.0, E2 Task 7): host-neutral vault detect/prepare/confirm,
   // explicit paths only, no host runtime. Reuses the same MemoryOps opsContext
@@ -3489,9 +3528,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.7.0).
+  // The Engine (types/engine.d.ts, contract 1.8.0).
   const engine = {
-    contract: "1.7.0",
+    contract: "1.8.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3499,15 +3538,7 @@ export function createEngine(host, config, testOptions = {}) {
       return { agentId: id, close: async () => { openedAgents.delete(id); } };
     },
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
-    async status() {
-      return {
-        ready: true,
-        degraded: null,
-        agents: openedAgents.size,
-        contract: "1.7.0",
-        storeSchema: { current: storeMigrator.current(), expected: STORE_SCHEMA_VERSION },
-      };
-    },
+    status: () => statusReporter.status(),
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
       if (closing) return recallResult({ degraded: { ...ENGINE_CLOSED, capability: "recall" } });
@@ -3542,19 +3573,31 @@ export function createEngine(host, config, testOptions = {}) {
         // The turn's agent and its principal's agent must agree: the queue is
         // keyed by one and the stores are scoped by the other.
         if (t.principal?.agentId !== agentId) return { stored: 0, skipped: 1, reason: "principal-agent-mismatch" };
-        const workspaceDir = await host.workspaceDir(agentId);
-        const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
-        // TurnRecord.incognito === false is the host's own classification:
-        // the host routing classifier is not consulted again (a host without
-        // routing would otherwise store nothing for a keyed session).
-        const report = { stored: 0, skipped: 0 };
-        const outcome = await internals.getCaptureTurn()(
-          { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
-          { agentId, workspaceDir, sessionKey: t.sessionKey },
-          { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report },
-        );
-        if (outcome?.ok) return { stored: report.stored, skipped: report.skipped };
-        return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
+        // Only a result without `reason` (the pipeline completed) is recorded.
+        return replayGuard.run(agentId, turnKeyOf(t), async () => {
+          const workspaceDir = await host.workspaceDir(agentId);
+          const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
+          // TurnRecord.incognito === false is the host's own classification:
+          // the host routing classifier is not consulted again (a host without
+          // routing would otherwise store nothing for a keyed session).
+          const report = { stored: 0, skipped: 0 };
+          const outcome = await internals.getCaptureTurn()(
+            { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
+            { agentId, workspaceDir, sessionKey: t.sessionKey },
+            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report },
+          );
+          if (outcome?.ok) {
+            // The scheduler reports ok once the worker settled; the pipeline
+            // itself swallows an abort or a failed item and says so in
+            // `report.incomplete` — such a capture carries a reason, so it is
+            // not recorded and its replay is captured.
+            if (report.incomplete) {
+              return { stored: report.stored, skipped: report.stored > 0 ? report.skipped : Math.max(1, report.skipped), reason: report.incomplete };
+            }
+            return { stored: report.stored, skipped: report.skipped };
+          }
+          return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
+        }, { signal });
       })().catch((error) => ({ stored: 0, skipped: 1, reason: detailOf(error) }));
       return { id: randomUUID(), acceptedAt, done, abort: (reason) => controller.abort(reason) };
     },
@@ -3613,6 +3656,10 @@ export function createEngine(host, config, testOptions = {}) {
       history: (agentId, opts = {}) => internals.jobs.history(agentId, opts),
     }),
     embedding: embeddingService,
+    models: Object.freeze({
+      status: () => modelsService.status(),
+      warm: async (opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => modelsService.warm(opts)); },
+    }),
     admin: adminOps,
     // Typed MemoryOps surface (contract 1.5.0, E1). After close() every member
     // rejects with MemoryOpError "storage" before it touches a store, so a

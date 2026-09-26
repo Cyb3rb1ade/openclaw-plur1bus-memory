@@ -369,6 +369,10 @@ export function createTurnCapture(ctx) {
       // waehrend die Erfassung noch laeuft — genau die Gleichzeitigkeit,
       // die dieser Umbau beseitigen soll.
       return await pool.withDb(agentId, async (db) => {
+      // Engine.capture (opts.report) must know whether the pipeline got as far
+      // as storing: an abort or failure before that point is swallowed below,
+      // and the replay guard must not record such a turn (Q3, E4 Task 5).
+      let rowsSettled = false;
       try {
         throwIfCaptureAborted();
         // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
@@ -567,6 +571,7 @@ export function createTurnCapture(ctx) {
         throwIfCaptureAborted();
 
         // Phase 2: Dedup-Checks parallel (schnell mit ANN-Index)
+        let dedupFailed = 0;
         const toStore = (await Promise.all(
           prepared.filter(p => p.ok).map(async (p) => {
             try {
@@ -575,6 +580,7 @@ export function createTurnCapture(ctx) {
               return p;
             } catch (err) {
               host.logger.warn(`memory-lancedb-namespaced: dedup-check failed: ${String(err)}`);
+              dedupFailed++;
               return null;
             }
           })
@@ -585,6 +591,7 @@ export function createTurnCapture(ctx) {
 
         // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
         const storedMemoryRows = [];
+        let storeFailed = 0;
         for (const p of toStore) {
           try {
             throwIfCaptureAborted();
@@ -659,13 +666,22 @@ export function createTurnCapture(ctx) {
             // steht und der Rest beim naechsten Turn drankommt. Einmal
             // abbrechen, der aeussere Block meldet den Zaehlstand.
             if (isAbortError(err)) throw err;
+            storeFailed++;
             host.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
           }
         }
         throwIfCaptureAborted();
 
         host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
-        if (opts.report) Object.assign(opts.report, { stored, skipped });
+        rowsSettled = true;
+        if (opts.report) {
+          Object.assign(opts.report, { stored, skipped });
+          // An item whose preparation, embedding, dedup check or write failed
+          // was not stored: the turn is incomplete, so a replay may retry it.
+          const failedItems = textPrep.filter((p) => !p.ok).length + prepared.filter((p) => !p.ok).length
+            + dedupFailed + storeFailed;
+          if (failedItems > 0) opts.report.incomplete = "capture-incomplete";
+        }
 
         // Speaker naming pipeline: propose display names from merged diarization segments.
         await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
@@ -1122,6 +1138,7 @@ export function createTurnCapture(ctx) {
           }
         }
       } catch (err) {
+        if (opts.report && !rowsSettled) opts.report.incomplete = isAbortError(err) || signal?.aborted ? "aborted" : "capture-failed";
         if (isAbortError(err)) {
           // Ohne Zaehler: `stored`/`skipped` leben im try-Block und sind
           // hier nicht sichtbar. Was gespeichert wurde, steht ohnehin je
