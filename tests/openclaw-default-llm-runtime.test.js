@@ -769,6 +769,70 @@ test("Critical Push direct override works without a host runtime", async (t) => 
   assert.equal(stored.type, "person");
 });
 
+test("7.16.10 Critical Push sends one Telegram button message per card to the cron's own target", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  // Callback data carries the agent id, which must fit /^[A-Za-z0-9_-]{1,32}$/.
+  const agentId = `crit-btn-${randomUUID().slice(0, 8)}`;
+  cleanCriticalPushTestState(t, agentId);
+  const memoryId = "99999999-9999-4999-8999-999999999999";
+  const directCalls = [];
+  installDirectOpenAiStub(t, directCalls, "person");
+  const pluginModule = await loadFreshPlugin();
+  await seedMemory(pluginModule, baseDbPath, agentId, {
+    id: memoryId,
+    text: "Alex Example is the new project lead.",
+    unclassified: true,
+  });
+  const api = createApi(baseDbPath, {
+    criticalPush: {
+      enabled: true,
+      model: "direct/critical-model",
+      baseUrl: "https://direct-critical.invalid/v1",
+      apiKey: "direct-critical-secret",
+    },
+    emotion: { t3: { enabled: false } },
+  });
+  const interactive = [];
+  const sent = [];
+  const loadedChannels = [];
+  api.registerInteractiveHandler = (registration) => interactive.push(registration);
+  api.runtime.channel = {
+    outbound: {
+      async loadAdapter(channel) {
+        loadedChannels.push(channel);
+        return { async sendPayload(params) { sent.push(params); } };
+      },
+    },
+  };
+  api.config = {
+    workspaceDir,
+    bindings: [{ agentId, match: { channel: "telegram", accountId: "bot-a" } }],
+  };
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  assert.equal(interactive.length, 1, "the click handler is registered, so buttons are ready");
+
+  const result = await findCommand(api).handler({
+    args: "internal classify-recent",
+    agentId,
+    channel: "cron",
+    workspaceDir,
+    workspaceKey: "workspace-critical-buttons",
+    resolveCronDelivery: async () => ({ channel: "telegram", to: "4242" }),
+  });
+
+  assert.equal(result.text, "NO_REPLY", "every card went out with buttons, nothing is left for the cron text");
+  assert.deepEqual(loadedChannels, ["telegram"]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "4242");
+  assert.equal(sent[0].accountId, "bot-a", "the bot account comes from the agent's telegram binding");
+  assert.equal(sent[0].cfg, api.config);
+  const [accept, reject] = sent[0].payload.channelData.telegram.buttons[0];
+  assert.match(accept.callback_data, new RegExp(`^plurc:a:${agentId}:[0-9a-f]+$`));
+  assert.match(reject.callback_data, new RegExp(`^plurc:r:${agentId}:[0-9a-f]+$`));
+  assert.match(JSON.stringify(api.logger.calls), /button push sent=1/);
+  assert.equal(directCalls.length, 1);
+});
+
 test("Critical Push policy rejection leaves cards unclassified and diagnostics sanitized", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = "critical-policy-agent";

@@ -53,6 +53,8 @@ import { createHostServices } from "../../lib/host-services.js";
 import { shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "../../lib/runtime-shutdown.js";
 import { createOpenClawSkillWorkshopClient } from "../../lib/setup/skill-workshop-plugin-runtime.js";
 import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/runtime-config.js";
+import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js";
+import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 
 /**
  * The OpenClaw plugin's register(): validate the test-injection dependencies,
@@ -106,6 +108,10 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     throw new TypeError("skillWorkshop must be an object when provided");
   }
   setHostSdkLoader(loadOpenClawPluginSdkRuntime);
+  // 7.16.10: Der Critical Push kommt nur dann mit Telegram-Knöpfen, wenn der
+  // Klick-Handler beim Host registriert ist (registerChatCommands setzt
+  // ready); sonst bleibt es beim Text.
+  const criticalButtonState = { ready: false };
   // The capabilities below are built — inspectCronNativeCapabilities runs,
   // the skill-workshop client and the reactions checker are constructed —
   // before createEngine resolves and validates the plugin config. The old
@@ -138,6 +144,29 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       // MemoryOps archive-first backups stay where /forget and /correct have
       // always put them (~/.openclaw/memory/_archive, or under OPENCLAW_HOME).
       memoryArchiveDir: resolveDefaultArchiveDir,
+      // 7.16.10: classify-recent (engine/jobs/internal-job-bodies.js) sendet
+      // den Critical Push hierüber als eine Telegram-Nachricht je Karte mit
+      // Annehmen/Ablehnen. Ziel ist das Zustellziel des eigenen Crons
+      // (commandCtx.resolveCronDelivery, Cron-Dienst im Gateway-Kontext), das
+      // Bot-Konto die eindeutige Telegram-Bindung des Agenten. null, solange
+      // der Klick-Handler nicht registriert ist.
+      pushCriticalButtons: async ({ agentId, result, commandCtx, warning }) => {
+        if (!criticalButtonState.ready) return null;
+        const cronDelivery = typeof commandCtx?.resolveCronDelivery === "function"
+          ? await commandCtx.resolveCronDelivery()
+          : null;
+        return deliverCriticalButtonPush({
+          agentId,
+          result,
+          config: api.config,
+          delivery: cronDelivery
+            ? { ...cronDelivery, accountId: cronDelivery.accountId || boundTelegramAccountId(agentId, api.config) }
+            : null,
+          loadAdapter: (channel) => api.runtime?.channel?.outbound?.loadAdapter?.(channel),
+          warning,
+          logger: host.logger,
+        });
+      },
     },
   });
   const engine = createEngine(host, api.pluginConfig || {}, engineInternals ? { internals: engineInternals } : {});
@@ -352,6 +381,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
         confirmationIndex,
         confirmationStore,
         controlHealth,
+        criticalButtonState,
         cronDirectDispatchReady,
         dashboardSkillAction,
         dimensions,

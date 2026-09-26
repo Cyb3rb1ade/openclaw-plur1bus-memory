@@ -316,6 +316,9 @@ export const DEPLOY_FILES = [
   "lib/critical-push-classifier.js",
   "lib/critical-push-state.js",
   "lib/critical-review.js",
+  // 7.16.10: Critical Push mit Telegram-Knöpfen (Text/Callback-Daten und Versand).
+  "lib/critical-buttons.js",
+  "lib/critical-button-delivery.js",
   "lib/tombstone.js",
   "lib/registry-lock.js",
   "lib/fetch-with-timeout.js",

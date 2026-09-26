@@ -18,6 +18,7 @@
 import { randomUUID } from "node:crypto";
 import { buildControlPlaneProjection } from "../../lib/control-plane-projection.js";
 import { buildCriticalReplyCommand } from "../../lib/critical-reply-intent.js";
+import { CRITICAL_BUTTON_NAMESPACE, criticalDecisionLine, parseCriticalButtonPayload } from "../../lib/critical-buttons.js";
 import { assignShortRefs, resolveShortRef, translateType } from "../../lib/critical-review.js";
 import { readGcReport } from "../../lib/dashboard-operations.js";
 import { largestKnownAgentCount, readPluginConfigFile } from "../../lib/dashboard-settings.js";
@@ -35,6 +36,7 @@ import { checkRuntimePressure } from "../../lib/runtime-pressure-gate.js";
 import { createConfirmation, isAuthorized } from "../../lib/security.js";
 import { normalizeCommandInput } from "../../lib/semantic-input.js";
 import { resolveEffectiveConfig } from "../../lib/setup/config-contract.js";
+import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { createCompactionRunner, isPartitionId } from "../../lib/setup/control-ui-compaction.js";
 import { registerControlUiRuntime } from "../../lib/setup/control-ui-plugin-runtime.js";
 import { applyControlUiWriteAction, createCaptureChunkingMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
@@ -83,6 +85,7 @@ export function registerChatCommands(ctx) {
     confirmationIndex,
     confirmationStore,
     controlHealth,
+    criticalButtonState,
     cronDirectDispatchReady,
     dashboardSkillAction,
     dimensions,
@@ -1078,12 +1081,12 @@ export function registerChatCommands(ctx) {
       if (subKey === "accept") {
         const result = await memoryDbAdapter.markCriticalAccepted(agentId, fullId);
         if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
-        return { text: t("critical.accepted", { lang, tone }) };
+        return { text: t("critical.accepted", { lang, tone }), outcome: "accepted" };
       }
       if (subKey === "reject") {
         const result = await memoryDbAdapter.markCriticalRejected(agentId, fullId);
         if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
-        return { text: t("critical.rejected", { lang, tone }) };
+        return { text: t("critical.rejected", { lang, tone }), outcome: "rejected" };
       }
       // edit → in den vorhandenen sicheren Korrekturablauf führen.
       const card = (pending || []).find((c) => c.id === fullId);
@@ -1146,6 +1149,69 @@ export function registerChatCommands(ctx) {
         return undefined;
       }
     };
+    // 7.16.10: Klick auf „Annehmen“/„Ablehnen“ unter einer Push-Karte.
+    // Derselbe autorisierte Critical-Befehl wie beim Tippen oder
+    // Zitieren erledigt die Arbeit; der Host prüft den Absender vorher
+    // gegen die Telegram-Allowlist.
+    if (cfg.criticalPush?.buttons !== false && typeof api.registerInteractiveHandler === "function") {
+      const handleCriticalButton = async (ctx) => {
+        const decision = parseCriticalButtonPayload(ctx?.callback?.payload);
+        if (!decision) return { handled: false };
+        const refuse = () => ({ handled: true });
+        if (ctx.isGroup || ctx.auth?.isAuthorizedSender !== true) return refuse();
+        const senderId = String(ctx.senderId ?? "");
+        const conversationId = String(ctx.conversationId ?? ctx.callback?.chatId ?? "");
+        if (!senderId || !conversationId) return refuse();
+        // Die Karte gehört dem Agenten aus den Callback-Daten; ein Klick
+        // zählt nur über dessen eigenen Telegram-Bot und im Direktchat
+        // mit dem Absender selbst.
+        if (conversationId !== senderId) return refuse();
+        if (boundTelegramAccountId(decision.agentId, api.config) !== ctx.accountId) return refuse();
+        const target = `telegram:${conversationId}`;
+        let outcome = "failed";
+        try {
+          const result = await runCriticalCommand({
+            args: `critical ${decision.action} ${decision.ref}`,
+            agentId: decision.agentId,
+            sessionKey: `agent:${decision.agentId}:telegram:${ctx.accountId}:direct:${conversationId}`,
+            channel: "telegram",
+            accountId: ctx.accountId,
+            senderId,
+            from: target,
+            to: target,
+            config: api.config,
+            getCurrentConversationBinding: () => null,
+            message: { from: { id: senderId }, chat: { id: conversationId, type: "private" } },
+          });
+          if (result?.outcome === "accepted" || result?.outcome === "rejected") outcome = result.outcome;
+          host.logger.info(`plur1bus critical[${decision.agentId}]: button ${decision.action} ${decision.ref} -> ${outcome}`);
+        } catch (error) {
+          host.logger.warn(`memory-lancedb-namespaced: critical button failed: ${error?.message || error}`);
+        }
+        const line = criticalDecisionLine(decision.ref, outcome);
+        try {
+          const base = typeof ctx.callback?.messageText === "string" ? ctx.callback.messageText : "";
+          if (base) await ctx.respond.editMessage({ text: `${base}\n\n${line}` });
+          else {
+            await ctx.respond.clearButtons();
+            await ctx.respond.reply({ text: line });
+          }
+        } catch (error) {
+          host.logger.warn(`memory-lancedb-namespaced: critical button message update failed: ${error?.message || error}`);
+        }
+        return { handled: true };
+      };
+      try {
+        api.registerInteractiveHandler({
+          channel: "telegram",
+          namespace: CRITICAL_BUTTON_NAMESPACE,
+          handler: handleCriticalButton,
+        });
+        criticalButtonState.ready = true;
+      } catch (error) {
+        host.logger.warn(`memory-lancedb-namespaced: could not register critical buttons: ${error?.message || error}`);
+      }
+    }
     for (const hookName of ["before_dispatch", "before_agent_reply"]) {
       try {
         api.on(hookName, answerQuotedCriticalReply);
