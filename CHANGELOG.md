@@ -5,6 +5,15 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.17.1] — 2026-09-26
+
+### Geändert
+
+- **Umschalten per `/modus` statt `/voice`.** Auf Discord gehört `/voice` dem
+  eingebauten OpenClaw-Slash-Befehl, der Text erreichte PLUR1BUS nie und die
+  Knöpfe kamen nicht. `/modus`, `/modus light`, `/modus full` und
+  `/modus status` schalten jetzt um.
+
 ## [7.17.0] — 2026-09-26
 
 ### Hinzugefügt

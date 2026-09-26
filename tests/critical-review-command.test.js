@@ -418,7 +418,7 @@ test("eine zitierte Push-Antwort „bitte alle akzeptieren“ wird vor dem Agent
   const handler = hooks.filter((entry) => entry.name === "before_agent_reply").at(-1)?.fn;
   assert.ok(dispatchHandlers.length > 0, "the plugin listens before dispatch");
   assert.equal(typeof handler, "function", "the plugin listens before the agent replies");
-  // Seit 7.17.0 hängt auch /voice an before_dispatch; der Critical-Handler
+  // Seit 7.17.0 hängt auch /modus an before_dispatch; der Critical-Handler
   // ist derselbe wie auf before_agent_reply.
   assert.ok(dispatchHandlers.includes(handler), "one handler, two hooks");
 

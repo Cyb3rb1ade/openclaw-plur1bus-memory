@@ -19,13 +19,14 @@ const config = {
   ] } } },
 };
 
-test("parses /voice commands and ignores other text", () => {
-  assert.deepEqual(parseVoiceCommand("/voice"), { action: "menu" });
-  assert.deepEqual(parseVoiceCommand("/voice light"), { action: "light" });
-  assert.deepEqual(parseVoiceCommand("/voice Full"), { action: "persona" });
-  assert.deepEqual(parseVoiceCommand("/voice persona"), { action: "persona" });
-  assert.deepEqual(parseVoiceCommand("/voice status"), { action: "status" });
-  assert.equal(parseVoiceCommand("/voice turbo"), null);
+test("parses /modus commands and ignores other text", () => {
+  assert.deepEqual(parseVoiceCommand("/modus"), { action: "menu" });
+  assert.deepEqual(parseVoiceCommand("/modus light"), { action: "light" });
+  assert.deepEqual(parseVoiceCommand("/modus Full"), { action: "persona" });
+  assert.deepEqual(parseVoiceCommand("/modus persona"), { action: "persona" });
+  assert.deepEqual(parseVoiceCommand("/modus status"), { action: "status" });
+  assert.equal(parseVoiceCommand("/modus turbo"), null);
+  assert.equal(parseVoiceCommand("/voice light"), null, "/voice gehört dem OpenClaw-Slash-Befehl");
   assert.equal(parseVoiceCommand("voice light"), null);
   assert.equal(parseVoiceCommand("/vc join"), null);
 });
@@ -95,7 +96,7 @@ test("a failing session patch is counted, the mode is still stored", async (t) =
   assert.equal(readVoiceMode(base, "main"), "light");
 });
 
-test("the /voice hook and the plurv button switch the mode for the owner only", async (t) => {
+test("the /modus hook and the plurv button switch the mode for the owner only", async (t) => {
   const { rmSync: rm } = await import("node:fs");
   const { makeTempDir } = await import("./helpers/temp-dir.js");
   const baseDbPath = makeTempDir("plur1bus-voice-hook-");
@@ -134,7 +135,7 @@ test("the /voice hook and the plurv button switch the mode for the owner only", 
   };
   const context = { channelId: "discord", accountId: "default", senderId: "1323072788939935867", conversationId: "channel:1518159522076823592", sessionKey: "agent:main:discord:channel:1518159522076823592" };
 
-  const light = await run({ body: "/voice light", isGroup: true }, context);
+  const light = await run({ body: "/modus light", isGroup: true }, context);
   assert.equal(light?.handled, true);
   assert.equal(readVoiceMode(baseDbPath, "main"), "light");
   assert.equal(patched.length, 2);
@@ -144,11 +145,11 @@ test("the /voice hook and the plurv button switch the mode for the owner only", 
   assert.match(sent[0].payload.text, /Light/);
   assert.equal(sent[0].payload.interactive.blocks[0].type, "buttons");
 
-  const stranger = await run({ body: "/voice full" }, { ...context, senderId: "42" });
+  const stranger = await run({ body: "/modus full" }, { ...context, senderId: "42" });
   assert.match(stranger.text, /Nur der Besitzer/);
   assert.equal(readVoiceMode(baseDbPath, "main"), "light");
 
-  const telegram = await run({ body: "/voice full" }, { ...context, channelId: "telegram" });
+  const telegram = await run({ body: "/modus full" }, { ...context, channelId: "telegram" });
   assert.match(telegram.text, /nur für Discord/);
 
   assert.equal(await run({ body: "Hallo Bernd" }, context), undefined);

@@ -10275,7 +10275,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }
         }
 
-        // 7.17.0: /voice [light|full|status] in Discord und Knöpfe
+        // 7.17.0: /modus [light|full|status] in Discord und Knöpfe
         // plurv:<modus>:<agent>. Die Hook-Antwort kann nur Text tragen, deshalb
         // geht die Knopfnachricht selbst über den Discord-Adapter raus.
         if (typeof api.on === "function") {
@@ -10321,14 +10321,14 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               await sendVoiceModeMessage({ agentId, mode, to, accountId: context?.accountId });
               return { handled: true };
             } catch (error) {
-              api.logger?.warn?.(`memory-lancedb-namespaced: /voice failed: ${error?.message || error}`);
+              api.logger?.warn?.(`memory-lancedb-namespaced: /modus failed: ${error?.message || error}`);
               return { handled: true, text: "Sprachmodus konnte nicht umgeschaltet werden, Details im Log." };
             }
           };
           try {
             api.on("before_dispatch", answerVoiceCommand);
           } catch (error) {
-            api.logger?.warn?.(`memory-lancedb-namespaced: could not listen for /voice: ${error?.message || error}`);
+            api.logger?.warn?.(`memory-lancedb-namespaced: could not listen for /modus: ${error?.message || error}`);
           }
           if (typeof api.registerInteractiveHandler === "function") {
             try {

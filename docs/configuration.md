@@ -757,8 +757,9 @@ oder mit `buttons: false` bleibt es bei der Textnachricht mit Befehlen. Alle auf
 einmal geht weiter per `/plur1bus critical accept all` oder zitierter Antwort.
 
 **Discord-Sprachräume: Persona/Light (seit 7.17.0).** Der Modus steht je Agent in
-`<baseDbPath>/.plur1bus-voice-mode/<agent>.json` (Standard `persona`). `/voice`,
-`/voice light`, `/voice full` und `/voice status` im Discord-Text schalten um oder
+`<baseDbPath>/.plur1bus-voice-mode/<agent>.json` (Standard `persona`). `/modus`,
+`/modus light`, `/modus full` und `/modus status` im Discord-Text (seit 7.17.1;
+`/voice` gehört dem OpenClaw-Slash-Befehl) schalten um oder
 zeigen den Stand mit Knöpfen. Umschalten setzt über den Host `thinkingLevel` der
 Sitzungen `agent:<agent>:discord:channel:<id>` für jeden Raum aus
 `channels.discord.voice.allowedChannels`; das Modell der Sitzung wird nie
