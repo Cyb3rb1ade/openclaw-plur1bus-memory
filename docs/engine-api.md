@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.6.0** · frozen at 1.0.0 on 2026-09-22, amended seven times
+**Contract version 1.7.0** · frozen at 1.0.0 on 2026-09-22, amended eight times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -77,6 +77,17 @@ own changelog:
   `"memory.proposal"` event. See
   [Shared copies and change proposals](#shared-copies-and-change-proposals-160-d31)
   and [AdminOps in 1.6.0](#adminops-in-160-obsidian-migrate-the-deprecated-aliases)
+  below.
+- **1.7.0** — `EmbeddingService.probe()` and `.serve()` real (engine PR E3):
+  `probe(opts?)` exercises the configured provider once (identity, readiness,
+  a memoized successful result), returning `EmbeddingProbeResult`;
+  `serve(address?: IpcAddress | null)` starts the engine's scoped-embedding
+  IPC server on `address` (or the platform default) as the in-process owner,
+  without the loopback claim listener (ADR-001 C1), returning
+  `EmbeddingServeResult`; `null` stops serving. `admin.obsidian.detect`
+  reports a vault that vanishes mid-check as unconfirmed instead of failing
+  the whole call (R11). `HostCapabilities.pushCriticalButtons` is typed. See
+  [EmbeddingService in 1.7.0](#embeddingservice-in-170-probe-and-serve)
   below.
 
 ## The two halves
@@ -363,10 +374,160 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   host can tell a legacy store apart from one already on the version this
   engine build expects.
 
+## EmbeddingService in 1.7.0: probe and serve
+
+- **`probe(opts?)`** (`engine/providers/embedding-service.js`,
+  `createEmbeddingProbe`) answers whether the configured embedding provider
+  is actually loaded and producing usable vectors — it never throws on a
+  provider failure; the result says `ok: false` instead, and the raw
+  provider error goes only to `logger.warn`.
+  - Each provider call embeds a fixed text — `` `plur1bus embedding probe
+    ${nonce}:${attempt}` `` — where `nonce` is a random id generated once per
+    engine and `attempt` increments on every real call, so the text never
+    repeats and can never be answered from a persisted embedding cache.
+  - A successful probe (a finite vector of exactly `identity.dimensions`) is
+    memoized; a later call answers the memoized result with `cached: true`
+    and makes no provider call, until `opts.refresh === true` forces a new
+    one. A **failed** probe is never memoized, so a retry always exercises
+    the provider again.
+  - `opts.refresh === true` always gets a provider call of its own: when a
+    call is already in flight, the refreshed call is queued to start after
+    it settles (refreshes queued behind the same call share that one new
+    call) — it is never answered by the older call's result.
+  - `probe()` has no timeout of its own; callers should pass `opts.signal`
+    (or an `AbortSignal.timeout(...)`) so a hung provider cannot stall them —
+    the harness warm-up does.
+  - Concurrent calls without `refresh` share one in-flight provider call.
+    Each caller's own `opts.signal` aborting only that caller's wait answers
+    that caller `{ ok: false, error: "aborted", cached: false, identity,
+    durationMs, checkedAt }` — it never cancels the shared call or the other
+    callers waiting on it.
+  - `error` is one of `EmbeddingProbeError`: `"provider-failed"` (the
+    provider call threw), `"invalid-vector"` (not an array/typed array, or a
+    non-finite element), `"dimension-mismatch"` (a finite vector of the
+    wrong length), `"aborted"` (this caller's own signal fired first).
+  - The harness uses `probe()` as its embedding warm-up primitive; E4 reads
+    model-readiness status without making a provider call of its own from
+    two extra methods on the object `createEmbeddingProbe` returns
+    (`internals.embeddingProbe`; not part of the `Engine` surface):
+    `lastResult()` — the most recent **successful** probe, or `null` (a
+    later failure does not clear it); `lastAttempt()` — the most recent
+    **completed** probe, `ok` or failed, or `null` (an `"aborted"` answer is
+    never recorded: an abort ends only one caller's wait, the provider call
+    still completes and becomes the last attempt).
+- **`serve(address?)`** (`createEmbeddingServing`) starts the engine's
+  scoped-embedding IPC server (`lib/providers/scoped-embedding-ipc.js`) as
+  the **in-process owner** — `claim: false`, so unlike the legacy OpenClaw
+  path it never opens the loopback claim listener (ADR-001 C1).
+  - **Default address per platform** (omitted `address`, i.e. `undefined`;
+    `host.platform.ipcAddress(resolveScopedEmbeddingIpcPaths(baseDbPath).
+    directory)`): Linux — an abstract socket (no filesystem entry, released
+    on process death); macOS and other POSIX — a filesystem socket at
+    `<baseDbPath>/control/embedding-ipc/owner.sock`; Windows — a named pipe
+    `\\.\pipe\plur1bus-embedding-<32 hex>` (the SHA-256 of the embedding-ipc
+    directory path `<baseDbPath>/control/embedding-ipc`, truncated to 32 hex
+    characters; the Linux abstract-socket name uses the same digest). No
+    claim listener is opened for any of these.
+  - The token always lives at
+    `<baseDbPath>/control/embedding-ipc/owner.token`, for every address kind
+    — including an abstract socket or named pipe, neither of which has a
+    filesystem entry of its own. `EmbeddingServeResult.tokenPath` is this
+    path; the token itself is never in a result, a log line or an error.
+  - **Idempotency:** calling `serve` again with the address already being
+    served (same `kind`/`address`) resolves the same result object without
+    restarting anything. A **different** address while one is already
+    served rejects `conflict` ("embedding IPC is already served on another
+    address") — one engine serves at most one address at a time.
+  - **`null`** stops serving and resolves `EmbeddingServeResult` with
+    `address: null`, `tokenPath: null`, `identity: null` (in-process only;
+    `null` is never forwarded to the transport — it is handled before any
+    address validation or `createServer` call). `null` when nothing is
+    being served is a no-op that resolves the same shape.
+  - **`dispose()`** (on the resolved `EmbeddingServeResult`, part of
+    `Disposable`) stops that server, but only while it is still the
+    currently-served one (checked both when called and again inside the
+    serialized queue) — fire-and-forget, it does not reject.
+  - **`close()`** stops serving as part of engine shutdown
+    (`engine/lifecycle/close-resources.js`), before the embedding provider
+    itself is closed.
+  - **Error table** (`MemoryOpError`):
+    - `invalid-input` — a malformed `address` (not an `IpcAddress`-shaped
+      object), a kind the current platform does not use (e.g. a named pipe
+      off Windows), or, for a `unix-socket` address, an unsafe socket
+      directory: missing, a symlink, not a directory, or not private
+      (POSIX mode with any group/other bit set) — checked before anything
+      listens or any token is written.
+    - `conflict` — another address is already served; the requested address
+      is in use (a live foreign listener, or another in-process owner on
+      the same address answers `scoped_embedding_owner_already_active`,
+      surfaced here as "embedding IPC address is in use" — this is also
+      what a second **in-process** `serve()` on a different address gets,
+      via the transport's single in-process-owner-per-`stateRoot` guard);
+      the host lifecycle already owns this stateRoot's IPC (`hostOwned`);
+      this engine's own embedding provider is itself an IPC client, not an
+      owner.
+    - `storage` — the engine is closed or closing; the listener failed to
+      start for any other reason ("embedding IPC server failed to start",
+      raw error to `logger.warn` only); `serve(null)` failed to stop the
+      running server ("embedding IPC server failed to stop", raw error to
+      `logger.warn` only) — the served state is still cleared either way.
+
+### Security model
+
+- **POSIX filesystem sockets** (macOS/BSD `unix-socket` default, or any
+  caller-supplied `unix-socket` address): the socket's parent directory must
+  already be private (`0700`, not a symlink) before `serve` will use it, and
+  the socket file itself is secured to `0600` after the listener binds. The
+  token file is `0600` inside a `0700` directory.
+- **Abstract sockets (Linux) and named pipes (Windows) have no filesystem
+  permissions at all** — there is nothing to `chmod`. The guard for both is
+  the same as for a filesystem socket: every request's envelope token is
+  compared with `timingSafeEqual` against the private token file, plus the
+  model/dimensions/fingerprint identity binding baked into the envelope
+  (`{dimensions, fingerprintId, model, request, token}`) — a client with the
+  right token but the wrong model or fingerprint still gets an error frame,
+  never vectors. The address itself is not treated as a secret barrier, only
+  as a rendezvous point; the token is the actual credential.
+- **Windows pipe ACLs are out of scope for 1.7.0** (PR-11): Node's `net`
+  module cannot set a DACL on a named pipe, so an engine serving a named pipe
+  today relies on the default pipe security descriptor rather than a
+  user-SID-scoped ACL. Windows system tests for the pipe transport are
+  deferred to the same PR-11.
+- **The token authenticates clients to the server, not the server to
+  clients.** Nothing lets a client verify that whoever listens on the address
+  is the real owner. Abstract-socket and named-pipe names are predictable
+  (derived from the SHA-256 of the embedding-ipc directory path, see above),
+  and after a crash a stale `owner.token` stays on disk (only a clean
+  shutdown removes it). A local user who binds the then-free abstract or pipe
+  name first therefore receives the tokens clients send and can answer with
+  forged vectors — or simply holds the name so the real owner's `serve()`
+  answers `conflict`. The legacy OpenClaw data socket (`owner.sock` inside
+  the `0700` embedding-ipc directory) is stronger on that point: only the
+  owning user can bind or reach it. Server authentication (a challenge on
+  the token, or peer-credential checks) is a follow-up for PR-11, alongside
+  the Windows pipe ACL.
+- **One serving engine per `stateRoot`, across processes, is the operator's
+  responsibility.** The transport's single-owner guard
+  (`scoped_embedding_owner_already_active`) is in-process only, and the
+  claim listener that would additionally exclude other *processes* is
+  intentionally not opened on this path (ADR-001 C1). What is caught across
+  processes: two engine processes serving the **same** address (a
+  live-socket connect probe, or `EADDRINUSE`, answers `conflict`), and a
+  claimed legacy OpenClaw owner of the same `stateRoot` — before listening,
+  an unclaimed server connect-probes the claim address and the legacy
+  `owner.sock` (connecting opens no listener) and answers `conflict` while
+  either accepts. Two engine processes on the same `stateRoot` serving
+  **different** addresses are not prevented, nor a legacy owner that starts
+  *after* an unclaimed one: the later owner overwrites the shared
+  `owner.token`, so the earlier owner's clients fail auth or see an
+  unannounced owner change. Each server unlinks `owner.token` on shutdown
+  (or after a failed start) only while the file still holds its own token,
+  so the earlier owner no longer deletes the later owner's token.
+
 ## What is implemented in M1b-1
 
 `createEngine(host, config, testOptions?)` (`engine/create-engine.js`)
-constructs the full 1.6.0 `Engine` surface described above from a plain
+constructs the full 1.7.0 `Engine` surface described above from a plain
 `HostServices` object with no OpenClaw `api` anywhere in its call graph —
 `createEngine(createStubHost(), config)` is exactly how the engine's own
 tests build one, and `tests/engine-contract.test.js` proves it end to end.
@@ -414,20 +575,17 @@ involved):
   [AdminOps in 1.6.0](#adminops-in-160-obsidian-migrate-the-deprecated-aliases)
   above); `admin.reembedding.{plan,apply,resume,status}` and
   `admin.workspacePolicy.*` were already wired to real coordinators.
-- `embedding.probe()` and `embedding.serve()` are placeholders: `probe()`
-  always resolves `{ ok: true, cached: false }` without actually exercising
-  the provider, and `serve()` returns a no-op `Disposable` without opening any
-  IPC address.
 - `status()` reports `{ ready: true, degraded: null, agents:
-  openedAgents.size, contract: "1.6.0", storeSchema: { current, expected } }`
+  openedAgents.size, contract: "1.7.0", storeSchema: { current, expected } }`
   — `storeSchema` (1.6.0) is the one part of the status that does probe the
-  store (it reads the schema marker), the rest is still static and does not
-  probe the embedder or any other dependency for actual health.
+  store (it reads the schema marker); it does not yet reflect `probe()`'s
+  readiness (deferred to E4), and the rest is still static and does not
+  probe any other dependency for actual health.
 
 Everything else — `recall`, `capture`, `checkpoint`, `memory.*` (1.5.0/1.6.0),
-`jobs.run`/`history`, `tools`, `embedding.embed`/`rerank`/`identities`,
-`channels`, `admin.reembedding.plan`/`apply`/`resume`/`status`,
-`admin.workspacePolicy.*`, `admin.share`/`.forget`/`.obsidian.*`/`.migrate` —
+`jobs.run`/`history`, `tools`, `embedding.embed`/`rerank`/`identities`/
+`probe`/`serve` (1.7.0), `channels`, `admin.reembedding.plan`/`apply`/`resume`/
+`status`, `admin.workspacePolicy.*`, `admin.share`/`.forget`/`.obsidian.*`/`.migrate` —
 works against a plain `HostServices` with no adapter involved, per
 `tests/engine-contract.test.js`.
 
@@ -461,6 +619,13 @@ works against a plain `HostServices` with no adapter involved, per
   is never cut off mid-write, and no store closes under a lease. A call that
   arrives after `close()` began is refused immediately (`storage`, "engine is
   closed") rather than joining the drain.
+- **`HostCapabilities.pushCriticalButtons?` is typed but optional (1.7.0).**
+  `engine/jobs/internal-job-bodies.js`'s classify-recent job calls it only
+  from a cron-internal run, only when the host provides it, and only when
+  the job actually pushed at least one card; a host without it, one that
+  throws, or one whose call resolves `null` or a result with `sent === 0`,
+  leaves the job on the plain cron text delivery unchanged — a missing or
+  failing capability degrades to text, it never fails the job.
 
 ## `RecallQuery` fields the engine ignores
 

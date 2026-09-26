@@ -111,9 +111,11 @@ function dedupeByNormalizedPath(candidates) {
  * @param {() => object} options.getObsidianBridgeConfig Returns the engine config's obsidianBridge section.
  * @param {object} [options.logger]
  * @param {() => number} [options.clock]
+ * @param {(args: {baseDbPath: string, memoryCtx: object, vaultPath: string}) => boolean} [options.isVaultConfirmed]
+ *   Test seam for `detect` only; defaults to the real `isOwnedVaultConfirmed`. `prepare`/`confirm` always use the real check.
  * @returns {{detect: Function, prepare: Function, confirm: Function}}
  */
-export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, getObsidianBridgeConfig, logger, clock = Date.now }) {
+export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, getObsidianBridgeConfig, logger, clock = Date.now, isVaultConfirmed = isOwnedVaultConfirmed }) {
   const home = homedir();
   // nonce -> { vaultPath, expiresAt }. Separate from confirmationStore: this
   // Map only remembers which vault path a nonce prepared, so confirm() can
@@ -180,9 +182,17 @@ export function createObsidianOps({ opsContext, baseDbPath, confirmationStore, g
     const vaults = dedupeByNormalizedPath(ordered).map(({ path, source }) => {
       const directoryExists = isExistingDirectory(path);
       const isVault = directoryExists && isVaultDirectory(path);
-      const confirmed = directoryExists
-        && guardVaultFs("detect", path, () => isOwnedVaultConfirmed({ baseDbPath, memoryCtx: boundMemoryCtx(memoryCtx), vaultPath: path }));
-      return { path, isVault, confirmed, source };
+      if (!directoryExists) return { path, isVault, confirmed: false, source };
+      try {
+        const confirmed = guardVaultFs("detect", path, () => isVaultConfirmed({ baseDbPath, memoryCtx: boundMemoryCtx(memoryCtx), vaultPath: path }));
+        return { path, isVault, confirmed, source };
+      } catch (err) {
+        if (isMemoryOpError(err) && err.code === "not-found") {
+          logger?.warn?.("admin.obsidian.detect: vault vanished during detect; reported unconfirmed");
+          return { path, isVault: isExistingDirectory(path) && isVaultDirectory(path), confirmed: false, source };
+        }
+        throw err;
+      }
     });
 
     return { agentId, vaults };

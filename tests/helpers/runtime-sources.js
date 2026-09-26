@@ -64,6 +64,7 @@ const ENGINE_PATHS = Object.freeze({
   envConfig: "engine/runtime/env-config.js",
   knowledgePending: "engine/knowledge/knowledge-pending.js",
   lancedbLoader: "engine/store/lancedb-loader.js",
+  embeddingService: "engine/providers/embedding-service.js",
   legacyProviders: "engine/providers/legacy-providers.js",
   llmCalls: "engine/runtime/llm-calls.js",
   memoryDb: "engine/store/memory-db.js",

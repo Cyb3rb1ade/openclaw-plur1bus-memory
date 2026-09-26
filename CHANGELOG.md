@@ -439,6 +439,78 @@ Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
   closed“) abgelehnt statt am Drain teilzunehmen; kein Store schließt unter
   einer laufenden Operation.
 
+### E3 — Contract 1.7.0 (Embedding-Probe/Serve echt, detect-Toleranz, typisiertes pushCriticalButtons)
+
+Contract-Version **1.7.0**. Details in `docs/engine-api.md`, Abschnitt
+„EmbeddingService in 1.7.0: probe and serve“.
+
+#### Hinzugefügt
+
+- **`Engine.embedding.probe()`** prüft den Embedding-Provider einmal echt
+  (fixer Text mit Pro-Engine-Nonce, damit kein persistenter Embedding-Cache
+  antworten kann; Identität, Bereitschaft, bei Erfolg gemerkt) — Contract
+  1.7.0. Parallele Aufrufe teilen sich einen laufenden Provider-Aufruf; der
+  Abbruch eines einzelnen Aufrufers (`signal`) beendet nur dessen eigenes
+  Warten (`{ ok: false, error: "aborted" }`), nie den geteilten Aufruf oder
+  die übrigen Wartenden. Ein Fehlschlag wird nie gemerkt, ein erneuter
+  Versuch prüft den Provider also wieder. Wirft nie bei einem
+  Provider-Fehler; der Rohfehler geht nur an `logger.warn`. Der Harness nutzt
+  `probe()` als Warm-up-Primitive, E4 liest `lastResult()`.
+- **`Engine.embedding.serve(address | null)`** startet den
+  Scoped-Embedding-IPC-Server als In-Process-Owner ohne
+  Loopback-Claim-Listener (ADR-001 C1); Default-Adresse je Plattform (Linux:
+  Abstract Socket; macOS/BSD:
+  `<baseDbPath>/control/embedding-ipc/owner.sock`; Windows:
+  `\\.\pipe\plur1bus-embedding-<32 hex>`); das Token liegt für jede
+  Adressart unverändert unter
+  `<baseDbPath>/control/embedding-ipc/owner.token` (0600, Verzeichnis 0700)
+  und erscheint nie in einem Ergebnis, einer Log-Zeile oder einem Fehler.
+  `null` = nur In-Process (stoppt den Server, `{ address: null, tokenPath:
+  null, identity: null }`). Bekannte Grenze: zwei Prozesse auf demselben
+  `stateRoot`, die **verschiedene** Adressen bedienen, werden nicht
+  verhindert — der zweite überschreibt `owner.token` der ersten Instanz;
+  dieselbe Adresse und In-Process-Duplikate werden dagegen erkannt (Letzteres
+  meldet `conflict` „embedding IPC address is in use“), ebenso ein laufender
+  OpenClaw-Owner (mit Claim) desselben `stateRoot` in einem anderen Prozess:
+  vor dem Listen prüft der Server ohne Claim per Verbindungsversuch die
+  Claim-Adresse und `owner.sock` und verweigert, solange einer antwortet.
+  Jeder Server löscht `owner.token` beim Beenden nur noch, solange die Datei
+  sein eigenes Token enthält.
+- **Sicherheitshinweis zu `serve()`:** Das Token authentifiziert nur Clients
+  gegenüber dem Server, nicht den Server gegenüber Clients. Abstract-Socket-
+  und Named-Pipe-Namen sind vorhersagbar (SHA-256 des
+  embedding-ipc-Verzeichnispfads), und nach einem Absturz bleibt ein altes
+  `owner.token` liegen; ein lokaler Nutzer, der den freien Namen zuerst
+  belegt, erhält die Client-Tokens und kann gefälschte Vektoren liefern oder
+  `serve()` mit `conflict` blockieren. Der bisherige Linux-Datensocket im
+  0700-Verzeichnis war hier stärker. Server-Authentifizierung (Challenge oder
+  Peer-Credentials) folgt mit PR-11 zusammen mit der Pipe-ACL.
+- **`probe({ refresh: true })`** erzwingt jetzt auch bei laufendem Aufruf
+  einen neuen Provider-Aufruf (hinten angestellt); Aufrufer sollten ein
+  `signal` bzw. Timeout übergeben. Neben `lastResult()` (letzter Erfolg)
+  gibt es `lastAttempt()` (letzter abgeschlossener Versuch, Erfolg oder
+  Fehlschlag, nie ein Abbruch).
+- **`HostCapabilities.pushCriticalButtons`** ist typisiert
+  (`CriticalButtonPushArgs`/`CriticalButtonPushResult`); fehlt sie, wirft sie,
+  oder liefert sie `null`/`sent: 0`/kein `unsentTexts`-Array, bleibt
+  `classify-recent` unverändert bei der Text-Zustellung über den Cron;
+  `unsentTexts: []` mit `sent > 0` ergibt NO_REPLY.
+
+#### Geändert
+
+- **`createScopedEmbeddingIpcServer`** nimmt optional `address`/`claim`, der
+  Client optional `address`; der OpenClaw-Pfad (ohne diese Optionen) bleibt
+  verhaltensgleich — Claim-Listener, `owner.sock` im privaten Verzeichnis,
+  alle bestehenden Tests unverändert grün. Beide Clients lehnen
+  `address: null` jetzt ab wie der Server.
+
+#### Behoben
+
+- **`admin.obsidian.detect` scheitert nicht mehr als Ganzes**, wenn ein Vault
+  während der Prüfung verschwindet — der betroffene Kandidat wird als
+  `{ isVault: false, confirmed: false }` gemeldet statt den ganzen Aufruf mit
+  `not-found` scheitern zu lassen (R11).
+
 ## [7.16.11] — 2026-09-26
 
 ### Geändert

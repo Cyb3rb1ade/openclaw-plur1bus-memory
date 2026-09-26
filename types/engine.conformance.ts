@@ -9,8 +9,9 @@
 
 import type {
   AdminOps, AgentContext, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
-  Deferral, Degraded, Engine, EngineConfig, EngineEventName, EngineStatus, HostServices,
-  HostCapabilities, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
+  CriticalButtonPushArgs, CriticalButtonPushResult, Deferral, Degraded, Disposable, Engine, EngineConfig,
+  EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostServices,
+  HostCapabilities, IpcAddress, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
   MemoryProposalStatus, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
   SchemaVersion, TurnOrigin, TurnRecord,
 } from "./engine.js";
@@ -103,7 +104,7 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.6.0">>();
+assertTrue<Exact<ContractVersion, "1.7.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
@@ -141,6 +142,15 @@ assertTrue<Exact<MemoryProposalStatus, "pending" | "accepted" | "rejected" | "st
 assertTrue<Exact<Extract<EngineEventName, `memory.${string}`>, "memory.proposal">>();
 assertTrue<Exact<EngineStatus["storeSchema"], { current: SchemaVersion | null; expected: SchemaVersion }>>();
 
+// 1.7.0: EmbeddingService probe/serve; HostCapabilities.pushCriticalButtons (E3 Task 1).
+assertTrue<Exact<Engine["embedding"]["probe"], (opts?: { signal?: AbortSignal; refresh?: boolean }) => Promise<import("./engine.js").EmbeddingProbeResult>>>();
+assertTrue<Exact<Engine["embedding"]["serve"], (address?: IpcAddress | null) => Promise<EmbeddingServeResult>>>();
+assertTrue<Exact<EmbeddingProbeError, "aborted" | "provider-failed" | "invalid-vector" | "dimension-mismatch">>();
+assertTrue<Exact<EmbeddingServeResult["address"], IpcAddress | null>>();
+assertTrue<EmbeddingServeResult extends Disposable ? true : false>();
+assertTrue<Exact<HostCapabilities["pushCriticalButtons"], ((args: CriticalButtonPushArgs) => Promise<CriticalButtonPushResult | null>) | undefined>>();
+assertTrue<Exact<CriticalButtonPushArgs["warning"], string>>();
+
 // A minimal host satisfies HostServices: everything optional stays optional.
 const minimalHost: HostServices = {
   logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -168,3 +178,5 @@ void hostWithCapabilities;
 assertTrue<Exact<NonNullable<HostServices["capabilities"]>["registrationMode"], string | undefined>>();
 assertTrue<Exact<HostCapabilities["resolvePath"], ((path: string) => string) | undefined>>();
 assertTrue<Exact<HostCapabilities["memoryArchiveDir"], (() => string) | undefined>>();
+const hostWithButtons: HostServices = { ...minimalHost, capabilities: { pushCriticalButtons: async () => null } };
+void hostWithButtons;

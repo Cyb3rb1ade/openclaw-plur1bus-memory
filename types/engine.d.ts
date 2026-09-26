@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.6.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended seven times under the policy below — see the changelog at the end
+ * Contract version 1.7.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended eight times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -37,9 +37,10 @@
  *            1.4.1 — JobTrigger gains "unknown" (a crash row recovered from a corrupt, unreadable start marker; M1b-1 final review m2).
  *            1.5.0 — MemoryOps types, Engine.memory (E1 Task 2); runCommand deprecated; MemoryState.tombstones number | null (E1-R11); HostCapabilities.memoryArchiveDir? (E1 Task 8).
  *            1.6.0 — AdminOps.share/forget alias Engine.memory (deprecated); ObsidianOps with explicit paths; migrate over a store schema marker; MemoryOps.propose/proposals (D31); MemoryCard.sharedBy/sourceId; MemoryOpError.detail; "memory.proposal" event; EngineStatus.storeSchema (E2).
+ *            1.7.0 — EmbeddingService.probe(opts?) → EmbeddingProbeResult (identity, readiness, memoized); serve(address?: IpcAddress | null) → EmbeddingServeResult (real scoped IPC, in-process owner, no claim listener); HostCapabilities.pushCriticalButtons? typed (E3).
  */
 
-export type ContractVersion = "1.6.0";
+export type ContractVersion = "1.7.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -186,11 +187,28 @@ export interface HostPathOverrides {
   stateDirOverride?(): string | undefined;
 }
 
+/** 1.7.0: argument of HostCapabilities.pushCriticalButtons (engine/jobs/internal-job-bodies.js). */
+export interface CriticalButtonPushArgs {
+  agentId: AgentId;
+  /** The classify-recent classifier result (pushMessages, errors, …); host-opaque. */
+  result: unknown;
+  /** The host's own command context, passed back unchanged; host-opaque. Revisited with HostRuntime in 2.0 (E6). */
+  commandCtx: unknown;
+  /** Partial-failure note for the last card; "" when there is none. */
+  warning: string;
+}
+/** `sent` cards went out with buttons; `unsentTexts` go out as plain cron text; `reason` is host-defined. */
+export interface CriticalButtonPushResult { sent: number; unsentTexts: string[]; reason?: string }
+
 export interface HostCapabilities {
   resolvePath?(path: string): string;
   registrationMode?: string;
   /** 1.5.0: where MemoryOps forget/correct write archive-first backups; read per call. Default `<stateDir>/memory/_archive`. */
   memoryArchiveDir?(): string;
+  /** 1.7.0: deliver Critical Push cards with accept/reject buttons. `null`, `sent === 0`, or no `unsentTexts`
+   *  array → the engine replies with the plain cron text (as it does when the capability is absent or throws);
+   *  `unsentTexts: []` with `sent > 0` → NO_REPLY (every card went out with buttons). */
+  pushCriticalButtons?(args: CriticalButtonPushArgs): Promise<CriticalButtonPushResult | null>;
   [capability: string]: unknown;
 }
 
@@ -399,12 +417,51 @@ export interface RerankHit {
   score: number;
 }
 
+export type EmbeddingProbeError = "aborted" | "provider-failed" | "invalid-vector" | "dimension-mismatch";
+export interface EmbeddingProbeResult {
+  /** The provider returned a finite vector of `identity.dimensions`: the model is loaded and ready. */
+  ok: boolean;
+  error?: EmbeddingProbeError;
+  /** true: the memoized result of an earlier successful probe of this engine; no provider call was made. */
+  cached: boolean;
+  identity: EmbeddingIdentity;
+  /** Provider call time of the probe that produced this result. */
+  durationMs: number;
+  /** Clock time (host.clock) when that probe finished. */
+  checkedAt: number;
+}
+/** The values a client must put into the IPC envelope next to the token. */
+export interface EmbeddingEnvelopeIdentity { model: string; dimensions: number; fingerprintId: string }
+export interface EmbeddingServeResult extends Disposable {
+  /** The bound address; null after serve(null) (in-process only). */
+  address: IpcAddress | null;
+  /** Where the 0600 token file lives; null when not serving. The token itself is never returned. */
+  tokenPath: string | null;
+  identity: EmbeddingEnvelopeIdentity | null;
+}
+
+/**
+ * probe(): exercises the provider once (a query embed of a fixed probe text with a per-engine nonce, so a
+ * persisted embedding cache cannot answer it) and memoizes a successful result; concurrent calls share one
+ * provider call; `refresh: true` forces a new provider call (queued behind a call already in flight, never
+ * answered by it). Never rejects for a provider failure (the result says `ok: false`) and has no timeout of its
+ * own: callers should pass a `signal` (the harness warm-up does); rejects with MemoryOpError `storage`
+ * ("engine is closed") after close().
+ * serve(address): starts the engine's scoped-embedding IPC server on `address` (omitted → the platform default,
+ * `host.platform.ipcAddress(<baseDbPath>/control/embedding-ipc)`), without the loopback claim listener
+ * (ADR-001 C1). Idempotent for the address already served (same result object); `null` stops serving and resolves
+ * `{ address: null, tokenPath: null, identity: null }` (in-process only). `dispose()` stops that server if it is
+ * still the served one (fire and forget). close() stops serving. Rejects with MemoryOpError: `invalid-input`
+ * (malformed address, a kind the platform does not use, an unsafe socket directory), `conflict` (another address
+ * already served, the address in use, the host lifecycle owns the IPC, the engine is an IPC client),
+ * `storage` (closed, or the listener failed to start).
+ */
 export interface EmbeddingService {
   embed(texts: string[], o: { kind: "query" | "passage"; identity: EmbeddingIdentity; signal: AbortSignal }): Promise<Float32Array[]>;
   rerank(query: string, docs: string[], o: { topN: number; signal: AbortSignal }): Promise<RerankHit[]>;
-  probe(): Promise<{ ok: boolean; error?: string; cached: boolean }>;
+  probe(opts?: { signal?: AbortSignal; refresh?: boolean }): Promise<EmbeddingProbeResult>;
   identities(): EmbeddingIdentity[];
-  serve(address: IpcAddress): Promise<Disposable>;
+  serve(address?: IpcAddress | null): Promise<EmbeddingServeResult>;
 }
 
 /* ------------------------------------------------------------------ */

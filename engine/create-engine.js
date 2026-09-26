@@ -70,7 +70,7 @@ import { applyLegacyProviderDefaults } from "../lib/providers/legacy-provider-mi
 import { EMBEDDING_DIMENSIONS } from "../lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
-import { ReloadSafeIpcScopedEmbeddingProvider, createScopedEmbeddingIpcServer } from "../lib/providers/scoped-embedding-ipc.js";
+import { ReloadSafeIpcScopedEmbeddingProvider, createScopedEmbeddingIpcServer, resolveScopedEmbeddingIpcPaths } from "../lib/providers/scoped-embedding-ipc.js";
 import { pinnedLocalModelProfile, validatePinnedModelArtifacts } from "../lib/providers/local-model-artifacts.js";
 import { createConfiguredSecretInputResolver } from "../lib/providers/secret-input.js";
 import { createBackgroundMemoryScheduler } from "../lib/runtime-scheduler.js";
@@ -108,6 +108,7 @@ import { CONTROL_HEALTH_CACHE_TTL_MS, CONTROL_HEALTH_FAILED_RETRY_MS, CONTROL_HE
 import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
 import { aggregateSkillMinerRuns, appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, formatKnownValidityLabel, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore, textSuggestsGroupOrigin } from "./commands/command-helpers.js";
 import { createRuntimeRerankerProvider } from "./providers/runtime-reranker.js";
+import { createEmbeddingProbe, createEmbeddingServing } from "./providers/embedding-service.js";
 import { ENGINE_INTERNALS } from "./internals.js";
 import { createResourceCloser } from "./lifecycle/close-resources.js";
 import { flushMetrics } from "../lib/metrics.js";
@@ -1421,6 +1422,21 @@ export function createEngine(host, config, testOptions = {}) {
         logger: host.logger,
       })
     : null;
+  // EmbeddingService.serve() (E3 Task 4): the engine as the in-process IPC
+  // owner on an explicit address. Built here so the resource closer below can
+  // stop it; its callbacks read late-bound state (internals, closing) and
+  // only run after createEngine returned.
+  const embeddingServing = createEmbeddingServing({
+    stateRoot: baseDbPath,
+    getEmbeddings: () => internals.embeddings,
+    fingerprintId: activeEmbeddingFingerprintId,
+    defaultAddress: () => host.platform.ipcAddress(resolveScopedEmbeddingIpcPaths(baseDbPath).directory),
+    hostOwned: scopedEmbeddingServer !== null,
+    isClient: () => internals.embeddings instanceof ReloadSafeIpcScopedEmbeddingProvider,
+    isClosed: () => closing !== null,
+    isUnsafeLink: host.platform.isUnsafeLink,
+    logger: host.logger,
+  });
   if (commandRuntimeHooks) {
     for (const method of ["embed", "embedQuery", "embedPassage", "embedBatch"]) {
       if (typeof embeddings[method] !== "function") continue;
@@ -2934,6 +2950,7 @@ export function createEngine(host, config, testOptions = {}) {
     flushMetrics,
     llmResultCache,
     scopedEmbeddingServer,
+    embeddingServer: embeddingServing,
     embeddings,
     reranker,
     modelPreparationCoordinator,
@@ -3390,6 +3407,14 @@ export function createEngine(host, config, testOptions = {}) {
   let toolSpecs = null;
 
   // EmbeddingService over the engine's provider and reranker.
+  const embeddingProbe = createEmbeddingProbe({
+    getEmbeddings: () => internals.embeddings,
+    getIdentity: () => embeddingService.identities()[0],
+    logger: host.logger,
+    clock,
+  });
+  internals.embeddingProbe = embeddingProbe;
+  internals.embeddingServing = embeddingServing;
   const embeddingService = Object.freeze({
     async embed(texts, o = {}) {
       const provider = internals.embeddings;
@@ -3400,14 +3425,15 @@ export function createEngine(host, config, testOptions = {}) {
     rerank: (query, docs, o = {}) => (internals.reranker
       ? internals.reranker.rerank(query, docs, o.topN, { signal: o.signal })
       : Promise.resolve([])),
-    probe: async () => ({ ok: true, cached: false }),
+    probe: async (opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => embeddingProbe.probe(opts)); },
     identities: () => [Object.freeze({
       fingerprintId: internals.activeEmbeddingFingerprintId,
       provider: internals.normalizedEmbeddingCfg.provider,
       model: internals.normalizedEmbeddingCfg.model || internals.model,
       dimensions: internals.vectorDim,
     })],
-    serve: async () => ({ dispose() {} }),
+    // Not tracked: embeddingServing.shutdown() (run by close) waits for the serve chain.
+    serve: async (address) => { assertMemoryOpen(); return embeddingServing.serve(address); },
   });
 
   // AdminOps.obsidian (1.6.0, E2 Task 7): host-neutral vault detect/prepare/confirm,
@@ -3463,9 +3489,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.6.0).
+  // The Engine (types/engine.d.ts, contract 1.7.0).
   const engine = {
-    contract: "1.6.0",
+    contract: "1.7.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3478,7 +3504,7 @@ export function createEngine(host, config, testOptions = {}) {
         ready: true,
         degraded: null,
         agents: openedAgents.size,
-        contract: "1.6.0",
+        contract: "1.7.0",
         storeSchema: { current: storeMigrator.current(), expected: STORE_SCHEMA_VERSION },
       };
     },
