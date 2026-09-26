@@ -462,8 +462,11 @@ test("Telegram-Knöpfe unter einer Push-Karte nehmen an bzw. lehnen ab und schre
   api.registerInteractiveHandler = (registration) => interactive.push(registration);
   api.config = {
     workspaceDir,
-    bindings: [{ agentId, match: { channel: "telegram", accountId: "default", peer: { kind: "direct", id: "4242" } } }],
-    channels: { telegram: { accounts: { default: { botToken: "x" } } } },
+    // Wie live: Bindung nur ans Bot-Konto, dazu ein Platzhalter, der nicht zählt.
+    bindings: [
+      { agentId, match: { channel: "telegram", accountId: "default" } },
+      { agentId, match: { channel: "telegram", accountId: "*" } },
+    ],
   };
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const registration = interactive.find((entry) => entry.channel === "telegram" && entry.namespace === "plurc");
@@ -475,12 +478,12 @@ test("Telegram-Knöpfe unter einer Push-Karte nehmen an bzw. lehnen ab und schre
       channel: "telegram",
       accountId: "default",
       callbackId: `cb-${payload}`,
-      conversationId: "4242",
+      conversationId: "command-owner",
       senderId: "command-owner",
       isGroup: false,
       isForum: false,
       auth: { isAuthorizedSender: true },
-      callback: { data: `plurc:${payload}`, namespace: "plurc", payload, messageId: 7, chatId: "4242", messageText: "Karte\nReferenz: x" },
+      callback: { data: `plurc:${payload}`, namespace: "plurc", payload, messageId: 7, chatId: "command-owner", messageText: "Karte\nReferenz: x" },
       respond: {
         editMessage: async (params) => edits.push(params),
         editButtons: async () => {},

@@ -212,7 +212,7 @@ import {
   parseCriticalButtonPayload,
 } from "./lib/critical-buttons.js";
 import { deliverCriticalButtonPush } from "./lib/critical-button-delivery.js";
-import { deriveDeliveryFromChannelConfig } from "./lib/setup/feature-cron-plan.js";
+import { boundTelegramAccountId } from "./lib/setup/feature-cron-plan.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
   checkWikiAuth,
@@ -7725,10 +7725,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 // über die Cron-Zustellung raus.
                 const pushedCount = Array.isArray(result?.pushMessages) ? result.pushMessages.length : 0;
                 if (cronInternal && pushedCount > 0 && cpCfg.buttons !== false && criticalButtonState.ready) {
+                  const cronDelivery = typeof commandCtx?.resolveCronDelivery === "function"
+                    ? await commandCtx.resolveCronDelivery()
+                    : null;
                   const delivery = await deliverCriticalButtonPush({
                     agentId: internalAgent,
                     result,
                     config: api.config,
+                    delivery: cronDelivery
+                      ? { ...cronDelivery, accountId: cronDelivery.accountId || boundTelegramAccountId(internalAgent, api.config) }
+                      : null,
                     loadAdapter: (channel) => api.runtime?.channel?.outbound?.loadAdapter?.(channel),
                     warning: classifierPartialFailureWarning(result),
                     logger: api.logger,
@@ -10188,10 +10194,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               const conversationId = String(ctx.conversationId ?? ctx.callback?.chatId ?? "");
               if (!senderId || !conversationId) return refuse();
               // Die Karte gehört dem Agenten aus den Callback-Daten; ein Klick
-              // zählt nur über dessen eigenen Telegram-Bot und aus dem Chat,
-              // in den sein Push geht.
-              const delivery = deriveDeliveryFromChannelConfig(decision.agentId, api.config);
-              if (!delivery || delivery.accountId !== ctx.accountId || delivery.to !== conversationId) return refuse();
+              // zählt nur über dessen eigenen Telegram-Bot und im Direktchat
+              // mit dem Absender selbst.
+              if (conversationId !== senderId) return refuse();
+              if (boundTelegramAccountId(decision.agentId, api.config) !== ctx.accountId) return refuse();
               const target = `telegram:${conversationId}`;
               let outcome = "failed";
               try {

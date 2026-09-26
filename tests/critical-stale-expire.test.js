@@ -14,6 +14,7 @@ function fakeDb(pending) {
     },
     async markCriticalRejected(_agent, id) {
       calls.rejected.push(id);
+      return { ok: true, id, status: "rejected" };
     },
     async markConfirmed(_agent, id) {
       calls.confirmed.push(id);
@@ -43,6 +44,14 @@ test("reports nothing to do and keeps going past a failing card", async () => {
   };
   const result = await expireStaleCriticals(db, "main");
   assert.equal(result.expired, 1);
+  assert.equal(result.errors, 1);
+});
+
+test("counts a write that reports ok=false as an error, not as expired", async () => {
+  const db = fakeDb([{ id: "a" }]);
+  db.markCriticalRejected = async () => ({ ok: false, error: "no table" });
+  const result = await expireStaleCriticals(db, "main");
+  assert.equal(result.expired, 0);
   assert.equal(result.errors, 1);
 });
 

@@ -18,7 +18,7 @@ test("each card is its own message with exactly accept and reject", () => {
   const messages = buildCriticalButtonMessages("bernhardine", cards);
   assert.equal(messages.length, 2, "no extra all message");
   assert.match(messages[0].text, /„Eva zieht um“/);
-  assert.match(messages[0].text, /verfällt die Markierung nach 24 Stunden/);
+  assert.match(messages[0].text, /verfällt die Markierung nach etwa einem Tag/);
   assert.deepEqual(messages[0].buttons, [[
     { text: "✅ Annehmen", callback_data: "plurc:a:bernhardine:47056", style: "success" },
     { text: "❌ Ablehnen", callback_data: "plurc:r:bernhardine:47056", style: "danger" },
