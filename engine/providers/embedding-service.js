@@ -29,7 +29,7 @@ export const PROBE_TEXT_PREFIX = "plur1bus embedding probe";
  * @param {{ warn(message: string): void }} deps.logger
  * @param {() => number} [deps.clock]
  * @param {string} [deps.nonce] Per-engine nonce distinguishing probe texts from real content.
- * @returns {{ probe(opts?: { signal?: AbortSignal, refresh?: boolean }): Promise<object>, lastResult(): object | null, lastAttempt(): object | null }}
+ * @returns {{ probe(opts?: { signal?: AbortSignal, refresh?: boolean }): Promise<object>, lastResult(): object | null, lastAttempt(): object | null, pending(): boolean }}
  *   Every result is an EmbeddingProbeResult (types/engine.d.ts).
  *   - `probe()`: see types/engine.d.ts. `refresh: true` always gets a provider call that starts after the call
  *     in flight (if any) settles; refreshes queued behind the same in-flight call share that one new call.
@@ -117,6 +117,8 @@ export function createEmbeddingProbe({ getEmbeddings, getIdentity, logger, clock
     lastResult: () => memoized,
     /** Last completed probe, ok or failed (never an abort), or null. */
     lastAttempt: () => lastCompleted,
+    /** true while a provider call is running or queued (E4 model readiness). */
+    pending: () => inFlight !== null,
   };
 }
 

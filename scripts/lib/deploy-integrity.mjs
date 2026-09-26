@@ -62,6 +62,7 @@ export const DEPLOY_FILES = [
   "engine/memory-ops/proposal-store.js",
   "engine/memory-ops/proposals.js",
   "engine/providers/embedding-service.js",
+  "engine/providers/model-readiness.js",
   "engine/providers/legacy-providers.js",
   "engine/providers/runtime-reranker.js",
   "engine/recall/assemble-prompt-context.js",

@@ -109,6 +109,7 @@ import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, r
 import { aggregateSkillMinerRuns, appendConflictLog, buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, formatJsonCommandResult, formatKnownValidityLabel, rememberPendingConfirmation, resolveConfirmationIdentity, summarizeNeoStore, textSuggestsGroupOrigin } from "./commands/command-helpers.js";
 import { createRuntimeRerankerProvider } from "./providers/runtime-reranker.js";
 import { createEmbeddingProbe, createEmbeddingServing } from "./providers/embedding-service.js";
+import { createModelsService, createRerankerProbe } from "./providers/model-readiness.js";
 import { ENGINE_INTERNALS } from "./internals.js";
 import { createResourceCloser } from "./lifecycle/close-resources.js";
 import { flushMetrics } from "../lib/metrics.js";
@@ -3436,6 +3437,21 @@ export function createEngine(host, config, testOptions = {}) {
     serve: async (address) => { assertMemoryOpen(); return embeddingServing.serve(address); },
   });
 
+  // ModelsService (1.8.0, E4 Task 3): embedder and reranker readiness, and
+  // Engine.models.warm() as the warm-up entry point.
+  const getReranker = () => internals.reranker ?? null;
+  const getRerankerProvider = () => (internals.reranker ? (internals.rerankerCfg?.provider ?? null) : null);
+  const rerankerProbe = createRerankerProbe({ getReranker, logger: host.logger, clock });
+  const modelsService = createModelsService({
+    embeddingProbe,
+    rerankerProbe,
+    getIdentity: () => embeddingService.identities()[0],
+    getReranker,
+    getRerankerProvider,
+  });
+  internals.rerankerProbe = rerankerProbe;
+  internals.modelsService = modelsService;
+
   // AdminOps.obsidian (1.6.0, E2 Task 7): host-neutral vault detect/prepare/confirm,
   // explicit paths only, no host runtime. Reuses the same MemoryOps opsContext
   // (fail-closed principal/agent resolution) and the engine's existing
@@ -3613,6 +3629,10 @@ export function createEngine(host, config, testOptions = {}) {
       history: (agentId, opts = {}) => internals.jobs.history(agentId, opts),
     }),
     embedding: embeddingService,
+    models: Object.freeze({
+      status: () => modelsService.status(),
+      warm: async (opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => modelsService.warm(opts)); },
+    }),
     admin: adminOps,
     // Typed MemoryOps surface (contract 1.5.0, E1). After close() every member
     // rejects with MemoryOpError "storage" before it touches a store, so a
