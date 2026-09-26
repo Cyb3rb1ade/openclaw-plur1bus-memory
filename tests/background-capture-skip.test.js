@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { shouldSkipAutoCaptureForInternalTurn } from "../lib/runtime-scheduler.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 describe("shouldSkipAutoCaptureForInternalTurn", () => {
   it("skips cron origin", () => {
@@ -71,12 +71,21 @@ describe("shouldSkipAutoCaptureForInternalTurn", () => {
   });
 
   it("gates internal turns before the NEO worker or any durable capture path", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    const autoCaptureStart = source.indexOf("if (autoCapture) {");
-    const handlerStart = source.indexOf('api.on("agent_end"', autoCaptureStart);
-    const skipAt = source.indexOf("shouldSkipAutoCaptureForInternalTurn(event, ctx)", handlerStart);
+    // PR-03e (engine-extraction M1a) moved the agent_end auto-capture body out
+    // of index.js into engine/capture/capture-turn.js; index.js keeps only the
+    // registration. The ordering guard follows the body, and `ctx` is the
+    // handler's second parameter there, now named `hookCtx`. Task 13b moved
+    // the registration itself from index.js into adapter/openclaw/plugin.js.
+    const pluginSource = readRuntimeSources().adapter.plugin;
+    const autoCaptureStart = pluginSource.indexOf("if (autoCapture) {");
+    const registrationAt = pluginSource.indexOf("registerCaptureHook({", autoCaptureStart);
+    assert.ok(autoCaptureStart >= 0 && registrationAt >= 0, "adapter/openclaw/plugin.js still registers auto-capture");
+
+    const source = readRuntimeSources().engine.captureTurn;
+    const handlerStart = source.indexOf("return async function captureTurn(");
+    const skipAt = source.indexOf("shouldSkipAutoCaptureForInternalTurn(event, hookCtx)", handlerStart);
     const neoAt = source.indexOf("neoWorkerRuntime.runNeoAgentEnd", handlerStart);
-    assert.ok(autoCaptureStart >= 0 && handlerStart >= 0 && skipAt >= 0 && neoAt >= 0);
+    assert.ok(handlerStart >= 0 && skipAt >= 0 && neoAt >= 0);
     assert.ok(skipAt < neoAt, "the internal-turn gate must run before NEO capture");
   });
 });

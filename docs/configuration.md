@@ -32,7 +32,7 @@ Der äußere `memories`-Block, den `applyGlobalInjectBudget` tatsächlich sieht,
 ist größer — er hängt an diese bereits gedeckelte Ausgabe zusätzlich die
 Persona-/Mood-/Reaction-/Dream-Echo-/Open-Threads-/Widerspruchs- und
 Reaktivierungs-Direktiven sowie die Knowledge-Update-, Konflikt- und
-Skill-Proposal-Nudges an (im Recall-Hook in `index.js`)
+Skill-Proposal-Nudges an (`engine/recall/assemble-prompt-context.js:1085,1190`)
 — Text, den `memoriesMaxChars` nicht kennt und nicht begrenzt. Ob
 `globalInjectMaxChars` überhaupt bindet, hängt also von der Summe aus dem
 `memoriesMaxChars`-gedeckelten Anteil, diesen zusätzlichen Direktiven/Nudges

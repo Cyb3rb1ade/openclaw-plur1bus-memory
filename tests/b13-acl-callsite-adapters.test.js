@@ -17,6 +17,7 @@ import {
 } from "../lib/memory-request-context.js";
 import { isAuthorized } from "../lib/security.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -213,11 +214,17 @@ describe("B13 strict ownership ACL adapters", () => {
     }), /agentId is required/);
     assert.equal(workspaceReads, 0);
 
-    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    assert.match(indexSource, /const auth = isAuthorized\(memoryCtx, cfg, \{ \.\.\.opts, chatKind: memoryCtx\.chatKind \}\)/);
-    assert.match(indexSource, /const checkAuth = async \(memoryCtx, opts = \{\}, localeCtx = null\) =>/);
-    assert.match(indexSource, /checkAuth\(memoryCtx, \{ destructive: true, chatKind: memoryCtx\.chatKind \}, commandCtx\)/);
-    assert.match(indexSource, /const runStatusCommand = async \(commandCtx, suppliedMemoryCtx = null\)/);
+    // PR-03g (engine-extraction M1a) moved the chat-command registration —
+    // with `checkAuth`, its `isAuthorized` call site and the six command
+    // bodies — out of index.js into adapter/openclaw/register-commands.js.
+    // Every anchor below left index.js entirely (1 -> 0, and 6 -> 0 for the
+    // destructive checkAuth call sites), so the guard follows them there
+    // rather than asserting against a file that no longer holds them.
+    const commandsSource = readRuntimeSources().adapter.commands;
+    assert.match(commandsSource, /const auth = isAuthorized\(memoryCtx, cfg, \{ \.\.\.opts, chatKind: memoryCtx\.chatKind \}\)/);
+    assert.match(commandsSource, /const checkAuth = async \(memoryCtx, opts = \{\}, localeCtx = null\) =>/);
+    assert.match(commandsSource, /checkAuth\(memoryCtx, \{ destructive: true, chatKind: memoryCtx\.chatKind \}, commandCtx\)/);
+    assert.match(commandsSource, /const runStatusCommand = async \(commandCtx, suppliedMemoryCtx = null\)/);
   });
 
   it("rejects malformed snapshots and unknown/internal scopes", () => {
@@ -285,8 +292,11 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.deepEqual(sideEffects, { processed: 0, idle: 0, dispatched: 0 });
     assert.ok(enabled.some((hook) => hook.name === "before_prompt_build"));
     assert.ok(enabled.some((hook) => hook.name === "agent_end"));
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    assert.doesNotMatch(source, /api\.on\(["']message_received["']/);
+    // Task 13b: registrations live in adapter/openclaw/plugin.js and the
+    // register-* modules now, so the ban covers every runtime source.
+    for (const source of readRuntimeSources().all) {
+      assert.doesNotMatch(source, /api\.on\(["']message_received["']/);
+    }
   });
 
   it("threads the canonical context through every current ACL adapter family", () => {
@@ -304,10 +314,24 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.match(sources["telegram-commands/memory-query.js"], /filterMemoriesByAcl\(ctx, results\)/);
     assert.match(sources["recall-pipeline.js"], /checkAccess\(aclCtx, r\.entry\)/);
 
-    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    assert.match(indexSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
-    assert.match(indexSource, /const storeAccessCtx = memoryCtx/);
-    assert.match(indexSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
-    assert.doesNotMatch(indexSource, /checkAccess\(\{\s*agentId,\s*workspaceId/);
+    const { engine, adapter } = readRuntimeSources();
+    // PR-03g: the two registered command handlers that resolve the canonical
+    // context now live in the adapter (2 -> 0 in index.js); the store call
+    // site below moved with register()'s construction half into
+    // engine/create-engine.js (Task 13b) and stays pinned there.
+    const commandsSource = adapter.commands;
+    assert.match(commandsSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
+    assert.match(engine.createEngine, /const storeAccessCtx = memoryCtx/);
+    // PR-03h: the model-facing recall call site moved with the tool factory
+    // into engine/tools/memory-tools.js (index.js 1 -> 0); the bridge store
+    // call site above stays in index.js and stays pinned to it.
+    const memoryToolsSource = engine.memoryTools;
+    assert.match(memoryToolsSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
+    // Step 9 part 1 moved MemoryDB (the store-side checkAccess call sites)
+    // into engine/store/memory-db.js, so the legacy-shape ban covers every
+    // runtime source, not index.js alone.
+    for (const source of readRuntimeSources().all) {
+      assert.doesNotMatch(source, /checkAccess\(\{\s*agentId,\s*workspaceId/);
+    }
   });
 });

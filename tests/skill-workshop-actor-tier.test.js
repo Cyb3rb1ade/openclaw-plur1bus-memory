@@ -10,8 +10,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { isLegalEpistemicTransition, transitionEpistemicStatus } from "../lib/epistemic-status.js";
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 const TIER = "system:skill-workshop";
 
@@ -50,8 +50,11 @@ describe("Akteursstufe system:skill-workshop", () => {
   });
 
   it("der Lebenszyklus-Pfad übergibt genau diese Stufe", () => {
-    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    assert.match(source, /actor: "openclaw-skill-workshop",[\s\S]{0,400}?actorTier: "system:skill-workshop"/u);
-    assert.doesNotMatch(source, /actorTier: "system"(?!:)/u);
+    // Task 13b: the skill_proposal_changed listener moved from index.js into
+    // adapter/openclaw/register-commands.js (registerSkillProposalListener);
+    // the legacy-tier ban covers every runtime source.
+    const { adapter, all } = readRuntimeSources();
+    assert.match(adapter.commands, /actor: "openclaw-skill-workshop",[\s\S]{0,400}?actorTier: "system:skill-workshop"/u);
+    for (const source of all) assert.doesNotMatch(source, /actorTier: "system"(?!:)/u);
   });
 });

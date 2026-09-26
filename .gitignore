@@ -22,6 +22,7 @@ docs/**
 !docs/configuration.md
 !docs/compatibility-openclaw-2026.8.1-beta.3.md
 !docs/compatibility-openclaw.md
+!docs/engine-api.md
 !docs/recall-architecture.md
 !docs/migration-v6.md
 !docs/release-checklist.md
@@ -60,6 +61,9 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/run-feature-cron.mjs
 !scripts/migrate-neo-vectors-sidecar.mjs
 !scripts/build-neo-candidate-index.mjs
+!scripts/typecheck.mjs
+!scripts/lint-no-api-outside-adapter.mjs
+!scripts/lint-engine-imports.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
 !scripts/lib/find-deploy-dir.mjs

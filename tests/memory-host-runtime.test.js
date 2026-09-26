@@ -145,24 +145,25 @@ test("session hits never pass the authorization step", async () => {
 });
 
 test("a host-originated search stays on the agent's private partition", async () => {
-  // The runtime's recall closure in index.js builds its context from the
-  // agent id alone. Pin both halves of that: the context builder yields no
-  // workspace identity and no user principal for such input, and index.js
-  // hands exactly that context to withAccessReadDbs, which then leases no
-  // shared pool.
+  // The runtime's recall closure (adapter/openclaw/register-tools.js
+  // registerMemoryCapability since Task 13b; index.js before) builds its
+  // context from the agent id alone. Pin both halves of that: the context
+  // builder yields no workspace identity and no user principal for such
+  // input, and the registration hands exactly that context to
+  // withAccessReadDbs, which then leases no shared pool.
   const { resolveMemoryRequestContext } = await import("../lib/memory-request-context.js");
   const context = resolveMemoryRequestContext({ agentId: "main" });
   assert.equal(context.agentId, "main");
   assert.ok(!context.workspaceIdentity, "no workspace identity from an agent id alone");
   assert.ok(!context.userPrincipal, "no user principal from an agent id alone");
 
-  const { readFileSync } = await import("node:fs");
-  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+  const { readRuntimeSources } = await import("./helpers/runtime-sources.js");
+  const source = readRuntimeSources().adapter.tools;
   const start = source.indexOf("const memoryHostRuntime = createMemoryHostRuntime({");
-  assert.ok(start > 0, "runtime registration present in index.js");
+  assert.ok(start > 0, "runtime registration present in adapter/openclaw/register-tools.js");
   const block = source.slice(start, source.indexOf("api.registerMemoryCapability({", start));
   assert.match(block, /resolveMemoryRequestContext\(\{ agentId: forAgentId \}\)/, "context comes from the agent id only");
-  assert.match(block, /withAccessReadDbs\(pool, sharedMemoryPool, forAgentId, \{ \.\.\.memoryCtx, logger: api\.logger \}/, "that context is what scopes the read pools");
+  assert.match(block, /withAccessReadDbs\(pool, sharedMemoryPool, forAgentId, \{ \.\.\.memoryCtx, logger: host\.logger \}/, "that context is what scopes the read pools");
   assert.doesNotMatch(block, /workspaceIdentity|userPrincipal/, "nothing widens the scope by hand");
   assert.match(source, /runtime: memoryHostRuntime,/, "the runtime is what gets registered");
 });

@@ -16,6 +16,8 @@ import {
   registerObsidianVaultRuntime,
 } from "../lib/setup/obsidian-vault-plugin-runtime.js";
 import { DEFAULT_WS_SUFFIXES, detectObsidianVaults, listWorkspaceDirectories } from "../lib/setup/feature-profiles.js";
+import { bindHostPaths, resetHostPaths } from "../lib/host-paths.js";
+import { envHostPaths } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 function tempDir(t) {
@@ -195,6 +197,7 @@ describe("vault detection across agent workspaces", () => {
     mkdirSync(join(base, "workspaces-not-an-agent"), { recursive: true });
     const previous = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = base;
+    bindHostPaths(envHostPaths());
     try {
       assert.deepEqual(listWorkspaceDirectories(base), ["workspace", "workspace-bernhardine", "workspace-heisenberg"]);
       const detected = detectObsidianVaults({});
@@ -204,6 +207,7 @@ describe("vault detection across agent workspaces", () => {
       const explicit = detectObsidianVaults({ workspaces: [{ path: join(base, "workspace-bernhardine") }] });
       assert.deepEqual(explicit.vaultPaths, [join(base, "workspace-bernhardine")]);
     } finally {
+      resetHostPaths();
       if (previous === undefined) delete process.env.OPENCLAW_HOME; else process.env.OPENCLAW_HOME = previous;
     }
     assert.deepEqual(listWorkspaceDirectories(join(base, "missing")), DEFAULT_WS_SUFFIXES, "an unreadable home falls back to the default suffix");

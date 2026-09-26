@@ -32,13 +32,12 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const indexPath = join(__dirname, "..", "index.js");
-const indexSrc = readFileSync(indexPath, "utf8");
+import { readRuntimeSources } from "./helpers/runtime-sources.js";
+
+// Task 13b: the construction half of register() (this block included) is
+// engine/create-engine.js now.
+const indexSrc = readRuntimeSources().engine.createEngine;
 
 describe("emotion-refine encoding maxTokens — Auflösung des Konfigurationswerts", () => {
   // Extrahiert exakt den Block, der EMOTION_REFINE_ENCODING_MAX_TOKENS
@@ -47,7 +46,7 @@ describe("emotion-refine encoding maxTokens — Auflösung des Konfigurationswer
     /const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT[\s\S]*?: EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT;/,
   );
 
-  it("die Konstante EMOTION_REFINE_ENCODING_MAX_TOKENS ist in index.js auffindbar", () => {
+  it("die Konstante EMOTION_REFINE_ENCODING_MAX_TOKENS ist in engine/create-engine.js auffindbar", () => {
     assert.ok(match, "EMOTION_REFINE_ENCODING_MAX_TOKENS-Block nicht gefunden — Extraktion/Regex prüfen");
   });
 

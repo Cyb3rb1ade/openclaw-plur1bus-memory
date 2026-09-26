@@ -5,6 +5,336 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Hinzugefügt
+
+- **Eingefrorener Engine-Vertrag** in `types/engine.d.ts` (Contract 1.2.0,
+  eingefroren bei 1.0.0, seitdem zweimal geändert: 1.1.0 fügt
+  `SecurePathResult.reason: "acl-tool-unavailable"` hinzu, 1.2.0 macht
+  `HostServices.workspaceDir` asynchron) plus `npm run typecheck`. Reicht
+  `Host`/`HostServices`, `Engine`, `Principal`, `AgentContext`, `TurnOrigin`,
+  `RecallQuery`/`RecallResult`, `CaptureHandle` und `JobRun` in einer Form ein,
+  gegen die beide Adapter geschrieben werden.
+- **`lib/platform.js`** mit `securePath`, `ipcAddress`, `isUnsafeLink` und
+  `canonicalIdentityPath`.
+- **`lib/host-services.js`** — `createHostServices(api)` und `createStubHost()`.
+- **Golden-Prefix-Korpus** (`tests/fixtures/golden-prefix/`): sieben
+  synthetische Szenarien, deren `prependContext` byteweise festgehalten ist.
+- **`bench/recall-budget-probe.mjs`** und
+  `bench/results/2026-09-22-recall-budget-probe.md` — p50/p95/p99 der
+  Recall-Latenz gegen den synthetischen Golden-Prefix-Korpus mit
+  Stub-Embedder; bei N=20 Stichproben entsprechen p95 und p99 dem
+  Stichproben-Maximum (nearest-rank, floor).
+- **`tools/free-identifiers.mjs`** — Scope-Analyse über die TypeScript-Compiler-
+  API (keine neue Abhängigkeit), benutzt um die Extraktionsgrenzen zu ziehen.
+- **`scripts/lint-engine-imports.mjs`, `scripts/lint-no-api-outside-adapter.mjs`,
+  `scripts/typecheck.mjs`** — alle drei in `npm run lint` verdrahtet.
+- **`tests/helpers/runtime-sources.js`** (`readRuntimeSources()`).
+- **`docs/engine-api.md`** und die Spalte *Harness behaviour* in
+  `docs/compatibility-openclaw.md`.
+- Optionaler, testinterner Kontext-Schlüssel `recallTimingSink` (additiv, in
+  Produktion ein No-op) — inzwischen wieder entfernt, siehe M1b-1 unten
+  (`RecallResult.timing`/`recall.completed`).
+
+### Geändert
+
+- `index.js` ist auf die Konstruktion und die Registrierungsaufrufe reduziert;
+  Recall, Capture, Kommandos und Tools liegen unter `engine/`, jede
+  `api.on`/`api.register*`-Stelle unter `adapter/openclaw/`. **Kein
+  Verhaltensunterschied** — die volle Suite und der Golden-Prefix-Korpus sind
+  die Gates.
+- `index.js` liest den Logger jetzt über `HostServices` (`host.logger`) statt
+  direkt über `api.logger`; die fünf host-gekoppelten Funktionen vor
+  `register()` (`inspectCronNativeCapabilities`,
+  `reconcileUnsafeDirectCronsWithService`, `runDeferredFeatureCronBootstrap`,
+  `makeReactionsCapabilityChecker`, `resolveNeoHooksConfig`) bleiben davon
+  ausgenommen, da sie ihren eigenen `api`-Parameter tragen statt `host` aus
+  einem Closure zu lesen.
+
+### Behoben
+
+- `process.env.HOME` wird nicht mehr als Home-Verzeichnis benutzt
+  (`lib/providers/openclaw-memory-embedding-adapters.js`); unter Windows ist
+  die Variable nicht gesetzt, der Modell-Cache landete im Arbeitsverzeichnis.
+- Alle `chmod`-Stellen laufen über `securePath`, das unter Windows eine
+  benutzergebundene ACL setzt statt nur das Read-only-Bit; wenn das ACL-Tool
+  fehlt, wird das jetzt abgefangen statt die Operation scheitern zu lassen
+  (ein anderer Fehler des ACL-Tools wird weiterhin nicht abgefangen).
+- `applyGlobalInjectBudget` (`lib/inject-budget.js`) kürzte den droppable
+  `memories`-Block an einer beliebigen Zeichenposition, was ein halb offenes
+  `<memory-record>`-Element (fehlerhaftes XML) erzeugen und den inneren
+  Trunkierungs-Marker verschlucken konnte. Der Block wird jetzt am Ende des
+  letzten vollständigen `<memory-record>`-Elements gekürzt und bekommt
+  denselben `<!-- memory context truncated -->`-Marker wie `truncateMemoryContext`;
+  jedes an dieser Stelle noch offene Element wird korrekt geschlossen —
+  seit Fix-Runde 2 über ein echtes Scannen des Tag-Stroms (`openTagsAt`/
+  `closeOpenElements`, `lib/inject-budget.js`) statt einer festen Liste
+  bekannter Wrapper-Namen, sodass auch ein bislang nicht aufgeführter
+  Wrapper wie `<memory-reactivation>` (dem am Ende angehängten
+  Reaktivierungs-Block, `lib/conversation-reactivation-recall.js`) korrekt
+  geschlossen wird; passt kein einziger Record mehr in das verbleibende
+  Budget, wird der ganze Block verworfen statt mittendrin abgeschnitten. Ein
+  droppable Block ganz ohne `<memory-record>`-Elemente (z. B. ein reiner
+  Start-Hinweis) wird ebenfalls vollständig verworfen statt an beliebiger
+  Zeichenposition abgeschnitten (Fix-Runde 1). `truncateMemoryContext`'s
+  eigener Fallback für den Fall, dass kein einziger Record mehr ins Budget
+  passt, schneidet seit Fix-Runde 2 ebenfalls vor dem ersten `<memory-record>`
+  statt mittendrin und schließt offene Wrapper über denselben Helper
+  (Fix-Runde 2).
+- `recall.globalInjectMaxChars` (Default 17 000) konnte nie greifen, weil der
+  `<relevant-memories>`-Block bereits vorher von `truncateMemoryContext` auf
+  12 000 Zeichen gedeckelt wurde und nichts diesen inneren Wert überschrieb.
+  Der innere Cap ist jetzt über `recall.memoriesMaxChars` (Default weiterhin
+  `12000`, additiv, verhaltensneutral) konfigurierbar; siehe
+  `docs/configuration.md` für das Zusammenspiel beider Werte.
+- Das Golden-Prefix-Szenario `recall-over-budget` war falsch benannt: sein
+  Kommentar versprach den 17 000-Zeichen-Cap, tatsächlich pinnt es einen
+  gewöhnlichen Prefix mit zwei Records (~1 100 Zeichen) — der 12 KB `FILLER`
+  jedes Records erreicht den Prompt nie, weil nur die auf 400 Zeichen
+  gedeckelte Summary angezeigt wird. Umbenannt zu
+  `recall-large-text-records` (`git mv`, Oracle-Bytes unverändert), Kommentar
+  korrigiert; alle Referenzen aktualisiert.
+- `truncateMemoryContext` (`lib/relevant-memory-context.js`, der innere Cap
+  hinter `recall.memoriesMaxChars`) schnitt ebenfalls an einer beliebigen
+  Zeichenposition (`output.slice(0, limit) + marker`), mit demselben Risiko
+  eines halb offenen `<memory-record>`-Elements oder eines nie geschlossenen
+  `<relevant-memories>`-Wrappers — und das am produktiven Pfad, der bei den
+  Standardeinstellungen tatsächlich greift. Nutzt jetzt denselben
+  Record-Grenzen-Helfer wie `applyGlobalInjectBudget`
+  (`trimAtRecordBoundary`, `lib/inject-budget.js`) und fällt nur noch auf den
+  reinen Zeichenschnitt zurück, wenn kein einziger Record mehr passt
+  (Fix-Runde 1, betrifft nur das Golden-Prefix-Szenario `recall-truncated`).
+
+### M1b-1 — die Engine-API (`createEngine`)
+
+Contract-Version **1.4.1** (von 1.0.0 über 1.1.0/1.2.0/1.3.0, siehe oben, auf
+1.4.0 gehoben — der komplette `Engine`-Umfang von `createEngine` —, dann 1.4.1:
+`JobTrigger` kennt `"unknown"` für die Crash-Zeile eines unlesbaren
+Start-Markers). Details in `docs/engine-api.md`.
+
+#### Hinzugefügt
+
+- **`engine/create-engine.js`** — `createEngine(host, config, testOptions?)`
+  baut den vollen 1.4.1-`Engine`-Umfang aus einem reinen `HostServices`-Objekt
+  ohne OpenClaw-`api` im Aufrufgraphen (`createEngine(createStubHost(),
+  config)` ist genau das, was `tests/engine-contract.test.js` prüft).
+  `index.js` ist auf 55 Zeilen geschrumpft (Konstruktion, ein
+  `plugin.register()`-Aufruf, `/wiki`, `export default`).
+- **`Principal`/`AgentContext` als explizite Eingaben** (`engine/identity/
+  principal.js`) statt implizit aus dem OpenClaw-Hook gelesen; ein
+  Kanal-Register (`Engine.channels`) für die offene `ChannelRef`-Vokabular.
+- **JobRegistry mit 18 engine-eigenen Jobs** (`engine/jobs/job-registry.js`,
+  `job-specs.js`, `internal-job-bodies.js`) — `Engine.jobs.run()`/`.history()`/
+  `.list()` ersetzen die bisherigen Cron-/internen Command-Aufrufer.
+- **Anhängendes Run-Ledger** (`engine/jobs/job-ledger.js`) unter
+  `<baseDbPath>/_jobs/<agentId>/ledger.jsonl` (bewusste Abweichung von der
+  ursprünglichen Spezifikation, die `stateDir` nannte — der Ledger-Wurzelpfad
+  bleibt im selben Verzeichnisbaum, den Tests bereits pro Agent über
+  `baseDbPath` isolieren) plus Started-Markern zur Absturzerkennung.
+- **`checkpoint(agentId, reason)`** (`engine/checkpoint/checkpoint-store.js`,
+  `CheckpointReason` inkl. `"session-end"`).
+- **`RecallResult.timing`** (`{ phases, totalMs, namespacePhases }`) auf jedem
+  geplanten Recall, plus das Host-Event `recall.completed` (`{ agentId,
+  timing, degraded }`), genau einmal pro Recall-Versuch, unabhängig davon, ob
+  `Engine.recall` oder der adapter-eigene `before_prompt_build`-Hook ihn
+  ausgelöst hat — beide rufen denselben Assembler. Ersetzt den testinternen
+  `recallTimingSink`/`api.__recallTimingSinkForTests`-Seam vollständig; die
+  feinkörnigen Pro-Namensraum-Phasen werden separat gesammelt
+  (`onNamespacePhases`) und nicht mehr in den äußeren Timer gefaltet, den die
+  Timeout-Log-Zeile des Schedulers liest.
+- **L3-Events und `Deferral`s** (additiv): `recall.block-clipped`,
+  `recall.block-dropped`, `recall.degraded`, `job.run`.
+- **`lib/host-paths.js`/`lib/host-sdk-loader.js` als injizierte Host-Pfade**
+  (`HostServices.configPath()`, `.routing?`, `.pathOverrides?`, Contract
+  1.3.0) statt direkter `OPENCLAW_HOME`/`OPENCLAW_CONFIG_PATH`-Lesungen im
+  Engine-Graphen.
+- **`scripts/lint-engine-imports.mjs`, Regeln 6–7**: die
+  Forbidden-Import-Regel gilt jetzt transitiv über den gesamten von
+  `engine/**` erreichbaren `lib/**`-Graphen, und kein
+  `process.env.OPENCLAW_*`-Lesen bzw. kein `"openclaw/…"`-Ladepfad ist auf
+  diesem Graphen erlaubt.
+- **`bench/results/2026-09-24-recall-budget-probe.md`** — Re-Lauf des B6-
+  Probes gegen `RecallResult.timing`/`recall.completed` statt
+  `recallTimingSink`, mit Vergleichstabelle gegen den 2026-09-22-Report.
+
+#### Geändert (Verhaltensänderungen, siehe M1b-1-Vertrag §7)
+
+- **Job-Semantik (PR-08):** ein `incomplete`-Job-Lauf wird bis zu zweimal neu
+  versucht (`MAX_ATTEMPTS = 3` insgesamt), bevor er als `abandoned` markiert
+  wird (mit Diary-Zeile, sofern Diary aktiv); `already_processed` gilt, sobald
+  irgendeine Ledger-Zeile den Schlüssel als erledigt führt (`keys`, gesetzt
+  über `markCompletedKey`) — unabhängig vom Ausgang dieser Zeile, also auch
+  nach einem `failed`-Lauf, der den Schlüssel schon markiert hatte —, und ein
+  nach den Wiederholungen aufgegebener Schlüssel zählt ebenfalls als
+  erledigt (Skip mit Grund `abandoned`); eine `incomplete`-Zeile allein macht
+  einen Schlüssel nie erledigt. `rem`/`deep`-Phasen teilen sich einen
+  Circuit-Breaker von 3 LLM-Sitzungen pro Agent und UTC-Kalendertag
+  (Wiederholungsversuche zählen mit, laufende Sitzungen ebenfalls — eine
+  Reservierung im Speicher vor dem Job-Körper); ein Singleton- oder
+  `rem`/`deep`-Job, der für denselben Agenten schon läuft, wird nicht doppelt
+  gestartet (`skipped`/`already_running`); jeder Job-Lauf erzeugt eine
+  Ledger-Zeile, auch ein Skip.
+- **Recall-Abbruch (spec §3.2):** ein abgebrochener oder per Timeout
+  beendeter Recall liefert jetzt die Blöcke zurück, die zum Abbruchzeitpunkt
+  bereits fertig waren, zusammen mit `degraded.reason: "aborted"`/`"timeout"`,
+  statt gar nichts — auch dann, wenn der Scheduler die Antwort aus seinem
+  Recall-Cache liefert. Der Cache ist auf dem `Engine.recall`-Pfad nach dem
+  ganzen Principal geschlüsselt (nie über Principals hinweg) und gibt immer
+  Kopien heraus; ein abgebrochener Recall markiert keine fälligen Reminder
+  als präsentiert und schreibt keinen späten Wert mehr in den Cache. Die
+  sieben Golden-Szenarien laufen nie in einen Timeout, das Oracle bleibt also
+  unverändert.
+- **Recall-Fehler sind sichtbar:** Druck-Abwurf, volle Queue, Scheduler-Fehler
+  und ein Fehler im Store-Abschnitt kommen als `degraded` (`"pressure"`,
+  `"queue-full"`, `"error"`) statt als `degraded: null` zurück; der
+  OpenClaw-Join und das Golden-Oracle sind davon unberührt.
+- **Rerank-Budget:** der Reranker bekommt ein einziges Signal — das
+  Aufrufer-Signal plus den einen `rerankerTimeoutMs`-Timer — und wird gegen
+  genau dieses Signal gerannt (`raceAbort(reranker.rerank(...), rerankAbort,
+  …)`): ein Timeout-Owner statt eines zweiten, unabhängigen Timers. Embedder
+  und LanceDB-Abfrage haben keinen eigenen Timer; sie sind über dasselbe
+  Aufrufer-Signal per `raceAbort` begrenzt.
+- **`Engine`-Oberfläche (Final Review):** `Engine.capture` fragt den
+  Host-Routing-Klassifikator nicht erneut, wenn der Host den Turn mit
+  `incognito: false` selbst klassifiziert hat (ein Host ohne Routing
+  speicherte sonst nichts), und meldet in `stored` die tatsächlich
+  gespeicherte Anzahl; Light-Dream und Dream-Echo nutzen den Principal des
+  Aufrufers statt eines benutzerlosen Hook-Kontexts; `Engine.jobs.run` reicht
+  nur `trigger`, `signal` und `dryRun` weiter (`dryRun` → `skipped`/
+  `dry_run_unsupported`, das Signal wird nur vor dem Start beachtet);
+  `Engine.close()` lehnt nie ab, danach antworten `recall`/`capture` mit
+  `"engine-closed"` und `jobs.run` lehnt mit `Error("engine closed")` ab.
+- `run-state.json`'s historische REM-Abschlüsse werden einmalig in das
+  Ledger migriert (`engine/jobs/run-state-migration.js`); danach wird die
+  alte Datei nicht mehr gelesen.
+
+### E1 — Contract 1.5.0 (typisierte MemoryOps)
+
+Contract-Version **1.5.0**. Details in `docs/engine-api.md`, Abschnitt
+„Typed MemoryOps“.
+
+#### Hinzugefügt
+
+- **`Engine.memory`** mit sechs Mitgliedern (`engine/memory-ops/`): `list`
+  (genau eines von `topic` oder `since`/`until`, `limit` Standard 20, höchstens
+  100), `show`, `forget`, `correct`, `share` (Ziel `"workspace"` oder
+  `"user"`, `{ allowSensitive }` nach einer Bestätigung) und `state`. Jedes
+  Mitglied nimmt `Principal` und `AgentContext` explizit und löst sie wie
+  `recall`/`capture` auf; `forget`, `correct` und `share` verlangen
+  `origin: "user"` und `background: false`, `share` zusätzlich einen
+  `"proved"`-Principal mit der Ziel-Identität.
+- **Fehler-Codes:** jedes Mitglied lehnt mit einem `MemoryOpError` ab
+  (`code` stabil, `message` englisch und log-sicher, nie Kartentext):
+  `not-found` (auch „existiert, aber nicht sichtbar“, „nicht mehr live“ und
+  „vergessen“ — bewusst nicht unterscheidbar), `denied`, `invalid-input`,
+  `approval-required`, `conflict`, `storage`.
+- **`HostCapabilities.memoryArchiveDir()`** (optional, pro Aufruf gelesen): ein
+  Host kann das Archivverzeichnis der MemoryOps selbst nennen.
+
+#### Geändert
+
+- **`runCommand` ist deprecated** (entfällt mit Contract 2.0); ein Host liest
+  und ändert Erinnerungen über `Engine.memory`.
+- **Archive liegen unter `<stateDir>/memory/_archive`**, sofern der Host
+  nichts anderes nennt. Für OpenClaw ändert sich nichts: der Adapter reicht
+  über `memoryArchiveDir` das bisherige Verzeichnis durch
+  (`~/.openclaw/memory/_archive` bzw. `$OPENCLAW_HOME/.openclaw/memory/_archive`).
+- **`correct` liefert die ID der neuen, lebenden Version** (E1-R8), nicht die
+  übergebene, jetzt abgelöste ID.
+- **`correct` schreibt über `safeUpdate`** (`lib/safe-update.js`) statt über
+  `db-adapter.updateCard`: frische Zusammenfassung aus dem neuen Text,
+  Evidenzzeile mit dem gespeicherten Vorher-Text, Neo-Reconsolidation-Event,
+  Retrieval-Verstärkung — genau der Pfad, den `/correct` schon immer nahm.
+  `updateSource` ist dabei `"user_correction"` statt `"telegram:/correct"`
+  (beide gelten in `lib/memory-text-contradiction.js` als autoritativ).
+- **`computeCutoff` akzeptiert neben den benannten Bereichen `{ from, to }`**
+  (Epoch-ms); `list` mit `since`/`until` vor mehr als 30 Tagen wird dadurch
+  nicht mehr stillschweigend abgeschnitten.
+- **`MemoryState.tombstones` ist `number | null`**: `null` heißt „Registry
+  unlesbar“, nie „keine Tombstones“.
+- **`/memory` mit Zeitangabe** (heute, gestern, ein Monat …) listet jetzt die
+  neuesten Erinnerungen zuerst; vorher war die Reihenfolge bei vielen
+  Treffern zufällig.
+- **`/share` auf eine geteilte Kopie** antwortet weiter mit „nicht gefunden“;
+  `Engine.memory` selbst meldet dafür `denied` (geteilte Kopien lassen sich
+  über diesen Aufruf noch nicht ändern, Folgearbeit in E2).
+- **OpenClaw-Adapter:** `/forget`, `/correct` und `/share` führen ihre
+  eigentliche Änderung über `Engine.memory` aus; Parsing, Normalisierung,
+  Kandidatenauswahl, Bestätigungs-Nonce, Sprache, Darstellung und `checkAuth`
+  bleiben im Adapter. Ein über den `/plur1bus`-Router (auch
+  `Engine.runCommand`) erreichter Befehl behält den `AgentContext` des
+  Aufrufers; ein Subagent kann damit nichts vergessen oder korrigieren.
+  `/memory` bleibt bewusst bei `queryMemoryAcrossAccessPools` (`--explain`
+  und die Filtersyntax bildet `MemoryListQuery` nicht ab).
+- **Bewusste Antwortänderungen von `/forget`, `/correct` und `/share`:**
+  (1) beim Bestätigen antworten „nicht gefunden“ und „per ACL verweigert“
+  beide mit `*_not_found` (nicht mehr unterscheidbar); (2) die Variable in
+  `*_failed` ist jetzt eine allgemeine englische Meldung statt des
+  lokalisierten Einzelfehlers; (3) abgelöste, archivierte, abgelaufene und
+  invalidierte Ziele werden mit „nicht gefunden“ abgelehnt. Eine Ablehnung
+  `denied`, die erst nach bestandenem `checkAuth` aus der Engine kommt
+  (z. B. widersprüchliche Workspace-Identität nach einem Config-Reload),
+  antwortet mit `*_failed` statt mit dem Whitelist-Hinweis und wird mit
+  Grund geloggt.
+- **Audit-Einträge von `/forget` und `/correct` (OpenClaw-Parität):** der
+  Akteur ist jetzt `userPrincipal` oder, ohne ihn, `principal:<agentId>`
+  (bisher bei `/forget` `userPrincipal`, `userId` oder `"telegram:/forget"`;
+  bei `/correct` leer). Der Grund lautet `"MemoryOps.forget"` bzw.
+  `"MemoryOps.correct"` (bisher `"user /forget command"` bzw. keiner).
+- **Neo-Partition von `/correct` (OpenClaw-Parität):** der Neo-Store für das
+  Reconsolidation-Event und die Kanten-Umschreibung wird jetzt aus
+  `{ agentId, workspaceDir }` abgeleitet statt aus dem vollen
+  Befehlskontext; die Session→Workspace-Zuordnung von
+  `workspaceKeyFromContext` wird dabei nicht mehr gelesen. Ist eine Session
+  an einen anderen als den Standard-Neo-Workspace gebunden, können Event und
+  Kanten-Umschreibung in einer anderen Partition landen als bisher. Die
+  Session-Fakten wieder durchzureichen ist ein E2-Folgepunkt.
+- **`show` liest alle erreichbaren Pools:** wie `list` den privaten Pool des
+  Agenten, den Workspace- und den User-Pool (gleiche ACL, gleicher
+  Liveness-Test); jede ID, die `list` ausgibt, findet `show` auch.
+- **`forget`, `correct` und `share` ändern nur eigene agent-private Karten.**
+  Für eine Karte, die nur in einem geteilten Pool (Workspace oder User)
+  liegt und die der Aufrufer sehen kann, antworten sie jetzt mit `denied`
+  („shared copies cannot be changed through this call yet“) statt mit
+  `not-found`; eine Karte, die der Aufrufer gar nicht sehen kann, bleibt
+  `not-found`. Geteilte Kopien zu ändern ist ein E2-Folgepunkt (OpenClaws
+  `/forget` hat heute dieselbe Grenze).
+- **`list` im Zeitmodus liefert die neuesten Karten:** jeder Pool liefert
+  seine neuesten `limit + 1` Zeilen, die Zusammenführung sortiert global
+  nach `createdAt` absteigend, und `truncated` ist genau dann `true`, wenn
+  mehr Karten passen. Bisher nahm jede Quelle bei mehr als 100 Treffern die
+  ältesten 100 in Speicherreihenfolge, und `truncated` blieb `false`. `list`
+  lehnt außerdem ein leeres oder nur aus Leerzeichen bestehendes `topic`,
+  `until` zusammen mit `topic` und `until` vor `since` mit `invalid-input` ab.
+- **`Engine.memory` nach `close()`:** jedes Mitglied lehnt mit
+  `MemoryOpError` `storage` („engine is closed“) ab, bevor es einen Store
+  berührt; ein später Aufruf öffnet LanceDB nicht wieder und schreibt weder
+  Archiv noch Tombstone.
+
+#### Behoben
+
+- **`db-adapter` merkte sich eine fehlende Tabelle für immer:** fehlte das
+  Agenten-Verzeichnis oder die Tabelle noch (oder schlug das Öffnen fehl),
+  cachte `resolveRawTable` `null` ohne es je zu verwerfen. Ein einziges
+  `show`/`forget` vor dem ersten Capture eines Agenten ließ `getCard` danach
+  bis zum Neustart für alle seine Karten `not-found` antworten. Ein
+  Fehlschlag gilt jetzt nur noch für den laufenden Aufruf.
+
+- **`db-adapter` sah Schreibvorgänge anderer LanceDB-Handles nicht:** die
+  gecachte Tabelle behielt die Version beim Öffnen, sodass eine über den
+  Agenten-Pool geschriebene Zeile (die neue Version eines `/correct`, ein
+  Statuswechsel) für `getCard`/`resolveCandidates` bis zum Neustart
+  unsichtbar blieb. `lancedb.connect` läuft jetzt wie in `MemoryDB` mit
+  `readConsistencyInterval: 0`.
+- **Capture auf frischen Installationen:** eine von `MemoryDB` angelegte
+  Tabelle hatte keine Spalte `chunkGroupId` (weder in der Schema-Zeile noch
+  in `MemoryDB`s eigener Migrationsliste). Ergänzte `db-adapter` sie danach
+  über ein zweites Handle, lehnte LanceDB jeden weiteren Append dieser
+  `MemoryDB`-Instanz ab („missing=[chunkGroupId]“, der Spalten-Cache filterte
+  das Feld heraus) — Capture und Korrekturen standen bis zum Neustart.
+  `chunkGroupId` gehört jetzt zur Schema-Zeile und zur Migrationsliste.
+
 ## [7.16.9] — 2026-09-25
 
 ### Behoben
