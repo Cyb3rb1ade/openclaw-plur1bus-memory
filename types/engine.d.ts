@@ -205,8 +205,9 @@ export interface HostCapabilities {
   registrationMode?: string;
   /** 1.5.0: where MemoryOps forget/correct write archive-first backups; read per call. Default `<stateDir>/memory/_archive`. */
   memoryArchiveDir?(): string;
-  /** 1.7.0: deliver Critical Push cards with accept/reject buttons. `null` = not ready; the engine then replies
-   *  with the plain cron text, as it does when the capability is absent, throws, or returns no `unsentTexts`. */
+  /** 1.7.0: deliver Critical Push cards with accept/reject buttons. `null`, `sent === 0`, or no `unsentTexts`
+   *  array → the engine replies with the plain cron text (as it does when the capability is absent or throws);
+   *  `unsentTexts: []` with `sent > 0` → NO_REPLY (every card went out with buttons). */
   pushCriticalButtons?(args: CriticalButtonPushArgs): Promise<CriticalButtonPushResult | null>;
   [capability: string]: unknown;
 }
@@ -442,8 +443,10 @@ export interface EmbeddingServeResult extends Disposable {
 /**
  * probe(): exercises the provider once (a query embed of a fixed probe text with a per-engine nonce, so a
  * persisted embedding cache cannot answer it) and memoizes a successful result; concurrent calls share one
- * provider call; `refresh: true` forces a new provider call. Never rejects for a provider failure (the result
- * says `ok: false`); rejects with MemoryOpError `storage` ("engine is closed") after close().
+ * provider call; `refresh: true` forces a new provider call (queued behind a call already in flight, never
+ * answered by it). Never rejects for a provider failure (the result says `ok: false`) and has no timeout of its
+ * own: callers should pass a `signal` (the harness warm-up does); rejects with MemoryOpError `storage`
+ * ("engine is closed") after close().
  * serve(address): starts the engine's scoped-embedding IPC server on `address` (omitted → the platform default,
  * `host.platform.ipcAddress(<baseDbPath>/control/embedding-ipc)`), without the loopback claim listener
  * (ADR-001 C1). Idempotent for the address already served (same result object); `null` stops serving and resolves

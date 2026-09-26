@@ -470,18 +470,39 @@ Contract-Version **1.7.0**. Details in `docs/engine-api.md`, Abschnitt
   `stateRoot`, die **verschiedene** Adressen bedienen, werden nicht
   verhindert — der zweite überschreibt `owner.token` der ersten Instanz;
   dieselbe Adresse und In-Process-Duplikate werden dagegen erkannt (Letzteres
-  meldet `conflict` „embedding IPC address is in use“).
+  meldet `conflict` „embedding IPC address is in use“), ebenso ein laufender
+  OpenClaw-Owner (mit Claim) desselben `stateRoot` in einem anderen Prozess:
+  vor dem Listen prüft der Server ohne Claim per Verbindungsversuch die
+  Claim-Adresse und `owner.sock` und verweigert, solange einer antwortet.
+  Jeder Server löscht `owner.token` beim Beenden nur noch, solange die Datei
+  sein eigenes Token enthält.
+- **Sicherheitshinweis zu `serve()`:** Das Token authentifiziert nur Clients
+  gegenüber dem Server, nicht den Server gegenüber Clients. Abstract-Socket-
+  und Named-Pipe-Namen sind vorhersagbar (SHA-256 des
+  embedding-ipc-Verzeichnispfads), und nach einem Absturz bleibt ein altes
+  `owner.token` liegen; ein lokaler Nutzer, der den freien Namen zuerst
+  belegt, erhält die Client-Tokens und kann gefälschte Vektoren liefern oder
+  `serve()` mit `conflict` blockieren. Der bisherige Linux-Datensocket im
+  0700-Verzeichnis war hier stärker. Server-Authentifizierung (Challenge oder
+  Peer-Credentials) folgt mit PR-11 zusammen mit der Pipe-ACL.
+- **`probe({ refresh: true })`** erzwingt jetzt auch bei laufendem Aufruf
+  einen neuen Provider-Aufruf (hinten angestellt); Aufrufer sollten ein
+  `signal` bzw. Timeout übergeben. Neben `lastResult()` (letzter Erfolg)
+  gibt es `lastAttempt()` (letzter abgeschlossener Versuch, Erfolg oder
+  Fehlschlag, nie ein Abbruch).
 - **`HostCapabilities.pushCriticalButtons`** ist typisiert
   (`CriticalButtonPushArgs`/`CriticalButtonPushResult`); fehlt sie, wirft sie,
-  oder liefert sie `null`/`sent: 0`, bleibt `classify-recent` unverändert bei
-  der Text-Zustellung über den Cron.
+  oder liefert sie `null`/`sent: 0`/kein `unsentTexts`-Array, bleibt
+  `classify-recent` unverändert bei der Text-Zustellung über den Cron;
+  `unsentTexts: []` mit `sent > 0` ergibt NO_REPLY.
 
 #### Geändert
 
 - **`createScopedEmbeddingIpcServer`** nimmt optional `address`/`claim`, der
   Client optional `address`; der OpenClaw-Pfad (ohne diese Optionen) bleibt
   verhaltensgleich — Claim-Listener, `owner.sock` im privaten Verzeichnis,
-  alle bestehenden Tests unverändert grün.
+  alle bestehenden Tests unverändert grün. Beide Clients lehnen
+  `address: null` jetzt ab wie der Server.
 
 #### Behoben
 

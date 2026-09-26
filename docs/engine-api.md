@@ -390,6 +390,13 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
     and makes no provider call, until `opts.refresh === true` forces a new
     one. A **failed** probe is never memoized, so a retry always exercises
     the provider again.
+  - `opts.refresh === true` always gets a provider call of its own: when a
+    call is already in flight, the refreshed call is queued to start after
+    it settles (refreshes queued behind the same call share that one new
+    call) — it is never answered by the older call's result.
+  - `probe()` has no timeout of its own; callers should pass `opts.signal`
+    (or an `AbortSignal.timeout(...)`) so a hung provider cannot stall them —
+    the harness warm-up does.
   - Concurrent calls without `refresh` share one in-flight provider call.
     Each caller's own `opts.signal` aborting only that caller's wait answers
     that caller `{ ok: false, error: "aborted", cached: false, identity,
@@ -400,9 +407,14 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
     non-finite element), `"dimension-mismatch"` (a finite vector of the
     wrong length), `"aborted"` (this caller's own signal fired first).
   - The harness uses `probe()` as its embedding warm-up primitive; E4 reads
-    `lastResult()` (not part of the `Engine` surface — an extra method on
-    the object `createEmbeddingProbe` returns) for model-readiness status
-    without making a provider call of its own.
+    model-readiness status without making a provider call of its own from
+    two extra methods on the object `createEmbeddingProbe` returns
+    (`internals.embeddingProbe`; not part of the `Engine` surface):
+    `lastResult()` — the most recent **successful** probe, or `null` (a
+    later failure does not clear it); `lastAttempt()` — the most recent
+    **completed** probe, `ok` or failed, or `null` (an `"aborted"` answer is
+    never recorded: an abort ends only one caller's wait, the provider call
+    still completes and becomes the last attempt).
 - **`serve(address?)`** (`createEmbeddingServing`) starts the engine's
   scoped-embedding IPC server (`lib/providers/scoped-embedding-ipc.js`) as
   the **in-process owner** — `claim: false`, so unlike the legacy OpenClaw
@@ -412,8 +424,10 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
     directory)`): Linux — an abstract socket (no filesystem entry, released
     on process death); macOS and other POSIX — a filesystem socket at
     `<baseDbPath>/control/embedding-ipc/owner.sock`; Windows — a named pipe
-    `\\.\pipe\plur1bus-embedding-<32 hex>` (`sha256(stateRoot)` truncated to
-    32 hex characters). No claim listener is opened for any of these.
+    `\\.\pipe\plur1bus-embedding-<32 hex>` (the SHA-256 of the embedding-ipc
+    directory path `<baseDbPath>/control/embedding-ipc`, truncated to 32 hex
+    characters; the Linux abstract-socket name uses the same digest). No
+    claim listener is opened for any of these.
   - The token always lives at
     `<baseDbPath>/control/embedding-ipc/owner.token`, for every address kind
     — including an abstract socket or named pipe, neither of which has a
@@ -479,17 +493,36 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   today relies on the default pipe security descriptor rather than a
   user-SID-scoped ACL. Windows system tests for the pipe transport are
   deferred to the same PR-11.
+- **The token authenticates clients to the server, not the server to
+  clients.** Nothing lets a client verify that whoever listens on the address
+  is the real owner. Abstract-socket and named-pipe names are predictable
+  (derived from the SHA-256 of the embedding-ipc directory path, see above),
+  and after a crash a stale `owner.token` stays on disk (only a clean
+  shutdown removes it). A local user who binds the then-free abstract or pipe
+  name first therefore receives the tokens clients send and can answer with
+  forged vectors — or simply holds the name so the real owner's `serve()`
+  answers `conflict`. The legacy OpenClaw data socket (`owner.sock` inside
+  the `0700` embedding-ipc directory) is stronger on that point: only the
+  owning user can bind or reach it. Server authentication (a challenge on
+  the token, or peer-credential checks) is a follow-up for PR-11, alongside
+  the Windows pipe ACL.
 - **One serving engine per `stateRoot`, across processes, is the operator's
   responsibility.** The transport's single-owner guard
   (`scoped_embedding_owner_already_active`) is in-process only, and the
   claim listener that would additionally exclude other *processes* is
-  intentionally not opened on this path (ADR-001 C1). Two engine processes
-  serving the **same** address are still caught (a live-socket connect
-  probe, or `EADDRINUSE`, answers `conflict`). Two engine processes on the
-  same `stateRoot` serving **different** addresses are not prevented: the
-  second overwrites the shared `owner.token`, so the first owner's clients
-  fail auth or see an unannounced owner change, and whichever server shuts
-  down first unlinks the shared token out from under the other.
+  intentionally not opened on this path (ADR-001 C1). What is caught across
+  processes: two engine processes serving the **same** address (a
+  live-socket connect probe, or `EADDRINUSE`, answers `conflict`), and a
+  claimed legacy OpenClaw owner of the same `stateRoot` — before listening,
+  an unclaimed server connect-probes the claim address and the legacy
+  `owner.sock` (connecting opens no listener) and answers `conflict` while
+  either accepts. Two engine processes on the same `stateRoot` serving
+  **different** addresses are not prevented, nor a legacy owner that starts
+  *after* an unclaimed one: the later owner overwrites the shared
+  `owner.token`, so the earlier owner's clients fail auth or see an
+  unannounced owner change. Each server unlinks `owner.token` on shutdown
+  (or after a failed start) only while the file still holds its own token,
+  so the earlier owner no longer deletes the later owner's token.
 
 ## What is implemented in M1b-1
 

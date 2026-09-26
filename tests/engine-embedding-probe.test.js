@@ -9,7 +9,7 @@ import { createEngine } from "../engine/create-engine.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 import { join } from "node:path";
-import { PROBE_TEXT_PREFIX } from "../engine/providers/embedding-service.js";
+import { PROBE_TEXT_PREFIX, createEmbeddingProbe } from "../engine/providers/embedding-service.js";
 
 const config = (baseDbPath) => ({
   baseDbPath,
@@ -149,5 +149,70 @@ describe("EmbeddingService.probe() (E3 Task 3)", () => {
         return true;
       },
     );
+  });
+
+  it("(f) refresh: true forces a new provider call even while another call is in flight", async () => {
+    const { engine, embeddings } = await setup("e3-probe-f-");
+    const vector = () => Array.from({ length: 384 }, (_, i) => (i === 0 ? 1 : 0));
+    let release;
+    const parked = new Promise((resolve) => { release = resolve; });
+    let parkedOnce = false;
+    embeddings.setQueryImpl(async () => {
+      if (!parkedOnce) { parkedOnce = true; await parked; }
+      return vector();
+    });
+
+    const a = engine.embedding.probe();
+    const b = engine.embedding.probe({ refresh: true });
+    const c = engine.embedding.probe({ refresh: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(embeddings.calls.length, 1, "the refreshed call waits for the in-flight one to settle");
+
+    release();
+    const [aResult, bResult, cResult] = await Promise.all([a, b, c]);
+    assert.equal(aResult.ok, true);
+    assert.equal(bResult.ok, true);
+    assert.equal(bResult.cached, false);
+    assert.equal(embeddings.calls.length, 2, "refresh made its own provider call; queued refreshes share it");
+    assert.equal(cResult, bResult, "two refreshes queued behind the same call share one new call");
+    assert.notEqual(embeddings.calls[0], embeddings.calls[1]);
+  });
+});
+
+describe("createEmbeddingProbe lastResult()/lastAttempt() (E3)", () => {
+  const identity = Object.freeze({ fingerprintId: "fp", provider: "stub", model: "stub", dimensions: 2 });
+
+  it("lastResult() keeps the last success; lastAttempt() tracks the last completed probe, never an abort", async () => {
+    let impl = async () => [1, 0];
+    let tick = 0;
+    const probe = createEmbeddingProbe({
+      getEmbeddings: () => ({ embedQuery: (text) => impl(text) }),
+      getIdentity: () => identity,
+      logger: { warn() {} },
+      clock: () => ++tick,
+    });
+    assert.equal(probe.lastResult(), null);
+    assert.equal(probe.lastAttempt(), null);
+
+    const ok = await probe.probe();
+    assert.equal(ok.ok, true);
+    assert.deepEqual(probe.lastResult(), ok);
+    assert.deepEqual(probe.lastAttempt(), ok);
+
+    impl = async () => { throw new Error("down"); };
+    const failed = await probe.probe({ refresh: true });
+    assert.equal(failed.error, "provider-failed");
+    assert.deepEqual(probe.lastResult(), ok, "a failure does not replace the last success");
+    assert.deepEqual(probe.lastAttempt(), failed, "lastAttempt() reports the failure");
+
+    let release;
+    impl = () => new Promise((resolve) => { release = () => resolve([1, 0]); });
+    const aborted = await probe.probe({ refresh: true, signal: AbortSignal.abort() });
+    assert.equal(aborted.error, "aborted");
+    assert.deepEqual(probe.lastAttempt(), failed, "an abort is not a completed attempt");
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(probe.lastAttempt().ok, true, "the shared call completed and is the last attempt");
+    assert.equal(probe.lastResult(), probe.lastAttempt());
   });
 });

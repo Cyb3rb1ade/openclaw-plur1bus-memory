@@ -29,55 +29,82 @@ export const PROBE_TEXT_PREFIX = "plur1bus embedding probe";
  * @param {{ warn(message: string): void }} deps.logger
  * @param {() => number} [deps.clock]
  * @param {string} [deps.nonce] Per-engine nonce distinguishing probe texts from real content.
- * @returns {{ probe(opts?: { signal?: AbortSignal, refresh?: boolean }): Promise<object>, lastResult(): object | null }}
- *   probe()'s and lastResult()'s result is an EmbeddingProbeResult (types/engine.d.ts).
+ * @returns {{ probe(opts?: { signal?: AbortSignal, refresh?: boolean }): Promise<object>, lastResult(): object | null, lastAttempt(): object | null }}
+ *   Every result is an EmbeddingProbeResult (types/engine.d.ts).
+ *   - `probe()`: see types/engine.d.ts. `refresh: true` always gets a provider call that starts after the call
+ *     in flight (if any) settles; refreshes queued behind the same in-flight call share that one new call.
+ *     Callers should pass a `signal` (or timeout) — a hung provider otherwise never answers.
+ *   - `lastResult()`: the most recent **successful** probe (`ok: true`), or null — what E4 reads for
+ *     "the model has been ready"; a later failure does not clear it.
+ *   - `lastAttempt()`: the most recent **completed** provider probe, successful or failed (never an
+ *     `"aborted"` answer — an abort only ends one caller's wait, the provider call still completes), or null.
  */
 export function createEmbeddingProbe({ getEmbeddings, getIdentity, logger, clock = Date.now, nonce = randomUUID() }) {
   let attempt = 0;
+  /** @type {{ promise: Promise<object>, started: boolean } | null} The newest provider call, running or queued. */
   let inFlight = null;
   /** @type {object | null} EmbeddingProbeResult (types/engine.d.ts) of the last successful probe. */
   let memoized = null;
+  /** @type {object | null} EmbeddingProbeResult of the last completed probe, ok or failed. */
+  let lastCompleted = null;
 
   function runProbe() {
     const t0 = clock();
     const identity = getIdentity();
     const text = `${PROBE_TEXT_PREFIX} ${nonce}:${attempt++}`;
+    const failed = (error) => {
+      const result = { ok: false, error, cached: false, identity, durationMs: clock() - t0, checkedAt: clock() };
+      lastCompleted = result;
+      return result;
+    };
     return (async () => {
       let vector;
       try {
         vector = await getEmbeddings().embedQuery(text);
       } catch (error) {
         logger.warn(`embedding.probe: provider failed: ${error?.message ?? error}`);
-        return { ok: false, error: "provider-failed", cached: false, identity, durationMs: clock() - t0, checkedAt: clock() };
+        return failed("provider-failed");
       }
-      if (!Array.isArray(vector) && !ArrayBuffer.isView(vector)) {
-        return { ok: false, error: "invalid-vector", cached: false, identity, durationMs: clock() - t0, checkedAt: clock() };
-      }
+      if (!Array.isArray(vector) && !ArrayBuffer.isView(vector)) return failed("invalid-vector");
       let allFinite = true;
       for (let i = 0; i < vector.length; i += 1) {
         if (!Number.isFinite(vector[i])) { allFinite = false; break; }
       }
-      if (!allFinite) {
-        return { ok: false, error: "invalid-vector", cached: false, identity, durationMs: clock() - t0, checkedAt: clock() };
-      }
-      if (vector.length !== identity.dimensions) {
-        return { ok: false, error: "dimension-mismatch", cached: false, identity, durationMs: clock() - t0, checkedAt: clock() };
-      }
+      if (!allFinite) return failed("invalid-vector");
+      if (vector.length !== identity.dimensions) return failed("dimension-mismatch");
       const result = { ok: true, cached: false, identity, durationMs: clock() - t0, checkedAt: clock() };
       memoized = result;
+      lastCompleted = result;
       return result;
     })();
   }
 
+  /** Start a provider call now, or queue it behind `after` (the call currently in flight). */
+  function launch(after) {
+    const entry = { promise: null, started: false };
+    const run = () => {
+      entry.started = true;
+      return runProbe();
+    };
+    entry.promise = (after ? after.then(run, run) : run()).finally(() => {
+      if (inFlight === entry) inFlight = null;
+    });
+    inFlight = entry;
+    return entry;
+  }
+
   async function probe(opts = {}) {
-    if (opts.refresh !== true && memoized) return { ...memoized, cached: true };
+    const refresh = opts.refresh === true;
+    if (!refresh && memoized) return { ...memoized, cached: true };
     const callerStart = clock();
-    if (!inFlight) {
-      inFlight = runProbe().finally(() => { inFlight = null; });
-    }
-    const shared = inFlight;
+    let entry = inFlight;
+    if (!entry) entry = launch(null);
+    // A running call began before this refresh was asked for: queue a new one
+    // behind it. A call that is itself still queued has not started yet, so it
+    // already is "a new provider call" for this caller too.
+    else if (refresh && entry.started) entry = launch(entry.promise);
     try {
-      return await raceAbort(shared, opts.signal);
+      return await raceAbort(entry.promise, opts.signal);
     } catch {
       const identity = getIdentity();
       return { ok: false, error: "aborted", cached: false, identity, durationMs: clock() - callerStart, checkedAt: clock() };
@@ -86,8 +113,10 @@ export function createEmbeddingProbe({ getEmbeddings, getIdentity, logger, clock
 
   return {
     probe,
-    /** What E4 reads for model readiness; not wired to Engine.status() here. */
+    /** Last successful probe, or null (E4 model readiness; not wired to Engine.status() here). */
     lastResult: () => memoized,
+    /** Last completed probe, ok or failed (never an abort), or null. */
+    lastAttempt: () => lastCompleted,
   };
 }
 
