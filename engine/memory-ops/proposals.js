@@ -55,7 +55,9 @@ function publicProposal(proposal) {
  * @param {{opsContext: object, sharedOps: {findSharedRow: Function, refreshShare: Function}, store: object, memoryDbAdapter: object, host: object, logger?: object, clock?: () => number}} deps
  * @returns {{propose: Function, list: Function, accept: Function, reject: Function}}
  */
-export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAdapter, host, logger, clock = Date.now }) {
+const ALWAYS_SUPPORTED = Object.freeze({ support: () => ({ supported: true }) });
+
+export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAdapter, host, logger, clock = Date.now, sharedMemoryPool = ALWAYS_SUPPORTED }) {
   async function propose(sharedId, newText, p, a, opts = {}) {
     const { agentId, memoryCtx, workspaceDir } = await opsContext.resolve(p, a, { destructive: true });
 
@@ -296,7 +298,15 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
     const { agentId, memoryCtx, workspaceDir, archiveDir } = await opsContext.resolve(p, a, { destructive: true });
     const safeId = parseProposalId(proposalId);
 
+    // Resolved and authorised first (a foreign proposal still answers
+    // not-found, anti-oracle); a platform property, checked before any
+    // refresh step (memory.correct via refreshShare) touches the shared
+    // copy (E4-R2/Task 6). The proposal stays untouched/pending.
     loadPending(agentId, memoryCtx, safeId, "accept");
+    const support = sharedMemoryPool.support();
+    if (!support.supported) {
+      throw memoryOpError("unsupported", "shared memory is not supported on this platform", { capability: "shared-memory", reason: support.reason });
+    }
     claim(safeId);
     try {
       // Re-read under the claim: a resolve that finished between the check

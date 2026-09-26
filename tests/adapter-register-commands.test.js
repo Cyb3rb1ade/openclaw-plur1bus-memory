@@ -21,6 +21,7 @@ import { readTombstonesFromRegistry } from "../lib/tombstone.js";
 import { CORRECTION_PREVIEW_CHARS } from "../engine/runtime/constants.js";
 import { makeQuerySummarizer } from "../engine/runtime/env-config.js";
 import { applyEpistemicStatusToLanceDb } from "../engine/store/memory-db.js";
+import { memoryOpError } from "../engine/memory-ops/errors.js";
 import {
   completePendingConfirmation, parseConfirmationCommand, rememberPendingConfirmation, resolveConfirmationIdentity,
 } from "../engine/commands/command-helpers.js";
@@ -127,7 +128,7 @@ function e1DirectCommand(args) {
  * replaced by spies that record each call and then delegate to the real
  * engine.memory member.
  */
-async function e1Harness() {
+async function e1Harness({ shareOverride } = {}) {
   const tmpRoot = makeTempDir("e1-t8-root-");
   const stateDir = join(tmpRoot, "state");
   const workspaceDir = join(tmpRoot, "workspace");
@@ -157,7 +158,11 @@ async function e1Harness() {
     ...engine.memory,
     forget: async (...args) => { calls.forget.push(args); return engine.memory.forget(...args); },
     correct: async (...args) => { calls.correct.push(args); return engine.memory.correct(...args); },
-    share: async (...args) => { calls.share.push(args); return engine.memory.share(...args); },
+    share: async (...args) => {
+      calls.share.push(args);
+      if (shareOverride) return shareOverride(...args);
+      return engine.memory.share(...args);
+    },
   });
   const commands = new Map();
   const api = { config: {}, registerCommand(spec) { commands.set(spec.name, spec); } };
@@ -279,6 +284,15 @@ describe("E1 Task 8: slash commands run their final effect through Engine.memory
 
     const missing = await run("share", "66666666-6666-4666-8666-666666666666");
     assert.equal(missing.text, t("plur1bus.share_not_found", { lang: "en" }));
+  });
+
+  it("/share answers share_unsupported when shared memory is unavailable (E4 Task 6)", async () => {
+    const { run, seed } = await e1Harness({
+      shareOverride: async () => { throw memoryOpError("unsupported", "shared memory is not supported on this platform", { capability: "shared-memory", reason: "platform" }); },
+    });
+    const id = await seed("The team standup moved to half past nine.", "standup");
+    const reply = await run("share", id);
+    assert.equal(reply.text, t("plur1bus.share_unsupported", { lang: "en" }));
   });
   it("the /plur1bus router passes its own AgentContext through: a subagent's forget confirm is refused (E1-R12 M2) and answers forget_failed, not the whitelist hint (M1)", async () => {
     const { calls, run, seed, rawCard, internals, warnings } = await e1Harness();

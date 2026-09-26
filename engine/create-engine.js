@@ -1512,6 +1512,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryDbAdapter,
     host,
     logger: host.logger,
+    sharedMemoryPool,
   });
 
   // 7.12.48: Das Skill-Ledger liegt je ACL-Partition unter dem Neo-Store.
