@@ -260,6 +260,8 @@ export const DEPLOY_FILES = [
   // 7.16.10: Critical Push mit Telegram-Knöpfen (Text/Callback-Daten und Versand).
   "lib/critical-buttons.js",
   "lib/critical-button-delivery.js",
+  // 7.17.0: Persona/Light für Discord-Sprachräume.
+  "lib/voice-mode.js",
   "lib/tombstone.js",
   "lib/registry-lock.js",
   "lib/fetch-with-timeout.js",
