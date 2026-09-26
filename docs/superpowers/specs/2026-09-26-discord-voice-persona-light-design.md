@@ -9,7 +9,8 @@ Bernd (Agent `main`) soll
 1. auf Zuruf (`/vc join`) in Discord-Sprachräume kommen, zuhören und mit Stimme antworten,
 2. dem Besitzer in Sprachräume folgen können, an- und abschaltbar,
 3. Discord-Sprachnachrichten verschicken können,
-4. in Sprachräumen zwischen **Persona** (voll) und **Light** (schnell) umschaltbar sein.
+4. in Sprachräumen zwischen **Persona** (voll) und **Light** (schnell) umschaltbar sein,
+5. den gesamten Discord-Server verwalten können: Kanäle, Rollen, Mitglieder, Moderation, Events, Emojis, Präsenz.
 
 Light gilt nur in Sprachraum-Sitzungen. Geschriebene Discord-Nachrichten laufen immer als Persona.
 
@@ -20,6 +21,8 @@ Light gilt nur in Sprachraum-Sitzungen. Geschriebene Discord-Nachrichten laufen 
 - `channels.discord.voice` ist eingeschaltet (Realtime über OpenAI `gpt-realtime-2`), aber `plugins.entries.discord.enabled` steht auf `false`. Bernd ist auf Discord derzeit nicht aktiv.
 - Der Bot-Token (`channels.discord.accounts.default.token`) ist gültig: Bot „Bernd das Bot“ (`1486657982820253736`), Server „Server von Cyb3rblade“ (`1486678369901744240`), Besitzer `1323072788939935867`. Sprachräume: „Allgemein“ (`1486678370434551811`), „Test“ (`1518159522076823592`).
 - Discord steht auf `allowFrom: ["*"]`, `commands.ownerAllowFrom` ist nicht gesetzt.
+- Der Bot hat auf dem Server die Rolle „Bernd das Bot“ mit **Administrator**-Recht (Kanäle, Server, Rollen, Kick, Ban, Timeout, Nachrichten, Webhooks, Events, Verbinden, Sprechen).
+- OpenClaw-Aktionsgruppen (`channels.discord.actions.*`) ab Werk: an sind reactions, messages, threads, pins, polls, search, memberInfo, roleInfo, channelInfo, channels, voiceStatus, events, stickers, emojiUploads, stickerUploads, permissions; **aus** sind roles, moderation, presence.
 - NVIDIA-Schlüssel (`/root/.openclaw/.env.nemotron`), per Riva-Konfigurationsabfrage geprüft:
   - Parakeet 1.1B RNNT multilingual (`71203149-d3b7-4460-8231-1be2543a1fca`): Deutsch, offline und streaming.
   - Magpie TTS multilingual (`877104f7-e885-42b9-8de8-f6e4c6303969`): Deutsch, 22 050 Hz, Stimmen `DE-DE.Diego`, `.Jason`, `.Leo`, `.Mia`, `.Pascal`, `.Ray`.
@@ -88,7 +91,14 @@ Sprachnachricht: message-Werkzeug ──► tts (OpenAI-kompatibel) ──► [M
 - Nur der Besitzer darf umschalten (Allowlist-Prüfung des Hosts plus Abgleich mit `commands.ownerAllowFrom`).
 - Offene Machbarkeitsfrage: ob PLUR1BUS ein „Raum betreten“-Ereignis sieht. Falls nicht, sendet `/voice` ohne Argument die Knopfnachricht, und `/vc join` bleibt ohne automatische Knöpfe.
 
-### Baustein 6: Aufräumen
+### Baustein 6: Serververwaltung
+
+- `channels.discord.actions`: `roles: true`, `moderation: true`, `presence: true`. Die übrigen Gruppen sind ab Werk an und bleiben es.
+- Weil Bernd damit Kanäle löschen, Rollen vergeben und Mitglieder bannen kann, wird `channels.discord.allowFrom` auf den Besitzer (`1323072788939935867`) eingeengt und `commands.ownerAllowFrom` gesetzt (Baustein 1). Sonst könnte jede Person, die auf dem Server schreibt, Bernd zu diesen Aktionen bringen.
+- In Bernds `AGENTS.md` eine kurze Regel: vor unumkehrbaren Aktionen (Kanal oder Rolle löschen, Ban, Kick) einmal nachfragen; Anlegen, Umbenennen, Rechte setzen, Timeout ohne Rückfrage.
+- Die Aktionen stehen Bernd in jeder Sitzung zur Verfügung, also auch aus Telegram heraus (`message`-Werkzeug mit `channel: "discord"` und `guildId`).
+
+### Baustein 7: Aufräumen
 
 - `discord-voice-stt.service` wird deaktiviert und gestoppt. Die Unit-Datei bleibt als `.disabled` liegen.
 - Beide Bridge-Units bekommen `StartLimitIntervalSec=300`, `StartLimitBurst=5` und `RestartSec=10`, damit ein künftiger Ausfall nicht wieder das Syslog flutet.
@@ -108,6 +118,7 @@ Sprachnachricht: message-Werkzeug ──► tts (OpenAI-kompatibel) ──► [M
 
 - Bridges: Unit-Tests mit gemocktem Riva-Client (Format, Satzaufteilung, Fehler-Mapping) und je ein Livetest mit einem echten deutschen Satz hin und zurück.
 - PLUR1BUS: Modus-Speicher (atomar, Standard `persona`), Weglassen von Recall und Modellwechsel nur bei Sprachraum-Sitzung plus Light, Capture läuft weiter, Umschalten per Befehl und Knopf, Berechtigung, `thinkingLevel`-Patch ohne `model`.
+- Serververwaltung: nach dem Umstellen je eine harmlose Aktion pro Gruppe als Livetest (Testkanal anlegen und wieder löschen, Testrolle anlegen und wieder löschen, Präsenz setzen); Moderation nur als Trockenprüfung der Freigabe, nicht an echten Mitgliedern.
 - Livetest mit dem Besitzer: `/vc join` in „Test“, ein Satz in Persona, Umschalten auf Light, derselbe Satz, Antwortzeit vergleichen; Folgen an/aus; eine Sprachnachricht; Probehören der sechs Stimmen.
 
 ## Nicht Teil dieses Umbaus
@@ -115,3 +126,4 @@ Sprachnachricht: message-Werkzeug ──► tts (OpenAI-kompatibel) ──► [M
 - Realtime-Modus über OpenAI (bleibt konfiguriert, ungenutzt).
 - Die Sprachnachrichten-Bridge auf Port 8020 und ihr englisches Modell.
 - Light für geschriebene Discord-Nachrichten oder andere Kanäle.
+- Weitere Discord-Server; die Konfiguration betrifft nur „Server von Cyb3rblade“.
