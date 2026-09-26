@@ -27,6 +27,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isAbortError, raceAbort } from "../../lib/abort.js";
 
 export const REPLAY_GUARD_MAX_ENTRIES = 512;
 export const REPLAY_GUARD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -52,6 +53,9 @@ export function turnKeyOf(t) {
 }
 
 const duplicateTurn = () => ({ stored: 0, skipped: 1, reason: "duplicate-turn" });
+// Same shape the capture pipeline itself gives an aborted turn
+// (engine/create-engine.js's capture(), capture-turn.js's `opts.report.incomplete`).
+const abortedTurn = () => ({ stored: 0, skipped: 1, reason: "aborted" });
 
 // Agent ids match /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/ (safeAgentId); ":" is
 // not a valid file-name character on Windows, so the name is URI-encoded
@@ -65,8 +69,15 @@ function validEntries(parsed) {
 
 /**
  * @param {{ root: string, clock?: () => number, logger?: { warn?: (m: string) => void } }} options
- * @returns {{ run(agentId: string, key: string, fn: () => Promise<{ stored: number, skipped: number, reason?: string }>): Promise<{ stored: number, skipped: number, reason?: string }> }}
- *   (the result is a CaptureResult, types/engine.d.ts)
+ * @returns {{ run(agentId: string, key: string, fn: () => Promise<{ stored: number, skipped: number, reason?: string }>, opts?: { signal?: AbortSignal }): Promise<{ stored: number, skipped: number, reason?: string }> }}
+ *   (the result is a CaptureResult, types/engine.d.ts). `opts.signal`, when
+ *   given, only bounds a *waiter's* time in the queue behind an identical
+ *   in-flight capture (M4, fix wave 1): the caller's own signal aborting
+ *   while waiting resolves immediately with the same `{ reason: "aborted" }`
+ *   shape the capture pipeline itself gives an aborted turn, rather than the
+ *   waiter silently ignoring its own cancellation and waiting out the whole
+ *   in-flight capture regardless. It never cancels the in-flight capture
+ *   itself, only this call's own wait.
  */
 export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
   /** agentId → [{ key, at }], oldest first. */
@@ -136,7 +147,7 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
   }
 
   return Object.freeze({
-    async run(agentId, key, fn) {
+    async run(agentId, key, fn, { signal } = {}) {
       const flightKey = `${agentId}\0${key}`;
       // Wait out an identical capture already running; if it recorded the
       // turn this one is a duplicate, otherwise it runs itself (only one
@@ -145,7 +156,18 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
         if (isRecorded(agentId, key)) return duplicateTurn();
         const pending = inFlight.get(flightKey);
         if (!pending) break;
-        await pending;
+        if (signal) {
+          try {
+            await raceAbort(pending, signal);
+          } catch (error) {
+            // `pending` itself never rejects (see `flight` below); only the
+            // caller's own signal can reject this race.
+            if (isAbortError(error)) return abortedTurn();
+            throw error;
+          }
+        } else {
+          await pending;
+        }
       }
       let settle;
       const flight = new Promise((resolve) => { settle = resolve; });

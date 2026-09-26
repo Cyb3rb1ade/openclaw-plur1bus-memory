@@ -253,8 +253,9 @@ export function createMemoryWrite({ opsContext, memoryDbAdapter, baseDbPath, poo
     // Platform property, not data-dependent: answers before any anti-oracle
     // lookup (getCard) or write, so an id that doesn't even exist still gets
     // "unsupported" rather than "not-found" (E4-R2/Task 6).
-    if (!sharedMemoryPool.support().supported) {
-      throw memoryOpError("unsupported", messageForCode("unsupported"), { capability: "shared-memory", reason: sharedMemoryPool.support().reason });
+    const sharedMemorySupport = sharedMemoryPool.support();
+    if (!sharedMemorySupport.supported) {
+      throw memoryOpError("unsupported", messageForCode("unsupported"), { capability: "shared-memory", reason: sharedMemorySupport.reason });
     }
 
     let safeId;

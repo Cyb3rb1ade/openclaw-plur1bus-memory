@@ -577,14 +577,22 @@ The checks run in a fixed order and the first match wins:
 
 1. the embedder has `state: "failed"` → `{ reason: "model-failed",
    capability: "embedding" }`;
-2. the embedder has `state: "loading"` (already probed at least once and not
-   yet confirmed, or actively warming) → `{ reason: "models-warming",
+2. the embedder has `state: "loading"` (no attempt has completed yet — this
+   is where a fresh, never-warmed engine starts, and stays, until
+   `Engine.models.warm()` runs at least once; it does **not** mean a probe
+   is currently in flight, see below) → `{ reason: "models-warming",
    capability: "embedding" }`;
 3. the reranker has `state: "failed"` → `{ reason: "model-failed",
    capability: "reranker" }`;
-4. the reranker has `state: "loading"` → `{ reason: "models-warming",
-   capability: "reranker" }`;
+4. the reranker has `state: "loading"` (same meaning as step 2) → `{
+   reason: "models-warming", capability: "reranker" }`;
 5. otherwise `null`.
+
+**A fresh, never-warmed engine therefore reports `degraded: { reason:
+"models-warming", capability: "embedding" }` from the moment it opens until
+a host's first `warm()` call completes** — `tests/engine-contract.test.js`
+pins exactly this. A host that wants a clean `degraded: null` on startup
+calls `Engine.models.warm()` in the background right after `open`/`ready`.
 
 A **disabled** reranker (no reranker configured) is neither `"failed"` nor
 `"loading"`, so it never degrades the status. `jobs.health().ledger ===
@@ -598,27 +606,38 @@ their own fields, not folded into this derivation.
 "failed" | "disabled"`) for the embedder and, when a reranker is configured,
 the reranker, each with `checkedAt` and, on `"failed"`, `error`.
 
-- **`"loading"` with `checkedAt: null` means "not probed yet"** (controller
-  ruling C1) — before any probe has run for that model, this is what
-  `status()` reports; it is not a fifth state and does not mean a probe is
-  in flight.
-- **`"loading"` with a non-null `checkedAt`** means the model's last
-  completed attempt was some time ago and a probe is currently running
-  (`warming: true` on the readiness object) — `Engine.models.warm({ signal })`
-  is the explicit way to run one. A host normally calls `warm()` once in the
-  background right after `open`/`ready`; that call is what turns a fresh
-  embedder from "not probed yet" into `"ready"` or `"failed"`, and is how a
-  host clears a `"models-warming"` `degraded` reason. Calling `status()`
+- **`"loading"` always has `checkedAt: null`, and means "no attempt has
+  completed yet"** (controller ruling C1) — this is the state before the
+  very first probe for that model finishes, whether or not one is currently
+  running. `readinessOf` (`engine/providers/model-readiness.js`) derives
+  `checkedAt` only from the last **completed** attempt: with no completed
+  attempt yet, `checkedAt` is `null` regardless of the model's `warming`
+  flag. `"loading"` is not a fifth state and, by itself, does not tell you
+  whether a probe is in flight — read `warming` for that (below).
+- **There is no "loading with a `checkedAt`" state.** Once any attempt for a
+  model has completed, its state becomes `"ready"` or `"failed"` and **stays**
+  one of those two from then on — a later re-probe (`Engine.models.warm({
+  signal })` called again, e.g. `opts.refresh` on the underlying probe) never
+  reverts the state back to `"loading"`. While that re-probe runs, `warming:
+  true` is set on top of the model's current `"ready"`/`"failed"` state and
+  `checkedAt` still reflects the previous completed attempt, not the one in
+  progress.
+- **`Engine.models.warm({ signal })`** is the explicit way to run a probe. A
+  host normally calls it once in the background right after `open`/`ready`;
+  that first call is what turns a fresh embedder from `"loading"`
+  (`checkedAt: null`) into `"ready"` or `"failed"`, and is how a host clears
+  a `"models-warming"` `degraded` reason (see above). Calling `status()`
   alone never triggers a probe.
 - **`"ready"`** is the most recent completed attempt succeeding;
   **`"failed"`** is the most recent completed attempt failing, with `error`
   set to the raw `EmbeddingProbeError`/`RerankerProbeError` code. An aborted
-  attempt (the caller's own `signal`) is never recorded as the last attempt,
-  so it cannot turn a model `"failed"`; only a real completed attempt can.
-  An aborted `warm()` therefore leaves the model exactly where it was before
-  the call — `"loading"` if nothing had completed yet, `"ready"`/`"failed"`
-  if a prior attempt had. A failed reranker never marks the embedder
-  failed, and vice versa: the two are independent probes.
+  attempt (the caller's own `signal`) is never recorded as the last
+  completed attempt, so it cannot turn a model `"failed"` or change
+  `checkedAt`; only a real completed attempt can. An aborted `warm()`
+  therefore leaves the model exactly where it was before the call —
+  `"loading"` if nothing had completed yet, `"ready"`/`"failed"` (with the
+  same `checkedAt`) if a prior attempt had. A failed reranker never marks
+  the embedder failed, and vice versa: the two are independent probes.
 - **`"disabled"`** is the reranker's state when the host configured no
   reranker at all; it is not a failure and does not degrade the status.
 - `status()` still resolves normally after `close()`.
@@ -664,10 +683,17 @@ returns it today).
 Where a platform has no shared-memory mode, `Engine.memory.share` and
 `proposals.accept` reject with a typed `MemoryOpError` — `code:
 "unsupported"`, `detail: { capability: "shared-memory", reason: "platform"
-}` — **before** any row, archive or `.plur1bus-shared` directory is touched;
-this check runs ahead of every anti-oracle lookup, so a nonexistent source
-id on an unsupported platform still answers `"unsupported"`, never
-`"not-found"`. Shared reads (`withUserReadDb`/`withWorkspaceReadDb`) are
+}` — **before** any row, archive or `.plur1bus-shared` directory is touched.
+The two members order this check differently against their own lookups:
+**`share`** treats it as a platform property, not data-dependent, and checks
+it ahead of every anti-oracle lookup (`getCard`), so a nonexistent source id
+on an unsupported platform still answers `"unsupported"`, never
+`"not-found"`. **`proposals.accept`** resolves and authorises the proposal
+first (`loadPending`) and only then checks `sharedMemoryPool.support()` — a
+proposal id that does not exist, or belongs to another sharer, answers
+`"not-found"` exactly as it would on a supported platform; only a proposal
+that does resolve then hits `"unsupported"` before its shared copy is
+touched. Shared reads (`withUserReadDb`/`withWorkspaceReadDb`) are
 unaffected by this error path: they already answered empty/`null` on an
 unsupported platform, and still do. The OpenClaw `/share` reply says why
 (`plur1bus.share_unsupported`) instead of the generic `share_failed` text

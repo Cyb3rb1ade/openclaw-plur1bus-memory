@@ -57,6 +57,10 @@ const NEVER_PROBED = Object.freeze({ lastAttempt: () => null, pending: () => fal
  * @param {object} deps
  * @param {{health(): object}} deps.jobs `JobsHealth` source (Task 2).
  * @param {{status(): object}} deps.models `ModelsStatus` source (Task 3).
+ * @param {() => object} [deps.getIdentity] The engine's own embedding-identity
+ *   getter (`embeddingService.identities()[0]`), read only as a fallback when
+ *   `models.status()` itself throws — `EngineStatus.models.embedder.identity`
+ *   is non-nullable, so the fallback still needs a real `EmbeddingIdentity`.
  * @param {{support(): object}} deps.sharedMemoryPool
  * @param {{current(): string | null}} deps.storeMigrator
  * @param {string} deps.expectedSchema
@@ -65,7 +69,7 @@ const NEVER_PROBED = Object.freeze({ lastAttempt: () => null, pending: () => fal
  * @param {string} deps.contract
  * @returns {{status(): Promise<object>}} Never rejects.
  */
-export function createStatusReporter({ jobs, models, sharedMemoryPool, storeMigrator, expectedSchema, openedAgents, host, contract }) {
+export function createStatusReporter({ jobs, models, getIdentity, sharedMemoryPool, storeMigrator, expectedSchema, openedAgents, host, contract }) {
   const loggedJournalReasons = new Set();
   const logJournalUnavailable = (reason) => {
     if (loggedJournalReasons.has(reason)) return;
@@ -82,13 +86,24 @@ export function createStatusReporter({ jobs, models, sharedMemoryPool, storeMigr
     }
   }
 
+  /** Best-effort `EmbeddingIdentity` for the models.status() fallback below — never throws. */
+  function safeFallbackIdentity() {
+    try {
+      const identity = getIdentity?.();
+      if (identity && typeof identity === "object") return identity;
+    } catch (error) {
+      host?.logger?.debug?.(`engine.status: fallback identity getter failed: ${error?.message ?? error}`);
+    }
+    return { fingerprintId: "unknown", provider: "unknown", model: "unknown", dimensions: 0 };
+  }
+
   function safeModelsStatus() {
     try {
       return models.status();
     } catch (error) {
       host?.logger?.debug?.(`engine.status: models.status() failed: ${error?.message ?? error}`);
       const readiness = readinessOf(NEVER_PROBED);
-      return { embedder: { ...readiness, identity: null }, reranker: { ...readiness, provider: null } };
+      return { embedder: { ...readiness, identity: safeFallbackIdentity() }, reranker: { ...readiness, provider: null } };
     }
   }
 

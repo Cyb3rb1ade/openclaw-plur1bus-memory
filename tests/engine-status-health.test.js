@@ -194,6 +194,51 @@ describe("Engine.status() (E4 Task 4)", () => {
     assert.equal(s.contract, "1.8.0");
   });
 
+  it("a throwing models.status() falls back to a real, non-null embedder identity (M2)", async () => {
+    // EngineStatus.models.embedder.identity is a non-nullable EmbeddingIdentity
+    // (types/engine.d.ts); the fallback must still be a real object, built
+    // from the engine's own identity getter, not a bare `null`.
+    const reporter = createStatusReporter({
+      jobs: { health: () => ({ ledger: "ok", agents: [] }) },
+      models: { status: () => { throw new Error("models down"); } },
+      getIdentity: () => ({ fingerprintId: "fp1", provider: "local-transformers", model: "m", dimensions: 384 }),
+      sharedMemoryPool: { support: () => ({ supported: false, mode: "unavailable", reason: "platform" }) },
+      storeMigrator: { current: () => "1" },
+      expectedSchema: "1",
+      openedAgents: new Set(),
+      host: { logger: { debug() {} } },
+      contract: "1.8.0",
+    });
+    const status = await reporter.status();
+    assert.equal(typeof status.models.embedder.identity, "object");
+    assert.notEqual(status.models.embedder.identity, null);
+    assert.deepEqual(status.models.embedder.identity, { fingerprintId: "fp1", provider: "local-transformers", model: "m", dimensions: 384 });
+    assert.equal(status.models.embedder.state, "loading");
+
+    // A getIdentity that itself throws still yields a real object, never null.
+    const reporter2 = createStatusReporter({
+      jobs: { health: () => ({ ledger: "ok", agents: [] }) },
+      models: { status: () => { throw new Error("models down"); } },
+      getIdentity: () => { throw new Error("identity unavailable"); },
+      sharedMemoryPool: { support: () => ({ supported: false, mode: "unavailable", reason: "platform" }) },
+      storeMigrator: { current: () => "1" },
+      expectedSchema: "1",
+      openedAgents: new Set(),
+      host: { logger: { debug() {} } },
+      contract: "1.8.0",
+    });
+    const status2 = await reporter2.status();
+    assert.equal(typeof status2.models.embedder.identity, "object");
+    assert.notEqual(status2.models.embedder.identity, null);
+
+    // End-to-end: the real engine's status() always has a non-null identity too.
+    const { engine } = setupEngine("e4-status-identity-");
+    const engineStatus = await engine.status();
+    assert.equal(typeof engineStatus.models.embedder.identity, "object");
+    assert.notEqual(engineStatus.models.embedder.identity, null);
+    await engine.close();
+  });
+
   it("(f) status does not create shared or job directories", async () => {
     const { engine, baseDbPath } = setupEngine("e4-status-f-");
     await engine.status();

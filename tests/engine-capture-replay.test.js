@@ -353,4 +353,42 @@ describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
     assert.deepEqual(await broken.run(AGENT, "k-w", done()), { stored: 1, skipped: 0 });
     assert.ok(warned.length >= 1);
   });
+
+  it("a waiter's own signal aborting while it waits on an identical in-flight capture resolves immediately as aborted (M4)", async () => {
+    const { createTurnReplayGuard } = await load();
+    const base = makeTempDir("e4-guard-abort-wait-");
+    const guard = createTurnReplayGuard({ root: join(base, "_capture-turns"), logger: { warn() {} } });
+
+    let releaseFirst;
+    const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+    const first = guard.run(AGENT, "k-abort", async () => { await firstGate; return { stored: 1, skipped: 0 }; });
+
+    const controller = new AbortController();
+    const waiterStart = Date.now();
+    const waiter = guard.run(AGENT, "k-abort", async () => ({ stored: 1, skipped: 0 }), { signal: controller.signal });
+    // Give the waiter a tick to actually start waiting on the in-flight capture.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    controller.abort();
+
+    const waiterResult = await waiter;
+    const waiterElapsedMs = Date.now() - waiterStart;
+    assert.deepEqual(waiterResult, { stored: 0, skipped: 1, reason: "aborted" });
+    // It did not wait out the whole in-flight capture (which only resolves
+    // after `releaseFirst()`, well below): well under any real capture time.
+    assert.ok(waiterElapsedMs < 1000, `waiter should not block on the in-flight capture, took ${waiterElapsedMs}ms`);
+
+    // The in-flight capture itself is untouched by the waiter's own abort.
+    releaseFirst();
+    assert.deepEqual(await first, { stored: 1, skipped: 0 });
+
+    // A waiter with no signal still behaves exactly as before (waits it out).
+    let releaseSecond;
+    const secondGate = new Promise((resolve) => { releaseSecond = resolve; });
+    const second = guard.run(AGENT, "k-abort-2", async () => { await secondGate; return { stored: 1, skipped: 0 }; });
+    const plainWaiter = guard.run(AGENT, "k-abort-2", async () => ({ stored: 1, skipped: 0 }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releaseSecond();
+    assert.deepEqual(await second, { stored: 1, skipped: 0 });
+    assert.deepEqual(await plainWaiter, { stored: 0, skipped: 1, reason: "duplicate-turn" });
+  });
 });

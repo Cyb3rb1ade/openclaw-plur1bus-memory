@@ -3465,6 +3465,7 @@ export function createEngine(host, config, testOptions = {}) {
   const statusReporter = createStatusReporter({
     jobs: internals.jobs,
     models: modelsService,
+    getIdentity: () => embeddingService.identities()[0],
     sharedMemoryPool: internals.sharedMemoryPool,
     storeMigrator,
     expectedSchema: STORE_SCHEMA_VERSION,
@@ -3596,7 +3597,7 @@ export function createEngine(host, config, testOptions = {}) {
             return { stored: report.stored, skipped: report.skipped };
           }
           return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
-        });
+        }, { signal });
       })().catch((error) => ({ stored: 0, skipped: 1, reason: detailOf(error) }));
       return { id: randomUUID(), acceptedAt, done, abort: (reason) => controller.abort(reason) };
     },
