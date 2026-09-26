@@ -39,6 +39,7 @@ export const DEPLOY_FILES = [
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
+  "engine/capture/turn-replay-guard.js",
   "engine/checkpoint/checkpoint-store.js",
   "engine/commands/command-helpers.js",
   "engine/commands/plur1bus-command.js",

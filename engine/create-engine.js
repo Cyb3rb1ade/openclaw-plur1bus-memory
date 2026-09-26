@@ -88,6 +88,7 @@ import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 import { createPlur1busCommandRunner } from "./commands/plur1bus-command.js";
 import { createTurnCapture } from "./capture/capture-turn.js";
+import { createTurnReplayGuard, turnKeyOf } from "./capture/turn-replay-guard.js";
 import { createPromptContextAssembler } from "./recall/assemble-prompt-context.js";
 import { recallResult } from "./recall/recall-result.js";
 import { buildSystemSupplement } from "./recall/system-supplement.js";
@@ -3405,6 +3406,10 @@ export function createEngine(host, config, testOptions = {}) {
     throw new Error(`${name} is not available in M1b-1`);
   };
   const openedAgents = new Set();
+  // Q3 (E4 Task 5): a journal replay of a turn already captured answers
+  // `duplicate-turn` before the capture pipeline runs (no second summary,
+  // row or meta-reflection session count), across restarts too.
+  const replayGuard = createTurnReplayGuard({ root: join(baseDbPath, "_capture-turns"), clock, logger: host.logger });
   const channels = createChannelRegistry();
   let toolSpecs = null;
 
@@ -3566,19 +3571,31 @@ export function createEngine(host, config, testOptions = {}) {
         // The turn's agent and its principal's agent must agree: the queue is
         // keyed by one and the stores are scoped by the other.
         if (t.principal?.agentId !== agentId) return { stored: 0, skipped: 1, reason: "principal-agent-mismatch" };
-        const workspaceDir = await host.workspaceDir(agentId);
-        const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
-        // TurnRecord.incognito === false is the host's own classification:
-        // the host routing classifier is not consulted again (a host without
-        // routing would otherwise store nothing for a keyed session).
-        const report = { stored: 0, skipped: 0 };
-        const outcome = await internals.getCaptureTurn()(
-          { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
-          { agentId, workspaceDir, sessionKey: t.sessionKey },
-          { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report },
-        );
-        if (outcome?.ok) return { stored: report.stored, skipped: report.skipped };
-        return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
+        // Only a result without `reason` (the pipeline completed) is recorded.
+        return replayGuard.run(agentId, turnKeyOf(t), async () => {
+          const workspaceDir = await host.workspaceDir(agentId);
+          const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
+          // TurnRecord.incognito === false is the host's own classification:
+          // the host routing classifier is not consulted again (a host without
+          // routing would otherwise store nothing for a keyed session).
+          const report = { stored: 0, skipped: 0 };
+          const outcome = await internals.getCaptureTurn()(
+            { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
+            { agentId, workspaceDir, sessionKey: t.sessionKey },
+            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report },
+          );
+          if (outcome?.ok) {
+            // The scheduler reports ok once the worker settled; the pipeline
+            // itself swallows an abort or a failed item and says so in
+            // `report.incomplete` — such a capture carries a reason, so it is
+            // not recorded and its replay is captured.
+            if (report.incomplete) {
+              return { stored: report.stored, skipped: report.stored > 0 ? report.skipped : Math.max(1, report.skipped), reason: report.incomplete };
+            }
+            return { stored: report.stored, skipped: report.skipped };
+          }
+          return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
+        });
       })().catch((error) => ({ stored: 0, skipped: 1, reason: detailOf(error) }));
       return { id: randomUUID(), acceptedAt, done, abort: (reason) => controller.abort(reason) };
     },
