@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { createEngine } from "../engine/create-engine.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
-import { expandVaultPath } from "../engine/admin/obsidian.js";
+import { createObsidianOps, expandVaultPath } from "../engine/admin/obsidian.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DIGEST_RE = /^[0-9a-f]{64}$/;
@@ -220,5 +220,83 @@ describe("Engine.admin.obsidian", () => {
     assert.ok(plain.vaults.some((v) => v.source === "workspace"));
 
     await engine.close({ budgetMs: 5_000 });
+  });
+});
+
+// R11 (Task 5): a vault that vanishes between the existence check and the
+// confirmation-store lookup is reported as unconfirmed for that candidate
+// only, instead of failing the whole detect() call. Unit-level: exercises
+// createObsidianOps directly with a fake isVaultConfirmed seam, since
+// reproducing an fs race through the real lib is not practical.
+describe("engine/admin/obsidian.js — detect tolerates a vault that vanishes mid-check (R11, unit)", () => {
+  function makeOps(vaultA, isVaultConfirmed, warnings) {
+    return createObsidianOps({
+      opsContext: {
+        resolve: async () => ({
+          agentId: "agent-r11",
+          memoryCtx: { trust: "proved", userPrincipal: "user:v1:" + "0".repeat(64) },
+          workspaceDir: vaultA,
+        }),
+      },
+      baseDbPath: "/unused/base-db",
+      confirmationStore: new Map(),
+      getObsidianBridgeConfig: () => ({}),
+      logger: { warn: (msg) => warnings.push(msg) },
+      isVaultConfirmed,
+    });
+  }
+
+  it("(a) reports the vanished candidate as unconfirmed and still resolves the others", async () => {
+    const stateDir = makeTempDir("e3t5-state-");
+    const vaultA = makeVaultDir(stateDir, "vault-a");
+    const vaultB = makeVaultDir(stateDir, "vault-b");
+    const vaultC = makeVaultDir(stateDir, "vault-c");
+    const warnings = [];
+
+    const isVaultConfirmed = ({ vaultPath }) => {
+      if (vaultPath === vaultB) {
+        rmSync(vaultB, { recursive: true, force: true });
+        const err = new Error("ENOENT: no such file or directory");
+        err.code = "ENOENT";
+        throw err;
+      }
+      return false;
+    };
+
+    const ops = makeOps(vaultA, isVaultConfirmed, warnings);
+    const result = await ops.detect({}, agent, { candidates: [vaultB, vaultC] });
+
+    assert.equal(result.vaults.length, 3);
+    const byPath = Object.fromEntries(result.vaults.map((v) => [v.path, v]));
+    assert.deepEqual(byPath[vaultA], { path: vaultA, isVault: true, confirmed: false, source: "workspace" });
+    assert.deepEqual(byPath[vaultC], { path: vaultC, isVault: true, confirmed: false, source: "candidate" });
+    assert.deepEqual(byPath[vaultB], { path: vaultB, isVault: false, confirmed: false, source: "candidate" });
+    assert.ok(warnings.some((w) => /vanished during detect/.test(w)), `expected a "vanished during detect" warning, got: ${JSON.stringify(warnings)}`);
+  });
+
+  it("(b) a confirmation failure on a vault that still exists still fails the whole call", async () => {
+    const stateDir = makeTempDir("e3t5-state-");
+    const vaultA = makeVaultDir(stateDir, "vault-a");
+    const vaultB = makeVaultDir(stateDir, "vault-b");
+    const warnings = [];
+
+    const isVaultConfirmed = ({ vaultPath }) => {
+      if (vaultPath === vaultB) {
+        const err = new Error("EACCES: permission denied");
+        err.code = "EACCES";
+        throw err;
+      }
+      return false;
+    };
+
+    const ops = makeOps(vaultA, isVaultConfirmed, warnings);
+
+    await assert.rejects(ops.detect({}, agent, { candidates: [vaultB] }), (err) => {
+      assert.equal(err.name, "MemoryOpError");
+      assert.equal(err.code, "storage");
+      assert.equal(err.message, "vault confirmation failed");
+      return true;
+    });
+    assert.ok(existsSync(vaultB), "vaultB should still exist for this case");
   });
 });
