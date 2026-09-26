@@ -439,6 +439,20 @@ Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
   closed“) abgelehnt statt am Drain teilzunehmen; kein Store schließt unter
   einer laufenden Operation.
 
+## [7.16.11] — 2026-09-26
+
+### Geändert
+
+- **Vergessen durch das Modell sperrt nicht mehr dauerhaft.** Das Werkzeug
+  `memory_forget` archiviert die Karte, setzt sie auf `deleted` und schreibt
+  die Audit-Zeile wie bisher, legt aber keinen Fingerabdruck mehr im
+  Tombstone-Register an. Bisher sperrte ein Vergessen durch das Modell
+  denselben Inhalt dauerhaft gegen erneutes Speichern; ein Missverständnis
+  oder eine eingeschleuste Anweisung in einer gelesenen Seite konnte so etwas
+  Unwiderrufliches auslösen. Die dauerhafte Sperre bleibt dem Menschen
+  vorbehalten (`/forget`, `lib/telegram-commands/memory-edit.js`, unverändert).
+  Bestehende Einträge im Register bleiben gültig.
+
 ## [7.16.10] — 2026-09-26
 
 ### Hinzugefügt
