@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { createConnection } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
@@ -590,5 +590,150 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     await registrations[0].start();
     await registrations[0].stop();
     assert.deepEqual(calls, ["start", "stop"]);
+  });
+});
+
+describe("scoped embedding IPC on an explicit address (E3)", () => {
+  function e3Embeddings() {
+    return {
+      model: "fixture/e5",
+      dimensions: () => 2,
+      embedQuery: async () => [1, 0],
+      embedPassage: async () => [0, 1],
+      embedBatch: async (texts) => texts.map(() => [0.5, 0.5]),
+    };
+  }
+
+  function explicitUnixAddress() {
+    const dir = makeTempDir("e3-sock-");
+    chmodSync(dir, 0o700);
+    return { kind: "unix-socket", address: join(dir, "e.sock") };
+  }
+
+  function e3Client(stateRoot, address, fingerprintId = ACTIVE_FINGERPRINT_ID) {
+    return new IpcScopedEmbeddingProvider({ stateRoot, model: "fixture/e5", dimensions: 2, fingerprintId, address });
+  }
+
+  it("serves a round trip on an explicit unix socket and removes socket and token on shutdown", async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const address = explicitUnixAddress();
+    const server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address,
+      claim: false,
+    });
+    let provider = null;
+    try {
+      await server.start();
+      provider = e3Client(stateRoot, address);
+      assert.deepEqual(await provider.embedQuery("q"), [1, 0]);
+      assert.equal(statSync(address.address).mode & 0o777, 0o600);
+      assert.deepEqual(server.identity, { model: "fixture/e5", dimensions: 2, fingerprintId: ACTIVE_FINGERPRINT_ID });
+      assert.equal(Object.isFrozen(server.identity), true);
+      assert.equal(server.tokenPath, resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath);
+      assert.equal(existsSync(resolveScopedEmbeddingIpcPaths(stateRoot).socketPath), false);
+    } finally {
+      await provider?.shutdown();
+      await server.shutdown();
+    }
+    assert.equal(existsSync(address.address), false);
+    assert.equal(existsSync(server.tokenPath), false);
+  });
+
+  it("opens no claim listener when claim is false", async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const address = explicitUnixAddress();
+    const server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address,
+      claim: false,
+    });
+    const probe = createServer();
+    try {
+      await server.start();
+      probe.listen(resolveScopedEmbeddingOwnerClaimAddress(resolveScopedEmbeddingIpcPaths(stateRoot).directory));
+      await Promise.race([
+        once(probe, "listening"),
+        once(probe, "error").then(([error]) => { throw error; }),
+      ]);
+    } finally {
+      if (probe.listening) await new Promise((resolve) => probe.close(resolve));
+      await server.shutdown();
+    }
+  });
+
+  it("serves an abstract socket and refuses a second owner on the same address", {
+    skip: process.platform !== "linux",
+  }, async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const address = { kind: "abstract-socket", address: "\0plur1bus-e3-test-" + randomUUID() };
+    const options = { stateRoot, embeddings: e3Embeddings(), fingerprintId: ACTIVE_FINGERPRINT_ID, address, claim: false };
+    const first = createScopedEmbeddingIpcServer(options);
+    const second = createScopedEmbeddingIpcServer(options);
+    let provider = null;
+    try {
+      await first.start();
+      provider = e3Client(stateRoot, address);
+      assert.deepEqual(await provider.embedQuery("q"), [1, 0]);
+      const tokenBefore = readFileSync(first.tokenPath, "utf8");
+      await assert.rejects(second.start(), /owner is already active/);
+      await second.shutdown();
+      assert.equal(readFileSync(first.tokenPath, "utf8"), tokenBefore);
+      assert.deepEqual(await provider.embedPassage("still served"), [0, 1]);
+    } finally {
+      await provider?.shutdown();
+      await second.shutdown();
+      await first.shutdown();
+    }
+    assert.equal(existsSync(first.tokenPath), false);
+  });
+
+  it("recovers a stale unix socket left at the explicit address", async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const address = explicitUnixAddress();
+    await leaveStaleUnixSocket(address.address);
+    const server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address,
+      claim: false,
+    });
+    let provider = null;
+    try {
+      await server.start();
+      provider = e3Client(stateRoot, address);
+      assert.deepEqual(await provider.embedBatch(["a", "b"]), [[0.5, 0.5], [0.5, 0.5]]);
+      assert.equal(existsSync(resolveScopedEmbeddingIpcPaths(stateRoot).socketPath), false);
+    } finally {
+      await provider?.shutdown();
+      await server.shutdown();
+    }
+  });
+
+  it("rejects a client with a different fingerprint on the explicit address", async () => {
+    const stateRoot = makeTempDir("e3-ipc-");
+    const address = explicitUnixAddress();
+    const server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address,
+      claim: false,
+    });
+    let provider = null;
+    try {
+      await server.start();
+      provider = e3Client(stateRoot, address, STALE_FINGERPRINT_ID);
+      await assert.rejects(provider.embedQuery("q"), /fingerprint does not match/);
+      assert.equal(existsSync(resolveScopedEmbeddingIpcPaths(stateRoot).socketPath), false);
+    } finally {
+      await provider?.shutdown();
+      await server.shutdown();
+    }
   });
 });
