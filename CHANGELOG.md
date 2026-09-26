@@ -447,9 +447,9 @@ Contract-Version **1.6.0**. Details in `docs/engine-api.md`, Abschnitte
   eigene Telegram-Nachricht mit „✅ Annehmen“ und „❌ Ablehnen“. Ein Tipp führt
   denselben autorisierten Befehl aus wie `/plur1bus critical accept|reject` und
   schreibt das Ergebnis unter die Karte, die Knöpfe verschwinden. Der Host
-  prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt nur Klicks
-  aus Direktchats, über den Bot des Agenten, dem die Karte gehört, und aus dem
-  Chat, in den dessen Push geht. Versand über den Telegram-Outbound-Adapter des
+  prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt einen Klick
+  nur im Direktchat mit dem Absender selbst und nur über den eigenen Bot des
+  Agenten, dem die Karte gehört. Versand über den Telegram-Outbound-Adapter des
   Hosts an das Zustellziel des eigenen classify-recent-Crons des Agenten
   (`resolveCronDelivery`, dasselbe Ziel wie bisher der Text), über den Bot aus
   der eindeutigen Telegram-Bindung des Agenten
