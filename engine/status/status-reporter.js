@@ -95,13 +95,24 @@ export function createStatusReporter({ jobs, models, sharedMemoryPool, storeMigr
   async function journalBacklog() {
     const capability = host?.capabilities?.journalBacklog;
     if (typeof capability !== "function") return null;
+    // `AbortSignal.timeout()`'s own internal timer is unref'd: with a
+    // never-settling capability and nothing else keeping the event loop
+    // alive (a one-shot CLI's status() call, or this file's own test in
+    // isolation), the timer can be skipped entirely and the awaited promise
+    // never settles. A plain ref'd `setTimeout` that aborts a controller
+    // fires unconditionally and is cleared in `finally` either way.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException("journal backlog timed out", "TimeoutError")), JOURNAL_BACKLOG_TIMEOUT_MS);
     let raw;
     try {
-      raw = await raceAbort(Promise.resolve().then(() => capability()), AbortSignal.timeout(JOURNAL_BACKLOG_TIMEOUT_MS));
+      raw = await raceAbort(Promise.resolve().then(() => capability()), controller.signal);
     } catch (error) {
       logJournalUnavailable(isAbortError(error) ? "timed out" : `threw: ${error?.message ?? error}`);
       return null;
+    } finally {
+      clearTimeout(timer);
     }
+    if (raw === null) return null;
     const normalized = normalizeJournalBacklog(raw);
     if (normalized === null) logJournalUnavailable("invalid shape");
     return normalized;

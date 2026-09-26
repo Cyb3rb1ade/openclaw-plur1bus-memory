@@ -113,6 +113,31 @@ describe("Engine.status() (E4 Task 4)", () => {
     await engine.close();
   });
 
+  it("a host journalBacklog() returning null is a valid \"no backlog\" answer, not an invalid shape", async () => {
+    const debugLines = [];
+    const stateDir = makeTempDir("e4-status-c-null-state-");
+    const baseDbPath = join(makeTempDir("e4-status-c-null-root-"), "lancedb-namespaced");
+    const engine = createEngine(
+      createStubHost({
+        stateDir,
+        workspaceDir: async (agentId) => {
+          const { mkdirSync } = await import("node:fs");
+          const dir = join(stateDir, "workspaces", agentId);
+          mkdirSync(dir, { recursive: true });
+          return dir;
+        },
+        logger: { info() {}, warn() {}, error() {}, debug: (m) => debugLines.push(String(m)) },
+        capabilities: { journalBacklog: () => null },
+      }),
+      baseConfig(baseDbPath),
+      { internals: { embeddings: flatEmbedder(), reranker: flatReranker() } },
+    );
+    const s = await engine.status();
+    assert.equal(s.journal, null);
+    assert.ok(!debugLines.some((line) => line.includes("invalid shape")), `unexpected log: ${JSON.stringify(debugLines)}`);
+    await engine.close();
+  });
+
   it("(d) degraded follows the model states (unit, degradedFromModels)", () => {
     const readiness = (state) => ({ state, warming: false, checkedAt: state === "loading" ? null : 1 });
     assert.deepEqual(

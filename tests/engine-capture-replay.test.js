@@ -180,7 +180,7 @@ describe("Engine.capture replay guard (E4 Task 5, Q3)", () => {
     }
   });
 
-  it("a replay survives an engine restart", { skip: process.platform === "win32" }, async () => {
+  it("a replay survives an engine restart", async () => {
     const first = setup();
     const r1 = await first.engine.capture(turn({ runId: "r-restart", text: T })).done;
     assert.ok(r1.stored >= 1, `first capture stored (${JSON.stringify(r1)})`);
@@ -190,9 +190,13 @@ describe("Engine.capture replay guard (E4 Task 5, Q3)", () => {
     try {
       const replay = await second.engine.capture(turn({ runId: "r-restart", text: T })).done;
       assert.deepEqual(replay, DUPLICATE);
-      const root = join(first.baseDbPath, "_capture-turns");
-      assert.equal(statSync(root).mode & 0o777, 0o700);
-      assert.equal(statSync(join(root, `${AGENT}.json`)).mode & 0o777, 0o600);
+      // POSIX file-mode bits are not meaningful on Windows; the restart/replay
+      // check itself still runs there.
+      if (process.platform !== "win32") {
+        const root = join(first.baseDbPath, "_capture-turns");
+        assert.equal(statSync(root).mode & 0o777, 0o700);
+        assert.equal(statSync(join(root, `${AGENT}.json`)).mode & 0o777, 0o600);
+      }
     } finally {
       await second.engine.close();
     }
