@@ -13,6 +13,8 @@ node_modules/
 # für den Operator, kein Repo-Inhalt.
 dedupe-exports/
 docs/**
+!docs/adr/
+!docs/adr/**
 !docs/audits/
 !docs/audits/**
 !docs/runbooks/
