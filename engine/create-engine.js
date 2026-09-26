@@ -2003,8 +2003,17 @@ export function createEngine(host, config, testOptions = {}) {
     actor = "memory_forget",
     actorType = "tool",
     reason = "memory_forget tool",
+    blockRecapture = false,
   }) {
     const memoryId = String(card?.id || "");
+    // 7.16.10+: Vergessen durch das Modell blendet die Karte aus (Status
+    // deleted, Archiv, Audit), schreibt aber keinen Fingerabdruck ins
+    // Tombstone-Register. Der Fingerabdruck sperrt denselben Inhalt dauerhaft
+    // gegen erneutes Speichern; diese Sperre bleibt einer Entscheidung des
+    // Menschen vorbehalten (/forget, lib/telegram-commands/memory-edit.js).
+    // Ein Missverständnis oder eine eingeschleuste Anweisung soll nichts
+    // Unwiderrufliches auslösen.
+    const registryDir = blockRecapture ? baseDbPath : null;
     const tombstone = buildTombstone({
       card,
       agentId,
@@ -2022,7 +2031,7 @@ export function createEngine(host, config, testOptions = {}) {
       // In-Memory-Commit-Flag erst NACH erfolgreicher Persistierung setzen,
       // damit ein fehlgeschlagener Append keinen falschen "committed"-Zustand
       // vortäuscht und ein erneuter Forget nachtragen kann.
-      if (baseDbPath && !already) {
+      if (registryDir && !already) {
         appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "committed" });
       }
       const auditOk = appendDestructiveOpLog(workspaceDir, {
@@ -2042,7 +2051,7 @@ export function createEngine(host, config, testOptions = {}) {
       return auditOk;
     };
     const failTombstone = (errorClass) => {
-      if (baseDbPath) {
+      if (registryDir) {
         appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "failed" });
       }
       appendDestructiveOpLog(workspaceDir, {
@@ -2061,7 +2070,7 @@ export function createEngine(host, config, testOptions = {}) {
     };
 
     // Phase 1: attempted (vor der Mutation).
-    if (baseDbPath) {
+    if (registryDir) {
       appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "attempted" });
     }
     let result;
@@ -2097,7 +2106,7 @@ export function createEngine(host, config, testOptions = {}) {
       throw err;
     }
     if (result?.notFound) {
-      if (baseDbPath) {
+      if (registryDir) {
         appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "failed" });
       }
       return { ok: false, notFound: true };
@@ -2106,8 +2115,13 @@ export function createEngine(host, config, testOptions = {}) {
       // Crash-Recovery: Zeile bereits deleted — fehlenden committed Tombstone
       // und Audit nachtragen. Fehlschlag des Backfills ist ein Fehler (fail-closed),
       // kein stilles ok:true.
-      if (baseDbPath) {
-        const backfill = backfillCommittedTombstone(baseDbPath, card, {
+      if (!registryDir) {
+        // Ohne Register nur das Audit nachtragen (fail-closed).
+        if (!commitTombstone(true)) {
+          throw new Error("tombstone audit write failed");
+        }
+      } else {
+        const backfill = backfillCommittedTombstone(registryDir, card, {
           agentId,
           actor,
           actorType,
