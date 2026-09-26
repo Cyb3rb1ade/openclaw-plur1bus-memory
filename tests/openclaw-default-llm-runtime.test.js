@@ -907,6 +907,52 @@ test("engine classify-recent keeps the cron text when the capability returns no 
   assert.match(output.text, /\/plur1bus critical accept /);
 });
 
+test("engine classify-recent keeps the cron text when the capability returns null", async (t) => {
+  const calls = [];
+  const { output } = await runClassifyRecentOnStubHost(t, {
+    async pushCriticalButtons(args) {
+      calls.push(args);
+      return null;
+    },
+  });
+  assert.match(output.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
+  assert.match(output.text, /\/plur1bus critical accept /);
+  assert.equal(calls.length, 1, "capability is called exactly once");
+  assert.equal(typeof calls[0].agentId, "string", "agentId is a string");
+  assert.equal(typeof calls[0].warning, "string", "warning is a string");
+  assert(("commandCtx" in calls[0]), "commandCtx is present");
+});
+
+test("engine classify-recent keeps the cron text when nothing was sent", async (t) => {
+  const { output } = await runClassifyRecentOnStubHost(t, {
+    async pushCriticalButtons() {
+      return { sent: 0, unsentTexts: ["x"], reason: "no_telegram_target" };
+    },
+  });
+  assert.match(output.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
+  assert.match(output.text, /\/plur1bus critical accept /);
+  assert.match(output.text, /Alex Example/, "output includes the fallback cron text, not the unsentTexts");
+});
+
+test("engine classify-recent answers NO_REPLY when every card went out with buttons", async (t) => {
+  const { output } = await runClassifyRecentOnStubHost(t, {
+    async pushCriticalButtons() {
+      return { sent: 1, unsentTexts: [] };
+    },
+  });
+  assert.equal(output.text, "NO_REPLY");
+});
+
+test("engine classify-recent sends only the unsent cards as text", async (t) => {
+  const { output } = await runClassifyRecentOnStubHost(t, {
+    async pushCriticalButtons() {
+      return { sent: 1, unsentTexts: ["Rest-Karte E3"] };
+    },
+  });
+  assert.match(output.text, /Rest-Karte E3/);
+  assert(!output.text.includes("Alex Example"), "output does not include the seeded memory");
+});
+
 test("Critical Push policy rejection leaves cards unclassified and diagnostics sanitized", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = "critical-policy-agent";

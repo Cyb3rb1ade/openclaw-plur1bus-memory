@@ -281,9 +281,9 @@ export function createInternalJobBodies(ctx) {
         host.logger.info(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
         // 7.16.10: eine Telegram-Nachricht je Karte mit Annehmen/Ablehnen.
         // Nicht gesendete Karten gehen wie bisher als Text über die
-        // Cron-Zustellung raus. Den Versand macht der Host
-        // (host.capabilities.pushCriticalButtons, adapter/openclaw/plugin.js);
-        // er liefert null, solange sein Klick-Handler nicht registriert ist.
+        // Cron-Zustellung raus. Den Versand macht der Host über
+        // HostCapabilities.pushCriticalButtons (adapter/openclaw/plugin.js).
+        // Sie liefert null, solange der Klick-Handler nicht registriert ist.
         const pushedCount = Array.isArray(result?.pushMessages) ? result.pushMessages.length : 0;
         const pushCriticalButtons = host.capabilities?.pushCriticalButtons;
         if (cronInternal && pushedCount > 0 && cpCfg.buttons !== false && typeof pushCriticalButtons === "function") {
