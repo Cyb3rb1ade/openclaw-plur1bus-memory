@@ -389,6 +389,8 @@ describe("Engine", () => {
       assert.equal(typeof engine.memory[m], "function", `engine.memory.${m}`);
     }
     assert.equal(typeof engine.memory.proposals.list, "function", "engine.memory.proposals.list");
+    assert.equal(typeof engine.memory.proposals.accept, "function", "engine.memory.proposals.accept");
+    assert.equal(typeof engine.memory.proposals.reject, "function", "engine.memory.proposals.reject");
     assert.ok(Object.isFrozen(engine.memory));
     await engine.close();
   });

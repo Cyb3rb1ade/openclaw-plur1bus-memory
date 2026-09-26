@@ -1,13 +1,13 @@
 /**
- * engine/memory-ops/proposals.js — E2 Task 5 (spec decision D31): `MemoryOps.propose`
- * and `MemoryOps.proposals.list`.
+ * engine/memory-ops/proposals.js — E2 Tasks 5 and 6 (spec decision D31):
+ * `MemoryOps.propose` and `MemoryOps.proposals.{list, accept, reject}`.
  *
  * A shared (workspace/user) copy is changed directly only by the agent that
  * shared it (`Engine.memory.correct`, engine/memory-ops/write.js). Any other
  * agent who can read the copy instead files a change proposal here; the
- * sharer accepts or rejects it later (Task 6 — `accept`/`reject` are stubs in
- * this task and are not wired onto `Engine.memory.proposals`). Filing never
- * changes the shared copy itself.
+ * sharer accepts (refreshing the copy with the proposal's text) or rejects it
+ * later (Task 6). Filing never changes the shared copy itself; only the
+ * sharer's `accept` does.
  */
 
 import { randomUUID } from "node:crypto";
@@ -23,7 +23,7 @@ const MAX_LIST_LIMIT = 100;
 const PROPOSAL_STATUSES = new Set(["pending", "accepted", "rejected", "stale"]);
 
 /**
- * @param {{opsContext: object, sharedOps: {findSharedRow: Function}, store: object, memoryDbAdapter: object, host: object, logger?: object, clock?: () => number}} deps
+ * @param {{opsContext: object, sharedOps: {findSharedRow: Function, refreshShare: Function}, store: object, memoryDbAdapter: object, host: object, logger?: object, clock?: () => number}} deps
  * @returns {{propose: Function, list: Function, accept: Function, reject: Function}}
  */
 export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAdapter, host, logger, clock = Date.now }) {
@@ -158,14 +158,162 @@ export function createMemoryProposals({ opsContext, sharedOps, store, memoryDbAd
     return { agentId, items: result.items, truncated: result.truncated, unreadable: result.unreadable };
   }
 
-  /** Implemented in Task 6; not wired onto Engine.memory.proposals in this task. */
-  async function accept() {
-    throw memoryOpError("storage", "not implemented");
+  // Proposal ids currently being accepted/rejected in this process: a second
+  // accept/reject of the same id while the first is still running is a
+  // conflict, not a second refresh. Released in `finally`.
+  const resolving = new Set();
+
+  /**
+   * The sharer's pending proposal, or the matching MemoryOpError. Proposals
+   * are filed under the sharer, so `store.get(agentId, …)` answers null for
+   * anyone else — the same anti-oracle `not-found` as an unknown id.
+   */
+  function loadPending(agentId, safeId, opName) {
+    let proposal;
+    try {
+      proposal = store.get(agentId, safeId);
+    } catch (err) {
+      if (isMemoryOpError(err)) throw err;
+      logger?.warn?.(`memory-ops.proposals.${opName}: store.get failed for agent '${agentId}'/'${safeId}': ${err?.message || err}`);
+      throw memoryOpError("storage", "proposal read failed");
+    }
+    if (!proposal || proposal.sharerAgentId !== agentId) throw memoryOpError("not-found", "proposal not found");
+    if (proposal.status !== "pending") throw memoryOpError("conflict", `proposal is ${proposal.status}`);
+    return proposal;
   }
 
-  /** Implemented in Task 6; not wired onto Engine.memory.proposals in this task. */
-  async function reject() {
-    throw memoryOpError("storage", "not implemented");
+  function saveResolved(proposal, opName) {
+    try {
+      store.update(proposal);
+    } catch (err) {
+      if (isMemoryOpError(err)) throw err;
+      logger?.warn?.(`memory-ops.proposals.${opName}: store.update failed for '${proposal.sharerAgentId}'/'${proposal.id}': ${err?.message || err}`);
+      throw memoryOpError("storage", "proposal write failed");
+    }
+  }
+
+  function emitResolved(proposal) {
+    emitEngineEvent(host, "memory.proposal", {
+      proposalId: proposal.id,
+      status: proposal.status,
+      sharerAgentId: proposal.sharerAgentId,
+      proposerAgentId: proposal.proposerAgentId,
+      sharedId: proposal.sharedId,
+    });
+  }
+
+  function parseProposalId(proposalId) {
+    try {
+      return safeUuid(proposalId);
+    } catch {
+      throw memoryOpError("invalid-input", "proposalId must be a valid proposal id");
+    }
+  }
+
+  function claim(safeId) {
+    if (resolving.has(safeId)) throw memoryOpError("conflict", "proposal is being resolved");
+    resolving.add(safeId);
+  }
+
+  /**
+   * Sharer only. Refreshes the shared copy with the proposal's text through
+   * the same path the sharer's own `correct` takes (refreshShare). A copy
+   * that is gone or whose text changed since the proposal was filed is never
+   * overwritten: the proposal is marked `stale` and the call answers
+   * `conflict`. Any refresh failure leaves the proposal `pending`.
+   */
+  async function accept(proposalId, p, a) {
+    const { agentId, memoryCtx, workspaceDir, archiveDir } = await opsContext.resolve(p, a, { destructive: true });
+    const safeId = parseProposalId(proposalId);
+
+    loadPending(agentId, safeId, "accept");
+    claim(safeId);
+    try {
+      // Re-read under the claim: a resolve that finished between the check
+      // above and the claim must not be applied twice.
+      const proposal = loadPending(agentId, safeId, "accept");
+
+      const found = await sharedOps.findSharedRow({ agentId, memoryCtx, id: proposal.sharedId });
+      let staleReason = null;
+      if (!found || !isSharer(found.card, agentId)) staleReason = "shared copy is gone; proposal marked stale";
+      else if (found.card.text !== proposal.oldText) staleReason = "shared copy changed since the proposal";
+      if (staleReason) {
+        opsContext.assertOpen?.();
+        const stale = { ...proposal, status: "stale", resolvedAt: clock() };
+        saveResolved(stale, "accept");
+        emitResolved(stale);
+        throw memoryOpError("conflict", staleReason);
+      }
+
+      opsContext.assertOpen?.();
+      let refreshed;
+      try {
+        refreshed = await sharedOps.refreshShare({
+          agentId, memoryCtx, workspaceDir, archiveDir,
+          card: found.card, newText: proposal.newText, reason: "MemoryOps.proposals.accept",
+        });
+      } catch (err) {
+        // The proposal stays pending; the error (and its detail naming the
+        // ids a partial refresh left behind) reaches the caller unchanged.
+        const detail = err?.detail ? ` detail=${JSON.stringify(err.detail)}` : "";
+        logger?.warn?.(`memory-ops.proposals.accept: refresh failed for proposal '${safeId}' (agent '${agentId}', shared copy '${proposal.sharedId}'), left pending: ${err?.code || ""} ${err?.message || err}${detail}`);
+        throw err;
+      }
+      const { sourceId, sharedId } = refreshed;
+
+      const accepted = { ...proposal, status: "accepted", resolvedAt: clock(), resultId: sharedId };
+      saveResolved(accepted, "accept");
+
+      const auditOk = appendDestructiveOpLog(workspaceDir, {
+        op: "memory-proposal-accept",
+        proposalId: safeId,
+        resultId: sharedId,
+        actor: memoryCtx.userPrincipal || `principal:${agentId}`,
+        at: new Date().toISOString(),
+      });
+      if (!auditOk) throw memoryOpError("storage", "audit failed");
+
+      emitResolved(accepted);
+      return { proposalId: safeId, id: sharedId, sourceId };
+    } finally {
+      resolving.delete(safeId);
+    }
+  }
+
+  /** Sharer only. Records the rejection (and an optional note); never touches the shared copy. */
+  async function reject(proposalId, p, a, opts = {}) {
+    const { agentId, memoryCtx, workspaceDir } = await opsContext.resolve(p, a, { destructive: true });
+    const safeId = parseProposalId(proposalId);
+
+    let note = null;
+    if (opts?.note !== undefined && opts?.note !== null) {
+      if (typeof opts.note !== "string" || opts.note.length > MAX_NOTE_LENGTH) {
+        throw memoryOpError("invalid-input", `note must be a string of at most ${MAX_NOTE_LENGTH} characters`);
+      }
+      note = opts.note;
+    }
+
+    loadPending(agentId, safeId, "reject");
+    claim(safeId);
+    try {
+      const proposal = loadPending(agentId, safeId, "reject");
+      opsContext.assertOpen?.();
+      const rejected = { ...proposal, status: "rejected", resolvedAt: clock(), resolutionNote: note };
+      saveResolved(rejected, "reject");
+
+      const auditOk = appendDestructiveOpLog(workspaceDir, {
+        op: "memory-proposal-reject",
+        proposalId: safeId,
+        actor: memoryCtx.userPrincipal || `principal:${agentId}`,
+        at: new Date().toISOString(),
+      });
+      if (!auditOk) throw memoryOpError("storage", "audit failed");
+
+      emitResolved(rejected);
+      return { proposalId: safeId, status: "rejected" };
+    } finally {
+      resolving.delete(safeId);
+    }
   }
 
   return { propose, list, accept, reject };

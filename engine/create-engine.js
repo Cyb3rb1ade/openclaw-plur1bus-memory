@@ -3585,11 +3585,12 @@ export function createEngine(host, config, testOptions = {}) {
       correct: async (id, newText, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.correct(id, newText, p, a)); },
       share: async (id, target, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.share(id, target, p, a, opts)); },
       state: async (p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.state(p, a)); },
-      // Change proposals (E2 Task 5, D31): the guard shape engine.memory
-      // already uses. accept/reject are Task 6 and stay unwired until then.
-      propose: async (sharedId, newText, p, a, opts) => { assertMemoryOpen(); return internals.memoryProposals.propose(sharedId, newText, p, a, opts); },
+      // Change proposals (E2 Tasks 5 and 6, D31): tracked like every other member.
+      propose: async (sharedId, newText, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.propose(sharedId, newText, p, a, opts)); },
       proposals: Object.freeze({
-        list: async (q, p, a) => { assertMemoryOpen(); return internals.memoryProposals.list(q, p, a); },
+        list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.list(q, p, a)); },
+        accept: async (proposalId, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.accept(proposalId, p, a)); },
+        reject: async (proposalId, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.reject(proposalId, p, a, opts)); },
       }),
     }),
     events: Object.freeze({
