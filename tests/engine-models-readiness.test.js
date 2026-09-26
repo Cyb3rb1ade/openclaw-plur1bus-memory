@@ -165,6 +165,21 @@ describe("Engine.models readiness and warm-up (E4 Task 3)", () => {
     assert.equal(status2.reranker.error, "invalid-result");
   });
 
+  it("(d2) a relevance_score-shaped hit (both real reranker providers' shape) reports ready (E4-R1)", async () => {
+    const { engine, reranker } = await setup("e4-models-d2-");
+    reranker.setImpl(async () => [{ index: 0, relevance_score: 0.7 }]);
+    const status = await engine.models.warm();
+    assert.equal(status.reranker.state, "ready");
+  });
+
+  it("(d3) an empty rerank result is invalid-result, not ready", async () => {
+    const { engine, reranker } = await setup("e4-models-d3-");
+    reranker.setImpl(async () => []);
+    const status = await engine.models.warm();
+    assert.equal(status.reranker.state, "failed");
+    assert.equal(status.reranker.error, "invalid-result");
+  });
+
   it("(e) a failed refresh after a success reports failed", async () => {
     const { engine, embeddings } = await setup("e4-models-e-");
     const ok = await engine.models.warm();

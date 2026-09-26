@@ -52,7 +52,7 @@ export function createRerankerProbe({ getReranker, logger, clock = Date.now }) {
         logger.warn(`reranker.probe: provider failed: ${error?.message ?? error}`);
         return failed("provider-failed");
       }
-      if (!Array.isArray(hits)) return failed("invalid-result");
+      if (!Array.isArray(hits) || hits.length === 0) return failed("invalid-result");
       const valid = hits.every((hit) => {
         const score = hit?.score ?? hit?.relevance_score;
         return Number.isInteger(hit?.index) && hit.index >= 0 && hit.index < PROBE_DOCUMENTS.length && Number.isFinite(score);
