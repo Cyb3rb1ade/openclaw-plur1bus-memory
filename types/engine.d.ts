@@ -269,7 +269,7 @@ export interface EngineConfigKey {
   default?: unknown;
   description: string;
   readAt: EngineConfigReadAt;
-  /** Paths below this key whose readAt differs from the key's own (e.g. "reembedding.activeGeneration"). */
+  /** Paths below this key whose readAt differs from the key's own (none in 1.9.0; hosts re-read HOST_REREAD_PATHS separately). */
   liveOverrides: string[];
   tier: EngineConfigTier;
   /** true when the key or any path below it is x-sensitive. */

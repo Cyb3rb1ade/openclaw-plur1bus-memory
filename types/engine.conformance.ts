@@ -165,16 +165,7 @@ assertTrue<Exact<EngineConfigReadAt, "construction" | "live">>();
 assertTrue<Exact<EngineConfigKey["tier"], "basic" | "advanced">>();
 assertTrue<Exact<EngineConfigSchema["x-contract"], ContractVersion>>();
 assertTrue<Exact<RecallQuery["warmOnly"], boolean | undefined>>();
-const minimalPrincipal: Principal = {
-  agentId: "agent-1",
-  workspace: "workspace:v1:w1",
-  channel: "test-channel",
-  accountId: "account-1",
-  chat: { id: "chat-1", kind: "direct" },
-  trust: "proved",
-};
-const minimalAgent: AgentContext = { origin: "user", background: false };
-const warmQuery: RecallQuery = { query: "q", principal: minimalPrincipal, agent: minimalAgent, signal: new AbortController().signal, warmOnly: true };
+const warmQuery: RecallQuery = { ...query, warmOnly: true };
 void warmQuery;
 
 // A minimal host satisfies HostServices: everything optional stays optional.
