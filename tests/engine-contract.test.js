@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
-import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+import { defaultSharedMemoryMode } from "../lib/shared-memory-pool.js";
 import { readRuntimeSources } from "./helpers/runtime-sources.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -55,9 +55,9 @@ describe("Engine", () => {
     assert.equal(status.models.embedder.state, "loading");
     assert.equal(status.models.reranker.state, "disabled");
     assert.equal(status.journal, null);
-    assert.deepEqual(status.sharedMemory, stableDirectoryCapabilitiesSupported()
-      ? { supported: true, mode: "fd-capability" }
-      : { supported: false, mode: "unavailable", reason: "platform" });
+    assert.deepEqual(status.sharedMemory, defaultSharedMemoryMode() === "unavailable"
+      ? { supported: false, mode: "unavailable", reason: "platform" }
+      : { supported: true, mode: defaultSharedMemoryMode() });
     assert.ok(engine.systemSupplement().length >= 1);
     await engine.close({ budgetMs: 5_000 });
   });

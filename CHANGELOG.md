@@ -567,11 +567,27 @@ Contract-Version **1.8.0**. Details in `docs/engine-api.md`, Abschnitt
   (`{ supported, mode, reason? }`); Linux bleibt unverändert beim
   Descriptor-Alias-Modus (`fd-capability`).
 - **ADR 0001** (`docs/adr/0001-shared-memory-on-macos-and-windows.md`): warum
-  macOS und Windows heute keinen Shared-Memory-Modus haben, und der
-  empfohlene, noch nicht umgesetzte `verified-path`-Modus, um das zu
-  schließen (Owner-Entscheidung ausstehend). `SharedMemoryMode` führt
-  `"verified-path"` schon jetzt in seiner Union — reserviert, bis der Modus
-  ausgeliefert wird.
+  macOS und Windows keinen Descriptor-Alias-Modus haben, und der
+  `verified-path`-Modus, der das schließt — vom Owner am 2026-09-27
+  angenommen (Status „Accepted").
+- **Geteilte Erinnerungen funktionieren auf macOS und Windows im
+  Verified-Path-Modus (ADR 0001).** `SharedMemoryPool` wählt dort
+  `verified-path` (`lib/verified-path-directory.js`): jeder Pfad wird vom
+  Wurzelverzeichnis an per `lstat` geprüft (kein Symlink, keine Junction,
+  POSIX: Eigentümer root oder der aktuelle Benutzer, nicht für andere
+  beschreibbar), `.plur1bus-shared` wird beim Anlegen auf den Benutzer
+  beschränkt (`0700` bzw. `icacls`) und muss danach benutzereigen und privat
+  sein, die Identität jedes gehaltenen Verzeichnisses wird vor jeder
+  LanceDB-Operation und nach jeder Lease erneut geprüft. Schlägt eine Prüfung
+  fehl, sperrt sich der Pool bis zum Neustart: `status().sharedMemory` meldet
+  `{ supported: false, mode: "verified-path", reason }` (`unsafe-root`,
+  `acl-tool-unavailable`, `identity-changed`), weitere Freigaben antworten
+  mit `unsupported`, geteilte Lesezugriffe bleiben leer. Ein bestehendes
+  `.plur1bus-shared` mit lockereren Rechten wird abgelehnt, nicht still
+  verschärft. Linux bleibt unverändert beim `fd-capability`-Modus; die
+  Legacy-Shared-Migration und benannte Namespaces bleiben Linux-only. Der
+  Contract bleibt 1.8.0. Neuer CI-Job `windows-verified-path.yml`
+  (windows-latest), der macOS-Portabilitäts-Job führt die neuen Tests mit.
 
 #### Geändert
 

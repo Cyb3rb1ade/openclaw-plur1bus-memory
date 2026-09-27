@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { createEngine } from "../engine/create-engine.js";
 import { createStatusReporter, degradedFromModels, normalizeJournalBacklog, JOURNAL_BACKLOG_TIMEOUT_MS } from "../engine/status/status-reporter.js";
 import { createStubHost } from "../lib/host-services.js";
-import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+import { defaultSharedMemoryMode } from "../lib/shared-memory-pool.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const baseConfig = (baseDbPath) => ({
@@ -71,9 +71,10 @@ describe("Engine.status() (E4 Task 4)", () => {
     const after = await engine.status();
     assert.equal(after.degraded, null);
 
-    const expectedShared = stableDirectoryCapabilitiesSupported()
-      ? { supported: true, mode: "fd-capability" }
-      : { supported: false, mode: "unavailable", reason: "platform" };
+    const defaultMode = defaultSharedMemoryMode();
+    const expectedShared = defaultMode === "unavailable"
+      ? { supported: false, mode: "unavailable", reason: "platform" }
+      : { supported: true, mode: defaultMode };
     assert.deepEqual(after.sharedMemory, expectedShared);
     await engine.close();
   });

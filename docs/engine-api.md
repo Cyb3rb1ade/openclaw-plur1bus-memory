@@ -129,7 +129,11 @@ payload)`, read by every `emitEngineEvent` call in `engine/**`), `clock`
 surface (`jobs`, `embedding`, `admin`, `events`, `channels`). `engine/create-engine.js`'s `createEngine(host, config,
 testOptions?)` builds one; `testOptions.internals` overrides members of the
 engine's internal object after construction (e.g. a stub embedder) and is
-test-only.
+test-only. `testOptions.sharedMemoryMode` (test-only, untyped, not part of
+the contract) forces the `SharedMemoryPool` routing mode — `"fd-capability"`,
+`"verified-path"` or `"unavailable"` — so Linux CI can drive the
+verified-path mode end to end; the pool is captured by local bindings in
+`createEngine`, so an `internals` override would not reach every user of it.
 
 ## Rules the types encode
 
@@ -665,25 +669,26 @@ also becomes `null`, logged once.
 ### `EngineStatus.sharedMemory` and the `unsupported` `MemoryOpError`
 
 `sharedMemoryPool.support()` reports `{ supported, mode }` (mode
-`"fd-capability"` or `"unavailable"`), plus `reason: "platform"` when
-unsupported — a pure, filesystem-free read of the mode `SharedMemoryPool`
-selected at construction (`stableDirectoryCapabilitiesSupported()`), never a
-live probe. **Linux is unchanged**: the descriptor-alias routing in
-`lib/directory-capability.js` (`fd-capability`) stays the only Linux mode in
-every task of this plan. **macOS and Windows** have no such routing today
-(no `/proc`, no path syntax through an open handle) and report `{ supported:
-false, mode: "unavailable", reason: "platform" }`; see
-[ADR 0001](adr/0001-shared-memory-on-macos-and-windows.md) for why,
-and for the verified-path mode recommended (but not yet implemented) to
-close that gap. `SharedMemoryMode` already includes `"verified-path"` in its
-union — **reserved; not produced until the verified-path mode ships** (the
-owner's decision on the ADR is pending; `sharedMemoryPool.support()` never
-returns it today).
+`"fd-capability"`, `"verified-path"` or `"unavailable"`), plus a `reason`
+when unsupported — a pure, filesystem-free read of the mode `SharedMemoryPool`
+selected at construction (`defaultSharedMemoryMode()`) and of its taint,
+never a live probe. **Linux is unchanged**: the descriptor-alias routing in
+`lib/directory-capability.js` (`fd-capability`) stays the only Linux mode.
+**macOS and Windows** use the verified-path mode of
+[ADR 0001](adr/0001-shared-memory-on-macos-and-windows.md) (accepted
+2026-09-27; see "Shared memory on macOS and Windows (verified-path)" below)
+and report `{ supported: true, mode: "verified-path" }` until a check fails;
+then `{ supported: false, mode: "verified-path", reason }` with `reason`
+`"unsafe-root"`, `"acl-tool-unavailable"` or `"identity-changed"`. Any other
+platform reports `{ supported: false, mode: "unavailable", reason:
+"platform" }`.
 
-Where a platform has no shared-memory mode, `Engine.memory.share` and
-`proposals.accept` reject with a typed `MemoryOpError` — `code:
-"unsupported"`, `detail: { capability: "shared-memory", reason: "platform"
-}` — **before** any row, archive or `.plur1bus-shared` directory is touched.
+Where a platform has no shared-memory mode, or a verified-path pool is
+tainted, `Engine.memory.share` and `proposals.accept` reject with a typed
+`MemoryOpError` — `code: "unsupported"`, `detail: { capability:
+"shared-memory", reason }` (the `support().reason`: `"platform"`, or the
+verified-path taint) — **before** any row, archive or `.plur1bus-shared`
+directory is touched.
 The two members order this check differently against their own lookups:
 **`share`** treats it as a platform property, not data-dependent, and checks
 it ahead of every anti-oracle lookup (`getCard`), so a nonexistent source id
@@ -698,6 +703,87 @@ unaffected by this error path: they already answered empty/`null` on an
 unsupported platform, and still do. The OpenClaw `/share` reply says why
 (`plur1bus.share_unsupported`) instead of the generic `share_failed` text
 when the outcome is `"unsupported"`.
+
+### Shared memory on macOS and Windows (verified-path)
+
+ADR 0001 Option B, accepted by the owner on 2026-09-27 and shipped as E4.2
+(contract stays 1.8.0 — every value below was already in the 1.8.0 unions).
+`SharedMemoryPool` picks its mode once, in the constructor:
+`defaultSharedMemoryMode()` answers `"fd-capability"` where descriptor
+aliases work (Linux), `"verified-path"` on darwin and win32, `"unavailable"`
+elsewhere. In verified-path mode the pool opens directories with
+`openVerifiedPathDirectory` (`lib/verified-path-directory.js`) where the fd
+mode uses `openDirectoryCapability`, and compares the pinned `{dev, ino}` of a
+freshly walked directory where the fd mode uses
+`pathMatchesDirectoryCapability`. The child `AgentDbPool`s receive the
+`VerifiedPathDirectory` as `parentDirectoryCapability` unchanged; on that
+parent-routed path they only call `openChild`, `childMatches`, `assertOpen`,
+`path` and `close`, and `MemoryDB` hands LanceDB the held directory's
+canonical `path` after `assertOpen()`.
+
+What is checked, and when:
+
+- **Every open** walks the canonical path from the filesystem root with
+  `lstat`: no symlink, junction or reparse point; on POSIX every segment is
+  owned by root or the current user and not group/other-writable unless
+  sticky. A symlink already in the configured base path (e.g. macOS
+  `/var -> /private/var`) is resolved once by `realpathSync.native` and the
+  policy then applies to the resolved chain (ruling E4-R10).
+- **First write lease per process**: a `.plur1bus-shared` the pool just
+  created is restricted with `secureDirectoryOwnerOnly` (POSIX `fchmod
+  0o700`; win32 `icacls <root> /inheritance:r /grant:r <user>:(OI)(CI)(F)`);
+  then `assertOwnerOnlyDirectory` checks the root (POSIX owner = uid and
+  `(mode & 0o077) === 0`; win32 owner SID = user SID and every Allow ACE is
+  the user, SYSTEM or Administrators, read through `powershell.exe`) and the
+  base must belong to the current user (POSIX owner = uid and `(mode &
+  0o022) === 0`; win32 owner SID = user SID). A pre-existing root with looser
+  permissions is refused, never silently tightened.
+- **Every LanceDB operation**: `MemoryDB` calls `assertOpen()` on the held
+  directory (`lstat` identity, plus the POSIX anchor descriptor).
+- **After every lease** (`finally` in `_lease`): the root is re-verified.
+
+A failure **taints** the pool until restart: `support()` answers `{
+supported: false, mode: "verified-path", reason }` with the error's reason
+(`unsafe-root`, `acl-tool-unavailable`; a moved identity or a failed
+after-lease check is `identity-changed`; an error without a reason, such as
+`ENOSYS` for missing `O_NOFOLLOW`, counts as `unsafe-root` — fail-closed). The
+call that hit the failure rejects with its own (log-safe) error, which
+`Engine.memory` maps to `storage`; later shares and accepts answer
+`unsupported`, later write leases throw `SHARED_MEMORY_UNSUPPORTED` with the
+taint as `.reason`, and shared reads answer empty, exactly as on a platform
+without shared memory. The taint is logged once through `safeWarn`, naming
+the reason only.
+
+The **legacy shared migration** (`plur1bus migrate-legacy-shared`) and
+**explicit named namespaces** stay fd-only: in verified-path mode the
+migration answers `sharedMemoryUnsupportedError("platform")` before it reads
+or writes anything.
+
+**Residual risks** (ADR 0001): the check-to-use window between the last
+`lstat` and LanceDB's own open remains by construction and is exploitable
+only by the current user, root or Administrators; Windows ancestors above
+the base are checked for reparse points only; network and virtual
+filesystems with unstable inode numbers fail closed with
+`identity-changed`; the Windows ACL read needs `powershell.exe` (missing →
+`acl-tool-unavailable`). **Elevated Windows shells** (ruling E4-R12): a
+directory created by an elevated Administrator is usually owned by
+Administrators (`S-1-5-32-544`), not the user, so the shared root or base
+answers `unsafe-root`.
+
+**Troubleshooting** — `status().sharedMemory.reason`:
+
+- `unsafe-root` on macOS: a directory on the path is group/other-writable or
+  owned by someone else, or `.plur1bus-shared` is not `0700`. Fix the mode
+  (`chmod 700 <base>/.plur1bus-shared`, `chmod go-w <base>`) and restart.
+- `unsafe-root` on Windows: most often an elevated (Run as administrator)
+  process created the base or root. Run unelevated, or hand the directory to
+  the user (`icacls <dir> /setowner <user>`) and remove foreign Allow ACEs;
+  then restart.
+- `acl-tool-unavailable`: `powershell.exe` (or `icacls`) could not run —
+  restore it on `PATH` and restart.
+- `identity-changed`: the base or `.plur1bus-shared` was renamed, replaced or
+  is on a filesystem without stable inode numbers. Move the base to a local
+  disk, check nothing else rewrites it, and restart.
 
 ### Turn replay (Q3): a replayed capture does not run twice
 
@@ -843,8 +929,8 @@ works against a plain `HostServices` with no adapter involved, per
   back `null`. A host with no journal of its own (or no need to report a
   backlog) can leave the capability unset entirely; `journal: null` then
   means "not reported", not "empty".
-- **A platform without a shared-memory mode answers `unsupported`, not
-  `storage` (1.8.0).** `Engine.memory.share` and `proposals.accept` check
+- **A platform without a shared-memory mode, or a tainted verified-path
+  pool, answers `unsupported`, not `storage` (1.8.0).** `Engine.memory.share` and `proposals.accept` check
   `sharedMemoryPool.support()` before touching anything, and reject with
   `MemoryOpError` `code: "unsupported"`, `detail: { capability:
   "shared-memory", reason }` when it is unsupported — a host should route

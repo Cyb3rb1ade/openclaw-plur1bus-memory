@@ -1,10 +1,8 @@
 # ADR 0001: Shared memory on macOS and Windows
 
-- **Status:** Proposed — owner decision pending. The analysis and the
-  recommendation below are complete; the implementation (engine plan 2a-E4,
-  Tasks 9 and 10) is not started and is dispatched only after the owner's
-  explicit yes. On acceptance Task 10 sets this line to "Accepted", with the
-  owner and the date.
+- **Status:** Accepted — owner Christian (Cyb3rb1ade), 2026-09-27. Option B
+  (verified-path mode on darwin and win32) is implemented by engine plan
+  2a-E4, Tasks 9 and 10 (E4.2).
 - **Date:** 2026-09-26
 - **Scope:** explicit shared memory (workspace and user pools, `/share`,
   shared-copy refresh, change proposals, shared reads) on darwin and win32.
@@ -146,7 +144,7 @@ Keep `unsupported` on darwin and win32. Zero risk and zero cost, but shared
 memory stays unavailable on two of the three D8 targets, including the
 owner's primary platform (macOS).
 
-## Decision (recommended, pending owner)
+## Decision (accepted 2026-09-27)
 
 **Option B, verified-path mode, on darwin and win32. Linux stays on
 fd-capability routing** — it remains Linux's only mode, and every existing
@@ -167,7 +165,7 @@ identity that make the remaining window harmless.
 
 ## Consequences
 
-If the owner accepts:
+Accepted (2026-09-27):
 
 - `SharedMemorySupport.mode` (`types/engine.d.ts:723`) answers
   `"verified-path"` on darwin and win32; `supported` is `true` unless a check
@@ -183,7 +181,7 @@ If the owner accepts:
   (`unsafe-root`) rather than silently tightened; the operator fixes the mode
   or ACL.
 
-If the owner declines:
+Had the owner declined (kept for the record):
 
 - `unsupported` (reason `"platform"`) stays the answer on darwin and win32,
   exactly as shipped by Tasks 4 and 6.
@@ -204,6 +202,15 @@ If the owner declines:
   namespaces** (`lib/multi-namespace-pool.js:167`) stay fd-only; off Linux the
   migration answers `unsupported` and named namespaces stay disabled, as the
   B12 audit already records for named routing.
+- **A symlink already in the configured base path** (ruling E4-R10) is
+  resolved once by the canonicalisation of step 1 — this is how macOS's
+  `/var -> /private/var` temp directories work — and the policy of steps 2-4
+  applies to the resolved chain. A link that appears after that is refused.
+- **Elevated Windows shells** (ruling E4-R12): a directory created by an
+  elevated Administrator is usually owned by `S-1-5-32-544`, not the user's
+  SID, so such a shared root or base answers `unsafe-root`. Run the engine
+  unelevated, or give the directory to the user (`icacls <dir> /setowner
+  <user>`).
 - **The check-to-use window** between the last `lstat` and LanceDB's own open
   remains, by construction (see the security argument); it is exploitable only
   by the current user, root or Administrators.

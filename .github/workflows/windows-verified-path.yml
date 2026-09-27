@@ -1,4 +1,8 @@
-name: macOS path and capability contracts
+name: Windows verified-path shared memory
+
+# ADR 0001 (E4 Task 10): the first real run of the verified-path directory
+# code on Windows — icacls, the PowerShell ACL read, reparse-point refusal and
+# lstat-pinned identities. POSIX-mode cases skip on win32.
 
 on:
   pull_request:
@@ -10,9 +14,9 @@ permissions:
   contents: read
 
 jobs:
-  portability:
-    runs-on: macos-latest
-    timeout-minutes: 10
+  verified-path:
+    runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -20,13 +24,8 @@ jobs:
           node-version: '24.16.0'
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Canonical paths and fail-closed shared capabilities
+      - name: Verified-path directories and shared memory
         run: >-
           node --test
-          tests/b13-memory-request-context.test.js
-          tests/reembedding-generation-layout.test.js
-          tests/openclaw-default-llm-runtime.test.js
-          tests/release-731-runtime-callsite-security.test.js
-          tests/b13-shared-memory-pool.test.js
           tests/verified-path-directory.test.js
           tests/b13-shared-memory-verified-path.test.js

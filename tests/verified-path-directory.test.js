@@ -7,6 +7,10 @@
  * `platform: "win32"` plus injected `readAcl` / `execFile`. The suite runs as
  * root in the container, so owner and mode policy is driven through the
  * injected `lstat` and `uid` seams, not the real uid.
+ *
+ * On real Windows (windows-latest CI, E4 Task 10) the cases that need POSIX
+ * modes, uids or anchor descriptors skip; the last case runs the real
+ * `icacls` / PowerShell ACL path there.
  */
 
 import { describe, it } from "node:test";
@@ -38,6 +42,7 @@ const SYSTEM_SID = "S-1-5-18";
 const ADMINS_SID = "S-1-5-32-544";
 const AUTH_USERS_SID = "S-1-5-11";
 const ME = process.getuid?.();
+const POSIX_ONLY = { skip: process.platform === "win32" ? "needs POSIX modes, uids or anchor descriptors" : false };
 
 /** A bigint lstat that reports `overrides` for exactly one path and the real entry elsewhere. */
 function lstatOverriding(target, overrides) {
@@ -55,7 +60,7 @@ function privateBase(prefix) {
 }
 
 describe("VerifiedPathDirectory", () => {
-  it("opens and creates a private chain and routes children", () => {
+  it("opens and creates a private chain and routes children", POSIX_ONLY, () => {
     const base = makeTempDir("e4-vp-");
     const dir = openVerifiedPathDirectory(join(base, "s"), { create: true });
     try {
@@ -82,7 +87,7 @@ describe("VerifiedPathDirectory", () => {
     }
   });
 
-  it("refuses a symlinked segment at open and a swap after open", () => {
+  it("refuses a symlinked segment at open and a swap after open", POSIX_ONLY, () => {
     const base = privateBase("e4-vp-link-");
     const other = join(base, "other");
     mkdirSync(other, { mode: 0o700 });
@@ -157,7 +162,7 @@ describe("VerifiedPathDirectory", () => {
     }
   });
 
-  it("resolves a link in the configured path once and applies the policy to its target chain", () => {
+  it("resolves a link in the configured path once and applies the policy to its target chain", POSIX_ONLY, () => {
     // ADR 0001 step 1: the path is canonicalised once (realpathSync.native of
     // its nearest existing ancestor); the walk then runs on the canonical
     // chain. This is what lets macOS's /var -> /private/var tmpdir work.
@@ -199,7 +204,7 @@ describe("VerifiedPathDirectory", () => {
     }
   });
 
-  it("ancestor and owner policy", () => {
+  it("ancestor and owner policy", POSIX_ONLY, () => {
     const base = privateBase("e4-vp-policy-");
     const ancestor = join(base, "a");
     mkdirSync(ancestor, { mode: 0o700 });
@@ -365,7 +370,7 @@ describe("VerifiedPathDirectory", () => {
     );
   });
 
-  it("secureDirectoryOwnerOnly makes a POSIX directory 0700 without following a link", () => {
+  it("secureDirectoryOwnerOnly makes a POSIX directory 0700 without following a link", POSIX_ONLY, () => {
     const base = privateBase("e4-vp-secure-");
     const dir = join(base, "d");
     mkdirSync(dir, { mode: 0o755 });
@@ -418,7 +423,7 @@ describe("VerifiedPathDirectory", () => {
     assert.throws(() => dir.openChild("c"), /closed/);
   });
 
-  it("holds an anchor descriptor per directory on POSIX", () => {
+  it("holds an anchor descriptor per directory on POSIX", POSIX_ONLY, () => {
     const base = privateBase("e4-vp-anchor-");
     const dir = openVerifiedPathDirectory(base);
     try {
@@ -504,7 +509,7 @@ describe("VerifiedPathDirectory (fix round 1)", () => {
     }
   });
 
-  it("childMatches answers false when the re-opened child breaks the policy", () => {
+  it("childMatches answers false when the re-opened child breaks the policy", POSIX_ONLY, () => {
     const base = privateBase("e4-vp-match-policy-");
     const parent = openVerifiedPathDirectory(base);
     try {
@@ -521,7 +526,7 @@ describe("VerifiedPathDirectory (fix round 1)", () => {
     }
   });
 
-  it("noFollowDirectoryFlags fails closed without O_DIRECTORY or O_NOFOLLOW", () => {
+  it("noFollowDirectoryFlags fails closed without O_DIRECTORY or O_NOFOLLOW", POSIX_ONLY, () => {
     assert.throws(() => noFollowDirectoryFlags({ O_RDONLY: 0, O_DIRECTORY: 0x10000 }), { code: "ENOSYS" });
     assert.throws(() => noFollowDirectoryFlags({ O_RDONLY: 0, O_NOFOLLOW: 0x20000 }), { code: "ENOSYS" });
     assert.equal(
@@ -532,5 +537,42 @@ describe("VerifiedPathDirectory (fix round 1)", () => {
       noFollowDirectoryFlags(),
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_CLOEXEC,
     );
+  });
+});
+
+describe("VerifiedPathDirectory on real Windows (E4 Task 10)", () => {
+  it("icacls restricts a real directory, PowerShell reads its ACL, identity is pinned", { skip: process.platform !== "win32" }, () => {
+    const base = privateBase("e4-vp-realwin-");
+    const dir = openVerifiedPathDirectory(join(base, "s"), { create: true });
+    try {
+      assert.equal(dir.anchorFd, null);
+      const before = readDirectoryAcl(dir.path);
+      assert.match(before.userSid, /^S-1-/);
+      assert.deepEqual(secureDirectoryOwnerOnly(dir.path), { applied: true, mechanism: "acl" });
+      const after = readDirectoryAcl(dir.path);
+      const allowed = after.aces.filter((ace) => ace.type === "Allow").map((ace) => ace.sid);
+      assert.ok(allowed.includes(after.userSid), "the current user keeps an Allow ACE");
+      for (const sid of allowed) {
+        assert.ok([after.userSid, SYSTEM_SID, ADMINS_SID].includes(sid), `unexpected Allow ACE ${sid} after icacls`);
+      }
+      if (after.ownerSid === after.userSid) {
+        assertOwnerOnlyDirectory(dir.path);
+      } else {
+        // Elevated shells create directories owned by Administrators (E4-R12).
+        assert.throws(() => assertOwnerOnlyDirectory(dir.path), { reason: "unsafe-root" });
+      }
+      const child = dir.openChild("c", { create: true });
+      try {
+        assert.equal(dir.childMatches("c", child), true);
+        renameSync(child.path, `${child.path}.old`);
+        mkdirSync(child.path);
+        assert.throws(() => child.assertOpen(), { code: "EIDENTITY" });
+        assert.equal(dir.childMatches("c", child), false);
+      } finally {
+        child.close();
+      }
+    } finally {
+      dir.close();
+    }
   });
 });

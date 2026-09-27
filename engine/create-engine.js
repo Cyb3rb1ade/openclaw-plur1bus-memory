@@ -135,7 +135,7 @@ const ENGINE_VERSION = JSON.parse(readFileSync(new URL("../package.json", import
  *
  * @param {object} host HostServices (types/engine.d.ts, contract 1.5.0).
  * @param {object} config The plugin config (EngineConfig).
- * @param {{internals?: object}} [testOptions] Test-only: overrides applied to EngineInternals after construction.
+ * @param {{internals?: object, sharedMemoryMode?: "fd-capability"|"verified-path"|"unavailable"}} [testOptions] Test-only: `internals` overrides applied to EngineInternals after construction; `sharedMemoryMode` forces the SharedMemoryPool routing mode (ADR 0001) — the pool is captured by local bindings, so an `internals` override would not reach every user of it.
  * @returns {object} Engine (types/engine.d.ts), plus the adapter-only internals seam (engine/internals.js).
  */
 export function createEngine(host, config, testOptions = {}) {
@@ -1245,7 +1245,13 @@ export function createEngine(host, config, testOptions = {}) {
   // configured recall.halfLifeDaysMap; every pool this engine opens carries it.
   const EngineAgentDbPool = AgentDbPool.withOptions({ halfLifeOverrides });
   const pool = new MultiNamespacePool(namespaceLayout, vectorDim, EngineAgentDbPool, host.logger);
-  const sharedMemoryPool = new SharedMemoryPool(embeddingGenerationLayout.sharedBaseDir, vectorDim, EngineAgentDbPool, host.logger);
+  const sharedMemoryPool = new SharedMemoryPool(
+    embeddingGenerationLayout.sharedBaseDir,
+    vectorDim,
+    EngineAgentDbPool,
+    host.logger,
+    testOptions.sharedMemoryMode ? { mode: testOptions.sharedMemoryMode } : {},
+  );
   // The control surface gets its own bounded, read-only view. It must never
   // reuse a write pool: a status request is not allowed to create a Lance
   // table, directory, or card as a side effect.
