@@ -930,7 +930,7 @@ way to read the schema:
 - **`livePaths()`** — every path whose resolved `readAt` is `"live"`, sorted.
 - **`sensitivePaths()`** — every `x-sensitive` path, in depth-first schema
   order; this is exactly the manifest's `configContracts.secretInputs.paths`
-  list (eight credential keys, unchanged by E5 — see E5-R24 below).
+  list (eight credential keys, unchanged by E5 — see the open item below).
 
 ### `readAt`, `x-tier`, `x-sensitive` — and what "live" means
 
@@ -943,7 +943,7 @@ way to read the schema:
 - **`x-tier`** is `"basic"` or `"advanced"`. Every key is `"advanced"` in
   1.9.0 (D29) — the harness/host UI has no `"basic"` tier to show yet.
 - **`x-sensitive`** marks the eight credential nodes the manifest already
-  masked as secret inputs. E5-R24 (open item for the owner): `*.headers` and
+  masked as secret inputs. **Open item for the owner:** `*.headers` and
   `reminders.webhookUrl` also carry values a host would not want echoed back
   in a UI or log, but neither is `x-sensitive` — E5 kept `secretInputs.paths`
   identical to today's manifest and did not widen it.
@@ -1030,7 +1030,7 @@ all `null`.
 | write the start notice, mood/emotion files, fast-bernd, overlays, contradictions, the retrieval ledger, presentation/activity/reminder state, the knowledge cache, graph-recall metrics, or call the query summarizer | none of these code paths are reached |
 | note a fragment-compactor write, or run `optimizeTable` | never referenced |
 
-Per E5-R26, a warm recall never touches the persistent (SQLite) embedding
+A warm recall never touches the persistent (SQLite) embedding
 cache (`runtime.embeddingCachePersist`): every warm embed carries the
 embedding cache's per-call memory-only flag (`persist: false`), which skips
 both the persistent lookup (whose hit would refresh access times, and whose
@@ -1044,8 +1044,10 @@ recall or `models.warm()` would — call `models.warm()` first.
 
 **Background priority; not cached.** `background: true` puts a warm recall
 behind foreground recalls in the scheduler. `cacheKey: ""` means a warm
-answer is never served back to a later real recall (and a real recall right
-after a warm one still embeds its own query fresh).
+answer is never served back to a later real recall — a real recall right
+after a warm one is not served from the recall cache; its query embedding
+is usually a warm memory-cache hit, since the warm recall already filled
+the provider's in-memory embedding cache.
 
 **Hosts should warm with it after `models.warm()`.** Call `Engine.recall`
 with `warmOnly: true` once per agent after `Engine.models.warm()` resolves,
@@ -1102,7 +1104,7 @@ Defaults (`DEFAULT_LANCEDB_COMPACTION`): `enabled: true`, `fragmentThreshold:
 64`, `checkEveryWrites: 16`, `checkIntervalMs: 600000` (10 min), `timeoutMs:
 60000`. **`runtime.lancedbCompaction.enabled: false` is the only off
 switch** — `dailyConsolidation.lancedbOptimize.enabled` governs the nightly
-job only and does **not** disable this compaction (R12); the two run
+job only and does **not** disable this compaction; the two run
 independently, and both hosts can have one, both, or neither enabled.
 **Compaction is on by default for every host, including OpenClaw** (owner
 decision, 2026-09-27).
@@ -1128,11 +1130,23 @@ optimized; `dailyConsolidation` and the dashboard wait for the lock in FIFO
 order instead, so a long compactor optimize can delay them by up to its own
 bound.
 
-**Parked M5.** A timer-driven cleanup — this compactor's `cleanupOlderThan`,
-and `dailyConsolidation`'s own optimize — can delete versions older than the
+**A known, pre-existing risk, not introduced or fixed by E5.** A
+timer-driven cleanup — this compactor's `cleanupOlderThan`, and
+`dailyConsolidation`'s own optimize — can delete versions older than the
 retention window while a long-running reader still has one of them open.
 This is the same risk `dailyConsolidation`'s optimize already carried before
-E5; E5 does not introduce it and does not fix it.
+E5.
+
+**A lingering native optimize can outlive `close()`.** `Engine.close()`
+resolves once its own `budgetMs` elapses, race or no race, but a LanceDB
+`optimize()` call that is still running natively when the compactor's
+`timeoutMs` fires keeps running in the background — the compactor's timeout
+only stops *waiting* on it, it does not cancel the underlying work. That
+lingering optimize can keep the Node.js process alive after `close()`
+returns, for as long as it takes LanceDB to finish (bounded by the
+compactor's own `timeoutMs`, not by `close()`'s `budgetMs`). This does not
+break the neo worker's "the process can exit" guarantee, which is scoped to
+the neo worker lease above, not to LanceDB's native calls.
 
 ### The neo worker lease
 

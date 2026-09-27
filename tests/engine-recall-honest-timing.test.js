@@ -100,7 +100,10 @@ describe("honest recall timing (E5 Task 8)", () => {
       // Date.now() differences are whole milliseconds and never exceed the
       // ceiling of the true span, which the caller's wall clock encloses.
       assert.ok(timing.totalMs <= Math.ceil(wall), `totalMs ${timing.totalMs} > wall ${wall}`);
-      assert.ok(timing.totalMs >= wall - 30, `totalMs ${timing.totalMs} < wall ${wall} - 30`);
+      // 100 ms of slack for a loaded CI runner or a GC pause between the
+      // assembler computing `timing` and this line resuming (final review m5);
+      // the test's point is the >= 100 ms queue asserted above, not this margin.
+      assert.ok(timing.totalMs >= wall - 100, `totalMs ${timing.totalMs} < wall ${wall} - 100`);
     } finally {
       parking.release();
       await engine.close({ budgetMs: 5_000 });

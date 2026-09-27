@@ -632,7 +632,7 @@ Kein Contract-Wechsel (Typen bleiben bei 1.8.0).
   bisher und endet als `duplicate-turn`; der OpenClaw-Adapter-Pfad ist
   unverändert.
 
-### E5 — Contract 1.9.0 (host-neutraler Engine-Config-Schema, Warm-Only-Recall, ehrliches Timing, Fragment-Kompaktierung, Neo-Worker-Lease)
+### E5 — Contract 1.9.0 (host-neutrales Engine-Config-Schema, Warm-Only-Recall, ehrliches Timing, Fragment-Kompaktierung, Neo-Worker-Lease)
 
 Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
 „Engine configuration schema in 1.9.0".
@@ -669,8 +669,9 @@ Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
   kleinem `recall.softBudgetMs` (Harness) kann ein Soft-Budget-Fallback
   dadurch früher greifen. Der harte Scheduler-Timeout ist unverändert und
   zählt weiterhin ab dem Enqueue.
-- **`reembedding.activeGeneration` wird host-neutral live gelesen** —
-  über `engine/config/live-config.js`, unabhängig davon, ob `host.config()`
+- **`reembedding.activeGeneration` wird host-neutral erneut gelesen
+  (Verifikations-Read, kein live-Schlüssel)** — über
+  `engine/config/live-config.js`, unabhängig davon, ob `host.config()`
   die gesamte Host-Konfiguration oder direkt die Engine-Konfiguration liefert.
 
 #### Behoben

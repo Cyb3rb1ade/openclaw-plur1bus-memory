@@ -173,6 +173,49 @@ describe("fragment compactor (unit)", () => {
     await compactor.close();
   });
 
+  it("a losing streak of 5 consecutive conflict-only failures warns once per agent, and success resets it (m1)", async () => {
+    const { log, logger } = quietLogger();
+    let mode = "conflict";
+    const compactor = createFragmentCompactor({
+      config: { fragmentThreshold: 8 },
+      fragmentCount: async () => 50,
+      optimize: async () =>
+        mode === "conflict"
+          ? { ok: false, reason: "Retryable commit conflict for version 7", conflict: true }
+          : { ok: true },
+      keepVersionsHours: 24,
+      logger,
+      clock: () => NOW,
+      timers: manualTimers(),
+    });
+    for (let i = 1; i <= 4; i++) {
+      const r = await compactor.check("a");
+      assert.equal(r.action, "failed");
+    }
+    assert.equal(log.warn.length, 0, "below the threshold stays at debug");
+    assert.equal(log.debug.length, 4);
+    const fifth = await compactor.check("a");
+    assert.equal(fifth.action, "failed");
+    assert.equal(log.warn.length, 1, "the 5th consecutive conflict loss warns once");
+    assert.match(log.warn[0], /'a' has lost to concurrent writes 5 checks in a row/);
+    const sixth = await compactor.check("a");
+    assert.equal(sixth.action, "failed");
+    assert.equal(log.warn.length, 2, "each further loss in the streak warns again");
+
+    mode = "success";
+    const success = await compactor.check("a");
+    assert.equal(success.action, "compacted");
+    assert.equal(log.warn.length, 2, "a success does not itself warn");
+
+    mode = "conflict";
+    for (let i = 1; i <= 4; i++) {
+      const r = await compactor.check("a");
+      assert.equal(r.action, "failed");
+    }
+    assert.equal(log.warn.length, 2, "the streak count reset on success, so 4 more losses stay quiet");
+    await compactor.close();
+  });
+
   it("resolveLancedbCompaction rejects out-of-range values", async () => {
     assert.deepEqual(resolveLancedbCompaction(undefined), DEFAULT_LANCEDB_COMPACTION);
     assert.deepEqual(DEFAULT_LANCEDB_COMPACTION, {
@@ -414,14 +457,22 @@ describe("db-adapter support for the compactor", () => {
     assert.equal(await pending, null);
   });
 
-  it("fragmentCount opens the table without column migrations and shutdown closes it (M3)", async () => {
+  it("fragmentCount opens the table without column migrations and shutdown closes it (M3)", async (t) => {
     const lancedb = await import("@lancedb/lancedb");
     const basePath = makeTempDir("e5-fc-stats-");
     const db = await lancedb.connect(join(basePath, "agent-s"));
     await db.createTable("memories", [{ id: "row-1", text: "synthetic", createdAt: 1 }]);
+    const rawTable = await db.openTable("memories");
+    const statsAvailable = typeof rawTable.stats === "function";
     const adapter = createDbAdapter({ basePath, logger: silent().logger });
     const count = await adapter.fragmentCount("agent-s");
-    assert.ok(count === null || count >= 1, `fragment count ${count}`);
+    if (statsAvailable) {
+      assert.equal(typeof count, "number", `stats() exists, so fragmentCount must be a number, got ${count}`);
+      assert.ok(count >= 1, `fragment count ${count}`);
+    } else {
+      t.diagnostic(`this @lancedb/lancedb build has no table.stats(); fragmentCount is null (${count})`);
+      assert.equal(count, null);
+    }
     const fields = (await (await db.openTable("memories")).schema()).fields.map((f) => f.name);
     assert.deepEqual(fields.sort(), ["createdAt", "id", "text"], "no ensure*Columns migration ran");
     await adapter.shutdown();

@@ -39,6 +39,14 @@ const MINIMUMS = Object.freeze({
 const DEFAULT_KEEP_VERSIONS_HOURS = 24;
 
 /**
+ * Consecutive conflict-only failures for one agent before a single `warn`
+ * fires (m1). Below this, a conflict loss stays at `debug` — retrying at the
+ * next check is the expected, quiet case. The count resets to 0 on any
+ * successful compaction, so the warning is per losing streak, not cumulative.
+ */
+const CONFLICT_WARN_THRESHOLD = 5;
+
+/**
  * Validated copy of runtime.lancedbCompaction merged over the defaults
  * (out-of-range or non-integer values → default).
  *
@@ -93,6 +101,8 @@ export function createFragmentCompactor({
   const writesSinceCompaction = new Map();
   /** All writes seen per agent; its keys are the agents the timer checks. */
   const totalWrites = new Map();
+  /** Consecutive conflict-only failures per agent, since the last success (m1). */
+  const consecutiveConflicts = new Map();
   /** agentId → { promise, force } of the check queued or running for it. */
   const inFlight = new Map();
   let chain = Promise.resolve();
@@ -150,6 +160,7 @@ export function createFragmentCompactor({
     }
     if (result?.ok) {
       writesSinceCompaction.set(agentId, 0);
+      consecutiveConflicts.set(agentId, 0);
       const fragmentsAfter = await safeCount(agentId);
       return outcome(agentId, "compacted", null, started, fragmentsBefore, fragmentsAfter);
     }
@@ -160,8 +171,17 @@ export function createFragmentCompactor({
     }
     if (result?.conflict === true) {
       // Lost to concurrent writes on all attempts; the next check retries.
-      logger?.debug?.(`plur1bus-compaction: optimize for '${agentId}' lost to concurrent writes, retrying at the next check`);
+      const streak = (consecutiveConflicts.get(agentId) ?? 0) + 1;
+      consecutiveConflicts.set(agentId, streak);
+      if (streak >= CONFLICT_WARN_THRESHOLD) {
+        logger?.warn?.(
+          `plur1bus-compaction: optimize for '${agentId}' has lost to concurrent writes ${streak} checks in a row, table may not be compacting`,
+        );
+      } else {
+        logger?.debug?.(`plur1bus-compaction: optimize for '${agentId}' lost to concurrent writes, retrying at the next check`);
+      }
     } else {
+      consecutiveConflicts.set(agentId, 0);
       logger?.warn?.(`plur1bus-compaction: optimize failed for '${agentId}': ${reason}`);
     }
     return outcome(agentId, "failed", reason, started, fragmentsBefore);

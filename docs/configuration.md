@@ -601,10 +601,10 @@ Jedes `add()`/`update()` schreibt ein neues LanceDB-Fragment. Bisher lief `optim
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
 | `runtime.lancedbCompaction.enabled` | `boolean` | `true` | Kompaktierung aktivieren. **Einziger Aus-Schalter** — `dailyConsolidation.lancedbOptimize.enabled` steuert ausschließlich den nächtlichen Job und schaltet diese Kompaktierung nicht ab (und umgekehrt). |
-| `runtime.lancedbCompaction.fragmentThreshold` | `number` | `64` | Fragmentzahl je Agent-Tabelle, ab der `optimizeTable` läuft (Minimum 8). |
-| `runtime.lancedbCompaction.checkEveryWrites` | `number` | `16` | Nach so vielen Schreibzugriffen wird die Fragmentzahl geprüft (Minimum 1). |
-| `runtime.lancedbCompaction.checkIntervalMs` | `number` | `600000` | Zusätzliche Prüfung per Timer, alle 10 Minuten (Minimum 60000). |
-| `runtime.lancedbCompaction.timeoutMs` | `number` | `60000` | Timeout eines einzelnen `optimize()`-Laufs (Minimum 10000). |
+| `runtime.lancedbCompaction.fragmentThreshold` | `integer` | `64` | Fragmentzahl je Agent-Tabelle, ab der `optimizeTable` läuft (Minimum 8). |
+| `runtime.lancedbCompaction.checkEveryWrites` | `integer` | `16` | Nach so vielen Schreibzugriffen wird die Fragmentzahl geprüft (Minimum 1). |
+| `runtime.lancedbCompaction.checkIntervalMs` | `integer` | `600000` | Zusätzliche Prüfung per Timer, alle 10 Minuten (Minimum 60000). |
+| `runtime.lancedbCompaction.timeoutMs` | `integer` | `60000` | Timeout eines einzelnen `optimize()`-Laufs (Minimum 10000). |
 
 ### Verhalten
 
