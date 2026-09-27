@@ -65,7 +65,7 @@ import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
 import { ensureEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { addTraceStoreDecision, createRecallDecisionTrace, textPreview } from "../lib/recall-decision-trace.js";
 import { buildNeoWorkspaceAliases, createNeoStore, neoSessionKeysFromContext, searchNeoCandidatesGlobal, workspaceKeyFromContext } from "../lib/neo-arch.js";
-import { getSharedNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
+import { acquireSharedNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
 import { normalizeEmbeddingConfig, resolveLocalModelCacheDir } from "../lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "../lib/providers/legacy-provider-migration.js";
 import { EMBEDDING_DIMENSIONS } from "../lib/providers/dimensions.js";
@@ -951,9 +951,12 @@ export function createEngine(host, config, testOptions = {}) {
       return { allowed: false, reason: "workspace_identity_required" };
     }
   };
-  const neoWorkerRuntime = neoEnabled
-    ? getSharedNeoWorkerRuntime({ logger: host.logger })
+  // E5 Task 5: a lease on the process-wide worker; close() releases it, and
+  // the last release terminates the worker so the host process can exit.
+  const neoWorkerLease = neoEnabled
+    ? acquireSharedNeoWorkerRuntime({ logger: host.logger })
     : null;
+  const neoWorkerRuntime = neoWorkerLease?.runtime ?? null;
   // 7.12.30: Sentinel fuer das Embedding-Budget im Prompt-Recall.
   const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
   if (neoEnabled && neoMode === "slot") {
@@ -2964,6 +2967,7 @@ export function createEngine(host, config, testOptions = {}) {
     modelPreparationCoordinator,
     reembeddingCoordinator,
     localModelGeneration,
+    neoWorker: neoWorkerLease,
   });
   let closing = null;
   const closeEngine = (budgetMs) => {

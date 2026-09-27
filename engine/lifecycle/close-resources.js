@@ -25,6 +25,7 @@
  * @param {{shutdown: () => Promise<void>}|null} [options.modelPreparationCoordinator]
  * @param {{shutdown: () => Promise<void>}|null} [options.reembeddingCoordinator]
  * @param {{beginCleanup: () => void, releaseModels: () => Promise<void>}|null} [options.localModelGeneration]
+ * @param {{release: () => Promise<void>}|null} [options.neoWorker] The engine's neo worker lease; released after the pool shutdown.
  * @returns {() => Promise<void>} The closer; the second and later calls return the first call's promise.
  */
 export function createResourceCloser({
@@ -42,6 +43,7 @@ export function createResourceCloser({
   modelPreparationCoordinator = null,
   reembeddingCoordinator = null,
   localModelGeneration = null,
+  neoWorker = null,
 }) {
   let shutdownPromise = null;
   return function closeResources() {
@@ -95,6 +97,9 @@ export function createResourceCloser({
       const ordered = (async () => {
         await cleanup("memory-lancedb-namespaced: adapter shutdown failed", () => memoryDbAdapter.shutdown());
         await cleanup("memory-lancedb-namespaced: pool shutdown failed", () => pool.shutdown());
+        if (typeof neoWorker?.release === "function") {
+          await cleanup("plur1bus-neo: worker release failed", () => neoWorker.release());
+        }
         if (sharedMemoryPool) {
           await cleanup("memory-lancedb-namespaced: shared pool shutdown failed", () => sharedMemoryPool.shutdown());
         }
