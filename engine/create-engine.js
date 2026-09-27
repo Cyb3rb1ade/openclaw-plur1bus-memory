@@ -3161,6 +3161,9 @@ export function createEngine(host, config, testOptions = {}) {
     workspacePolicyGuard,
     workspacePolicyStore,
     runPlur1busCommand: runPlur1busCommandWithIdentity,
+    // A member (not a captureContext extra) so a test can stand in for the
+    // first post-store capture step (E4.1).
+    runSpeakerProposalPipeline,
     ...(testOptions.internals ?? {}),
   };
 
@@ -3299,6 +3302,7 @@ export function createEngine(host, config, testOptions = {}) {
     "rememberNeoWorkspace",
     "reminderAutoExtract",
     "resolveTemperamentName",
+    "runSpeakerProposalPipeline",
     "runtimeScheduler",
     "skillMinerEnabled",
     "snapshotNeoMessages",
@@ -3311,7 +3315,6 @@ export function createEngine(host, config, testOptions = {}) {
     MAX_POSTPROCESSING_RETRIES,
     callLlm,
     generateSummary,
-    runSpeakerProposalPipeline,
     summarizeForCapture,
     textSuggestsGroupOrigin,
     waitForTimeoutSettlement,
@@ -3579,8 +3582,9 @@ export function createEngine(host, config, testOptions = {}) {
         // The turn's agent and its principal's agent must agree: the queue is
         // keyed by one and the stores are scoped by the other.
         if (t.principal?.agentId !== agentId) return { stored: 0, skipped: 1, reason: "principal-agent-mismatch" };
-        // Only a result without `reason` (the pipeline completed) is recorded.
-        return replayGuard.run(agentId, turnKeyOf(t), async () => {
+        // Recorded once the pipeline's rows settled cleanly (onRowsSettled,
+        // E4.1), or else when the result carries no `reason`.
+        return replayGuard.run(agentId, turnKeyOf(t), async (onRowsSettled) => {
           const workspaceDir = await host.workspaceDir(agentId);
           const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
           // TurnRecord.incognito === false is the host's own classification:
@@ -3590,7 +3594,7 @@ export function createEngine(host, config, testOptions = {}) {
           const outcome = await internals.getCaptureTurn()(
             { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
             { agentId, workspaceDir, sessionKey: t.sessionKey },
-            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report },
+            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report, onRowsSettled },
           );
           if (outcome?.ok) {
             // The scheduler reports ok once the worker settled; the pipeline

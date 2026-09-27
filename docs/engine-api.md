@@ -845,6 +845,20 @@ second summary, a second row, or a second session count. Keys are persisted
 per agent (surviving a restart) for **7 days**, capped at the **512** most
 recent per agent (oldest dropped first).
 
+**When a turn is recorded (E4.1).** The key is written as soon as the
+capture's rows have settled successfully — at least one row stored and no
+item failed — right after the store loop and **before** the post-store steps
+(speaker pipeline, meta-cognition, graph build, the neo embedding drain,
+scheduler settling). A process killed during those steps therefore has the
+turn recorded already, and the host's journal replay answers
+`"duplicate-turn"` instead of storing the row again; the only remaining
+window between "row stored" and "turn recorded" is the guard's own atomic
+file write (temp file + rename). The post-store steps are best-effort: if
+one of them fails afterwards, or the capture's result still ends up carrying
+a `reason`, the turn **stays recorded**. A capture that settles with nothing
+stored (every item cleanly skipped) is recorded, as before, once it
+completes without a `reason`.
+
 A capture that **fails or is only partly completed is not recorded** as a
 replay key, so replaying it runs the capture pipeline again — this is a
 deliberate trade-off: a turn that stored one summarised item and then failed
