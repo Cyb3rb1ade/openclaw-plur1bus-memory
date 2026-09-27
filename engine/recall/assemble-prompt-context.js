@@ -25,7 +25,7 @@ import { isLlmRouteAvailable } from "../../lib/llm-router.js";
 import { createRetrievalLedgerEntry } from "../../lib/memory-dynamics.js";
 import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { buildMoodStyleDirective } from "../../lib/mood-style-directive.js";
-import { dedupeNeoLanesAgainstTexts, formatNeoRecallContext, routeNeoRecall } from "../../lib/neo-arch.js";
+import { dedupeNeoLanesAgainstTexts, formatNeoRecallContext } from "../../lib/neo-arch.js";
 import { OPEN_THREADS_SHOWN_FILE, collectOpenThreads, formatOpenThreadsContext, normalizeTopic } from "../../lib/open-threads.js";
 import { OverlayGenerator } from "../../lib/overlay-generator.js";
 import { findBestPattern } from "../../lib/pattern-surface.js";
@@ -39,7 +39,9 @@ import { listDueReminders, presentReminder } from "../../lib/reminder-store.js";
 import { readReplyOutcomeLog, recordPendingReplyOutcome, sessionKeyFrom } from "../../lib/reply-outcome-tracking.js";
 import { resolveCompactedAt } from "../checkpoint/checkpoint-store.js";
 import { emitEngineEvent } from "../events.js";
+import { readNeoPrelude } from "./neo-prelude.js";
 import { ABORTED, contextBlock, copyRecallResult, recallResult } from "./recall-result.js";
+import { autoRecallParams } from "./recall-params.js";
 import { isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { applySemanticLensToRecall } from "../../lib/semantic-lens-index.js";
 import { formatTimeContext, getLastActivity, recordActivity } from "../../lib/session-time.js";
@@ -72,20 +74,12 @@ export function createPromptContextAssembler(ctx) {
     MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
     NEO_EMBED_TIMEOUT,
     NEO_RECALL_PRELUDE_LOG_MS,
-    adaptiveBudgetCfg,
-    autoRecallMinScore,
     automaticWorkspacePolicyDecision,
     buildMaintenanceNudges,
     callLlm,
-    candidateTopK,
-    canonicalEnabled,
-    canonicalMaxItems,
-    canonicalMinScore,
     cfg,
     checkpointStore = null,
     dbg,
-    dedupEnabled,
-    dedupJaccard,
     detectReactionsCapabilityCached,
     embeddings,
     emotionalPool,
@@ -94,7 +88,6 @@ export function createPromptContextAssembler(ctx) {
     host,
     makeQuerySummarizer,
     markNeoRecallInjection,
-    maxPromptMemories,
     memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
     mergingEnabled,
@@ -109,17 +102,13 @@ export function createPromptContextAssembler(ctx) {
     personaDirectiveMaxChars,
     personaVoiceLlmCfg,
     pool,
-    queryRefinerEnabled,
     recallQueryLlmCfg,
     replyOutcomeDynamics,
     replyOutcomeEnabled,
     replyOutcomeMaxAssistantChars,
     replyOutcomeMaxMemoryIds,
-    rerankCandidates,
     reranker,
-    rerankerCfg,
     resolveCommandLocaleRecall,
-    resolveRuntimeRecallBudget,
     resolveTurnPrincipal = null,
     runMergedNamespaceRecall,
     runMinimalBeforePromptMaintenance,
@@ -131,33 +120,43 @@ export function createPromptContextAssembler(ctx) {
     sharedMemoryPool,
     skillLedgerDirForAgent,
     skillMinerEnabled,
-    softBudgetFallback,
     softBudgetMs,
     summaryMaxWords,
     temporalContextEnabled,
     traceCfg,
     traceEnabled,
     traceInPrompt,
+    warmRecallPath = null,
     workspacePolicyGuard,
   } = ctx;
 
   return async function assemblePromptContext(event, hookCtx, opts = {}) {
     const assemblerEntryAt = Date.now();
+    // RecallQuery.warmOnly (E5 Task 9): the read-only heavy path only. It
+    // emits no event (every exit below goes through `emit`), neither reads
+    // nor fills the recall cache, runs at background priority and skips the
+    // reply-outcome kick; warm-recall-path.js lists what else it leaves out.
+    const warmOnly = opts?.warmOnly === true;
+    const emit = warmOnly ? () => {} : (name, payload) => emitEngineEvent(host, name, payload);
     const callerSignal = opts?.signal;
     if (!(callerSignal instanceof AbortSignal)) {
       const degraded = { reason: "invalid-query", capability: "recall", detail: "signal is required" };
-      emitEngineEvent(host, "recall.degraded", { agentId: hookCtx?.agentId || "default", degraded });
+      emit("recall.degraded", { agentId: hookCtx?.agentId || "default", degraded });
       return recallResult({ degraded });
     }
     if (callerSignal.aborted) {
-      emitEngineEvent(host, "recall.degraded", { agentId: hookCtx?.agentId || "default", degraded: ABORTED });
+      emit("recall.degraded", { agentId: hookCtx?.agentId || "default", degraded: ABORTED });
       return recallResult({ degraded: ABORTED });
+    }
+    // Never fall back to a full (writing) recall when no warm path is wired.
+    if (warmOnly && typeof warmRecallPath !== "function") {
+      return recallResult({ degraded: { reason: "warm-failed", capability: "recall", detail: "warm path unavailable" } });
     }
     // Blocks finished before the scheduled work completes. An aborted or
     // timed-out recall returns these (spec 3.2) instead of nothing.
     const completed = { neo: "", start: "" };
-    const background = opts.agentContext ? opts.agentContext.background === true : isBackgroundTurn(event, hookCtx);
-    const skipInternalRecall = opts.agentContext ? opts.agentContext.origin !== "user" : shouldSkipAutoRecallForInternalTurn(event, hookCtx);
+    const background = warmOnly || (opts.agentContext ? opts.agentContext.background === true : isBackgroundTurn(event, hookCtx));
+    const skipInternalRecall = !warmOnly && (opts.agentContext ? opts.agentContext.origin !== "user" : shouldSkipAutoRecallForInternalTurn(event, hookCtx));
     if (hookCtx?.workspaceDir && !automaticWorkspacePolicyDecision(event, hookCtx).allowed) return recallResult();
     const agentIdForCache = hookCtx?.agentId || "default";
     const sessionKeyForCache = hookCtx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
@@ -166,7 +165,10 @@ export function createPromptContextAssembler(ctx) {
     // whole principal, never by agent + text alone: two principals asking
     // the same agent the same thing must never share a cached answer. The
     // OpenClaw hook path (no memoryCtx) keeps its session-scoped key.
-    const cacheKey = opts.memoryCtx
+    // A warm recall must not fill the cache (the next real recall would be
+    // served its empty answer) nor be answered from it: "" is neither read
+    // nor written by the scheduler.
+    const cacheKey = warmOnly ? "" : opts.memoryCtx
       ? `principal:${JSON.stringify([
         opts.memoryCtx.agentId ?? agentIdForCache,
         opts.memoryCtx.workspaceIdentity ?? "",
@@ -218,6 +220,8 @@ export function createPromptContextAssembler(ctx) {
     // 09./10.09.2026 passierte das dutzendfach, ohne dass eine Logzeile den
     // Verbleib der Zeit zeigte.
     timer.start("prelude");
+    // The warm path ends `prelude` itself (after its neo reads).
+    if (warmOnly) return warmRecallPath(event, hookCtx, { signal, memoryCtx: opts.memoryCtx, timer });
     const recallPrelude = { startedAt: Date.now(), identityMs: 0, hookRecordMs: 0, windowMs: 0, embedMs: 0, embedTimedOut: false, globalMs: 0, lanesMs: 0 };
     const { memoryCtx } = opts.memoryCtx
       ? { memoryCtx: opts.memoryCtx }
@@ -268,40 +272,22 @@ export function createPromptContextAssembler(ctx) {
         }
         recallPrelude.hookRecordMs = Date.now() - hookRecordStartedAt;
         if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
-          const windowStartedAt = Date.now();
-          const neoItems = [...neoStore.readCandidates(500, requester), ...neoStore.readBehaviorCards(200, requester)];
-          recallPrelude.windowMs = Date.now() - windowStartedAt;
-          let queryVector = null;
-          const embedStartedAt = Date.now();
-          try {
-            const embedPromise = Promise.resolve(typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId }));
-            let embedTimer = null;
-            const embedTimeout = new Promise((resolve) => { embedTimer = setTimeout(() => resolve(NEO_EMBED_TIMEOUT), neoGlobalRecall.embedTimeoutMs); });
-            try {
-              const outcome = await Promise.race([embedPromise, embedTimeout]);
-              if (outcome === NEO_EMBED_TIMEOUT) {
-                recallPrelude.embedTimedOut = true;
-                embedPromise.catch(() => {});
-                host.logger.warn(`plur1bus-neo: prompt query embedding exceeded ${neoGlobalRecall.embedTimeoutMs} ms, continuing without vector`);
-              } else {
-                queryVector = outcome;
-              }
-            } finally {
-              if (embedTimer) clearTimeout(embedTimer);
-            }
-          } catch (error) { host.logger.debug(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
-          recallPrelude.embedMs = Date.now() - embedStartedAt;
-          const globalStartedAt = Date.now();
-          try {
-            neoGlobalIds = runNeoGlobalSearch(neoStore, neoItems, queryVector, requester);
-          } catch (globalErr) {
-            host.logger.warn(`plur1bus-neo: global candidate search failed: ${String(globalErr)}`);
-          }
-          recallPrelude.globalMs = Date.now() - globalStartedAt;
-          const lanesStartedAt = Date.now();
-          neoLanes = routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 });
+          const prelude = await readNeoPrelude({
+            neoStore,
+            requester,
+            prompt: event.prompt,
+            embeddings,
+            embedTimeoutMs: neoGlobalRecall.embedTimeoutMs,
+            timeoutSymbol: NEO_EMBED_TIMEOUT,
+            runNeoGlobalSearch,
+            logger: host.logger,
+            prelude: recallPrelude,
+          });
+          neoGlobalIds = prelude.neoGlobalIds;
+          neoLanes = prelude.neoLanes;
+          const formatStartedAt = Date.now();
           neoContext = formatNeoRecallContext(neoLanes, { idempotencyKey: injectionKey || undefined });
-          recallPrelude.lanesMs = Date.now() - lanesStartedAt;
+          recallPrelude.lanesMs += Date.now() - formatStartedAt;
         }
       } catch (neoErr) {
         host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
@@ -473,51 +459,25 @@ export function createPromptContextAssembler(ctx) {
           })
         : null;
       // v1.9.0 — komplette Pipeline aus shared module
-      const _autoRecallBaseParams = {
+      const _autoRecallBaseParams = autoRecallParams(ctx, {
         query: event.prompt,
-        phaseTimer: timer,
-        softBudgetFallback,
-        embeddings,
+        timer,
         signal,
         workspaceDir: hookCtx?.workspaceDir,
-        topN: maxPromptMemories,
-        budget: resolveRuntimeRecallBudget(event.prompt, maxPromptMemories, adaptiveBudgetCfg),
-        adaptiveBudget: adaptiveBudgetCfg,
-        recallMinScore: autoRecallMinScore,
-        dedupEnabled,
-        dedupJaccard,
-        canonicalEnabled,
-        canonicalMinScore,
-        canonicalMaxItems,
-        reranker,
-        rerankCandidates,
-        candidateTopK,
-        rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
-        rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
-        summaryMaxWords,
+        workspaceKey: hookCtx?.workspaceKey || hookCtx?.workspaceDir || null,
+        agentId,
+        memoryCtx,
+        graphEdges,
+        emotionalState: emotionalPool.get(agentId),
+        decisionTrace: trace,
+        useAssociative,
+        assocCfg,
         querySummarizer: makeQuerySummarizer(
           mergingEnabled ? recallQueryLlmCfg : null,
           host.logger,
           agentId,
           { agentId, signal },
         ),
-        logger: host.logger,
-        emotionalState: emotionalPool.get(agentId),
-        graphEdges,
-        associativeEnabled: useAssociative,
-        graphConfig: useAssociative ? {
-          maxDepth: assocCfg.maxDepth ?? 2,
-          maxNeighborsPerNode: assocCfg.maxNeighborsPerNode ?? 8,
-          maxAssociatedResults: assocCfg.maxAssociatedResults ?? 40,
-          minCumulativeRelevance: assocCfg.minCumulativeRelevance ?? 0.2,
-          graphHydrationRelevanceThreshold: assocCfg.graphHydrationRelevanceThreshold ?? 0.25,
-          graphIndex: { enabled: assocCfg.graphIndex?.enabled !== false },
-        } : {},
-        workspaceKey: hookCtx?.workspaceKey || hookCtx?.workspaceDir || null,
-        agentId,
-        memoryCtx,
-        queryRefinerEnabled,
-        decisionTrace: trace,
         retrievalLogger: (ledgerInfo) => {
           try {
             const neoStore = getNeoStore(hookCtx, event);
@@ -527,7 +487,7 @@ export function createPromptContextAssembler(ctx) {
             })]);
           } catch (_e) { dbg(_e); }
         },
-      };
+      });
       const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runMergedNamespaceRecall(
         readDbs,
         _autoRecallBaseParams,
@@ -1253,7 +1213,7 @@ export function createPromptContextAssembler(ctx) {
       const capChars = cfg.recall?.globalInjectMaxChars ?? 17_000;
       const deferrals = [...memoryDeferrals, ...planGlobalInjectBudget({ blocks, maxChars: capChars }).deferrals];
       for (const deferral of deferrals) {
-        emitEngineEvent(host, `recall.block-${deferral.kind}`, { agentId, ...deferral });
+        emit(`recall.block-${deferral.kind}`, { agentId, ...deferral });
       }
       return recallResult({ blocks, capChars, deferrals });
     } catch (err) {
@@ -1275,8 +1235,9 @@ export function createPromptContextAssembler(ctx) {
     const timing = { phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs(), namespacePhases };
     const withTiming = (result) => ({ ...result, timing });
     // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
-    // Reply-Outcome-Dynamik die Tabelle anfassen.
-    if (replyOutcomeEnabled) replyOutcomeDynamics.kick(agentIdForCache);
+    // Reply-Outcome-Dynamik die Tabelle anfassen. Not after a warm recall:
+    // the kick applies queued table updates (R14).
+    if (replyOutcomeEnabled && !warmOnly) replyOutcomeDynamics.kick(agentIdForCache);
     const partial = () => [contextBlock("neo", completed.neo, true), contextBlock("start", completed.start, true)]
       .filter((block) => block.text);
     if (scheduledRecall.ok) {
@@ -1291,19 +1252,19 @@ export function createPromptContextAssembler(ctx) {
       // The same holds for the scheduler's own timeout answered from the cache.
       if ((scheduledRecall.aborted || scheduledRecall.timedOut) && scheduledRecall.fromCache) {
         const cachedDegraded = scheduledRecall.aborted ? ABORTED : { reason: "timeout", capability: "recall" };
-        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: cachedDegraded });
+        emit("recall.degraded", { agentId: agentIdForCache, degraded: cachedDegraded });
         const result = withTiming({ ...value, degraded: cachedDegraded });
-        emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+        emit("recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
         return result;
       }
       if (innerFailure && !scheduledRecall.fromCache) {
-        emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: innerFailure });
+        emit("recall.degraded", { agentId: agentIdForCache, degraded: innerFailure });
         const result = withTiming({ ...value, degraded: innerFailure });
-        emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+        emit("recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
         return result;
       }
       const result = withTiming(value);
-      emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+      emit("recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
       return result;
     }
     if (scheduledRecall.aborted || scheduledRecall.timedOut) {
@@ -1314,9 +1275,9 @@ export function createPromptContextAssembler(ctx) {
       const abortLine = `memory-lancedb-namespaced: recall ${reasonLabel} without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`;
       if (scheduledRecall.aborted) host.logger.debug(abortLine);
       else host.logger.warn(abortLine);
-      emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded });
+      emit("recall.degraded", { agentId: agentIdForCache, degraded });
       const result = withTiming(recallResult({ blocks: partial(), degraded }));
-      emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+      emit("recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
       return result;
     }
     // Every other exit is a failure the caller must be able to tell from an
@@ -1331,9 +1292,9 @@ export function createPromptContextAssembler(ctx) {
         ? { reason: "pressure", capability: "recall", ...(scheduledRecall.reason ? { detail: String(scheduledRecall.reason) } : {}) }
         : { reason: "queue-full", capability: "recall", ...(scheduledRecall.reason ? { detail: String(scheduledRecall.reason) } : {}) };
     }
-    if (failure) emitEngineEvent(host, "recall.degraded", { agentId: agentIdForCache, degraded: failure });
+    if (failure) emit("recall.degraded", { agentId: agentIdForCache, degraded: failure });
     const result = withTiming(recallResult({ degraded: failure }));
-    emitEngineEvent(host, "recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
+    emit("recall.completed", { agentId: agentIdForCache, timing, degraded: result.degraded });
     return result;
   };
 }

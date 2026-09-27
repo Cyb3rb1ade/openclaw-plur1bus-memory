@@ -91,6 +91,7 @@ import { createPlur1busCommandRunner } from "./commands/plur1bus-command.js";
 import { createTurnCapture } from "./capture/capture-turn.js";
 import { createTurnReplayGuard, turnKeyOf } from "./capture/turn-replay-guard.js";
 import { createPromptContextAssembler } from "./recall/assemble-prompt-context.js";
+import { createWarmRecallPath } from "./recall/warm-recall-path.js";
 import { recallResult } from "./recall/recall-result.js";
 import { buildSystemSupplement } from "./recall/system-supplement.js";
 import { createMemoryTools } from "./tools/memory-tools.js";
@@ -999,6 +1000,18 @@ export function createEngine(host, config, testOptions = {}) {
     emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
     return createNeoStore(neoRoot, workspaceKey);
   };
+  // The warm-only recall's neo store (E5 Task 9): the same workspace key as
+  // getNeoStore, but the session map is only read (never updated), no
+  // onNeoStore host hook runs and opening the store skips its stale
+  // temp-file cleanup. Only the store's read methods may be called on it.
+  const peekNeoStore = (ctx = {}, event = {}) => createNeoStore(neoRoot, workspaceKeyFromContext(ctx, {
+    event,
+    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+    rootDir: neoRoot,
+    runtime: host.runtime ?? undefined,
+    sessionWorkspaceKeys,
+    workspaceAliases: neoWorkspaceAliases,
+  }), { readOnly: true });
   // 7.12.45: Der Vergleich folgt dem Partitionsschluessel (ownerStorageKey):
   // agent-private kennt nur den Agenten, workspace nur die Workspace-
   // Identitaet, user Agent + Owner. Bis dahin verglich er workspaceIdentity
@@ -3079,6 +3092,7 @@ export function createEngine(host, config, testOptions = {}) {
     gcEnabled,
     getMemoryTurnRoutes,
     getNeoStore,
+    peekNeoStore,
     halfLifeOverrides,
     host,
     hostRoutingLoader,
@@ -3206,7 +3220,7 @@ export function createEngine(host, config, testOptions = {}) {
     }
     return Object.freeze({ ...view, ...extra });
   };
-  internals.recallContext ??= viewOf([
+  const recallContextNames = [
     "NEO_EMBED_TIMEOUT",
     "NEO_RECALL_PRELUDE_LOG_MS",
     "adaptiveBudgetCfg",
@@ -3240,6 +3254,7 @@ export function createEngine(host, config, testOptions = {}) {
     "neoRequester",
     "neoWorkerRuntime",
     "overlayLlmCfg",
+    "peekNeoStore",
     "personaDirectiveMaxChars",
     "personaVoiceLlmCfg",
     "pool",
@@ -3270,7 +3285,8 @@ export function createEngine(host, config, testOptions = {}) {
     "traceEnabled",
     "traceInPrompt",
     "workspacePolicyGuard",
-  ], {
+  ];
+  const recallContextExtras = {
     MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
     buildMaintenanceNudges,
     callLlm,
@@ -3280,7 +3296,11 @@ export function createEngine(host, config, testOptions = {}) {
     normalizedLlmErrorClass,
     resolveRuntimeRecallBudget,
     runMergedNamespaceRecall,
-  });
+  };
+  // The warm-only path (E5 Task 9) is built from the same members as the
+  // assembler, which reaches it as recallContext.warmRecallPath.
+  internals.warmRecallPath ??= createWarmRecallPath(viewOf(recallContextNames, recallContextExtras));
+  internals.recallContext ??= viewOf([...recallContextNames, "warmRecallPath"], recallContextExtras);
   internals.captureContext ??= viewOf([
     "NEO_HOOK_DRAIN_MARGIN_MS",
     "NEO_HOOK_DRAIN_MIN_MS",
@@ -3592,7 +3612,9 @@ export function createEngine(host, config, testOptions = {}) {
         // per scheduled recall — do not emit it again here, or every
         // `Engine.recall` call would double the event the adapter's own
         // registered hook already produces through the same assembler.
-        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt })) ?? recallResult();
+        // warmOnly (E5 Task 9): the read-only heavy path, see
+        // engine/recall/warm-recall-path.js.
+        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt, warmOnly: q.warmOnly === true })) ?? recallResult();
       } catch (error) {
         // An abort that lands before the assembler runs (e.g. during
         // host.workspaceDir) is still an abort, not a bad query.
