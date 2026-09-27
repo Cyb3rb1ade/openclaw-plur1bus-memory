@@ -36,6 +36,7 @@ const ENGINE_PATHS = Object.freeze({
   captureTurn: "engine/capture/capture-turn.js",
   turnReplayGuard: "engine/capture/turn-replay-guard.js",
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
+  engineConfigSchema: "engine/config/engine-config-schema.js",
   events: "engine/events.js",
   principal: "engine/identity/principal.js",
   memoryOpsContext: "engine/memory-ops/context.js",

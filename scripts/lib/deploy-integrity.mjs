@@ -43,6 +43,8 @@ export const DEPLOY_FILES = [
   "engine/checkpoint/checkpoint-store.js",
   "engine/commands/command-helpers.js",
   "engine/commands/plur1bus-command.js",
+  "engine/config/engine-config-schema.js",
+  "engine/config/engine-config.schema.json",
   "engine/create-engine.js",
   "engine/events.js",
   "engine/identity/principal.js",

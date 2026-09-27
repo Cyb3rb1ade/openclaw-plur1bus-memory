@@ -1,0 +1,2920 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plur1bus-engine-config",
+  "x-contract": "1.9.0",
+  "$defs": {
+    "secretInput": {
+      "type": [
+        "string",
+        "object"
+      ],
+      "minLength": 1,
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "provider",
+        "id"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "env",
+            "store",
+            "file",
+            "exec"
+          ]
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "embedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true
+        },
+        "apiKeyEnv": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "openai-compatible",
+            "local-transformers"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "requestTimeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "description": "Per-request timeout for remote embedding calls (OpenAI-compatible providers). Unset means 15000 ms; the SDK default of ten minutes let a stalled request block a recall until the worker timeout."
+        },
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "dimensions": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "revision": {
+              "type": "string"
+            },
+            "queryPrefix": {
+              "type": "string"
+            },
+            "passagePrefix": {
+              "type": "string"
+            },
+            "maxTokens": {
+              "type": "integer",
+              "minimum": 32,
+              "maximum": 8192,
+              "description": "Per-text token cap for the pinned local Jina runtimes (default 512). Bounds the attention working set the ONNX runtime keeps for the longest text of a batch."
+            },
+            "cacheDir": {
+              "type": "string"
+            }
+          }
+        },
+        "fallback": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiKey": {
+              "$ref": "#/$defs/secretInput",
+              "x-sensitive": true
+            },
+            "model": {
+              "type": "string"
+            },
+            "baseUrl": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [],
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Embedding provider, model, endpoint, credential, vector dimensions, request timeout, local-model options and an optional fallback provider used to vectorise memories and queries."
+    },
+    "baseDbPath": {
+      "type": "string",
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Base directory under which the engine keeps its per-agent LanceDB stores and related state files."
+    },
+    "namespaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "activeWriteNamespace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+        },
+        "activeRecallNamespaces": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          }
+        },
+        "legacyReadOnlyNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          }
+        },
+        "crossNamespaceRecall": {
+          "type": "boolean"
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Named storage namespaces: the single namespace new writes go to, the namespaces recall reads, strictly read-only legacy sources, and whether recall may include those legacy sources."
+    },
+    "modelPreparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "e5-multilingual-384",
+            "jina-v3-multilingual-32",
+            "jina-v3-multilingual-64",
+            "jina-v3-multilingual-128",
+            "jina-v3-multilingual-256",
+            "jina-v3-multilingual-512",
+            "jina-v3-multilingual-768",
+            "jina-v3-multilingual-1024",
+            "jina-v5-nano-32",
+            "jina-v5-nano-64",
+            "jina-v5-nano-128",
+            "jina-v5-nano-256",
+            "jina-v5-nano-512",
+            "jina-v5-nano-768"
+          ]
+        },
+        "acceptNonCommercialLicense": {
+          "type": "boolean"
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Pinned local embedding profile to download and hash-validate ahead of a migration, plus the licence acceptance some profiles require; it never switches the active generation."
+    },
+    "reembedding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activeGeneration",
+        "fingerprintId",
+        "dimensions"
+      ],
+      "properties": {
+        "activeGeneration": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "fingerprintId": {
+          "type": "string",
+          "pattern": "^embedding:v1:sha256:[a-f0-9]{64}$"
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Coordinator-managed identity of the active embedding generation (generation id, vector-space fingerprint and dimensions) that selects the store layout; change it only through a validated migration."
+    },
+    "embeddingBatchSize": {
+      "type": "number",
+      "minimum": 1,
+      "default": 8,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Number of texts embedded per provider request when a capture stores several rows at once."
+    },
+    "language": {
+      "type": "string",
+      "default": "de",
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Language code for engine-generated text such as reflections and user-facing notices."
+    },
+    "timezone": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Default IANA time zone for local-time features such as the style directive's time of day, dream narratives and afterthoughts; null uses the process's local time zone."
+    },
+    "replyOutcomeTracking": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "dynamicsMaxBacklog": {
+          "type": "number",
+          "minimum": 1
+        },
+        "dynamicsFallbackDelayMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxAgeMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 604800000
+        },
+        "maxMemoryIds": {
+          "type": "number",
+          "minimum": 1,
+          "default": 12
+        },
+        "maxReplyChars": {
+          "type": "number",
+          "minimum": 1,
+          "default": 4000
+        },
+        "maxAssistantChars": {
+          "type": "number",
+          "minimum": 1,
+          "default": 4000
+        },
+        "maxOutcomeLogEntries": {
+          "type": "number",
+          "minimum": 1,
+          "default": 5000
+        },
+        "maxFeedbackLogEntries": {
+          "type": "number",
+          "minimum": 1,
+          "default": 5000
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Records how replies landed and which recalled memories they used, with limits on backlog, age, stored ids, text lengths and log sizes."
+    },
+    "chatModels": {
+      "type": "object",
+      "description": "Chat model per workspace, chosen on the dashboard: agent id to provider/model. The dashboard also writes the agent's model.primary; a start script that re-applies agent models from a profile can read this map and keep the choice.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+@-]*/[A-Za-z0-9._:/+@-]+$"
+      },
+      "readAt": "construction",
+      "x-tier": "advanced"
+    },
+    "dreaming": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Controls OpenClaw memory-core dreaming sidecar compatibility and the sleep plan shown on OpenClaw's Memory page. Keep false when memory-core can still run its own sweep; when PLUR1BUS owns the memory slot the host disables memory-core anyway, and true makes the page stop claiming dreaming is off."
+        },
+        "frequency": {
+          "type": "string",
+          "description": "Cron expression the Memory page shows for all three sleep phases. The host renders one shared value; PLUR1BUS actually runs REM and deep sleep as separate per-agent feature crons and light sleep after a conversation, so this is a display hint, not the schedule itself. Unset leaves the host default."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone the Memory page prints next to the sleep plan. Unset falls back to agents.defaults.userTimezone."
+        },
+        "narrative": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "temperature": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0.9
+            },
+            "storeAsMemory": {
+              "type": "boolean",
+              "default": true
+            },
+            "importanceMax": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 0.49,
+              "default": 0.45
+            },
+            "diary": {
+              "type": "boolean",
+              "default": true,
+              "description": "Also append each dream narrative to the agent's DREAMS.md, the file OpenClaw's Dreams page shows."
+            }
+          }
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Dream narratives written into the host's dream page, with their schedule, time zone and narrative options."
+    },
+    "reminders": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deliveryMode": {
+          "type": "string",
+          "enum": [
+            "pending_only",
+            "webhook",
+            "host_callback"
+          ],
+          "default": "pending_only"
+        },
+        "webhookUrl": {
+          "type": "string"
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "How due reminders are delivered: kept pending for the host to pick up, posted to a webhook, or handed to a host callback."
+    },
+    "neo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "agentEndBudgetMs": {
+          "type": "number",
+          "minimum": 1000,
+          "description": "Sub-budget in ms for the Neo agent_end worker inside the capture window. Overrunning it aborts only the worker, and the capture keeps the rest. Default 20000."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "augment",
+            "slot"
+          ],
+          "default": "augment"
+        },
+        "statePath": {
+          "type": "string"
+        },
+        "corpusDefaultWorkspaceKey": {
+          "type": "string"
+        },
+        "workspaceAliases": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "workspaceKey": {
+                "type": "string"
+              },
+              "workspace_id": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "workspacePath": {
+                "type": "string"
+              },
+              "workspaceDir": {
+                "type": "string"
+              },
+              "workspace": {
+                "type": "string"
+              },
+              "dir": {
+                "type": "string"
+              },
+              "agent_id": {
+                "type": "string"
+              },
+              "agentId": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "alias": {
+                "type": "string"
+              },
+              "aliases": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "legacyKeys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "embeddingDrain": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "impact": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical",
+                "all"
+              ],
+              "default": "low"
+            },
+            "maxItems": {
+              "type": "number",
+              "default": 250
+            }
+          }
+        },
+        "recall": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "global": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Search over all Neo candidates (not only the recent window) by cosine similarity on the vector sidecar. Defaults: enabled, topK 30, minSimilarity 0.35, halfLifeDays 30, maxCandidates 20000, dedupeThreshold 0.8.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "topK": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 200
+                },
+                "minSimilarity": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "halfLifeDays": {
+                  "type": "number",
+                  "minimum": 1
+                },
+                "maxCandidates": {
+                  "type": "number",
+                  "minimum": 100
+                },
+                "dedupeThreshold": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "embedTimeoutMs": {
+                  "type": "number",
+                  "minimum": 500
+                }
+              }
+            }
+          }
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Neo layer, an additive cognitive layer over the memory store, with its agent-end budget, mode, state location, workspace mapping, embedding drain and recall options."
+    },
+    "autoCapture": {
+      "type": "boolean",
+      "default": true,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Captures durable memory from eligible finished turns automatically."
+    },
+    "captureChunking": {
+      "type": "boolean",
+      "default": true,
+      "description": "Splits a captured message that contains several independent statements into separate memories with their own vectors, at structure (lists, headings, paragraphs) and, for long running text, at sentence boundaries.",
+      "readAt": "construction",
+      "x-tier": "advanced"
+    },
+    "captureChunkingMode": {
+      "type": "string",
+      "enum": [
+        "beides",
+        "geteilt"
+      ],
+      "default": "beides",
+      "description": "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.",
+      "readAt": "construction",
+      "x-tier": "advanced"
+    },
+    "autoRecall": {
+      "type": "boolean",
+      "default": true,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Injects relevant durable memory into the prompt before an eligible turn."
+    },
+    "captureMaxChars": {
+      "type": "number",
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Maximum number of characters kept from each captured message text; longer text is truncated before it is stored."
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recallTimeoutMs": {
+          "type": "number",
+          "default": 45000
+        },
+        "captureTimeoutMs": {
+          "type": "number",
+          "default": 60000
+        },
+        "maxConcurrentRecall": {
+          "type": "number",
+          "default": 1
+        },
+        "maxConcurrentCapturePerAgent": {
+          "type": "number",
+          "default": 1
+        },
+        "backgroundPriority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal"
+          ],
+          "default": "low"
+        },
+        "recallCacheTtlMs": {
+          "type": "number",
+          "default": 120000
+        },
+        "recallCacheMaxEntries": {
+          "type": "number",
+          "default": 128
+        },
+        "maxQueueDepthRecall": {
+          "type": "number",
+          "default": 20
+        },
+        "maxQueueDepthCapturePerAgent": {
+          "type": "number",
+          "default": 10
+        },
+        "pressureGateEnabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "rssWarningBytes": {
+          "type": "number",
+          "default": 3221225472
+        },
+        "rssCriticalBytes": {
+          "type": "number",
+          "default": 4831838208
+        },
+        "embeddingCacheEnabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "embeddingCacheTtlMs": {
+          "type": "number",
+          "default": 300000
+        },
+        "embeddingCacheMaxEntries": {
+          "type": "number",
+          "default": 128
+        },
+        "embeddingCachePersist": {
+          "type": "boolean",
+          "default": false
+        },
+        "embeddingCachePersistDebug": {
+          "type": "boolean",
+          "default": false
+        },
+        "embeddingCacheCoalesce": {
+          "type": "boolean",
+          "default": true
+        },
+        "embeddingCacheMetrics": {
+          "type": "boolean",
+          "default": false
+        },
+        "embeddingCacheScope": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "shared"
+          ],
+          "default": "agent"
+        },
+        "embeddingCacheMaxBytes": {
+          "type": "number"
+        },
+        "llmResultCacheEnabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "llmResultCacheTtlMs": {
+          "type": "number",
+          "default": 86400000
+        },
+        "llmResultCacheMaxEntries": {
+          "type": "number",
+          "default": 256
+        },
+        "llmResultCachePersist": {
+          "type": "boolean",
+          "default": false
+        },
+        "llmResultCacheMaxBytes": {
+          "type": "number",
+          "default": 67108864
+        },
+        "llmResultCacheMetrics": {
+          "type": "boolean",
+          "default": true
+        },
+        "metricsDebounceMs": {
+          "type": "number",
+          "default": 5000
+        },
+        "eventLoopLagResolutionMs": {
+          "type": "number",
+          "default": 10
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Runtime limits and caches: recall and capture timeouts, concurrency and queue depths, background priority, the recall cache, the memory-pressure gate, the embedding cache, the LLM result cache and metrics timing."
+    },
+    "temporalContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Adds a temporal-continuity block to the prompt so the agent knows how much time has passed since earlier conversations."
+    },
+    "recallMinScore": {
+      "type": "number",
+      "default": 0.15,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Minimum similarity score a memory needs to be returned by an explicit memory search tool call."
+    },
+    "autoRecallMinScore": {
+      "type": "number",
+      "default": 0.2,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Minimum similarity score a memory needs to be injected by automatic recall."
+    },
+    "duplicateThreshold": {
+      "type": "number",
+      "default": 0.95,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Similarity at or above which a new capture counts as a duplicate of an existing memory and is not stored again."
+    },
+    "forgetThreshold": {
+      "type": "number",
+      "default": 0.3,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Minimum similarity a stored memory needs to be matched as a candidate by a forget request."
+    },
+    "summaryMaxWords": {
+      "type": "number",
+      "default": 150,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Maximum number of words in the fallback summary generated for a recalled memory that has no stored summary."
+    },
+    "reranker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "cohere",
+            "local-transformers",
+            "disabled"
+          ]
+        },
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true
+        },
+        "apiKeyEnv": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "candidates": {
+          "type": "number"
+        },
+        "timeoutMs": {
+          "type": "number",
+          "default": 5000
+        },
+        "fallbackOnError": {
+          "type": "boolean",
+          "default": true
+        },
+        "fallbackProvider": {
+          "type": "string",
+          "enum": [
+            "local-transformers",
+            "disabled"
+          ]
+        },
+        "fallbackModel": {
+          "type": "string"
+        },
+        "fallbackRevision": {
+          "type": "string"
+        },
+        "fallbackCacheDir": {
+          "type": "string"
+        },
+        "local": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "cacheDir": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "dtype": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [],
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Reranker that re-orders recall candidates for relevance: provider, model, credential, candidate count, timeout, error fallback and local-model options."
+    },
+    "merging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "threshold": {
+          "type": "number",
+          "default": 0.7
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
+        },
+        "baseUrl": {
+          "type": "string",
+          "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true,
+          "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "disableThinking": {
+          "type": "boolean"
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "autoApply": {
+          "type": "boolean",
+          "default": false
+        },
+        "autoApplyRisk": {
+          "type": "string",
+          "const": "low-only",
+          "default": "low-only"
+        },
+        "backupBeforeApply": {
+          "type": "boolean",
+          "const": true,
+          "default": true
+        },
+        "auditLog": {
+          "type": "boolean",
+          "const": true,
+          "default": true
+        },
+        "mode": {
+          "type": "string",
+          "const": "safe-versioned",
+          "default": "safe-versioned"
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "LLM-based merging, which decides whether two similar memories describe the same fact, with its model route, similarity threshold, auto-apply risk limits, backups and audit log."
+    },
+    "schicht15": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
+        },
+        "baseUrl": {
+          "type": "string",
+          "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true,
+          "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "disableThinking": {
+          "type": "boolean"
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "minImportance": {
+          "type": "number",
+          "default": 0.7
+        },
+        "maxPromotionsPerRun": {
+          "type": "number",
+          "default": 0,
+          "description": "Maximum KNOWLEDGE.md promotions per 24-hour window (0 = unlimited). Before 7.12.3 the lifetime count was compared, which blocked a workspace forever once it had promoted that many cards."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Knowledge promotion, which promotes recurring, important findings into the workspace's long-term knowledge file, with its model route, importance floor and per-run limit."
+    },
+    "llmRouter": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Model routes for the background features: a shared default model, per-agent models, the agents shown on the dashboard, and error diagnostics.",
+      "properties": {
+        "defaultModel": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Modell für alle Hintergrund-Features, die kein eigenes konfiguriert haben (Episodenextraktion, Traumdeutung, Gesprächsanalyse, Verdichtung …). Ohne diesen Wert folgen sie dem Hauptmodell des Agenten und verbrauchen dessen Kontingent, obwohl sie nichts vom laufenden Gespräch brauchen. Ein feature-eigenes Modell hat Vorrang; Features mit eigenem Transport (baseUrl/apiKey/headers) bleiben unberührt. Die Route bleibt openclaw-override, Anmeldung und Transport also beim Host."
+        },
+        "errorDiagnostics": {
+          "type": "boolean",
+          "default": false,
+          "description": "Schreibt die redigierte Fehlermeldung eines gescheiterten Modellaufrufs nach <baseDbPath>/llm-router-errors.log. Nur zur Fehlersuche einschalten: die Meldung des Fremdsystems kann Bruchstücke des Prompts enthalten, deshalb steht sie nie im normalen Log."
+        },
+        "agentModels": {
+          "type": "object",
+          "description": "Optional model overrides per OpenClaw agent and LLM task. Missing entries preserve the existing feature-local model/transport, then llmRouter.defaultModel, then the host default. Dashboard choices use the OpenClaw route; existing direct credentials are preserved for resetting.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "merging": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "capture-summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "recall-query-summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "memory-compaction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "conflict-resolution": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "rem-pattern-analysis": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "conversation-insights": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "dream-narrative": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "dream-echo": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "episode-extraction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "afterthought": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "persona-voice": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "wiki": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "continuity-overlay": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "overlay-audit-contradiction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "memory-text-contradiction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "emotionT3": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "emotion-encoding": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "schicht15": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "skillMiner": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "criticalPush": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$"
+              },
+              "*": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,255}$",
+                "description": "Standardmodell des Agenten für alle Aufgaben ohne eigene Wahl. Eine Aufgabenwahl hat Vorrang; der Standard hat Vorrang vor jeder Route aus der Konfigurationsdatei, genau wie eine Aufgabenwahl."
+              }
+            }
+          }
+        },
+        "dashboardAgents": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "description": "Welche Agenten im Reiter eine Spalte in der Modell-Matrix bekommen. Leer oder fehlend: die stehenden Agenten (mit heartbeat) plus jeder Agent mit gespeicherter Wahl; gibt es keine, alle bekannten. Unbekannte Kennungen werden übergangen."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced"
+    },
+    "skillMiner": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "cron": {
+          "type": "string",
+          "default": "0 5 * * *"
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": "Europe/Berlin"
+        },
+        "maxPerRun": {
+          "type": "number",
+          "default": 5
+        },
+        "minConfidence": {
+          "type": "number",
+          "default": 0.6
+        },
+        "minEvidenceScore": {
+          "type": "number",
+          "default": 3
+        },
+        "autoApply": {
+          "type": "string",
+          "enum": [
+            "host",
+            "on",
+            "off"
+          ],
+          "default": "host",
+          "description": "Apply mined skills through the OpenClaw Skill Workshop without a manual review: \"host\" follows skills.workshop.autonomous.mode (auto applies, propose/off leaves drafts pending), \"on\" always applies, \"off\" always waits for approval in the PLUR1BUS dashboard or /plur1bus skills."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
+        },
+        "baseUrl": {
+          "type": "string",
+          "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true,
+          "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "disableThinking": {
+          "type": "boolean"
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Skill miner, which derives reusable skills from memory evidence into the host's skill workshop, with its schedule, thresholds, auto-apply mode and model route."
+    },
+    "gc": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "maxDbSizeMb": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Archive the weakest memories once an agent database exceeds this size. Unset means no size-driven collection."
+        },
+        "maxMemoryCount": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Archive the weakest memories once an agent holds more than this many active rows. Unset means no count-driven collection."
+        },
+        "minMemoryStrength": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Archive every active memory whose memoryStrength falls below this value. Applied independently of the size and count caps."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Garbage collection, which removes memories a retention policy no longer keeps, bounded by database size, memory count and a minimum memory strength."
+    },
+    "recall": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "importanceBoost": {
+          "type": "number",
+          "default": 0.3
+        },
+        "dedup": {
+          "type": "boolean",
+          "default": true
+        },
+        "dedupJaccard": {
+          "type": "number",
+          "default": 0.78
+        },
+        "canonicalFirst": {
+          "type": "boolean",
+          "default": true
+        },
+        "canonicalMinScore": {
+          "type": "number",
+          "default": 0.3
+        },
+        "canonicalMaxItems": {
+          "type": "number",
+          "default": 5
+        },
+        "maxPromptMemories": {
+          "type": "number",
+          "default": 12
+        },
+        "globalInjectMaxChars": {
+          "type": "number",
+          "default": 17000
+        },
+        "memoriesMaxChars": {
+          "type": "number",
+          "default": 12000
+        },
+        "candidateTopK": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 40
+        },
+        "queryRefinement": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "adaptiveBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "tokenBudgetPct": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.3
+            }
+          }
+        },
+        "semanticCompression": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "tokenBudget": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 240
+            }
+          }
+        },
+        "softBudgetMs": {
+          "type": "number",
+          "default": 35000
+        },
+        "softBudgetFallback": {
+          "type": "boolean",
+          "default": true
+        },
+        "eventLoopLagSnapshot": {
+          "type": "boolean",
+          "default": true
+        },
+        "halfLifeDaysMap": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "transient": {
+              "type": "number",
+              "default": 60
+            },
+            "episodic": {
+              "type": "number",
+              "default": 180
+            },
+            "longContext": {
+              "type": "number",
+              "default": 600
+            },
+            "project": {
+              "type": "number",
+              "default": 600
+            }
+          }
+        },
+        "decisionTrace": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "includeInPrompt": {
+              "type": "boolean",
+              "default": false
+            },
+            "maxCandidates": {
+              "type": "number",
+              "minimum": 1,
+              "default": 50
+            },
+            "maxTextPreviewChars": {
+              "type": "number",
+              "minimum": 0,
+              "default": 160
+            },
+            "persist": {
+              "type": "boolean",
+              "const": false,
+              "default": false
+            },
+            "visibleHints": {
+              "type": "boolean",
+              "const": false,
+              "default": false
+            }
+          }
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Recall pipeline tuning: candidate count, importance boost, deduplication, canonical-first selection, prompt budgets, query refinement, adaptive budget, semantic compression, the soft time budget and its fallback, half-lives per memory type and the decision trace."
+    },
+    "recallHedging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "minItems": {
+          "type": "number"
+        },
+        "bottomFraction": {
+          "type": "number"
+        },
+        "maxHedged": {
+          "type": "number"
+        },
+        "minSpread": {
+          "type": "number",
+          "default": 0.1
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Frames low-confidence recalled memories with hedged wording, based on their position and the spread of scores in the result."
+    },
+    "semanticLens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "maxLensMemories": {
+          "type": "number",
+          "default": 3
+        },
+        "maxBridgeMemories": {
+          "type": "number",
+          "default": 2
+        },
+        "maxFadedMemories": {
+          "type": "number",
+          "default": 1
+        },
+        "maxCommunities": {
+          "type": "number",
+          "default": 2
+        },
+        "timeoutMs": {
+          "type": "number",
+          "default": 50
+        },
+        "cacheTtlMs": {
+          "type": "number",
+          "default": 30000
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Semantic lens, which projects recalled memories onto a semantic community index and adds bridging and faded memories, with size limits, a timeout and a cache lifetime."
+    },
+    "controlUi": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Operator dashboard surface. The tab is read-only unless writeActions is raised.",
+      "properties": {
+        "writeActions": {
+          "type": "string",
+          "enum": [
+            "off",
+            "reranker",
+            "all"
+          ],
+          "default": "off",
+          "description": "off: the dashboard changes nothing and asks for read scope only. reranker: the reranking choice becomes switchable from the tab. all: additionally exposes the embedding target and the re-embedding migration steps. Anything but off gives the tab operator.write authority."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced"
+    },
+    "continuityEngine": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "associativeRecall": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "maxDepth": {
+              "type": "number",
+              "default": 2
+            },
+            "maxNeighborsPerNode": {
+              "type": "number",
+              "default": 8
+            },
+            "maxAssociatedResults": {
+              "type": "number",
+              "default": 40
+            },
+            "minCumulativeRelevance": {
+              "type": "number",
+              "default": 0.2
+            },
+            "graphHydrationRelevanceThreshold": {
+              "type": "number",
+              "default": 0.25
+            },
+            "graphIndex": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              }
+            },
+            "assocThreshold": {
+              "type": "number",
+              "default": 0.75
+            }
+          }
+        },
+        "patternSurfacing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "patternThreshold": {
+              "type": "number",
+              "default": 0.7
+            },
+            "maxPerSession": {
+              "type": "number",
+              "default": 1
+            }
+          }
+        },
+        "tasteGate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "maxAssociationsPerSession": {
+              "type": "number",
+              "default": 1
+            },
+            "maxPatternsPerSession": {
+              "type": "number",
+              "default": 1
+            }
+          }
+        },
+        "overlays": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "autoCreateOnRecall": {
+              "type": "boolean",
+              "default": false
+            },
+            "maxAgeDays": {
+              "type": "number",
+              "default": 30
+            },
+            "confidenceThreshold": {
+              "type": "number",
+              "default": 0.7
+            },
+            "maxPerSession": {
+              "type": "number",
+              "default": 3
+            },
+            "provisionalByDefault": {
+              "type": "boolean",
+              "default": true
+            },
+            "autoResolveContradictions": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "contradictionDetection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "maxPairsPerRecall": {
+              "type": "number",
+              "default": 20
+            }
+          }
+        },
+        "doctor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "maxAgeDays": {
+              "type": "number",
+              "default": 90
+            }
+          }
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Continuity engine, which carries themes across sessions through associative recall, pattern surfacing, the taste gate, overlays, contradiction detection and its doctor."
+    },
+    "conversationReactivationRecall": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "idleThresholdMinutes": {
+          "type": "number",
+          "default": 45
+        },
+        "cooldownMinutes": {
+          "type": "number",
+          "default": 30
+        },
+        "maxReactivationMemories": {
+          "type": "number",
+          "default": 3
+        },
+        "maxFadedReactivationMemories": {
+          "type": "number",
+          "default": 1
+        },
+        "maxOpenThreads": {
+          "type": "number",
+          "default": 3
+        },
+        "maxCommunities": {
+          "type": "number",
+          "default": 2
+        },
+        "timeoutMs": {
+          "type": "number",
+          "default": 50
+        },
+        "visibleHints": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Brings open threads and faded memories back into the prompt when a conversation resumes after a long pause, with idle and cooldown windows and size limits."
+    },
+    "obsidianBridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "augment",
+            "apply"
+          ],
+          "default": "augment"
+        },
+        "vaultPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "workspaceRoot": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "reviewRoot": {
+          "type": "string",
+          "default": "plur1bus"
+        },
+        "requireUserApproval": {
+          "type": "boolean",
+          "default": true
+        },
+        "applyApprovedOnly": {
+          "type": "boolean",
+          "default": true
+        },
+        "writeManagedBlocks": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowWrite": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowDotObsidianWrite": {
+          "type": "boolean",
+          "default": false
+        },
+        "backupBeforeApply": {
+          "type": "boolean",
+          "default": true
+        },
+        "auditLog": {
+          "type": "boolean",
+          "default": true
+        },
+        "requireVaultPathConfirmation": {
+          "type": "boolean",
+          "default": true
+        },
+        "capabilityPack": {
+          "type": "string",
+          "enum": [
+            "full"
+          ],
+          "default": "full"
+        },
+        "agents": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [
+                "*"
+              ]
+            },
+            "equalCapabilities": {
+              "type": "boolean",
+              "default": true
+            },
+            "defaultProfiles": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "conservative",
+                  "maintenance",
+                  "project_manager",
+                  "semantic_deep"
+                ]
+              },
+              "default": {
+                "default": "standard"
+              }
+            }
+          }
+        },
+        "morningReview": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "cron": {
+              "type": "string",
+              "default": "0 9 * * *"
+            },
+            "timezone": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": "Europe/Berlin"
+            },
+            "delivery": {
+              "type": "string",
+              "enum": [
+                "announce",
+                "silent"
+              ],
+              "default": "announce"
+            },
+            "session": {
+              "type": "string",
+              "enum": [
+                "isolated",
+                "current"
+              ],
+              "default": "isolated"
+            },
+            "writeReviewBundle": {
+              "type": "boolean",
+              "default": true
+            },
+            "applyMode": {
+              "type": "string",
+              "enum": [
+                "manual"
+              ],
+              "default": "manual"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending_setup",
+                "active"
+              ],
+              "default": "pending_setup"
+            }
+          }
+        },
+        "eveningReview": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "cron": {
+              "type": "string",
+              "default": "0 18 * * *"
+            },
+            "timezone": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": "Europe/Berlin"
+            },
+            "delivery": {
+              "type": "string",
+              "enum": [
+                "announce",
+                "silent"
+              ],
+              "default": "announce"
+            },
+            "session": {
+              "type": "string",
+              "enum": [
+                "isolated",
+                "current"
+              ],
+              "default": "isolated"
+            },
+            "applyMode": {
+              "type": "string",
+              "enum": [
+                "manual"
+              ],
+              "default": "manual"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending_setup",
+                "active"
+              ],
+              "default": "pending_setup"
+            }
+          }
+        },
+        "maintenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "daily": {
+              "type": "string",
+              "enum": [
+                "light"
+              ],
+              "default": "light"
+            },
+            "weekly": {
+              "type": "string",
+              "enum": [
+                "deep"
+              ],
+              "default": "deep"
+            }
+          }
+        },
+        "adversarial": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "daily": {
+              "type": "string",
+              "enum": [
+                "light"
+              ],
+              "default": "light"
+            },
+            "weekly": {
+              "type": "string",
+              "enum": [
+                "deep"
+              ],
+              "default": "deep"
+            }
+          }
+        },
+        "optionalIntegrations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dataview": {
+              "type": "boolean",
+              "default": false
+            },
+            "tasks": {
+              "type": "boolean",
+              "default": false
+            },
+            "bases": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "maxFileBytes": {
+          "type": "number",
+          "default": 262144
+        },
+        "maxItems": {
+          "type": "number",
+          "default": 200
+        },
+        "bundleCooldownMs": {
+          "type": "number",
+          "default": 0
+        },
+        "staleBundleMaxAgeDays": {
+          "type": "number",
+          "default": 7
+        },
+        "autoApplyLowRisk": {
+          "type": "boolean",
+          "default": false
+        },
+        "dryRun": {
+          "type": "boolean",
+          "default": true
+        },
+        "watch": {
+          "type": "boolean",
+          "default": false
+        },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "workspace_id": {
+                "type": "string"
+              },
+              "workspaceId": {
+                "type": "string"
+              },
+              "agent_id": {
+                "type": "string"
+              },
+              "agentId": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "workspace": {
+                "type": "string"
+              },
+              "dir": {
+                "type": "string"
+              },
+              "includeGlobs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ignoreGlobs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requireUserApproval": {
+                "type": "boolean"
+              },
+              "allowDotObsidianWrite": {
+                "type": "boolean"
+              },
+              "tombstoneOnDelete": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "includeGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ignoreGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tombstoneOnDelete": {
+          "type": "boolean",
+          "default": true
+        },
+        "sourceOfTruth": {
+          "type": "string",
+          "enum": [
+            "plur1bus-lancedb"
+          ],
+          "default": "plur1bus-lancedb"
+        },
+        "recallAuthority": {
+          "type": "string",
+          "enum": [
+            "lancedb-reranked-vector"
+          ],
+          "default": "lancedb-reranked-vector"
+        },
+        "dashboardLayer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "records": {
+              "type": "boolean",
+              "default": true
+            },
+            "markdownDashboards": {
+              "type": "boolean",
+              "default": true
+            },
+            "bases": {
+              "type": "boolean",
+              "default": false
+            },
+            "dataview": {
+              "type": "boolean",
+              "default": false
+            },
+            "tasks": {
+              "type": "boolean",
+              "default": false
+            },
+            "autoLinkSuggestions": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "deepMaintenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "archiveAfterDays": {
+              "type": "number",
+              "default": 30
+            },
+            "staleDecisionAfterDays": {
+              "type": "number",
+              "default": 45
+            },
+            "semanticDuplicateScan": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "adversarialDeep": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "semanticContradictionScan": {
+              "type": "boolean",
+              "default": true
+            },
+            "evidenceScoring": {
+              "type": "boolean",
+              "default": true
+            },
+            "llmClassifier": {
+              "type": "boolean",
+              "default": false
+            },
+            "fallbackOnError": {
+              "type": "boolean",
+              "default": true
+            },
+            "onlyWhenProviderAvailable": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "semanticGraph": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "proposalOnly": {
+              "type": "boolean",
+              "default": true
+            },
+            "writeDerivedEdges": {
+              "type": "boolean",
+              "default": true
+            },
+            "mutateMemory": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "provenanceGraph": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "impactAnalysis": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "proposalOnly": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "graphLinks": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxPerNote": {
+              "type": "number",
+              "default": 5
+            },
+            "includeSemantic": {
+              "type": "boolean",
+              "default": false
+            },
+            "semanticThreshold": {
+              "type": "number",
+              "default": 0.78
+            },
+            "blockId": {
+              "type": "string",
+              "default": "graph-links"
+            },
+            "tiers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [
+                "explicit",
+                "type",
+                "semantic"
+              ]
+            },
+            "semanticDiscovery": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "maxPerRun": {
+                  "type": "number",
+                  "default": 500
+                },
+                "threshold": {
+                  "type": "number",
+                  "default": 0.78
+                },
+                "maxLinksPerRecord": {
+                  "type": "number",
+                  "default": 5
+                },
+                "topK": {
+                  "type": "number",
+                  "default": 20
+                }
+              }
+            }
+          }
+        },
+        "weekly": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "archive": {
+              "type": "boolean",
+              "default": true
+            },
+            "trendWindowWeeks": {
+              "type": "number",
+              "default": 4
+            }
+          }
+        },
+        "soulPatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "force": {
+              "type": "boolean",
+              "default": false
+            },
+            "migrateLegacy": {
+              "type": "boolean",
+              "default": false
+            },
+            "createIfMissing": {
+              "type": "boolean",
+              "default": true
+            },
+            "backup": {
+              "type": "boolean",
+              "default": true
+            },
+            "promptForLegacyMigration": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Obsidian bridge, which mirrors memories into an Obsidian vault, with write and approval gates, reviews, maintenance, graph links, provenance and the other vault integration options."
+    },
+    "criticalPush": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "buttons": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send each critical card as its own Telegram message with Accept and Reject buttons. false keeps the plain text message with commands."
+        },
+        "maxPerDay": {
+          "type": "number",
+          "default": 3
+        },
+        "hideTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "person",
+              "beziehung",
+              "geburtstag",
+              "geld_konto",
+              "gesundheit",
+              "zugang_passwort"
+            ]
+          },
+          "default": [],
+          "description": "Critical types whose content is hidden in the push card in addition to zugang_passwort, which is always hidden. Pushes go to the owner's direct chat only; before 7.12.2 gesundheit and geld_konto were hidden as well."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
+        },
+        "baseUrl": {
+          "type": "string",
+          "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true,
+          "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "disableThinking": {
+          "type": "boolean"
+        },
+        "headers": {
+          "type": "object",
+          "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Critical push, which classifies recent memories and sends urgent findings to the operator, with a daily limit, hidden memory types, buttons and a model route."
+    },
+    "dailyConsolidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "lancedbOptimize": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "keepVersionsHours": {
+              "type": "number",
+              "minimum": 1
+            },
+            "timeoutMs": {
+              "type": "number",
+              "minimum": 10000
+            }
+          }
+        },
+        "decayMode": {
+          "type": "string",
+          "enum": [
+            "batch",
+            "rows"
+          ]
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Daily consolidation job, which condenses the day's memories, applies decay and optionally optimises the LanceDB tables."
+    },
+    "styleDirective": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeOfDay": {
+          "type": "boolean",
+          "default": true
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "opinion": {
+          "type": "boolean",
+          "default": true
+        },
+        "askBack": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Style directive that shapes how a reply reads: time-of-day awareness, stating an opinion, and asking back."
+    },
+    "dreamEcho": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Dream echo, which surfaces material that dreaming consolidated in later prompts."
+    },
+    "personaVoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "maxDirectiveChars": {
+          "type": "number",
+          "minimum": 200
+        },
+        "maxBullets": {
+          "type": "number",
+          "minimum": 6
+        },
+        "minDaysBetween": {
+          "type": "number",
+          "minimum": 0
+        },
+        "minOutcomes": {
+          "type": "number",
+          "minimum": 1
+        },
+        "cron": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Persona voice, which evolves the agent's voice directive from observed reply outcomes on a schedule, with limits on directive size and cadence."
+    },
+    "afterthought": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Afterthought, which may send a short follow-up message when a recent conversation ended with an open outcome."
+    },
+    "reactionNudge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "enum": [
+            true,
+            false,
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "palette": {
+          "type": "string"
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Reaction nudge, which suggests a reaction emoji where the channel supports it, with its emoji palette."
+    },
+    "contradictionDisclosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Points out in the prompt when a recalled memory conflicts with the current turn."
+    },
+    "featureCronSetup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Controls gateway_start provisioning for exactly eight owner-gated jobs: persona-evolve: personaVoice.enabled && skillMiner.enabled; afterthought: afterthought.enabled && (skillMiner.enabled || merging.enabled); consolidate-daily: dailyConsolidation.enabled; classify-recent: criticalPush.enabled; rem-dream: merging.enabled; skill-miner: skillMiner.enabled; discover-semantic-links: obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled; gc-run: gc.enabled. Raw sourceConfig owns gates/schedules; effective runtimeConfig owns bindings/accounts/delivery. Outbound delivery uses concrete peer.id/defaultTo, never allowFrom, and fails closed without model or credential overrides.",
+      "properties": {
+        "auto": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set false to disable the deferred gateway_start feature-cron bootstrap. Manual `/plur1bus setup crons` and npm postinstall are unaffected."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced"
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowChatConfigCommands": {
+          "type": "boolean",
+          "default": true
+        },
+        "allowModelDestructiveMemoryOps": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow model-facing memory_forget and knowledge_update tool calls unless explicitly disabled."
+        },
+        "allowedUserIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of allowed Telegram/Discord user IDs. Destructive commands require user-bound auth."
+        },
+        "allowedChatIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of allowed chat/channel IDs. Non-destructive commands may use chat-only auth when allowedUserIds is empty."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Access control for chat commands and model-facing destructive memory tools, including the allowed user and chat ids."
+    },
+    "setupProfile": {
+      "type": "string",
+      "enum": [
+        "recommended",
+        "safe",
+        "custom"
+      ],
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Feature profile chosen during setup (recommended, safe or custom), recorded by an explicit selection."
+    },
+    "featuresConfirmedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Timestamp of the explicit feature-profile selection, or null when no selection has been confirmed."
+    },
+    "morningReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "cron": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delivery": {
+          "type": "string",
+          "enum": [
+            "announce",
+            "silent"
+          ]
+        },
+        "session": {
+          "type": "string",
+          "enum": [
+            "isolated",
+            "current"
+          ]
+        },
+        "writeReviewBundle": {
+          "type": "boolean"
+        },
+        "applyMode": {
+          "type": "string",
+          "const": "manual"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending_setup",
+            "active"
+          ]
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Morning review of yesterday's memories: schedule, time zone, delivery, session, review bundle and apply mode."
+    },
+    "eveningReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "cron": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delivery": {
+          "type": "string",
+          "enum": [
+            "announce",
+            "silent"
+          ]
+        },
+        "session": {
+          "type": "string",
+          "enum": [
+            "isolated",
+            "current"
+          ]
+        },
+        "applyMode": {
+          "type": "string",
+          "const": "manual"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending_setup",
+            "active"
+          ]
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Evening review of the day's memories: schedule, time zone, delivery, session and apply mode."
+    },
+    "metaCognition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "llmReport": {
+          "type": "boolean",
+          "default": false
+        },
+        "llmReportMode": {
+          "type": "string",
+          "default": "budgeted"
+        },
+        "fallbackOnError": {
+          "type": "boolean",
+          "default": true
+        },
+        "sessionThreshold": {
+          "type": "number",
+          "minimum": 1,
+          "default": 50
+        },
+        "intervalDays": {
+          "type": "number",
+          "minimum": 0,
+          "default": 7
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Meta-cognition, which observes the agent's own recall quality and can write an LLM reflection report after enough sessions or days."
+    },
+    "emotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": [
+            "t1",
+            "t2",
+            "t3",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        "t2": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "t3": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "model": {
+              "type": "string",
+              "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
+            },
+            "apiKey": {
+              "$ref": "#/$defs/secretInput",
+              "x-sensitive": true,
+              "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+            },
+            "baseUrl": {
+              "type": "string",
+              "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+            },
+            "fallbackOnError": {
+              "type": "boolean",
+              "default": true
+            },
+            "onlyWhenProviderAvailable": {
+              "type": "boolean",
+              "default": true
+            },
+            "escalationConfidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.85
+            },
+            "timeoutMs": {
+              "type": "number",
+              "minimum": 0,
+              "default": 4000
+            },
+            "captureMode": {
+              "type": "string",
+              "enum": [
+                "deferred",
+                "inline"
+              ],
+              "description": "Where tier-3 runs for newly captured memories: deferred (default) stores the lexical tier-1/2 score in the hook and lets the emotion-refine cron refine low-confidence rows; inline keeps the LLM call in the agent_end hook."
+            },
+            "refineImportanceMin": {
+              "type": "number",
+              "minimum": 0,
+              "description": "In deferred mode, memories with importance at or above this value are always refined by the emotion-refine cron, even when tier 1/2 is confident. Default 0.9; values above 1 disable the rule."
+            },
+            "encodingMaxTokens": {
+              "type": "number",
+              "minimum": 1,
+              "description": "Output token budget for the combined emotion+meaning encoding call (lib/encoding-llm.js) run by the emotion-refine cron. Its answer carries the full eight-dimension emotion label map plus a free-text reason and needs more room than the tier-3 emotion classification call, which stays at 300. Default 1500 (measured: 400/800 truncate with finish_reason \"length\"; 1500 completes at ~345 tokens with finish_reason \"stop\"). Values < 1 or non-finite fall back to the default."
+            }
+          }
+        },
+        "moodInfluence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.3
+        },
+        "intensityHalfLifeFactor": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1
+        },
+        "temperaments": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "preset": {
+                "type": "string"
+              },
+              "sensitivity": {
+                "type": "number",
+                "minimum": 0
+              },
+              "decayMultiplier": {
+                "type": "number",
+                "minimum": 0
+              },
+              "blendFactor": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "moodInfluence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "baseline": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "joy": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "trust": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "anticipation": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "sadness": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "disgust": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "anger": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "fear": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "surprise": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Emotion engine: tier routing, the keyword and LLM tiers (with an optional feature-local model route), mood influence, intensity half-life and temperaments."
+    },
+    "memoryDynamics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "flashbulbEncoding": {
+          "type": "boolean",
+          "default": false,
+          "description": "Blitzlicht-Kodierung: Eine Erinnerung, deren Blitzlicht-Wert (0,5 · emotionale Intensität + 0,5 · Wichtigkeit) die Schwelle 0,80 erreicht, bekommt Gedächtnisstärke 0,95, eine Mindest-Halbwertszeit von 3650 Tagen statt 90 und die Klasse 'flashbulb'. Die Schwelle stammt aus dem Phase-3-Pilotlauf vom 21.09.2026 über 24.509 aktive Zeilen: 0,80 trifft 1,8 % der Zeilen der letzten 30 Tage (Zielgröße laut scripts/importance-metrics.mjs: unter 2 %), die vorherigen 0,70 hätten 6,4 % getroffen. Entschieden wird einmal je Zeile, wenn das Modellurteil aus Tier 3 zum ersten Mal vorliegt — der emotion-refine-Cron liest nur Zeilen mit pending-Status und setzt sie danach auf final, sie verlassen die Warteschlange dauerhaft. Der Capture-Pfad selbst brennt praktisch nie ein: Dort liegt nur die Tier-2-Heuristik vor, die auf echten Texten höchstens 0,60 Intensität erreicht. Bestandszeilen auf 'final' werden nie nachträglich eingebrannt. Vorgabe aus, weil die Wirkung praktisch unumkehrbar ist: Eine Halbwertszeit von zehn Jahren nimmt der Bereinigung jeden Zugriff."
+        }
+      },
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Memory dynamics switches, currently flashbulb encoding for memories with high emotional intensity and importance."
+    }
+  }
+}
