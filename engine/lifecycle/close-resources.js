@@ -25,6 +25,8 @@
  * @param {{shutdown: () => Promise<void>}|null} [options.modelPreparationCoordinator]
  * @param {{shutdown: () => Promise<void>}|null} [options.reembeddingCoordinator]
  * @param {{beginCleanup: () => void, releaseModels: () => Promise<void>}|null} [options.localModelGeneration]
+ * @param {{release: () => Promise<void>}|null} [options.neoWorker] The engine's neo worker lease; released after the pool shutdown.
+ * @param {{close: () => Promise<void>}|null} [options.fragmentCompactor] The LanceDB fragment compactor; closed (its running optimize awaited) before the db-adapter shutdown, because it optimizes through that adapter; the pair runs beside the other ordered steps.
  * @returns {() => Promise<void>} The closer; the second and later calls return the first call's promise.
  */
 export function createResourceCloser({
@@ -42,6 +44,8 @@ export function createResourceCloser({
   modelPreparationCoordinator = null,
   reembeddingCoordinator = null,
   localModelGeneration = null,
+  neoWorker = null,
+  fragmentCompactor = null,
 }) {
   let shutdownPromise = null;
   return function closeResources() {
@@ -92,9 +96,21 @@ export function createResourceCloser({
           : null,
         localModelResources,
       ].filter(Boolean);
-      const ordered = (async () => {
+      // The compactor optimizes through the db-adapter, so the adapter shuts
+      // down only after the compactor closed (R8). The pair runs as its own
+      // branch: a long-running optimize must not hold back the pool, neo,
+      // metrics and cache steps below (Task 6 fix round 1, I2).
+      const adapterBranch = (async () => {
+        if (typeof fragmentCompactor?.close === "function") {
+          await cleanup("plur1bus-compaction: compactor close failed", () => fragmentCompactor.close());
+        }
         await cleanup("memory-lancedb-namespaced: adapter shutdown failed", () => memoryDbAdapter.shutdown());
+      })();
+      const ordered = (async () => {
         await cleanup("memory-lancedb-namespaced: pool shutdown failed", () => pool.shutdown());
+        if (typeof neoWorker?.release === "function") {
+          await cleanup("plur1bus-neo: worker release failed", () => neoWorker.release());
+        }
         if (sharedMemoryPool) {
           await cleanup("memory-lancedb-namespaced: shared pool shutdown failed", () => sharedMemoryPool.shutdown());
         }
@@ -104,7 +120,7 @@ export function createResourceCloser({
         await cleanup("metrics flush failed", () => flushMetrics());
         await cleanup("memory-lancedb-namespaced: LLM result cache shutdown failed", () => llmResultCache.close());
       })();
-      await Promise.all([...immediate, ordered]);
+      await Promise.all([...immediate, adapterBranch, ordered]);
     })();
     return shutdownPromise;
   };

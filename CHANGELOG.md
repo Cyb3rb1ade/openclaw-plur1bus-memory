@@ -632,6 +632,61 @@ Kein Contract-Wechsel (Typen bleiben bei 1.8.0).
   bisher und endet als `duplicate-turn`; der OpenClaw-Adapter-Pfad ist
   unverändert.
 
+### E5 — Contract 1.9.0 (host-neutrales Engine-Config-Schema, Warm-Only-Recall, ehrliches Timing, Fragment-Kompaktierung, Neo-Worker-Lease)
+
+Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
+„Engine configuration schema in 1.9.0".
+
+#### Hinzugefügt
+
+- **`engine-config.schema.json`** beschreibt alle Engine-Schlüssel
+  host-neutral (Typ, Default, Beschreibung, `readAt`, `x-tier`,
+  `x-sensitive`); `openclaw.plugin.json` wird daraus erzeugt (`npm run
+  gen:config-schema`, `--check` als CI-Gate gegen Drift) — Contract 1.9.0.
+- **`RecallQuery.warmOnly`** wärmt den schweren Recall-Pfad (Neo-Vorlauf,
+  Query-Embedding, ein nur lesend geöffneter Store, Vektorsuche, Rerank)
+  ohne Schreibzugriffe (auch keine Zeile im persistenten Embedding-Cache:
+  neues Per-Call-Flag `persist: false` im Embedding-Cache, durchgereicht
+  von Local-, OpenAI- und Scoped-IPC-Provider), ohne Events, Recall-Cache
+  oder LLM-Aufrufe, mit Hintergrund-Priorität — gedacht für einen Aufruf je
+  Agent direkt nach `Engine.models.warm()`. Antwort sonst `blocks: []` mit
+  `degraded` `warm-failed`, `aborted`, `timeout`, `queue-full`/`pressure`
+  oder `engine-closed`; ein kalter Modell-Cache lädt Modelldateien wie bei
+  jedem ersten Modell-Load.
+- **`runtime.lancedbCompaction`** — begrenzte LanceDB-Fragment-Kompaktierung
+  zwischen den `dailyConsolidation`-Läufen, standardmäßig aktiv auf jedem
+  Host, auch OpenClaw (Owner-Entscheidung 2026-09-27); Details in
+  `docs/configuration.md`.
+
+#### Geändert
+
+- **Das weiche Recall-Budget zählt ab Aufruf, inklusive Warteschlange.**
+  `RecallTiming.totalMs` läuft jetzt ehrlich ab `Engine.recall` (bzw. auf dem
+  OpenClaw-Hook-Pfad ab dem Assembler-Eintritt); `phases.completed` beginnt
+  mit `entry`/`queue`/`prelude`. Die Emotions-Inferenz, die Write-/Read-DB-
+  Leases, der GC-Kick, der Start-Notice-Konsum und fast-bernd zählen jetzt
+  ebenfalls gegen das weiche Budget, ohne eine eigene Phase zu sein — bei
+  kleinem `recall.softBudgetMs` (Harness) kann ein Soft-Budget-Fallback
+  dadurch früher greifen. Der harte Scheduler-Timeout ist unverändert und
+  zählt weiterhin ab dem Enqueue.
+- **`reembedding.activeGeneration` wird host-neutral erneut gelesen
+  (Verifikations-Read, kein live-Schlüssel)** — über
+  `engine/config/live-config.js`, unabhängig davon, ob `host.config()`
+  die gesamte Host-Konfiguration oder direkt die Engine-Konfiguration liefert.
+
+#### Behoben
+
+- **Capture- und Recall-Latenz wachsen nicht mehr mit der Zahl der
+  LanceDB-Fragmente:** begrenzte Kompaktierung zwischen den
+  consolidate-daily-Läufen (`runtime.lancedbCompaction`).
+- **`timing.totalMs` enthält jetzt Warteschlange und Neo-Vorlauf.**
+- **Mit aktivem Neo hält die Engine nach `close()` keinen Worker-Thread
+  mehr offen; der Prozess endet.** `close()` gibt jetzt eine Lease auf den
+  geteilten Neo-Worker frei statt eine bloße Referenz zu halten; der Worker
+  selbst endet erst, wenn die letzte Lease freigegeben wurde (oder der
+  OpenClaw-Adapter ihn direkt über `gateway_stop` schließt), und startet bei
+  Bedarf in rund 600 ms neu.
+
 ## [7.16.11] — 2026-09-26
 
 ### Geändert

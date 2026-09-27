@@ -1,6 +1,6 @@
 /**
  * engine/status/status-reporter.js — assembles `EngineStatus` (types/engine.d.ts,
- * contract 1.8.0) from the ledger-derived job health (Task 2), model readiness
+ * contract 1.9.0) from the ledger-derived job health (Task 2), model readiness
  * (Task 3), an optional host journal-backlog capability, and the shared-memory
  * pool's own support() (E4 Task 4).
  *

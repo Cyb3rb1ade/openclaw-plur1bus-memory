@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.8.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended nine times under the policy below — see the changelog at the end
+ * Contract version 1.9.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended ten times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -39,9 +39,10 @@
  *            1.6.0 — AdminOps.share/forget alias Engine.memory (deprecated); ObsidianOps with explicit paths; migrate over a store schema marker; MemoryOps.propose/proposals (D31); MemoryCard.sharedBy/sourceId; MemoryOpError.detail; "memory.proposal" event; EngineStatus.storeSchema (E2).
  *            1.7.0 — EmbeddingService.probe(opts?) → EmbeddingProbeResult (identity, readiness, memoized); serve(address?: IpcAddress | null) → EmbeddingServeResult (real scoped IPC, in-process owner, no claim listener); HostCapabilities.pushCriticalButtons? typed (E3).
  *            1.8.0 — EngineStatus.jobs/models/journal/sharedMemory, degraded derived from model readiness; Engine.models (status, warm); HostCapabilities.journalBacklog?; MemoryOpErrorCode "unsupported"; CaptureResult.reason "duplicate-turn" (E4).
+ *            1.9.0 — engine-config.schema.json with readAt/x-tier/x-sensitive and its types (EngineConfigSchema, EngineConfigKey, EngineConfigReadAt); RecallQuery.warmOnly; RecallTiming.totalMs covers queue wait and prelude (E5).
  */
 
-export type ContractVersion = "1.8.0";
+export type ContractVersion = "1.9.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -227,10 +228,52 @@ export interface HostRuntime {
   llm?: { complete?(params: unknown): Promise<unknown> };
 }
 
-/** The 56 keys of openclaw.plugin.json configSchema. Kept open in 1.0.0 so
- *  the contract does not have to move every time a key is added. */
+/** The keys of openclaw.plugin.json configSchema. Kept open in 1.0.0 so
+ *  the contract does not have to move every time a key is added; see
+ *  engine/config/engine-config.schema.json for the current shape. */
 export interface EngineConfig {
   [key: string]: unknown;
+}
+
+/* ------------------------------------------------------------------ */
+/* Engine config schema (1.9.0)                                       */
+/* ------------------------------------------------------------------ */
+
+/** 1.9.0: when the engine reads a config value. construction: from createEngine's `config` argument, once — a change
+ *  needs a new engine. live: per operation through HostServices.config() (engine/config/live-config.js). */
+export type EngineConfigReadAt = "construction" | "live";
+export type EngineConfigTier = "basic" | "advanced";
+/** A node of engine/config/engine-config.schema.json (JSON Schema 2020-12 plus three annotations). */
+export interface EngineConfigSchemaNode {
+  type?: string | string[];
+  default?: unknown;
+  description?: string;
+  /** Required on every top-level key; a nested node may override its parent. */
+  readAt?: EngineConfigReadAt;
+  "x-tier"?: EngineConfigTier;
+  /** true on credential inputs (the manifest's secretInputs). */
+  "x-sensitive"?: boolean;
+  properties?: Record<string, EngineConfigSchemaNode>;
+  [keyword: string]: unknown;
+}
+export interface EngineConfigSchema extends EngineConfigSchemaNode {
+  $schema: "https://json-schema.org/draft/2020-12/schema";
+  $id: "plur1bus-engine-config";
+  "x-contract": ContractVersion;
+  properties: Record<string, EngineConfigSchemaNode & { description: string; readAt: EngineConfigReadAt; "x-tier": EngineConfigTier }>;
+}
+/** One top-level key as engineConfigKeys() reports it. */
+export interface EngineConfigKey {
+  key: string;
+  type: string | string[] | null;
+  default?: unknown;
+  description: string;
+  readAt: EngineConfigReadAt;
+  /** Paths below this key whose readAt differs from the key's own (none in 1.9.0; hosts re-read HOST_REREAD_PATHS separately). */
+  liveOverrides: string[];
+  tier: EngineConfigTier;
+  /** true when the key or any path below it is x-sensitive. */
+  sensitive: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -264,6 +307,15 @@ export interface RecallQuery {
   compactedAt?: number | null;
   previousUserTurnAt?: number | null;
   validAt?: string;
+  /** 1.9.0: run only the read-only heavy path (neo prelude reads, query embedding, read-only store open, vector search,
+   *  rerank) and answer { blocks: [], degraded: null, timing } on success. Writes no memory data, no store, no file and
+   *  no persistent embedding-cache row (embeds are memory-only, E5-R26), emits no event, never uses or fills the recall
+   *  cache, never calls an LLM, runs at background (low, evictable) priority. It warms in-memory caches (the provider's
+   *  embedding cache, loaded models, the neo worker); a cold local model cache still downloads model files, as any
+   *  first model load does. A warm recall can also answer blocks [] with degraded "warm-failed" (the warm path failed),
+   *  "aborted", "timeout", "queue-full" or "pressure" (shed at background priority), or "engine-closed"; a workspace
+   *  whose policy disables memory answers an empty success. */
+  warmOnly?: boolean;
 }
 
 export interface Degraded {
@@ -285,6 +337,8 @@ export interface Deferral {
   reason: "global-cap" | "memories-cap";
 }
 
+/** 1.9.0: `totalMs` runs from `Engine.recall` entry (for the OpenClaw hook path: assembler entry); `phases.completed`
+ *  begins with `entry` (Engine.recall only), `queue` and `prelude`. */
 export interface RecallTiming {
   phases: Record<string, unknown> | null;
   totalMs: number;

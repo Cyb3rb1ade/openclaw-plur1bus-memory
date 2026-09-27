@@ -36,6 +36,8 @@ const ENGINE_PATHS = Object.freeze({
   captureTurn: "engine/capture/capture-turn.js",
   turnReplayGuard: "engine/capture/turn-replay-guard.js",
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
+  engineConfigSchema: "engine/config/engine-config-schema.js",
+  liveConfig: "engine/config/live-config.js",
   events: "engine/events.js",
   principal: "engine/identity/principal.js",
   memoryOpsContext: "engine/memory-ops/context.js",
@@ -54,6 +56,9 @@ const ENGINE_PATHS = Object.freeze({
   minimalMaintenance: "engine/recall/minimal-maintenance.js",
   plur1busCommand: "engine/commands/plur1bus-command.js",
   recallResult: "engine/recall/recall-result.js",
+  neoPrelude: "engine/recall/neo-prelude.js",
+  recallParams: "engine/recall/recall-params.js",
+  warmRecallPath: "engine/recall/warm-recall-path.js",
   systemSupplement: "engine/recall/system-supplement.js",
   remOutcome: "engine/jobs/rem-outcome.js",
   runStateMigration: "engine/jobs/run-state-migration.js",
@@ -61,6 +66,7 @@ const ENGINE_PATHS = Object.freeze({
   commandHelpers: "engine/commands/command-helpers.js",
   constants: "engine/runtime/constants.js",
   controlHealth: "engine/store/control-health.js",
+  fragmentCompactor: "engine/store/fragment-compactor.js",
   debugLog: "engine/runtime/debug-log.js",
   envConfig: "engine/runtime/env-config.js",
   knowledgePending: "engine/knowledge/knowledge-pending.js",
@@ -95,6 +101,7 @@ const ADAPTER_PATHS = Object.freeze({
   turnPrincipal: "adapter/openclaw/turn-principal.js",
   hostProbes: "adapter/openclaw/host-probes.js",
   plugin: "adapter/openclaw/plugin.js",
+  configSchema: "adapter/openclaw/config-schema.js",
 });
 
 function listJsFiles(relativeDir) {

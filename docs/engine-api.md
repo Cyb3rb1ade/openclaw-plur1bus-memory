@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.8.0** · frozen at 1.0.0 on 2026-09-22, amended nine times
+**Contract version 1.9.0** · frozen at 1.0.0 on 2026-09-22, amended ten times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -105,6 +105,27 @@ own changelog:
   `/share` reply) on a platform whose shared-memory mode is `"unavailable"`,
   before any row, archive or `.plur1bus-shared` directory is touched. See
   [Status, models and shared memory in 1.8.0](#status-models-and-shared-memory-in-180)
+  below.
+- **1.9.0** — a host-neutral engine config schema, warm-only recall, honest
+  recall timing, bounded fragment compaction and a neo worker that lets the
+  process exit (engine PR E5): `engine/config/engine-config.schema.json`
+  describes every engine config key with its type, default, description,
+  `readAt` (`"construction"` or `"live"`), `x-tier` and `x-sensitive`, loaded
+  through `loadEngineConfigSchema`/`engineConfigKeys`/`readAtOf`/`livePaths`/
+  `sensitivePaths` (`engine/config/engine-config-schema.js`);
+  `openclaw.plugin.json`'s `configSchema` and `secretInputs.paths` are
+  generated from it (`npm run gen:config-schema`, `--check` for CI); all
+  `recall.*` keys are construction-time. `RecallQuery.warmOnly` runs the
+  read-only heavy recall path (neo prelude, query embedding, a read-only
+  store open, vector search, rerank) with no writes (no store, file or
+  persistent embedding-cache row), no event, no recall-cache use and no LLM
+  call, at background priority. `RecallTiming.totalMs` now covers
+  the queue wait and the prelude honestly, `phases.completed` beginning with
+  `entry`/`queue`/`prelude`. `runtime.lancedbCompaction` bounds LanceDB
+  fragment growth between `dailyConsolidation`'s own nightly optimize runs,
+  on by default on every host. `close()` now releases the shared neo worker
+  so a process with neo enabled can exit. See
+  [Engine configuration schema in 1.9.0](#engine-configuration-schema-in-190)
   below.
 
 ## The two halves
@@ -879,10 +900,270 @@ replay. Hosts should give every journal line a stable `runId` (the harness's
 own journal does, per 2a-H3) so the key is unambiguous; a host that cannot
 should expect this caveat.
 
+## Engine configuration schema in 1.9.0
+
+### Where the schema lives, and how to read it
+
+`engine/config/engine-config.schema.json` ships inside the package and is the
+host-neutral description of every engine config key: JSON Schema 2020-12
+(`$schema`, `$id: "plur1bus-engine-config"`, `x-contract`, `$defs`, `type`,
+`additionalProperties`, `properties`) plus three annotations on every node.
+It is the same shape as `openclaw.plugin.json`'s `configSchema` — indeed it
+*is* that shape, annotated (see "The manifest is generated" below) — with the
+same 55 top-level keys.
+
+`engine/config/engine-config-schema.js` is the loader, and the only supported
+way to read the schema:
+
+- **`loadEngineConfigSchema()`** parses the file once, deep-freezes it and
+  caches it; every caller shares the same frozen object.
+- **`engineConfigKeys()`** returns one `EngineConfigKey` per top-level key, in
+  schema order: `key`, `type` (or `"enum"` when the node has no `type`, or
+  `null`), `default` (only when the node declares one), `description`,
+  `readAt`, `liveOverrides` (paths below the key whose resolved `readAt`
+  differs from the key's own — empty in 1.9.0, see below), `tier`, and
+  `sensitive` (true when the key or anything below it is `x-sensitive`).
+- **`readAtOf(path)`** resolves a dotted path (e.g. `"recall.softBudgetMs"`)
+  to the `readAt` of the nearest node on that path that declares one —
+  `null` for an unknown path. Only `properties` chains form paths; `$defs`,
+  `items` and similar are schema plumbing, not config paths.
+- **`livePaths()`** — every path whose resolved `readAt` is `"live"`, sorted.
+- **`sensitivePaths()`** — every `x-sensitive` path, in depth-first schema
+  order; this is exactly the manifest's `configContracts.secretInputs.paths`
+  list (eight credential keys, unchanged by E5 — see the open item below).
+
+### `readAt`, `x-tier`, `x-sensitive` — and what "live" means
+
+- **`readAt`** is `"construction"` or `"live"`. `"construction"` (every key,
+  as of 1.9.0) means the engine reads the value once, from `createEngine`'s
+  `config` argument; changing it takes a new engine. `"live"` would mean the
+  engine re-reads the value per operation through `HostServices.config()` —
+  no key is declared live in 1.9.0 (`livePaths()` is `[]`); see the note on
+  `reembedding.activeGeneration` below.
+- **`x-tier`** is `"basic"` or `"advanced"`. Every key is `"advanced"` in
+  1.9.0 (D29) — the harness/host UI has no `"basic"` tier to show yet.
+- **`x-sensitive`** marks the eight credential nodes the manifest already
+  masked as secret inputs. **Open item for the owner:** `*.headers` and
+  `reminders.webhookUrl` also carry values a host would not want echoed back
+  in a UI or log, but neither is `x-sensitive` — E5 kept `secretInputs.paths`
+  identical to today's manifest and did not widen it.
+- **What "live" would mean depends on what a host's `config()` returns.** An
+  OpenClaw-style host's `config()` (or its fresher `runtime.config.current()`)
+  returns the *whole* host config, with the engine's own config nested under
+  `plugins.entries["memory-lancedb-namespaced"].config`; a harness-style host
+  with no `runtime` has `config()` return the engine config directly. A live
+  key's value would be read through that same host-neutral indirection
+  (`engine/config/live-config.js`'s `livePluginConfig(host)`), so a "live"
+  annotation means the same thing regardless of which shape the host's
+  `config()` returns.
+- **One path is re-read without being live.** The re-embedding switch probe
+  re-reads `reembedding.activeGeneration` to confirm the host has actually
+  switched generations — a verification read, not a live config value. It
+  stays `readAt: "construction"` in the schema; `engine/config/live-config.js`
+  lists it separately, in `HOST_REREAD_PATHS`, and `readLiveConfigValue(host,
+  path)` throws `TypeError` for any path not on that list. A re-read is
+  deliberately not the same thing as declaring a key live.
+
+### `recall.*` keys are construction-time
+
+Every key under `recall.*` — `softBudgetMs`, `hardBudgetMs`, `capChars`,
+`memoriesMaxChars`, `rerankerTimeoutMs` and the rest — is `readAt:
+"construction"`. A host that wants a different recall budget or cap must
+build a new engine; changing the host's own config file has no effect on an
+engine already running, and no `recall.*` value is re-read per call.
+
+### The manifest is generated
+
+`openclaw.plugin.json`'s `configSchema` and `configContracts.secretInputs
+.paths` are no longer hand-maintained: they are generated from
+`engine/config/engine-config.schema.json` by `adapter/openclaw/
+config-schema.js` (`deriveOpenClawConfigSchema`, `deriveSecretInputPaths`,
+`applyEngineSchemaToManifest`, which strips `readAt`/`x-tier`/`x-sensitive`
+and the engine-only root keys/keywords, and touches nothing else in the
+manifest). `npm run gen:config-schema` writes the file only when its content
+would change; `npm run gen:config-schema -- --check` writes nothing and
+exits 1 with "openclaw.plugin.json is out of date: run npm run
+gen:config-schema" on drift — this is the CI gate against hand-editing the
+generated parts. The manifest's top-level `configSchema.properties` count
+stays 55; nothing else in the manifest is touched by generation.
+
+### `warmOnly` — the read-only heavy recall path
+
+`RecallQuery.warmOnly` (1.9.0) runs the expensive part of recall — the neo
+prelude, the query embedding, a read-only store open, the vector search and
+rerank — and answers `{ blocks: [], degraded: null, timing }` on success.
+
+**Other answers.** Always `blocks: []`; `degraded` is not null when the warm
+recall did not run to the end:
+
+| `degraded.reason` | When |
+|---|---|
+| `"warm-failed"` | the warm path threw (for example a store read error), or no warm path is wired; logged at debug |
+| `"aborted"` | the caller's signal aborted, before or during the recall |
+| `"timeout"` | the scheduler's hard recall timeout |
+| `"queue-full"` / `"pressure"` | shed or evicted by the scheduler — warm recalls run at background (low) priority, the first to go |
+| `"engine-closed"` | the engine is closing or closed |
+| `"invalid-query"` | no `signal`, or a bad principal (as for any recall) |
+
+A workspace whose policy disables automatic memory answers an empty success
+(`degraded: null`) without reading anything.
+
+**What runs:** a read-only workspace-policy check; if neo is enabled, a
+worker warm-up (`warmUp()`) and, for a prompt of five characters or more, the
+neo prelude against a read-only peek of the neo store (no session-map write,
+no `onNeoStore` event, no stale-temp-file cleanup); read-only leases on every
+recall namespace (`withAccessReadDbs(..., { readOnly: true })`, a read-only
+`MemoryDB.init()` that never creates a directory or table and never caches a
+miss as a negative); the merged namespace recall itself, with
+`emotionalState`, `decisionTrace`, `querySummarizer` and `retrievalLogger`
+all `null`.
+
+**The no-write guarantee, in short:**
+
+| What a normal recall can do | What `warmOnly` does instead |
+|---|---|
+| cache the result | `cacheKey: ""` — the scheduler never reads or writes it |
+| run at the caller's priority | `background` forced `true` → scheduler priority `"low"` |
+| emit `recall.degraded`/`.block-*`/`.completed` | all twelve emit sites become no-ops |
+| apply queued reply-outcome updates | `replyOutcomeDynamics.kick` is skipped |
+| open the private/shared stores for writing | every store is opened read-only |
+| write the start notice, mood/emotion files, fast-bernd, overlays, contradictions, the retrieval ledger, presentation/activity/reminder state, the knowledge cache, graph-recall metrics, or call the query summarizer | none of these code paths are reached |
+| note a fragment-compactor write, or run `optimizeTable` | never referenced |
+
+A warm recall never touches the persistent (SQLite) embedding
+cache (`runtime.embeddingCachePersist`): every warm embed carries the
+embedding cache's per-call memory-only flag (`persist: false`), which skips
+both the persistent lookup (whose hit would refresh access times, and whose
+first open creates the database) and the persistent write. The local,
+OpenAI and scoped-IPC providers pass the flag through; across the IPC it
+reaches the owner process's cache. Only in-memory state is warmed: the
+provider's in-memory embedding cache, loaded models, the neo worker thread,
+OS page caches. **One exception to "writes nothing":** a cold local model
+cache downloads model artifacts on first use, exactly as the first real
+recall or `models.warm()` would — call `models.warm()` first.
+
+**Background priority; not cached.** `background: true` puts a warm recall
+behind foreground recalls in the scheduler. `cacheKey: ""` means a warm
+answer is never served back to a later real recall — a real recall right
+after a warm one is not served from the recall cache; its query embedding
+is usually a warm memory-cache hit, since the warm recall already filled
+the provider's in-memory embedding cache.
+
+**Hosts should warm with it after `models.warm()`.** Call `Engine.recall`
+with `warmOnly: true` once per agent after `Engine.models.warm()` resolves,
+to bring the neo worker, the read-only store connections and the rerank
+pipeline hot before the first real turn — without touching that agent's
+data, its recall cache, or emitting any event.
+
+### Timing phases and the soft-budget consequence
+
+`RecallTiming.totalMs` is honest as of 1.9.0: it runs from `Engine.recall`
+entry (or, on the OpenClaw hook path, from the assembler's own entry — the
+hook calls the assembler directly, so there is no `entry` phase there).
+`phases.completed` begins with the named phases, in order:
+
+- **`entry`** — `Engine.recall` up to the assembler: `safeAgentId`,
+  `host.workspaceDir(agentId)`, `memoryContextFromPrincipal`. Present only
+  when `Engine.recall` was the caller.
+- **`queue`** — the wait for a scheduler recall slot.
+- **`prelude`** — principal resolution and, with neo enabled, the neo
+  prelude (worker warm-up, the hook record, the candidate-window read, the
+  query embedding up to `neo.recall.global.embedTimeoutMs`, the global
+  search, lanes).
+
+**Segments that are not a named phase, but now count against the soft
+budget** — the gap between the sum of the phases above and `totalMs`:
+
+- the start-notice consume
+- the write-db lease (`pool.withWriteDb`, `db.init()`)
+- the read-db leases (`withAccessReadDbs`)
+- the GC kick
+- the emotion-inference LLM call
+- fast-bernd
+
+**Consequence:** with a small `recall.softBudgetMs` (the harness), a
+soft-budget fallback can trigger earlier than it used to, because queue
+wait, principal resolution, the neo embed and emotion inference now all
+spend the budget before the store read even begins. At OpenClaw's default
+budget (35 s) the effect is marginal. **The scheduler's hard timeout is
+unaffected** — it still counts from enqueue, its own separate clock.
+
+### Fragment compaction (`runtime.lancedbCompaction`)
+
+Every `add()`/`update()` writes a new LanceDB fragment; only
+`dailyConsolidation`'s own nightly `lancedbOptimize` job ran `optimize()`
+before E5, and it is off by default, so an install that never schedules it
+never compacted — capture and recall latency grew with every turn.
+`engine/store/fragment-compactor.js` now counts per-agent table writes and,
+every `checkEveryWrites` writes or `checkIntervalMs`, checks the agent's
+fragment count; once it reaches `fragmentThreshold` it runs the db-adapter's
+`optimizeTable`, keeping the table's last `keepVersionsHours` (from
+`dailyConsolidation.lancedbOptimize`) of versions.
+
+Defaults (`DEFAULT_LANCEDB_COMPACTION`): `enabled: true`, `fragmentThreshold:
+64`, `checkEveryWrites: 16`, `checkIntervalMs: 600000` (10 min), `timeoutMs:
+60000`. **`runtime.lancedbCompaction.enabled: false` is the only off
+switch** — `dailyConsolidation.lancedbOptimize.enabled` governs the nightly
+job only and does **not** disable this compaction; the two run
+independently, and both hosts can have one, both, or neither enabled.
+**Compaction is on by default for every host, including OpenClaw** (owner
+decision, 2026-09-27).
+
+**Fallback without stats.** When `table.stats()` is unavailable (no table
+yet, a failed or timed-out stats read), the compactor falls back to the
+number of writes since its last compaction as a stand-in for the fragment
+count, so it still checks and still compacts on a host whose LanceDB build
+does not expose fragment stats.
+
+**Shared pools and explicit extra namespaces are not compacted by it** — the
+compactor only reaches the per-agent authoritative `memories` table, the
+same table `dailyConsolidation`'s own optimize already covered; it does not
+newly cover anything `dailyConsolidation` did not already reach, and
+`dailyConsolidation` still runs against the agent table on its own schedule
+regardless of whether the compactor is enabled.
+
+**Concurrency.** A process-wide optimize lock, one per resolved table path,
+serializes every caller of `optimizeTable` — the compactor, other engines in
+the same process, `dailyConsolidation` and the dashboard runner. The
+compactor asks to skip rather than wait when a table is already being
+optimized; `dailyConsolidation` and the dashboard wait for the lock in FIFO
+order instead, so a long compactor optimize can delay them by up to its own
+bound.
+
+**A known, pre-existing risk, not introduced or fixed by E5.** A
+timer-driven cleanup — this compactor's `cleanupOlderThan`, and
+`dailyConsolidation`'s own optimize — can delete versions older than the
+retention window while a long-running reader still has one of them open.
+This is the same risk `dailyConsolidation`'s optimize already carried before
+E5.
+
+**A lingering native optimize can outlive `close()`.** `Engine.close()`
+resolves once its own `budgetMs` elapses, race or no race, but a LanceDB
+`optimize()` call that is still running natively when the compactor's
+`timeoutMs` fires keeps running in the background — the compactor's timeout
+only stops *waiting* on it, it does not cancel the underlying work. That
+lingering optimize can keep the Node.js process alive after `close()`
+returns, for as long as it takes LanceDB to finish (bounded by the
+compactor's own `timeoutMs`, not by `close()`'s `budgetMs`). This does not
+break the neo worker's "the process can exit" guarantee, which is scoped to
+the neo worker lease above, not to LanceDB's native calls.
+
+### The neo worker lease
+
+`createEngine` now takes a lease on the shared neo worker
+(`acquireSharedNeoWorkerRuntime`, `lib/neo-worker-runtime.js`) instead of
+holding a bare reference to it, and releases that lease in `close()`. The
+worker's own process ends only when the last lease releases it (or the
+OpenClaw adapter's `gateway_stop` closes it directly). For a single engine —
+a harness host, or the last OpenClaw plugin instance to close — the worker
+ends at that `close()` and respawns in about 600 ms the next time an engine
+needs it. Multiple engines sharing one process (OpenClaw's per-run plugin
+instances) keep the worker alive until every one of them has closed.
+
 ## What is implemented in M1b-1
 
 `createEngine(host, config, testOptions?)` (`engine/create-engine.js`)
-constructs the full 1.8.0 `Engine` surface described above from a plain
+constructs the full 1.9.0 `Engine` surface described above from a plain
 `HostServices` object with no OpenClaw `api` anywhere in its call graph —
 `createEngine(createStubHost(), config)` is exactly how the engine's own
 tests build one, and `tests/engine-contract.test.js` proves it end to end.
@@ -931,7 +1212,7 @@ involved):
   above); `admin.reembedding.{plan,apply,resume,status}` and
   `admin.workspacePolicy.*` were already wired to real coordinators.
 - `status()` reports `{ ready: true, degraded, agents: openedAgents.size,
-  contract: "1.8.0", storeSchema: { current, expected }, jobs, models,
+  contract: "1.9.0", storeSchema: { current, expected }, jobs, models,
   journal, sharedMemory }` — as of 1.8.0 (E4) `jobs`, `models`, `journal`,
   `sharedMemory` and `degraded` are real, derived from the ledger, the model
   probes, the host's own journal capability and the shared-memory pool's
@@ -1002,6 +1283,32 @@ works against a plain `HostServices` with no adapter involved, per
   retrying never helps on that platform. `EngineStatus.sharedMemory` reports
   the same fact ahead of time, so a host can grey out sharing UI without
   waiting for a failed call.
+- **A live config path is read through `readAtOf`/`readLiveConfigValue`, not
+  by re-reading the host's config file directly (1.9.0).** No key is
+  `readAt: "live"` in 1.9.0 — `livePaths()` is `[]` — and the one exception,
+  the re-embedding switch probe's re-read of `reembedding.activeGeneration`,
+  goes through `engine/config/live-config.js`'s `readLiveConfigValue(host,
+  path)`, which only accepts a path on its own `HOST_REREAD_PATHS` list and
+  reads it through `livePluginConfig(host)`, the same host-neutral
+  indirection regardless of whether `host.config()` returns the whole host
+  config (OpenClaw) or the engine config directly (a harness-style host with
+  no `runtime`). A host should never assume a config value it changes at
+  run time reaches a running engine; every key is read once, at
+  `createEngine`.
+- **A host should warm with `warmOnly`, after `models.warm()` (1.9.0).**
+  `RecallQuery.warmOnly` runs the heavy recall path read-only, in the
+  background, uncached, and with no event — it is meant to be called once
+  per agent right after `Engine.models.warm()` resolves, to bring the neo
+  worker and the read-only store connections hot before the first real
+  turn, not as a substitute for a real recall a user is waiting on.
+- **Fragment compaction runs by default, on every host (1.9.0).**
+  `runtime.lancedbCompaction.enabled: false` is the only way to turn it off;
+  `dailyConsolidation.lancedbOptimize.enabled` does not affect it either way.
+  A host that already schedules `dailyConsolidation`'s nightly optimize gets
+  both: the compactor keeps fragment counts bounded between runs, and the
+  nightly job still runs on its own schedule. See [Fragment compaction
+  (`runtime.lancedbCompaction`)](#fragment-compaction-runtimelancedbcompaction)
+  above.
 
 ## `RecallQuery` fields the engine ignores
 
@@ -1059,7 +1366,13 @@ recall-shaped ones:
   `before_prompt_build` hook both call the same assembler
   (`createPromptContextAssembler`), so this event fires exactly once per
   attempt regardless of which caller triggered it — `Engine.recall` does not
-  emit a second copy of its own.
+  emit a second copy of its own. As of 1.9.0, `phases`' completed list begins
+  with `entry`/`queue`/`prelude` (see [Timing phases and the soft-budget
+  consequence](#timing-phases-and-the-soft-budget-consequence) above) and
+  `totalMs` honestly includes the queue wait and the prelude. **None of the
+  five recall-shaped events fire for a `warmOnly` recall** — the assembler's
+  local `emit` wrapper is a no-op for the whole warm path, including its
+  degraded exits.
 - **`job.run`** — one per job run, carrying the same shape as the ledger row.
 - **`memory.proposal`** (1.6.0) — one per proposal lifecycle transition:
   `{ proposalId, status, sharerAgentId, proposerAgentId, sharedId }`, fired
@@ -1123,9 +1436,15 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/internals.js` | `ENGINE_INTERNALS`/`internalsOf(engine)` — the adapter-only seam onto `EngineInternals` |
 | `engine/events.js` | `emitEngineEvent(host, name, payload)` |
 | `engine/lifecycle/close-resources.js` | the shutdown owner `Engine.close({ budgetMs })` calls |
-| `engine/recall/assemble-prompt-context.js` | the per-turn recall assembly, the six blocks, `RecallResult.timing`, `recall.completed`/`recall.block-*`/`recall.degraded` |
+| `engine/recall/assemble-prompt-context.js` | the per-turn recall assembly, the six blocks, `RecallResult.timing`, `recall.completed`/`recall.block-*`/`recall.degraded`, the `entry`/`queue`/`prelude` phases and the `warmOnly` branch (1.9.0) |
 | `engine/recall/namespace-recall.js` | `runMergedNamespaceRecall` — one pipeline run per leased namespace, merged after every child settles; `onNamespacePhases` |
+| `engine/recall/neo-prelude.js` | `readNeoPrelude` — the neo window read, embed-with-timeout, global search and lane routing (1.9.0, factored out of the assembler) |
+| `engine/recall/recall-params.js` | `autoRecallParams` — the merged-namespace-recall call params, including `readOnly` (1.9.0) |
+| `engine/recall/warm-recall-path.js` | `createWarmRecallPath` — the `warmOnly` read-only recall path (1.9.0) |
 | `engine/recall/minimal-maintenance.js` | the auto-recall-off branch |
+| `engine/config/engine-config-schema.js` | `loadEngineConfigSchema`/`engineConfigKeys`/`readAtOf`/`livePaths`/`sensitivePaths` (1.9.0) |
+| `engine/config/live-config.js` | `HOST_REREAD_PATHS`, `livePluginConfig`, `readLiveConfigValue` — the one host-neutral live re-read (1.9.0) |
+| `engine/store/fragment-compactor.js` | `createFragmentCompactor` — bounded LanceDB fragment compaction, `runtime.lancedbCompaction` (1.9.0) |
 | `engine/recall/recall-result.js` | `recallResult()`/`contextBlock()`/`ABORTED` — the one constructor for `RecallResult` |
 | `engine/recall/system-supplement.js` | `Engine.systemSupplement()`'s static prefix |
 | `engine/capture/capture-turn.js` | auto-capture, `Engine.capture()`'s body |
@@ -1162,6 +1481,7 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/runtime/semantic-discovery.js` | `semanticDiscovery` link-index building |
 | `engine/knowledge/knowledge-pending.js` | pending-knowledge curation helpers |
 | `adapter/openclaw/plugin.js` | `register(api, deps?)` — the one place `HostServices` is built from a real `api` and OpenClaw's hooks/commands/tools are registered, in frozen order |
+| `adapter/openclaw/config-schema.js` | `deriveOpenClawConfigSchema`/`deriveSecretInputPaths`/`applyEngineSchemaToManifest` — generates the manifest's `configSchema`/`secretInputs.paths` from the engine schema (1.9.0) |
 | `adapter/openclaw/host-probes.js` | OpenClaw-specific capability probing used during registration |
 | `adapter/openclaw/turn-principal.js` | resolves a `Principal`/`AgentContext` from an OpenClaw hook's own arguments |
 | `adapter/openclaw/join-recall.js` | `prependContextFromRecall` — the host's join-and-cap step over `RecallResult` |

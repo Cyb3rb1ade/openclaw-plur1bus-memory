@@ -23,6 +23,7 @@ import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { diffSnapshots, snapshotTree } from "./helpers/fs-snapshot.js";
 
 // node:sqlite is only stable (no flag) from Node 22.12+; 22.5–22.11 require --experimental-sqlite
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
@@ -1042,5 +1043,44 @@ describeSqlite("embedding-cache v2 size limits", () => {
     assert.strictEqual(rows.some((row) => row.debug_text === "old-00"), false);
     assert.strictEqual(rows.some((row) => row.debug_text === "newest"), true);
     assert.ok(statSync(dbPath).size <= hardLimit, "checkpoint/vacuum must restore the hard bound");
+  });
+});
+
+describe("embedding cache: memory-only calls (E5 R26)", () => {
+  const vec = (text) => [text.length, 1, 0, 0];
+  const compute = (calls) => async (texts) => { calls.push(...texts); return texts.map(vec); };
+
+  it("persist: false neither opens, reads nor writes the persistent tier", async () => {
+    const base = makeTempDir("ec-memonly-");
+    const cache = createEmbeddingCache({ persist: true, cacheBasePath: base, dimensions: 4 });
+    const calls = [];
+    const [first] = await cache.getMany(["the roadmap review"], { agentId: "a", persist: false }, compute(calls));
+    assert.deepStrictEqual(first, vec("the roadmap review"));
+    assert.strictEqual(existsSync(join(base, "embedding-cache-v2")), false, "no embedding-cache-v2 directory");
+    assert.strictEqual(cache.getMetrics().persistWrites, 0);
+    await cache.getMany(["the roadmap review"], { agentId: "a", persist: false }, compute(calls));
+    assert.deepStrictEqual(calls, ["the roadmap review"], "the second call is a memory hit");
+    assert.strictEqual(cache.getMetrics().memoryHits, 1);
+    cache.close();
+  });
+
+  it("a persist: false call leaves an existing database untouched", async () => {
+    const base = makeTempDir("ec-memonly-db-");
+    const seeding = createEmbeddingCache({ persist: true, cacheBasePath: base, dimensions: 4 });
+    await seeding.getMany(["seeded text"], { agentId: "a" }, compute([]));
+    assert.strictEqual(seeding.getMetrics().persistWrites, 1, "the default call persists");
+    seeding.close();
+    const dbDir = join(base, "embedding-cache-v2");
+    const before = snapshotTree(dbDir);
+    assert.ok(before.size > 0, "the database exists");
+    // A fresh process: an empty memory tier, the row only on disk.
+    const cache = createEmbeddingCache({ persist: true, cacheBasePath: base, dimensions: 4 });
+    const calls = [];
+    await cache.getMany(["seeded text", "a new text"], { agentId: "a", persist: false }, compute(calls));
+    assert.deepStrictEqual(calls, ["seeded text", "a new text"], "the persistent row is not read");
+    assert.strictEqual(cache.getMetrics().persistHits, 0);
+    assert.strictEqual(cache.getMetrics().persistWrites, 0);
+    cache.close();
+    assert.deepStrictEqual(diffSnapshots(before, snapshotTree(dbDir)), { added: [], removed: [], changed: [] }, "database files unchanged");
   });
 });

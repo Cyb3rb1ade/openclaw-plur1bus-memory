@@ -53,7 +53,8 @@ import { findProposalWorkspace } from "../lib/telegram-commands/skill-commands.j
 import { readProposals as readSkillProposals } from "../lib/jobs/skill-miner/proposal-writer.js";
 import { collectSkillWorkshopProposals } from "../lib/setup/skill-workshop-dashboard.js";
 import { pickTone, readSoulToneCached, resolveLocale, t } from "../lib/i18n.js";
-import { PLUGIN_KEY, detectPendingFeatures, isApplyBlocked, reportDormantFeature } from "../lib/setup/feature-profiles.js";
+import { readLiveConfigValue } from "./config/live-config.js";
+import { detectPendingFeatures, isApplyBlocked, reportDormantFeature } from "../lib/setup/feature-profiles.js";
 import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "../lib/setup/config-contract.js";
 import { checkAccess } from "../lib/acl-middleware.js";
 import { buildMemoryAccountTopology, buildMemoryWorkspaceAliases, createHostIncognitoSessionClassifier, createHostRoutingLoader, describePrimaryAgentIds, describeUserPoolLabels, describeWorkspacePoolLabels, getSharedMemoryTurnRouteRegistry, normalizeWorkspaceTarget, resolveMemoryRequestContext, resolveToolMemoryRequestContext, workspacePoolKey } from "../lib/memory-request-context.js";
@@ -64,7 +65,7 @@ import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
 import { ensureEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { addTraceStoreDecision, createRecallDecisionTrace, textPreview } from "../lib/recall-decision-trace.js";
 import { buildNeoWorkspaceAliases, createNeoStore, neoSessionKeysFromContext, searchNeoCandidatesGlobal, workspaceKeyFromContext } from "../lib/neo-arch.js";
-import { getSharedNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
+import { acquireSharedNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
 import { normalizeEmbeddingConfig, resolveLocalModelCacheDir } from "../lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "../lib/providers/legacy-provider-migration.js";
 import { EMBEDDING_DIMENSIONS } from "../lib/providers/dimensions.js";
@@ -90,6 +91,7 @@ import { createPlur1busCommandRunner } from "./commands/plur1bus-command.js";
 import { createTurnCapture } from "./capture/capture-turn.js";
 import { createTurnReplayGuard, turnKeyOf } from "./capture/turn-replay-guard.js";
 import { createPromptContextAssembler } from "./recall/assemble-prompt-context.js";
+import { createWarmRecallPath } from "./recall/warm-recall-path.js";
 import { recallResult } from "./recall/recall-result.js";
 import { buildSystemSupplement } from "./recall/system-supplement.js";
 import { createMemoryTools } from "./tools/memory-tools.js";
@@ -105,6 +107,8 @@ import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmError
 import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "./recall/namespace-recall.js";
 import { applyEpistemicStatusToLanceDb, waitForTimeoutSettlement } from "./store/memory-db.js";
 import { AgentDbPool } from "./store/agent-db-pool.js";
+import { createFragmentCompactor } from "./store/fragment-compactor.js";
+import { resolveLancedbOptimizePlan } from "../lib/lancedb-optimize.js";
 import { STORE_SCHEMA_VERSION, createStoreMigrator, writeStoreSchemaMarker } from "./store/schema-version.js";
 import { CONTROL_HEALTH_CACHE_TTL_MS, CONTROL_HEALTH_FAILED_RETRY_MS, CONTROL_HEALTH_MAX_PARTITIONS, CONTROL_HEALTH_REFRESH_INTERVAL_MS, createControlHealthRowInspector, listControlHealthPartitions } from "./store/control-health.js";
 import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
@@ -950,9 +954,12 @@ export function createEngine(host, config, testOptions = {}) {
       return { allowed: false, reason: "workspace_identity_required" };
     }
   };
-  const neoWorkerRuntime = neoEnabled
-    ? getSharedNeoWorkerRuntime({ logger: host.logger })
+  // E5 Task 5: a lease on the process-wide worker; close() releases it, and
+  // the last release terminates the worker so the host process can exit.
+  const neoWorkerLease = neoEnabled
+    ? acquireSharedNeoWorkerRuntime({ logger: host.logger })
     : null;
+  const neoWorkerRuntime = neoWorkerLease?.runtime ?? null;
   // 7.12.30: Sentinel fuer das Embedding-Budget im Prompt-Recall.
   const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
   if (neoEnabled && neoMode === "slot") {
@@ -968,15 +975,18 @@ export function createEngine(host, config, testOptions = {}) {
     });
   }
   const sessionWorkspaceKeys = new Map();
+  // The one place the neo workspace key is derived: getNeoStore (which then
+  // remembers the session) and peekNeoStore (which does not) must agree.
+  const neoWorkspaceKeyOf = (ctx = {}, event = {}) => workspaceKeyFromContext(ctx, {
+    event,
+    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+    rootDir: neoRoot,
+    runtime: host.runtime ?? undefined,
+    sessionWorkspaceKeys,
+    workspaceAliases: neoWorkspaceAliases,
+  });
   const rememberNeoWorkspace = (ctx = {}, event = {}) => {
-    const workspaceKey = workspaceKeyFromContext(ctx, {
-      event,
-      defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-      rootDir: neoRoot,
-      runtime: host.runtime ?? undefined,
-      sessionWorkspaceKeys,
-      workspaceAliases: neoWorkspaceAliases,
-    });
+    const workspaceKey = neoWorkspaceKeyOf(ctx, event);
     for (const sessionKey of neoSessionKeysFromContext(ctx, event)) {
       sessionWorkspaceKeys.set(sessionKey, workspaceKey);
     }
@@ -993,6 +1003,11 @@ export function createEngine(host, config, testOptions = {}) {
     emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
     return createNeoStore(neoRoot, workspaceKey);
   };
+  // The warm-only recall's neo store (E5 Task 9): the same workspace key as
+  // getNeoStore, but the session map is only read (never updated), no
+  // onNeoStore host hook runs and opening the store skips its stale
+  // temp-file cleanup. Only the store's read methods may be called on it.
+  const peekNeoStore = (ctx = {}, event = {}) => createNeoStore(neoRoot, neoWorkspaceKeyOf(ctx, event), { readOnly: true });
   // 7.12.45: Der Vergleich folgt dem Partitionsschluessel (ownerStorageKey):
   // agent-private kennt nur den Agenten, workspace nur die Workspace-
   // Identitaet, user Agent + Owner. Bis dahin verglich er workspaceIdentity
@@ -1475,6 +1490,23 @@ export function createEngine(host, config, testOptions = {}) {
     logger: host.logger,
   });
 
+  // Bounded LanceDB fragment compaction between consolidate-daily runs
+  // (E5 Task 6). Capture notes every stored row through noteTableWrite; the
+  // compactor optimizes an agent's table once it reaches the fragment
+  // threshold. On by default for every host; runtime.lancedbCompaction
+  // .enabled: false is the only off switch. The optimize closure reads the
+  // adapter method at call time, so a test can wrap it.
+  const fragmentCompactor = createFragmentCompactor({
+    config: cfg.runtime?.lancedbCompaction,
+    fragmentCount: (agentId) => memoryDbAdapter.fragmentCount(agentId),
+    optimize: (agentId, opts) => memoryDbAdapter.optimizeTable(agentId, opts),
+    keepVersionsHours: resolveLancedbOptimizePlan(cfg.dailyConsolidation?.lancedbOptimize).keepVersionsHours,
+    logger: host.logger,
+  });
+  // Read through internals, so a testOptions.internals.fragmentCompactor
+  // override also receives the capture path's writes.
+  const noteTableWrite = (agentId) => internals.fragmentCompactor?.noteWrite?.(agentId);
+
   // Typed MemoryOps (contract 1.5.0, E1). One context instance is shared by
   // every MemoryOps member; it is also exposed on internals as memoryOpsContext.
   // isClosed reads the engine's `closing` flag (set by closeEngine below) so a
@@ -1709,11 +1741,8 @@ export function createEngine(host, config, testOptions = {}) {
     if (operationError) throw operationError;
     return result;
   };
-  const readConfiguredReembeddingSelection = () => {
-    const current = host.runtime?.config?.current?.() || host.config();
-    const currentReembedding = current?.plugins?.entries?.[PLUGIN_KEY]?.config?.reembedding;
-    return Object.freeze({ generation: currentReembedding?.activeGeneration ?? null });
-  };
+  const readConfiguredReembeddingSelection = () =>
+    Object.freeze({ generation: readLiveConfigValue(host, "reembedding.activeGeneration") ?? null });
   const runTargetGenerationRuntimeProbe = async (input) => {
     const provider = await createTargetEmbeddingProvider(input);
     const probe = createGenerationRuntimeProbe({
@@ -2966,6 +2995,8 @@ export function createEngine(host, config, testOptions = {}) {
     modelPreparationCoordinator,
     reembeddingCoordinator,
     localModelGeneration,
+    neoWorker: neoWorkerLease,
+    fragmentCompactor,
   });
   let closing = null;
   const closeEngine = (budgetMs) => {
@@ -3053,9 +3084,11 @@ export function createEngine(host, config, testOptions = {}) {
     findSafeDuplicateForValidity,
     flashbulbEncodingEnabled,
     forgetThreshold,
+    fragmentCompactor,
     gcEnabled,
     getMemoryTurnRoutes,
     getNeoStore,
+    peekNeoStore,
     halfLifeOverrides,
     host,
     hostRoutingLoader,
@@ -3095,6 +3128,7 @@ export function createEngine(host, config, testOptions = {}) {
     neoWorkerRuntime,
     neoWorkspaceAliases,
     normalizedEmbeddingCfg,
+    noteTableWrite,
     obsidianBridgeCfg,
     obsidianBridgeEnabled,
     obsidianVaultsConfirmed,
@@ -3182,7 +3216,7 @@ export function createEngine(host, config, testOptions = {}) {
     }
     return Object.freeze({ ...view, ...extra });
   };
-  internals.recallContext ??= viewOf([
+  const recallContextNames = [
     "NEO_EMBED_TIMEOUT",
     "NEO_RECALL_PRELUDE_LOG_MS",
     "adaptiveBudgetCfg",
@@ -3216,6 +3250,7 @@ export function createEngine(host, config, testOptions = {}) {
     "neoRequester",
     "neoWorkerRuntime",
     "overlayLlmCfg",
+    "peekNeoStore",
     "personaDirectiveMaxChars",
     "personaVoiceLlmCfg",
     "pool",
@@ -3246,7 +3281,8 @@ export function createEngine(host, config, testOptions = {}) {
     "traceEnabled",
     "traceInPrompt",
     "workspacePolicyGuard",
-  ], {
+  ];
+  const recallContextExtras = {
     MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
     buildMaintenanceNudges,
     callLlm,
@@ -3256,7 +3292,11 @@ export function createEngine(host, config, testOptions = {}) {
     normalizedLlmErrorClass,
     resolveRuntimeRecallBudget,
     runMergedNamespaceRecall,
-  });
+  };
+  // The warm-only path (E5 Task 9) is built from the same members as the
+  // assembler, which reaches it as recallContext.warmRecallPath.
+  internals.warmRecallPath ??= createWarmRecallPath(viewOf(recallContextNames, recallContextExtras));
+  internals.recallContext ??= viewOf([...recallContextNames, "warmRecallPath"], recallContextExtras);
   internals.captureContext ??= viewOf([
     "NEO_HOOK_DRAIN_MARGIN_MS",
     "NEO_HOOK_DRAIN_MIN_MS",
@@ -3297,6 +3337,7 @@ export function createEngine(host, config, testOptions = {}) {
     "neoRoot",
     "neoWorkerRuntime",
     "neoWorkspaceAliases",
+    "noteTableWrite",
     "personaVoiceLlmCfg",
     "pool",
     "rememberNeoWorkspace",
@@ -3480,7 +3521,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.8.0",
+    contract: "1.9.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3537,9 +3578,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.8.0).
+  // The Engine (types/engine.d.ts, contract 1.9.0).
   const engine = {
-    contract: "1.8.0",
+    contract: "1.9.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3550,6 +3591,9 @@ export function createEngine(host, config, testOptions = {}) {
     status: () => statusReporter.status(),
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
+      // The recall clock starts here (E5 Task 8): timing.totalMs and the soft
+      // budget count from the call, not from the store read.
+      const startedAt = Date.now();
       if (closing) return recallResult({ degraded: { ...ENGINE_CLOSED, capability: "recall" } });
       if (!(q?.signal instanceof AbortSignal)) {
         return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: "signal is required" } });
@@ -3564,7 +3608,9 @@ export function createEngine(host, config, testOptions = {}) {
         // per scheduled recall — do not emit it again here, or every
         // `Engine.recall` call would double the event the adapter's own
         // registered hook already produces through the same assembler.
-        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent })) ?? recallResult();
+        // warmOnly (E5 Task 9): the read-only heavy path, see
+        // engine/recall/warm-recall-path.js.
+        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt, warmOnly: q.warmOnly === true })) ?? recallResult();
       } catch (error) {
         // An abort that lands before the assembler runs (e.g. during
         // host.workspaceDir) is still an abort, not a bad query.

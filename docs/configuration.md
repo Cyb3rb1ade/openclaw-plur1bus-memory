@@ -594,6 +594,28 @@ credentials ändern sich dadurch nicht.
 
 ---
 
+## LanceDB-Fragment-Kompaktierung (`runtime.lancedbCompaction`)
+
+Jedes `add()`/`update()` schreibt ein neues LanceDB-Fragment. Bisher lief `optimize()` nur im nächtlichen `dailyConsolidation.lancedbOptimize`-Job, der standardmäßig aus ist — ohne ihn wuchsen Capture- und Recall-Latenz mit jedem weiteren Turn. Seit E5 zählt ein eigener Kompaktierer die Schreibzugriffe je Agent und stößt `optimizeTable` an, sobald die Fragmentzahl die Schwelle erreicht — unabhängig vom nächtlichen Job.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `runtime.lancedbCompaction.enabled` | `boolean` | `true` | Kompaktierung aktivieren. **Einziger Aus-Schalter** — `dailyConsolidation.lancedbOptimize.enabled` steuert ausschließlich den nächtlichen Job und schaltet diese Kompaktierung nicht ab (und umgekehrt). |
+| `runtime.lancedbCompaction.fragmentThreshold` | `integer` | `64` | Fragmentzahl je Agent-Tabelle, ab der `optimizeTable` läuft (Minimum 8). |
+| `runtime.lancedbCompaction.checkEveryWrites` | `integer` | `16` | Nach so vielen Schreibzugriffen wird die Fragmentzahl geprüft (Minimum 1). |
+| `runtime.lancedbCompaction.checkIntervalMs` | `integer` | `600000` | Zusätzliche Prüfung per Timer, alle 10 Minuten (Minimum 60000). |
+| `runtime.lancedbCompaction.timeoutMs` | `integer` | `60000` | Timeout eines einzelnen `optimize()`-Laufs (Minimum 10000). |
+
+### Verhalten
+
+- **Standardmäßig aktiv auf jedem Host, auch OpenClaw** (Owner-Entscheidung 2026-09-27).
+- Ohne verfügbare `table.stats()` (keine Tabelle, fehlgeschlagener oder abgelaufener Stats-Read) zählt der Kompaktierer ersatzweise die Schreibzugriffe seit der letzten Kompaktierung als Fragment-Schätzung — er prüft und kompaktiert also auch dann.
+- Ein Prozess-weiter Optimize-Lock (einer je Tabellenpfad) serialisiert diesen Kompaktierer, weitere Engines im selben Prozess, `dailyConsolidation` und den Dashboard-Runner: Der Kompaktierer überspringt statt zu warten, wenn eine Tabelle schon optimiert wird; `dailyConsolidation` und das Dashboard warten stattdessen in FIFO-Reihenfolge.
+- Erreicht nur die pro-Agent-Tabelle (`memories`), dieselbe, die `dailyConsolidation.lancedbOptimize` bereits abdeckt — geteilte Pools und explizit zusätzliche Namespaces kompaktiert weder dieser Kompaktierer noch `dailyConsolidation`.
+- **Bekanntes Restrisiko:** Ein zeitgesteuertes Aufräumen (`cleanupOlderThan` hier, ebenso bei `dailyConsolidation`s eigenem Optimize) kann Versionen löschen, die älter als das Retention-Fenster sind, während ein lang laufender Lesevorgang noch darauf zugreift — dasselbe Risiko, das `dailyConsolidation`s Optimize bereits vor E5 trug; E5 führt es nicht neu ein und behebt es nicht.
+
+---
+
 ## Schalter und Entscheidungen im Reiter
 
 Mit `controlUi.writeActions: "all"` trägt jede Feature-Karte ihren Schalter

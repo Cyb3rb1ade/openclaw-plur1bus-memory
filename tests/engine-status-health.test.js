@@ -184,7 +184,7 @@ describe("Engine.status() (E4 Task 4)", () => {
       expectedSchema: "1",
       openedAgents: new Set(),
       host: { logger: { debug() {} } },
-      contract: "1.8.0",
+      contract: "1.9.0",
     });
     const unitStatus = await reporter.status();
     assert.deepEqual(unitStatus.jobs, { ledger: "unavailable", agents: [] });
@@ -192,7 +192,7 @@ describe("Engine.status() (E4 Task 4)", () => {
     const { engine } = setupEngine("e4-status-e-");
     await engine.close();
     const s = await engine.status();
-    assert.equal(s.contract, "1.8.0");
+    assert.equal(s.contract, "1.9.0");
   });
 
   it("a throwing models.status() falls back to a real, non-null embedder identity (M2)", async () => {
@@ -208,7 +208,7 @@ describe("Engine.status() (E4 Task 4)", () => {
       expectedSchema: "1",
       openedAgents: new Set(),
       host: { logger: { debug() {} } },
-      contract: "1.8.0",
+      contract: "1.9.0",
     });
     const status = await reporter.status();
     assert.equal(typeof status.models.embedder.identity, "object");
@@ -226,7 +226,7 @@ describe("Engine.status() (E4 Task 4)", () => {
       expectedSchema: "1",
       openedAgents: new Set(),
       host: { logger: { debug() {} } },
-      contract: "1.8.0",
+      contract: "1.9.0",
     });
     const status2 = await reporter2.status();
     assert.equal(typeof status2.models.embedder.identity, "object");

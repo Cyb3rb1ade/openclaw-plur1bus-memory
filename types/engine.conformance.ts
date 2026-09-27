@@ -10,6 +10,7 @@
 import type {
   AdminOps, AgentContext, AgentJobHealth, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   CriticalButtonPushArgs, CriticalButtonPushResult, Deferral, Degraded, Disposable, Engine, EngineConfig,
+  EngineConfigKey, EngineConfigReadAt, EngineConfigSchema,
   EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostServices,
   HostCapabilities, IpcAddress, JobLastRun, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
   MemoryProposalStatus, ModelsStatus, ModelState, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
@@ -104,7 +105,7 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.8.0">>();
+assertTrue<Exact<ContractVersion, "1.9.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
@@ -158,6 +159,14 @@ assertTrue<Exact<EngineStatus["journal"], import("./engine.js").JournalBacklog |
 assertTrue<Exact<EngineStatus["sharedMemory"]["mode"], "fd-capability" | "verified-path" | "unavailable">>();
 assertTrue<"unsupported" extends MemoryOpErrorCode ? true : false>();
 assertTrue<Exact<AgentJobHealth["lastRuns"], Partial<Record<JobName, JobLastRun>>>>();
+
+// 1.9.0: engine config schema, warm-only recall (E5 Task 1).
+assertTrue<Exact<EngineConfigReadAt, "construction" | "live">>();
+assertTrue<Exact<EngineConfigKey["tier"], "basic" | "advanced">>();
+assertTrue<Exact<EngineConfigSchema["x-contract"], ContractVersion>>();
+assertTrue<Exact<RecallQuery["warmOnly"], boolean | undefined>>();
+const warmQuery: RecallQuery = { ...query, warmOnly: true };
+void warmQuery;
 
 // A minimal host satisfies HostServices: everything optional stays optional.
 const minimalHost: HostServices = {
