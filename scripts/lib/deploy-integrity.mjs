@@ -191,6 +191,7 @@ export const DEPLOY_FILES = [
   // ── multi-namespace + provider system (v6.7.0) ────────────────────────────
   "lib/multi-namespace-pool.js",
   "lib/directory-capability.js",
+  "lib/verified-path-directory.js",
   "lib/namespace-config.js",
   "lib/providers/config-normalize.js",
   "lib/providers/dimension-guard.js",
