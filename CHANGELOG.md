@@ -643,6 +643,16 @@ Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
   host-neutral (Typ, Default, Beschreibung, `readAt`, `x-tier`,
   `x-sensitive`); `openclaw.plugin.json` wird daraus erzeugt (`npm run
   gen:config-schema`, `--check` als CI-Gate gegen Drift) — Contract 1.9.0.
+- **Header-Maps und Reminder-Webhook maskiert**: `merging.headers`,
+  `schicht15.headers`, `skillMiner.headers`, `criticalPush.headers` und
+  `reminders.webhookUrl` sind jetzt `x-sensitive` und in OpenClaw per
+  `uiHints` als sensitiv markiert (Owner-Entscheidung zu E5-R24); neu
+  `redactSensitiveConfig` und `secretInputPaths`. `x-sensitive` heißt nur
+  noch Maskieren/Redigieren — `configContracts.secretInputs.paths` folgt den
+  `$ref`-`secretInput`-Knoten und bleibt bei den acht `*.apiKey`-Pfaden, weil
+  OpenClaw `${NAME}`-Strings an SecretInput-Pfaden selbst als Env-SecretRef
+  auflösen würde und die Engine an Headern und Webhook-URL keine SecretRefs
+  auflöst; bestehende Klartext-Konfigurationen bleiben unverändert gültig.
 - **`RecallQuery.warmOnly`** wärmt den schweren Recall-Pfad (Neo-Vorlauf,
   Query-Embedding, ein nur lesend geöffneter Store, Vektorsuche, Rerank)
   ohne Schreibzugriffe (auch keine Zeile im persistenten Embedding-Cache:

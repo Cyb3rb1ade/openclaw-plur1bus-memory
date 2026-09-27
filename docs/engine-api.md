@@ -112,7 +112,8 @@ own changelog:
   describes every engine config key with its type, default, description,
   `readAt` (`"construction"` or `"live"`), `x-tier` and `x-sensitive`, loaded
   through `loadEngineConfigSchema`/`engineConfigKeys`/`readAtOf`/`livePaths`/
-  `sensitivePaths` (`engine/config/engine-config-schema.js`);
+  `sensitivePaths`/`secretInputPaths`, with `redactSensitiveConfig` to mask
+  the `x-sensitive` values (`engine/config/engine-config-schema.js`);
   `openclaw.plugin.json`'s `configSchema` and `secretInputs.paths` are
   generated from it (`npm run gen:config-schema`, `--check` for CI); all
   `recall.*` keys are construction-time. `RecallQuery.warmOnly` runs the
@@ -929,8 +930,19 @@ way to read the schema:
   `items` and similar are schema plumbing, not config paths.
 - **`livePaths()`** — every path whose resolved `readAt` is `"live"`, sorted.
 - **`sensitivePaths()`** — every `x-sensitive` path, in depth-first schema
-  order; this is exactly the manifest's `configContracts.secretInputs.paths`
-  list (eight credential keys, unchanged by E5 — see the open item below).
+  order: the eight credential keys plus `reminders.webhookUrl` and the four
+  `*.headers` maps (thirteen paths).
+- **`secretInputPaths()`** — every path whose node is `$ref:
+  "#/$defs/secretInput"` (`SECRET_INPUT_REF`), in depth-first schema order;
+  this is exactly the manifest's `configContracts.secretInputs.paths` list
+  (the eight credential keys, unchanged by E5). Every secret input is
+  `x-sensitive`; the reverse does not hold.
+- **`redactSensitiveConfig(config)`** — a deep copy of an engine config with
+  the value at every `x-sensitive` path that is set (not absent, `null` or
+  `""`) replaced whole by `REDACTED_CONFIG_VALUE` (`"[REDACTED]"`): a string,
+  a SecretRef object and a headers map alike. The input is not modified. The
+  engine itself never logs its config; this is the one helper a host or
+  harness surface uses before showing or logging config values.
 
 ### `readAt`, `x-tier`, `x-sensitive` — and what "live" means
 
@@ -942,11 +954,28 @@ way to read the schema:
   `reembedding.activeGeneration` below.
 - **`x-tier`** is `"basic"` or `"advanced"`. Every key is `"advanced"` in
   1.9.0 (D29) — the harness/host UI has no `"basic"` tier to show yet.
-- **`x-sensitive`** marks the eight credential nodes the manifest already
-  masked as secret inputs. **Open item for the owner:** `*.headers` and
-  `reminders.webhookUrl` also carry values a host would not want echoed back
-  in a UI or log, but neither is `x-sensitive` — E5 kept `secretInputs.paths`
-  identical to today's manifest and did not widen it.
+- **`x-sensitive`** means *mask and redact*: every surface that shows or
+  logs config must hide the value (`redactSensitiveConfig`, the manifest's
+  `uiHints[path].sensitive`). It marks the eight credential nodes, and — by
+  the owner's ruling on E5-R24 — `merging.headers`, `schicht15.headers`,
+  `skillMiner.headers`, `criticalPush.headers` (an `Authorization` header is
+  possible) and `reminders.webhookUrl` (may carry a token).
+- **Secret input (SecretRef) is a separate property**, not an annotation:
+  a node accepts an OpenClaw SecretRef exactly when its `$ref` is
+  `#/$defs/secretInput`. Only those eight nodes feed the manifest's
+  `configContracts.secretInputs.paths`. The five paths above stay
+  plain-value only, because declaring them would change what existing
+  plaintext configs mean on OpenClaw 2026.8.2: the host turns a secret-input
+  string of the form `${NAME}` or `$NAME` into an env SecretRef and
+  resolves it itself (the engine's `resolveEnvVars` resolves
+  `reminders.webhookUrl`'s `${…}` against its own allow-list today), a
+  SecretRef at `*.headers` would have to resolve to a string although the
+  value is a map (`headers.*` would be the only workable shape), and no engine
+  code resolves a SecretRef in a header value or the webhook URL — the map is
+  passed through as HTTP headers as is. OpenClaw's own masking comes from the
+  `uiHints` `sensitive` flag, which handles an object value (the whole map is
+  replaced by the redaction sentinel and restored on write), so all five are
+  masked there without becoming SecretRef surfaces.
 - **What "live" would mean depends on what a host's `config()` returns.** An
   OpenClaw-style host's `config()` (or its fresher `runtime.config.current()`)
   returns the *whole* host config, with the engine's own config nested under
@@ -977,7 +1006,8 @@ engine already running, and no `recall.*` value is re-read per call.
 `openclaw.plugin.json`'s `configSchema` and `configContracts.secretInputs
 .paths` are no longer hand-maintained: they are generated from
 `engine/config/engine-config.schema.json` by `adapter/openclaw/
-config-schema.js` (`deriveOpenClawConfigSchema`, `deriveSecretInputPaths`,
+config-schema.js` (`deriveOpenClawConfigSchema`, `deriveSecretInputPaths` —
+the `secretInputPaths()` nodes, not every `x-sensitive` one —
 `applyEngineSchemaToManifest`, which strips `readAt`/`x-tier`/`x-sensitive`
 and the engine-only root keys/keywords, and touches nothing else in the
 manifest). `npm run gen:config-schema` writes the file only when its content
@@ -985,7 +1015,9 @@ would change; `npm run gen:config-schema -- --check` writes nothing and
 exits 1 with "openclaw.plugin.json is out of date: run npm run
 gen:config-schema" on drift — this is the CI gate against hand-editing the
 generated parts. The manifest's top-level `configSchema.properties` count
-stays 55; nothing else in the manifest is touched by generation.
+stays 55; nothing else in the manifest is touched by generation. `uiHints`
+stays hand-maintained; a test pins its `sensitive: true` entries to
+`sensitivePaths()`, in order.
 
 ### `warmOnly` — the read-only heavy recall path
 
@@ -1442,7 +1474,7 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/recall/recall-params.js` | `autoRecallParams` — the merged-namespace-recall call params, including `readOnly` (1.9.0) |
 | `engine/recall/warm-recall-path.js` | `createWarmRecallPath` — the `warmOnly` read-only recall path (1.9.0) |
 | `engine/recall/minimal-maintenance.js` | the auto-recall-off branch |
-| `engine/config/engine-config-schema.js` | `loadEngineConfigSchema`/`engineConfigKeys`/`readAtOf`/`livePaths`/`sensitivePaths` (1.9.0) |
+| `engine/config/engine-config-schema.js` | `loadEngineConfigSchema`/`engineConfigKeys`/`readAtOf`/`livePaths`/`sensitivePaths`/`secretInputPaths`/`redactSensitiveConfig` (1.9.0) |
 | `engine/config/live-config.js` | `HOST_REREAD_PATHS`, `livePluginConfig`, `readLiveConfigValue` — the one host-neutral live re-read (1.9.0) |
 | `engine/store/fragment-compactor.js` | `createFragmentCompactor` — bounded LanceDB fragment compaction, `runtime.lancedbCompaction` (1.9.0) |
 | `engine/recall/recall-result.js` | `recallResult()`/`contextBlock()`/`ABORTED` — the one constructor for `RecallResult` |

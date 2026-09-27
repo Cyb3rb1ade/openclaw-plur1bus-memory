@@ -5,13 +5,20 @@
  * The JSON is the host-neutral engine config schema: the OpenClaw manifest's
  * `configSchema` plus three annotations — `readAt` (when the engine reads a
  * value: once at `createEngine`, or live per operation), `x-tier` (basic or
- * advanced) and `x-sensitive` (credential inputs). Every top-level key declares
+ * advanced) and `x-sensitive` (secret values: credentials, auth headers, tokenised
+ * URLs — masked on every surface and replaced by redactSensitiveConfig). Every top-level key declares
  * `readAt`; a nested node may override it, so a path's readAt is that of the
  * nearest (deepest) node on the path that declares one.
  *
  * The schema is read once from the package, deep-frozen and cached; callers
  * share the same object and cannot mutate it. Only `properties` chains form
  * config paths — `$defs`, `items` and friends are validation detail.
+ *
+ * `x-sensitive` is about masking only. Whether a path accepts an OpenClaw
+ * SecretRef is a separate fact: the node's `$ref` is `#/$defs/secretInput`
+ * (secretInputPaths). Every secret input is x-sensitive; not every x-sensitive
+ * path is a secret input (the `*.headers` maps and `reminders.webhookUrl` take
+ * plain values only, and the engine does not resolve SecretRefs there).
  */
 import { readFileSync } from "node:fs";
 
@@ -105,6 +112,57 @@ export function sensitivePaths(schema = loadEngineConfigSchema()) {
   const out = [];
   const root = childrenOf(schema);
   if (root) walk(root, "", null, (path, node) => { if (node["x-sensitive"] === true) out.push(path); });
+  return out;
+}
+
+/** The `$ref` of a node that accepts a SecretInput (a plaintext string or an OpenClaw SecretRef). */
+export const SECRET_INPUT_REF = "#/$defs/secretInput";
+
+/**
+ * Every dotted path whose node is a SecretInput (`$ref` to SECRET_INPUT_REF),
+ * in depth-first schema order — the OpenClaw manifest's
+ * `configContracts.secretInputs.paths`.
+ *
+ * @param {object} [schema]
+ * @returns {string[]}
+ */
+export function secretInputPaths(schema = loadEngineConfigSchema()) {
+  const out = [];
+  const root = childrenOf(schema);
+  if (root) walk(root, "", null, (path, node) => { if (node.$ref === SECRET_INPUT_REF) out.push(path); });
+  return out;
+}
+
+/** The value redactSensitiveConfig puts in place of a sensitive value. */
+export const REDACTED_CONFIG_VALUE = "[REDACTED]";
+
+/**
+ * A deep copy of a config object in which the value at every x-sensitive path
+ * that is present and not null/empty is replaced, whole, by
+ * REDACTED_CONFIG_VALUE — a string, a SecretRef object and a headers map
+ * alike. Use it before a config (or part of one) reaches a log, a status page
+ * or any other surface. The input is not modified; non-object input is
+ * returned as is.
+ *
+ * @param {unknown} config
+ * @param {object} [schema]
+ * @returns {unknown}
+ */
+export function redactSensitiveConfig(config, schema = loadEngineConfigSchema()) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return config;
+  const out = structuredClone(config);
+  for (const path of sensitivePaths(schema)) {
+    const segments = path.split(".");
+    let parent = out;
+    for (const segment of segments.slice(0, -1)) {
+      parent = parent && typeof parent === "object" && !Array.isArray(parent) && Object.hasOwn(parent, segment) ? parent[segment] : null;
+    }
+    const last = segments.at(-1);
+    if (!parent || typeof parent !== "object" || Array.isArray(parent) || !Object.hasOwn(parent, last)) continue;
+    const value = parent[last];
+    if (value === undefined || value === null || value === "") continue;
+    parent[last] = REDACTED_CONFIG_VALUE;
+  }
   return out;
 }
 
