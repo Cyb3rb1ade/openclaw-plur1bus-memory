@@ -117,8 +117,9 @@ own changelog:
   generated from it (`npm run gen:config-schema`, `--check` for CI); all
   `recall.*` keys are construction-time. `RecallQuery.warmOnly` runs the
   read-only heavy recall path (neo prelude, query embedding, a read-only
-  store open, vector search, rerank) with no writes, no event, no cache use
-  and no LLM call, at background priority. `RecallTiming.totalMs` now covers
+  store open, vector search, rerank) with no writes (no store, file or
+  persistent embedding-cache row), no event, no recall-cache use and no LLM
+  call, at background priority. `RecallTiming.totalMs` now covers
   the queue wait and the prelude honestly, `phases.completed` beginning with
   `entry`/`queue`/`prelude`. `runtime.lancedbCompaction` bounds LanceDB
   fragment growth between `dailyConsolidation`'s own nightly optimize runs,
@@ -990,7 +991,22 @@ stays 55; nothing else in the manifest is touched by generation.
 
 `RecallQuery.warmOnly` (1.9.0) runs the expensive part of recall — the neo
 prelude, the query embedding, a read-only store open, the vector search and
-rerank — and answers `{ blocks: [], degraded: null, timing }`.
+rerank — and answers `{ blocks: [], degraded: null, timing }` on success.
+
+**Other answers.** Always `blocks: []`; `degraded` is not null when the warm
+recall did not run to the end:
+
+| `degraded.reason` | When |
+|---|---|
+| `"warm-failed"` | the warm path threw (for example a store read error), or no warm path is wired; logged at debug |
+| `"aborted"` | the caller's signal aborted, before or during the recall |
+| `"timeout"` | the scheduler's hard recall timeout |
+| `"queue-full"` / `"pressure"` | shed or evicted by the scheduler — warm recalls run at background (low) priority, the first to go |
+| `"engine-closed"` | the engine is closing or closed |
+| `"invalid-query"` | no `signal`, or a bad principal (as for any recall) |
+
+A workspace whose policy disables automatic memory answers an empty success
+(`degraded: null`) without reading anything.
 
 **What runs:** a read-only workspace-policy check; if neo is enabled, a
 worker warm-up (`warmUp()`) and, for a prompt of five characters or more, the
@@ -1014,11 +1030,17 @@ all `null`.
 | write the start notice, mood/emotion files, fast-bernd, overlays, contradictions, the retrieval ledger, presentation/activity/reminder state, the knowledge cache, graph-recall metrics, or call the query summarizer | none of these code paths are reached |
 | note a fragment-compactor write, or run `optimizeTable` | never referenced |
 
-Per E5-R26, a warm recall never writes the persistent (SQLite) embedding
-cache either — only the in-memory embedding/model caches a provider keeps on
-its own are warmed, which is the whole point of warming. This is the
-intended behaviour; a fix that lands the guarantee at the embedding-cache
-layer itself may merge in parallel with this documentation.
+Per E5-R26, a warm recall never touches the persistent (SQLite) embedding
+cache (`runtime.embeddingCachePersist`): every warm embed carries the
+embedding cache's per-call memory-only flag (`persist: false`), which skips
+both the persistent lookup (whose hit would refresh access times, and whose
+first open creates the database) and the persistent write. The local,
+OpenAI and scoped-IPC providers pass the flag through; across the IPC it
+reaches the owner process's cache. Only in-memory state is warmed: the
+provider's in-memory embedding cache, loaded models, the neo worker thread,
+OS page caches. **One exception to "writes nothing":** a cold local model
+cache downloads model artifacts on first use, exactly as the first real
+recall or `models.warm()` would — call `models.warm()` first.
 
 **Background priority; not cached.** `background: true` puts a warm recall
 behind foreground recalls in the scheduler. `cacheKey: ""` means a warm

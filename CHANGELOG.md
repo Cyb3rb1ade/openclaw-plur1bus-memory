@@ -645,9 +645,14 @@ Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
   gen:config-schema`, `--check` als CI-Gate gegen Drift) — Contract 1.9.0.
 - **`RecallQuery.warmOnly`** wärmt den schweren Recall-Pfad (Neo-Vorlauf,
   Query-Embedding, ein nur lesend geöffneter Store, Vektorsuche, Rerank)
-  ohne Schreibzugriffe, Events, Cache-Nutzung oder LLM-Aufrufe, mit
-  Hintergrund-Priorität — gedacht für einen Aufruf je Agent direkt nach
-  `Engine.models.warm()`.
+  ohne Schreibzugriffe (auch keine Zeile im persistenten Embedding-Cache:
+  neues Per-Call-Flag `persist: false` im Embedding-Cache, durchgereicht
+  von Local-, OpenAI- und Scoped-IPC-Provider), ohne Events, Recall-Cache
+  oder LLM-Aufrufe, mit Hintergrund-Priorität — gedacht für einen Aufruf je
+  Agent direkt nach `Engine.models.warm()`. Antwort sonst `blocks: []` mit
+  `degraded` `warm-failed`, `aborted`, `timeout`, `queue-full`/`pressure`
+  oder `engine-closed`; ein kalter Modell-Cache lädt Modelldateien wie bei
+  jedem ersten Modell-Load.
 - **`runtime.lancedbCompaction`** — begrenzte LanceDB-Fragment-Kompaktierung
   zwischen den `dailyConsolidation`-Läufen, standardmäßig aktiv auf jedem
   Host, auch OpenClaw (Owner-Entscheidung 2026-09-27); Details in

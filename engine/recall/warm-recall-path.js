@@ -26,6 +26,26 @@ import { autoRecallParams } from "./recall-params.js";
 import { recallResult } from "./recall-result.js";
 
 /**
+ * The provider with `persist: false` added to every call's options (the
+ * embedding cache's memory-only flag). Only the single-text methods the
+ * recall uses are wrapped (`embedBatch` signatures differ between providers
+ * and nothing on the warm path calls it); methods the provider lacks stay
+ * absent.
+ *
+ * @param {object} provider Embedding provider.
+ * @returns {object} A frozen wrapper over `embedQuery`, `embed`, `embedPassage`.
+ */
+export function memoryOnlyEmbeddings(provider) {
+  const wrapped = {};
+  for (const name of ["embedQuery", "embed", "embedPassage"]) {
+    if (typeof provider?.[name] === "function") {
+      wrapped[name] = (text, options) => provider[name](text, { ...options, persist: false });
+    }
+  }
+  return Object.freeze(wrapped);
+}
+
+/**
  * Build the warm path from the recall context.
  *
  * The caller has already started the `prelude` phase on `timer`; this path
@@ -51,6 +71,10 @@ export function createWarmRecallPath(ctx) {
     sharedMemoryPool,
     workspacePolicyGuard,
   } = ctx;
+  // E5 R26: every warm embed is memory-only, so a persistent embedding cache
+  // (runtime.embeddingCachePersist) is neither opened, read nor written.
+  const warmEmbeddings = memoryOnlyEmbeddings(embeddings);
+  const warmCtx = { ...ctx, embeddings: warmEmbeddings };
 
   return async function warmRecall(event, hookCtx, { signal, memoryCtx, timer }) {
     try {
@@ -70,7 +94,7 @@ export function createWarmRecallPath(ctx) {
               neoStore: peekNeoStore(hookCtx, event),
               requester: neoRequester(hookCtx, event),
               prompt,
-              embeddings,
+              embeddings: warmEmbeddings,
               embedTimeoutMs: neoGlobalRecall.embedTimeoutMs,
               timeoutSymbol: NEO_EMBED_TIMEOUT,
               runNeoGlobalSearch,
@@ -101,7 +125,7 @@ export function createWarmRecallPath(ctx) {
         const useAssociative = computeUseAssociative(continuityCfg.enabled !== false, assocCfg);
         await runMergedNamespaceRecall(
           readDbs,
-          autoRecallParams(ctx, {
+          autoRecallParams(warmCtx, {
             query: prompt,
             timer,
             signal,

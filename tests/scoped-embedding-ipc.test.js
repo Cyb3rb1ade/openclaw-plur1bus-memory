@@ -167,6 +167,43 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     }
   });
 
+  it("carries a memory-only persist: false across the IPC call and omits it otherwise (E5 R26)", async () => {
+    const stateRoot = createStateRoot("plur1bus-scoped-embedding-memonly-");
+    const calls = [];
+    const embeddings = {
+      model: "intfloat/multilingual-e5-small",
+      dimensions: () => 2,
+      async embedQuery(text, options) { calls.push(["query", text, options]); return [1, 0]; },
+      async embedPassage(text, options) { calls.push(["passage", text, options]); return [0, 1]; },
+      async embedBatch(texts, retries, options) { calls.push(["batch", texts, options]); return texts.map(() => [0.5, 0.5]); },
+    };
+    const server = createScopedEmbeddingIpcServer({ stateRoot, embeddings, fingerprintId: ACTIVE_FINGERPRINT_ID });
+    let provider = null;
+    try {
+      await server.start();
+      provider = new ReloadSafeIpcScopedEmbeddingProvider({
+        stateRoot,
+        model: "intfloat/multilingual-e5-small",
+        dimensions: 2,
+        fingerprintId: ACTIVE_FINGERPRINT_ID,
+      });
+      await provider.embedQuery("q", { persist: false, agentId: "a" });
+      await provider.embed("p", { persist: false });
+      await provider.embedBatch(["a"], { persist: false });
+      await provider.embedQuery("q2", { agentId: "a" });
+      assert.deepEqual(calls, [
+        ["query", "q", { persist: false }],
+        ["passage", "p", { persist: false }],
+        ["batch", ["a"], { persist: false }],
+        ["query", "q2", undefined],
+      ]);
+    } finally {
+      await provider?.shutdown();
+      await server.shutdown();
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed before transport for invalid inputs or an absent owner service", async () => {
     const stateRoot = createStateRoot("plur1bus-scoped-embedding-absent-");
     const provider = new IpcScopedEmbeddingProvider({

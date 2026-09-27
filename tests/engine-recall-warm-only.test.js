@@ -10,9 +10,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { dirname, join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
+import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { internalsOf } from "../engine/internals.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { createStubHost } from "../lib/host-services.js";
@@ -21,7 +22,6 @@ import { writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
 import { addPendingReminder } from "../lib/reminder-pending.js";
 import { saveReminder } from "../lib/reminder-store.js";
 import { writePlur1busStartNotice } from "../lib/setup/feature-profiles.js";
-import { SHARED_ROOT_SEGMENT } from "../lib/shared-memory-pool.js";
 import { diffSnapshots, snapshotTree } from "./helpers/fs-snapshot.js";
 import {
   config as sharedConfig,
@@ -29,6 +29,7 @@ import {
   freshBaseDbPath,
   principal as sharedPrincipal,
   twoWorkspaceHost,
+  USER_PRINCIPAL,
 } from "./helpers/shared-workspace-engine.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -50,20 +51,37 @@ const config = (baseDbPath, overrides = {}) => ({
   ...overrides,
 });
 
-// Records every call; a fixed vector, so every stored row and every neo
-// candidate matches every query.
-function recordingEmbedder() {
+// Records every call with its options; a fixed vector, so every stored row
+// and every neo candidate matches every query. With `cacheBasePath` it
+// embeds through a real persisting embedding cache, as the providers do
+// (runtime.embeddingCachePersist: true), honouring the per-call `persist`.
+function recordingEmbedder({ cacheBasePath = null, onEmbedQuery = null } = {}) {
   const calls = { embedQuery: [], embed: [] };
+  const cache = cacheBasePath
+    ? createEmbeddingCache({ persist: true, cacheBasePath, provider: "stub", model: "flat", dimensions: 384 })
+    : null;
+  const viaCache = async (purpose, text, options) => {
+    if (!cache) return vector();
+    const [v] = await cache.getMany([text], { model: `flat:${purpose}`, agentId: options?.agentId, persist: options?.persist }, async (texts) => texts.map(vector));
+    return v;
+  };
   const embedder = {
     calls,
-    embedQuery: async (text) => { calls.embedQuery.push(String(text)); return vector(); },
-    embed: async (text) => { calls.embed.push(String(text)); return vector(); },
-    embedPassage: async () => vector(),
+    cache,
+    embedQuery: async (text, options) => {
+      calls.embedQuery.push({ text: String(text), options });
+      if (onEmbedQuery) await onEmbedQuery(text, options);
+      return viaCache("query", text, options);
+    },
+    embed: async (text, options) => { calls.embed.push({ text: String(text), options }); return viaCache("passage", text, options); },
+    embedPassage: async (text, options) => viaCache("passage", text, options),
     embedBatch: async (texts) => texts.map(vector),
-    shutdown: async () => {},
+    shutdown: async () => { cache?.close(); },
   };
   return embedder;
 }
+
+const textsOf = (calls) => calls.map((c) => c.text);
 
 function recordingReranker() {
   const calls = [];
@@ -119,6 +137,10 @@ function emptyDiff(label, a, b) {
 // The engine of (a)-(c): neo on, 12 stored captures, KNOWLEDGE.md without a
 // cache, a due reminder (table row and pending file), a pending skill
 // proposal past the weekly gate, a start notice.
+//
+// Merging (an LLM route through the host runtime), GC and a persisting
+// embedding cache (under baseDbPath, so the snapshots cover it) are on, so
+// "no LLM call" and "nothing on disk" do not hold merely by configuration.
 async function seededEngine() {
   const stateDir = makeTempDir("t9-state-");
   const baseDbPath = join(makeTempDir("t9-root-"), "lancedb-namespaced");
@@ -126,16 +148,22 @@ async function seededEngine() {
   mkdirSync(join(workspace, "memory"), { recursive: true });
   const llmCalls = [];
   const hostEvents = [];
+  const llm = { complete: async (...args) => { llmCalls.push(args); throw new Error("no llm in this test"); } };
   const host = createStubHost({
     stateDir,
     workspaceDir: async () => workspace,
     logger: { info() {}, warn() {}, error() {}, debug() {} },
-    llm: { complete: async (...args) => { llmCalls.push(args); throw new Error("no llm in this test"); } },
+    llm,
+    runtime: { llm },
     events: { emit: (name, payload) => hostEvents.push({ name, payload }) },
   });
-  const embeddings = recordingEmbedder();
+  const embeddings = recordingEmbedder({ cacheBasePath: baseDbPath });
   const reranker = recordingReranker();
-  const engine = createEngine(host, config(baseDbPath), { internals: { embeddings, reranker } });
+  const engine = createEngine(host, config(baseDbPath, {
+    merging: { enabled: true },
+    gc: { enabled: true },
+    runtime: { recallTimeoutMs: 10_000, embeddingCachePersist: true },
+  }), { internals: { embeddings, reranker } });
   const internals = internalsOf(engine);
   for (const [i, fact] of FACTS.entries()) {
     const outcome = await engine.capture({
@@ -165,7 +193,22 @@ async function seededEngine() {
   await waitForQuiet(Object.values(roots));
   // Let the compactor finish any check the seeded writes scheduled.
   await internals.fragmentCompactor.check(AGENT);
+  assert.ok(existsSync(join(baseDbPath, "embedding-cache-v2")), "the seeding filled the persistent embedding cache");
   return { engine, internals, host, embeddings, reranker, llmCalls, hostEvents, roots, workspace };
+}
+
+// Counts the lease calls on the private and shared pools.
+function spyLeases(internals) {
+  const counts = { withWriteDb: 0, withReadDbs: 0, withReadOnlyReadDbs: 0, withWorkspaceReadDb: 0, withUserReadDb: 0 };
+  const restorers = [];
+  const wrap = (target, name) => {
+    const original = target[name];
+    target[name] = function (...args) { counts[name] += 1; return original.apply(this, args); };
+    restorers.push(() => { target[name] = original; });
+  };
+  for (const name of ["withWriteDb", "withReadDbs", "withReadOnlyReadDbs"]) wrap(internals.pool, name);
+  for (const name of ["withWorkspaceReadDb", "withUserReadDb"]) wrap(internals.sharedMemoryPool, name);
+  return { counts, restore: () => { for (const r of restorers) r(); } };
 }
 
 function snapshotAll(roots) {
@@ -197,9 +240,14 @@ describe("RecallQuery.warmOnly (E5 Task 9)", () => {
       const eventsBefore = hostEvents.length;
       const spy = spyCompaction(internals);
       const result = await engine.recall({ query: QUERY, principal, agent, signal: new AbortController().signal, warmOnly: true });
+      // A query past the pipeline's summarizer limit: the real path would
+      // hand it to the query summarizer (an LLM call through merging).
+      const long = await engine.recall({ query: `${QUERY} ${"and the planning details ".repeat(900)}`, principal, agent, signal: new AbortController().signal, warmOnly: true });
       spy.restore();
       assert.deepEqual(result.blocks, []);
       assert.equal(result.degraded, null);
+      assert.deepEqual(long.blocks, []);
+      assert.equal(long.degraded, null);
       // Anything a warm recall scheduled in the background would land here.
       await sleep(300);
       const after = snapshotAll(roots);
@@ -215,16 +263,39 @@ describe("RecallQuery.warmOnly (E5 Task 9)", () => {
   });
 
   it("a warm-only recall runs the heavy path", async () => {
-    const { engine, embeddings, reranker } = await seededEngine();
+    const { engine, internals, embeddings, reranker, workspace } = await seededEngine();
     try {
       const queriesBefore = embeddings.calls.embedQuery.length;
+      const embedsBefore = embeddings.calls.embed.length;
       const rerankBefore = reranker.calls.length;
+      const leases = spyLeases(internals);
       const result = await engine.recall({ query: QUERY, principal, agent, signal: new AbortController().signal, warmOnly: true });
+      leases.restore();
       assert.equal(result.degraded, null);
       assert.deepEqual(result.blocks, []);
+      // Read-only leases only: a full recall takes withWriteDb + withReadDbs.
+      assert.deepEqual(
+        [leases.counts.withWriteDb, leases.counts.withReadDbs, leases.counts.withReadOnlyReadDbs, leases.counts.withWorkspaceReadDb],
+        [0, 0, 1, 1],
+        `leases ${JSON.stringify(leases.counts)}`,
+      );
       const queries = embeddings.calls.embedQuery.slice(queriesBefore);
-      assert.ok(queries.filter((q) => q === QUERY).length >= 2, `embedQuery for the neo prelude and the pipeline: ${JSON.stringify(queries)}`);
-      assert.equal(reranker.calls.length - rerankBefore, 1, "the reranker ran once");
+      assert.ok(textsOf(queries).filter((q) => q === QUERY).length >= 2, `embedQuery for the neo prelude and the pipeline: ${JSON.stringify(textsOf(queries))}`);
+      // The canonical search embedded both KNOWLEDGE.md sections, and its
+      // cache was not written.
+      const embeds = textsOf(embeddings.calls.embed.slice(embedsBefore));
+      assert.ok(embeds.some((t) => t.includes("fortnightly planning meeting")), `section embeds: ${JSON.stringify(embeds)}`);
+      assert.ok(embeds.some((t) => t.includes("Releases leave every Thursday")), `section embeds: ${JSON.stringify(embeds)}`);
+      assert.equal(existsSync(join(workspace, ".adaptive-learning", "knowledge-cache.json")), false, "no canonical cache file");
+      // E5 R26: every warm embed is memory-only.
+      for (const call of [...queries, ...embeddings.calls.embed.slice(embedsBefore)]) {
+        assert.equal(call.options?.persist, false, `warm embed of ${JSON.stringify(call.text.slice(0, 40))} is memory-only`);
+      }
+      // The reranker saw the stored rows, not an empty table.
+      const reranks = reranker.calls.slice(rerankBefore);
+      assert.equal(reranks.length, 1, "the reranker ran once");
+      assert.equal(reranks[0].query, QUERY);
+      assert.ok(reranks[0].count > 0, `reranked ${reranks[0].count} rows`);
       const phases = result.timing.phases.completed.map((c) => c.phase);
       for (const phase of ["queue", "prelude", "namespace-recall"]) assert.ok(phases.includes(phase), `phase ${phase} in ${phases.join(",")}`);
       assert.ok(result.timing.totalMs > 0);
@@ -234,15 +305,21 @@ describe("RecallQuery.warmOnly (E5 Task 9)", () => {
   });
 
   it("a warm-only recall leaves the next real recall intact", async () => {
-    const { engine, embeddings } = await seededEngine();
+    const { engine, embeddings, llmCalls } = await seededEngine();
     try {
       await engine.recall({ query: QUERY, principal, agent, signal: new AbortController().signal, warmOnly: true });
       const queriesBefore = embeddings.calls.embedQuery.length;
+      const embedsBefore = embeddings.calls.embed.length;
+      const llmBefore = llmCalls.length;
       const result = await engine.recall({ query: QUERY, principal, agent, signal: new AbortController().signal });
       assert.equal(result.degraded, null);
       const names = result.blocks.filter((b) => b.text).map((b) => b.name);
       for (const name of ["neo", "start", "reminder"]) assert.ok(names.includes(name), `block ${name} in ${names.join(",")}`);
+      const realCalls = [...embeddings.calls.embedQuery.slice(queriesBefore), ...embeddings.calls.embed.slice(embedsBefore)];
       assert.ok(embeddings.calls.embedQuery.length > queriesBefore, "the real recall embedded the query again (not served from the recall cache)");
+      for (const call of realCalls) assert.notEqual(call.options?.persist, false, "a real recall's embeds may persist");
+      // The same LLM spy the warm tests read sees the real path's calls.
+      assert.ok(llmCalls.length > llmBefore, "the real recall reaches the LLM spy");
     } finally {
       await engine.close({ budgetMs: 5_000 });
     }
@@ -266,16 +343,22 @@ describe("RecallQuery.warmOnly (E5 Task 9)", () => {
     }
   });
 
-  it("warming a workspace principal does not create the shared root", { skip: !stableDirectoryCapabilitiesSupported() }, async () => {
+  it("warming a workspace and user principal creates nothing (private or shared)", { skip: !stableDirectoryCapabilitiesSupported() }, async () => {
     const stateDir = makeTempDir("t9-e-state-");
     const baseDbPath = freshBaseDbPath("t9-e-");
     const { host } = twoWorkspaceHost(stateDir);
     const engine = createEngine(host, sharedConfig(baseDbPath), { internals: { embeddings: sharedFlatEmbedder() } });
     try {
-      const result = await engine.recall({ query: QUERY, principal: sharedPrincipal("anna"), agent, signal: new AbortController().signal, warmOnly: true });
+      const root = dirname(baseDbPath);
+      const before = snapshotTree(root);
+      const leases = spyLeases(internalsOf(engine));
+      const result = await engine.recall({ query: QUERY, principal: sharedPrincipal("anna", { user: USER_PRINCIPAL }), agent, signal: new AbortController().signal, warmOnly: true });
+      leases.restore();
       assert.equal(result.degraded, null);
-      const shared = [...snapshotTree(dirname(baseDbPath)).keys()].filter((path) => path.split(sep).includes(SHARED_ROOT_SEGMENT));
-      assert.deepEqual(shared, [], "no shared root");
+      assert.equal(leases.counts.withWorkspaceReadDb, 1, "the workspace read lease was taken");
+      assert.equal(leases.counts.withUserReadDb, 1, "the user read lease was taken");
+      // Neither anna's private directory nor a shared root appears.
+      emptyDiff("the store root", before, snapshotTree(root));
     } finally {
       await engine.close({ budgetMs: 5_000 });
     }
@@ -300,6 +383,46 @@ describe("RecallQuery.warmOnly (E5 Task 9)", () => {
     await engine.close({ budgetMs: 5_000 });
     const closed = await engine.recall({ query: QUERY, principal, agent, signal: new AbortController().signal, warmOnly: true });
     assert.equal(closed.degraded?.reason, "engine-closed");
+  });
+
+  it("a warm-only recall aborted mid-flight answers aborted and emits nothing", async () => {
+    const workspace = makeTempDir("t9-g-ws-");
+    const hostEvents = [];
+    const host = createStubHost({
+      stateDir: makeTempDir("t9-g-state-"),
+      workspaceDir: async () => workspace,
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      events: { emit: (name, payload) => hostEvents.push({ name, payload }) },
+    });
+    const controller = new AbortController();
+    // The caller gives up while the pipeline embeds the query.
+    const embeddings = recordingEmbedder({
+      onEmbedQuery: (_text, options) => new Promise((_, reject) => {
+        const signal = options?.signal;
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        controller.abort(new Error("caller gave up"));
+      }),
+    });
+    const baseDbPath = join(makeTempDir("t9-g-root-"), "lancedb-namespaced");
+    const engine = createEngine(host, config(baseDbPath, { neo: { enabled: false } }), { internals: { embeddings } });
+    try {
+      // A table to search, so the warm path reaches the pipeline's embed.
+      await internalsOf(engine).pool.withWriteDb(AGENT, async (db) => {
+        await db.init();
+        await db.store({ text: "The roadmap review is on Tuesday.", vector: vector(), category: "fact", createdAt: Date.now(), storedBy: AGENT });
+      });
+      const completed = [];
+      const subscription = engine.events.on("recall.completed", (payload) => completed.push(payload));
+      const result = await engine.recall({ query: QUERY, principal, agent, signal: controller.signal, warmOnly: true });
+      subscription.dispose();
+      assert.ok(embeddings.calls.embedQuery.length >= 1, "the abort landed inside the embed");
+      assert.equal(result.degraded?.reason, "aborted");
+      assert.deepEqual(result.blocks, []);
+      assert.deepEqual(hostEvents, [], "no host event");
+      assert.equal(completed.length, 0, "no recall.completed");
+    } finally {
+      await engine.close({ budgetMs: 5_000 });
+    }
   });
 });
 

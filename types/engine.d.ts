@@ -308,8 +308,13 @@ export interface RecallQuery {
   previousUserTurnAt?: number | null;
   validAt?: string;
   /** 1.9.0: run only the read-only heavy path (neo prelude reads, query embedding, read-only store open, vector search,
-   *  rerank) and answer { blocks: [], degraded: null, timing }. Writes nothing, emits no event, never uses or fills the
-   *  recall cache, never calls an LLM, runs at background priority. */
+   *  rerank) and answer { blocks: [], degraded: null, timing } on success. Writes no memory data, no store, no file and
+   *  no persistent embedding-cache row (embeds are memory-only, E5-R26), emits no event, never uses or fills the recall
+   *  cache, never calls an LLM, runs at background (low, evictable) priority. It warms in-memory caches (the provider's
+   *  embedding cache, loaded models, the neo worker); a cold local model cache still downloads model files, as any
+   *  first model load does. A warm recall can also answer blocks [] with degraded "warm-failed" (the warm path failed),
+   *  "aborted", "timeout", "queue-full" or "pressure" (shed at background priority), or "engine-closed"; a workspace
+   *  whose policy disables memory answers an empty success. */
   warmOnly?: boolean;
 }
 

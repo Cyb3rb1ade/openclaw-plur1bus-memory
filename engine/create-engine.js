@@ -975,15 +975,18 @@ export function createEngine(host, config, testOptions = {}) {
     });
   }
   const sessionWorkspaceKeys = new Map();
+  // The one place the neo workspace key is derived: getNeoStore (which then
+  // remembers the session) and peekNeoStore (which does not) must agree.
+  const neoWorkspaceKeyOf = (ctx = {}, event = {}) => workspaceKeyFromContext(ctx, {
+    event,
+    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+    rootDir: neoRoot,
+    runtime: host.runtime ?? undefined,
+    sessionWorkspaceKeys,
+    workspaceAliases: neoWorkspaceAliases,
+  });
   const rememberNeoWorkspace = (ctx = {}, event = {}) => {
-    const workspaceKey = workspaceKeyFromContext(ctx, {
-      event,
-      defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-      rootDir: neoRoot,
-      runtime: host.runtime ?? undefined,
-      sessionWorkspaceKeys,
-      workspaceAliases: neoWorkspaceAliases,
-    });
+    const workspaceKey = neoWorkspaceKeyOf(ctx, event);
     for (const sessionKey of neoSessionKeysFromContext(ctx, event)) {
       sessionWorkspaceKeys.set(sessionKey, workspaceKey);
     }
@@ -1004,14 +1007,7 @@ export function createEngine(host, config, testOptions = {}) {
   // getNeoStore, but the session map is only read (never updated), no
   // onNeoStore host hook runs and opening the store skips its stale
   // temp-file cleanup. Only the store's read methods may be called on it.
-  const peekNeoStore = (ctx = {}, event = {}) => createNeoStore(neoRoot, workspaceKeyFromContext(ctx, {
-    event,
-    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-    rootDir: neoRoot,
-    runtime: host.runtime ?? undefined,
-    sessionWorkspaceKeys,
-    workspaceAliases: neoWorkspaceAliases,
-  }), { readOnly: true });
+  const peekNeoStore = (ctx = {}, event = {}) => createNeoStore(neoRoot, neoWorkspaceKeyOf(ctx, event), { readOnly: true });
   // 7.12.45: Der Vergleich folgt dem Partitionsschluessel (ownerStorageKey):
   // agent-private kennt nur den Agenten, workspace nur die Workspace-
   // Identitaet, user Agent + Owner. Bis dahin verglich er workspaceIdentity
