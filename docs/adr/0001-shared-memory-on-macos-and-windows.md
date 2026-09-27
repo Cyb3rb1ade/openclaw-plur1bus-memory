@@ -1,16 +1,19 @@
 # ADR 0001: Shared memory on macOS and Windows
 
-- **Status:** Proposed — owner decision pending. The analysis and the
-  recommendation below are complete; the implementation (engine plan 2a-E4,
-  Tasks 9 and 10) is not started and is dispatched only after the owner's
-  explicit yes. On acceptance Task 10 sets this line to "Accepted", with the
-  owner and the date.
+- **Status:** Accepted — owner Christian (Cyb3rb1ade), 2026-09-27. Option B
+  (verified-path mode on darwin and win32) is implemented by engine plan
+  2a-E4, Tasks 9 and 10 (E4.2).
 - **Date:** 2026-09-26
 - **Scope:** explicit shared memory (workspace and user pools, `/share`,
   shared-copy refresh, change proposals, shared reads) on darwin and win32.
   Linux is out of scope and unchanged.
 
 ## Context
+
+Line references in this section describe the code before E4.2, at commit
+`d0842424`. Since E4.2 the mode comes from `defaultSharedMemoryMode()`
+(`lib/shared-memory-pool.js:125-126`, constructor), the unsupported throw is
+at `lib/shared-memory-pool.js:254-267` and `support()` at `:156-161`.
 
 Explicit shared memory (spec decision D31) writes one copy of a memory into a
 workspace or user pool under `<sharedBaseDir>/.plur1bus-shared`, which every
@@ -102,6 +105,8 @@ around every LanceDB operation:
 2. **Ancestors.** POSIX: owner `root` or the current uid, and not group- or
    other-writable unless the sticky bit is set (so `/tmp`-style parents pass,
    world-writable non-sticky parents do not). Windows: no reparse point.
+   Steps 3 and 4 are checked from the first write lease on (as implemented);
+   read-only use relies on steps 1, 2 and 5.
 3. **The shared base.** Owner = current user; POSIX `(mode & 0o022) === 0`.
 4. **The shared root `.plur1bus-shared`.** Created `0o700`; owner = current
    user; POSIX `(mode & 0o077) === 0`. Windows: owner = current user SID and
@@ -118,8 +123,9 @@ around every LanceDB operation:
    (`_assertTrustedPath`, `engine/store/memory-db.js:437-443`; `_lancePath()`
    at `engine/store/memory-db.js:445-451` hands LanceDB the held directory's
    `path`), so a verified-path directory with the same interface plugs in
-   unchanged — and after every lease (a new `finally` check in `_lease`,
-   `lib/shared-memory-pool.js:213-225`). A mismatch taints the pool until
+   unchanged — and after every lease (an awaited `finally` in `_lease`,
+   `lib/shared-memory-pool.js:379-403`, calling `_assertRootAfterLease`,
+   `:369-377`). A mismatch taints the pool until
    restart: `support()` then answers `{ supported: false, mode:
    "verified-path", reason: "identity-changed" }` and later shares answer
    `unsupported`.
@@ -136,9 +142,28 @@ the Linux fd mode does not defend against either: such a process can write the
 tables directly. Step 5 turns an accidental or hostile swap by that principal
 into a fail-closed taint instead of a silent redirect.
 
-**Cost.** One `lstat` per path segment at open, one `lstat` per LanceDB
-operation and per lease, and on Windows one ACL read per process. No new
-dependency, no build toolchain, no binaries.
+**Cost** (as implemented, ruling E4-R16). Opening a directory walks its
+canonical path from the filesystem root: `lstat` + `open` + `fstat` per
+segment (POSIX; `lstat` only on Windows) plus one `realpathSync.native`.
+The pool's path guard (`assertSharedRoot`) is reached several times per
+step — `AgentDbPool._assertBasePath` calls it twice, `MemoryDB`'s trusted-path
+check reaches it through `_assertSecureAgentCapability`, the read route adds
+a key-path walk, `_openBase`/`_openSharedRoot` walk too, and every
+`childMatches` re-opens its child. Measured on POSIX in the final review
+(steady state, after the first lease; a "walk" is one full
+`openVerifiedPathDirectory` from `/`): about **6 walks per LanceDB
+operation**, about **15 per empty write lease** (21 with one `store`, +6 per
+further operation), **27 for a read lease with one `getById`** (66 on the
+first read lease, while the read pool is built). One walk at path depth 8
+costs about **97 µs** on the Linux review box, so a shared read lease spends
+roughly 2.6 ms on path verification there — more on macOS (slower syscalls,
+deeper real base paths), and a recall that reads both shared pools pays it
+twice. Accepted for now (E4-R16); de-duplicating the path guard or caching
+the base walk per lease is a possible follow-up. The first write lease per pool also runs
+`icacls` (only when it created the root) and two synchronous PowerShell ACL
+reads (root and base, `execFileSync`, up to 30 s each) on Windows, which
+block the event loop while they run. No new dependency, no build toolchain,
+no binaries.
 
 ### Option C — status quo
 
@@ -146,7 +171,7 @@ Keep `unsupported` on darwin and win32. Zero risk and zero cost, but shared
 memory stays unavailable on two of the three D8 targets, including the
 owner's primary platform (macOS).
 
-## Decision (recommended, pending owner)
+## Decision (accepted 2026-09-27)
 
 **Option B, verified-path mode, on darwin and win32. Linux stays on
 fd-capability routing** — it remains Linux's only mode, and every existing
@@ -167,7 +192,7 @@ identity that make the remaining window harmless.
 
 ## Consequences
 
-If the owner accepts:
+Accepted (2026-09-27):
 
 - `SharedMemorySupport.mode` (`types/engine.d.ts:723`) answers
   `"verified-path"` on darwin and win32; `supported` is `true` unless a check
@@ -183,7 +208,7 @@ If the owner accepts:
   (`unsafe-root`) rather than silently tightened; the operator fixes the mode
   or ACL.
 
-If the owner declines:
+Had the owner declined (kept for the record):
 
 - `unsupported` (reason `"platform"`) stays the answer on darwin and win32,
   exactly as shipped by Tasks 4 and 6.
@@ -195,6 +220,26 @@ If the owner declines:
 
 - **Windows ancestors** above the shared base are checked for reparse points
   only; their ACLs are the OS profile defaults and are not inspected.
+- **Windows base ACL**: on Windows only the base's owner SID is checked
+  (step 3), not its ACEs. A base carrying an Allow ACE for another principal
+  with `FILE_DELETE_CHILD`, or an inheritable foreign ACE, lets that principal
+  rename `.plur1bus-shared` away (a fail-closed `identity-changed` taint, i.e.
+  denial of service) or create entries in a newly made root before `icacls
+  /inheritance:r` runs. Default bases under the user profile carry no such
+  ACEs; the full base ACE policy is not implemented. Steps 3 and 4 run from
+  the first write lease on: a read-only pool checks no ACL at all on Windows,
+  so a root planted under such a base would be read into recall until the
+  first write lease refuses it.
+- **Windows first write lease blocks the event loop**: `icacls` and the
+  PowerShell ACL reads are synchronous `execFileSync` calls (typically
+  0.3-2 s, capped at 30 s each), once per pool.
+- **Transient errors**: `EMFILE`, `ENFILE`, `EIO`, `EAGAIN`, `EBUSY` and
+  `ENOMEM` during the checks fail only that call and do not taint; `EACCES`
+  and `EPERM` taint as `unsafe-root`. Any reason outside the 1.8.0 union is
+  mapped to `unsafe-root`.
+- **umask 002**: directories the host or engine creates with a group-writable
+  umask are `0775`; the ancestor walk and the base check then refuse them
+  (`unsafe-root`). Use umask 022 or `chmod g-w` the directories.
 - **Windows ACL read** depends on `powershell.exe`. If it is absent or cannot
   run, the check fails closed with `acl-tool-unavailable`.
 - **Network and virtual filesystems** with unstable inode numbers fail the
@@ -204,6 +249,15 @@ If the owner declines:
   namespaces** (`lib/multi-namespace-pool.js:167`) stay fd-only; off Linux the
   migration answers `unsupported` and named namespaces stay disabled, as the
   B12 audit already records for named routing.
+- **A symlink already in the configured base path** (ruling E4-R10) is
+  resolved once by the canonicalisation of step 1 — this is how macOS's
+  `/var -> /private/var` temp directories work — and the policy of steps 2-4
+  applies to the resolved chain. A link that appears after that is refused.
+- **Elevated Windows shells** (ruling E4-R12): a directory created by an
+  elevated Administrator is usually owned by `S-1-5-32-544`, not the user's
+  SID, so such a shared root or base answers `unsafe-root`. Run the engine
+  unelevated, or give the directory to the user (`icacls <dir> /setowner
+  <user>`).
 - **The check-to-use window** between the last `lstat` and LanceDB's own open
   remains, by construction (see the security argument); it is exploitable only
   by the current user, root or Administrators.

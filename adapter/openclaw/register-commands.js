@@ -278,7 +278,7 @@ export function registerChatCommands(ctx) {
     try {
       return { ok: true, value: await op() };
     } catch (err) {
-      if (isMemoryOpError(err)) return { ok: false, code: err.code, error: err.message };
+      if (isMemoryOpError(err)) return { ok: false, code: err.code, error: err.message, reason: err.detail?.reason };
       throw err;
     }
   };
@@ -1266,11 +1266,16 @@ export function registerChatCommands(ctx) {
           || (outcome.code === "denied" && /shared copies cannot be changed/.test(String(outcome.error ?? ""))),
         denied: outcome.code === "denied",
         unsupported: outcome.code === "unsupported",
+        // A verified-path pool that failed a safety check (unsafe-root,
+        // acl-tool-unavailable, identity-changed) is not "not available on
+        // this system": it needs a fix and a restart (E4.2).
+        unsupportedAfterCheck: outcome.code === "unsupported" && outcome.reason !== undefined && outcome.reason !== "platform",
         error: outcome.error,
       };
     };
     const shareFailure = (result) => {
       if (result.denied && !result.notFound) host.logger.warn(`memory-lancedb-namespaced: /share refused by Engine.memory after checkAuth: ${result.error}`);
+      if (result.unsupportedAfterCheck) return fail("plur1bus.share_safety_check_failed");
       if (result.unsupported) return fail("plur1bus.share_unsupported");
       return fail(result.notFound ? "plur1bus.share_not_found" : "plur1bus.share_failed");
     };

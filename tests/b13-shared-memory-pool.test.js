@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { SharedMemoryPool, SHARED_MEMORY_UNSUPPORTED, SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE } from "../lib/shared-memory-pool.js";
+import { SharedMemoryPool, SHARED_MEMORY_UNSUPPORTED, SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE, defaultSharedMemoryMode } from "../lib/shared-memory-pool.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 import { workspacePoolKey } from "../lib/memory-request-context.js";
-import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { AgentDbPool } from "../index.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -20,9 +19,10 @@ const workspaceA = { workspaceIdentity: "workspace:v1:alpha" };
 const workspaceB = { workspaceIdentity: "workspace:v1:beta" };
 const userA = { userPrincipal: "user:v1:telegram:one" };
 
-// Explicit shared memory requires fd-backed directory routing; platforms without
-// it (e.g. darwin, where /dev/fd cannot resolve children) must fail closed.
-const sharedCapabilitiesSupported = stableDirectoryCapabilitiesSupported();
+// Explicit shared memory needs a routing mode: fd-backed directory capabilities
+// (Linux) or verified-path (darwin, win32; ADR 0001). A platform with neither
+// must fail closed.
+const sharedCapabilitiesSupported = defaultSharedMemoryMode() !== "unavailable";
 
 describe("B13 shared memory pool", () => {
   it("routes workspaces and users to separate hashed physical roots", async () => {

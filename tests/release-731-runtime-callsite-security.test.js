@@ -11,7 +11,7 @@ import { buildRemPartition, getPreviousWeekWindow, runRemDream } from "../lib/dr
 const FROZEN_REM_NOW = new Date("2026-08-10T12:00:00.000Z");
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
-import { SharedMemoryPool, SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE } from "../lib/shared-memory-pool.js";
+import { SharedMemoryPool, SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE, defaultSharedMemoryMode } from "../lib/shared-memory-pool.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -329,7 +329,9 @@ function filesUnder(root) {
 }
 
 test("unsupported directory-capability hosts reject explicit shared writes without creating a shared root", async (t) => {
-  if (stableDirectoryCapabilitiesSupported()) {
+  // darwin and win32 now route through verified-path mode (ADR 0001); only a
+  // platform with no shared-memory mode at all reaches this case.
+  if (defaultSharedMemoryMode() !== "unavailable") {
     t.skip("supported hosts exercise the shared-memory integration happy paths below");
     return;
   }

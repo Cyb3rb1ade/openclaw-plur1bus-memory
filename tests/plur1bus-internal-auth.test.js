@@ -9,8 +9,9 @@ import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capabilit
 import { workspaceKeyFromContext } from "../lib/neo-arch.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
-// Migration report publication requires verified fd-backed directory aliases,
-// which are unavailable on darwin; the migration write path fails closed there.
+// Migration report publication requires fd-backed directory aliases; the
+// legacy migration stays fd-only (ADR 0001) and fails closed without them,
+// also on darwin/win32 in verified-path mode.
 const directoryCapabilitiesUnavailable = stableDirectoryCapabilitiesSupported()
   ? false
   : "stable directory capabilities are unavailable on this platform";
