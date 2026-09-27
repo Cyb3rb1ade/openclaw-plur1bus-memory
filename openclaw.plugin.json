@@ -1110,12 +1110,12 @@
           "defaultModel": {
             "type": "string",
             "minLength": 1,
-            "description": "Modell für alle Hintergrund-Features, die kein eigenes konfiguriert haben (Episodenextraktion, Traumdeutung, Gesprächsanalyse, Verdichtung …). Ohne diesen Wert folgen sie dem Hauptmodell des Agenten und verbrauchen dessen Kontingent, obwohl sie nichts vom laufenden Gespräch brauchen. Ein feature-eigenes Modell hat Vorrang; Features mit eigenem Transport (baseUrl/apiKey/headers) bleiben unberührt. Die Route bleibt openclaw-override, Anmeldung und Transport also beim Host."
+            "description": "Model used for every background feature that has not configured one of its own (episode extraction, dream interpretation, conversation analysis, consolidation, …). Without this value, they fall back to the agent's main model and consume its quota even though they need nothing from the live conversation. A feature-local model always takes precedence; features with their own transport (baseUrl/apiKey/headers) are unaffected. The route stays openclaw-override, so authentication and transport remain with the host."
           },
           "errorDiagnostics": {
             "type": "boolean",
             "default": false,
-            "description": "Schreibt die redigierte Fehlermeldung eines gescheiterten Modellaufrufs nach <baseDbPath>/llm-router-errors.log. Nur zur Fehlersuche einschalten: die Meldung des Fremdsystems kann Bruchstücke des Prompts enthalten, deshalb steht sie nie im normalen Log."
+            "description": "Writes the redacted error message of a failed model call to <baseDbPath>/llm-router-errors.log. Enable only for troubleshooting: the foreign system's message can contain fragments of the prompt, so it never appears in the normal log."
           },
           "agentModels": {
             "type": "object",
@@ -1268,7 +1268,7 @@
               "maxLength": 64,
               "pattern": "^[A-Za-z0-9_-]{1,64}$"
             },
-            "description": "Welche Agenten im Reiter eine Spalte in der Modell-Matrix bekommen. Leer oder fehlend: die stehenden Agenten (mit heartbeat) plus jeder Agent mit gespeicherter Wahl; gibt es keine, alle bekannten. Unbekannte Kennungen werden übergangen."
+            "description": "Which agents get a column in the dashboard's model matrix. Empty or unset: the standing agents (with a heartbeat) plus any agent with a saved choice; if there are none, every known agent. Unknown ids are skipped."
           }
         }
       },
@@ -2997,7 +2997,7 @@
           "flashbulbEncoding": {
             "type": "boolean",
             "default": false,
-            "description": "Blitzlicht-Kodierung: Eine Erinnerung, deren Blitzlicht-Wert (0,5 · emotionale Intensität + 0,5 · Wichtigkeit) die Schwelle 0,80 erreicht, bekommt Gedächtnisstärke 0,95, eine Mindest-Halbwertszeit von 3650 Tagen statt 90 und die Klasse 'flashbulb'. Die Schwelle stammt aus dem Phase-3-Pilotlauf vom 21.09.2026 über 24.509 aktive Zeilen: 0,80 trifft 1,8 % der Zeilen der letzten 30 Tage (Zielgröße laut scripts/importance-metrics.mjs: unter 2 %), die vorherigen 0,70 hätten 6,4 % getroffen. Entschieden wird einmal je Zeile, wenn das Modellurteil aus Tier 3 zum ersten Mal vorliegt — der emotion-refine-Cron liest nur Zeilen mit pending-Status und setzt sie danach auf final, sie verlassen die Warteschlange dauerhaft. Der Capture-Pfad selbst brennt praktisch nie ein: Dort liegt nur die Tier-2-Heuristik vor, die auf echten Texten höchstens 0,60 Intensität erreicht. Bestandszeilen auf 'final' werden nie nachträglich eingebrannt. Vorgabe aus, weil die Wirkung praktisch unumkehrbar ist: Eine Halbwertszeit von zehn Jahren nimmt der Bereinigung jeden Zugriff."
+            "description": "Flashbulb encoding: a memory whose flashbulb value (0.5 · emotional intensity + 0.5 · importance) reaches the 0.80 threshold gets memory strength 0.95, a minimum half-life of 3650 days instead of 90, and the 'flashbulb' class. The threshold comes from the phase-3 pilot run of 2026-09-21 over 24,509 active rows: 0.80 hits 1.8% of the last 30 days' rows (target per scripts/importance-metrics.mjs: under 2%), the previous 0.70 would have hit 6.4%. The decision is made once per row, when the tier-3 model judgment first becomes available — the emotion-refine cron reads only pending-status rows and then sets them to final, so they leave the queue for good. The capture path itself almost never burns it in: only the tier-2 heuristic is available there, which reaches at most 0.60 intensity on real text. Existing rows already at 'final' are never retroactively burned in. Default off, because the effect is practically irreversible: a ten-year half-life takes the row out of reach of cleanup."
           }
         },
         "description": "Memory dynamics switches, currently flashbulb encoding for memories with high emotional intensity and importance."
