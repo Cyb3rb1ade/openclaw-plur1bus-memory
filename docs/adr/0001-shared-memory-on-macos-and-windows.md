@@ -10,6 +10,11 @@
 
 ## Context
 
+Line references in this section describe the code before E4.2, at commit
+`d0842424`. Since E4.2 the mode comes from `defaultSharedMemoryMode()`
+(`lib/shared-memory-pool.js:125-126`, constructor), the unsupported throw is
+at `lib/shared-memory-pool.js:254-267` and `support()` at `:156-161`.
+
 Explicit shared memory (spec decision D31) writes one copy of a memory into a
 workspace or user pool under `<sharedBaseDir>/.plur1bus-shared`, which every
 member of that pool reads. The pool directories are therefore reachable by
@@ -116,8 +121,9 @@ around every LanceDB operation:
    (`_assertTrustedPath`, `engine/store/memory-db.js:437-443`; `_lancePath()`
    at `engine/store/memory-db.js:445-451` hands LanceDB the held directory's
    `path`), so a verified-path directory with the same interface plugs in
-   unchanged — and after every lease (a new `finally` check in `_lease`,
-   `lib/shared-memory-pool.js:213-225`). A mismatch taints the pool until
+   unchanged — and after every lease (an awaited `finally` in `_lease`,
+   `lib/shared-memory-pool.js:379-403`, calling `_assertRootAfterLease`,
+   `:369-377`). A mismatch taints the pool until
    restart: `support()` then answers `{ supported: false, mode:
    "verified-path", reason: "identity-changed" }` and later shares answer
    `unsupported`.
@@ -134,9 +140,18 @@ the Linux fd mode does not defend against either: such a process can write the
 tables directly. Step 5 turns an accidental or hostile swap by that principal
 into a fail-closed taint instead of a silent redirect.
 
-**Cost.** One `lstat` per path segment at open, one `lstat` per LanceDB
-operation and per lease, and on Windows one ACL read per process. No new
-dependency, no build toolchain, no binaries.
+**Cost** (as implemented, ruling E4-R16). Opening a directory walks its
+canonical path from the filesystem root: `lstat` + `open` + `fstat` per
+segment (POSIX; `lstat` only on Windows) plus one `realpathSync.native`.
+Each LanceDB operation runs the pool's path guard, which re-walks the shared
+root's full path from `/` that way, plus two or three `childMatches` (shared
+root in the base, kind segment, agent directory — each a re-open of that one
+child), and then `assertOpen()` on the held directory; each lease adds one
+more full walk after the callback. The first write lease per pool also runs
+`icacls` (only when it created the root) and two synchronous PowerShell ACL
+reads (root and base, `execFileSync`, up to 30 s each) on Windows, which
+block the event loop while they run. No new dependency, no build toolchain,
+no binaries.
 
 ### Option C — status quo
 
@@ -193,6 +208,19 @@ Had the owner declined (kept for the record):
 
 - **Windows ancestors** above the shared base are checked for reparse points
   only; their ACLs are the OS profile defaults and are not inspected.
+- **Windows base ACL**: on Windows only the base's owner SID is checked
+  (step 3), not its ACEs. A base carrying an Allow ACE for another principal
+  with `FILE_DELETE_CHILD`, or an inheritable foreign ACE, lets that principal
+  rename `.plur1bus-shared` away (a fail-closed `identity-changed` taint, i.e.
+  denial of service) or create entries in a newly made root before `icacls
+  /inheritance:r` runs. Default bases under the user profile carry no such
+  ACEs; the full base ACE policy is not implemented.
+- **Windows first write lease blocks the event loop**: `icacls` and the
+  PowerShell ACL reads are synchronous `execFileSync` calls (typically
+  0.3-2 s, capped at 30 s each), once per pool.
+- **umask 002**: directories the host or engine creates with a group-writable
+  umask are `0775`; the ancestor walk and the base check then refuse them
+  (`unsafe-root`). Use umask 022 or `chmod g-w` the directories.
 - **Windows ACL read** depends on `powershell.exe`. If it is absent or cannot
   run, the check fails closed with `acl-tool-unavailable`.
 - **Network and virtual filesystems** with unstable inode numbers fail the

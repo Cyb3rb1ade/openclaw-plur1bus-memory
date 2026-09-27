@@ -729,18 +729,32 @@ What is checked, and when:
   sticky. A symlink already in the configured base path (e.g. macOS
   `/var -> /private/var`) is resolved once by `realpathSync.native` and the
   policy then applies to the resolved chain (ruling E4-R10).
-- **First write lease per process**: a `.plur1bus-shared` the pool just
+- **First write lease per pool, before the root is created**: the base must
+  belong to the current user (POSIX owner = uid and `(mode & 0o022) ===
+  0`, so a sticky world-writable base is refused too; win32 owner SID = user
+  SID). Nothing is created under a base that fails this.
+- **First write lease per pool, root**: a `.plur1bus-shared` the pool just
   created is restricted with `secureDirectoryOwnerOnly` (POSIX `fchmod
   0o700`; win32 `icacls <root> /inheritance:r /grant:r <user>:(OI)(CI)(F)`);
   then `assertOwnerOnlyDirectory` checks the root (POSIX owner = uid and
   `(mode & 0o077) === 0`; win32 owner SID = user SID and every Allow ACE is
-  the user, SYSTEM or Administrators, read through `powershell.exe`) and the
-  base must belong to the current user (POSIX owner = uid and `(mode &
-  0o022) === 0`; win32 owner SID = user SID). A pre-existing root with looser
-  permissions is refused, never silently tightened.
-- **Every LanceDB operation**: `MemoryDB` calls `assertOpen()` on the held
-  directory (`lstat` identity, plus the POSIX anchor descriptor).
-- **After every lease** (`finally` in `_lease`): the root is re-verified.
+  the user, SYSTEM or Administrators, read through `powershell.exe`). A
+  pre-existing root with looser permissions is refused, never silently
+  tightened.
+- **Every LanceDB operation**: the pool's path guard (`assertSharedRoot`)
+  re-walks the shared root's full canonical path from `/` (`lstat` + `open`
+  + `fstat` per segment on POSIX, `lstat` on Windows, plus a realpath) and
+  runs two or three `childMatches` (shared root, kind segment, agent
+  directory — each re-opens that child); then `MemoryDB` calls `assertOpen()`
+  on the held directory (`lstat` identity, plus the POSIX anchor descriptor).
+- **After every lease** (awaited `finally` in `_lease`): one more full walk
+  re-verifies the root, also when the callback threw (the identity error
+  then replaces the callback's error) and on read leases.
+- **Cost on Windows**: the first write lease per pool runs `icacls` (when it
+  created the root) and two PowerShell ACL reads (root and base). All are
+  synchronous `execFileSync` calls (typically 0.3-2 s, capped at 30 s each)
+  and block the event loop — recall budgets and the `status()` cap included —
+  while they run.
 
 A failure **taints** the pool until restart: `support()` answers `{
 supported: false, mode: "verified-path", reason }` with the error's reason
@@ -762,7 +776,11 @@ or writes anything.
 **Residual risks** (ADR 0001): the check-to-use window between the last
 `lstat` and LanceDB's own open remains by construction and is exploitable
 only by the current user, root or Administrators; Windows ancestors above
-the base are checked for reparse points only; network and virtual
+the base are checked for reparse points only, and of the base itself only
+the owner SID is checked — a foreign Allow ACE with `FILE_DELETE_CHILD` or an
+inheritable foreign ACE on the base is not detected (the full base ACE
+policy is not implemented); a umask of 002 makes engine-created directories
+group-writable, which the walk refuses; network and virtual
 filesystems with unstable inode numbers fail closed with
 `identity-changed`; the Windows ACL read needs `powershell.exe` (missing →
 `acl-tool-unavailable`). **Elevated Windows shells** (ruling E4-R12): a
@@ -772,6 +790,9 @@ answers `unsafe-root`.
 
 **Troubleshooting** — `status().sharedMemory.reason`:
 
+- `unsafe-root` after the engine created the directories itself: the process
+  runs with umask 002, so `mkdirSync` made them group-writable (`0775`). Use
+  umask 022, or `chmod g-w` the base and its engine-created parents.
 - `unsafe-root` on macOS: a directory on the path is group/other-writable or
   owned by someone else, or `.plur1bus-shared` is not `0700`. Fix the mode
   (`chmod 700 <base>/.plur1bus-shared`, `chmod go-w <base>`) and restart.

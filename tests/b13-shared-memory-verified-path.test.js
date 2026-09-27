@@ -132,6 +132,7 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
         }),
         /identity changed/,
       );
+      assert.deepEqual(readdirSync(shared), [], "nothing was written into the replacement root");
       assert.deepEqual(pool.support(), { supported: false, mode: "verified-path", reason: "identity-changed" });
       await assert.rejects(pool.withUserDb(userA, async () => {}), (error) => {
         assert.equal(error.code, SHARED_MEMORY_UNSUPPORTED);
@@ -142,6 +143,66 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
       await pool.withWorkspaceReadDb(workspaceA, (db) => assert.equal(db, null));
       assert.ok(logger.warnings.length >= 1, "the taint is logged");
       assert.doesNotMatch(JSON.stringify(logger.warnings), /\bino\b|\bdev\b/);
+    } finally {
+      await pool.shutdown();
+    }
+  });
+
+  it("the after-lease check wins over a throwing callback", posixOnly, async () => {
+    const base = makeTempDir("b13-vp-throw-");
+    const pool = verifiedPool(base);
+    try {
+      const shared = join(base, SHARED);
+      await assert.rejects(
+        pool.withWorkspaceDb(workspaceA, async () => {
+          renameSync(shared, `${shared}.old`);
+          mkdirSync(shared, { mode: 0o700 });
+          throw new Error("synthetic callback failure");
+        }),
+        (error) => /identity changed/.test(error.message) && !/synthetic callback failure/.test(error.message),
+      );
+      assert.deepEqual(pool.support(), { supported: false, mode: "verified-path", reason: "identity-changed" });
+    } finally {
+      await pool.shutdown();
+    }
+  });
+
+  it("the after-lease check also runs on a read lease", posixOnly, async () => {
+    const base = makeTempDir("b13-vp-readlease-");
+    const pool = verifiedPool(base);
+    try {
+      const stored = row("A fact read under a swapped root.");
+      await pool.withWorkspaceDb(workspaceA, async (db) => { await db.store(stored); });
+      const shared = join(base, SHARED);
+      await assert.rejects(
+        pool.withWorkspaceReadDb(workspaceA, async (db) => {
+          assert.ok(db);
+          renameSync(shared, `${shared}.old`);
+          mkdirSync(shared, { mode: 0o700 });
+        }),
+        /identity changed/,
+      );
+      assert.deepEqual(pool.support(), { supported: false, mode: "verified-path", reason: "identity-changed" });
+      await pool.withWorkspaceReadDb(workspaceA, (db) => assert.equal(db, null));
+    } finally {
+      await pool.shutdown();
+    }
+  });
+
+  it("a root replaced by a fresh real directory before a lease fails the identity comparison", posixOnly, async () => {
+    const base = makeTempDir("b13-vp-fresh-");
+    const pool = verifiedPool(base);
+    try {
+      await pool.withWorkspaceDb(workspaceA, async (db) => { await db.store(row("first lease")); });
+      const shared = join(base, SHARED);
+      renameSync(shared, `${shared}.old`);
+      mkdirSync(shared, { mode: 0o700 });
+      await assert.rejects(
+        pool.withWorkspaceDb(workspaceA, async (db) => { await db.store(row("second lease")); }),
+        (error) => error.code === "EIDENTITY" && /shared memory root identity changed/.test(error.message),
+      );
+      assert.deepEqual(pool.support(), { supported: false, mode: "verified-path", reason: "identity-changed" });
+      assert.deepEqual(readdirSync(shared), [], "nothing was written into the look-alike root");
     } finally {
       await pool.shutdown();
     }
@@ -170,6 +231,19 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
       assert.equal(existsSync(join(openBase, SHARED)), false);
     } finally {
       await second.shutdown();
+    }
+
+    // A sticky, world-writable base passes the ancestor walk (sticky) but not
+    // the base-owner check (ADR step 3), which runs before the root is created.
+    const sticky = makeTempDir("b13-vp-d-sticky-");
+    chmodSync(sticky, 0o1777);
+    const fourth = verifiedPool(sticky);
+    try {
+      await assert.rejects(fourth.withWorkspaceDb(workspaceA, async () => {}), { reason: "unsafe-root" });
+      assert.deepEqual(fourth.support(), { supported: false, mode: "verified-path", reason: "unsafe-root" });
+      assert.equal(existsSync(join(sticky, SHARED)), false, "no root is created under an unsafe base");
+    } finally {
+      await fourth.shutdown();
     }
 
     // A pre-existing owner-only root is accepted.
