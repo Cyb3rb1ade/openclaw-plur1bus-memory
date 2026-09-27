@@ -34,7 +34,7 @@ import {
   assertOwnerOnlyDirectory,
   openVerifiedPathDirectory,
 } from "../lib/verified-path-directory.js";
-import { noFollowDirectoryFlags, readDirectoryAcl, secureDirectoryOwnerOnly } from "../lib/platform.js";
+import { aclChildEnv, noFollowDirectoryFlags, readDirectoryAcl, secureDirectoryOwnerOnly } from "../lib/platform.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const USER_SID = "S-1-5-21-1-2-3-1001";
@@ -304,6 +304,17 @@ describe("VerifiedPathDirectory", () => {
     );
   });
 
+  it("aclChildEnv drops every spelling of PSModulePath and adds the path", () => {
+    const env = aclChildEnv("C:\\synthetic\\dir", {
+      PSModulePath: "C:\\ps7\\Modules",
+      psmodulepath: "C:\\other",
+      Path: "C:\\Windows",
+      SystemRoot: "C:\\Windows",
+    });
+    assert.deepEqual(Object.keys(env).sort(), ["PLUR1BUS_ACL_PATH", "Path", "SystemRoot"]);
+    assert.equal(env.PLUR1BUS_ACL_PATH, "C:\\synthetic\\dir");
+  });
+
   it("readDirectoryAcl passes the path via the environment", () => {
     const target = "C:\\Users\\synthetic user\\shared'; Remove-Item -Recurse C:\\ #";
     const calls = [];
@@ -336,6 +347,7 @@ describe("VerifiedPathDirectory", () => {
     assert.match(script, /\$env:PLUR1BUS_ACL_PATH/);
     assert.ok(!script.includes("synthetic user"));
     assert.equal(options.env.PLUR1BUS_ACL_PATH, target);
+    assert.ok(!script.includes("Get-Acl"), "the ACL is read through .NET, not a cmdlet that needs a module");
 
     const missing = Object.assign(new Error("spawn powershell.exe ENOENT"), { code: "ENOENT" });
     assert.throws(
