@@ -3575,6 +3575,9 @@ export function createEngine(host, config, testOptions = {}) {
     status: () => statusReporter.status(),
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
     async recall(q) {
+      // The recall clock starts here (E5 Task 8): timing.totalMs and the soft
+      // budget count from the call, not from the store read.
+      const startedAt = Date.now();
       if (closing) return recallResult({ degraded: { ...ENGINE_CLOSED, capability: "recall" } });
       if (!(q?.signal instanceof AbortSignal)) {
         return recallResult({ degraded: { reason: "invalid-query", capability: "recall", detail: "signal is required" } });
@@ -3589,7 +3592,7 @@ export function createEngine(host, config, testOptions = {}) {
         // per scheduled recall — do not emit it again here, or every
         // `Engine.recall` call would double the event the adapter's own
         // registered hook already produces through the same assembler.
-        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent })) ?? recallResult();
+        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt })) ?? recallResult();
       } catch (error) {
         // An abort that lands before the assembler runs (e.g. during
         // host.workspaceDir) is still an abort, not a bad query.

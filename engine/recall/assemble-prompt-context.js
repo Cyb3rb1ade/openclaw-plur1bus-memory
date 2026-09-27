@@ -142,6 +142,7 @@ export function createPromptContextAssembler(ctx) {
   } = ctx;
 
   return async function assemblePromptContext(event, hookCtx, opts = {}) {
+    const assemblerEntryAt = Date.now();
     const callerSignal = opts?.signal;
     if (!(callerSignal instanceof AbortSignal)) {
       const degraded = { reason: "invalid-query", capability: "recall", detail: "signal is required" };
@@ -179,17 +180,26 @@ export function createPromptContextAssembler(ctx) {
         promptForCache,
       ])}`
       : `${agentIdForCache}:${sessionKeyForCache}:${promptForCache}`;
+    // Honest timing (E5 Task 8): the clock runs from the caller's start
+    // (`Engine.recall` entry) or, on the OpenClaw hook path, from here. So
+    // `timing.totalMs` and the soft budget include the queue wait, principal
+    // resolution, the neo prelude, the write-db lease and everything else
+    // before the store read, not just the store read itself.
+    const startedAt = Number.isFinite(opts.startedAt) ? opts.startedAt : Date.now();
     const phaseTimer = createRecallPhaseTimer({
       softBudgetMs,
       hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
       logger: host.logger,
+      startedAt,
     });
+    if (Number.isFinite(opts.startedAt)) phaseTimer.record("entry", assemblerEntryAt - opts.startedAt);
     const namespacePhases = [];
     // Set when the store section fails and the callback falls back to the
     // neo/start blocks (or nothing): the result reports it as degraded
     // instead of passing for a clean recall. Kept out of the returned value
     // so what the scheduler caches is unchanged.
     let innerFailure = null;
+    const enqueuedAt = Date.now();
     const scheduledRecall = await runtimeScheduler.runRecall({
       background,
       cacheKey,
@@ -197,6 +207,7 @@ export function createPromptContextAssembler(ctx) {
       phaseTimer,
       signal: callerSignal,
     }, async (signal, timer) => {
+    timer.record("queue", Date.now() - enqueuedAt);
     throwIfAborted(signal, "recall aborted");
     // P0-1: Interne/background Turns bekommen keine volle Recall-Injektion.
     if (skipInternalRecall) {
@@ -206,6 +217,7 @@ export function createPromptContextAssembler(ctx) {
     // globale Suche, Lanes). Der Host bricht den Hook nach 15 s ab; am
     // 09./10.09.2026 passierte das dutzendfach, ohne dass eine Logzeile den
     // Verbleib der Zeit zeigte.
+    timer.start("prelude");
     const recallPrelude = { startedAt: Date.now(), identityMs: 0, hookRecordMs: 0, windowMs: 0, embedMs: 0, embedTimedOut: false, globalMs: 0, lanesMs: 0 };
     const { memoryCtx } = opts.memoryCtx
       ? { memoryCtx: opts.memoryCtx }
@@ -219,7 +231,10 @@ export function createPromptContextAssembler(ctx) {
           sessionKey: hookCtx?.sessionKey ?? event?.sessionKey,
           sessionId: hookCtx?.sessionId ?? event?.sessionId,
         }, { workspaceAliases: memoryWorkspaceAliases }) };
-    if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
+    if (!workspacePolicyGuard.automatic(memoryCtx).allowed) {
+      timer.end("prelude");
+      return undefined;
+    }
     let neoContext = "";
     let neoLanes = null;
     let neoGlobalIds = null;
@@ -299,6 +314,7 @@ export function createPromptContextAssembler(ctx) {
       if (preludeMs >= NEO_RECALL_PRELUDE_LOG_MS) host.logger.info(preludeLine);
       else host.logger.debug(preludeLine);
     }
+    timer.end("prelude");
     if (!event.prompt || event.prompt.length < 5) return neoContext ? recallResult({ blocks: [contextBlock("neo", neoContext, true)] }) : undefined;
     // Skip heavy LanceDB recall for internal dreaming/sleep magic messages —
     // these cron turns don't need memory context and the recall would block

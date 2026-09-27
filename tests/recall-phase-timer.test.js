@@ -31,6 +31,15 @@ describe("recall-phase-timer", () => {
     assert.strictEqual(timer.summary().exceededBudget, true);
   });
 
+  it("a timer with startedAt counts from it", () => {
+    const timer = createRecallPhaseTimer({ startedAt: Date.now() - 50 });
+    assert.ok(timer.elapsedMs() >= 50, `elapsedMs ${timer.elapsedMs()} before any start()`);
+    assert.ok(timer.summary().elapsedMs >= 50);
+    // A later start() keeps the clock where it was.
+    timer.start("namespace-recall");
+    assert.ok(timer.elapsedMs() >= 50);
+  });
+
   it("bounds completed phase list", () => {
     const timer = createRecallPhaseTimer({});
     for (let i = 0; i < 40; i++) {

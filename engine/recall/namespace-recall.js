@@ -80,6 +80,8 @@ async function runMergedNamespaceRecall(
   });
   const timerConfig = phaseTimer?.summary?.() || {};
   phaseTimer?.start("namespace-recall");
+  const outerElapsedMs = phaseTimer?.elapsedMs?.();
+  const outerStartedAt = Number.isFinite(outerElapsedMs) ? Date.now() - outerElapsedMs : undefined;
   try {
     const requestNow = Date.now();
     const canonicalSourceIndex = readDbs.findIndex((source) => source.sourceKind === "private");
@@ -91,6 +93,10 @@ async function runMergedNamespaceRecall(
         softBudgetMs: timerConfig.softBudgetMs,
         hardTimeoutMs: timerConfig.hardTimeoutMs,
         logger: baseParams.logger,
+        // The pipeline checks the soft budget on this child timer, so it
+        // shares the outer clock: the budget counts from the recall's start
+        // (E5 Task 8), not from this namespace's first phase.
+        startedAt: outerStartedAt,
       });
       const childStrictReadErrors = readDbs.length === 1
         ? (strictReadErrors || baseParams.strictReadErrors === true)
