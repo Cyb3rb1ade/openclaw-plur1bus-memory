@@ -379,7 +379,8 @@
           "default": "pending_only"
         },
         "webhookUrl": {
-          "type": "string"
+          "type": "string",
+          "x-sensitive": true
         }
       },
       "readAt": "construction",
@@ -917,6 +918,7 @@
         },
         "headers": {
           "type": "object",
+          "x-sensitive": true,
           "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
         },
         "autoApply": {
@@ -974,6 +976,7 @@
         },
         "headers": {
           "type": "object",
+          "x-sensitive": true,
           "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
         },
         "minImportance": {
@@ -1221,6 +1224,7 @@
         },
         "headers": {
           "type": "object",
+          "x-sensitive": true,
           "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
         }
       },
@@ -2384,6 +2388,7 @@
         },
         "headers": {
           "type": "object",
+          "x-sensitive": true,
           "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
         }
       },

@@ -798,6 +798,19 @@ Jeder aktivierte Chat-Aufruf löst genau einen von vier Route-Modi auf:
 - `direct-override`: feature-lokales `model` plus `baseUrl`, aufgelöstes `apiKey` oder nicht-leere `headers`; der bestehende begrenzte OpenAI-kompatible Direktpfad wird verwendet.
 - `unavailable`: die Route kann sicher keinen Request senden. Direct transport without a feature-local model fails closed as an ambiguous partial override.
 
+**Geheime Werte ohne SecretRef.** `merging.headers`, `schicht15.headers`,
+`skillMiner.headers`, `criticalPush.headers` und `reminders.webhookUrl` sind im
+Engine-Config-Schema `x-sensitive` (Owner-Entscheidung zu E5-R24): jede
+Oberfläche maskiert sie — in OpenClaw über `uiHints[…].sensitive` (eine
+Header-Map wird als Ganzes durch den Redaktions-Platzhalter ersetzt und beim
+Speichern wiederhergestellt), in Engine/Harness über
+`redactSensitiveConfig`. Anders als die acht `*.apiKey`-Felder sind sie
+**keine** OpenClaw-SecretInputs (`configContracts.secretInputs.paths` bleibt
+bei acht Pfaden): Werte werden weiterhin im Klartext eingetragen, ein
+SecretRef-Objekt wird dort nicht aufgelöst. Ein `${VAR}` in
+`reminders.webhookUrl` löst die Engine wie bisher selbst gegen ihre
+Allow-List auf.
+
 `failed` ist der stabile Diagnosewert für einen gescheiterten Transport, kein
 fünfter Auswahlmodus. Erfolgreiche native Ergebnisse übernehmen ausschließlich
 die von OpenClaw zurückgegebenen Provider-/Modellwerte in die Diagnose; Prompts,

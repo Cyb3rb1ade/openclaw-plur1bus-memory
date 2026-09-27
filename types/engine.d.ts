@@ -251,7 +251,8 @@ export interface EngineConfigSchemaNode {
   /** Required on every top-level key; a nested node may override its parent. */
   readAt?: EngineConfigReadAt;
   "x-tier"?: EngineConfigTier;
-  /** true on credential inputs (the manifest's secretInputs). */
+  /** true on values every surface must mask/redact (credentials, `*.headers`, `reminders.webhookUrl`). Not the
+   *  manifest's secretInputs: those are the nodes whose `$ref` is `#/$defs/secretInput` (a subset). */
   "x-sensitive"?: boolean;
   properties?: Record<string, EngineConfigSchemaNode>;
   [keyword: string]: unknown;

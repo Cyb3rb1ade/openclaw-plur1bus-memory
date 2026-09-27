@@ -6,12 +6,16 @@
  * openclaw.plugin.json `configSchema` is the engine schema without its
  * engine-only root keys (`$schema`, `$id`, `x-contract`) and without the
  * engine-only keywords (`readAt`, `x-tier`, `x-sensitive`) in any node;
- * `configContracts.secretInputs.paths` lists the `x-sensitive` paths. Every
+ * `configContracts.secretInputs.paths` lists the SecretInput paths (`$ref` to
+ * `#/$defs/secretInput`, secretInputPaths) — not every `x-sensitive` path: a
+ * SecretRef surface needs a schema node that accepts a SecretRef and engine
+ * code that resolves it, which the `*.headers` maps and `reminders.webhookUrl`
+ * do not have (E5-R24). Every
  * other manifest field is hand-maintained and passed through untouched.
  * scripts/gen-openclaw-config-schema.mjs writes the result (`--check` detects
  * drift).
  */
-import { sensitivePaths } from "../../engine/config/engine-config-schema.js";
+import { secretInputPaths } from "../../engine/config/engine-config-schema.js";
 
 /** Root keys of the engine schema that the OpenClaw manifest does not carry. */
 export const ENGINE_ONLY_ROOT_KEYS = Object.freeze(["$schema", "$id", "x-contract"]);
@@ -48,14 +52,14 @@ export function deriveOpenClawConfigSchema(engineSchema) {
 }
 
 /**
- * The manifest's `configContracts.secretInputs.paths`: every `x-sensitive`
- * path in schema order.
+ * The manifest's `configContracts.secretInputs.paths`: every SecretInput path
+ * (secretInputPaths) in schema order.
  *
  * @param {object} engineSchema
  * @returns {Array<{ path: string; expected: "string" }>}
  */
 export function deriveSecretInputPaths(engineSchema) {
-  return sensitivePaths(engineSchema).map((path) => ({ path, expected: "string" }));
+  return secretInputPaths(engineSchema).map((path) => ({ path, expected: "string" }));
 }
 
 /**

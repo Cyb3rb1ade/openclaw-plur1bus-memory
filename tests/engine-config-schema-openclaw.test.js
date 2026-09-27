@@ -8,7 +8,10 @@
  * exactly as the pre-E5 manifest did: the last test compares it with the manifest
  * at 72b6697f (the E5 base) after stripping only descriptions and annotation
  * keywords, and checks that every other manifest field is unchanged. The one
- * allowed schema addition is runtime.lancedbCompaction (E5 Task 6).
+ * allowed schema addition is runtime.lancedbCompaction (E5 Task 6); the one
+ * allowed change elsewhere is five new sensitive uiHints (owner ruling on
+ * E5-R24: the four `*.headers` maps and reminders.webhookUrl are masked, but
+ * secretInputs keeps its eight paths).
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +27,7 @@ import {
   deriveOpenClawConfigSchema,
   deriveSecretInputPaths,
 } from "../adapter/openclaw/config-schema.js";
-import { loadEngineConfigSchema, readAtOf, sensitivePaths } from "../engine/config/engine-config-schema.js";
+import { loadEngineConfigSchema, readAtOf, secretInputPaths, sensitivePaths } from "../engine/config/engine-config-schema.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -35,7 +38,7 @@ const PRE_E5_COMMIT = "72b6697f";
 const readManifest = (file = MANIFEST_FILE) => JSON.parse(readFileSync(file, "utf8"));
 const runGenerator = (args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd: REPO_ROOT, encoding: "utf8" });
 
-const SENSITIVE = [
+const SECRET_INPUTS = [
   "embedding.apiKey",
   "embedding.fallback.apiKey",
   "reranker.apiKey",
@@ -44,6 +47,14 @@ const SENSITIVE = [
   "skillMiner.apiKey",
   "criticalPush.apiKey",
   "emotion.t3.apiKey",
+];
+// x-sensitive but not a secret input (E5-R24 owner ruling): masked, plain values only.
+const SENSITIVE_PLAIN = [
+  "reminders.webhookUrl",
+  "merging.headers",
+  "schicht15.headers",
+  "skillMiner.headers",
+  "criticalPush.headers",
 ];
 
 /** Deep copy without `description` and the engine-only keywords, in every object node. */
@@ -70,11 +81,17 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     assert.equal(Object.keys(manifest.configSchema.properties).length, 55);
   });
 
-  it("secretInputs follow x-sensitive", () => {
+  it("secretInputs follow the $ref secretInput nodes, not every x-sensitive path", () => {
     const schema = loadEngineConfigSchema();
     const paths = readManifest().configContracts.secretInputs.paths;
     assert.deepStrictEqual(paths, deriveSecretInputPaths(schema));
-    assert.deepStrictEqual(paths, SENSITIVE.map((path) => ({ path, expected: "string" })));
+    assert.deepStrictEqual(paths, SECRET_INPUTS.map((path) => ({ path, expected: "string" })));
+    assert.deepStrictEqual(paths.map((e) => e.path), secretInputPaths(schema));
+    const declared = new Set(paths.map((e) => e.path));
+    for (const path of SENSITIVE_PLAIN) {
+      assert.ok(sensitivePaths(schema).includes(path), `${path} is x-sensitive`);
+      assert.ok(!declared.has(path) && !declared.has(`${path}.*`), `${path} must not be a SecretRef surface`);
+    }
   });
 
   it("uiHints sensitive flags agree with x-sensitive", () => {
@@ -141,8 +158,19 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     assert.deepStrictEqual(Object.keys(after.configSchema.properties), Object.keys(before.configSchema.properties));
 
     assert.deepStrictEqual(Object.keys(after), Object.keys(before));
+    // Allow-list of uiHints additions since 72b6697f (E5-R24 owner ruling):
+    // exactly the five plain-only sensitive paths, each sensitive and advanced.
+    const afterHints = structuredClone(after.uiHints);
+    for (const path of SENSITIVE_PLAIN) {
+      assert.ok(!Object.hasOwn(before.uiHints, path), `${path} was not hinted before`);
+      assert.equal(afterHints[path]?.sensitive, true, path);
+      assert.equal(afterHints[path]?.advanced, true, path);
+      delete afterHints[path];
+    }
+    assert.deepStrictEqual(afterHints, before.uiHints);
+    assert.deepStrictEqual(Object.keys(afterHints), Object.keys(before.uiHints));
     for (const key of Object.keys(before)) {
-      if (key === "configSchema") continue;
+      if (key === "configSchema" || key === "uiHints") continue;
       assert.deepStrictEqual(after[key], before[key], `manifest field ${key} changed`);
     }
   });

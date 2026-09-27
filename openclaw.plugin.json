@@ -96,6 +96,12 @@
       "advanced": true,
       "help": "Credential for the configured fallback embedding provider."
     },
+    "reminders.webhookUrl": {
+      "label": "Reminder Webhook URL",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Webhook for reminder delivery; may carry a token. Plain value only, no SecretRef."
+    },
     "reranker.apiKey": {
       "label": "Reranker API Key",
       "sensitive": true,
@@ -108,11 +114,23 @@
       "advanced": true,
       "help": "Optional feature-local model credential."
     },
+    "merging.headers": {
+      "label": "Merging Headers",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Direct-transport HTTP headers (for example Authorization); masked as a whole. Plain values only, no SecretRef."
+    },
     "schicht15.apiKey": {
       "label": "Knowledge Promotion API Key",
       "sensitive": true,
       "advanced": true,
       "help": "Optional feature-local model credential."
+    },
+    "schicht15.headers": {
+      "label": "Knowledge Promotion Headers",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Direct-transport HTTP headers (for example Authorization); masked as a whole. Plain values only, no SecretRef."
     },
     "skillMiner.apiKey": {
       "label": "Skill Miner API Key",
@@ -120,11 +138,23 @@
       "advanced": true,
       "help": "Optional feature-local model credential used with Skill Workshop."
     },
+    "skillMiner.headers": {
+      "label": "Skill Miner Headers",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Direct-transport HTTP headers (for example Authorization); masked as a whole. Plain values only, no SecretRef."
+    },
     "criticalPush.apiKey": {
       "label": "Critical Push API Key",
       "sensitive": true,
       "advanced": true,
       "help": "Optional feature-local model credential."
+    },
+    "criticalPush.headers": {
+      "label": "Critical Push Headers",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Direct-transport HTTP headers (for example Authorization); masked as a whole. Plain values only, no SecretRef."
     },
     "emotion.t3.apiKey": {
       "label": "Emotion Tier 3 API Key",
