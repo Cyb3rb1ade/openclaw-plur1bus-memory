@@ -237,7 +237,7 @@
       "default": "de",
       "readAt": "construction",
       "x-tier": "advanced",
-      "description": "Language code for engine-generated text such as reflections and user-facing notices."
+      "description": "Language code for engine-generated text such as command replies and the persona-voice seed."
     },
     "timezone": {
       "type": [
@@ -363,7 +363,7 @@
       },
       "readAt": "construction",
       "x-tier": "advanced",
-      "description": "Dream narratives written into the host's dream page, with their schedule, time zone and narrative options."
+      "description": "Dreaming settings: enabled, frequency and timezone belong to the host's own managed dreaming and are not read by the engine (keep enabled off so the engine's narratives author the dream diary); narrative holds the engine's dream-narrative diary options."
     },
     "reminders": {
       "type": "object",
@@ -571,7 +571,7 @@
     "captureChunking": {
       "type": "boolean",
       "default": true,
-      "description": "Splits a captured message that contains several independent statements into separate memories with their own vectors, at structure (lists, headings, paragraphs) and, for long running text, at sentence boundaries.",
+      "description": "Splits a captured message that contains several independent statements into separate memories with their own vectors, at structure (lists, headings, paragraphs) and, for long running text, at sentence boundaries; set it to false if store growth is a concern, because every extra row is processed again by the hourly emotion job, the importance job and cleanup.",
       "readAt": "construction",
       "x-tier": "advanced"
     },
@@ -777,7 +777,7 @@
       "default": 150,
       "readAt": "construction",
       "x-tier": "advanced",
-      "description": "Maximum number of words in the fallback summary generated for a recalled memory that has no stored summary."
+      "description": "Maximum number of words in the summary generated for a memory when it is captured, stored or merged, and for a recalled memory that lacks one."
     },
     "reranker": {
       "type": "object",
@@ -1224,7 +1224,7 @@
       },
       "readAt": "construction",
       "x-tier": "advanced",
-      "description": "Garbage collection, which removes memories a retention policy no longer keeps, bounded by database size, memory count and a minimum memory strength."
+      "description": "Garbage collection, which archives (soft-deletes) memories a retention policy no longer keeps, bounded by database size, memory count and a minimum memory strength."
     },
     "recall": {
       "type": "object",
