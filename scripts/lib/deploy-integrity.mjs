@@ -45,6 +45,7 @@ export const DEPLOY_FILES = [
   "engine/commands/plur1bus-command.js",
   "engine/config/engine-config-schema.js",
   "engine/config/engine-config.schema.json",
+  "engine/config/live-config.js",
   "engine/create-engine.js",
   "engine/events.js",
   "engine/identity/principal.js",

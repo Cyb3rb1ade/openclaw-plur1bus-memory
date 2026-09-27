@@ -53,7 +53,8 @@ import { findProposalWorkspace } from "../lib/telegram-commands/skill-commands.j
 import { readProposals as readSkillProposals } from "../lib/jobs/skill-miner/proposal-writer.js";
 import { collectSkillWorkshopProposals } from "../lib/setup/skill-workshop-dashboard.js";
 import { pickTone, readSoulToneCached, resolveLocale, t } from "../lib/i18n.js";
-import { PLUGIN_KEY, detectPendingFeatures, isApplyBlocked, reportDormantFeature } from "../lib/setup/feature-profiles.js";
+import { readLiveConfigValue } from "./config/live-config.js";
+import { detectPendingFeatures, isApplyBlocked, reportDormantFeature } from "../lib/setup/feature-profiles.js";
 import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "../lib/setup/config-contract.js";
 import { checkAccess } from "../lib/acl-middleware.js";
 import { buildMemoryAccountTopology, buildMemoryWorkspaceAliases, createHostIncognitoSessionClassifier, createHostRoutingLoader, describePrimaryAgentIds, describeUserPoolLabels, describeWorkspacePoolLabels, getSharedMemoryTurnRouteRegistry, normalizeWorkspaceTarget, resolveMemoryRequestContext, resolveToolMemoryRequestContext, workspacePoolKey } from "../lib/memory-request-context.js";
@@ -1709,11 +1710,8 @@ export function createEngine(host, config, testOptions = {}) {
     if (operationError) throw operationError;
     return result;
   };
-  const readConfiguredReembeddingSelection = () => {
-    const current = host.runtime?.config?.current?.() || host.config();
-    const currentReembedding = current?.plugins?.entries?.[PLUGIN_KEY]?.config?.reembedding;
-    return Object.freeze({ generation: currentReembedding?.activeGeneration ?? null });
-  };
+  const readConfiguredReembeddingSelection = () =>
+    Object.freeze({ generation: readLiveConfigValue(host, "reembedding.activeGeneration") ?? null });
   const runTargetGenerationRuntimeProbe = async (input) => {
     const provider = await createTargetEmbeddingProvider(input);
     const probe = createGenerationRuntimeProbe({
