@@ -572,9 +572,10 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
 });
 
 test("verified auto-recall tickets and /memory compose authorized shared pools", async (t) => {
-  // Shared pool reads route through fd-backed directory capabilities; platforms
-  // without a stat-verifiable fd alias (e.g. darwin, see lib/directory-capability.js)
-  // fail closed and disable shared reads, so the composed pools stay empty there.
+  // This case exercises shared pool reads over fd-backed directory
+  // capabilities (Linux). darwin and win32 read shared pools through
+  // verified-path mode since E4.2 (ADR 0001); covering them here is a
+  // follow-up, so the case still skips without fd aliases.
   if (!stableDirectoryCapabilitiesSupported()) {
     t.skip("stable directory capabilities are unavailable on this platform; shared pool reads are disabled");
     return;

@@ -729,6 +729,9 @@ What is checked, and when:
   sticky. A symlink already in the configured base path (e.g. macOS
   `/var -> /private/var`) is resolved once by `realpathSync.native` and the
   policy then applies to the resolved chain (ruling E4-R10).
+- **From the first write lease on** (read-only use never runs these two
+  checks — on POSIX every walked segment still passes the ancestor policy,
+  on Windows a read-only pool checks reparse points only):
 - **First write lease per pool, before the root is created**: the base must
   belong to the current user (POSIX owner = uid and `(mode & 0o022) ===
   0`, so a sticky world-writable base is refused too; win32 owner SID = user
@@ -744,12 +747,21 @@ What is checked, and when:
 - **Every LanceDB operation**: the pool's path guard (`assertSharedRoot`)
   re-walks the shared root's full canonical path from `/` (`lstat` + `open`
   + `fstat` per segment on POSIX, `lstat` on Windows, plus a realpath) and
-  runs two or three `childMatches` (shared root, kind segment, agent
-  directory — each re-opens that child); then `MemoryDB` calls `assertOpen()`
+  `childMatches` re-opens each child; then `MemoryDB` calls `assertOpen()`
   on the held directory (`lstat` identity, plus the POSIX anchor descriptor).
+  The guard is reached several times per step (`AgentDbPool._assertBasePath`
+  twice, `MemoryDB` via `_assertSecureAgentCapability`, the read route's
+  key-path walk, `_openBase`/`_openSharedRoot`).
 - **After every lease** (awaited `finally` in `_lease`): one more full walk
   re-verifies the root, also when the callback threw (the identity error
   then replaces the callback's error) and on read leases.
+- **Measured POSIX cost** (final review, steady state; one "walk" = one full
+  `openVerifiedPathDirectory` from `/`): about 6 walks per LanceDB
+  operation, about 15 per empty write lease (21 with one `store`), 27 for a
+  read lease with one `getById` (66 on the first read lease). One walk at
+  path depth 8 costs about 97 µs on Linux, so a shared read lease spends
+  roughly 2.6 ms verifying paths — more on macOS. Accepted (E4-R16);
+  de-duplicating the guard is a possible follow-up.
 - **Cost on Windows**: the first write lease per pool runs `icacls` (when it
   created the root) and two PowerShell ACL reads (root and base). All are
   synchronous `execFileSync` calls (typically 0.3-2 s, capped at 30 s each)
@@ -760,7 +772,10 @@ A failure **taints** the pool until restart: `support()` answers `{
 supported: false, mode: "verified-path", reason }` with the error's reason
 (`unsafe-root`, `acl-tool-unavailable`; a moved identity or a failed
 after-lease check is `identity-changed`; an error without a reason, such as
-`ENOSYS` for missing `O_NOFOLLOW`, counts as `unsafe-root` — fail-closed). The
+`ENOSYS` for missing `O_NOFOLLOW`, counts as `unsafe-root` — fail-closed; so
+does any reason outside that set, and `EACCES`/`EPERM`). **Transient resource
+errors** (`EMFILE`, `ENFILE`, `EIO`, `EAGAIN`, `EBUSY`, `ENOMEM`) do not taint:
+the call rejects (the caller sees `storage`) and the next lease retries. The
 call that hit the failure rejects with its own (log-safe) error, which
 `Engine.memory` maps to `storage`; later shares and accepts answer
 `unsupported`, later write leases throw `SHARED_MEMORY_UNSUPPORTED` with the
@@ -777,7 +792,9 @@ or writes anything.
 `lstat` and LanceDB's own open remains by construction and is exploitable
 only by the current user, root or Administrators; Windows ancestors above
 the base are checked for reparse points only, and of the base itself only
-the owner SID is checked — a foreign Allow ACE with `FILE_DELETE_CHILD` or an
+the owner SID is checked, and a read-only pool checks no ACL at all until the
+first write lease (a root planted under such a base would be read into
+recall until then) — a foreign Allow ACE with `FILE_DELETE_CHILD` or an
 inheritable foreign ACE on the base is not detected (the full base ACE
 policy is not implemented); a umask of 002 makes engine-created directories
 group-writable, which the walk refuses; network and virtual
@@ -793,6 +810,17 @@ answers `unsafe-root`.
 - `unsafe-root` after the engine created the directories itself: the process
   runs with umask 002, so `mkdirSync` made them group-writable (`0775`). Use
   umask 022, or `chmod g-w` the base and its engine-created parents.
+- `unsafe-root` on a macOS external volume: volumes mounted with "Ignore
+  ownership on this volume" report every file as owned by uid 99, which the
+  walk refuses as a foreign owner. Keep the base on the system volume, or
+  untick that option in the volume's Get Info.
+- `unsafe-root` on Windows after a crash during the first share: the root was
+  created but `icacls` never ran, so it still carries inherited ACEs (e.g.
+  Users) and every start refuses it. Delete the empty `.plur1bus-shared` and
+  restart.
+- `unsafe-root` right after `EACCES` in the log: a directory on the path was
+  unreadable; `EACCES`/`EPERM` taint like a policy failure. Transient
+  resource errors (`EMFILE`, `EIO`, …) never taint — they fail only that call.
 - `unsafe-root` on macOS: a directory on the path is group/other-writable or
   owned by someone else, or `.plur1bus-shared` is not `0700`. Fix the mode
   (`chmod 700 <base>/.plur1bus-shared`, `chmod go-w <base>`) and restart.

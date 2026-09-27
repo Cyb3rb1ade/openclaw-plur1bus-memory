@@ -540,6 +540,42 @@ describe("VerifiedPathDirectory (fix round 1)", () => {
   });
 });
 
+describe("readDirectoryAcl: Windows PowerShell 5.1 ConvertTo-Json shapes (E4.2 final review)", () => {
+  const read = (output) => readDirectoryAcl("C:\\synthetic\\dir", { execFile: () => output });
+  it("unwraps an ETS array wrapper {value, Count}", () => {
+    const aces = [{ sid: USER_SID, type: "Allow" }, { sid: SYSTEM_SID, type: "Allow" }];
+    assert.deepEqual(
+      read(JSON.stringify({ ownerSid: USER_SID, userSid: USER_SID, aces: { value: aces, Count: 2 } })),
+      { ownerSid: USER_SID, userSid: USER_SID, aces },
+    );
+    assert.deepEqual(
+      read(JSON.stringify({ ownerSid: USER_SID, userSid: USER_SID, aces: { value: [], Count: 0 } })).aces,
+      [],
+    );
+  });
+  it("accepts a single ACE emitted as an object", () => {
+    assert.deepEqual(
+      read(`\uFEFF${JSON.stringify({ ownerSid: USER_SID, userSid: USER_SID, aces: { sid: USER_SID, type: "Allow" } })}\r\n`).aces,
+      [{ sid: USER_SID, type: "Allow" }],
+    );
+  });
+  it("still refuses malformed wrappers and ACE lists", () => {
+    for (const aces of [
+      { value: [{ sid: USER_SID, type: "Allow" }], Count: 2 },
+      { value: [{ sid: "Everyone", type: "Allow" }], Count: 1 },
+      { value: "S-1-5-18", Count: 1 },
+      null,
+      "S-1-5-18",
+    ]) {
+      assert.throws(
+        () => read(JSON.stringify({ ownerSid: USER_SID, userSid: USER_SID, aces })),
+        { reason: "acl-tool-unavailable" },
+        JSON.stringify(aces),
+      );
+    }
+  });
+});
+
 describe("VerifiedPathDirectory on real Windows (E4 Task 10)", () => {
   it("icacls restricts a real directory, PowerShell reads its ACL, identity is pinned", { skip: process.platform !== "win32" }, () => {
     const base = privateBase("e4-vp-realwin-");

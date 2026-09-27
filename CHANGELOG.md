@@ -576,15 +576,18 @@ Contract-Version **1.8.0**. Details in `docs/engine-api.md`, Abschnitt
   Wurzelverzeichnis an per `lstat` geprüft (kein Symlink, keine Junction,
   POSIX: Eigentümer root oder der aktuelle Benutzer, nicht für andere
   beschreibbar), `.plur1bus-shared` wird beim Anlegen auf den Benutzer
-  beschränkt (`0700` bzw. `icacls`) und muss danach benutzereigen und privat
-  sein, die Identität jedes gehaltenen Verzeichnisses wird vor jeder
+  beschränkt (`0700` bzw. `icacls`) und muss ab der ersten schreibenden Lease
+  benutzereigen und privat sein (ebenso muss die Basis dem Benutzer gehören;
+  eine rein lesende Nutzung prüft nur Pfad und Identität), die Identität jedes gehaltenen Verzeichnisses wird vor jeder
   LanceDB-Operation und nach jeder Lease erneut geprüft. Schlägt eine Prüfung
   fehl, sperrt sich der Pool bis zum Neustart: `status().sharedMemory` meldet
   `{ supported: false, mode: "verified-path", reason }` (`unsafe-root`,
   `acl-tool-unavailable`, `identity-changed`), weitere Freigaben antworten
-  mit `unsupported`, geteilte Lesezugriffe bleiben leer. Ein bestehendes
-  `.plur1bus-shared` mit lockereren Rechten wird abgelehnt, nicht still
-  verschärft. Linux bleibt unverändert beim `fd-capability`-Modus; die
+  mit `unsupported` (`/share` sagt dann, dass eine Sicherheitsprüfung
+  fehlgeschlagen ist und ein Neustart nötig ist), geteilte Lesezugriffe
+  bleiben leer. Vorübergehende Ressourcenfehler (`EMFILE`, `EIO`, `EAGAIN` …)
+  sperren nicht. Ein bestehendes `.plur1bus-shared` mit lockereren Rechten
+  wird ab der ersten schreibenden Lease abgelehnt, nicht still verschärft. Linux bleibt unverändert beim `fd-capability`-Modus; die
   Legacy-Shared-Migration und benannte Namespaces bleiben Linux-only. Der
   Contract bleibt 1.8.0. Neuer CI-Job `windows-verified-path.yml`
   (windows-latest), der macOS-Portabilitäts-Job führt die neuen Tests mit.

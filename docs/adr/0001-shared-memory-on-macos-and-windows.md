@@ -105,6 +105,8 @@ around every LanceDB operation:
 2. **Ancestors.** POSIX: owner `root` or the current uid, and not group- or
    other-writable unless the sticky bit is set (so `/tmp`-style parents pass,
    world-writable non-sticky parents do not). Windows: no reparse point.
+   Steps 3 and 4 are checked from the first write lease on (as implemented);
+   read-only use relies on steps 1, 2 and 5.
 3. **The shared base.** Owner = current user; POSIX `(mode & 0o022) === 0`.
 4. **The shared root `.plur1bus-shared`.** Created `0o700`; owner = current
    user; POSIX `(mode & 0o077) === 0`. Windows: owner = current user SID and
@@ -143,11 +145,21 @@ into a fail-closed taint instead of a silent redirect.
 **Cost** (as implemented, ruling E4-R16). Opening a directory walks its
 canonical path from the filesystem root: `lstat` + `open` + `fstat` per
 segment (POSIX; `lstat` only on Windows) plus one `realpathSync.native`.
-Each LanceDB operation runs the pool's path guard, which re-walks the shared
-root's full path from `/` that way, plus two or three `childMatches` (shared
-root in the base, kind segment, agent directory — each a re-open of that one
-child), and then `assertOpen()` on the held directory; each lease adds one
-more full walk after the callback. The first write lease per pool also runs
+The pool's path guard (`assertSharedRoot`) is reached several times per
+step — `AgentDbPool._assertBasePath` calls it twice, `MemoryDB`'s trusted-path
+check reaches it through `_assertSecureAgentCapability`, the read route adds
+a key-path walk, `_openBase`/`_openSharedRoot` walk too, and every
+`childMatches` re-opens its child. Measured on POSIX in the final review
+(steady state, after the first lease; a "walk" is one full
+`openVerifiedPathDirectory` from `/`): about **6 walks per LanceDB
+operation**, about **15 per empty write lease** (21 with one `store`, +6 per
+further operation), **27 for a read lease with one `getById`** (66 on the
+first read lease, while the read pool is built). One walk at path depth 8
+costs about **97 µs** on the Linux review box, so a shared read lease spends
+roughly 2.6 ms on path verification there — more on macOS (slower syscalls,
+deeper real base paths), and a recall that reads both shared pools pays it
+twice. Accepted for now (E4-R16); de-duplicating the path guard or caching
+the base walk per lease is a possible follow-up. The first write lease per pool also runs
 `icacls` (only when it created the root) and two synchronous PowerShell ACL
 reads (root and base, `execFileSync`, up to 30 s each) on Windows, which
 block the event loop while they run. No new dependency, no build toolchain,
@@ -214,10 +226,17 @@ Had the owner declined (kept for the record):
   rename `.plur1bus-shared` away (a fail-closed `identity-changed` taint, i.e.
   denial of service) or create entries in a newly made root before `icacls
   /inheritance:r` runs. Default bases under the user profile carry no such
-  ACEs; the full base ACE policy is not implemented.
+  ACEs; the full base ACE policy is not implemented. Steps 3 and 4 run from
+  the first write lease on: a read-only pool checks no ACL at all on Windows,
+  so a root planted under such a base would be read into recall until the
+  first write lease refuses it.
 - **Windows first write lease blocks the event loop**: `icacls` and the
   PowerShell ACL reads are synchronous `execFileSync` calls (typically
   0.3-2 s, capped at 30 s each), once per pool.
+- **Transient errors**: `EMFILE`, `ENFILE`, `EIO`, `EAGAIN`, `EBUSY` and
+  `ENOMEM` during the checks fail only that call and do not taint; `EACCES`
+  and `EPERM` taint as `unsafe-root`. Any reason outside the 1.8.0 union is
+  mapped to `unsafe-root`.
 - **umask 002**: directories the host or engine creates with a group-writable
   umask are `0775`; the ancestor walk and the base check then refuse them
   (`unsafe-root`). Use umask 022 or `chmod g-w` the directories.

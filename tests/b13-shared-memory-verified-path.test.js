@@ -10,6 +10,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -21,6 +22,7 @@ import {
   statSync,
   symlinkSync,
 } from "node:fs";
+import { userInfo } from "node:os";
 import { join, sep } from "node:path";
 
 import {
@@ -259,6 +261,57 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
     }
   });
 
+  it("taint reasons are whitelisted to the 1.8.0 union", async () => {
+    const pool = verifiedPool(makeTempDir("b13-vp-whitelist-"));
+    try {
+      pool._openSharedRoot = () => {
+        throw Object.assign(new Error("synthetic foreign reason"), { reason: "not-a-filesystem-path" });
+      };
+      await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), /synthetic foreign reason/);
+      assert.deepEqual(pool.support(), { supported: false, mode: "verified-path", reason: "unsafe-root" });
+    } finally {
+      await pool.shutdown();
+    }
+  });
+
+  it("transient resource errors are rethrown without tainting; EACCES still taints unsafe-root", async () => {
+    for (const code of ["EMFILE", "ENFILE", "EIO", "EAGAIN"]) {
+      const pool = verifiedPool(makeTempDir("b13-vp-transient-"));
+      try {
+        const real = pool._openSharedRoot.bind(pool);
+        let fail = true;
+        pool._openSharedRoot = (options) => {
+          if (fail) { fail = false; throw Object.assign(new Error(`synthetic ${code}`), { code }); }
+          return real(options);
+        };
+        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), { code });
+        assert.deepEqual(pool.support(), { supported: true, mode: "verified-path" }, code);
+        if (process.platform !== "win32") {
+          await pool.withWorkspaceDb(workspaceA, async (db) => assert.ok(db));
+          // The same during the after-lease check.
+          const assertRoot = pool.assertSharedRoot.bind(pool);
+          let armed = false;
+          pool.assertSharedRoot = () => {
+            if (armed) { armed = false; throw Object.assign(new Error(`synthetic ${code}`), { code }); }
+            return assertRoot();
+          };
+          await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => { armed = true; }), { code });
+          assert.deepEqual(pool.support(), { supported: true, mode: "verified-path" }, `${code} after lease`);
+        }
+      } finally {
+        await pool.shutdown();
+      }
+    }
+    const denied = verifiedPool(makeTempDir("b13-vp-eacces-"));
+    try {
+      denied._openSharedRoot = () => { throw Object.assign(new Error("synthetic EACCES"), { code: "EACCES" }); };
+      await assert.rejects(denied.withWorkspaceDb(workspaceA, async () => {}), { code: "EACCES" });
+      assert.deepEqual(denied.support(), { supported: false, mode: "verified-path", reason: "unsafe-root" });
+    } finally {
+      await denied.shutdown();
+    }
+  });
+
   it("the legacy shared migration stays fd-only and answers unsupported in verified-path mode", async () => {
     const pool = new SharedMemoryPool(makeTempDir("b13-vp-mig-"), DIM, AgentDbPool, null, { mode: "verified-path" });
     try {
@@ -318,6 +371,38 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
       return;
     }
     assert.equal(defaultSharedMemoryMode(), process.platform === "darwin" || process.platform === "win32" ? "verified-path" : "unavailable");
+  });
+
+  it("win32: a user-owned, owner-only base and root succeed even on an elevated runner", { skip: process.platform !== "win32" }, async () => {
+    // GitHub's windows-latest runs elevated, so new directories are owned by
+    // Administrators and the default path is refused (E4-R12). Handing the
+    // base and root to the user makes the success path reachable there:
+    // icacls on the pool root is skipped (createdRoot is false), the owner
+    // checks pass, LanceDB runs through a VerifiedPathDirectory and the
+    // after-lease check runs.
+    const base = realpathSync.native(makeTempDir("b13-vp-win-ok-"));
+    const root = join(base, SHARED);
+    mkdirSync(root);
+    const user = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${userInfo().username}` : userInfo().username;
+    const icacls = (args) => execFileSync("icacls", args, { stdio: "ignore", windowsHide: true });
+    icacls([base, "/setowner", user]);
+    icacls([root, "/setowner", user]);
+    icacls([root, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)(F)`]);
+    const rootAcl = readDirectoryAcl(root);
+    assert.equal(rootAcl.ownerSid, rootAcl.userSid, "the root was handed to the current user");
+    assert.equal(readDirectoryAcl(base).ownerSid, rootAcl.userSid, "the base was handed to the current user");
+
+    const pool = new SharedMemoryPool(base, DIM, AgentDbPool, recordingLogger());
+    try {
+      assert.equal(pool.mode, "verified-path");
+      const stored = row("A synthetic fact on a user-owned Windows root.");
+      await pool.withWorkspaceDb(workspaceA, async (db) => { await db.store(stored); });
+      const read = await pool.withWorkspaceReadDb(workspaceA, (db) => db.getById(stored.id));
+      assert.equal(read?.text, stored.text);
+      assert.deepEqual(pool.support(), { supported: true, mode: "verified-path" });
+    } finally {
+      await pool.shutdown();
+    }
   });
 
   it("win32: the real ACL path restricts the root or refuses it (E4-R12)", { skip: process.platform !== "win32" }, async () => {

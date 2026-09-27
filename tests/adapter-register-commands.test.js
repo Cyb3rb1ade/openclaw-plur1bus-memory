@@ -294,6 +294,17 @@ describe("E1 Task 8: slash commands run their final effect through Engine.memory
     const reply = await run("share", id);
     assert.equal(reply.text, t("plur1bus.share_unsupported", { lang: "en" }));
   });
+
+  it("/share on a tainted verified-path pool says a safety check failed and a restart is needed (E4.2)", async () => {
+    for (const reason of ["unsafe-root", "acl-tool-unavailable", "identity-changed"]) {
+      const { run, seed } = await e1Harness({
+        shareOverride: async () => { throw memoryOpError("unsupported", "shared memory is not supported on this platform", { capability: "shared-memory", reason }); },
+      });
+      const id = await seed("The team standup moved to half past nine.", "standup");
+      const reply = await run("share", id);
+      assert.equal(reply.text, t("plur1bus.share_safety_check_failed", { lang: "en" }), reason);
+    }
+  });
   it("the /plur1bus router passes its own AgentContext through: a subagent's forget confirm is refused (E1-R12 M2) and answers forget_failed, not the whitelist hint (M1)", async () => {
     const { calls, run, seed, rawCard, internals, warnings } = await e1Harness();
     const id = await seed("The backup drive is labelled Orion.", "backup");
