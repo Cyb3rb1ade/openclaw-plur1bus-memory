@@ -36,6 +36,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/turn-principal.js",
   "adapter/openclaw/host-probes.js",
   "adapter/openclaw/plugin.js",
+  "adapter/openclaw/config-schema.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
@@ -422,6 +423,7 @@ export const DEPLOY_FILES = [
   "scripts/run-semantic-discover-once.mjs",
   "scripts/run-semantic-link-index-phase43c.mjs",
   "scripts/typecheck.mjs",
+  "scripts/gen-openclaw-config-schema.mjs",
   "scripts/verify-plugin-deploy.mjs",
   "scripts/verify-workspace-writer.mjs",
   "scripts/lib/deploy-integrity.mjs",

@@ -97,6 +97,7 @@ const ADAPTER_PATHS = Object.freeze({
   turnPrincipal: "adapter/openclaw/turn-principal.js",
   hostProbes: "adapter/openclaw/host-probes.js",
   plugin: "adapter/openclaw/plugin.js",
+  configSchema: "adapter/openclaw/config-schema.js",
 });
 
 function listJsFiles(relativeDir) {
