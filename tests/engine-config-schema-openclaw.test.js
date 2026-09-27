@@ -7,7 +7,8 @@
  * The owner's VPS runs this plugin, so the generated configSchema must validate
  * exactly as the pre-E5 manifest did: the last test compares it with the manifest
  * at 72b6697f (the E5 base) after stripping only descriptions and annotation
- * keywords, and checks that every other manifest field is unchanged.
+ * keywords, and checks that every other manifest field is unchanged. The one
+ * allowed schema addition is runtime.lancedbCompaction (E5 Task 6).
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -130,8 +131,13 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     }
     const before = JSON.parse(git.stdout);
     const after = readManifest();
+    // Allow-list of schema additions since 72b6697f (E5-R25): exactly
+    // runtime.lancedbCompaction (E5 Task 6). Anything else must still match.
+    const afterSchema = structuredClone(after.configSchema);
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "lancedbCompaction"));
+    delete afterSchema.properties.runtime.properties.lancedbCompaction;
 
-    assert.deepStrictEqual(stripAnnotations(after.configSchema), stripAnnotations(before.configSchema));
+    assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
     assert.deepStrictEqual(Object.keys(after.configSchema.properties), Object.keys(before.configSchema.properties));
 
     assert.deepStrictEqual(Object.keys(after), Object.keys(before));

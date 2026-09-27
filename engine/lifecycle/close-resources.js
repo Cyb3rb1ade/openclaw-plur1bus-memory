@@ -26,6 +26,7 @@
  * @param {{shutdown: () => Promise<void>}|null} [options.reembeddingCoordinator]
  * @param {{beginCleanup: () => void, releaseModels: () => Promise<void>}|null} [options.localModelGeneration]
  * @param {{release: () => Promise<void>}|null} [options.neoWorker] The engine's neo worker lease; released after the pool shutdown.
+ * @param {{close: () => Promise<void>}|null} [options.fragmentCompactor] The LanceDB fragment compactor; closed (its running optimize awaited) before the db-adapter shutdown, because it optimizes through that adapter.
  * @returns {() => Promise<void>} The closer; the second and later calls return the first call's promise.
  */
 export function createResourceCloser({
@@ -44,6 +45,7 @@ export function createResourceCloser({
   reembeddingCoordinator = null,
   localModelGeneration = null,
   neoWorker = null,
+  fragmentCompactor = null,
 }) {
   let shutdownPromise = null;
   return function closeResources() {
@@ -95,6 +97,9 @@ export function createResourceCloser({
         localModelResources,
       ].filter(Boolean);
       const ordered = (async () => {
+        if (typeof fragmentCompactor?.close === "function") {
+          await cleanup("plur1bus-compaction: compactor close failed", () => fragmentCompactor.close());
+        }
         await cleanup("memory-lancedb-namespaced: adapter shutdown failed", () => memoryDbAdapter.shutdown());
         await cleanup("memory-lancedb-namespaced: pool shutdown failed", () => pool.shutdown());
         if (typeof neoWorker?.release === "function") {

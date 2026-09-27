@@ -860,6 +860,37 @@
           "eventLoopLagResolutionMs": {
             "type": "number",
             "default": 10
+          },
+          "lancedbCompaction": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Bounded LanceDB fragment compaction between consolidate-daily runs. enabled: false is the only off switch; dailyConsolidation.lancedbOptimize.enabled governs the nightly job only and does not disable this compaction.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "fragmentThreshold": {
+                "type": "integer",
+                "minimum": 8,
+                "default": 64
+              },
+              "checkEveryWrites": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 16
+              },
+              "checkIntervalMs": {
+                "type": "integer",
+                "minimum": 60000,
+                "default": 600000
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 10000,
+                "default": 60000
+              }
+            }
           }
         },
         "description": "Runtime limits and caches: recall and capture timeouts, concurrency and queue depths, background priority, the recall cache, the memory-pressure gate, the embedding cache, the LLM result cache and metrics timing."

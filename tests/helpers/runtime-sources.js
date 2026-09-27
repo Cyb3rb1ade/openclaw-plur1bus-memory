@@ -63,6 +63,7 @@ const ENGINE_PATHS = Object.freeze({
   commandHelpers: "engine/commands/command-helpers.js",
   constants: "engine/runtime/constants.js",
   controlHealth: "engine/store/control-health.js",
+  fragmentCompactor: "engine/store/fragment-compactor.js",
   debugLog: "engine/runtime/debug-log.js",
   envConfig: "engine/runtime/env-config.js",
   knowledgePending: "engine/knowledge/knowledge-pending.js",

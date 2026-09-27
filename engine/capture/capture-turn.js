@@ -151,6 +151,7 @@ export function createTurnCapture(ctx) {
     neoRoot,
     neoWorkerRuntime,
     neoWorkspaceAliases,
+    noteTableWrite = null,
     personaVoiceLlmCfg,
     pool,
     rememberNeoWorkspace,
@@ -674,6 +675,13 @@ export function createTurnCapture(ctx) {
 
         host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
         rowsSettled = true;
+        // E5 Task 6: every stored row is a new LanceDB fragment; the fragment
+        // compactor counts them and checks the table every few writes.
+        if (stored > 0 && typeof noteTableWrite === "function") {
+          for (let i = 0; i < stored; i++) {
+            try { noteTableWrite(agentId); } catch { /* best-effort */ }
+          }
+        }
         // An item whose preparation, embedding, dedup check or write failed
         // was not stored: the turn is incomplete, so a replay may retry it.
         const failedItems = textPrep.filter((p) => !p.ok).length + prepared.filter((p) => !p.ok).length

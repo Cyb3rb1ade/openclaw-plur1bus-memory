@@ -83,6 +83,7 @@ export const DEPLOY_FILES = [
   "engine/status/status-reporter.js",
   "engine/store/agent-db-pool.js",
   "engine/store/control-health.js",
+  "engine/store/fragment-compactor.js",
   "engine/store/lancedb-loader.js",
   "engine/store/memory-db.js",
   "engine/store/schema-version.js",

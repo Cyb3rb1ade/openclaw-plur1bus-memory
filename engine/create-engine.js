@@ -106,6 +106,8 @@ import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmError
 import { normalizeBoundedRecallInteger, resolveRuntimeRecallBudget, runMergedNamespaceRecall } from "./recall/namespace-recall.js";
 import { applyEpistemicStatusToLanceDb, waitForTimeoutSettlement } from "./store/memory-db.js";
 import { AgentDbPool } from "./store/agent-db-pool.js";
+import { createFragmentCompactor } from "./store/fragment-compactor.js";
+import { resolveLancedbOptimizePlan } from "../lib/lancedb-optimize.js";
 import { STORE_SCHEMA_VERSION, createStoreMigrator, writeStoreSchemaMarker } from "./store/schema-version.js";
 import { CONTROL_HEALTH_CACHE_TTL_MS, CONTROL_HEALTH_FAILED_RETRY_MS, CONTROL_HEALTH_MAX_PARTITIONS, CONTROL_HEALTH_REFRESH_INTERVAL_MS, createControlHealthRowInspector, listControlHealthPartitions } from "./store/control-health.js";
 import { KNOWLEDGE_LOCK_FILE, appendCurationLog, readKnowledgePendingSnapshot, removeKnowledgePending, trackKnowledgePending } from "./knowledge/knowledge-pending.js";
@@ -1478,6 +1480,23 @@ export function createEngine(host, config, testOptions = {}) {
     },
     logger: host.logger,
   });
+
+  // Bounded LanceDB fragment compaction between consolidate-daily runs
+  // (E5 Task 6). Capture notes every stored row through noteTableWrite; the
+  // compactor optimizes an agent's table once it reaches the fragment
+  // threshold. On by default for every host; runtime.lancedbCompaction
+  // .enabled: false is the only off switch. The optimize closure reads the
+  // adapter method at call time, so a test can wrap it.
+  const fragmentCompactor = createFragmentCompactor({
+    config: cfg.runtime?.lancedbCompaction,
+    fragmentCount: (agentId) => memoryDbAdapter.fragmentCount(agentId),
+    optimize: (agentId, opts) => memoryDbAdapter.optimizeTable(agentId, opts),
+    keepVersionsHours: resolveLancedbOptimizePlan(cfg.dailyConsolidation?.lancedbOptimize).keepVersionsHours,
+    logger: host.logger,
+  });
+  // Read through internals, so a testOptions.internals.fragmentCompactor
+  // override also receives the capture path's writes.
+  const noteTableWrite = (agentId) => internals.fragmentCompactor?.noteWrite?.(agentId);
 
   // Typed MemoryOps (contract 1.5.0, E1). One context instance is shared by
   // every MemoryOps member; it is also exposed on internals as memoryOpsContext.
@@ -2968,6 +2987,7 @@ export function createEngine(host, config, testOptions = {}) {
     reembeddingCoordinator,
     localModelGeneration,
     neoWorker: neoWorkerLease,
+    fragmentCompactor,
   });
   let closing = null;
   const closeEngine = (budgetMs) => {
@@ -3055,6 +3075,7 @@ export function createEngine(host, config, testOptions = {}) {
     findSafeDuplicateForValidity,
     flashbulbEncodingEnabled,
     forgetThreshold,
+    fragmentCompactor,
     gcEnabled,
     getMemoryTurnRoutes,
     getNeoStore,
@@ -3097,6 +3118,7 @@ export function createEngine(host, config, testOptions = {}) {
     neoWorkerRuntime,
     neoWorkspaceAliases,
     normalizedEmbeddingCfg,
+    noteTableWrite,
     obsidianBridgeCfg,
     obsidianBridgeEnabled,
     obsidianVaultsConfirmed,
@@ -3299,6 +3321,7 @@ export function createEngine(host, config, testOptions = {}) {
     "neoRoot",
     "neoWorkerRuntime",
     "neoWorkspaceAliases",
+    "noteTableWrite",
     "personaVoiceLlmCfg",
     "pool",
     "rememberNeoWorkspace",
