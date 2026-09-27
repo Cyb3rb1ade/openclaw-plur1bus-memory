@@ -96,6 +96,8 @@ export function createFragmentCompactor({
   /** agentId → { promise, force } of the check queued or running for it. */
   const inFlight = new Map();
   let chain = Promise.resolve();
+  /** Native optimize() runs that outlived their timeout; close() awaits them. */
+  const lingering = new Set();
   let closed = false;
   let closing = null;
 
@@ -137,6 +139,13 @@ export function createFragmentCompactor({
         quietConflicts: true,
       });
     } catch (err) {
+      // A timed-out optimize keeps running inside LanceDB (withTimeout leaves
+      // err.settlement pending); close() waits for it (fix round 1, I1).
+      if (err?.settlement && typeof err.settlement.then === "function") {
+        const settled = err.settlement.then(() => {}, () => {});
+        lingering.add(settled);
+        settled.then(() => lingering.delete(settled));
+      }
       result = { ok: false, reason: String(err?.message || err) };
     }
     if (result?.ok) {
@@ -145,8 +154,9 @@ export function createFragmentCompactor({
       return outcome(agentId, "compacted", null, started, fragmentsBefore, fragmentsAfter);
     }
     const reason = String(result?.reason || "unknown");
-    if (reason === "no-table" || result?.busy === true) {
-      return outcome(agentId, "skipped", result?.busy === true ? "busy" : "no-table", started, fragmentsBefore);
+    if (reason === "no-table" || reason === "shutdown" || result?.busy === true) {
+      const skipReason = result?.busy === true ? "busy" : reason === "shutdown" ? "closed" : "no-table";
+      return outcome(agentId, "skipped", skipReason, started, fragmentsBefore);
     }
     if (result?.conflict === true) {
       // Lost to concurrent writes on all attempts; the next check retries.
@@ -207,7 +217,7 @@ export function createFragmentCompactor({
     closed = true;
     if (timer !== null) timers.clearInterval(timer);
     timer = null;
-    closing = chain.then(() => {});
+    closing = chain.then(() => Promise.all([...lingering])).then(() => {});
     return closing;
   }
 

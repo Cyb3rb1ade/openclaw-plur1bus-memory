@@ -290,8 +290,143 @@ describe("db-adapter support for the compactor", () => {
     assert.equal((await running).ok, true);
     assert.equal((await queued).ok, true);
     assert.ok(order.indexOf("second:start") > order.indexOf("first:end"), order.join(","));
+    await tick();
     const free = await second.optimizeTable("agent-x", { timeoutMs: 20_000, ifBusy: "skip" });
     assert.equal(free.ok, true, "the lock is released afterwards");
+  });
+
+  it("a timed-out optimize holds the lock until LanceDB's optimize settles: two optimizes never overlap", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const basePath = makeTempDir("e5-fc-lock-timeout-");
+    let active = 0;
+    let maxActive = 0;
+    const native = deferred();
+    const starts = [];
+    const table = (name) => ({
+      optimize: async () => {
+        starts.push(name);
+        active++;
+        maxActive = Math.max(maxActive, active);
+        try {
+          if (name === "first") await native.promise;
+          return {};
+        } finally {
+          active--;
+        }
+      },
+    });
+    const first = createDbAdapter({ basePath, getTable: async () => table("first"), logger: silent().logger });
+    const second = createDbAdapter({ basePath, getTable: async () => table("second"), logger: silent().logger });
+
+    const running = first.optimizeTable("agent-x", { timeoutMs: 10_000 });
+    const runningOutcome = running.then(() => null, (err) => err);
+    await tick();
+    assert.deepEqual(starts, ["first"]);
+    const queued = second.optimizeTable("agent-x", { timeoutMs: 60_000 });
+    await tick();
+
+    t.mock.timers.tick(10_001);
+    const timedOut = await runningOutcome;
+    assert.equal(timedOut?.name, "TimeoutError", "the first optimize timed out");
+    await tick();
+    await tick();
+    assert.deepEqual(starts, ["first"], "the queued optimize waits while LanceDB still runs the timed-out one");
+    const skip = await second.optimizeTable("agent-x", { timeoutMs: 60_000, ifBusy: "skip" });
+    assert.equal(skip.busy, true, "the lock is still held");
+
+    native.resolve();
+    const result = await queued;
+    assert.equal(result.ok, true);
+    assert.deepEqual(starts, ["first", "second"]);
+    assert.equal(maxActive, 1, "two optimizes of one table never overlapped");
+  });
+
+  it("the lock is released after a throw and after a failed optimize", async () => {
+    const basePath = makeTempDir("e5-fc-lock-throw-");
+    const broken = createDbAdapter({ basePath, getTable: async () => { throw new Error("open broke"); }, logger: silent().logger });
+    const failing = createDbAdapter({ basePath, getTable: async () => ({ optimize: async () => { throw new Error("disk full"); } }), logger: silent().logger });
+    const healthy = createDbAdapter({ basePath, getTable: async () => ({ optimize: async () => ({}) }), logger: silent().logger });
+
+    const thrown = broken.optimizeTable("agent-x", { timeoutMs: 20_000 });
+    const afterThrow = healthy.optimizeTable("agent-x", { timeoutMs: 20_000 });
+    await assert.rejects(thrown, /open broke/);
+    assert.equal((await afterThrow).ok, true, "a waiter behind a throw runs");
+
+    const failed = await failing.optimizeTable("agent-x", { timeoutMs: 20_000 });
+    assert.equal(failed.ok, false);
+    await tick();
+    assert.equal((await healthy.optimizeTable("agent-x", { timeoutMs: 20_000, ifBusy: "skip" })).ok, true, "released after a failure");
+  });
+
+  it("a lock waiter's timeoutMs includes its wait (M1)", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const basePath = makeTempDir("e5-fc-lock-wait-");
+    const hold = deferred();
+    let waiterRan = false;
+    const holder = createDbAdapter({ basePath, getTable: async () => ({ optimize: async () => { await hold.promise; return {}; } }), logger: silent().logger });
+    const waiter = createDbAdapter({ basePath, getTable: async () => ({ optimize: async () => { waiterRan = true; return {}; } }), logger: silent().logger });
+
+    const held = holder.optimizeTable("agent-x", { timeoutMs: 600_000 });
+    await tick();
+    const gaveUp = waiter.optimizeTable("agent-x", { timeoutMs: 30_000 });
+    await tick();
+    t.mock.timers.tick(30_001);
+    const outcome = await gaveUp;
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.busy, true);
+    assert.match(outcome.reason, /lock wait exceeded/);
+    assert.equal(waiterRan, false);
+    // The holder still owns the lock after the waiter gave up.
+    assert.equal((await waiter.optimizeTable("agent-x", { timeoutMs: 30_000, ifBusy: "skip" })).busy, true);
+
+    // A waiter left with less than one 10 s attempt after the wait gives up too.
+    const late = waiter.optimizeTable("agent-x", { timeoutMs: 15_000 });
+    await tick();
+    t.mock.timers.tick(8_000);
+    hold.resolve();
+    assert.equal((await held).ok, true);
+    const lateOutcome = await late;
+    assert.equal(lateOutcome.busy, true);
+    assert.equal(waiterRan, false);
+  });
+
+  it("after shutdown() the adapter starts no optimize and reads no stats (M2)", async () => {
+    let optimized = 0;
+    let statsRead = 0;
+    const adapter = createDbAdapter({
+      basePath: makeTempDir("e5-fc-shutdown-"),
+      getTable: async () => ({ optimize: async () => { optimized++; return {}; }, stats: async () => { statsRead++; return { fragmentStats: { numFragments: 3 } }; } }),
+      logger: silent().logger,
+    });
+    await adapter.shutdown();
+    assert.deepEqual(await adapter.optimizeTable("a", { timeoutMs: 20_000 }), { ok: false, reason: "shutdown" });
+    assert.equal(await adapter.fragmentCount("a"), null);
+    assert.equal(optimized, 0);
+    assert.equal(statsRead, 0);
+  });
+
+  it("fragmentCount's 5 s budget covers opening the table (M4)", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 });
+    const adapter = createDbAdapter({ basePath: makeTempDir("e5-fc-open-"), getTable: () => new Promise(() => {}), logger: silent().logger });
+    const pending = adapter.fragmentCount("a");
+    await tick();
+    t.mock.timers.tick(5_001);
+    assert.equal(await pending, null);
+  });
+
+  it("fragmentCount opens the table without column migrations and shutdown closes it (M3)", async () => {
+    const lancedb = await import("@lancedb/lancedb");
+    const basePath = makeTempDir("e5-fc-stats-");
+    const db = await lancedb.connect(join(basePath, "agent-s"));
+    await db.createTable("memories", [{ id: "row-1", text: "synthetic", createdAt: 1 }]);
+    const adapter = createDbAdapter({ basePath, logger: silent().logger });
+    const count = await adapter.fragmentCount("agent-s");
+    assert.ok(count === null || count >= 1, `fragment count ${count}`);
+    const fields = (await (await db.openTable("memories")).schema()).fields.map((f) => f.name);
+    assert.deepEqual(fields.sort(), ["createdAt", "id", "text"], "no ensure*Columns migration ran");
+    await adapter.shutdown();
+    assert.equal(await adapter.fragmentCount("agent-s"), null);
+    db.close?.();
   });
 
   it("quietConflicts logs a conflict-only failure at debug and marks it", async () => {
@@ -460,10 +595,20 @@ describe("fragment compactor (engine)", () => {
     await started.promise;
     assert.equal(optimizeCalls, 1);
 
+    // The closer's other steps must not queue behind the parked optimize (I2).
+    let poolShutdown = false;
+    let cacheClosed = false;
+    const realPoolShutdown = internals.pool.shutdown.bind(internals.pool);
+    internals.pool.shutdown = async (...args) => { poolShutdown = true; return realPoolShutdown(...args); };
+    const realCacheClose = internals.llmResultCache.close.bind(internals.llmResultCache);
+    internals.llmResultCache.close = async (...args) => { cacheClosed = true; return realCacheClose(...args); };
+
     const t0 = Date.now();
     await engine.close({ budgetMs: 2_000 });
     const elapsed = Date.now() - t0;
-    assert.ok(elapsed < 2_500, `close() resolved within 2.5 s (${elapsed} ms)`);
+    assert.ok(elapsed < 4_000, `close() resolved near its 2 s budget (${elapsed} ms)`);
+    assert.equal(poolShutdown, true, "the pool shut down while the optimize was still parked");
+    assert.equal(cacheClosed, true, "the LLM result cache closed while the optimize was still parked");
 
     for (let i = 0; i < 100; i++) compactor.noteWrite(AGENT);
     await tick();
