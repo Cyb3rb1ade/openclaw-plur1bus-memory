@@ -12,6 +12,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
+  constants,
   lstatSync,
   mkdirSync,
   realpathSync,
@@ -28,7 +30,7 @@ import {
   assertOwnerOnlyDirectory,
   openVerifiedPathDirectory,
 } from "../lib/verified-path-directory.js";
-import { readDirectoryAcl, secureDirectoryOwnerOnly } from "../lib/platform.js";
+import { noFollowDirectoryFlags, readDirectoryAcl, secureDirectoryOwnerOnly } from "../lib/platform.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const USER_SID = "S-1-5-21-1-2-3-1001";
@@ -425,5 +427,110 @@ describe("VerifiedPathDirectory", () => {
       dir.close();
     }
     assert.equal(dir.anchorFd, null);
+  });
+});
+
+describe("VerifiedPathDirectory (fix round 1)", () => {
+  it("win32 identity path: no anchor, lstat-only assertOpen, no POSIX ancestor policy", () => {
+    const base = privateBase("e4-vp-win32-");
+    const other = join(base, "other");
+    mkdirSync(other, { mode: 0o700 });
+    const ancestor = join(base, "a");
+    mkdirSync(ancestor, { mode: 0o700 });
+    // A world-writable, foreign-owned ancestor and no uid: POSIX would refuse both.
+    const loose = lstatOverriding(ancestor, { mode: 0o40777n, uid: 4242n });
+    const dir = openVerifiedPathDirectory(join(ancestor, "d"), { create: true, platform: "win32", uid: null, lstat: loose });
+    try {
+      assert.equal(dir.anchorFd, null);
+      dir.assertOpen();
+      const child = dir.openChild("c", { create: true });
+      try {
+        assert.equal(child.anchorFd, null);
+        assert.equal(dir.childMatches("c", child), true);
+        // A rename-and-replace (the old inode stays alive as c.old) is seen by lstat alone.
+        renameSync(child.path, `${child.path}.old`);
+        mkdirSync(child.path, { mode: 0o700 });
+        assert.throws(() => child.assertOpen(), { code: "EIDENTITY" });
+        assert.equal(dir.childMatches("c", child), false);
+      } finally {
+        child.close();
+      }
+      renameSync(dir.path, `${dir.path}.old`);
+      symlinkSync(other, dir.path);
+      assert.throws(() => dir.assertOpen(), { code: "EIDENTITY" });
+    } finally {
+      dir.close();
+    }
+    assert.throws(
+      () => openVerifiedPathDirectory(join(ancestor, "x"), {
+        create: true,
+        platform: "win32",
+        lstat: lstatOverriding(ancestor, { mode: 0o120777n }),
+      }),
+      { code: "ELOOP" },
+      "a link met by the walk is refused on win32 too",
+    );
+  });
+
+  it("re-checks the parent after the child is opened, in the walk and in openChild", () => {
+    const base = privateBase("e4-vp-parent-");
+    const swapParentWhenChildIsLstated = (parent, childPath) => {
+      let done = false;
+      return (path, options) => {
+        if (path === childPath && !done) {
+          done = true;
+          renameSync(parent, `${parent}.old`);
+          mkdirSync(parent, { mode: 0o700 });
+          mkdirSync(childPath, { mode: 0o700 });
+        }
+        return lstatSync(path, options);
+      };
+    };
+
+    const walkParent = join(base, "walk");
+    mkdirSync(join(walkParent, "c"), { recursive: true, mode: 0o700 });
+    assert.throws(
+      () => openVerifiedPathDirectory(join(walkParent, "c"), { lstat: swapParentWhenChildIsLstated(walkParent, join(walkParent, "c")) }),
+      { code: "EIDENTITY" },
+    );
+
+    const childParent = join(base, "child");
+    mkdirSync(join(childParent, "c"), { recursive: true, mode: 0o700 });
+    const held = openVerifiedPathDirectory(childParent, { lstat: swapParentWhenChildIsLstated(childParent, join(childParent, "c")) });
+    try {
+      assert.throws(() => held.openChild("c"), { code: "EIDENTITY" });
+    } finally {
+      held.close();
+    }
+  });
+
+  it("childMatches answers false when the re-opened child breaks the policy", () => {
+    const base = privateBase("e4-vp-match-policy-");
+    const parent = openVerifiedPathDirectory(base);
+    try {
+      const child = parent.openChild("c", { create: true });
+      try {
+        chmodSync(child.path, 0o777);
+        assert.equal(parent.childMatches("c", child), false);
+        assert.throws(() => parent.openChild("c"), { reason: "unsafe-root" });
+      } finally {
+        child.close();
+      }
+    } finally {
+      parent.close();
+    }
+  });
+
+  it("noFollowDirectoryFlags fails closed without O_DIRECTORY or O_NOFOLLOW", () => {
+    assert.throws(() => noFollowDirectoryFlags({ O_RDONLY: 0, O_DIRECTORY: 0x10000 }), { code: "ENOSYS" });
+    assert.throws(() => noFollowDirectoryFlags({ O_RDONLY: 0, O_NOFOLLOW: 0x20000 }), { code: "ENOSYS" });
+    assert.equal(
+      noFollowDirectoryFlags({ O_RDONLY: 0, O_DIRECTORY: 0x10000, O_NOFOLLOW: 0x20000, O_CLOEXEC: 0x80000 }),
+      0x10000 | 0x20000 | 0x80000,
+    );
+    assert.equal(
+      noFollowDirectoryFlags(),
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_CLOEXEC,
+    );
   });
 });
