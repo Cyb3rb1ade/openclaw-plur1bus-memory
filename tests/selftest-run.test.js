@@ -12,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
 import { E5_EMBEDDING_PROFILE, BGE_RERANKER_PROFILE } from "../lib/providers/local-model-artifacts.js";
@@ -120,7 +120,7 @@ describe("runSelftest", () => {
       assert.equal(step.skipped, undefined, id);
       assert.equal(typeof step.ms, "number");
     }
-    assert.equal(stepOf(report, "rerank").skipped, "reranker-not-local");
+    assert.equal(stepOf(report, "rerank").skipped, "reranker-disabled");
     assert.equal(report.ok, true, report.errors.join("; "));
     assert.deepEqual(report.model, { profile: E5_EMBEDDING_PROFILE.model, revision: E5_EMBEDDING_PROFILE.revision, state: "present" });
     assert.ok(calls.includes("passage") && calls.includes("query"));
@@ -215,6 +215,10 @@ describe("runSelftest", () => {
     assert.equal(missing.ok, true, missing.errors.join("; "));
     const disabled = await run(box, { pluginConfig: { reranker: { enabled: false, provider: "local-transformers" } } });
     assert.equal(stepOf(disabled, "rerank").skipped, "reranker-disabled");
+    // HM1-R6: only an explicit enabled: true runs it (the manifest default is false).
+    const unset = await run(box, { pluginConfig: { reranker: { provider: "local-transformers" } }, modelArtifacts: presentModels() });
+    assert.equal(stepOf(unset, "rerank").skipped, "reranker-disabled");
+    assert.equal(unset.ok, true, unset.errors.join("; "));
     const cohere = await run(box, { pluginConfig: { reranker: { enabled: true, provider: "cohere" } } });
     assert.equal(stepOf(cohere, "rerank").skipped, "reranker-not-local");
   });
@@ -263,6 +267,66 @@ describe("runSelftest", () => {
     assert.equal(report.ok, true, report.errors.join("; "));
     assert.equal(stepOf(report, "recall").ok, true);
     assert.deepEqual(readdirSync(stateDir), []);
+  });
+
+  it("the temp store root follows OpenClaw's state dir and never creates one", async () => {
+    // Only a legacy ~/.clawdbot exists: the temp store goes there, and no
+    // ~/.openclaw is created (it would switch OpenClaw away from the legacy dir).
+    const legacy = sandbox();
+    mkdirSync(join(legacy.homeDir, ".clawdbot"));
+    const fallbackTmp = makeTempDir("st-tmp-");
+    const report = await run(legacy, { stateDir: undefined, env: { HOME: legacy.homeDir }, tmpDir: fallbackTmp });
+    assert.equal(report.ok, true, report.errors.join("; "));
+    assert.deepEqual(readdirSync(legacy.homeDir), [".clawdbot"]);
+    assert.deepEqual(readdirSync(join(legacy.homeDir, ".clawdbot")), []);
+    const kept = await run(legacy, { stateDir: undefined, env: { HOME: legacy.homeDir }, tmpDir: fallbackTmp, keep: true });
+    assert.equal(dirname(stepOf(kept, "store.delete").detail), join(legacy.homeDir, ".clawdbot"));
+
+    // No state dir at all: the temp store goes under the OS temp dir.
+    const empty = sandbox();
+    const tmpRoot = makeTempDir("st-tmp-");
+    const none = await run(empty, { stateDir: undefined, env: { HOME: empty.homeDir }, tmpDir: tmpRoot, keep: true });
+    assert.equal(none.ok, true, none.errors.join("; "));
+    assert.deepEqual(readdirSync(empty.homeDir), []);
+    assert.equal(dirname(stepOf(none, "store.delete").detail), tmpRoot);
+
+    // OPENCLAW_STATE_DIR wins; a profile picks <home>/.openclaw-<profile>;
+    // OPENCLAW_HOME replaces the home.
+    const box = sandbox();
+    const explicit = join(box.root, "explicit state");
+    mkdirSync(explicit);
+    mkdirSync(join(box.homeDir, ".openclaw-work"));
+    mkdirSync(join(box.openclawHome, ".openclaw"));
+    const viaEnv = await run(box, { stateDir: undefined, env: { HOME: box.homeDir, OPENCLAW_STATE_DIR: explicit }, tmpDir: tmpRoot, keep: true });
+    assert.equal(dirname(stepOf(viaEnv, "store.delete").detail), explicit);
+    const viaProfile = await run(box, { stateDir: undefined, env: { HOME: box.homeDir, OPENCLAW_PROFILE: "work" }, tmpDir: tmpRoot, keep: true });
+    assert.equal(dirname(stepOf(viaProfile, "store.delete").detail), join(box.homeDir, ".openclaw-work"));
+    const viaHome = await run(box, { stateDir: undefined, env: { HOME: box.homeDir, OPENCLAW_HOME: box.openclawHome }, tmpDir: tmpRoot, keep: true });
+    assert.equal(dirname(stepOf(viaHome, "store.delete").detail), join(box.openclawHome, ".openclaw"));
+  });
+
+  it("a relative baseDbPath is resolved against the state dir, not the cwd", async () => {
+    const box = sandbox();
+    const harnessHome = join(box.stateDir, "harness");
+    mkdirSync(harnessHome);
+    writeFileSync(join(harnessHome, "manifest.json"), "{}\n");
+    const report = await run(box, { env: { ...box.env, PLUR1BUS_HOME: harnessHome }, pluginConfig: { baseDbPath: "harness/lancedb" } });
+    assert.equal(stepOf(report, "coexistence").detail, "store-inside-harness-home");
+  });
+
+  it("never includes config values in the report, even before the scrub", async () => {
+    const box = sandbox();
+    const secret = "sk-TEST-DO-NOT-LOG";
+    const pluginConfig = {
+      embedding: { provider: "openai", apiKey: secret, baseUrl: "https://secret.example.invalid/v1" },
+      reranker: { enabled: true, provider: "cohere", apiKey: secret },
+    };
+    for (const remote of [false, true]) {
+      const report = await run(box, { pluginConfig, remote, scrubReport: false });
+      const text = JSON.stringify(report);
+      assert.equal(text.includes(secret), false, `remote=${remote}`);
+      assert.equal(text.includes("secret.example.invalid"), false, `remote=${remote}`);
+    }
   });
 
   it("never includes config values in the report", async () => {

@@ -126,6 +126,24 @@ describe("openclaw plur1bus selftest", () => {
     assert.deepEqual(ok.exitCodes, [0]);
   });
 
+  it("prints one notice line when a harness home exists beside the store (HM1-R17)", async () => {
+    const h = harness({ runResult: report(true, { harnessHome: "/home/u/.plur1bus" }) });
+    await h.parse(["plur1bus", "selftest"]);
+    const lines = h.out.join("").trimEnd().split("\n");
+    assert.equal(lines.filter((line) => line.includes("/home/u/.plur1bus")).length, 1);
+    assert.match(lines.find((line) => line.includes("/home/u/.plur1bus")), /^notice/);
+    assert.equal(lines.length, 3 + SELFTEST_STEPS.length + 2);
+    assert.equal(lines.at(-1), "selftest ok");
+
+    const inside = harness({ runResult: report(false, {
+      harnessHome: "/home/u/.plur1bus",
+      steps: SELFTEST_STEPS.map((id) => (id === "coexistence" ? { id, ok: false, ms: 0, detail: "store-inside-harness-home" } : { id, ok: true, ms: 1 })),
+      errors: ["store-inside-harness-home"],
+    }) });
+    await inside.parse(["plur1bus", "selftest"]);
+    assert.equal(inside.out.join("").split("\n").some((line) => line.startsWith("notice")), false, "no notice when coexistence failed");
+  });
+
   it("a usage error exits 2 without running the selftest", async () => {
     for (const args of [["plur1bus", "selftest", "--bogus"], ["plur1bus", "selftest", "extra"], ["plur1bus", "selftest", "--state-dir"]]) {
       const h = harness();
