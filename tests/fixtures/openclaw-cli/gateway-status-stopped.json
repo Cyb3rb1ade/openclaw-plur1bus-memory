@@ -3,7 +3,7 @@
     "version": "2026.9.6",
     "entrypoint": "<prefix>/tools/node-v24.21.0/lib/node_modules/openclaw/dist/entry.js"
   },
-  "logFile": "/tmp/openclaw/openclaw-2026-09-29.log",
+  "logFile": "<tmp>/openclaw/openclaw-2026-09-29.log",
   "service": {
     "inspectionReason": "service-manager-unavailable",
     "label": "no supported service manager detected",

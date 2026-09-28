@@ -25,8 +25,17 @@ any other temp path; ANSI colour codes stripped; **every `@` is written as
 `replaceAll("<at>", "@")`). In the `inspect` JSON fixtures `/plugin/configUiHints`
 and `/plugin/configJsonSchema` are replaced by a `"<trimmed: …>"` string: they
 are this plugin's own manifest data, not OpenClaw behaviour, and contain
-credential field names. Everything else is verbatim. `.txt` fixtures are
-stdout+stderr combined unless noted.
+credential field names. The OpenClaw-owned `/tmp/openclaw/…` paths (log file,
+ClawPack extraction dir) are written as `<tmp>/openclaw/…`, the random
+extraction suffix as `<rand>`. Everything else is verbatim.
+
+**Streams:** every `.txt` fixture merges stdout and stderr into one file (captured
+with `2>&1`), in emission order; the split per line was not recorded. For
+`install-already-installed.txt` this means the resolve/audit/download lines and
+the final `plugin already exists … (delete it first)` line cannot be attributed
+to a stream from the fixture; a replaying shim should emit the whole text on
+one stream and callers must match on the combined output, not on stderr alone.
+`version-*.txt` and `config-get-slot.txt` are stdout only (stderr was empty).
 
 ## Step 1: where `openclaw` and `node` land (`install-cli.sh`)
 
@@ -117,7 +126,9 @@ and with `--runtime`.
 **Use this:** installed ⇔ exit 0 and `/install` present; tracked version =
 `/install/version`; plugin dir = `/install/installPath` read fresh after every
 install (never cached, never derived); integrity check = `/install/npmIntegrity`
-(not `/install/integrity`); runtime OK ⇔ `inspect --runtime --json` exit 0,
+(not `/install/integrity`) for `/install/source` `npm` (npm-pack and npm
+installs); for `/install/source == "clawhub"` compare `/install/clawpackSha256`
+instead, see (k); runtime OK ⇔ `inspect --runtime --json` exit 0,
 `/plugin/status == "loaded"` and `/plugin/imported == true`. "Not installed" is
 exit 1 with `/ok == false` and `/error/message` starting `Plugin not found:`.
 
