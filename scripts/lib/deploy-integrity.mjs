@@ -439,6 +439,11 @@ export const DEPLOY_FILES = [
   // HM1 Task 3: store snapshot step (installer update/adoption path).
   "scripts/snapshot-store.mjs",
   "lib/snapshot/store-snapshot.js",
+  // HM1 Task 2: `openclaw plur1bus selftest`.
+  "lib/setup/selftest-plugin-runtime.js",
+  "lib/selftest/addon-probes.js",
+  "lib/selftest/run-selftest.js",
+  "lib/selftest/selftest-host.js",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;

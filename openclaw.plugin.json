@@ -6,6 +6,11 @@
   "kind": "memory",
   "cliCommands": [
     {
+      "name": "plur1bus",
+      "description": "PLUR1BUS maintenance commands (selftest)",
+      "hasSubcommands": true
+    },
+    {
       "name": "plur1bus-command",
       "description": "Run one PLUR1BUS chat command as operator, bound to a direct chat session",
       "hasSubcommands": false
