@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://updates.plur1bus.app/schema/plur1bus.plugin-feed-1.json",
   "title": "plur1bus.plugin-feed/1",
-  "description": "Signed PLUR1BUS plugin feed, published at https://updates.plur1bus.app/plugin/{channel}.json with a minisign signature at {channel}.json.minisig (HM1-R2, HM1-R4). Consumers verify the signature before trusting any URL or hash in it. Every object is closed except `notes`. build-plugin-feed.mjs enforces this schema with a hand-written validator of the same subset (type, const, enum, pattern, required, properties, additionalProperties, items, minItems, $ref) plus the semantic rules named in the descriptions. URLs may be file:// only for test feeds; the bootstraps and the installer refuse file:// outside PLUR1BUS_PLUGIN_INSTALLER_TEST=1.",
+  "description": "Signed PLUR1BUS plugin feed, published at https://updates.plur1bus.app/plugin/{channel}.json with a minisign signature at {channel}.json.minisig (HM1-R2, HM1-R4). Consumers verify the signature before trusting any URL or hash in it. Every object is closed except `notes`. build-plugin-feed.mjs enforces this schema with a hand-written validator of the same subset (type, const, enum, pattern, required, properties, additionalProperties, items, minItems, $ref) plus the semantic rules named in the descriptions. Every URL must be https://. The pattern also admits file:// so that test feeds share the schema; validateFeed refuses file:// unless called with { allowFile: true }, which only tests (PLUR1BUS_PLUGIN_INSTALLER_TEST=1) do.",
   "type": "object",
   "required": ["schema", "channel", "generatedAt", "installer", "bootstrap", "hosts"],
   "additionalProperties": false,
@@ -84,7 +84,7 @@
             "integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]{86}==$" }
           }
         },
-        "clawpackDigest": { "type": "string", "minLength": 1, "description": "ClawHub's ClawPack digest, added after the manual ClawHub publish when it differs from the npm integrity (HM1-R15)." },
+        "clawpackDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "ClawHub's ClawPack SHA-256 (64 lowercase hex, as the install record's clawpackSha256), added after the manual ClawHub publish (HM1-R15)." },
         "compat": {
           "type": "object",
           "description": "package.json openclaw.compat of the released tarball.",

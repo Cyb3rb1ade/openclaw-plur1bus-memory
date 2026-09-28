@@ -15,6 +15,7 @@ const fixtureFeed = JSON.parse(readFileSync(join(root, "tests", "fixtures", "min
 
 const COMPAT = { pluginApi: ">=2026.8.1", minGatewayVersion: "2026.8.1" };
 const NODE_RANGE = ">=24.16.0 <25 || >=26.1.0";
+const CLAWPACK = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /** Run npm with this Node: its CLI entry point sits next to the node binary. */
 function npm(args, cwd) {
@@ -97,7 +98,7 @@ describe("scripts/dist/build-plugin-feed.mjs", () => {
     const dir = makeTempDir("dist-feed-");
     const { tgz } = packFixture(dir, "7.17.0");
     const out = join(dir, "out", "plugin-stable.json");
-    const r = build(dir, { version: "7.17.0", tgz, out, extra: ["--clawpack-digest", "sha256:TEST-ONLY"] });
+    const r = build(dir, { version: "7.17.0", tgz, out, extra: ["--clawpack-digest", CLAWPACK] });
     assert.equal(r.status, 0, r.stderr);
     const feed = JSON.parse(readFileSync(out, "utf8"));
     assert.deepEqual(validateFeed(feed), { ok: true, errors: [] });
@@ -119,7 +120,7 @@ describe("scripts/dist/build-plugin-feed.mjs", () => {
     assert.equal(rel.npm, "npm:@cyb3rb1ade/plur1bus-memory@7.17.0");
     assert.equal(rel.tarball.sha256, sha256(tgz));
     assert.equal(rel.tarball.integrity, `sha512-${createHash("sha512").update(readFileSync(tgz)).digest("base64")}`);
-    assert.equal(rel.clawpackDigest, "sha256:TEST-ONLY");
+    assert.equal(rel.clawpackDigest, CLAWPACK);
     assert.deepEqual(rel.compat, COMPAT);
     assert.equal(rel.node, NODE_RANGE);
     assert.equal(rel.security, false);
@@ -158,13 +159,23 @@ describe("scripts/dist/build-plugin-feed.mjs", () => {
     assert.deepEqual(feed.hosts.openclaw.releases[1], prev.hosts.openclaw.releases[0]);
     assert.equal(feed.installer.version, "7.17.1");
 
-    // An older version added later still lands in semver order.
+    // A version below the previous latest is refused without --allow-older ...
     const v2 = packFixture(dir, "7.16.12");
     const third = join(dir, "third.json");
-    assert.equal(build(dir, { version: "7.16.12", tgz: v2.tgz, out: third, extra: ["--previous", second] }).status, 0);
+    const older = build(dir, { version: "7.16.12", tgz: v2.tgz, out: third, extra: ["--previous", second] });
+    assert.equal(older.status, 1);
+    assert.match(older.stderr, /7\.16\.12.*7\.17\.1.*--allow-older/);
+    assert.equal(existsSync(third), false);
+    // ... and with it lands in semver order while the newest installer and bootstraps stay.
+    writeFileSync(join(dir, "plur1bus-plugin-installer.mjs"), "// TEST ONLY other installer\n");
+    const allowed = build(dir, { version: "7.16.12", tgz: v2.tgz, out: third, extra: ["--previous", second, "--allow-older"] });
+    assert.equal(allowed.status, 0, allowed.stderr);
     const f3 = JSON.parse(readFileSync(third, "utf8"));
+    assert.deepEqual(validateFeed(f3).errors, []);
     assert.deepEqual(f3.hosts.openclaw.releases.map((x) => x.version), ["7.17.1", "7.17.0", "7.16.12"]);
     assert.equal(f3.hosts.openclaw.latest, "7.17.1");
+    assert.deepEqual(f3.installer, feed.installer);
+    assert.deepEqual(f3.bootstrap, feed.bootstrap);
 
     const dup = join(dir, "dup.json");
     writeFileSync(dup, "untouched");
@@ -178,7 +189,7 @@ describe("scripts/dist/build-plugin-feed.mjs", () => {
     beta.channel = "beta";
     const betaPath = join(dir, "beta.json");
     writeFileSync(betaPath, JSON.stringify(beta));
-    const c = build(dir, { version: "7.16.12", tgz: v2.tgz, out: join(dir, "c.json"), extra: ["--previous", betaPath] });
+    const c = build(dir, { version: "7.17.2", tgz: packFixture(dir, "7.17.2").tgz, out: join(dir, "c.json"), extra: ["--previous", betaPath] });
     assert.equal(c.status, 1);
     assert.match(c.stderr, /channel/);
   });
@@ -216,7 +227,7 @@ describe("scripts/dist/build-plugin-feed.mjs", () => {
   it("enforces every required key of the schema and keeps objects closed except notes", () => {
     const valid = clone(fixtureFeed);
     valid.hosts.openclaw.releases[0].npm = "npm:@cyb3rb1ade/plur1bus-memory@7.17.0";
-    valid.hosts.openclaw.releases[0].clawpackDigest = "sha256:TEST-ONLY";
+    valid.hosts.openclaw.releases[0].clawpackDigest = CLAWPACK;
     assert.deepEqual(validateFeed(valid).errors, []);
 
     const resolve = (node) => (node && node.$ref ? schema.$defs[node.$ref.replace("#/$defs/", "")] : node);
@@ -260,11 +271,41 @@ describe("scripts/dist/build-plugin-feed.mjs", () => {
       (f) => { f.hosts.openclaw.releases[0].tarball.url = "http://example.invalid/x.tgz"; },
       (f) => { f.channel = "nightly"; },
       (f) => { f.hosts.openclaw.windowsNativeBeta = "yes"; },
+      (f) => { f.hosts.openclaw.releases[0].clawpackDigest = "sha256:TEST-ONLY"; },
+      (f) => { f.hosts.openclaw.releases[0].clawpackDigest = CLAWPACK.toUpperCase(); },
     ];
     for (const mutate of semantic) {
       const f = clone(valid);
       mutate(f);
       assert.equal(validateFeed(f).ok, false, mutate.toString());
     }
+  });
+
+  it("refuses non-https URLs unless allowFile is set (tests only)", () => {
+    const paths = [
+      (f) => f.installer,
+      (f) => f.bootstrap.sh,
+      (f) => f.bootstrap.ps1,
+      (f) => f.hosts.openclaw.releases[0].tarball,
+    ];
+    for (const at of paths) {
+      const f = clone(fixtureFeed);
+      at(f).url = "file:///tmp/TEST-ONLY/artefact";
+      const res = validateFeed(f);
+      assert.equal(res.ok, false);
+      assert.ok(res.errors.some((e) => /https/.test(e)), res.errors.join("\n"));
+      assert.deepEqual(validateFeed(f, { allowFile: true }).errors, []);
+      at(f).url = "http://example.invalid/x";
+      assert.equal(validateFeed(f, { allowFile: true }).ok, false);
+    }
+
+    // The builder uses the default: a file:// URL never reaches a feed.
+    const dir = makeTempDir("dist-feed-file-");
+    const { tgz } = packFixture(dir, "7.17.0");
+    const out = join(dir, "out.json");
+    const r = build(dir, { version: "7.17.0", tgz, out, extra: ["--tarball-url", "file:///tmp/TEST-ONLY/x.tgz"] });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /https/);
+    assert.equal(existsSync(out), false);
   });
 });

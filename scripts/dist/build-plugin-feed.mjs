@@ -4,10 +4,11 @@
  * node scripts/dist/build-plugin-feed.mjs --channel stable|beta --version <v> --tgz <path> --tarball-url <url>
  *   --installer <path> --installer-url <url> --bootstrap-sh <p> --bootstrap-sh-url <u>
  *   --bootstrap-ps1 <p> --bootstrap-ps1-url <u> --notes-de <md-file> --notes-en <md-file>
- *   [--previous <feed.json>] [--clawpack-digest <d>] [--no-npm] [--security] --out <json>
+ *   [--previous <feed.json> [--allow-older]] [--clawpack-digest <sha256-hex>] [--no-npm] [--security] --out <json>
  *
  * Reads version, openclaw.compat and engines.node from the tarball's package.json, computes SHA-256 and npm's
- * sha512 integrity, merges into --previous's releases (newest first, versions unique), validates against
+ * sha512 integrity, merges into --previous's releases (newest first, versions unique; a version below the previous
+ * latest needs --allow-older and then keeps the previous installer and bootstraps), validates against
  * plugin-feed.schema.json and writes atomically. The release workflow runs this (Task 10); the owner signs the
  * result offline with minisign (HM1-R4). Exit 0 on success, 1 with the reason on stderr.
  */
@@ -126,15 +127,32 @@ export function compareVersions(a, b) {
   return 0;
 }
 
+/** Every URL-carrying field of a structurally valid feed, as [path, url]. */
+function feedUrls(feed) {
+  return [
+    ["installer.url", feed.installer.url],
+    ["bootstrap.sh.url", feed.bootstrap.sh.url],
+    ["bootstrap.ps1.url", feed.bootstrap.ps1.url],
+    ...feed.hosts.openclaw.releases.map((r, i) => [`hosts.openclaw.releases.${i}.tarball.url`, r.tarball.url]),
+  ];
+}
+
 /**
  * Validate a feed against plugin-feed.schema.json and the feed's semantic rules.
+ * Production callers use the default: every URL must be https://. Only tests pass allowFile: true.
  * @param {unknown} feed
+ * @param {{ allowFile?: boolean }} [options]
  * @returns {{ok: boolean, errors: string[]}}
  */
-export function validateFeed(feed) {
+export function validateFeed(feed, { allowFile = false } = {}) {
   const errors = [];
   check(schema, feed, "", errors);
   if (errors.length === 0) {
+    for (const [p, url] of feedUrls(feed)) {
+      if (!url.startsWith("https://") && !(allowFile && url.startsWith("file://"))) {
+        errors.push(`${p}: must be an https:// URL`);
+      }
+    }
     const oc = feed.hosts.openclaw;
     const seen = new Set();
     oc.releases.forEach((rel, i) => {
@@ -228,8 +246,8 @@ function readInput(path, what) {
  * Build the feed document (not written).
  * @param {{ channel: string, version: string, tgz: string, tarballUrl: string, installer: string, installerUrl: string,
  *   bootstrapSh: string, bootstrapShUrl: string, bootstrapPs1: string, bootstrapPs1Url: string,
- *   notesDe: string, notesEn: string, previous?: string, clawpackDigest?: string, npm?: boolean, security?: boolean,
- *   now?: Date }} opts
+ *   notesDe: string, notesEn: string, previous?: string, allowOlder?: boolean, clawpackDigest?: string, npm?: boolean,
+ *   security?: boolean, now?: Date }} opts
  * @returns {Record<string, any>} a feed that passed validateFeed
  */
 export function buildFeed(opts) {
@@ -260,6 +278,15 @@ export function buildFeed(opts) {
       throw new Error(`version ${opts.version} is already in the previous feed`);
     }
   }
+  // An older hotfix is added as a release entry only: the newest installer and bootstraps stay.
+  const older = previous !== null && compareVersions(opts.version, previous.hosts.openclaw.latest) < 0;
+  if (older && !opts.allowOlder) {
+    throw new Error(`version ${opts.version} is below the previous feed's latest ${previous.hosts.openclaw.latest}; pass --allow-older to add it as an older release`);
+  }
+  if (!older) {
+    const missing = ARTEFACT_FLAGS.filter(([flag, key]) => !opts[key]).map(([flag]) => `--${flag}`);
+    if (missing.length) throw new Error(`missing ${missing.join(", ")}`);
+  }
 
   const release = {
     version: pkg.version,
@@ -282,11 +309,15 @@ export function buildFeed(opts) {
     schema: FEED_SCHEMA,
     channel: opts.channel,
     generatedAt: (opts.now ?? new Date()).toISOString(),
-    installer: { version: pkg.version, url: opts.installerUrl, sha256: sha256(readInput(opts.installer, "installer")) },
-    bootstrap: {
-      sh: { url: opts.bootstrapShUrl, sha256: sha256(readInput(opts.bootstrapSh, "bootstrap")) },
-      ps1: { url: opts.bootstrapPs1Url, sha256: sha256(readInput(opts.bootstrapPs1, "bootstrap")) },
-    },
+    installer: older
+      ? { ...previous.installer }
+      : { version: pkg.version, url: opts.installerUrl, sha256: sha256(readInput(opts.installer, "installer")) },
+    bootstrap: older
+      ? { sh: { ...previous.bootstrap.sh }, ps1: { ...previous.bootstrap.ps1 } }
+      : {
+        sh: { url: opts.bootstrapShUrl, sha256: sha256(readInput(opts.bootstrapSh, "bootstrap")) },
+        ps1: { url: opts.bootstrapPs1Url, sha256: sha256(readInput(opts.bootstrapPs1, "bootstrap")) },
+      },
     hosts: {
       openclaw: {
         windowsNativeBeta: previous ? previous.hosts.openclaw.windowsNativeBeta : true,
@@ -340,9 +371,11 @@ export async function writeFileAtomic(path, text) {
   }
 }
 
-const REQUIRED_FLAGS = [
-  "channel", "version", "tgz", "tarball-url", "installer", "installer-url", "bootstrap-sh", "bootstrap-sh-url",
-  "bootstrap-ps1", "bootstrap-ps1-url", "notes-de", "notes-en", "out",
+const REQUIRED_FLAGS = ["channel", "version", "tgz", "tarball-url", "notes-de", "notes-en", "out"];
+/** Artefact flags: required unless --allow-older adds a version below the previous latest (then ignored). */
+const ARTEFACT_FLAGS = [
+  ["installer", "installer"], ["installer-url", "installerUrl"], ["bootstrap-sh", "bootstrapSh"],
+  ["bootstrap-sh-url", "bootstrapShUrl"], ["bootstrap-ps1", "bootstrapPs1"], ["bootstrap-ps1-url", "bootstrapPs1Url"],
 ];
 
 /**
@@ -356,8 +389,9 @@ export async function main(argv) {
       args: argv,
       strict: true,
       options: {
-        ...Object.fromEntries(REQUIRED_FLAGS.map((f) => [f, { type: "string" }])),
+        ...Object.fromEntries([...REQUIRED_FLAGS, ...ARTEFACT_FLAGS.map(([f]) => f)].map((f) => [f, { type: "string" }])),
         previous: { type: "string" },
+        "allow-older": { type: "boolean" },
         "clawpack-digest": { type: "string" },
         "no-npm": { type: "boolean" },
         security: { type: "boolean" },
@@ -365,6 +399,7 @@ export async function main(argv) {
     });
     const missing = REQUIRED_FLAGS.filter((f) => !values[f]);
     if (missing.length) throw new Error(`missing ${missing.map((f) => `--${f}`).join(", ")}`);
+    if (values["allow-older"] && !values.previous) throw new Error("--allow-older needs --previous");
     const feed = buildFeed({
       channel: values.channel,
       version: values.version,
@@ -379,6 +414,7 @@ export async function main(argv) {
       notesDe: values["notes-de"],
       notesEn: values["notes-en"],
       previous: values.previous,
+      allowOlder: values["allow-older"] === true,
       clawpackDigest: values["clawpack-digest"],
       npm: !values["no-npm"],
       security: values.security === true,
