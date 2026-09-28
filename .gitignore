@@ -58,6 +58,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/reindex-provider.mjs
 !scripts/embed-promoted-memories.mjs
 !scripts/install-memory-system.sh
+!scripts/snapshot-store.mjs
 !scripts/provider-wizard.mjs
 !scripts/setup-feature-crons.mjs
 !scripts/run-feature-cron.mjs
