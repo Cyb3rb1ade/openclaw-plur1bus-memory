@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://updates.plur1bus.app/schema/plur1bus.plugin-feed-1.json",
+  "title": "plur1bus.plugin-feed/1",
+  "description": "Signed PLUR1BUS plugin feed, published at https://updates.plur1bus.app/plugin/{channel}.json with a minisign signature at {channel}.json.minisig (HM1-R2, HM1-R4). Consumers verify the signature before trusting any URL or hash in it. Every object is closed except `notes`. build-plugin-feed.mjs enforces this schema with a hand-written validator of the same subset (type, const, enum, pattern, required, properties, additionalProperties, items, minItems, $ref) plus the semantic rules named in the descriptions. URLs may be file:// only for test feeds; the bootstraps and the installer refuse file:// outside PLUR1BUS_PLUGIN_INSTALLER_TEST=1.",
+  "type": "object",
+  "required": ["schema", "channel", "generatedAt", "installer", "bootstrap", "hosts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "plur1bus.plugin-feed/1" },
+    "channel": { "enum": ["stable", "beta"] },
+    "generatedAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$" },
+    "installer": {
+      "type": "object",
+      "description": "The bundled Node installer (plur1bus-plugin-installer.mjs) the bootstraps download and hand over to.",
+      "required": ["version", "url", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "url": { "$ref": "#/$defs/url" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "bootstrap": {
+      "type": "object",
+      "required": ["sh", "ps1"],
+      "additionalProperties": false,
+      "properties": {
+        "sh": { "$ref": "#/$defs/artefact" },
+        "ps1": { "$ref": "#/$defs/artefact" }
+      }
+    },
+    "hosts": {
+      "type": "object",
+      "required": ["openclaw"],
+      "additionalProperties": false,
+      "properties": {
+        "openclaw": {
+          "type": "object",
+          "description": "Semantic rules: `latest` equals releases[0].version; releases are sorted newest first by semver and versions are unique.",
+          "required": ["windowsNativeBeta", "latest", "releases"],
+          "additionalProperties": false,
+          "properties": {
+            "windowsNativeBeta": { "type": "boolean", "description": "While true the installer prints that Windows native support is in beta (HM1-R18)." },
+            "latest": { "$ref": "#/$defs/version" },
+            "releases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/release" } }
+          }
+        },
+        "hermes": false
+      }
+    }
+  },
+  "$defs": {
+    "version": { "type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$" },
+    "url": { "type": "string", "pattern": "^(https|file)://[^\\s]+$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artefact": {
+      "type": "object",
+      "required": ["url", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "url": { "$ref": "#/$defs/url" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "description": "Semantic rules: clawhub equals clawhub:@cyb3rb1ade/plur1bus-memory@<version>; npm, when present, equals npm:@cyb3rb1ade/plur1bus-memory@<version>.",
+      "required": ["version", "pluginId", "clawhub", "tarball", "compat", "node", "security", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "pluginId": { "const": "memory-lancedb-namespaced" },
+        "clawhub": { "type": "string", "pattern": "^clawhub:@cyb3rb1ade/plur1bus-memory@" },
+        "npm": { "type": "string", "pattern": "^npm:@cyb3rb1ade/plur1bus-memory@" },
+        "tarball": {
+          "type": "object",
+          "description": "The npm-pack tarball on the GitHub Release; integrity is npm's (sha512-<base64>) and must equal `npm pack --json` for the same bytes.",
+          "required": ["url", "sha256", "integrity"],
+          "additionalProperties": false,
+          "properties": {
+            "url": { "$ref": "#/$defs/url" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "integrity": { "type": "string", "pattern": "^sha512-[A-Za-z0-9+/]{86}==$" }
+          }
+        },
+        "clawpackDigest": { "type": "string", "minLength": 1, "description": "ClawHub's ClawPack digest, added after the manual ClawHub publish when it differs from the npm integrity (HM1-R15)." },
+        "compat": {
+          "type": "object",
+          "description": "package.json openclaw.compat of the released tarball.",
+          "required": ["pluginApi", "minGatewayVersion"],
+          "additionalProperties": false,
+          "properties": {
+            "pluginApi": { "type": "string", "minLength": 1 },
+            "minGatewayVersion": { "type": "string", "minLength": 1 }
+          }
+        },
+        "node": { "type": "string", "minLength": 1, "description": "package.json engines.node of the released tarball." },
+        "security": { "type": "boolean", "description": "True when the release fixes a security issue." },
+        "notes": {
+          "type": "object",
+          "description": "Release notes (Markdown). German and English are required (D78); other languages may be added.",
+          "required": ["de", "en"],
+          "properties": {
+            "de": { "type": "string", "minLength": 1 },
+            "en": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

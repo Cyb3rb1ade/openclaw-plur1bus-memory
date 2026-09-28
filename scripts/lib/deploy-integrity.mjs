@@ -316,6 +316,9 @@ export const DEPLOY_FILES = [
   "scripts/run-feature-cron.mjs",
   "scripts/lib/openclaw-cli.mjs",
   "scripts/lib/find-deploy-dir.mjs",
+  // ── plugin distribution: feed verifier and builder (HM1) ──────────────────
+  "scripts/dist/minisign.mjs",
+  "scripts/dist/build-plugin-feed.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",

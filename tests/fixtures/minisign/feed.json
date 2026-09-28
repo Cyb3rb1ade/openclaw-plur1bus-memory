@@ -1,0 +1,48 @@
+{
+  "schema": "plur1bus.plugin-feed/1",
+  "channel": "beta",
+  "generatedAt": "2026-09-28T12:00:00.000Z",
+  "installer": {
+    "version": "7.17.0",
+    "url": "https://example.invalid/TEST-ONLY/plur1bus-plugin-installer.mjs",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  "bootstrap": {
+    "sh": {
+      "url": "https://example.invalid/TEST-ONLY/install-plugin.sh",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000002"
+    },
+    "ps1": {
+      "url": "https://example.invalid/TEST-ONLY/install-plugin.ps1",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000003"
+    }
+  },
+  "hosts": {
+    "openclaw": {
+      "windowsNativeBeta": true,
+      "latest": "7.17.0",
+      "releases": [
+        {
+          "version": "7.17.0",
+          "pluginId": "memory-lancedb-namespaced",
+          "clawhub": "clawhub:@cyb3rb1ade/plur1bus-memory@7.17.0",
+          "tarball": {
+            "url": "https://example.invalid/TEST-ONLY/cyb3rb1ade-plur1bus-memory-7.17.0.tgz",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+            "integrity": "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+          },
+          "compat": {
+            "pluginApi": ">=2026.8.1",
+            "minGatewayVersion": "2026.8.1"
+          },
+          "node": ">=24.16.0 <25 || >=26.1.0",
+          "security": false,
+          "notes": {
+            "de": "TEST ONLY: Beispiel-Feed für die Signaturprüfung.",
+            "en": "TEST ONLY: example feed for the signature check."
+          }
+        }
+      ]
+    }
+  }
+}
