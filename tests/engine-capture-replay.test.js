@@ -13,12 +13,15 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
+import { hashEmbedder } from "./helpers/hash-embedder.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "agent-a";
@@ -37,46 +40,6 @@ const config = (baseDbPath, extra = {}) => ({
   duplicateThreshold: 0.95,
   ...extra,
 });
-
-function textHash(text) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h;
-}
-
-/** 384 dims, v[i] = ±1 from bit (i % 24) of the text hash, normalised. */
-function hashVector(text) {
-  const h = textHash(String(text));
-  const scale = 1 / Math.sqrt(384);
-  return Array.from({ length: 384 }, (_, i) => (((h >>> (i % 24)) & 1) ? scale : -scale));
-}
-
-/** `down = true` makes every capture-side embed call throw (embedder down);
- *  `holdBatch = true` parks the next embedBatch until `release()`. */
-function hashEmbedder() {
-  const stub = {
-    down: false,
-    holdBatch: false,
-    release: null,
-    onHeld: null,
-    embed: async (text) => { gate(); return hashVector(text); },
-    embedQuery: async (text) => hashVector(text),
-    embedPassage: async (text) => hashVector(text),
-    embedBatch: async (texts) => {
-      gate();
-      if (stub.holdBatch) await new Promise((resolve) => { stub.release = resolve; stub.onHeld?.(); });
-      return texts.map(hashVector);
-    },
-    shutdown: async () => {},
-  };
-  const gate = () => {
-    if (stub.down) throw new Error("embedder unavailable (synthetic)");
-  };
-  return stub;
-}
 
 function stubHost(stateDir, warned, llm) {
   return createStubHost({
@@ -362,6 +325,146 @@ describe("Engine.capture replay guard (E4 Task 5, Q3)", () => {
   });
 });
 
+// The crash window (E4.2): a process SIGKILLed after a capture's rows are
+// committed but before the replay guard marked the turn done. The capture runs
+// in a child process (tests/fixtures/capture-crash-child.mjs) that stops at a
+// fixed point of the pipeline and is killed there; a fresh engine over the
+// same directories then receives the journal replay.
+//
+// `duplicateThreshold: 2` switches the vector dedup off (no cosine score
+// reaches it): the replay guard alone must make the replay store the turn
+// exactly once. In production the dedup cannot be relied on for this either —
+// an oversized text is summarised by a model before embedding, and that
+// summary differs between the two runs (see the module comment of
+// engine/capture/turn-replay-guard.js).
+const CRASH_CHILD = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "capture-crash-child.mjs");
+const NO_DEDUP = { duplicateThreshold: 2 };
+const CHUNKED = [
+  "Status report for the replay test cluster:",
+  "- The staging database host is called orca-staging-7.",
+  "- The nightly backup window opens at 02:30 UTC.",
+  "- The on-call engineer this week is Mara from the storage team.",
+  "- The deploy freeze for the cluster starts on Friday at noon.",
+].join("\n");
+
+/** Runs one capture in a child process and SIGKILLs it at `stopAt`; resolves once the child is gone. */
+async function captureAndKill({ stateDir, baseDbPath, t, stopAt, stopAfter = 0, extra = NO_DEDUP }) {
+  const { signal: _signal, ...serialTurn } = t;
+  const arg = JSON.stringify({ stateDir, config: config(baseDbPath, extra), turn: serialTurn, stopAt, stopAfter });
+  const child = spawn(process.execPath, [CRASH_CHILD, arg], { stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const exited = new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
+  const stopped = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 30_000);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.includes("STOPPED\n")) { clearTimeout(timer); resolve(true); }
+    });
+    exited.then(() => { clearTimeout(timer); resolve(stdout.includes("STOPPED\n")); });
+  });
+  child.kill("SIGKILL");
+  const exit = await exited;
+  assert.ok(stopped, `the child reached ${stopAt} (stdout: ${stdout.trim()}, stderr: ${stderr.slice(-2_000)})`);
+  assert.equal(exit.signal, "SIGKILL", `the child was killed at ${stopAt} (${JSON.stringify(exit)})`);
+}
+
+const allCards = async (engine) => (await engine.memory.list({ since: 0, limit: 200 }, principal, userAgent)).items;
+
+/** Every stored text appears exactly once. */
+function assertNoDuplicateText(cards) {
+  const counts = new Map();
+  for (const card of cards) counts.set(card.text, (counts.get(card.text) ?? 0) + 1);
+  const duplicated = [...counts].filter(([, n]) => n > 1);
+  assert.deepEqual(duplicated, [], "no text is stored twice");
+}
+
+describe("Engine.capture replay guard: the crash window between row commit and done (E4.2)", () => {
+  it("a kill after the row committed, before the turn was marked done: the replay leaves exactly one row", async () => {
+    const stateDir = makeTempDir("e42-crash-state-");
+    const baseDbPath = join(makeTempDir("e42-crash-root-"), "lancedb-namespaced");
+    const t = turn({ runId: "journal:e42-committed", text: T });
+    await captureAndKill({ stateDir, baseDbPath, t, stopAt: "rows-committed" });
+
+    const { engine } = setup({ extra: NO_DEDUP, dirs: { stateDir, baseDbPath } });
+    try {
+      assert.equal((await cardsWithText(engine, T)).length, 1, "the killed capture committed its row");
+      const replay = await engine.capture(turn({ runId: "journal:e42-committed", text: T })).done;
+      assert.ok(replay.stored >= 1 && replay.reason === undefined, JSON.stringify(replay));
+      assert.equal((await cardsWithText(engine, T)).length, 1, "exactly one row after the replay");
+      // The rolled-back row is audited like every other deletion.
+      const audit = readFileSync(join(stateDir, "workspaces", AGENT, ".adaptive-learning", "destructive-ops.jsonl"), "utf8")
+        .trim().split("\n").map((line) => JSON.parse(line));
+      assert.deepEqual(audit.map((e) => [e.event, e.source, e.agentId]), [["memory.deleted", "capture_replay_rollback", AGENT]]);
+      // A third delivery of the same turn is now a plain duplicate.
+      assert.deepEqual(await engine.capture(turn({ runId: "journal:e42-committed", text: T })).done, DUPLICATE);
+      assert.equal((await cardsWithText(engine, T)).length, 1);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it("a chunked capture (whole text and parts) killed after its rows committed: the replay leaves exactly one set", async () => {
+    const stateDir = makeTempDir("e42-chunk-state-");
+    const baseDbPath = join(makeTempDir("e42-chunk-root-"), "lancedb-namespaced");
+    const t = turn({ runId: "journal:e42-chunked", text: CHUNKED });
+    await captureAndKill({ stateDir, baseDbPath, t, stopAt: "rows-committed" });
+
+    const { engine } = setup({ extra: NO_DEDUP, dirs: { stateDir, baseDbPath } });
+    try {
+      const before = await allCards(engine);
+      assert.ok(before.length >= 3, `the killed capture committed the whole text and its parts (${before.length} rows)`);
+      assert.ok(before.some((card) => card.text === CHUNKED), "the whole text is one of them");
+      const replay = await engine.capture(turn({ runId: "journal:e42-chunked", text: CHUNKED })).done;
+      assert.ok(replay.reason === undefined, JSON.stringify(replay));
+      const after = await allCards(engine);
+      assertNoDuplicateText(after);
+      assert.equal(after.length, before.length, "the replay stored the same set once");
+      assert.equal(after.length, replay.stored);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it("a chunked capture killed in the middle of its store loop: the replay leaves exactly one set", async () => {
+    const stateDir = makeTempDir("e42-mid-state-");
+    const baseDbPath = join(makeTempDir("e42-mid-root-"), "lancedb-namespaced");
+    const t = turn({ runId: "journal:e42-mid", text: CHUNKED });
+    await captureAndKill({ stateDir, baseDbPath, t, stopAt: "row-classify", stopAfter: 1 });
+
+    const { engine } = setup({ extra: NO_DEDUP, dirs: { stateDir, baseDbPath } });
+    try {
+      assert.equal((await allCards(engine)).length, 1, "the killed capture committed its first row only");
+      const replay = await engine.capture(turn({ runId: "journal:e42-mid", text: CHUNKED })).done;
+      assert.ok(replay.stored >= 3 && replay.reason === undefined, JSON.stringify(replay));
+      const after = await allCards(engine);
+      assertNoDuplicateText(after);
+      assert.equal(after.length, replay.stored);
+    } finally {
+      await engine.close();
+    }
+  });
+
+  it("a kill before the first row committed (turn pending, no rows written): the replay stores the turn once", async () => {
+    const stateDir = makeTempDir("e42-none-state-");
+    const baseDbPath = join(makeTempDir("e42-none-root-"), "lancedb-namespaced");
+    const t = turn({ runId: "journal:e42-none", text: T });
+    await captureAndKill({ stateDir, baseDbPath, t, stopAt: "row-classify", stopAfter: 0 });
+
+    const { engine } = setup({ extra: NO_DEDUP, dirs: { stateDir, baseDbPath } });
+    try {
+      assert.equal((await allCards(engine)).length, 0, "nothing was committed");
+      const replay = await engine.capture(turn({ runId: "journal:e42-none", text: T })).done;
+      assert.ok(replay.stored >= 1 && replay.reason === undefined, JSON.stringify(replay));
+      assert.equal((await cardsWithText(engine, T)).length, 1);
+      assert.deepEqual(await engine.capture(turn({ runId: "journal:e42-none", text: T })).done, DUPLICATE);
+    } finally {
+      await engine.close();
+    }
+  });
+});
+
 describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
   const load = () => import("../engine/capture/turn-replay-guard.js");
   const done = (extra = {}) => async () => ({ stored: 1, skipped: 0, ...extra });
@@ -474,6 +577,83 @@ describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
     await guard.run(AGENT, "k-late", failing);
     await guard.run(AGENT, "k-late", failing);
     assert.equal(calls, 2);
+  });
+
+  it("E4.2: onRowsPlanned marks the turn pending: not a duplicate, and the next run gets the planned ids to remove; done replaces it", async () => {
+    const { createTurnReplayGuard } = await load();
+    const root = join(makeTempDir("e42-guard-pending-"), "_capture-turns");
+    const guard = createTurnReplayGuard({ root, logger: { warn() {} } });
+    const ids = ["0b6f4c1e-8d2a-4f7e-9c3b-1a2b3c4d5e6f", "1c7a5d2f-9e3b-4a8f-8d4c-2b3c4d5e6f70"];
+    // A capture that announced its rows and never settled (the process died
+    // there; here the capture merely ends with a reason).
+    const first = await guard.run(AGENT, "k-p", async (_onRowsSettled, pending) => {
+      assert.deepEqual(pending.staleRowIds, [], "a first capture has nothing to remove");
+      pending.onRowsPlanned(ids);
+      return { stored: 2, skipped: 0, reason: "aborted" };
+    });
+    assert.equal(first.reason, "aborted");
+    const file = () => JSON.parse(readFileSync(join(root, `${AGENT}.json`), "utf8")).entries;
+    assert.deepEqual(file().map((e) => [e.key, e.pending]), [["k-p", ids]], "the pending entry is persisted with its row ids");
+
+    // Survives a restart, is not a duplicate-turn, and hands its ids over.
+    const restarted = createTurnReplayGuard({ root, logger: { warn() {} } });
+    let seen = null;
+    const replay = await restarted.run(AGENT, "k-p", async (onRowsSettled, pending) => {
+      seen = pending.staleRowIds;
+      onRowsSettled();
+      return { stored: 2, skipped: 0 };
+    });
+    assert.deepEqual(replay, { stored: 2, skipped: 0 });
+    assert.deepEqual(seen, ids);
+    assert.deepEqual(file().map((e) => [e.key, e.pending]), [["k-p", undefined]], "done replaces the pending entry");
+    assert.deepEqual(await restarted.run(AGENT, "k-p", done()), DUPLICATE);
+  });
+
+  it("E4.2: a replay that dies again keeps the earlier ids pending alongside its own", async () => {
+    const { createTurnReplayGuard } = await load();
+    const root = join(makeTempDir("e42-guard-union-"), "_capture-turns");
+    const guard = createTurnReplayGuard({ root, logger: { warn() {} } });
+    const a = "2d8b6e3a-0f4c-4b9a-9e5d-3c4d5e6f7081";
+    const b = "3e9c7f4b-1a5d-4cab-8f6e-4d5e6f708192";
+    await guard.run(AGENT, "k-u", async (_s, pending) => { pending.onRowsPlanned([a]); return { stored: 1, skipped: 0, reason: "aborted" }; });
+    await guard.run(AGENT, "k-u", async (_s, pending) => { pending.onRowsPlanned([b]); return { stored: 0, skipped: 1, reason: "aborted" }; });
+    let seen = null;
+    await guard.run(AGENT, "k-u", async (_s, pending) => { seen = pending.staleRowIds; return { stored: 0, skipped: 1, reason: "aborted" }; });
+    assert.deepEqual(seen, [a, b]);
+  });
+
+  it("E4.2: onRowsKept drops the pending entry (rows kept, the turn stays unrecorded)", async () => {
+    const { createTurnReplayGuard } = await load();
+    const root = join(makeTempDir("e42-guard-kept-"), "_capture-turns");
+    const guard = createTurnReplayGuard({ root, logger: { warn() {} } });
+    const id = "4fad8a5c-2b6e-4dbc-9a7f-5e6f708192a3";
+    await guard.run(AGENT, "k-k", async (_s, pending) => {
+      pending.onRowsPlanned([id]);
+      pending.onRowsKept();
+      return { stored: 1, skipped: 0, reason: "capture-incomplete" };
+    });
+    let seen = null;
+    let calls = 0;
+    await guard.run(AGENT, "k-k", async (_s, pending) => { calls++; seen = pending.staleRowIds; return { stored: 1, skipped: 0 }; });
+    assert.equal(calls, 1, "not a duplicate-turn");
+    assert.deepEqual(seen, [], "nothing to remove");
+  });
+
+  it("E4.2: pending entries are bounded: invalid ids are dropped on load, and they expire with the TTL", async () => {
+    const { createTurnReplayGuard, REPLAY_GUARD_TTL_MS } = await load();
+    const root = join(makeTempDir("e42-guard-bound-"), "_capture-turns");
+    mkdirSync(root, { recursive: true });
+    const id = "5abe9b6d-3c7f-4ecd-8b80-6f708192a3b4";
+    let now = 5_000_000;
+    writeFileSync(join(root, `${AGENT}.json`), JSON.stringify({ v: 1, entries: [{ key: "k-b", at: now, pending: [id, "not-a-uuid", 7, "x\" OR 1=1"] }] }));
+    const guard = createTurnReplayGuard({ root, clock: () => now, logger: { warn() {} } });
+    let seen = null;
+    await guard.run(AGENT, "k-b", async (_s, pending) => { seen = pending.staleRowIds; return { stored: 0, skipped: 1, reason: "aborted" }; });
+    assert.deepEqual(seen, [id]);
+
+    now += REPLAY_GUARD_TTL_MS + 1;
+    await guard.run(AGENT, "k-b", async (_s, pending) => { seen = pending.staleRowIds; return { stored: 0, skipped: 1, reason: "aborted" }; });
+    assert.deepEqual(seen, [], "an expired pending entry is forgotten (its rows, if any, are the turn's only copy)");
   });
 
   it("a waiter's own signal aborting while it waits on an identical in-flight capture resolves immediately as aborted (M4)", async () => {

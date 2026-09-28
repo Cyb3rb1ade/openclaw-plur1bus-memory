@@ -3629,8 +3629,10 @@ export function createEngine(host, config, testOptions = {}) {
         // keyed by one and the stores are scoped by the other.
         if (t.principal?.agentId !== agentId) return { stored: 0, skipped: 1, reason: "principal-agent-mismatch" };
         // Recorded once the pipeline's rows settled cleanly (onRowsSettled,
-        // E4.1), or else when the result carries no `reason`.
-        return replayGuard.run(agentId, turnKeyOf(t), async (onRowsSettled) => {
+        // E4.1), or else when the result carries no `reason`. The pipeline
+        // announces its row ids before the first write and removes the rows
+        // of an earlier, never-settled capture of this turn (E4.2).
+        return replayGuard.run(agentId, turnKeyOf(t), async (onRowsSettled, { staleRowIds, onRowsPlanned, onRowsKept }) => {
           const workspaceDir = await host.workspaceDir(agentId);
           const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });
           // TurnRecord.incognito === false is the host's own classification:
@@ -3640,7 +3642,7 @@ export function createEngine(host, config, testOptions = {}) {
           const outcome = await internals.getCaptureTurn()(
             { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
             { agentId, workspaceDir, sessionKey: t.sessionKey },
-            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report, onRowsSettled },
+            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report, onRowsSettled, staleRowIds, onRowsPlanned, onRowsKept },
           );
           if (outcome?.ok) {
             // The scheduler reports ok once the worker settled; the pipeline

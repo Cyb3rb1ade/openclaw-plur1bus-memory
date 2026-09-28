@@ -697,6 +697,30 @@ Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
   OpenClaw-Adapter ihn direkt über `gateway_stop` schließt), und startet bei
   Bedarf in rund 600 ms neu.
 
+### E4.2 — Wiedergabe-Schutz schließt das Fenster zwischen Commit und Merken
+
+Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
+
+#### Behoben
+
+- **Ein Kill zwischen dem LanceDB-Commit einer Zeile und dem Merken des
+  Turns legt bei der Journal-Wiedergabe keine zweite Zeile mehr an.** Nach
+  E4.1 blieb genau dieses Fenster (unter Last einige zehn Millisekunden, im
+  Harness-Kill-Soak auf CI getroffen): Zeile gespeichert, Schlüssel noch
+  nicht geschrieben, die Wiedergabe speicherte den Turn erneut. Jetzt legt
+  die Capture-Pipeline die Zeilen-IDs vor der Speicherschleife fest (Ganzes
+  und alle Chunk-Teile), und der Wiedergabe-Schutz schreibt den Turn vor der
+  ersten Zeile als *pending* mit diesen IDs (fsync, dann atomares Rename).
+  Eine Wiedergabe eines pending-Turns entfernt zuerst die davon
+  vorhandenen Zeilen (Eintrag in `destructive-ops.jsonl`, `source:
+  "capture_replay_rollback"`) und speichert den Turn dann genau einmal — egal
+  ob der Prozess vor, während oder nach der Speicherschleife starb. Ist der
+  Turn fertig, ersetzt der normale Eintrag den pending-Eintrag
+  (`duplicate-turn` wie bisher). Pending-Einträge laufen mit derselben TTL
+  (7 Tage) und Obergrenze (512 je Agent) ab; ein nie wiedergegebener bleibt
+  mit seinen Zeilen als einzige Kopie stehen. Eine Capture, die mit nur
+  teilweise gespeicherten Zeilen zurückkehrt, verhält sich unverändert.
+
 ## [7.16.11] — 2026-09-26
 
 ### Geändert
