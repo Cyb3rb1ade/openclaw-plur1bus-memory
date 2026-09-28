@@ -433,6 +433,9 @@ export const DEPLOY_FILES = [
   "scripts/lib/deploy-integrity.mjs",
   "scripts/lib/installer-config.mjs",
   "scripts/lib/patch-agents-memory-instructions.mjs",
+  // HM1 Task 3: store snapshot step (installer update/adoption path).
+  "scripts/snapshot-store.mjs",
+  "lib/snapshot/store-snapshot.js",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;
