@@ -873,13 +873,33 @@ item failed — right after the store loop and **before** the post-store steps
 (speaker pipeline, meta-cognition, graph build, the neo embedding drain,
 scheduler settling). A process killed during those steps therefore has the
 turn recorded already, and the host's journal replay answers
-`"duplicate-turn"` instead of storing the row again; the only remaining
-window between "row stored" and "turn recorded" is the guard's own atomic
-file write (temp file + rename). The post-store steps are best-effort: if
+`"duplicate-turn"` instead of storing the row again. The post-store steps are best-effort: if
 one of them fails afterwards, or the capture's result still ends up carrying
 a `reason`, the turn **stays recorded**. A capture that settles with nothing
 stored (every item cleanly skipped) is recorded, as before, once it
 completes without a `reason`.
+
+**The commit-to-record window (E4.3).** Between a row's LanceDB commit and
+the guard's write of the key there is still a short window (tens of
+milliseconds under load; the harness kill soak hit it). It is closed by a
+**pending** entry: right before the first row is written, the pipeline fixes
+the ids of every row it is about to store — the whole text and each chunk
+part alike — and the guard persists the turn as pending with those ids
+(fsync, then atomic rename) before the loop starts. A pending entry is not a
+recorded turn: a replay of it runs the capture again, but first removes
+whichever of the announced rows exist (physical delete, one
+`destructive-ops.jsonl` line per row with `source: "capture_replay_rollback"`)
+and only then stores the turn — exactly once, whether the earlier process
+died before its first row, in the middle of the loop or after the last
+commit. Marking the turn done replaces the pending entry, so a later replay
+answers `"duplicate-turn"` as before. If removing a row fails, the replay
+fails with `"capture-failed"` and the turn stays pending for the next
+replay. A pending entry is bounded like every other entry (7 days, 512 per
+agent); one that is never replayed simply expires, and the rows it
+announced, if any were written, stay as the turn's only copy. A capture that
+**returns** with its rows only partly stored drops its pending entry (those
+rows have already been through the post-store steps), so the partial-failure
+behaviour below is unchanged.
 
 A capture that **fails or is only partly completed is not recorded** as a
 replay key, so replaying it runs the capture pipeline again — this is a

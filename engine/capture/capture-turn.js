@@ -33,6 +33,7 @@ import { planReminderExtraction } from "../../lib/reminder-extraction.js";
 import { saveReminder } from "../../lib/reminder-store.js";
 import { isBackgroundTurn, shouldSkipAutoCaptureForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { trySafeWarn } from "../../lib/safe-logging.js";
+import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
 
 /**
@@ -376,6 +377,27 @@ export function createTurnCapture(ctx) {
       let rowsSettled = false;
       try {
         throwIfCaptureAborted();
+        // E4.3: rows an earlier capture of this same turn wrote and never
+        // settled (the process died between a row's commit and the replay
+        // guard marking the turn done). They go before anything else — the
+        // dedup check below would otherwise find them and skip the texts —
+        // so this capture stores the turn exactly once. A delete that fails
+        // fails the capture: the turn stays pending and its next replay
+        // tries again, rather than storing a second copy now.
+        for (const staleId of Array.isArray(opts.staleRowIds) ? opts.staleRowIds : []) {
+          throwIfCaptureAborted();
+          if (!(await db.getById(staleId))) continue;
+          await db.delete(staleId);
+          appendDestructiveOpLog(hookCtx?.workspaceDir, {
+            event: "memory.deleted",
+            source: "capture_replay_rollback",
+            agentId,
+            memoryId: staleId,
+            runId: event?.runId ?? null,
+            timestamp: new Date().toISOString(),
+          });
+          host.logger.info(`memory-lancedb-namespaced: removed row ${staleId} of an unsettled earlier capture of this turn for agent=${agentId}`);
+        }
         // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
         const maxChars = cfg.captureMaxChars || 15000;
         const turnId = event.turnId || event.runId || "";
@@ -593,7 +615,18 @@ export function createTurnCapture(ctx) {
         // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
         const storedMemoryRows = [];
         let storeFailed = 0;
-        for (const p of toStore) {
+        // E4.3: the row ids are fixed here and announced before the first row
+        // is written, so a process killed anywhere from here on leaves the
+        // turn pending with these ids and its replay removes them first.
+        const plannedIds = toStore.map(() => randomUUID());
+        if (typeof opts.onRowsPlanned === "function" && plannedIds.length > 0) {
+          try {
+            opts.onRowsPlanned(plannedIds);
+          } catch (planErr) {
+            host.logger.warn(`memory-lancedb-namespaced: replay guard plan failed for agent=${agentId}: ${String(planErr)}`);
+          }
+        }
+        for (const [storeIndex, p] of toStore.entries()) {
           try {
             throwIfCaptureAborted();
             const categoryResult = categorizeMemoryWithReason(p.text);
@@ -610,7 +643,7 @@ export function createTurnCapture(ctx) {
             throwIfCaptureAborted();
             const captureMoodContext = emotionalPool.snapshot(agentId);
             const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
-            const memoryId = randomUUID();
+            const memoryId = plannedIds[storeIndex];
 
             const row = applyDynamicsDefaults({
               id: memoryId,
@@ -702,6 +735,16 @@ export function createTurnCapture(ctx) {
             opts.onRowsSettled();
           } catch (settleErr) {
             host.logger.warn(`memory-lancedb-namespaced: replay guard record failed for agent=${agentId}: ${String(settleErr)}`);
+          }
+        } else if (typeof opts.onRowsKept === "function") {
+          // E4.3: not a clean store, but the rows that did land stay and go
+          // through the post-store steps below (graph edges will reference
+          // them), so the turn is no longer pending: a replay retries the
+          // turn as before instead of removing these rows.
+          try {
+            opts.onRowsKept();
+          } catch (keptErr) {
+            host.logger.warn(`memory-lancedb-namespaced: replay guard update failed for agent=${agentId}: ${String(keptErr)}`);
           }
         }
 

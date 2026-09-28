@@ -35,12 +35,30 @@
  * `reason`, the turn stays recorded — its rows are stored, and a replay would
  * only duplicate them. A capture that never calls `onRowsSettled` is
  * recorded, as before, only when its result carries no `reason`.
+ *
+ * E4.3: that last window — the row's LanceDB commit has resolved, the key is
+ * not written yet — is closed by a *pending* entry. Before the first row is
+ * written the pipeline fixes the row ids and hands them to `onRowsPlanned`,
+ * which persists `{ key, at, pending: [ids] }` (fsync + atomic rename) before
+ * it returns. A pending entry is not a recorded turn: a replay of that key is
+ * captured again, and `fn` receives the pending row ids as `staleRowIds` so
+ * the pipeline removes whichever of them were written before it stores the
+ * turn — exactly once, whether the earlier process died before, during or
+ * after its store loop. Marking the turn done (`onRowsSettled`) replaces the
+ * pending entry. A capture that returns with its rows only partly stored
+ * calls `onRowsKept` instead: those rows have been through the post-store
+ * steps (graph edges reference them), so the pending entry is dropped and the
+ * replay behaves as before E4.3 (see "A capture that fails or is only partly
+ * completed" in docs/engine-api.md). A pending entry that is never replayed
+ * expires with the same TTL and cap as every other entry; its rows, if any
+ * were written, are then the turn's only copy and stay.
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { isAbortError, raceAbort } from "../../lib/abort.js";
+import { selectSafeUuids } from "../../lib/sql-safety.js";
 
 export const REPLAY_GUARD_MAX_ENTRIES = 512;
 export const REPLAY_GUARD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -75,17 +93,30 @@ const abortedTurn = () => ({ stored: 0, skipped: 1, reason: "aborted" });
 // (letters, digits, ".", "_" and "-" stay as they are).
 const fileNameOf = (agentId) => `${encodeURIComponent(String(agentId))}.json`;
 
+// A pending entry keeps only well-formed row ids: they reach LanceDB delete
+// filters, and a turn plans at most one row per captured text and part.
+const MAX_PENDING_ROW_IDS = 10_000;
+
 function validEntries(parsed) {
   if (!parsed || parsed.v !== FILE_VERSION || !Array.isArray(parsed.entries)) return null;
-  return parsed.entries.filter((e) => e && typeof e.key === "string" && Number.isFinite(e.at));
+  return parsed.entries
+    .filter((e) => e && typeof e.key === "string" && Number.isFinite(e.at))
+    .map((e) => (Array.isArray(e.pending)
+      ? { key: e.key, at: e.at, pending: selectSafeUuids(e.pending, MAX_PENDING_ROW_IDS) }
+      : { key: e.key, at: e.at }));
 }
 
 /**
  * @param {{ root: string, clock?: () => number, logger?: { warn?: (m: string) => void } }} options
- * @returns {{ run(agentId: string, key: string, fn: (onRowsSettled: () => void) => Promise<{ stored: number, skipped: number, reason?: string }>, opts?: { signal?: AbortSignal }): Promise<{ stored: number, skipped: number, reason?: string }> }}
+ * @returns {{ run(agentId: string, key: string, fn: (onRowsSettled: () => void, pending: { staleRowIds: string[], onRowsPlanned: (ids: string[]) => void, onRowsKept: () => void }) => Promise<{ stored: number, skipped: number, reason?: string }>, opts?: { signal?: AbortSignal }): Promise<{ stored: number, skipped: number, reason?: string }> }}
  *   (the result is a CaptureResult, types/engine.d.ts). `onRowsSettled`
  *   records the key immediately (idempotent, never throws; see E4.1 in the
- *   module comment). `opts.signal`, when
+ *   module comment). `pending` (E4.3): `staleRowIds` are the row ids of an
+ *   earlier, never-settled capture of this turn, for `fn` to remove before
+ *   it stores; `onRowsPlanned(ids)` persists the turn as pending with those
+ *   ids (plus `staleRowIds`) before the first row is written;
+ *   `onRowsKept()` drops the pending entry. Neither throws, and both are
+ *   no-ops once the turn is recorded. `opts.signal`, when
  *   given, only bounds a *waiter's* time in the queue behind an identical
  *   in-flight capture (M4, fix wave 1): the caller's own signal aborting
  *   while waiting resolves immediately with the same `{ reason: "aborted" }`
@@ -95,7 +126,7 @@ function validEntries(parsed) {
  *   itself, only this call's own wait.
  */
 export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
-  /** agentId → [{ key, at }], oldest first. */
+  /** agentId → [{ key, at, pending? }], oldest first. */
   const byAgent = new Map();
   /** `${agentId}\0${key}` → Promise<boolean> (true when that capture was recorded). */
   const inFlight = new Map();
@@ -130,7 +161,13 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
 
   const isRecorded = (agentId, key) => {
     const now = clock();
-    return load(agentId).some((e) => e.key === key && now - e.at <= REPLAY_GUARD_TTL_MS);
+    return load(agentId).some((e) => e.key === key && !e.pending && now - e.at <= REPLAY_GUARD_TTL_MS);
+  };
+  /** Row ids of a pending (planned, never settled) capture of this turn; [] when there is none. */
+  const pendingRowIdsOf = (agentId, key) => {
+    const now = clock();
+    const entry = load(agentId).find((e) => e.key === key && e.pending && now - e.at <= REPLAY_GUARD_TTL_MS);
+    return entry ? [...entry.pending] : [];
   };
 
   function persist(agentId, entries) {
@@ -138,7 +175,15 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
     const target = join(root, fileNameOf(agentId));
     const tmp = join(root, `.${fileNameOf(agentId)}.${process.pid}.${randomUUID()}.tmp`);
     try {
-      writeFileSync(tmp, JSON.stringify({ v: FILE_VERSION, entries }), { encoding: "utf8", mode: 0o600, flag: "wx" });
+      // fsync before the rename (E4.3): a pending entry must be on disk before
+      // the first row it announces is written.
+      const fd = openSync(tmp, "wx", 0o600);
+      try {
+        writeSync(fd, JSON.stringify({ v: FILE_VERSION, entries }));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
       renameSync(tmp, target);
     } catch (error) {
       try { rmSync(tmp, { force: true }); } catch { /* best effort */ }
@@ -146,10 +191,12 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
     }
   }
 
-  function record(agentId, key) {
+  /** Records `key` as done, as pending with `pending` row ids, or (`pending === null`) removes it. */
+  function record(agentId, key, pending) {
     const now = clock();
     const entries = fresh(load(agentId), now).filter((e) => e.key !== key);
-    entries.push({ key, at: now });
+    if (pending === undefined) entries.push({ key, at: now });
+    else if (pending !== null) entries.push({ key, at: now, pending });
     const kept = entries.slice(-REPLAY_GUARD_MAX_ENTRIES);
     // Kept in memory even if the write fails: this process still recognises
     // the replay, only a restart would not.
@@ -199,8 +246,23 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
           warn(`plur1bus: capture replay guard could not record a turn for agent=${agentId} (${String(error?.message || error).slice(0, 120)})`);
         }
       };
+      // E4.3: rows of an earlier capture of this turn that never settled.
+      const staleRowIds = pendingRowIdsOf(agentId, key);
+      const markPending = (label, pending) => {
+        if (recorded) return;
+        try {
+          record(agentId, key, pending);
+        } catch (error) {
+          warn(`plur1bus: capture replay guard could not ${label} a turn for agent=${agentId} (${String(error?.message || error).slice(0, 120)})`);
+        }
+      };
+      const pending = Object.freeze({
+        staleRowIds: Object.freeze([...staleRowIds]),
+        onRowsPlanned: (ids) => markPending("mark pending", [...new Set([...staleRowIds, ...selectSafeUuids(Array.isArray(ids) ? ids : [], MAX_PENDING_ROW_IDS)])]),
+        onRowsKept: () => markPending("unmark pending", null),
+      });
       try {
-        const result = await fn(recordOnce);
+        const result = await fn(recordOnce, pending);
         if (result && result.reason === undefined) recordOnce();
         return result;
       } finally {
