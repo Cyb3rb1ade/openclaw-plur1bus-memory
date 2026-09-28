@@ -1,0 +1,221 @@
+{
+  "workspaceDir": "<state>/workspace",
+  "plugin": {
+    "id": "memory-lancedb-namespaced",
+    "name": "PLUR1BUS Memory: Make your agent yours",
+    "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
+    "packageVersion": "7.5.3",
+    "version": "7.5.3",
+    "builtWithOpenClawVersion": "2026.8.2",
+    "packageName": "<at>cyb3rb1ade/plur1bus-memory",
+    "format": "openclaw",
+    "source": "<state>/extensions/memory-lancedb-namespaced/index.js",
+    "rootDir": "<state>/extensions/memory-lancedb-namespaced",
+    "origin": "global",
+    "workspaceDir": "<state>/workspace",
+    "trust": {
+      "reason": "provenance-invalid",
+      "registryPath": "<state>/state/openclaw.sqlite",
+      "origin": "global",
+      "installSource": "clawhub",
+      "installSpec": "clawhub:<at>cyb3rb1ade/plur1bus-memory<at>7.5.3"
+    },
+    "enabled": true,
+    "compat": [],
+    "explicitlyEnabled": true,
+    "activated": true,
+    "activationSource": "explicit",
+    "activationReason": "selected memory slot",
+    "syntheticAuthRefs": [],
+    "status": "loaded",
+    "toolNames": [],
+    "hookNames": [],
+    "channelIds": [],
+    "cliBackendIds": [],
+    "providerIds": [],
+    "embeddingProviderIds": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "speechProviderIds": [],
+    "realtimeTranscriptionProviderIds": [],
+    "realtimeVoiceProviderIds": [],
+    "mediaUnderstandingProviderIds": [],
+    "transcriptSourceProviderIds": [],
+    "imageGenerationProviderIds": [],
+    "videoGenerationProviderIds": [],
+    "musicGenerationProviderIds": [],
+    "webFetchProviderIds": [],
+    "webSearchProviderIds": [],
+    "migrationProviderIds": [],
+    "contextEngineIds": [],
+    "agentHarnessIds": [],
+    "cliCommands": [],
+    "services": [],
+    "gatewayDiscoveryServiceIds": [],
+    "commands": [],
+    "httpRoutes": 0,
+    "hookCount": 0,
+    "configSchema": true,
+    "configUiHints": "<trimmed: plugin manifest uiHints, not OpenClaw behaviour>",
+    "configJsonSchema": "<trimmed: plugin manifest configSchema, not OpenClaw behaviour>",
+    "contracts": {
+      "embeddingProviders": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "tools": [
+        "knowledge_update",
+        "memory_forget",
+        "memory_recall",
+        "memory_search",
+        "memory_store"
+      ]
+    },
+    "kind": "memory",
+    "memorySlotSelected": true,
+    "imported": false,
+    "dependencyStatus": {
+      "hasDependencies": true,
+      "installed": true,
+      "requiredInstalled": true,
+      "optionalInstalled": true,
+      "missing": [],
+      "missingOptional": [],
+      "dependencies": [
+        {
+          "name": "<at>lancedb/lancedb",
+          "spec": "^0.26.2",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/<at>lancedb/lancedb"
+        },
+        {
+          "name": "apache-arrow",
+          "spec": "18.1.0",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/apache-arrow"
+        },
+        {
+          "name": "openai",
+          "spec": "^6.27.0",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/openai"
+        }
+      ],
+      "optionalDependencies": [
+        {
+          "name": "<at>huggingface/transformers",
+          "spec": "4.2.0",
+          "installed": true,
+          "optional": true,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/<at>huggingface/transformers"
+        },
+        {
+          "name": "typescript",
+          "spec": "^5.9.3",
+          "installed": true,
+          "optional": true,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/typescript"
+        }
+      ]
+    }
+  },
+  "shape": "plain-capability",
+  "capabilityMode": "plain",
+  "capabilityCount": 1,
+  "capabilities": [
+    {
+      "kind": "embedding",
+      "ids": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ]
+    }
+  ],
+  "typedHooks": [],
+  "customHooks": [],
+  "tools": [],
+  "commands": [],
+  "cliCommands": [],
+  "services": [],
+  "decisions": [],
+  "gatewayDiscoveryServices": [],
+  "gatewayMethods": [],
+  "mcpServers": [],
+  "lspServers": [],
+  "httpRouteCount": 0,
+  "bundleCapabilities": [],
+  "diagnostics": [],
+  "policy": {
+    "allowedModels": [],
+    "hasAllowedModelsConfig": false
+  },
+  "compatibility": [],
+  "install": {
+    "source": "clawhub",
+    "spec": "clawhub:<at>cyb3rb1ade/plur1bus-memory<at>7.5.3",
+    "installPath": "<state>/extensions/memory-lancedb-namespaced",
+    "version": "7.5.3",
+    "integrity": "sha256-uCljc6uWIjD86JiD2Tn0P3IgYZJsqXIdDkBMHImLUR0=",
+    "resolvedAt": "2026-09-28T22:12:15.183Z",
+    "installedAt": "2026-09-28T22:12:15.185Z",
+    "clawhubUrl": "https://clawhub.ai",
+    "clawhubPackage": "<at>cyb3rb1ade/plur1bus-memory",
+    "clawhubFamily": "code-plugin",
+    "clawhubChannel": "community",
+    "clawhubTrustDisposition": "review-required",
+    "clawhubTrustScanStatus": "suspicious",
+    "clawhubTrustReasons": [
+      "scan:suspicious"
+    ],
+    "clawhubTrustCheckedAt": "2026-09-28T22:11:52.925Z",
+    "artifactKind": "npm-pack",
+    "artifactFormat": "tgz",
+    "npmIntegrity": "sha512-AaSlKrcqlIf6cVv1w21r9hvNb/3P3x7OhJcGdFNOncxNvsPoGgQAGVBJ/hEYhX5tekmy5imZ4TkA8i9GvOjuMg==",
+    "npmShasum": "61f72d4fdf85e27b50192e04f373222d5a1aee5e",
+    "npmTarballName": "cyb3rb1ade-plur1bus-memory-7.5.3.tgz",
+    "clawpackSha256": "b8296373ab962230fce89883d939f43f722061926ca9721d0e404c1c898b511d",
+    "clawpackSize": 1231785,
+    "acceptedSurface": {
+      "channels": [],
+      "providers": [],
+      "tools": [
+        "knowledge_update",
+        "memory_forget",
+        "memory_recall",
+        "memory_search",
+        "memory_store"
+      ],
+      "contracts": [
+        "embeddingProviders: plur1bus-e5-small",
+        "embeddingProviders: plur1bus-openai",
+        "embeddingProviders: plur1bus-openai-compatible",
+        "tools: knowledge_update",
+        "tools: memory_forget",
+        "tools: memory_recall",
+        "tools: memory_search",
+        "tools: memory_store"
+      ],
+      "hooks": [],
+      "mcpServers": [],
+      "cliCommands": [
+        "plur1bus-feature-cron",
+        "plur1bus-obsidian",
+        "plur1bus-reembedding",
+        "plur1bus-workspace"
+      ],
+      "cliBackends": [],
+      "skills": [],
+      "dangerousConfigFlags": []
+    },
+    "acceptedSurfaceHash": "8f39c8ba4e9186468ed0592229b073a83c94add1ec85293c5a8574d638fc4bae",
+    "acceptedSurfaceAt": "2026-09-28T22:12:15.184Z",
+    "acceptedSurfaceIntegrity": "sha256-uCljc6uWIjD86JiD2Tn0P3IgYZJsqXIdDkBMHImLUR0="
+  }
+}

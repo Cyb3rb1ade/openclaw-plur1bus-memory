@@ -1,0 +1,95 @@
+{
+  "cli": {
+    "version": "2026.9.6",
+    "entrypoint": "<prefix>/tools/node-v24.21.0/lib/node_modules/openclaw/dist/entry.js"
+  },
+  "logFile": "/tmp/openclaw/openclaw-2026-09-29.log",
+  "service": {
+    "inspectionReason": "service-manager-unavailable",
+    "label": "no supported service manager detected",
+    "systemdInstallation": {
+      "kind": "none"
+    },
+    "loaded": false,
+    "loadState": {
+      "status": "not-loaded"
+    },
+    "loadedText": "enabled",
+    "notLoadedText": "disabled",
+    "targetRole": "diagnostic-only",
+    "command": null,
+    "runtime": {
+      "status": "unknown",
+      "inspectionReason": "service-manager-unavailable",
+      "detail": "No supported service manager detected. Restart the Gateway you launched manually after the update.; retry with openclaw gateway status --deep",
+      "inspectionFailure": {
+        "code": "service-runtime-inspection-failed",
+        "detail": "No supported service manager detected. Restart the Gateway you launched manually after the update."
+      }
+    },
+    "configAudit": {
+      "ok": true,
+      "issues": []
+    }
+  },
+  "config": {
+    "cli": {
+      "path": "<state>/openclaw.json",
+      "exists": true,
+      "valid": true
+    },
+    "daemon": {
+      "path": "<state>/openclaw.json",
+      "exists": true,
+      "valid": true
+    }
+  },
+  "gateway": {
+    "bindMode": "loopback",
+    "bindHost": "127.0.0.1",
+    "port": 18789,
+    "portSource": "env/config",
+    "probeUrl": "ws://127.0.0.1:18789",
+    "controlUiLinks": {
+      "httpUrl": "http://127.0.0.1:18789/",
+      "wsUrl": "ws://127.0.0.1:18789"
+    },
+    "probeNote": "Loopback-only gateway; only local clients can connect.",
+    "version": null
+  },
+  "hostDesktop": {
+    "enabled": false,
+    "state": "disabled",
+    "port": 5900
+  },
+  "port": {
+    "port": 18789,
+    "status": "free",
+    "listeners": [],
+    "hints": []
+  },
+  "rpc": {
+    "ok": false,
+    "kind": "connect",
+    "capability": "unknown",
+    "auth": {
+      "role": null,
+      "scopes": [],
+      "capability": "unknown"
+    },
+    "server": {
+      "version": null,
+      "connId": null
+    },
+    "connectFailure": {
+      "kind": "unreachable"
+    },
+    "error": "connect ECONNREFUSED 127.0.0.1:18789",
+    "url": "ws://127.0.0.1:18789"
+  },
+  "extraServices": [],
+  "pluginVersionDrift": {
+    "gatewayVersion": "2026.9.6",
+    "drifts": []
+  }
+}

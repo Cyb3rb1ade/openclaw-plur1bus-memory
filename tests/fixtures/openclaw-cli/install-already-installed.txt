@@ -1,0 +1,28 @@
+Resolving clawhub:<at>cyb3rb1ade/plur1bus-memory<at>7.5.3…
+  Package   <at>cyb3rb1ade/plur1bus-memory<at>7.5.3
+  Type      plugin
+  Requires  pluginApi >=2026.8.1 · minGateway 2026.8.1
+  ClawHub   https://clawhub.ai/plugins/<at>cyb3rb1ade/plur1bus-memory
+╭─ ClawHub Security Audit ─────────────────────────────────────────────────────────────╮
+│ <at>cyb3rb1ade/plur1bus-memory<at>7.5.3                                                    │
+│                                                                                      │
+│ Outcome: Review                                                                      │
+│                                                                                      │
+│ Overview:                                                                            │
+│ This is a powerful persistent-memory plugin with disclosed safety controls, but its  │
+│ automatic cron provisioning and default mutation authority are broad enough to       │
+│ require user review before installation.                                             │
+│                                                                                      │
+│ Install only if you want a full persistent memory subsystem, not just a prompt       │
+│ skill. Before enabling it, explicitly set unwanted feature blocks to enabled:false   │
+│ rather than relying on omission, review generated cron jobs after first startup, and │
+│ disable model-facing destructive memory operations if you do not want the agent      │
+│ itself to mutate or forget durable memory.                                           │
+│                                                                                      │
+│ Details:                                                                             │
+│ https://clawhub.ai/cyb3rb1ade/plugins/plur1bus-memory/security-audit?version=7.5.3   │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+Downloading plugin <at>cyb3rb1ade/plur1bus-memory<at>7.5.3 from ClawHub…
+Extracting /tmp/openclaw/openclaw-clawhub-clawpack-cZ8gTW/cyb3rb1ade-plur1bus-memory-7.5.3.tgz…
+Plugin manifest id "memory-lancedb-namespaced" differs from npm package name "<at>cyb3rb1ade/plur1bus-memory"; using manifest id as the config key.
+plugin already exists: <state>/extensions/memory-lancedb-namespaced (delete it first)
