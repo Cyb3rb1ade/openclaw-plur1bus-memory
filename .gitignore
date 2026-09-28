@@ -73,6 +73,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
 !scripts/lib/find-deploy-dir.mjs
+!scripts/dist/
 .openclaw/*
 !.openclaw/extensions/
 .openclaw/extensions/*
