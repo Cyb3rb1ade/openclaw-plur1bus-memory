@@ -89,7 +89,10 @@ async function run(command, o) {
 function describe(command, result) {
   switch (command) {
     case "create":
-      return `snapshot ${result.id} created: ${result.files} files, ${result.bytes} bytes in ${result.dir}`;
+      return [
+        `snapshot ${result.id} created: ${result.files} files, ${result.bytes} bytes in ${result.dir}`,
+        result.pruned.length ? `pruned ${result.pruned.join(", ")}` : "pruned nothing",
+      ].join("\n");
     case "list":
       return result.length === 0 ? "no snapshots" : result.map((s) => `${s.id}\t${s.kind}\t${s.createdAt}\t${s.bytes}`).join("\n");
     case "verify":
@@ -111,6 +114,7 @@ async function main(argv) {
     const parsed = parseArgs(argv);
     command = parsed.command;
     const result = await run(command, parsed.opts);
+    for (const w of result?.warnings ?? []) process.stderr.write(`snapshot-store: warning: ${w}\n`);
     if (json) emit({ schema: SNAPSHOT_SCHEMA, ok: true, command, result });
     else process.stdout.write(`${describe(command, result)}\n`);
     return 0;

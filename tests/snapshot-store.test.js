@@ -151,9 +151,16 @@ describe("store snapshot (HM1-R8)", () => {
     writeFileSync(legacy, "legacy tar");
     assert.equal(MAX_SNAPSHOTS, 5);
     const ids = [];
+    const results = [];
     for (let i = 0; i < 7; i++) {
-      ids.push((await createSnapshot({ stateDir, baseDbPath, label: "n", now: () => Date.UTC(2026, 8, 28, 10, 0, i) })).id);
+      const r = await createSnapshot({ stateDir, baseDbPath, label: "n", now: () => Date.UTC(2026, 8, 28, 10, 0, i) });
+      results.push(r);
+      ids.push(r.id);
     }
+    assert.deepEqual(results[4].pruned, []);
+    assert.deepEqual(results[5].pruned, [ids[0]]);
+    assert.deepEqual(results[6].pruned, [ids[1]]);
+    assert.deepEqual(results[6].warnings, []);
     const list = await listSnapshots({ stateDir });
     const node = list.filter((s) => s.kind === "snapshot").map((s) => s.id).sort();
     assert.deepEqual(node, ids.slice(2).sort());
@@ -316,12 +323,92 @@ describe("store snapshot (HM1-R8)", () => {
     const unsafe = (e) => e instanceof SnapshotError && e.reason === "unsafe-path";
     await assert.rejects(createSnapshot({ stateDir, baseDbPath: stateDir, label: "x" }), unsafe);
     await assert.rejects(createSnapshot({ stateDir, baseDbPath: root, label: "x" }), unsafe);
+    // baseDbPath containing the snapshots root (<state>/memory is the parent of .snapshots).
+    const memoryDir = join(stateDir, "memory");
+    await assert.rejects(createSnapshot({ stateDir, baseDbPath: memoryDir, label: "x" }), unsafe);
+    await assert.rejects(createSnapshot({ stateDir, baseDbPath: join(memoryDir, ".snapshots"), label: "x" }), unsafe);
+    const good = await createSnapshot({ stateDir, baseDbPath, label: "good" });
+    await assert.rejects(restoreSnapshot({ stateDir, baseDbPath: memoryDir, id: good.id }), unsafe);
+    assert.ok(existsSync(join(memoryDir, ".snapshots", good.id, "snapshot.json")), "memory dir untouched");
+    assert.deepEqual(readdirSync(stateDir).filter((n) => n.startsWith("memory.")), []);
     const outside = makeTempDir("plur1bus-outside-");
     await nodeFs.rm(join(stateDir, "memory", "_archive"), { recursive: true });
     await nodeFs.symlink(outside, join(stateDir, "memory", "_archive"), "dir");
     await assert.rejects(createSnapshot({ stateDir, baseDbPath, label: "x" }), unsafe);
     await assert.rejects(restoreSnapshot({ stateDir, baseDbPath, id: "../../etc" }), unsafe);
     await assert.rejects(restoreSnapshot({ stateDir, baseDbPath, id: "plur1bus-20990101T000000Z-none" }), (e) => e instanceof SnapshotError && e.reason === "not-found");
+  });
+});
+
+describe("store snapshot: fix round 1", () => {
+  it("an invalid maxKeep is refused before any copy", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    let copies = 0;
+    const fsImpl = { ...nodeFs, async copyFile(...a) { copies += 1; return nodeFs.copyFile(...a); } };
+    for (const maxKeep of [0, -1, 1.5, "5"]) {
+      await assert.rejects(createSnapshot({ stateDir, baseDbPath, label: "x", maxKeep, fsImpl }), RangeError);
+    }
+    await assert.rejects(pruneSnapshots({ stateDir, maxKeep: 0 }), RangeError);
+    assert.equal(copies, 0);
+    assert.ok(!existsSync(snapshotsDir(stateDir)) || readdirSync(snapshotsDir(stateDir)).length === 0);
+  });
+
+  it("a prune failure after a successful create is a warning, not a failure", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const first = await createSnapshot({ stateDir, baseDbPath, label: "a", now: () => Date.UTC(2026, 8, 28, 10, 0, 0) });
+    const fsImpl = {
+      ...nodeFs,
+      async rm(p, o) {
+        if (p === first.dir) throw Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" });
+        return nodeFs.rm(p, o);
+      },
+    };
+    const second = await createSnapshot({ stateDir, baseDbPath, label: "b", maxKeep: 1, fsImpl, now: () => Date.UTC(2026, 8, 28, 10, 0, 1) });
+    assert.deepEqual(second.pruned, []);
+    assert.equal(second.warnings.length, 1);
+    assert.match(second.warnings[0], /pruning old snapshots failed/);
+    await verifySnapshot({ dir: second.dir });
+    assert.ok(existsSync(first.dir));
+  });
+
+  it("restore refuses before copying when the store's disk lacks 1.1x the store bytes", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "t" });
+    const before = walkFiles(baseDbPath).map((p) => [p, sha256(join(baseDbPath, p))]);
+    let copies = 0;
+    const fsImpl = {
+      ...nodeFs,
+      async statfs() { return { bsize: 4096, bavail: 1, bfree: 1, blocks: 100, type: 0, files: 0, ffree: 0 }; },
+      async copyFile(...a) { copies += 1; return nodeFs.copyFile(...a); },
+    };
+    await assert.rejects(restoreSnapshot({ stateDir, baseDbPath, id: snap.id, fsImpl }), (e) => e instanceof SnapshotError && e.reason === "insufficient-disk");
+    assert.equal(copies, 0);
+    assert.deepEqual(walkFiles(baseDbPath).map((p) => [p, sha256(join(baseDbPath, p))]), before);
+    assert.deepEqual(readdirSync(dirname(baseDbPath)).filter((n) => n.startsWith("lancedb-namespaced.")), []);
+  });
+
+  it("a failed rollback rename reports both errors and where the previous store is", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "t" });
+    const rowsBefore = await rowsOf(baseDbPath, "main");
+    const fsImpl = {
+      ...nodeFs,
+      async rename(from, to) {
+        if (from.includes(".restore-")) throw Object.assign(new Error("move-in failed"), { code: "EIO" });
+        if (from.includes(".pre-restore-")) throw Object.assign(new Error("move-back failed"), { code: "EIO" });
+        return nodeFs.rename(from, to);
+      },
+    };
+    let err;
+    await restoreSnapshot({ stateDir, baseDbPath, id: snap.id, fsImpl }).catch((e) => { err = e; });
+    assert.ok(err, "restore must fail");
+    assert.equal(err.name, "RestoreRollbackError");
+    assert.match(err.cause.message, /move-in failed/);
+    assert.match(err.rollbackError.message, /move-back failed/);
+    assert.ok(err.preRestorePath.startsWith(`${baseDbPath}.pre-restore-`));
+    assert.ok(err.message.includes(err.preRestorePath));
+    assert.deepEqual(await rowsOf(err.preRestorePath, "main"), rowsBefore, "the previous store is intact where the error says");
+    assert.ok(!readdirSync(dirname(baseDbPath)).some((n) => n.includes(".restore-") && !n.includes(".pre-restore-")));
   });
 });
 
@@ -336,6 +423,12 @@ describe("snapshot-store CLI", () => {
     assert.equal(doc.schema, SNAPSHOT_SCHEMA);
     assert.equal(doc.ok, true);
     const id = doc.result.id;
+    assert.deepEqual(doc.result.pruned, []);
+    const human = run("create", "--state-dir", stateDir, "--base-db-path", baseDbPath, "--label", "cli2");
+    assert.equal(human.status, 0, human.stderr);
+    assert.match(human.stdout, /pruned nothing/);
+    const second = JSON.parse(run("list", "--state-dir", stateDir, "--json").stdout).result.find((s) => s.label === "cli2");
+    await nodeFs.rm(join(snapshotsDir(stateDir), second.id), { recursive: true });
     const listed = JSON.parse(run("list", "--state-dir", stateDir, "--json").stdout);
     assert.deepEqual(listed.result.map((s) => s.id), [id]);
     assert.equal(run("verify", "--state-dir", stateDir, "--id", id, "--json").status, 0);
