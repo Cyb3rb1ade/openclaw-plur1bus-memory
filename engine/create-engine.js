@@ -3631,7 +3631,7 @@ export function createEngine(host, config, testOptions = {}) {
         // Recorded once the pipeline's rows settled cleanly (onRowsSettled,
         // E4.1), or else when the result carries no `reason`. The pipeline
         // announces its row ids before the first write and removes the rows
-        // of an earlier, never-settled capture of this turn (E4.2).
+        // of an earlier, never-settled capture of this turn (E4.3).
         return replayGuard.run(agentId, turnKeyOf(t), async (onRowsSettled, { staleRowIds, onRowsPlanned, onRowsKept }) => {
           const workspaceDir = await host.workspaceDir(agentId);
           const memoryCtx = memoryContextFromPrincipal(t.principal, { workspaceDir, sessionKey: t.sessionKey, workspaceAliases: internals.memoryWorkspaceAliases, logger: host.logger });

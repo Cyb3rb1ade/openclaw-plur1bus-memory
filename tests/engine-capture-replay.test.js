@@ -325,7 +325,7 @@ describe("Engine.capture replay guard (E4 Task 5, Q3)", () => {
   });
 });
 
-// The crash window (E4.2): a process SIGKILLed after a capture's rows are
+// The crash window (E4.3): a process SIGKILLed after a capture's rows are
 // committed but before the replay guard marked the turn done. The capture runs
 // in a child process (tests/fixtures/capture-crash-child.mjs) that stops at a
 // fixed point of the pipeline and is killed there; a fresh engine over the
@@ -380,7 +380,7 @@ function assertNoDuplicateText(cards) {
   assert.deepEqual(duplicated, [], "no text is stored twice");
 }
 
-describe("Engine.capture replay guard: the crash window between row commit and done (E4.2)", () => {
+describe("Engine.capture replay guard: the crash window between row commit and done (E4.3)", () => {
   it("a kill after the row committed, before the turn was marked done: the replay leaves exactly one row", async () => {
     const stateDir = makeTempDir("e42-crash-state-");
     const baseDbPath = join(makeTempDir("e42-crash-root-"), "lancedb-namespaced");
@@ -579,7 +579,7 @@ describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
     assert.equal(calls, 2);
   });
 
-  it("E4.2: onRowsPlanned marks the turn pending: not a duplicate, and the next run gets the planned ids to remove; done replaces it", async () => {
+  it("E4.3: onRowsPlanned marks the turn pending: not a duplicate, and the next run gets the planned ids to remove; done replaces it", async () => {
     const { createTurnReplayGuard } = await load();
     const root = join(makeTempDir("e42-guard-pending-"), "_capture-turns");
     const guard = createTurnReplayGuard({ root, logger: { warn() {} } });
@@ -609,7 +609,7 @@ describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
     assert.deepEqual(await restarted.run(AGENT, "k-p", done()), DUPLICATE);
   });
 
-  it("E4.2: a replay that dies again keeps the earlier ids pending alongside its own", async () => {
+  it("E4.3: a replay that dies again keeps the earlier ids pending alongside its own", async () => {
     const { createTurnReplayGuard } = await load();
     const root = join(makeTempDir("e42-guard-union-"), "_capture-turns");
     const guard = createTurnReplayGuard({ root, logger: { warn() {} } });
@@ -622,7 +622,7 @@ describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
     assert.deepEqual(seen, [a, b]);
   });
 
-  it("E4.2: onRowsKept drops the pending entry (rows kept, the turn stays unrecorded)", async () => {
+  it("E4.3: onRowsKept drops the pending entry (rows kept, the turn stays unrecorded)", async () => {
     const { createTurnReplayGuard } = await load();
     const root = join(makeTempDir("e42-guard-kept-"), "_capture-turns");
     const guard = createTurnReplayGuard({ root, logger: { warn() {} } });
@@ -639,7 +639,7 @@ describe("createTurnReplayGuard (E4 Task 5, unit)", () => {
     assert.deepEqual(seen, [], "nothing to remove");
   });
 
-  it("E4.2: pending entries are bounded: invalid ids are dropped on load, and they expire with the TTL", async () => {
+  it("E4.3: pending entries are bounded: invalid ids are dropped on load, and they expire with the TTL", async () => {
     const { createTurnReplayGuard, REPLAY_GUARD_TTL_MS } = await load();
     const root = join(makeTempDir("e42-guard-bound-"), "_capture-turns");
     mkdirSync(root, { recursive: true });

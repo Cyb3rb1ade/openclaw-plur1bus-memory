@@ -36,7 +36,7 @@
  * only duplicate them. A capture that never calls `onRowsSettled` is
  * recorded, as before, only when its result carries no `reason`.
  *
- * E4.2: that last window — the row's LanceDB commit has resolved, the key is
+ * E4.3: that last window — the row's LanceDB commit has resolved, the key is
  * not written yet — is closed by a *pending* entry. Before the first row is
  * written the pipeline fixes the row ids and hands them to `onRowsPlanned`,
  * which persists `{ key, at, pending: [ids] }` (fsync + atomic rename) before
@@ -48,7 +48,7 @@
  * pending entry. A capture that returns with its rows only partly stored
  * calls `onRowsKept` instead: those rows have been through the post-store
  * steps (graph edges reference them), so the pending entry is dropped and the
- * replay behaves as before E4.2 (see "A capture that fails or is only partly
+ * replay behaves as before E4.3 (see "A capture that fails or is only partly
  * completed" in docs/engine-api.md). A pending entry that is never replayed
  * expires with the same TTL and cap as every other entry; its rows, if any
  * were written, are then the turn's only copy and stay.
@@ -111,7 +111,7 @@ function validEntries(parsed) {
  * @returns {{ run(agentId: string, key: string, fn: (onRowsSettled: () => void, pending: { staleRowIds: string[], onRowsPlanned: (ids: string[]) => void, onRowsKept: () => void }) => Promise<{ stored: number, skipped: number, reason?: string }>, opts?: { signal?: AbortSignal }): Promise<{ stored: number, skipped: number, reason?: string }> }}
  *   (the result is a CaptureResult, types/engine.d.ts). `onRowsSettled`
  *   records the key immediately (idempotent, never throws; see E4.1 in the
- *   module comment). `pending` (E4.2): `staleRowIds` are the row ids of an
+ *   module comment). `pending` (E4.3): `staleRowIds` are the row ids of an
  *   earlier, never-settled capture of this turn, for `fn` to remove before
  *   it stores; `onRowsPlanned(ids)` persists the turn as pending with those
  *   ids (plus `staleRowIds`) before the first row is written;
@@ -175,7 +175,7 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
     const target = join(root, fileNameOf(agentId));
     const tmp = join(root, `.${fileNameOf(agentId)}.${process.pid}.${randomUUID()}.tmp`);
     try {
-      // fsync before the rename (E4.2): a pending entry must be on disk before
+      // fsync before the rename (E4.3): a pending entry must be on disk before
       // the first row it announces is written.
       const fd = openSync(tmp, "wx", 0o600);
       try {
@@ -246,7 +246,7 @@ export function createTurnReplayGuard({ root, clock = Date.now, logger }) {
           warn(`plur1bus: capture replay guard could not record a turn for agent=${agentId} (${String(error?.message || error).slice(0, 120)})`);
         }
       };
-      // E4.2: rows of an earlier capture of this turn that never settled.
+      // E4.3: rows of an earlier capture of this turn that never settled.
       const staleRowIds = pendingRowIdsOf(agentId, key);
       const markPending = (label, pending) => {
         if (recorded) return;

@@ -697,7 +697,7 @@ Contract-Version **1.9.0**. Details in `docs/engine-api.md`, Abschnitt
   OpenClaw-Adapter ihn direkt über `gateway_stop` schließt), und startet bei
   Bedarf in rund 600 ms neu.
 
-### E4.2 — Wiedergabe-Schutz schließt das Fenster zwischen Commit und Merken
+### E4.3 — Wiedergabe-Schutz schließt das Fenster zwischen Commit und Merken
 
 Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
 

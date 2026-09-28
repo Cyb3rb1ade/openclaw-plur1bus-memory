@@ -377,7 +377,7 @@ export function createTurnCapture(ctx) {
       let rowsSettled = false;
       try {
         throwIfCaptureAborted();
-        // E4.2: rows an earlier capture of this same turn wrote and never
+        // E4.3: rows an earlier capture of this same turn wrote and never
         // settled (the process died between a row's commit and the replay
         // guard marking the turn done). They go before anything else — the
         // dedup check below would otherwise find them and skip the texts —
@@ -615,7 +615,7 @@ export function createTurnCapture(ctx) {
         // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
         const storedMemoryRows = [];
         let storeFailed = 0;
-        // E4.2: the row ids are fixed here and announced before the first row
+        // E4.3: the row ids are fixed here and announced before the first row
         // is written, so a process killed anywhere from here on leaves the
         // turn pending with these ids and its replay removes them first.
         const plannedIds = toStore.map(() => randomUUID());
@@ -737,7 +737,7 @@ export function createTurnCapture(ctx) {
             host.logger.warn(`memory-lancedb-namespaced: replay guard record failed for agent=${agentId}: ${String(settleErr)}`);
           }
         } else if (typeof opts.onRowsKept === "function") {
-          // E4.2: not a clean store, but the rows that did land stay and go
+          // E4.3: not a clean store, but the rows that did land stay and go
           // through the post-store steps below (graph edges will reference
           // them), so the turn is no longer pending: a replay retries the
           // turn as before instead of removing these rows.

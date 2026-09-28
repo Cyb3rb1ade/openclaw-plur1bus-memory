@@ -879,7 +879,7 @@ a `reason`, the turn **stays recorded**. A capture that settles with nothing
 stored (every item cleanly skipped) is recorded, as before, once it
 completes without a `reason`.
 
-**The commit-to-record window (E4.2).** Between a row's LanceDB commit and
+**The commit-to-record window (E4.3).** Between a row's LanceDB commit and
 the guard's write of the key there is still a short window (tens of
 milliseconds under load; the harness kill soak hit it). It is closed by a
 **pending** entry: right before the first row is written, the pipeline fixes
