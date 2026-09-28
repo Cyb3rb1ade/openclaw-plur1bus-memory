@@ -74,6 +74,9 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/lib/deploy-integrity.mjs
 !scripts/lib/find-deploy-dir.mjs
 !scripts/dist/
+!scripts/dist/installer/
+# Built installer bundle (npm run build:installer); a release artefact, never committed.
+dist-installer/
 .openclaw/*
 !.openclaw/extensions/
 .openclaw/extensions/*
