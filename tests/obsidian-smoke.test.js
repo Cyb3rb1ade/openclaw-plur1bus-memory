@@ -18,7 +18,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import {
   syncWorkspace,
   confirmVaultPath,
@@ -30,6 +30,7 @@ import {
 import {
   safeBridgePath,
   resolveObsidianBridgePaths,
+  resolveUnder,
 } from "../lib/obsidian-control-room.js";
 import { resolveInside } from "../lib/sql-safety.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
@@ -276,6 +277,16 @@ describe("obsidian-smoke-p5", () => {
     assert.throws(() => resolveInside(base, "../../../etc/passwd"), /Path traversal blocked/);
     assert.throws(() => resolveInside(base, "foo/../../../etc/passwd"), /Path traversal blocked/);
     assert.doesNotThrow(() => resolveInside(base, "memory/cards/test.md"));
+  });
+
+  it("resolveUnder accepts win32 paths under the vault and still refuses escapes (path.win32)", () => {
+    // resolve() yields "\\"-separated paths on win32; a "/" prefix check refused every path under the vault.
+    assert.equal(resolveUnder("C:\\Vault", "plur1bus", {}, win32), "C:\\Vault\\plur1bus");
+    assert.equal(resolveUnder("C:\\Vault", "plur1bus/review-bundles/x.md", {}, win32), "C:\\Vault\\plur1bus\\review-bundles\\x.md");
+    assert.equal(resolveUnder("C:\\Vault", ".", {}, win32), "C:\\Vault");
+    assert.throws(() => resolveUnder("C:\\Vault", "../Other", {}, win32), /Path traversal rejected/);
+    assert.throws(() => resolveUnder("C:\\Vault", "C:/Other", {}, win32), /Unsafe absolute path rejected/);
+    assert.throws(() => resolveUnder("C:\\Vault", "..\\Vault2\\x", {}, win32), /Path traversal rejected/);
   });
 
   it("blocks path traversal via safeBridgePath", () => {
