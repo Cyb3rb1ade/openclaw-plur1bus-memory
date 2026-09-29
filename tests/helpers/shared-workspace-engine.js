@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { createEngine } from "../../engine/create-engine.js";
 import { createStubHost } from "../../lib/host-services.js";
 import { makeTempDir } from "./temp-dir.js";
+import { prepareEngineSharedBase } from "./win32-shared-owner.js";
 
 /** Nested under its own temp root so a per-agent sibling directory of baseDbPath (e.g. `_tombstones`, `_proposals`) is per test. */
 export function freshBaseDbPath(prefix) {
@@ -84,7 +85,7 @@ export function setup(prefix) {
   const stateDir = makeTempDir(`${prefix}state-`);
   const baseDbPath = freshBaseDbPath(prefix);
   const { host, workspaceDir } = twoWorkspaceHost(stateDir);
-  const engine = createEngine(host, config(baseDbPath), { internals: { embeddings: flatEmbedder() } });
+  const engine = prepareEngineSharedBase(createEngine(host, config(baseDbPath), { internals: { embeddings: flatEmbedder() } }));
   return { stateDir, baseDbPath, workspaceDir, engine };
 }
 

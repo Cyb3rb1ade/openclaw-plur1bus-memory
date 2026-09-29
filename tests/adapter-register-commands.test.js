@@ -26,6 +26,7 @@ import {
   completePendingConfirmation, parseConfirmationCommand, rememberPendingConfirmation, resolveConfirmationIdentity,
 } from "../engine/commands/command-helpers.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { prepareEngineSharedBase } from "./helpers/win32-shared-owner.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(join(root, "adapter", "openclaw", "register-commands.js"), "utf8");
@@ -152,6 +153,7 @@ async function e1Harness({ shareOverride } = {}) {
     duplicateThreshold: 1.01,
     security: { allowedUserIds: [E1_OWNER], allowedChatIds: ["chat-a"] },
   }, { internals: { embeddings: e1FlatEmbedder() } });
+  prepareEngineSharedBase(engine);
   const internals = internalsOf(engine);
   const calls = { forget: [], correct: [], share: [] };
   const engineMemory = Object.freeze({
