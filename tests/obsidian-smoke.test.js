@@ -32,6 +32,7 @@ import {
   resolveObsidianBridgePaths,
   resolveUnder,
 } from "../lib/obsidian-control-room.js";
+import { assertSafeRelativePath as safeAssertRelative, isDotObsidianSegment } from "../lib/obsidian/safe-paths.js";
 import { resolveInside } from "../lib/sql-safety.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
@@ -287,6 +288,18 @@ describe("obsidian-smoke-p5", () => {
     assert.throws(() => resolveUnder("C:\\Vault", "../Other", {}, win32), /Path traversal rejected/);
     assert.throws(() => resolveUnder("C:\\Vault", "C:/Other", {}, win32), /Unsafe absolute path rejected/);
     assert.throws(() => resolveUnder("C:\\Vault", "..\\Vault2\\x", {}, win32), /Path traversal rejected/);
+  });
+
+  it("the .obsidian write gate folds case and trailing dots/spaces on every platform", () => {
+    const gate = /\.obsidian writes require obsidianBridge\.allowDotObsidianWrite=true/;
+    for (const segment of [".obsidian", ".OBSIDIAN", ".Obsidian", ".obsidian.", ".obsidian ", ".OBSIDIAN. ."]) {
+      assert.throws(() => resolveUnder("C:\\Vault", `${segment}/plugins/x.js`, {}, win32), gate, segment);
+      assert.throws(() => resolveUnder("/vault", `${segment}/plugins/x.js`), gate, segment);
+      assert.throws(() => safeAssertRelative(`${segment}/plugins/x.js`), gate, segment);
+      assert.equal(resolveUnder("C:\\Vault", `${segment}/plugins/x.js`, { allowDotObsidianWrite: true }, win32).endsWith("x.js"), true);
+    }
+    assert.equal(resolveUnder("C:\\Vault", ".obsidianx/notes.md", {}, win32), "C:\\Vault\\.obsidianx\\notes.md");
+    assert.equal(isDotObsidianSegment("obsidian"), false);
   });
 
   it("blocks path traversal via safeBridgePath", () => {
