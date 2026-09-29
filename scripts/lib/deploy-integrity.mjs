@@ -319,6 +319,7 @@ export const DEPLOY_FILES = [
   // ── plugin distribution: feed verifier and builder (HM1) ──────────────────
   "scripts/dist/minisign.mjs",
   "scripts/dist/build-plugin-feed.mjs",
+  "scripts/dist/render-bootstraps.mjs", // renders install-plugin.sh/.ps1 (HM1 Task 7)
   // ── plugin distribution: Node installer sources and bundler (HM1 Task 5) ──
   "scripts/dist/build-installer.mjs",
   "scripts/dist/installer/main.mjs",

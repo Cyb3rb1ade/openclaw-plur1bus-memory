@@ -1,0 +1,498 @@
+# PLUR1BUS memory plugin bootstrap for OpenClaw on Windows (D87, spec A.3, HM1-R3). Windows PowerShell 5.1 or PowerShell 7.
+# @@RENDER_NOTE@@
+#
+#   & ([scriptblock]::Create((irm https://plur1bus.app/install-plugin.ps1))) [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
+#
+# Looks for OpenClaw natively (openclaw.cmd / openclaw on PATH) and in the WSL distros (`wsl.exe -l -q`, running
+# ones from `wsl.exe -l -q --running`; a running distro is probed with `wsl.exe -d <d> -e sh -lc 'command -v openclaw'`, a
+# stopped one only with -ProbeWsl or an interactive yes, HM1-R1/C12). Several candidates and no -Target: an
+# interactive choice, or exit 2 listing them. Then it downloads the signed plugin feed ({channel}.json) and its
+# .minisig into a private temp dir and verifies the signature with the inlined minisign verifier (run with Node)
+# BEFORE trusting any URL or hash in it.
+#   native:     downloads the bundled Node installer named by the feed, checks its SHA-256 (.NET) and runs
+#               `node <installer> --feed-file <verified feed> [installer flags]`.
+#   wsl:<d>:    downloads the feed's bootstrap.sh, checks its SHA-256 and pipes it into
+#               `wsl.exe -d <d> -e sh -s -- --version <resolved> [installer flags]` (an `--offline <path>` is
+#               translated with `wslpath -a`); the distro's own run verifies the feed again (spec A.3 step 1).
+# The installer's (or the distro's) exit code is this script's. Needs no administrator rights; writes nothing but its
+# temp dir (removed on exit). The script is unsigned (Authenticode pending, as the harness install.ps1).
+#
+# Exit codes: 0 ok, 1 failed (nothing changed; bad signature or checksum), 2 needs a choice, 3 incompatible host
+# (openclaw-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from the installer).
+#
+# Environment:
+#   PLUR1BUS_PLUGIN_CHANNEL   release channel, ^[a-z0-9-]+$ (default: stable)
+#   PLUR1BUS_PLUGIN_FEED      feed URL; `{channel}` is replaced (default: https://updates.plur1bus.app/plugin/{channel}.json).
+#                             https:// only.
+# Test seams (only with PLUR1BUS_PLUGIN_INSTALLER_TEST=1): file:// feeds and downloads, PLUR1BUS_PLUGIN_PUBKEY (a
+# TEST ONLY minisign public key used instead of the channel keys below) and PLUR1BUS_PLUGIN_WSL_EXE (a wsl.exe shim).
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
+
+$PubkeyStable = '@@PUBKEY_STABLE@@'
+$PubkeyBeta = '@@PUBKEY_BETA@@'
+# scripts/dist/minisign.mjs, verbatim, as base64 (this file stays ASCII-only).
+$MinisignJsBase64 = '@@MINISIGN_JS@@'
+
+$BootstrapArgs = @($args)
+$script:TestMode = ($env:PLUR1BUS_PLUGIN_INSTALLER_TEST -eq '1')
+
+# Every refusal throws; the top level prints the message, cleans up and exits with the code (never `exit` inside
+# try/finally).
+function Fail([int]$code, [string]$message) {
+  $e = [System.InvalidOperationException]::new($message)
+  $e.Data['exitCode'] = $code
+  throw $e
+}
+
+function Say([string]$message) {
+  [Console]::Error.WriteLine("install-plugin: $message")
+}
+
+# win-x64 | win-arm64, or $null outside the release matrix. PROCESSOR_ARCHITEW6432 is the real architecture when this
+# shell runs under emulation (a 32-bit or x64 PowerShell on ARM64).
+function Get-Target {
+  $arch = $env:PROCESSOR_ARCHITEW6432
+  if ([string]::IsNullOrEmpty($arch)) { $arch = $env:PROCESSOR_ARCHITECTURE }
+  switch ($arch) {
+    'AMD64' { return 'win-x64' }
+    'ARM64' { return 'win-arm64' }
+    default { return $null }
+  }
+}
+
+# SHA-256 of <file>, lower-case hex, straight from .NET. Not Get-FileHash: in Windows PowerShell 5.1 that is a script
+# function of the Microsoft.PowerShell.Utility module, and when 5.1 starts from pwsh 7 it inherits pwsh's PSModulePath,
+# cannot load that module and reports "The term 'Get-FileHash' is not recognized".
+function Get-Sha256([string]$file) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($file)
+  try {
+    return ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant()
+  } finally {
+    $stream.Dispose()
+    $sha.Dispose()
+  }
+}
+
+# Refuses anything but https://, and file:// outside the test flag.
+function Assert-Url([string]$uri, [string]$what) {
+  if ($uri -like 'https://*') { return }
+  if ($uri -like 'file://*') {
+    if ($script:TestMode) { return }
+    Fail 1 "$what must be https:// (file:// only with PLUR1BUS_PLUGIN_INSTALLER_TEST=1): $uri"
+  }
+  Fail 1 "$what must be https://: $uri"
+}
+
+# Copies <uri> to <file>: https:// through Invoke-WebRequest, file:// (test flag only) from the local path.
+function Get-Resource([string]$uri, [string]$file) {
+  $u = [Uri]::new($uri)
+  if ($u.Scheme -eq 'file') {
+    if (-not $script:TestMode) { Fail 1 "refusing a file:// URL without PLUR1BUS_PLUGIN_INSTALLER_TEST=1: $uri" }
+    # LocalPath decodes the URL (%7E in an 8.3 name such as RUNNER~1).
+    [System.IO.File]::Copy($u.LocalPath, $file, $true)
+  } elseif ($u.Scheme -eq 'https') {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $u -OutFile $file -UseBasicParsing -MaximumRedirection 5
+  } else {
+    Fail 1 "refusing to download over anything but https: $uri"
+  }
+}
+
+# Runs a native command, stdout captured as lines, stderr to the console. Local 'Continue': Windows PowerShell 5.1
+# turns native stderr into terminating errors under 'Stop'.
+function Invoke-Capture([string]$file, [string[]]$argv) {
+  $ErrorActionPreference = 'Continue'
+  $lines = @(& $file @argv)
+  return [pscustomobject]@{ Code = $LASTEXITCODE; Lines = $lines }
+}
+
+# wsl.exe prints UTF-16LE unless WSL_UTF8=1 is honoured; decoded as the console code page that leaves NULs (and maybe
+# a BOM) between the characters. Strip them, and CRs, whatever the decoding was.
+function ConvertFrom-NativeLines($lines) {
+  $text = (@($lines) | ForEach-Object { [string]$_ }) -join "`n"
+  $text = $text.Replace([string][char]0, '').Replace([string][char]0xFEFF, '').Replace("`r", '')
+  return @($text -split "`n")
+}
+
+# node_ok: the version satisfies the plugin's engines range >=24.16.0 <25 || >=26.1.0.
+function Test-NodeOk([string]$node) {
+  if ([string]::IsNullOrEmpty($node) -or -not (Test-Path -LiteralPath $node -PathType Leaf)) { return $false }
+  try { $r = Invoke-Capture $node @('--version') } catch { return $false }
+  if ($r.Code -ne 0) { return $false }
+  $v = ((ConvertFrom-NativeLines $r.Lines) -join '').Trim()
+  if ($v -notmatch '^v(\d+)\.(\d+)\.(\d+)') { return $false }
+  $major = [int]$Matches[1]
+  $minor = [int]$Matches[2]
+  if ($major -eq 24 -and $minor -ge 16) { return $true }
+  if ($major -eq 26 -and $minor -ge 1) { return $true }
+  return ($major -ge 27)
+}
+
+# node.exe on PATH if new enough, else the Node OpenClaw brings: node.exe beside openclaw.cmd (npm's cmd shim prefers
+# it), then install.ps1's portable Node (%LOCALAPPDATA%\OpenClaw\deps\portable-node, fact sheet; Task 8 CI verifies).
+# A node.cmd/.bat on PATH is only probed for its version (for the message): it is never run with the installer's
+# arguments, because cmd.exe re-parses them. (Off Windows, pwsh finds the plain `node` executable.)
+function Find-Node([string]$openclawPath) {
+  $script:PathNodeNote = 'none'
+  $name = 'node.exe'
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '/') { $name = 'node' }
+  $c = Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) {
+    if (Test-NodeOk $c.Path) { return $c.Path }
+    $script:PathNodeNote = "$($c.Path) (version outside the range)"
+  } else {
+    $shim = Get-Command -Name node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($shim) {
+      $state = 'version outside the range'
+      if (Test-NodeOk $shim.Path) { $state = 'a script shim, not run with the installer' }
+      $script:PathNodeNote = "$($shim.Path) ($state)"
+    }
+  }
+  $candidates = New-Object System.Collections.ArrayList
+  if ($openclawPath) { [void]$candidates.Add((Join-Path (Split-Path -Parent $openclawPath) 'node.exe')) }
+  if ($env:LOCALAPPDATA) { [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'OpenClaw\deps\portable-node\node.exe')) }
+  foreach ($n in $candidates) {
+    if (Test-NodeOk $n) { return $n }
+  }
+  return $null
+}
+
+function Get-WslExe {
+  if ($script:TestMode -and -not [string]::IsNullOrEmpty($env:PLUR1BUS_PLUGIN_WSL_EXE)) { return $env:PLUR1BUS_PLUGIN_WSL_EXE }
+  $c = Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) { return $c.Path }
+  return $null
+}
+
+# Distro names from `wsl.exe <listArgs>` (NULs, BOM and CRs stripped; lines that are not a distro name, such as
+# "There are no running distributions.", dropped), or $null when wsl.exe fails.
+function Get-WslNames([string]$wsl, [string[]]$listArgs) {
+  try { $r = Invoke-Capture $wsl $listArgs } catch { return $null }
+  if ($r.Code -ne 0) { return $null }
+  $names = New-Object System.Collections.ArrayList
+  foreach ($l in (ConvertFrom-NativeLines $r.Lines)) {
+    $n = ($l -replace '^[^A-Za-z0-9]+', '').Trim()
+    if ($n -match '^[A-Za-z0-9][A-Za-z0-9._-]*$' -and -not $names.Contains($n)) { [void]$names.Add($n) }
+  }
+  return ,$names.ToArray()
+}
+
+# The installed distros with their running state. `-l -q --running` is locale-independent (no state column to parse);
+# if it fails, every distro counts as stopped and is only probed with consent. It exits non-zero on some WSL builds
+# when nothing runs, which also means "none running".
+function Get-WslDistros([string]$wsl) {
+  $out = New-Object System.Collections.ArrayList
+  $all = Get-WslNames $wsl @('-l', '-q')
+  if ($null -eq $all) { return $out.ToArray() }
+  $running = Get-WslNames $wsl @('-l', '-q', '--running')
+  if ($null -eq $running) { $running = @() }
+  foreach ($n in $all) { [void]$out.Add([pscustomobject]@{ Name = $n; Running = (@($running) -contains $n) }) }
+  return $out.ToArray()
+}
+
+function Test-WslOpenclaw([string]$wsl, [string]$distro) {
+  try { $r = Invoke-Capture $wsl @('-d', $distro, '-e', 'sh', '-lc', 'command -v openclaw') } catch { return $false }
+  return ($r.Code -eq 0 -and ((ConvertFrom-NativeLines $r.Lines) -join '').Trim().Length -gt 0)
+}
+
+function Test-Interactive {
+  try { return ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) } catch { return $false }
+}
+
+# One argument quoted for CommandLineToArgvW (the rules wsl.exe and the C runtime parse by).
+function ConvertTo-WinArg([string]$a) {
+  if ($a.Length -gt 0 -and $a -notmatch '[\s"]') { return $a }
+  $sb = New-Object System.Text.StringBuilder
+  [void]$sb.Append('"')
+  $bs = 0
+  foreach ($ch in $a.ToCharArray()) {
+    if ($ch -eq [char]'\') { $bs++; continue }
+    if ($ch -eq [char]'"') {
+      [void]$sb.Append('\' * (2 * $bs + 1))
+      [void]$sb.Append('"')
+      $bs = 0
+      continue
+    }
+    if ($bs -gt 0) { [void]$sb.Append('\' * $bs); $bs = 0 }
+    [void]$sb.Append($ch)
+  }
+  [void]$sb.Append('\' * (2 * $bs))
+  [void]$sb.Append('"')
+  return $sb.ToString()
+}
+
+# Runs <file> <argv> with the console's stdin and stderr, and copies its stdout to this process's stdout byte for byte
+# (a PowerShell `&` call would decode and re-encode it with the console code page, garbling the installer's UTF-8
+# --json on Windows PowerShell 5.1). Also keeps empty arguments. Returns the exit code.
+function Invoke-Passthrough([string]$file, [string[]]$argv) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $file
+  $psi.Arguments = (@($argv) | ForEach-Object { ConvertTo-WinArg $_ }) -join ' '
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $p = [System.Diagnostics.Process]::Start($psi)
+  try {
+    $stdout = [Console]::OpenStandardOutput()
+    try {
+      $p.StandardOutput.BaseStream.CopyTo($stdout)
+      $stdout.Flush()
+    } finally {
+      $stdout.Dispose()
+    }
+    $p.WaitForExit()
+    return $p.ExitCode
+  } finally {
+    $p.Dispose()
+  }
+}
+
+# Runs <file> <argv> with <bytes> as its stdin, byte for byte (no PowerShell pipeline re-encoding or added newline);
+# stdout and stderr stay the console's. Returns the exit code.
+function Invoke-WithStdin([string]$file, [string[]]$argv, [byte[]]$bytes) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $file
+  $psi.Arguments = (@($argv) | ForEach-Object { ConvertTo-WinArg $_ }) -join ' '
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardInput = $true
+  $p = [System.Diagnostics.Process]::Start($psi)
+  try {
+    try {
+      $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+      $p.StandardInput.BaseStream.Flush()
+    } catch [System.IO.IOException] {
+      # the child stopped reading early; its exit code tells what happened
+    }
+    try { $p.StandardInput.Close() } catch [System.IO.IOException] { }
+    $p.WaitForExit()
+    return $p.ExitCode
+  } finally {
+    $p.Dispose()
+  }
+}
+
+$FieldsJs = @'
+const fs = require("fs");
+const [file, ...paths] = process.argv.slice(2);
+let feed;
+try { feed = JSON.parse(fs.readFileSync(file, "utf8")); } catch { process.stderr.write("the feed is not JSON\n"); process.exit(2); }
+for (const path of paths) {
+  const v = path.split(".").reduce((o, k) => (o !== null && typeof o === "object" ? o[k] : undefined), feed);
+  if (typeof v !== "string" || !/^[\x21-\x7e]+$/.test(v)) { process.stderr.write("the feed has no valid " + path + "\n"); process.exit(3); }
+  process.stdout.write(v + "\n");
+}
+'@
+
+$exitCode = 1
+$tmp = $null
+$savedEnv = @{}
+foreach ($name in @('WSL_UTF8', 'WSLENV', 'PLUR1BUS_PLUGIN_CHANNEL')) {
+  $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+try {
+  # Bootstrap switches are taken out; everything else goes to the installer unchanged.
+  $target = $null
+  $probeWsl = $false
+  $rest = New-Object System.Collections.ArrayList
+  for ($i = 0; $i -lt $BootstrapArgs.Count; $i++) {
+    $a = [string]$BootstrapArgs[$i]
+    # `powershell -File` splits an argument at "-name:" and drops the colon: `--offline=C:\x` arrives as
+    # `--offline=C` and `\x`. Put a drive-letter path back together. Assumes a `--flag=<one letter>` followed by an
+    # argument starting with \ or / is always such a split (no installer flag takes a one-letter value).
+    if ($a -cmatch '^--[A-Za-z][A-Za-z0-9-]*=[A-Za-z]$' -and $i + 1 -lt $BootstrapArgs.Count -and ([string]$BootstrapArgs[$i + 1]) -match '^[\\/]') {
+      $i++
+      $a = $a + ':' + [string]$BootstrapArgs[$i]
+    }
+    if ($a -eq '-Target' -or $a -eq '-Target:') {
+      if ($i + 1 -ge $BootstrapArgs.Count) { Fail 1 '-Target needs native or wsl:<distro>' }
+      $i++
+      $target = [string]$BootstrapArgs[$i]
+    } elseif ($a -like '-Target:*') {
+      $target = $a.Substring(8)
+    } elseif ($a -eq '-ProbeWsl') {
+      $probeWsl = $true
+    } else {
+      [void]$rest.Add($a)
+    }
+  }
+  $wslDistro = $null
+  if ($null -ne $target -and $target -ne 'native') {
+    if ($target -match '^wsl:(.+)$') { $wslDistro = $Matches[1] } else { Fail 1 "invalid -Target ${target}: expected native or wsl:<distro>" }
+  }
+
+  $channel = $env:PLUR1BUS_PLUGIN_CHANNEL
+  if ([string]::IsNullOrEmpty($channel)) { $channel = 'stable' }
+  if ($channel -cnotmatch '^[a-z0-9-]+$') { Fail 1 "invalid channel: $channel (expected ^[a-z0-9-]+`$)" }
+  $feedUrl = $env:PLUR1BUS_PLUGIN_FEED
+  if ([string]::IsNullOrEmpty($feedUrl)) { $feedUrl = 'https://updates.plur1bus.app/plugin/{channel}.json' }
+  $feedUrl = $feedUrl.Replace('{channel}', $channel)
+  Assert-Url $feedUrl 'the feed URL'
+
+  $pubkey = $null
+  if ($script:TestMode -and -not [string]::IsNullOrEmpty($env:PLUR1BUS_PLUGIN_PUBKEY)) {
+    $pubkey = $env:PLUR1BUS_PLUGIN_PUBKEY
+  } elseif ($channel -ceq 'stable') {
+    $pubkey = $PubkeyStable
+  } elseif ($channel -ceq 'beta') {
+    $pubkey = $PubkeyBeta
+  }
+  if ([string]::IsNullOrEmpty($pubkey)) { Fail 1 "this bootstrap carries no feed public key for channel $channel" }
+
+  # Candidates: native OpenClaw and WSL distros with OpenClaw.
+  $env:WSL_UTF8 = '1'
+  $nativeOc = $null
+  $c = Get-Command openclaw.cmd, openclaw -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) { $nativeOc = $c.Path }
+  $wsl = Get-WslExe
+  $mode = $null
+  if ($target -eq 'native') {
+    if (-not $nativeOc) { Fail 3 'openclaw-not-found: no openclaw.cmd or openclaw on PATH' }
+    $mode = 'native'
+  } elseif ($wslDistro) {
+    if (-not $wsl) { Fail 3 "wsl-not-found: -Target $target needs wsl.exe" }
+    $names = @(Get-WslDistros $wsl | ForEach-Object { $_.Name })
+    if ($names -notcontains $wslDistro) { Fail 3 "unknown WSL distro $wslDistro (installed: $(if ($names.Count) { $names -join ', ' } else { 'none' }))" }
+    $mode = 'wsl'
+  } else {
+    $candidates = New-Object System.Collections.ArrayList
+    if ($nativeOc) { [void]$candidates.Add('native') }
+    if ($wsl) {
+      $distros = @(Get-WslDistros $wsl)
+      $stopped = @($distros | Where-Object { -not $_.Running } | ForEach-Object { $_.Name })
+      $probeStopped = $probeWsl
+      if (-not $probeWsl -and $stopped.Count -gt 0 -and (Test-Interactive)) {
+        $ans = Read-Host "install-plugin: also look for OpenClaw in the stopped WSL distros $($stopped -join ', ')? This starts them. [y/N]"
+        $probeStopped = ($ans -match '^(y|yes|j|ja)$')
+      }
+      foreach ($d in $distros) {
+        if (($d.Running -or $probeStopped) -and (Test-WslOpenclaw $wsl $d.Name)) { [void]$candidates.Add("wsl:$($d.Name)") }
+      }
+      if (-not $probeStopped -and $stopped.Count -gt 0) {
+        Say "not probed (stopped WSL distros; -ProbeWsl starts and probes them): $($stopped -join ', ')"
+      }
+    }
+    if ($candidates.Count -eq 0) { Fail 3 'openclaw-not-found: no openclaw.cmd or openclaw on PATH and none in a probed WSL distro; install OpenClaw first (https://docs.openclaw.ai/install/installer)' }
+    $choice = $candidates[0]
+    if ($candidates.Count -gt 1) {
+      if (-not (Test-Interactive)) {
+        Fail 2 "several OpenClaw installations found: $($candidates -join ', '); choose one with -Target native or -Target wsl:<distro>"
+      }
+      for ($i = 0; $i -lt $candidates.Count; $i++) { [Console]::Error.WriteLine("  [$($i + 1)] $($candidates[$i])") }
+      $ans = Read-Host "install-plugin: install into which one? [1-$($candidates.Count)]"
+      $n = 0
+      if (-not [int]::TryParse([string]$ans, [ref]$n) -or $n -lt 1 -or $n -gt $candidates.Count) {
+        Fail 2 "no valid choice; candidates: $($candidates -join ', '); choose one with -Target"
+      }
+      $choice = $candidates[$n - 1]
+    }
+    if ($choice -eq 'native') { $mode = 'native' } else { $mode = 'wsl'; $wslDistro = $choice.Substring(4) }
+  }
+
+  $hostTarget = $null
+  if ($mode -eq 'native') {
+    $hostTarget = Get-Target
+    if ($null -eq $hostTarget) { Fail 3 "unsupported-target: windows/$($env:PROCESSOR_ARCHITECTURE); the plugin supports win-x64 and win-arm64 (and linux-x64, linux-arm64, darwin-arm64)" }
+  }
+  $node = Find-Node $nativeOc
+  if (-not $node) {
+    if ($mode -eq 'wsl') {
+      Fail 3 "node-not-found: checking the feed signature for WSL needs Node >=24.16.0 <25 || >=26.1.0 on Windows; or run install-plugin.sh inside the distro (wsl -d $wslDistro)"
+    }
+    Fail 3 "node-not-found: need node.exe >=24.16.0 <25 || >=26.1.0 on PATH or the Node OpenClaw installed (on PATH: $($script:PathNodeNote))"
+  }
+
+  # Private temp dir: the feed, its signature, the verifier, then the installer or bootstrap.sh.
+  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('plur1bus-plugin-' + [Guid]::NewGuid().ToString('N'))
+  [void][System.IO.Directory]::CreateDirectory($tmp)
+  $feedFile = Join-Path $tmp "$channel.json"
+  $sigFile = "$feedFile.minisig"
+  try { Get-Resource $feedUrl $feedFile } catch { Fail 1 "could not read the plugin feed ${feedUrl}: $($_.Exception.Message)" }
+  try { Get-Resource "$feedUrl.minisig" $sigFile } catch { Fail 1 "could not read the feed signature ${feedUrl}.minisig: $($_.Exception.Message)" }
+  $minisignFile = Join-Path $tmp 'minisign.mjs'
+  [System.IO.File]::WriteAllBytes($minisignFile, [Convert]::FromBase64String($MinisignJsBase64))
+  $verifyFile = Join-Path $tmp 'verify.mjs'
+  [System.IO.File]::WriteAllText($verifyFile, "import { mainVerify } from './minisign.mjs';`nprocess.exitCode = mainVerify(process.argv.slice(2));`n")
+  $r = Invoke-Capture $node @($verifyFile, $pubkey, $feedFile, $sigFile)
+  if ($r.Code -ne 0) { Fail 1 "the plugin feed signature does not verify: $feedUrl (nothing else fetched, nothing changed)" }
+  Say "feed signature verified ($(((ConvertFrom-NativeLines $r.Lines) -join ' ').Trim()))"
+
+  $fieldsFile = Join-Path $tmp 'fields.cjs'
+  [System.IO.File]::WriteAllText($fieldsFile, $FieldsJs)
+  $r = Invoke-Capture $node @($fieldsFile, $feedFile, 'schema', 'channel', 'installer.url', 'installer.sha256', 'hosts.openclaw.latest', 'bootstrap.sh.url', 'bootstrap.sh.sha256')
+  $fld = @(ConvertFrom-NativeLines $r.Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+  if ($r.Code -ne 0 -or $fld.Count -ne 7) { Fail 1 'the plugin feed is invalid' }
+  if ($fld[0] -cne 'plur1bus.plugin-feed/1') { Fail 1 "unknown feed schema $($fld[0])" }
+  if ($fld[1] -cne $channel) { Fail 1 "the feed at $feedUrl is for channel $($fld[1]), not $channel" }
+
+  if ($mode -eq 'native') {
+    $url = $fld[2]
+    $want = $fld[3]
+    Assert-Url $url 'the installer URL'
+    if ($want -cnotmatch '^[0-9a-f]{64}$') { Fail 1 'the plugin feed has no valid installer sha256' }
+    $installer = Join-Path $tmp 'plur1bus-plugin-installer.mjs'
+    Say "downloading $url ($hostTarget)"
+    try { Get-Resource $url $installer } catch { Fail 1 "could not download ${url}: $($_.Exception.Message)" }
+    $got = Get-Sha256 $installer
+    if ($got -ne $want) { Fail 1 "checksum mismatch for ${url}: expected $want, got $got (nothing run)" }
+    $exitCode = Invoke-Passthrough $node (@($installer, '--feed-file', $feedFile) + [string[]]$rest.ToArray())
+  } else {
+    $shUrl = $fld[5]
+    $shWant = $fld[6]
+    Assert-Url $shUrl 'the bootstrap.sh URL'
+    if ($shWant -cnotmatch '^[0-9a-f]{64}$') { Fail 1 'the plugin feed has no valid bootstrap.sh sha256' }
+    # --version <v> resolves here (default: the feed's latest) and is passed first; --offline <path> is translated.
+    $version = $fld[4]
+    $outArgs = New-Object System.Collections.ArrayList
+    $offline = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $rest.Count; $i++) {
+      $a = [string]$rest[$i]
+      if ($a -ceq '--version' -and $i + 1 -lt $rest.Count) { $i++; $version = [string]$rest[$i] }
+      elseif ($a -clike '--version=*') { $version = $a.Substring(10) }
+      elseif ($a -ceq '--offline' -and $i + 1 -lt $rest.Count) { $i++; [void]$outArgs.Add('--offline'); [void]$offline.Add($outArgs.Count); [void]$outArgs.Add([string]$rest[$i]) }
+      elseif ($a -clike '--offline=*') { [void]$outArgs.Add('--offline'); [void]$offline.Add($outArgs.Count); [void]$outArgs.Add($a.Substring(10)) }
+      else { [void]$outArgs.Add($a) }
+    }
+    if ($version -cnotmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') { Fail 1 "invalid --version $version" }
+
+    $shFile = Join-Path $tmp 'install-plugin.sh'
+    try { Get-Resource $shUrl $shFile } catch { Fail 1 "could not download ${shUrl}: $($_.Exception.Message)" }
+    $shGot = Get-Sha256 $shFile
+    if ($shGot -ne $shWant) { Fail 1 "checksum mismatch for ${shUrl}: expected $shWant, got $shGot (nothing run)" }
+
+    foreach ($k in $offline) {
+      $winPath = [string]$outArgs[$k]
+      $r = Invoke-Capture $wsl @('-d', $wslDistro, '-e', 'wslpath', '-a', $winPath)
+      $linPath = ((ConvertFrom-NativeLines $r.Lines) -join '').Trim()
+      if ($r.Code -ne 0 -or $linPath -eq '') { Fail 1 "cannot translate --offline $winPath into a path inside $wslDistro" }
+      $outArgs[$k] = $linPath
+    }
+
+    # The channel (and a mirror feed URL) reach the distro's run through WSLENV.
+    $env:PLUR1BUS_PLUGIN_CHANNEL = $channel
+    $share = @('PLUR1BUS_PLUGIN_CHANNEL/u')
+    if (-not [string]::IsNullOrEmpty($env:PLUR1BUS_PLUGIN_FEED)) { $share += 'PLUR1BUS_PLUGIN_FEED/u' }
+    $wslEnv = @()
+    if (-not [string]::IsNullOrEmpty($env:WSLENV)) { $wslEnv = @($env:WSLENV -split ':' | Where-Object { $_ -ne '' }) }
+    foreach ($s in $share) {
+      $nm = ($s -split '/')[0]
+      if (-not (@($wslEnv | Where-Object { ($_ -split '/')[0] -eq $nm }).Count)) { $wslEnv += $s }
+    }
+    $env:WSLENV = $wslEnv -join ':'
+
+    Say "handing over to WSL distro $wslDistro (plugin $version)"
+    $argv = @('-d', $wslDistro, '-e', 'sh', '-s', '--', '--version', $version) + [string[]]$outArgs.ToArray()
+    $exitCode = Invoke-WithStdin $wsl $argv ([System.IO.File]::ReadAllBytes($shFile))
+  }
+} catch {
+  $ex = $_.Exception
+  $exitCode = 1
+  if ($ex.Data.Contains('exitCode')) { $exitCode = [int]$ex.Data['exitCode'] }
+  [Console]::Error.WriteLine("install-plugin: $($ex.Message)")
+} finally {
+  if ($tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+  foreach ($name in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnv[$name], 'Process') }
+}
+if ($null -eq $exitCode) { $exitCode = 1 }
+exit $exitCode
