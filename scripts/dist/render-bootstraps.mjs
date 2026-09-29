@@ -15,7 +15,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -74,9 +74,16 @@ export function renderBootstraps(o = {}) {
   return { sh, ps1 };
 }
 
+/** <file>.tmp-<pid> -> fsync -> rename (global constraint "atomic writes"). */
 function writeAtomic(file, text, mode) {
   const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, text, { mode });
+  const fd = openSync(tmp, "w", mode);
+  try {
+    writeSync(fd, text);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, file);
 }
 

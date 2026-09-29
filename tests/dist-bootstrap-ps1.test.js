@@ -113,11 +113,15 @@ const sc = JSON.parse(readFileSync(process.env.WSL_SHIM_SCENARIO, "utf8"));
 const args = process.argv.slice(2);
 appendFileSync(sc.log, JSON.stringify({ argv: args, WSL_UTF8: process.env.WSL_UTF8 ?? null, WSLENV: process.env.WSLENV ?? null }) + "\\n");
 const utf16 = (s) => process.stdout.write(Buffer.from(s, "utf16le"));
-if (args[0] === "-l" && args.includes("-q")) { utf16(sc.distros.map((d) => d.name + "\\r\\n").join("")); process.exit(0); }
-if (args[0] === "-l" && args.includes("-v")) {
-  utf16("  NAME            STATE           VERSION\\r\\n" + sc.distros.map((d, i) => (i === 0 ? "* " : "  ") + d.name.padEnd(16) + (d.running ? "Running" : "Stopped").padEnd(16) + "2\\r\\n").join(""));
+// \`-l -q --running\` lists running distros only (none: a message and a non-zero exit, like some WSL builds);
+// \`-l -q\` lists all. \`-l -v\` (locale-dependent state column) is deliberately unsupported (T7-b).
+if (args[0] === "-l" && args.includes("-q") && args.includes("--running")) {
+  const running = sc.distros.filter((d) => d.running);
+  if (running.length === 0) { utf16("There are no running distributions.\\r\\n"); process.exit(1); }
+  utf16(running.map((d) => d.name + "\\r\\n").join(""));
   process.exit(0);
 }
+if (args[0] === "-l" && args.includes("-q") && args.length === 2) { utf16(sc.distros.map((d) => d.name + "\\r\\n").join("")); process.exit(0); }
 if (args[0] === "-d") {
   const d = sc.distros.find((x) => x.name === args[1]);
   const rest = args.slice(2);
@@ -229,15 +233,18 @@ function makePsCase(o) {
     shBytes: readFileSync(shPath),
     goodNode: join(goodNodeDir, "node.exe"),
     privateNodePath,
-    run(args = []) {
+    run(args = [], { raw = false } = {}) {
       const r = spawnSync(o.shell.exe, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps1Script, ...args], {
         env,
-        encoding: "utf8",
+        encoding: raw ? "buffer" : "utf8",
         stdio: ["pipe", "pipe", "pipe"],
         input: "",
         timeout: 120_000,
       });
       return { code: r.status, stdout: r.stdout, stderr: r.stderr, out: `${r.stdout}\n${r.stderr}` };
+    },
+    markText() {
+      return existsSync(mark) ? readFileSync(mark, "utf8") : null;
     },
     installer() {
       return existsSync(mark) ? JSON.parse(readFileSync(mark, "utf8")) : null;
@@ -337,6 +344,8 @@ describe("install-plugin.ps1", { skip: PS_SKIP }, () => {
         assert.doesNotMatch(r.stderr, /wsl:docker-desktop/);
         assert.equal(c.installer(), null);
         assert.ok(c.wslCalls().every((e) => e.WSL_UTF8 === "1"), "WSL_UTF8=1 is set for every wsl.exe call");
+        assert.ok(c.wslCalls().some((e) => e.argv.join(" ") === "-l -q --running"), "running state comes from -l -q --running");
+        assert.ok(!c.wslCalls().some((e) => e.argv.includes("-v")), "no locale-dependent -l -v parse");
       });
 
       it("a stopped distro is not probed without -ProbeWsl", () => {
@@ -376,6 +385,16 @@ describe("install-plugin.ps1", { skip: PS_SKIP }, () => {
         assert.equal(r2.code, 1, r2.out);
         assert.match(r2.stderr, /checksum mismatch/);
         assert.equal(bad.wslStdin(), null);
+      });
+
+      it("the installer's --json stdout comes through byte-identical, non-ASCII included", () => {
+        const c = makePsCase({ shell });
+        const dir = "C:\\Users\\J\u00fcrgen A\\.openclaw \u00e9\u4e2d";
+        const r = c.run(["--json", "--state-dir", dir], { raw: true });
+        assert.equal(r.code, 0, r.stderr.toString("utf8"));
+        // The fake installer writes JSON.stringify(record) + "\n" to stdout and the same JSON to its mark file.
+        assert.deepEqual(r.stdout, Buffer.from(c.markText() + "\n", "utf8"));
+        assert.deepEqual(c.installer().argv.slice(2), ["--json", "--state-dir", dir]);
       });
 
       it("ps1 passes a non-ASCII state dir through unchanged", () => {

@@ -4,7 +4,7 @@
 #   & ([scriptblock]::Create((irm https://plur1bus.app/install-plugin.ps1))) [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
 #
 # Looks for OpenClaw natively (openclaw.cmd / openclaw on PATH) and in the WSL distros (`wsl.exe -l -q`, running
-# state from `wsl.exe -l -v`; a running distro is probed with `wsl.exe -d <d> -e sh -lc 'command -v openclaw'`, a
+# ones from `wsl.exe -l -q --running`; a running distro is probed with `wsl.exe -d <d> -e sh -lc 'command -v openclaw'`, a
 # stopped one only with -ProbeWsl or an interactive yes, HM1-R1/C12). Several candidates and no -Target: an
 # interactive choice, or exit 2 listing them. Then it downloads the signed plugin feed ({channel}.json) and its
 # .minisig into a private temp dir and verifies the signature with the inlined minisign verifier (run with Node)
@@ -131,11 +131,26 @@ function Test-NodeOk([string]$node) {
   return ($major -ge 27)
 }
 
-# node on PATH if new enough, else the Node OpenClaw brings: node.exe beside openclaw.cmd (npm's cmd shim prefers
+# node.exe on PATH if new enough, else the Node OpenClaw brings: node.exe beside openclaw.cmd (npm's cmd shim prefers
 # it), then install.ps1's portable Node (%LOCALAPPDATA%\OpenClaw\deps\portable-node, fact sheet; Task 8 CI verifies).
+# A node.cmd/.bat on PATH is only probed for its version (for the message): it is never run with the installer's
+# arguments, because cmd.exe re-parses them. (Off Windows, pwsh finds the plain `node` executable.)
 function Find-Node([string]$openclawPath) {
-  $c = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($c -and (Test-NodeOk $c.Path)) { return $c.Path }
+  $script:PathNodeNote = 'none'
+  $name = 'node.exe'
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '/') { $name = 'node' }
+  $c = Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) {
+    if (Test-NodeOk $c.Path) { return $c.Path }
+    $script:PathNodeNote = "$($c.Path) (version outside the range)"
+  } else {
+    $shim = Get-Command -Name node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($shim) {
+      $state = 'version outside the range'
+      if (Test-NodeOk $shim.Path) { $state = 'a script shim, not run with the installer' }
+      $script:PathNodeNote = "$($shim.Path) ($state)"
+    }
+  }
   $candidates = New-Object System.Collections.ArrayList
   if ($openclawPath) { [void]$candidates.Add((Join-Path (Split-Path -Parent $openclawPath) 'node.exe')) }
   if ($env:LOCALAPPDATA) { [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'OpenClaw\deps\portable-node\node.exe')) }
@@ -152,26 +167,29 @@ function Get-WslExe {
   return $null
 }
 
-# The installed distros with their running state. A state column other than "Running" (for instance a localised one)
-# counts as stopped, so such a distro is only probed with consent.
-function Get-WslDistros([string]$wsl) {
-  $out = New-Object System.Collections.ArrayList
-  try { $r = Invoke-Capture $wsl @('-l', '-q') } catch { return $out.ToArray() }
-  if ($r.Code -ne 0) { return $out.ToArray() }
+# Distro names from `wsl.exe <listArgs>` (NULs, BOM and CRs stripped; lines that are not a distro name, such as
+# "There are no running distributions.", dropped), or $null when wsl.exe fails.
+function Get-WslNames([string]$wsl, [string[]]$listArgs) {
+  try { $r = Invoke-Capture $wsl $listArgs } catch { return $null }
+  if ($r.Code -ne 0) { return $null }
   $names = New-Object System.Collections.ArrayList
   foreach ($l in (ConvertFrom-NativeLines $r.Lines)) {
     $n = ($l -replace '^[^A-Za-z0-9]+', '').Trim()
     if ($n -match '^[A-Za-z0-9][A-Za-z0-9._-]*$' -and -not $names.Contains($n)) { [void]$names.Add($n) }
   }
-  $running = @{}
-  try { $r = Invoke-Capture $wsl @('-l', '-v') } catch { $r = $null }
-  if ($r -and $r.Code -eq 0) {
-    foreach ($l in (ConvertFrom-NativeLines $r.Lines)) {
-      $fields = @((($l -replace '^[^A-Za-z0-9]+', '').Trim()) -split '\s+')
-      if ($fields.Count -ge 2 -and $fields[1] -eq 'Running') { $running[$fields[0]] = $true }
-    }
-  }
-  foreach ($n in $names) { [void]$out.Add([pscustomobject]@{ Name = $n; Running = [bool]$running[$n] }) }
+  return ,$names.ToArray()
+}
+
+# The installed distros with their running state. `-l -q --running` is locale-independent (no state column to parse);
+# if it fails, every distro counts as stopped and is only probed with consent. It exits non-zero on some WSL builds
+# when nothing runs, which also means "none running".
+function Get-WslDistros([string]$wsl) {
+  $out = New-Object System.Collections.ArrayList
+  $all = Get-WslNames $wsl @('-l', '-q')
+  if ($null -eq $all) { return $out.ToArray() }
+  $running = Get-WslNames $wsl @('-l', '-q', '--running')
+  if ($null -eq $running) { $running = @() }
+  foreach ($n in $all) { [void]$out.Add([pscustomobject]@{ Name = $n; Running = (@($running) -contains $n) }) }
   return $out.ToArray()
 }
 
@@ -204,6 +222,31 @@ function ConvertTo-WinArg([string]$a) {
   [void]$sb.Append('\' * (2 * $bs))
   [void]$sb.Append('"')
   return $sb.ToString()
+}
+
+# Runs <file> <argv> with the console's stdin and stderr, and copies its stdout to this process's stdout byte for byte
+# (a PowerShell `&` call would decode and re-encode it with the console code page, garbling the installer's UTF-8
+# --json on Windows PowerShell 5.1). Also keeps empty arguments. Returns the exit code.
+function Invoke-Passthrough([string]$file, [string[]]$argv) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $file
+  $psi.Arguments = (@($argv) | ForEach-Object { ConvertTo-WinArg $_ }) -join ' '
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $p = [System.Diagnostics.Process]::Start($psi)
+  try {
+    $stdout = [Console]::OpenStandardOutput()
+    try {
+      $p.StandardOutput.BaseStream.CopyTo($stdout)
+      $stdout.Flush()
+    } finally {
+      $stdout.Dispose()
+    }
+    $p.WaitForExit()
+    return $p.ExitCode
+  } finally {
+    $p.Dispose()
+  }
 }
 
 # Runs <file> <argv> with <bytes> as its stdin, byte for byte (no PowerShell pipeline re-encoding or added newline);
@@ -256,7 +299,8 @@ try {
   for ($i = 0; $i -lt $BootstrapArgs.Count; $i++) {
     $a = [string]$BootstrapArgs[$i]
     # `powershell -File` splits an argument at "-name:" and drops the colon: `--offline=C:\x` arrives as
-    # `--offline=C` and `\x`. Put a drive-letter path back together.
+    # `--offline=C` and `\x`. Put a drive-letter path back together. Assumes a `--flag=<one letter>` followed by an
+    # argument starting with \ or / is always such a split (no installer flag takes a one-letter value).
     if ($a -cmatch '^--[A-Za-z][A-Za-z0-9-]*=[A-Za-z]$' -and $i + 1 -lt $BootstrapArgs.Count -and ([string]$BootstrapArgs[$i + 1]) -match '^[\\/]') {
       $i++
       $a = $a + ':' + [string]$BootstrapArgs[$i]
@@ -356,7 +400,7 @@ try {
     if ($mode -eq 'wsl') {
       Fail 3 "node-not-found: checking the feed signature for WSL needs Node >=24.16.0 <25 || >=26.1.0 on Windows; or run install-plugin.sh inside the distro (wsl -d $wslDistro)"
     }
-    Fail 3 'node-not-found: need Node >=24.16.0 <25 || >=26.1.0 on PATH or the Node OpenClaw installed'
+    Fail 3 "node-not-found: need node.exe >=24.16.0 <25 || >=26.1.0 on PATH or the Node OpenClaw installed (on PATH: $($script:PathNodeNote))"
   }
 
   # Private temp dir: the feed, its signature, the verifier, then the installer or bootstrap.sh.
@@ -392,11 +436,7 @@ try {
     try { Get-Resource $url $installer } catch { Fail 1 "could not download ${url}: $($_.Exception.Message)" }
     $got = Get-Sha256 $installer
     if ($got -ne $want) { Fail 1 "checksum mismatch for ${url}: expected $want, got $got (nothing run)" }
-    $restArgs = [string[]]$rest.ToArray()
-    $ErrorActionPreference = 'Continue'
-    & $node $installer '--feed-file' $feedFile @restArgs
-    $exitCode = $LASTEXITCODE
-    $ErrorActionPreference = 'Stop'
+    $exitCode = Invoke-Passthrough $node (@($installer, '--feed-file', $feedFile) + [string[]]$rest.ToArray())
   } else {
     $shUrl = $fld[5]
     $shWant = $fld[6]

@@ -200,7 +200,10 @@ main() {
   umask 077
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/plur1bus-plugin.XXXXXX") || fail 1 "cannot create a temp dir"
   trap 'rm -rf "$tmp"' EXIT
-  trap 'exit 1' HUP INT TERM
+  # A signal before the installer runs: exit 130. While it runs, sh delivers the trap only after the child ended;
+  # the handler then returns, so the installer's own status (1 rolled back, 4 rollback failed, ...) stays the exit code.
+  child=
+  trap 'if [ -z "$child" ]; then exit 130; fi' HUP INT TERM
 
   feed="$tmp/$channel.json"
   fetch "$feed_url" "$feed" || fail 1 "could not download the plugin feed $feed_url"
@@ -227,6 +230,7 @@ process.exitCode = mainVerify(process.argv.slice(1));" -- "$pubkey" "$feed" "$fe
   # The private umask was for the temp dir only; OpenClaw and the installer write with the user's own.
   umask "$old_umask"
   code=0
+  child=1
   # Piped into sh, stdin is the script itself: give the installer the terminal for its questions when there is one.
   if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
     "$node" "$installer" --feed-file "$feed" "$@" </dev/tty || code=$?

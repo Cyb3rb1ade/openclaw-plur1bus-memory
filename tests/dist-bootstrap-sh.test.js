@@ -9,7 +9,7 @@
 
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -30,6 +30,10 @@ const i = argv.indexOf("--feed-file");
 const feedFile = i >= 0 ? argv[i + 1] : null;
 const rec = { argv, umask: process.umask(), feed: feedFile && existsSync(feedFile) ? readFileSync(feedFile, "utf8") : null };
 writeFileSync(process.env.FAKE_INSTALLER_MARK, JSON.stringify(rec));
+if (process.env.FAKE_INSTALLER_WAIT) {
+  // TEST ONLY: stay "busy" (a rollback in progress) until the test says go.
+  while (!existsSync(process.env.FAKE_INSTALLER_WAIT)) await new Promise((r) => setTimeout(r, 20));
+}
 process.stdout.write(JSON.stringify(rec) + "\\n");
 process.exit(Number(process.env.FAKE_INSTALLER_EXIT || 0));
 `;
@@ -68,7 +72,7 @@ function makeBootstrapCase(o = {}) {
   // install-cli.sh's wrapper shape (fact sheet step 1).
   writeFileSync(join(ocBin, "openclaw"), `#!/bin/sh\nexec "${join(privDir, "node")}" "${join(sb.binDir, "openclaw-shim.mjs")}" "$@"\n`, { mode: 0o755 });
   const realCurl = which("curl");
-  writeFileSync(join(bin, "curl"), `#!/bin/sh\nfor a in "$@"; do case "$a" in *://*) printf '%s\\n' "$a" >>"${curlLog}" ;; esac; done\nexec "${realCurl}" "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "curl"), `#!/bin/sh\nfor a in "$@"; do case "$a" in *://*) printf '%s\\n' "$a" >>"${curlLog}" ;; esac; done\nif [ -n "\${CURL_BLOCK:-}" ]; then : >"\$CURL_BLOCK.started"; while [ ! -e "\$CURL_BLOCK" ]; do sleep 0.05; done; fi\nexec "${realCurl}" "$@"\n`, { mode: 0o755 });
 
   const installerPath = join(root, "fake-installer.mjs");
   writeFileSync(installerPath, FAKE_INSTALLER);
@@ -110,6 +114,27 @@ function makeBootstrapCase(o = {}) {
       const r = spawnSync("sh", ["-c", 'umask 022 && exec sh "$0" "$@"', script, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
       return { code: r.status, stdout: r.stdout, stderr: r.stderr, out: r.stdout + r.stderr };
     },
+    /** Start the bootstrap, SIGTERM it (only it) once `startedFile` exists, then create `goFile`; resolves {code, signal}. */
+    signalled(startedFile, goFile, args = []) {
+      return new Promise((resolveP, reject) => {
+        const child = spawn("sh", ["-c", 'umask 022 && exec sh "$0" "$@"', script, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+        let err = "";
+        child.stderr.on("data", (d) => { err += d; });
+        const t0 = Date.now();
+        const poll = setInterval(() => {
+          if (existsSync(startedFile)) {
+            clearInterval(poll);
+            child.kill("SIGTERM");
+            setTimeout(() => writeFileSync(goFile, ""), 200);
+          } else if (Date.now() - t0 > 30_000) {
+            clearInterval(poll);
+            child.kill("SIGKILL");
+            reject(new Error(`never started: ${err}`));
+          }
+        }, 20);
+        child.on("exit", (code, signal) => resolveP({ code, signal, stderr: err }));
+      });
+    },
     installer() {
       return existsSync(mark) ? JSON.parse(readFileSync(mark, "utf8")) : null;
     },
@@ -150,6 +175,23 @@ describe("install-plugin.sh", { skip: SKIP }, () => {
     const r = c.run(["--update"]);
     assert.equal(r.code, 2, r.out);
     assert.deepEqual(c.installer().argv.slice(2), ["--update"]);
+  });
+
+  it("a signal during the installer keeps the installer's exit code; before it, exits 130", async () => {
+    const c = makeBootstrapCase({ installerExit: 4 });
+    const go = join(c.root, "go");
+    c.env.FAKE_INSTALLER_WAIT = go;
+    const r = await c.signalled(join(c.root, "installer-ran.json"), go, ["--update"]);
+    assert.equal(r.code, 4, r.stderr);
+    assert.deepEqual(spawnSync("ls", ["-A", c.tmpDir], { encoding: "utf8" }).stdout, "", "temp dir removed");
+
+    const early = makeBootstrapCase();
+    const block = join(early.root, "curl-go");
+    early.env.CURL_BLOCK = block;
+    const r2 = await early.signalled(`${block}.started`, block);
+    assert.equal(r2.code, 130, r2.stderr);
+    assert.equal(early.installer(), null);
+    assert.deepEqual(spawnSync("ls", ["-A", early.tmpDir], { encoding: "utf8" }).stdout, "", "temp dir removed");
   });
 
   it("a bad signature exits 1 and downloads nothing else", () => {
