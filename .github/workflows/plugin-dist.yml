@@ -2,8 +2,9 @@ name: plugin-dist
 
 # HM1 Task 8 (D86, spec A.2): pack the plugin once, install it into disposable OpenClaw instances (min and latest)
 # on the five release targets, run the selftest, and drive the installer end to end: fresh install, an upgrade that
-# keeps every stored row (D89, HM1-R13), a forced failing verify that rolls back, uninstall. Plus a non-blocking WSL
-# leg (C8) and a nightly upgrade from the newest GitHub Release (HM1-R13).
+# keeps every stored row (D89, HM1-R13), a forced failing verify that rolls back (the driver asserts the store was
+# found untouched and not restored, HM1-R-F2), uninstall. Plus a non-blocking WSL leg (C8) and a nightly upgrade
+# from the newest GitHub Release (HM1-R13).
 #
 # Every OpenClaw here lives under $RUNNER_TEMP (OPENCLAW_HOME, OPENCLAW_STATE_DIR; HOME too on POSIX) and
 # tests/helpers/assert-disposable.mjs runs right after installing it (HM1-R11). No Gateway is installed or started.
@@ -232,7 +233,7 @@ jobs:
         run: node tests/helpers/sign-feed-for-ci.mjs --artefacts "$RUNNER_TEMP/plugin-dist" --out-dir "$OC_FEED_DIR" --github-env "$GITHUB_ENV"
       # install-plugin.sh on POSIX, install-plugin.ps1 under Windows PowerShell 5.1 on Windows (the byte-identical
       # --json check also runs it under pwsh 7).
-      - name: Installer path (fresh -ci.0, seed 50 rows, forced failing update, update, byte-identical --json, uninstall)
+      - name: Installer path (fresh -ci.0, seed 50 rows, forced failing update with the store untouched, update, byte-identical --json, uninstall)
         run: node tests/helpers/ci-plugin-dist.mjs installer --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$OC_FEED_DIR"
       - name: ClawHub non-TTY install with and without --accept-capabilities (T5-b, informational)
         continue-on-error: true

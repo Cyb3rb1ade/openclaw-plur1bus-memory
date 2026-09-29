@@ -237,7 +237,7 @@ Identical for the bootstraps and the installer.
 | 1 | Failed and rolled back, or nothing changed. |
 | 2 | A choice is needed: several WSL candidates, a legacy deploy, an interrupted run that this mode may not continue, or a prompt without a terminal. |
 | 3 | Incompatible host or environment (the findings above, `openclaw-not-found`, `node-not-found`, `unsupported-target`, `legacy-deploy-guard`, `unsafe-purge-path`, `clawpack-digest-missing`, `host-not-yet-supported`). Nothing was changed. |
-| 4 | Verification failed **and** the rollback failed, or the Gateway blocked a store restore without a terminal to ask. The report prints the manual steps. |
+| 4 | Verification failed **and** the rollback failed, or the Gateway blocked a needed store restore (the store had changed) without a terminal to ask. The report prints the manual steps. |
 
 ## Environment variables
 
@@ -320,10 +320,16 @@ A tracked install (or `--update`) takes this path:
    plugin's config and the memory slot survive it. An update never writes
    config. The plugin directory is read from the install record; old npm
    generation folders are never deleted, only reported with their size.
-6. Verifies as above. Failure: reinstalls the previous exact version,
-   **restores the snapshot**, verifies that, and only then deletes the
-   `.pre-restore-*` copy of the failed store; exit 1 (4 with manual commands if
-   this fails).
+6. Verifies as above. Failure: reinstalls the previous exact version, then
+   **compares the live store with the snapshot's SHA-256 manifest**. Unchanged
+   (the usual case: `plugins install --force` does not write to the store) →
+   no restore, so a running Gateway neither blocks nor prompts the rollback.
+   Changed (the new version, or the Gateway, wrote to it after the snapshot) →
+   the snapshot is **restored** (see the Gateway rule below) and the replaced
+   store is **kept** at `<store>.pre-restore-<ts>`, named in the report, because
+   it holds whatever was written after the snapshot; only `--uninstall
+   --purge` deletes it. Then verifies; exit 1 (4 with manual commands if this
+   fails).
 7. Success: records the version, keeps the current and previous tarball, and
    tells you to restart the Gateway. If `allowConversationAccess` is still
    unset, the summary names it and prints `openclaw config set
@@ -355,8 +361,9 @@ A manual tool exists in a source checkout: `node scripts/snapshot-store.mjs
 <create|list|verify|restore|prune> --state-dir <d> [--base-db-path <p>]
 [--label <l>] [--id <id>] [--json]`.
 
-**The store is never restored under a running Gateway.** Before an automatic
-restore the installer asks `openclaw gateway status --json`. Running (or
+**The store is never restored under a running Gateway.** A restore is only
+needed when the store differs from the snapshot (above); before such a restore
+the installer asks `openclaw gateway status --json`. Running (or
 anything ambiguous, a timeout, a non-zero exit, unparseable output: it fails
 closed): on a terminal it asks you to stop the Gateway and checks again;
 without a terminal it exits 4 with the manual steps (stop the Gateway, then
@@ -368,8 +375,8 @@ with connection refused, counts as stopped.
 first. If a run was killed, lost its network or was interrupted with Ctrl-C,
 the next run reports the interrupted operation and step and continues it (a
 fresh install is rolled back and repeated), or with `--rollback` undoes it
-(reinstalls the previous version and restores the snapshot, again only while
-the Gateway is stopped). A resume never runs a destructive step in another
+(reinstalls the previous version and restores the snapshot if the store
+changed, again only while the Gateway is stopped). A resume never runs a destructive step in another
 mode: an interrupted purge continues only under `--uninstall --purge` with the
 confirmations asked again; any other mode reports the interrupted operation and
 exits 2. `--dry-run` never resumes: it names the interrupted operation and what
@@ -398,8 +405,8 @@ delete a filesystem root, a home directory, the state directory or an ancestor
 of either (`unsafe-purge-path`, exit 3). The exact deletion rules of the whole installer:
 the store is deleted only by `--uninstall --purge`; snapshots are pruned to the
 newest five Node snapshots after a new one is taken (legacy tarballs never) and
-all of them go with `--purge`; the `.pre-restore-*` copy of a failed store is
-deleted only after a verified rollback; installed-tarball artefacts are pruned
+all of them go with `--purge`; the `.pre-restore-*` copy a restore leaves beside
+the store is never deleted except by `--purge`; installed-tarball artefacts are pruned
 to the current and the previous version; the legacy `.plur1bus-legacy-<ts>`
 directory of an adoption is never deleted by the installer.
 
@@ -423,7 +430,8 @@ Adoption: snapshot, rename the legacy directory to
 dot name keeps it out of OpenClaw's plugin scan), `openclaw plugins install
 <source> --force --accept-capabilities`, `allowConversationAccess` and the
 memory slot, verify. On any failure it uninstalls the tracked copy, renames the
-legacy directory back, restores the snapshot and the config values. The
+legacy directory back, restores the snapshot if the store changed (keeping the
+replaced store at `.pre-restore-*`, as for an update) and the config values. The
 embedding choice the deploy ran with is never changed, `memory-lancedb-stock`
 and `plur1bus-release` are left alone, and an interrupted adoption is continued
 or (`--rollback`) undone by the next run.

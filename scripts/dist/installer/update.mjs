@@ -10,8 +10,10 @@
  * `pre-<target>` → `openclaw plugins install <same-source locator>@<target> --force
  * --accept-capabilities` (R-S4: `plugins update` rejects npm:/clawhub: locators) →
  * verify (A.4) → success records the new version; failure reinstalls the previous exact
- * version, restores the snapshot, verifies that, and only then deletes `.pre-restore-*`;
- * exit 1, or 4 with the manual commands when the rollback itself fails.
+ * version, compares the live store with the snapshot manifest and restores it only when it
+ * differs (HM1-R-F2: an untouched store needs no restore and no stopped Gateway), verifies;
+ * exit 1, or 4 with the manual commands when the rollback itself fails. A restore's
+ * `.pre-restore-*` copy of the replaced store is kept and named; only `--purge` deletes it.
  *
  * `writeState({ inProgress: { op: "update", step } })` precedes every step, so a killed run
  * is continued (or, with --rollback, undone) by the next one. The steps are `snapshot`,
@@ -29,7 +31,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { compareVersions, PACKAGE_NAME } from "../build-plugin-feed.mjs";
-import { createSnapshot, restoreSnapshot, SnapshotError } from "../../../lib/snapshot/store-snapshot.js";
+import { compareStoreWithSnapshot, createSnapshot, restoreSnapshot, SnapshotError } from "../../../lib/snapshot/store-snapshot.js";
 import { isReadonlyRefusal, PLUGIN_ID, failureSummary } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { writeState } from "./state.mjs";
@@ -205,7 +207,7 @@ export function manualRestoreLines({ stateDir, baseDbPath, snapshotId, preRestor
   return [
     `the pre-change store is in snapshot ${snapshotId}: stop the Gateway, move ${baseDbPath} aside and copy ${join(dir, "store")} to ${baseDbPath}` +
       ` (or: node <plugin dir>/scripts/snapshot-store.mjs restore --state-dir "${stateDir}" --base-db-path "${baseDbPath}" --id ${snapshotId})`,
-    ...(preRestorePath ? [`the store as it was before the rollback is kept at ${preRestorePath}; delete it once everything works`] : []),
+    ...(preRestorePath ? [`the store as it was before the rollback is kept at ${preRestorePath} (it holds anything written after the snapshot); --uninstall --purge removes it`] : []),
   ];
 }
 
@@ -224,32 +226,57 @@ export async function waitForGatewayStopped({ cli, isTTY, flags = {}, prompt }) 
 }
 
 /**
- * Restore the snapshot into the store, but only once `gate()` (the Gateway check) passed.
- * Returns { ok, preRestorePath, manual }.
+ * HM1-R-F2: compare the live store with the snapshot manifest first; an untouched store is
+ * not restored (no Gateway gate, no exit 4). A store that differs (or cannot be compared) is
+ * restored from the snapshot, but only once `gate()` (the Gateway check, T6-e) passed; the
+ * replaced store is kept at `.pre-restore-*` and never deleted here.
+ * Returns { ok, restored, untouched, preRestorePath, manual }.
  */
 export async function restoreStep({ report, stateDir, baseDbPath, snapshotId, gate = null }) {
-  if (!snapshotId) return { ok: true, preRestorePath: null, manual: [] };
+  if (!snapshotId) return { ok: true, restored: false, untouched: false, preRestorePath: null, manual: [] };
+  try {
+    const cmp = await compareStoreWithSnapshot({ stateDir, baseDbPath, id: snapshotId });
+    if (cmp.unchanged) {
+      report.step("restore", "skipped", `the store is untouched since snapshot ${snapshotId} (${cmp.detail}); nothing to restore`);
+      return { ok: true, restored: false, untouched: true, preRestorePath: null, manual: [] };
+    }
+    report.step("restore.compare", "info", `the store differs from snapshot ${snapshotId}: ${cmp.detail}; restoring it`);
+  } catch (err) {
+    report.step("restore.compare", "warn", `could not compare the store with snapshot ${snapshotId} (${err?.reason ?? err?.code ?? "error"}: ${err?.message ?? err}); restoring it`);
+  }
   if (gate && !(await gate())) {
     report.step("restore", "failed", `the OpenClaw Gateway is running; the store was not restored from ${snapshotId}`);
     return {
       ok: false,
+      restored: false,
+      untouched: false,
       preRestorePath: null,
       manual: [`stop the Gateway (for example \`openclaw gateway stop\`, or through its service manager), then re-run the installer with --rollback to restore the store from snapshot ${snapshotId}`],
     };
   }
   try {
     const r = await restoreSnapshot({ stateDir, baseDbPath, id: snapshotId });
-    report.step("restore", "ok", `store restored from ${snapshotId}`);
-    return { ok: true, preRestorePath: r.preRestorePath, manual: [] };
+    report.step("restore", "ok", `store restored from ${snapshotId}${r.preRestorePath ? `; the replaced store is kept at ${r.preRestorePath}` : ""}`);
+    return { ok: true, restored: true, untouched: false, preRestorePath: r.preRestorePath, manual: [] };
   } catch (err) {
     report.step("restore", "failed", `${err?.reason ?? err?.name ?? "error"}: ${err?.message ?? err}`);
-    return { ok: false, preRestorePath: err?.preRestorePath ?? null, manual: manualRestoreLines({ stateDir, baseDbPath, snapshotId, preRestorePath: err?.preRestorePath ?? null }) };
+    return { ok: false, restored: false, untouched: false, preRestorePath: err?.preRestorePath ?? null, manual: manualRestoreLines({ stateDir, baseDbPath, snapshotId, preRestorePath: err?.preRestorePath ?? null }) };
   }
 }
 
-/** Delete the `.pre-restore-*` copy only after the rolled-back state verified (brief, D89). */
-export function dropPreRestore(preRestorePath) {
-  if (preRestorePath) rmTree(preRestorePath);
+/** Name a kept `.pre-restore-*` copy in the report (HM1-R-F2: kept until an explicit purge). */
+export function notePreRestore(report, preRestorePath) {
+  if (!preRestorePath) return;
+  report.set("preRestorePath", preRestorePath);
+  report.note(`The store as it was before the rollback (with anything written after the snapshot) is kept at ${preRestorePath}. Nothing deletes it except \`--uninstall --purge\`; remove it yourself once you no longer need it.`);
+}
+
+/** How a rollback treated the store, for its summary line. */
+export function storeOutcome(restored, snapshotId) {
+  if (!snapshotId) return "";
+  if (restored.untouched) return `, store untouched since ${snapshotId} (not restored)`;
+  if (restored.restored) return `, store restored from ${snapshotId}`;
+  return "";
 }
 
 /** Print the manual steps and finish with exit 4. */
@@ -515,8 +542,8 @@ async function applyUpdate(ctx, plan, from) {
 }
 
 /**
- * Reinstall the previous exact version, restore the snapshot, verify both; delete the
- * `.pre-restore-*` copy only when that verify passed. Exit 1, or 4 with manual steps.
+ * Reinstall the previous exact version, restore the snapshot when the store differs from it
+ * (HM1-R-F2), verify. Exit 1, or 4 with manual steps; a `.pre-restore-*` copy is kept.
  */
 async function rollbackUpdate(ctx, plan) {
   const { cli, report, stateDir, baseDbPath } = ctx;
@@ -548,11 +575,11 @@ async function rollbackUpdate(ctx, plan) {
     }
   }
 
+  notePreRestore(report, restored.preRestorePath);
   if (manual.length === 0) {
-    dropPreRestore(restored.preRestorePath);
     clearProgress(ctx, plan);
     pruneArtefacts(stateDir, [plan.progress.previousVersion, plan.progress.targetVersion]);
-    report.step("rollback", "ok", `${PACKAGE_NAME}@${plan.progress.previousVersion} reinstalled${plan.progress.snapshotId ? `, store restored from ${plan.progress.snapshotId}` : ""}`);
+    report.step("rollback", "ok", `${PACKAGE_NAME}@${plan.progress.previousVersion} reinstalled${storeOutcome(restored, plan.progress.snapshotId)}`);
     return report.finish(EXIT.FAILED);
   }
   plan.progress.step = "rollback-failed";

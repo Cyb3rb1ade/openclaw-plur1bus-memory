@@ -6,13 +6,13 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { detectLegacyDeploy } from "../scripts/dist/installer/legacy.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState } from "../scripts/dist/installer/state.mjs";
 import { listSnapshots } from "../lib/snapshot/store-snapshot.js";
-import { createInstallerSandbox, mutatingCalls, runSandboxInstaller, treeDigest, walkTree } from "./helpers/installer-sandbox.js";
+import { createInstallerSandbox, makeTestFeed, mutatingCalls, runSandboxInstaller, treeDigest, walkTree } from "./helpers/installer-sandbox.js";
 
 const ID = "memory-lancedb-namespaced";
 const SLOT = "plugins.slots.memory";
@@ -27,8 +27,8 @@ const mutating = mutatingCalls;
 const walk = walkTree;
 
 /** The owner's VPS shape: rsync deploy, release copy, stock plugin, a store; untracked by OpenClaw. */
-function legacySandbox(scenario = {}) {
-  const sb = createInstallerSandbox({ scenario: { legacy: true, config: { [SLOT]: ID }, ...scenario } });
+function legacySandbox(scenario = {}, { feed } = {}) {
+  const sb = createInstallerSandbox({ ...(feed ? { feed } : {}), scenario: { legacy: true, config: { [SLOT]: ID }, ...scenario } });
   const legacyDir = join(sb.stateDir, "extensions", ID);
   mkdirSync(join(legacyDir, "lib"), { recursive: true });
   writeFileSync(join(legacyDir, "index.js"), "// TEST ONLY legacy deploy\n");
@@ -126,6 +126,8 @@ describe("plugin installer: legacy adoption", () => {
     assert.equal(treeDigest(bad.legacyDir), legacy2);
     assert.deepEqual(backups(bad.sb), []);
     assert.equal(treeDigest(bad.baseDbPath), store2, "store digest equal");
+    // HM1-R-F2: nothing wrote into the store, so it was compared, found untouched and not restored
+    assert.equal(JSON.parse(r2.stdout).steps.find((s) => s.id === "restore")?.status, "skipped");
     assert.deepEqual(walk(bad.sb.home).filter((p) => p.includes(".pre-restore-")), []);
     const calls = mutating(bad.sb.openclawCalls()).map((c) => c.join(" "));
     assert.ok(calls.includes(`plugins uninstall ${ID} --force`), JSON.stringify(calls));
@@ -133,6 +135,24 @@ describe("plugin installer: legacy adoption", () => {
     assert.equal(bad.sb.shimState().config[SLOT], ID, "the legacy deploy is selected again");
     assert.equal(readState(bad.sb.stateDir)?.inProgress, undefined);
     assert.equal(JSON.parse(r2.stdout).steps.find((s) => s.id === "rollback")?.status, "ok");
+  });
+
+  it("a failed adoption restores a store the new version wrote into and keeps the replaced store (HM1-R-F2)", async () => {
+    const { sb, legacyDir, baseDbPath } = legacySandbox({ failVersions: ["7.17.0"] }, { feed: makeTestFeed({ version: "7.17.0" }) });
+    const store = treeDigest(baseDbPath);
+    const legacy = treeDigest(legacyDir);
+    const r = await run(sb, ["--adopt-legacy", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    const doc = JSON.parse(r.stdout);
+    assert.match(doc.steps.find((s) => s.id === "restore.compare")?.detail ?? "", /written-by-7\.17\.0\.txt is new since the snapshot/);
+    assert.equal(doc.steps.find((s) => s.id === "restore")?.status, "ok");
+    assert.equal(doc.steps.find((s) => s.id === "rollback")?.status, "ok");
+    assert.equal(treeDigest(baseDbPath), store);
+    assert.equal(treeDigest(legacyDir), legacy);
+    const pre = readdirSync(dirname(baseDbPath)).filter((n) => n.startsWith("lancedb-namespaced.pre-restore-")).map((n) => join(dirname(baseDbPath), n));
+    assert.equal(pre.length, 1, "the replaced store is kept at .pre-restore-*");
+    assert.ok(existsSync(join(pre[0], "written-by-7.17.0.txt")));
+    assert.equal(doc.preRestorePath, pre[0]);
   });
 
   it("an adoption whose install fails with nothing installed puts the legacy dir back without restoring the store", async () => {

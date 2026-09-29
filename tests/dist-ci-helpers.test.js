@@ -199,7 +199,7 @@ describe("plugin-dist CI helpers", () => {
     assert.match(r.stdout, /FACT installer\.keptArtefact: \{"kept":"[^"]+","exists":true/);
     assert.match(r.stdout, /FACT bootstrap\.jsonByteIdentical\.sh: \{"same":true/);
     const md = readFileSync(summaryFile, "utf8");
-    for (const want of [/store before \| 50 rows/, /forced failing update \| exit 1, rollback ok, digest equal/, /update 7\.16\.11-ci\.0 → 7\.16\.11 \| exit 0 \(--offline\), digest equal, snapshots 1 → 2/, /uninstall \| exit 0, store kept/]) assert.match(md, want);
+    for (const want of [/store before \| 50 rows/, /forced failing update \| exit 1, rollback ok, store untouched \(not restored\), digest equal/, /update 7\.16\.11-ci\.0 → 7\.16\.11 \| exit 0 \(--offline\), digest equal, snapshots 1 → 2/, /uninstall \| exit 0, store kept/]) assert.match(md, want);
     assert.equal((await storeDigest({ baseDbPath: join(sb.stateDir, "memory", "lancedb-namespaced") })).rows, 50);
 
     // the driver refuses an instance outside the temp root before calling anything

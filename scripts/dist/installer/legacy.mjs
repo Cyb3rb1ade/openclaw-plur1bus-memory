@@ -13,7 +13,8 @@
  * Adoption: snapshot → rename the legacy dir to `<stateDir>/extensions/.plur1bus-legacy-<ts>`
  * (kept, never deleted) → `openclaw plugins install <spec> --force --accept-capabilities`
  * → `hooks.allowConversationAccess` (R-S1) and `plugins.slots.memory` (R-S5) → verify →
- * on failure uninstall, rename the legacy dir back, restore the snapshot and the previous
+ * on failure uninstall, rename the legacy dir back, restore the snapshot when the store
+ * differs from it (HM1-R-F2; the replaced store is kept at `.pre-restore-*`) and the previous
  * config values. `memory-lancedb-stock` and `plur1bus-release` are never touched. The
  * embedding choice the legacy deploy ran with is never changed (HM1-R10). Every step is
  * written to the installer state first, so an interrupted adoption is continued or, with
@@ -30,13 +31,14 @@ import { writeState } from "./state.mjs";
 import {
   assertOfflineTarball,
   downloadReleaseTarball,
-  dropPreRestore,
   finishRollbackFailed,
   installSpec,
   manualRestoreLines,
+  notePreRestore,
   removeWorkDir,
   restoreStep,
   snapshotStep,
+  storeOutcome,
   waitForGatewayStopped,
 } from "./update.mjs";
 import { renameWithRetry } from "./fsutil.mjs";
@@ -286,7 +288,7 @@ async function applyAdopt(ctx, plan, from) {
   throw new Stop(EXIT.FAILED, "resume", `unknown interrupted step ${JSON.stringify(step)}`);
 }
 
-/** Undo an adoption: uninstall, rename the legacy dir back, restore snapshot and config. */
+/** Undo an adoption: uninstall, rename the legacy dir back, restore the store if it changed (HM1-R-F2) and config. */
 async function rollbackAdopt(ctx, plan, { finish = true, restore = true } = {}) {
   const { cli, report, stateDir, baseDbPath } = ctx;
   const p = plan.progress;
@@ -339,10 +341,10 @@ async function rollbackAdopt(ctx, plan, { finish = true, restore = true } = {}) 
     if (manual.length) manual.push(...manualRestoreLines({ stateDir, baseDbPath, snapshotId: p.snapshotId, preRestorePath: restored.preRestorePath }));
   }
 
+  notePreRestore(report, restored.preRestorePath);
   if (manual.length === 0) {
-    dropPreRestore(restored.preRestorePath);
     clear(ctx, plan);
-    report.step("rollback", "ok", `legacy deploy restored at ${p.legacyDir}${restore && p.snapshotId ? `, store restored from ${p.snapshotId}` : ""}`);
+    report.step("rollback", "ok", `legacy deploy restored at ${p.legacyDir}${restore ? storeOutcome(restored, p.snapshotId) : ""}`);
     return finish ? report.finish(EXIT.FAILED) : EXIT.FAILED;
   }
   p.step = "rollback-failed";

@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
@@ -20,6 +20,7 @@ import {
   MAX_SNAPSHOTS,
   SNAPSHOT_SCHEMA,
   SnapshotError,
+  compareStoreWithSnapshot,
   createSnapshot,
   listSnapshots,
   pruneSnapshots,
@@ -409,6 +410,53 @@ describe("store snapshot: fix round 1", () => {
     assert.ok(err.message.includes(err.preRestorePath));
     assert.deepEqual(await rowsOf(err.preRestorePath, "main"), rowsBefore, "the previous store is intact where the error says");
     assert.ok(!readdirSync(dirname(baseDbPath)).some((n) => n.includes(".restore-") && !n.includes(".pre-restore-")));
+  });
+});
+
+describe("store snapshot: compare the live store (HM1-R-F2)", () => {
+  it("an untouched store matches its snapshot, even after it was read through LanceDB", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "pre-update" });
+    await rowsOf(baseDbPath, "main");
+    await rowsOf(baseDbPath, "work");
+    if (process.platform !== "win32") symlinkSync(join(stateDir, "vault"), join(baseDbPath, "vault-link")); // the copy skips symlinks, so does the compare
+    const cmp = await compareStoreWithSnapshot({ stateDir, baseDbPath, id: snap.id });
+    assert.equal(cmp.unchanged, true, cmp.detail);
+    assert.ok(cmp.files > 5);
+    // side files outside the store are not part of the comparison
+    writeFileSync(join(stateDir, "memory", "run-state.json"), "{\"lastRun\":2}\n");
+    assert.equal((await compareStoreWithSnapshot({ stateDir, baseDbPath, id: snap.id })).unchanged, true);
+  });
+
+  it("a new, changed (same size) or missing file, a LanceDB write and a missing store all differ", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "pre-update" });
+    const cmp = () => compareStoreWithSnapshot({ stateDir, baseDbPath, id: snap.id });
+    const reg = join(baseDbPath, "registry.json");
+    const orig = readFileSync(reg);
+
+    writeFileSync(join(baseDbPath, "extra.txt"), "x");
+    assert.deepEqual(await cmp(), { unchanged: false, detail: "store/extra.txt is new since the snapshot", files: (await cmp()).files });
+    rmSync(join(baseDbPath, "extra.txt"));
+
+    writeFileSync(reg, Buffer.from(orig.toString("utf8").replace("main", "MAIN")));
+    assert.match((await cmp()).detail, /store\/registry\.json changed since the snapshot/);
+    writeFileSync(reg, orig);
+    assert.equal((await cmp()).unchanged, true);
+
+    rmSync(reg);
+    assert.match((await cmp()).detail, /store\/registry\.json is gone since the snapshot/);
+    writeFileSync(reg, orig);
+
+    const table = await (await lancedb.connect(join(baseDbPath, "main"))).openTable("memories");
+    await table.add([{ id: "main-9", text: "new", vector: [2, 2] }]);
+    const after = await cmp();
+    assert.equal(after.unchanged, false);
+    assert.match(after.detail, /^store\/main\//);
+
+    rmSync(baseDbPath, { recursive: true });
+    assert.match((await cmp()).detail, /^no store at /);
+    await assert.rejects(compareStoreWithSnapshot({ stateDir, baseDbPath, id: "plur1bus-20990101T000000Z-none" }), (e) => e instanceof SnapshotError && e.reason === "not-found");
   });
 });
 

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 
@@ -53,9 +53,14 @@ async function trackedSandbox({ version = "7.16.11", source = "clawhub", stateSo
 
 const walk = walkTree;
 
-/** Anything a killed or half-finished run could leave behind. */
+/** Anything a killed or half-finished run could leave behind (a restore's `.pre-restore-*` copy is kept on purpose, HM1-R-F2). */
 function strays(...roots) {
-  return roots.flatMap((r) => walk(r)).filter((p) => /\.tmp-\d+$|\.pre-restore-|\.restore-\d+$|\.staging-/.test(p));
+  return roots.flatMap((r) => walk(r)).filter((p) => /\.tmp-\d+$|\.restore-\d+$|\.staging-/.test(p));
+}
+
+/** The `.pre-restore-*` copies beside the store. */
+function preRestores(baseDbPath) {
+  return readdirSync(dirname(baseDbPath)).filter((n) => n.startsWith(`${basename(baseDbPath)}.pre-restore-`)).map((n) => join(dirname(baseDbPath), n));
 }
 
 /** Run the installer in a child process (so the shim can kill it like Ctrl-C/OOM would). */
@@ -179,12 +184,22 @@ describe("plugin installer: update", () => {
     ]);
     assert.equal(sb.shimState().version, "7.16.11");
     assert.equal(treeDigest(baseDbPath), before, "store digest equal to before");
-    assert.deepEqual(strays(sb.root, sb.home), [], "the .pre-restore-* copy is removed after the rolled-back verify passed");
+    assert.deepEqual(strays(sb.root, sb.home), []);
     const st = readState(sb.stateDir);
     assert.equal(st.installedVersion, "7.16.11");
     assert.equal(st.inProgress, undefined);
     const doc = JSON.parse(r.stdout);
     assert.equal(doc.steps.find((s) => s.id === "rollback")?.status, "ok");
+    // HM1-R-F2: the new version wrote into the store, so it differed and was restored; the replaced store is kept and named
+    assert.equal(doc.steps.find((s) => s.id === "restore.compare")?.status, "info");
+    assert.match(doc.steps.find((s) => s.id === "restore.compare").detail, /written-by-7\.\d+\.\d+\.txt is new since the snapshot/);
+    assert.equal(doc.steps.find((s) => s.id === "restore")?.status, "ok");
+    const pre = preRestores(baseDbPath);
+    assert.equal(pre.length, 1, "the .pre-restore-* copy is kept after the rolled-back verify passed");
+    assert.ok(existsSync(join(pre[0], "written-by-7.17.0.txt")), "it holds what was written after the snapshot");
+    assert.equal(doc.preRestorePath, pre[0]);
+    assert.ok(r.stderr.includes(pre[0]) && /--uninstall --purge/.test(r.stderr), "the report names the copy and how it goes");
+    assert.match(doc.steps.find((s) => s.id === "rollback").detail, /store restored from plur1bus-/);
     assert.equal(doc.steps.find((s) => s.id === "verify.loaded")?.status, "failed");
     // the snapshot stays for manual recovery
     assert.equal((await listSnapshots({ stateDir: sb.stateDir })).filter((s) => s.kind === "snapshot").length, 1);
@@ -342,6 +357,7 @@ describe("plugin installer: update", () => {
     assert.equal(treeDigest(b.baseDbPath), before);
     assert.equal(readState(b.sb.stateDir).inProgress, undefined);
     assert.deepEqual(strays(b.sb.root, b.sb.home), []);
+    assert.equal(preRestores(b.baseDbPath).length, 1, "the store the killed run left is kept at .pre-restore-*");
 
     // --rollback with nothing interrupted changes nothing
     const n = b.sb.openclawCalls().length;
@@ -392,6 +408,7 @@ describe("plugin installer: update", () => {
     assert.equal(sb.shimState().version, "7.16.11", "the plugin reinstall part of the rollback still ran");
     assert.notEqual(treeDigest(baseDbPath), before, "the store was not restored under the running Gateway");
     assert.deepEqual(walk(dirname(baseDbPath)).filter((p) => p.includes(".pre-restore-")), []);
+    assert.match(JSON.parse(r.stdout).steps.find((s) => s.id === "restore.compare").detail, /new since the snapshot/, "it differed, so a restore was due");
     assert.equal(readState(sb.stateDir).inProgress?.step, "rollback-failed");
     assert.ok(sb.openclawCalls().some((a) => a.join(" ") === "gateway status --json"));
 
@@ -401,6 +418,36 @@ describe("plugin installer: update", () => {
     assert.equal(treeDigest(baseDbPath), before);
     assert.equal(readState(sb.stateDir).inProgress, undefined);
     assert.deepEqual(strays(sb.root, sb.home), []);
+    assert.equal(preRestores(baseDbPath).length, 1);
+  });
+
+  it("an untouched store is not restored, so a running Gateway neither blocks nor prompts the rollback (HM1-R-F2)", async () => {
+    const { sb, baseDbPath } = await trackedSandbox({ scenario: { failVersions: ["7.17.0"], gatewayRunning: true } });
+    sb.setScenario({ mutateStore: null }); // plugins install --force does not write to the store
+    const before = treeDigest(baseDbPath);
+    const snapDir = join(sb.stateDir, "memory", ".snapshots");
+    const r = await run(sb, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    const doc = JSON.parse(r.stdout);
+    const restore = doc.steps.find((s) => s.id === "restore");
+    assert.equal(restore?.status, "skipped");
+    assert.match(restore.detail, /untouched since snapshot plur1bus-.*nothing to restore/);
+    assert.equal(doc.steps.find((s) => s.id === "rollback")?.status, "ok");
+    assert.match(doc.steps.find((s) => s.id === "rollback").detail, /store untouched since plur1bus-.* \(not restored\)/);
+    assert.equal(doc.manualSteps, undefined);
+    assert.equal(sb.shimState().version, "7.16.11");
+    assert.equal(treeDigest(baseDbPath), before);
+    assert.deepEqual(preRestores(baseDbPath), []);
+    assert.equal(readState(sb.stateDir).inProgress, undefined);
+    assert.equal(readdirSync(snapDir).filter((n) => n.startsWith("plur1bus-")).length, 1, "the snapshot stays");
+
+    // on a TTY: no Gateway prompt either
+    const t = await trackedSandbox({ scenario: { failVersions: ["7.17.0"], gatewayRunning: true } });
+    t.sb.setScenario({ mutateStore: null });
+    const asked = [];
+    const r2 = await run(t.sb, ["--update", "--yes"], { isTTY: true, prompt: async (q) => (asked.push(q), "") });
+    assert.equal(r2.code, EXIT.FAILED, r2.out);
+    assert.deepEqual(asked.filter((q) => /Gateway/.test(q)), []);
   });
 
   it("a store restore on a TTY waits until the person stopped the Gateway (T6-e)", async () => {

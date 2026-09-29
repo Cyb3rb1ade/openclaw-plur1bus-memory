@@ -17,8 +17,8 @@
  *                           informational, exit 0 unless the environment is not disposable
  *   installer --artefacts d --feed-dir f --bootstrap sh|ps1 [--ps powershell|pwsh] [--from installer|raw]
  *             [--from-tgz t] [--skip-forced-failure]
- *                           fresh install (ci.0) → seed 50 rows → digest → forced failing update (exit 1, digest
- *                           equal, version back) → update (exit 0, digest equal, one more snapshot) → bootstrap and
+ *                           fresh install (ci.0) → seed 50 rows → digest → forced failing update (exit 1, store
+ *                           untouched so not restored, digest equal, version back) → update (exit 0, digest equal, one more snapshot) → bootstrap and
  *                           direct installer print byte-identical --json → (win32) store-inside-harness-home dry run
  *                           → uninstall (store kept)
  *   wsl-setup --distro d --openclaw-version v     install OpenClaw inside WSL under /tmp/plur1bus-ci (C8)
@@ -30,7 +30,7 @@
 
 import { execFile, spawnSync } from "node:child_process";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -450,6 +450,13 @@ async function cmdInstaller(o) {
     check(stepOf(f.doc, "verify.selftest")?.status === "failed" && stepOf(f.doc, "rollback")?.status === "ok", "verify.selftest failed and the rollback finished");
     const df = await storeDigest({ baseDbPath, pluginDir: (await inspectJson(oc, false)).json?.install?.installPath });
     check(df.rows === d0.rows && df.sha256 === d0.sha256, `digest after the rolled-back update equals before (${df.rows} rows)`);
+    // HM1-R-F2: `plugins install --force` never writes to the store, so the rollback finds it untouched and does not
+    // restore it (no Gateway gate, nothing replaced); a restore here, or a .pre-restore-* copy, would mean it changed.
+    const restoreStep = stepOf(f.doc, "restore");
+    const preRestores = safe(() => readdirSync(dirname(baseDbPath)).filter((n) => n.startsWith(`${basename(baseDbPath)}.pre-restore-`))) ?? [];
+    fact("installer.forcedFailureRestore", { restore: restoreStep ?? null, compare: stepOf(f.doc, "restore.compare") ?? null, preRestores });
+    check(restoreStep?.status === "skipped" && /untouched/.test(restoreStep.detail ?? ""), `the rollback found the store untouched and did not restore it (restore: ${JSON.stringify(restoreStep ?? null)})`);
+    check(preRestores.length === 0, `no .pre-restore-* copy beside the store (${preRestores.join(", ") || "none"})`);
     check((await version()) === fromVersion, `the rollback reinstalled ${fromVersion}`);
     check((await snapshots()) === snaps0 + 1, "the failed update left exactly one snapshot");
     // T8-b: the tarball a later rollback or --offline update will use is the installer's kept copy
@@ -458,7 +465,7 @@ async function cmdInstaller(o) {
     const recordPath = (await inspectJson(oc, false)).json?.install?.sourcePath ?? null;
     fact("installer.keptArtefact", { kept, exists: existsSync(kept), recorded, openclawSourcePath: recordPath });
     check(existsSync(kept) && recorded === kept, `the installer keeps ${fromVersion} at plur1bus-installer/artefacts/${fromVersion}.tgz and records it in its state`);
-    row("forced failing update", `exit 1, rollback ok, digest equal, version ${fromVersion}`);
+    row("forced failing update", `exit 1, rollback ok, store untouched (not restored), digest equal, version ${fromVersion}`);
   }
 
   // 4. the real update, --offline (T8-b: the rollback copy of the start version is kept by the installer)
