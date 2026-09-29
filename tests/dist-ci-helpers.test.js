@@ -24,6 +24,12 @@ import { createInstallerSandbox } from "./helpers/installer-sandbox.js";
 import { buildInstaller } from "../scripts/dist/build-installer.mjs";
 import { renderBootstraps } from "../scripts/dist/render-bootstraps.mjs";
 
+/** The bootstrap's node_ok gate: package.json engines ">=24.16.0 <25 || >=26.1.0". */
+function nodeMeetsEngines() {
+  const [maj, min] = process.versions.node.split(".").map(Number);
+  return (maj === 24 && min >= 16) || maj > 26 || (maj === 26 && min >= 1);
+}
+
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HELPERS = join(REPO, "tests", "helpers");
 const WORKFLOW = join(REPO, ".github", "workflows", "plugin-dist.yml");
@@ -165,7 +171,7 @@ describe("plugin-dist CI helpers", () => {
     assert.match(lines, /^PLUR1BUS_PLUGIN_PUBKEY=RW[A-Za-z0-9+/=]+$/m);
     assert.match(lines, /^PLUR1BUS_PLUGIN_FEED=file:\/\/.+stable\.json$/m);
   });
-  it("local dry run: the installer leg (install-plugin.sh, signed file:// feed, bundle) against the sandbox shims", { skip: process.platform === "win32" && "POSIX sh bootstrap and a symlinked plugin dir" }, async () => {
+  it("local dry run: the installer leg (install-plugin.sh, signed file:// feed, bundle) against the sandbox shims", { skip: (process.platform === "win32" && "POSIX sh bootstrap and a symlinked plugin dir") || (!nodeMeetsEngines() && "the bootstrap refuses a Node outside package.json engines (>=24.16 <25 || >=26.1), so this leg needs a supported Node") }, async () => {
     const dir = makeTempDir("dist-dry-run-");
     const a = await packArtefact(dir, { real: true });
     const sb = createInstallerSandbox({ scenario: { recordNpmIntegrityByVersion: a.integrity } });

@@ -98,6 +98,21 @@ describe("plugin release (HM1 Task 10)", () => {
     assert.match(stage, /p\.integrity/);
   });
 
+  it("every checkout in plugin-release.yml and plugin-dist.yml sets persist-credentials: false", () => {
+    let n = 0;
+    for (const file of ["plugin-release.yml", "plugin-dist.yml"]) {
+      const wf = parseYaml(readFileSync(join(REPO, ".github", "workflows", file), "utf8"));
+      for (const [name, job] of Object.entries(wf.jobs)) {
+        for (const step of job.steps ?? []) {
+          if (!String(step.uses).startsWith("actions/checkout@")) continue;
+          n += 1;
+          assert.equal(step.with?.["persist-credentials"], false, `${file} ${name}: checkout`);
+        }
+      }
+    }
+    assert.ok(n >= 7, `found ${n} checkouts`);
+  });
+
   it("the release notes exist in de and en for the package version", () => {
     const { version } = readJson("package.json");
     for (const lang of ["de", "en"]) {
