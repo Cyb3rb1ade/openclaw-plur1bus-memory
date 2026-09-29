@@ -70,6 +70,22 @@ describe("render-bootstraps.mjs", () => {
     parsePublicKey(stable);
   });
 
+  it("the Windows one-liner is the text-safe form everywhere, and a download refuses a non-https redirect", () => {
+    const safe = "$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF)))";
+    for (const f of ["README.md", join("docs", "distribution.md"), join("scripts", "dist", "install-plugin.ps1.in")]) {
+      const text = readFileSync(join(ROOT, f), "utf8");
+      assert.ok(text.includes(safe), `${f} shows the text-safe one-liner`);
+      assert.doesNotMatch(text, /\[scriptblock\]::Create\(\(irm /, `${f} no longer shows the bare irm form`);
+    }
+    const ps1 = readFileSync(join(ROOT, "scripts", "dist", "install-plugin.ps1.in"), "utf8");
+    const get = ps1.slice(ps1.indexOf("function Get-Resource"), ps1.indexOf("function Invoke-Capture"));
+    assert.match(get, /Invoke-WebRequest -Uri \$u -OutFile \$file -UseBasicParsing -MaximumRedirection 5 -PassThru/);
+    assert.match(get, /\$final = Get-FinalUri \$resp/);
+    assert.match(get, /elseif \(\$final\.Scheme -ne 'https'\) \{\s+Remove-Item -LiteralPath \$file[^\n]*\n\s+Fail 1 "refusing a redirect to a non-https URL/);
+    assert.match(ps1, /ResponseUri/);
+    assert.match(ps1, /RequestMessage\.RequestUri/);
+  });
+
   it("--test-key renders a TEST ONLY build without keys", () => {
     const r = render(["--test-key"]);
     assert.equal(r.status, 0, r.stderr);

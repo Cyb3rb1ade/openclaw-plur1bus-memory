@@ -1,7 +1,9 @@
 # PLUR1BUS memory plugin bootstrap for OpenClaw on Windows (D87, spec A.3, HM1-R3). Windows PowerShell 5.1 or PowerShell 7.
 # @@RENDER_NOTE@@
 #
-#   & ([scriptblock]::Create((irm https://plur1bus.app/install-plugin.ps1))) [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
+#   $s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF))) [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
+#
+# (text-safe: under pwsh 7 .Content is byte[] when the host does not serve text/*, so it is decoded as UTF-8 first)
 #
 # Looks for OpenClaw natively (openclaw.cmd / openclaw on PATH) and in the WSL distros (`wsl.exe -l -q`, running
 # ones from `wsl.exe -l -q --running`; a running distro is probed with `wsl.exe -d <d> -e sh -lc 'command -v openclaw'`, a
@@ -15,7 +17,8 @@
 #               `wsl.exe -d <d> -e sh -s -- --version <resolved> [installer flags]` (an `--offline <path>` is
 #               translated with `wslpath -a`); the distro's own run verifies the feed again (spec A.3 step 1).
 # The installer's (or the distro's) exit code is this script's. Needs no administrator rights; writes nothing but its
-# temp dir (removed on exit). The script is unsigned (Authenticode pending, as the harness install.ps1).
+# temp dir (removed on exit). The script is unsigned (Authenticode pending, as the harness install.ps1). Downloads are
+# https only, redirects included: a download that ends on a non-https URL fails (exit 1).
 #
 # Exit codes: 0 ok, 1 failed (nothing changed; bad signature or checksum), 2 needs a choice, 3 incompatible host
 # (openclaw-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from the installer).
@@ -85,7 +88,21 @@ function Assert-Url([string]$uri, [string]$what) {
   Fail 1 "$what must be https://: $uri"
 }
 
-# Copies <uri> to <file>: https:// through Invoke-WebRequest, file:// (test flag only) from the local path.
+# The URI a response finally came from: HttpWebResponse.ResponseUri (Windows PowerShell 5.1) or
+# HttpResponseMessage.RequestMessage.RequestUri (PowerShell 7); $null when neither can be read.
+function Get-FinalUri($resp) {
+  if ($null -eq $resp) { return $null }
+  $br = $resp.BaseResponse
+  if ($null -eq $br) { return $null }
+  if ($br.PSObject.Properties['ResponseUri'] -and $null -ne $br.ResponseUri) { return [Uri]$br.ResponseUri }
+  if ($br.PSObject.Properties['RequestMessage'] -and $null -ne $br.RequestMessage -and $null -ne $br.RequestMessage.RequestUri) {
+    return [Uri]$br.RequestMessage.RequestUri
+  }
+  return $null
+}
+
+# Copies <uri> to <file>: https:// through Invoke-WebRequest (a redirect must stay https), file:// (test flag only)
+# from the local path.
 function Get-Resource([string]$uri, [string]$file) {
   $u = [Uri]::new($uri)
   if ($u.Scheme -eq 'file') {
@@ -95,7 +112,17 @@ function Get-Resource([string]$uri, [string]$file) {
   } elseif ($u.Scheme -eq 'https') {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -Uri $u -OutFile $file -UseBasicParsing -MaximumRedirection 5
+    $resp = Invoke-WebRequest -Uri $u -OutFile $file -UseBasicParsing -MaximumRedirection 5 -PassThru
+    # The sh side pins redirects to https (curl --proto-redir =https). Invoke-WebRequest has no such switch, so the
+    # final URI is checked after the download: a redirect to anything but https fails and the file is discarded.
+    # (Integrity never depended on it: the feed signature and the SHA-256s in the signed feed are checked anyway.)
+    $final = Get-FinalUri $resp
+    if ($null -eq $final) {
+      Write-Warning "install-plugin.ps1: could not read the final URL of $uri; relying on the signature and SHA-256 checks"
+    } elseif ($final.Scheme -ne 'https') {
+      Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+      Fail 1 "refusing a redirect to a non-https URL: $uri -> $final"
+    }
   } else {
     Fail 1 "refusing to download over anything but https: $uri"
   }

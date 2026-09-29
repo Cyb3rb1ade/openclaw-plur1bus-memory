@@ -64,8 +64,14 @@ curl -fsSL https://plur1bus.app/install-plugin.sh | sh -s -- [installer flags]
 Windows (Windows PowerShell 5.1 or PowerShell 7, no administrator rights):
 
 ```powershell
-& ([scriptblock]::Create((irm https://plur1bus.app/install-plugin.ps1))) [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
+$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF))) [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
 ```
+
+The text-safe form matters: under PowerShell 7, `.Content` (and `irm`) returns
+a byte array when the host does not serve the script as `text/*`, and
+`[scriptblock]::Create` would then get the byte values. Decoding as UTF-8 and
+trimming a BOM works on Windows PowerShell 5.1 and PowerShell 7 alike (the same
+form as the harness `docs/manual-release.md` §6.4).
 
 The `.ps1` looks for OpenClaw natively (`openclaw.cmd` / `openclaw` on `PATH`)
 and inside the WSL distros (`wsl.exe -l -q`; running ones from
@@ -100,8 +106,10 @@ unsigned (Authenticode pending) and the bootstraps are hosted at
 `https://plur1bus.app/` beside the harness installers.
 
 Details worth knowing: the installer's SHA-256 check happens after its
-download but before it runs, so a mismatch runs nothing; without `curl` and
-`wget` the shell script exits 3; the WSL delegation of the `.ps1` needs a Node
+download but before it runs, so a mismatch runs nothing; both bootstraps
+download over https only, redirects included (`curl --proto-redir '=https'`;
+the `.ps1` checks the final URL and fails on anything but https); without
+`curl` and `wget` the shell script exits 3; the WSL delegation of the `.ps1` needs a Node
 (`node.exe`) on the Windows side, because the feed signature is verified there
 before anything is handed to the distro.
 

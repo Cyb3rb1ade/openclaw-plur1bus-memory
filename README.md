@@ -1147,8 +1147,12 @@ curl -fsSL https://plur1bus.app/install-plugin.sh | sh
 Windows PowerShell (5.1 or 7):
 
 ```powershell
-& ([scriptblock]::Create((irm https://plur1bus.app/install-plugin.ps1)))
+$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF)))
 ```
+
+(`.Content` is a byte array under PowerShell 7 when the host does not serve the
+script as `text/*`; the form above decodes it as UTF-8 and drops a BOM, so it
+works on both PowerShell versions whatever the content type.)
 
 Options go after the one-liner: `sh -s -- --accept-nc-licence` on Linux and
 macOS, `... --accept-nc-licence` after the closing parenthesis on Windows.
