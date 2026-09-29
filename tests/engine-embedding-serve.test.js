@@ -9,6 +9,7 @@ import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
@@ -53,10 +54,16 @@ function stubEmbedder() {
   };
 }
 
+// macOS: $TMPDIR realpaths to /private/var/folders/<..>/T/ (~57 bytes), so
+// <baseDbPath>/control/embedding-ipc/owner.sock exceeds the 103-byte sun_path
+// limit that resolveScopedEmbeddingIpcPaths() enforces for every serve() on
+// darwin. A real store (~/.openclaw/memory/...) is far shorter; /tmp is too.
+const shortTmp = process.platform === "darwin" ? "/tmp" : tmpdir();
+
 function setup(prefix) {
   const warned = [];
   const stateDir = makeTempDir(`${prefix}state-`);
-  const baseDbPath = join(makeTempDir(`${prefix}root-`), "lancedb-namespaced");
+  const baseDbPath = join(makeTempDir(`${prefix}root-`, shortTmp), "lancedb-namespaced");
   const host = stubHost(stateDir, warned);
   const engine = createEngine(host, config(baseDbPath), { internals: { embeddings: stubEmbedder() } });
   return { engine, host, baseDbPath, warned };
