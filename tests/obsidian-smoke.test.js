@@ -298,10 +298,10 @@ describe("obsidian-smoke-p5", () => {
       const hasTrailing = /[. ]$/.test(segment);
       // POSIX: the gate catches every spelling.
       assert.throws(() => resolveUnder("/vault", rel, {}, posix), gate, segment);
-      assert.throws(() => safeAssertRelative(rel, { platform: "linux" }), gate, segment);
+      assert.throws(() => safeAssertRelative(rel, { pathPlatform: "linux" }), gate, segment);
       // win32: a trailing dot/space is refused outright (Windows would strip it), even with the opt-in.
       assert.throws(() => resolveUnder("C:\\Vault", rel, {}, win32), hasTrailing ? trailing : gate, segment);
-      assert.throws(() => safeAssertRelative(rel, { platform: "win32" }), hasTrailing ? trailing : gate, segment);
+      assert.throws(() => safeAssertRelative(rel, { pathPlatform: "win32" }), hasTrailing ? trailing : gate, segment);
       if (hasTrailing) assert.throws(() => resolveUnder("C:\\Vault", rel, { allowDotObsidianWrite: true }, win32), trailing, segment);
       else assert.equal(resolveUnder("C:\\Vault", rel, { allowDotObsidianWrite: true }, win32), `C:\\Vault\\${segment}\\plugins\\x.js`);
     }
@@ -314,8 +314,8 @@ describe("obsidian-smoke-p5", () => {
       for (const rel of [`${segment}/x.md`, `notes/${segment}/x.md`, `notes/${segment}`]) {
         assert.throws(() => resolveUnder("/vault", rel, {}, posix), /Path traversal rejected/, JSON.stringify(rel));
         assert.throws(() => resolveUnder("C:\\Vault", rel, {}, win32), /Path traversal rejected/, JSON.stringify(rel));
-        assert.throws(() => safeAssertRelative(rel, { platform: "linux" }), /Path traversal rejected/, JSON.stringify(rel));
-        assert.throws(() => safeAssertRelative(rel, { platform: "win32" }), /Path traversal rejected/, JSON.stringify(rel));
+        assert.throws(() => safeAssertRelative(rel, { pathPlatform: "linux" }), /Path traversal rejected/, JSON.stringify(rel));
+        assert.throws(() => safeAssertRelative(rel, { pathPlatform: "win32" }), /Path traversal rejected/, JSON.stringify(rel));
       }
     }
     // Dots inside or leading a real name stay legal.
@@ -323,13 +323,43 @@ describe("obsidian-smoke-p5", () => {
     assert.equal(resolveUnder("C:\\Vault", "notes/.hidden/a..b.md", {}, win32), "C:\\Vault\\notes\\.hidden\\a..b.md");
   });
 
+  it("on win32 refuses ':' (NTFS streams, drive-relative) and 8.3 short names in any segment (review N1)", () => {
+    const stream = /Unsafe path segment rejected \(stream or drive syntax ":"\)/;
+    const short = /Unsafe path segment rejected \(8\.3 short-name form\)/;
+    const cases = [
+      ["OBSIDI~1/plugins/x.js", short],
+      ["obsidi~1/plugins/x.js", short],
+      ["notes/PROGRA~2/x.md", short],
+      [".obsidian::$INDEX_ALLOCATION/plugins/x.js", stream],
+      ["notes/x.md:secret", stream],
+      ["C:x/y.md", stream],
+    ];
+    for (const [rel, error] of cases) {
+      assert.throws(() => resolveUnder("C:\\Vault", rel, {}, win32), error, rel);
+      assert.throws(() => resolveUnder("C:\\Vault", rel, { allowDotObsidianWrite: true }, win32), error, rel);
+      assert.throws(() => safeAssertRelative(rel, { pathPlatform: "win32" }), error, rel);
+    }
+    // On POSIX "OBSIDI~1" and "a:b" are ordinary names, not aliases (resolveUnder = the control-room copy).
+    assert.equal(resolveUnder("/vault", "OBSIDI~1/x.md", {}, posix), "/vault/OBSIDI~1/x.md");
+    assert.equal(resolveUnder("/vault", "notes/a:b.md", {}, posix), "/vault/notes/a:b.md");
+    assert.doesNotThrow(() => safeAssertRelative("OBSIDI~1/x.md", { pathPlatform: "linux" }));
+    // A plain tilde without a digit stays legal on win32.
+    assert.equal(resolveUnder("C:\\Vault", "notes/~draft/x.md", {}, win32), "C:\\Vault\\notes\\~draft\\x.md");
+  });
+
+  it("reads the path platform from pathPlatform, never from a config's own platform key", () => {
+    // resolveReviewPath & co. pass the whole plugin config as options.
+    assert.doesNotThrow(() => safeAssertRelative("notes./x.md", { platform: "win32", pathPlatform: "linux" }));
+    assert.throws(() => safeAssertRelative("notes./x.md", { platform: "linux", pathPlatform: "win32" }), /trailing dot or space/);
+  });
+
   it("on win32 refuses any segment with a trailing dot or space; POSIX keeps such names", () => {
     const trailing = /Unsafe path segment rejected \(trailing dot or space\)/;
     for (const rel of ["notes./x.md", "notes /x.md", "notes/x.md.", "notes/x.md ", "a. ./b"]) {
       assert.throws(() => resolveUnder("C:\\Vault", rel, {}, win32), trailing, JSON.stringify(rel));
-      assert.throws(() => safeAssertRelative(rel, { platform: "win32" }), trailing, JSON.stringify(rel));
+      assert.throws(() => safeAssertRelative(rel, { pathPlatform: "win32" }), trailing, JSON.stringify(rel));
       assert.doesNotThrow(() => resolveUnder("/vault", rel, {}, posix), JSON.stringify(rel));
-      assert.doesNotThrow(() => safeAssertRelative(rel, { platform: "linux" }), JSON.stringify(rel));
+      assert.doesNotThrow(() => safeAssertRelative(rel, { pathPlatform: "linux" }), JSON.stringify(rel));
     }
   });
 
