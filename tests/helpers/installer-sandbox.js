@@ -444,6 +444,12 @@ export function sink() {
 }
 
 /**
+ * A supported arch for this host's platform: darwin ships arm64 only (D8), so
+ * pinning "x64" everywhere made every macOS run a darwin-x64 exit 3.
+ */
+export const SANDBOX_ARCH = process.platform === "darwin" ? "arm64" : "x64";
+
+/**
  * Run the installer in-process against the sandbox (never a TTY unless `extra.isTTY`;
  * a prompt fails the test unless `extra.prompt` is given; free space is stubbed).
  * @returns {Promise<{ code: number, stdout: string, stderr: string, out: string }>}
@@ -455,7 +461,7 @@ export async function runSandboxInstaller(sb, argv, extra = {}) {
   const code = await runInstaller(["--feed-file", sb.feedFile, ...argv], {
     env: sb.env,
     platform: process.platform,
-    arch: "x64",
+    arch: SANDBOX_ARCH,
     glibcVersion: "2.39",
     isTTY: false,
     statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }),

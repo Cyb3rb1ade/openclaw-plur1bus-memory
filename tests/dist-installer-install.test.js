@@ -4,7 +4,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -17,7 +17,7 @@ import { checkCompat, findHarnessHomes } from "../scripts/dist/installer/compat.
 import { whichOnPath } from "../scripts/dist/installer/detect.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState } from "../scripts/dist/installer/state.mjs";
-import { createInstallerSandbox, makeTestFeed, mutatingCalls, runSandboxInstaller, sha256File, sink } from "./helpers/installer-sandbox.js";
+import { SANDBOX_ARCH, createInstallerSandbox, makeTestFeed, mutatingCalls, runSandboxInstaller, sha256File, sink } from "./helpers/installer-sandbox.js";
 import { generateTestKeyPair } from "./helpers/minisign-sign.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -334,6 +334,20 @@ describe("plugin installer: install", () => {
     assert.match(r2.stderr, /PLUR1BUS harness home/);
   });
 
+  it("a not-yet-created store under a symlinked harness home is still inside it (macOS /var -> /private/var)", { skip: process.platform === "win32" && "POSIX directory symlinks" }, () => {
+    // macOS: $TMPDIR and many homes sit behind a symlink (/var -> /private/var).
+    // The existing home realpaths through the link; the missing store must too.
+    const root = makeTempDir("plur1bus-installer-hhlink-");
+    mkdirSync(join(root, "real", "harness"), { recursive: true });
+    symlinkSync(join(root, "real"), join(root, "link"), "dir");
+    const harness = join(root, "link", "harness");
+    const base = { openclawVersion: "2026.8.1", nodeVersion: "24.21.0", target: { target: "darwin-arm64", supported: true, detail: "" }, release: makeTestFeed().hosts.openclaw.releases[0], freeBytes: null, readonlyConfig: null, configValid: true, platform: "darwin" };
+    const ids = (baseDbPath) => checkCompat({ ...base, baseDbPath, harnessHomes: [harness] }).map((f) => f.id);
+    assert.ok(ids(join(harness, "store", "lancedb")).includes("store-inside-harness-home"));
+    assert.ok(ids(join(root, "real", "harness", "store")).includes("store-inside-harness-home"));
+    assert.ok(!ids(join(root, "link", "other", "store")).includes("store-inside-harness-home"));
+  });
+
   it("--host hermes exits 3 naming HM2", async () => {
     const sb = createInstallerSandbox();
     const r = await run(sb, ["--host", "hermes", "--json"]);
@@ -442,7 +456,7 @@ describe("plugin installer: install", () => {
     const env = { ...sb.env, PLUR1BUS_PLUGIN_FEED: pathToFileURL(feedPath).href, PLUR1BUS_PLUGIN_PUBKEY: key.publicKeyLine };
     const stdout = sink();
     const stderr = sink();
-    const opts = { env, platform: process.platform, arch: "x64", glibcVersion: "2.39", isTTY: false, stdout, stderr, statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }) };
+    const opts = { env, platform: process.platform, arch: SANDBOX_ARCH, glibcVersion: "2.39", isTTY: false, stdout, stderr, statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }) };
     assert.equal(await runInstaller(["--dry-run"], opts), EXIT.OK, stderr.text);
     assert.deepEqual(mutating(sb.openclawCalls()), []);
 

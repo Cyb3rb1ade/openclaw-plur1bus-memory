@@ -129,18 +129,30 @@ export function resolveBaseDbPath({ configured, env, platform = process.platform
   return path.join(home, ".openclaw", "memory", "lancedb-namespaced");
 }
 
-function realish(p) {
-  try {
-    return realpathSync.native(p);
-  } catch {
-    return p;
+/**
+ * realpath of `p`, or — when `p` does not exist yet (a store not created) —
+ * the realpath of its deepest existing ancestor plus the missing tail, so both
+ * sides of `inside()` resolve links alike (macOS: /var -> /private/var).
+ */
+function realish(p, path) {
+  const tail = [];
+  let cur = p;
+  for (;;) {
+    try {
+      return path.join(realpathSync.native(cur), ...tail);
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur || parent === ".") return p;
+      tail.unshift(path.basename(cur));
+      cur = parent;
+    }
   }
 }
 
 function inside(child, parent, platform) {
   const path = platform === "win32" ? win32 : posix;
   const norm = (p) => (platform === "win32" ? p.toLowerCase() : p);
-  const rel = path.relative(norm(realish(parent)), norm(realish(child)));
+  const rel = path.relative(norm(realish(parent, path)), norm(realish(child, path)));
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
