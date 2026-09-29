@@ -69,6 +69,21 @@ describe("persona-voice", () => {
     assert.ok(loadPersonaDirective(dir).includes("zählt gern auf"));
   });
 
+  it("loadPersonaDirective sieht auch eine gleich grosse Neufassung im selben Tick", () => {
+    const dir = makeTempDir("pv-");
+    writePersonaVoice(dir, "- Marotte: sagt AAAA.");
+    const path = join(dir, "persona-voice.md");
+    const tick = new Date(Math.floor(Date.now() / 1000) * 1000);
+    utimesSync(path, tick, tick);
+    assert.ok(loadPersonaDirective(dir).includes("sagt AAAA"));
+    const before = statSync(path).size;
+    writeFileSync(path, readFileSync(path, "utf8").replace("sagt AAAA", "sagt BBBB"), "utf8");
+    utimesSync(path, tick, tick);
+    assert.strictEqual(statSync(path).size, before, "same size");
+    assert.strictEqual(statSync(path).mtimeMs, tick.getTime(), "same mtime");
+    assert.ok(loadPersonaDirective(dir).includes("sagt BBBB"));
+  });
+
   it("loadPersonaDirective (7.12.38): 24 Zeilen passen ohne Kappung, Grenze konfigurierbar, Cache kennt die Grenze", () => {
     const dir = makeTempDir("pv-");
     const n = DEFAULT_PERSONA_MAX_BULLETS;
