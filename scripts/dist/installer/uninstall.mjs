@@ -8,16 +8,18 @@
  * cache and the vault are kept.
  *
  * `--purge` additionally deletes the store (the resolved baseDbPath, R-S7), the Node
- * snapshots (`<stateDir>/memory/.snapshots/plur1bus-*`, never the legacy `*.tar.gz`) and
- * the plugin's model cache under the state dir (`${OPENCLAW_HOME}/models/plur1bus`, as the plugin resolves it), and only
- * after two interactive confirmations or `--yes-delete-memories`; without a TTY and
+ * snapshots (`<stateDir>/memory/.snapshots/plur1bus-*`, never the legacy `*.tar.gz`), the
+ * `.pre-restore-*` copies beside the store and the plugin's default model cache
+ * (`${OPENCLAW_HOME}/models/plur1bus`, as the plugin resolves it; not under the state dir). A custom
+ * `embedding.local.cacheDir` is never purged: it is outside the config keys the installer reads (HM1-R10). The
+ * purge runs only after two interactive confirmations or `--yes-delete-memories`; without a TTY and
  * without that flag it exits 2 before any change. Every confirmation is asked before
  * the first change.
  */
 
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, parse, resolve, sep } from "node:path";
+import { basename, dirname, join, posix, win32 } from "node:path";
 
 import { listSnapshots } from "../../../lib/snapshot/store-snapshot.js";
 import { legacyDirOf } from "./legacy.mjs";
@@ -27,22 +29,28 @@ import { statePath, writeState } from "./state.mjs";
 import { removeWorkDir } from "./update.mjs";
 import { removeArtefacts } from "./artefacts.mjs";
 import { rmTree, withWinRetry } from "./fsutil.mjs";
+import { inside, realish } from "./compat.mjs";
 
 const SLOT = "plugins.slots.memory";
 
-/** Refuse to purge a path that is a filesystem root, a home, the state dir or one of their ancestors. */
-function assertPurgeable(path, { stateDir, home }) {
-  const p = resolve(path);
-  const under = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
-  const guarded = [resolve(stateDir), resolve(home)].filter(Boolean);
-  if (parse(p).root === p || guarded.some((g) => under(g, p))) {
+/**
+ * Refuse to purge a path that is a filesystem root, a home, the state dir or one of their ancestors. Compared by
+ * realpath (a not-yet-existing tail resolved like compat.inside) and case-folded on win32, so a baseDbPath naming the
+ * state dir or the home in another case or through a symlink is refused too.
+ */
+export function assertPurgeable(path, { stateDir, home, platform = process.platform }) {
+  const mod = platform === "win32" ? win32 : posix;
+  const p = mod.resolve(path);
+  const real = realish(p, mod);
+  const guarded = [stateDir, home].filter(Boolean).map((g) => mod.resolve(g));
+  if (mod.parse(p).root === p || mod.parse(real).root === real || guarded.some((g) => inside(g, p, platform))) {
     throw new Stop(EXIT.INCOMPATIBLE, "purge", `unsafe-purge-path: refusing to delete ${p} (it is or contains the state dir or the home directory); nothing was changed`);
   }
   return p;
 }
 
-async function purgePlan({ stateDir, baseDbPath, home, openclawHome }) {
-  const store = assertPurgeable(baseDbPath, { stateDir, home });
+async function purgePlan({ stateDir, baseDbPath, home, openclawHome, platform }) {
+  const store = assertPurgeable(baseDbPath, { stateDir, home, platform });
   let snapshots = [];
   try {
     snapshots = (await listSnapshots({ stateDir })).filter((s) => s.kind === "snapshot").map((s) => join(stateDir, "memory", ".snapshots", s.id));
@@ -91,7 +99,7 @@ export async function runUninstall(ctx) {
   if (purge) {
     const home = (ctx.platform === "win32" ? ctx.env?.USERPROFILE : ctx.env?.HOME) || homedir();
     const penv = ctx.childEnv ?? ctx.env ?? {};
-    plan = await purgePlan({ stateDir, baseDbPath, home, openclawHome: penv.OPENCLAW_HOME || join(homedir(), ".openclaw") });
+    plan = await purgePlan({ stateDir, baseDbPath, home, openclawHome: penv.OPENCLAW_HOME || join(homedir(), ".openclaw"), platform: ctx.platform ?? process.platform });
     report.set("purge", { store: plan.store, snapshots: plan.snapshots.length, preRestores: plan.preRestores, modelCache: plan.modelCache });
     // a resumed purge asks again (T6-d): an earlier run's confirmation does not carry over
     if (!flags["yes-delete-memories"]) {

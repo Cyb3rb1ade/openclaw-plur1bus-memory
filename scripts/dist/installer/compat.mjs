@@ -134,7 +134,7 @@ export function resolveBaseDbPath({ configured, env, platform = process.platform
  * the realpath of its deepest existing ancestor plus the missing tail, so both
  * sides of `inside()` resolve links alike (macOS: /var -> /private/var).
  */
-function realish(p, path) {
+export function realish(p, path) {
   const tail = [];
   let cur = p;
   for (;;) {
@@ -149,7 +149,8 @@ function realish(p, path) {
   }
 }
 
-function inside(child, parent, platform) {
+/** `child` is `parent` or lies below it, compared by realpath (see realish) and, on win32, case-folded. */
+export function inside(child, parent, platform) {
   const path = platform === "win32" ? win32 : posix;
   const norm = (p) => (platform === "win32" ? p.toLowerCase() : p);
   const rel = path.relative(norm(realish(parent, path)), norm(realish(child, path)));

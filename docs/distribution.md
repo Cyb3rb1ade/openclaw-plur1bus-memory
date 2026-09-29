@@ -391,7 +391,7 @@ The store, the snapshots, the model cache and the vault are **kept**.
 `--uninstall --purge` additionally deletes the store, the Node snapshots
 (`<stateDir>/memory/.snapshots/plur1bus-*`, never the legacy `*.tar.gz`), the
 `.pre-restore-*` copies beside the store and the plugin's model cache
-(`${OPENCLAW_HOME}/models/plur1bus`, where the plugin resolves it, `~/.openclaw/models/plur1bus` by default; a `models` folder under `OPENCLAW_STATE_DIR` is not touched). It lists exactly what it will delete, then asks
+(`${OPENCLAW_HOME}/models/plur1bus`, where the plugin resolves it, `~/.openclaw/models/plur1bus` by default; a `models` folder under `OPENCLAW_STATE_DIR` is not touched; a custom `embedding.local.cacheDir` is not purged either, because the installer does not read that key — delete it by hand if you set one). It lists exactly what it will delete, then asks
 twice (type `delete`, then `y`), or takes `--yes-delete-memories`. Without a
 terminal and without that flag it exits 2 before any change. It refuses to
 delete a filesystem root, a home directory, the state directory or an ancestor

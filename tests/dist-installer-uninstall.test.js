@@ -3,12 +3,14 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState, writeState } from "../scripts/dist/installer/state.mjs";
+import { assertPurgeable } from "../scripts/dist/installer/uninstall.mjs";
 import { createSnapshot, listSnapshots } from "../lib/snapshot/store-snapshot.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 import { createInstallerSandbox, mutatingCalls, runSandboxInstaller } from "./helpers/installer-sandbox.js";
 
 const ID = "memory-lancedb-namespaced";
@@ -152,5 +154,40 @@ describe("plugin installer: uninstall", () => {
     // run 36518766808: the summary kept only OpenClaw's Debug/Try/Help hints
     assert.match(r.stderr, /uninstall: openclaw plugins uninstall .* failed \(exit 1\): \[openclaw\] Command failed \| \[openclaw\] Reason: TEST ONLY uninstall failure;/);
     assert.doesNotMatch(r.stderr, /OPENCLAW_DEBUG|Try: openclaw doctor/);
+  });
+
+  it("purge refuses a baseDbPath naming the state dir or the home in another case or through a symlink", async () => {
+    const { sb, baseDbPath } = await installedSandbox();
+    // realpaths first, so a macOS /var -> /private/var link does not hide the case fold
+    const state = realpathSync(sb.stateDir);
+    const home = realpathSync(sb.home);
+    const flip = (p) => p.replace(/[a-z]/gi, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
+    // win32 folds case: the state dir, the home and an ancestor in another case are refused
+    for (const p of [flip(state), flip(home), flip(join(state, ".."))]) {
+      assert.throws(() => assertPurgeable(p, { stateDir: state, home, platform: "win32" }), /unsafe-purge-path/, p);
+    }
+    // a store below the state dir in another case is fine on win32
+    assert.doesNotThrow(() => assertPurgeable(flip(join(state, "memory", "lancedb-namespaced")), { stateDir: state, home, platform: "win32" }));
+    assert.equal(assertPurgeable(baseDbPath, { stateDir: sb.stateDir, home: sb.home }), baseDbPath);
+    if (process.platform === "win32") return; // symlinks need privileges there; the case fold above covers win32
+    const links = join(sb.root, "links");
+    mkdirSync(links, { recursive: true });
+    symlinkSync(sb.stateDir, join(links, "state-link"));
+    symlinkSync(sb.home, join(links, "home-link"));
+    for (const p of [join(links, "state-link"), join(links, "home-link"), join(links, "home-link", ".")]) {
+      assert.throws(() => assertPurgeable(p, { stateDir: sb.stateDir, home: sb.home, platform: process.platform }), /unsafe-purge-path/, p);
+    }
+    // end to end: the configured baseDbPath is a symlink to that sandbox's own state dir → exit 3, nothing changes
+    const root2 = makeTempDir("plur1bus-installer-purge-link-");
+    const link2 = join(root2, "state-link");
+    const sb2 = createInstallerSandbox({ root: root2, scenario: { installed: true, config: { [SLOT]: ID, [`plugins.entries.${ID}.config.baseDbPath`]: link2 } } });
+    symlinkSync(sb2.stateDir, link2);
+    writeFileSync(join(sb2.stateDir, "TEST-ONLY-keep.txt"), "TEST ONLY");
+    const r = await run(sb2, ["--uninstall", "--purge", "--yes-delete-memories"]);
+    assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
+    assert.match(r.stderr, /unsafe-purge-path/);
+    assert.deepEqual(mutating(sb2.openclawCalls()), []);
+    assert.ok(existsSync(join(sb2.stateDir, "TEST-ONLY-keep.txt")));
+    assert.ok(existsSync(sb.stateDir) && existsSync(join(baseDbPath, "main", "TEST-ONLY.lance")));
   });
 });
