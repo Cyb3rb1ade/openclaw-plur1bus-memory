@@ -9,7 +9,7 @@
  *
  * `--purge` additionally deletes the store (the resolved baseDbPath, R-S7), the Node
  * snapshots (`<stateDir>/memory/.snapshots/plur1bus-*`, never the legacy `*.tar.gz`) and
- * the plugin's model cache under the state dir (`<stateDir>/models/plur1bus`), and only
+ * the plugin's model cache under the state dir (`${OPENCLAW_HOME}/models/plur1bus`, as the plugin resolves it), and only
  * after two interactive confirmations or `--yes-delete-memories`; without a TTY and
  * without that flag it exits 2 before any change. Every confirmation is asked before
  * the first change.
@@ -41,7 +41,7 @@ function assertPurgeable(path, { stateDir, home }) {
   return p;
 }
 
-async function purgePlan({ stateDir, baseDbPath, home }) {
+async function purgePlan({ stateDir, baseDbPath, home, openclawHome }) {
   const store = assertPurgeable(baseDbPath, { stateDir, home });
   let snapshots = [];
   try {
@@ -49,7 +49,8 @@ async function purgePlan({ stateDir, baseDbPath, home }) {
   } catch {
     snapshots = [];
   }
-  const modelCache = join(stateDir, "models", "plur1bus");
+  // the plugin resolves its model cache as ${OPENCLAW_HOME}/models/plur1bus (lib/providers/dimensions.js), not under the state dir
+  const modelCache = join(openclawHome, "models", "plur1bus");
   // the `.pre-restore-*` copies a restore left beside the store are older states of the same memories
   let preRestores = [];
   try {
@@ -89,7 +90,8 @@ export async function runUninstall(ctx) {
   let plan = null;
   if (purge) {
     const home = (ctx.platform === "win32" ? ctx.env?.USERPROFILE : ctx.env?.HOME) || homedir();
-    plan = await purgePlan({ stateDir, baseDbPath, home });
+    const penv = ctx.childEnv ?? ctx.env ?? {};
+    plan = await purgePlan({ stateDir, baseDbPath, home, openclawHome: penv.OPENCLAW_HOME || join(homedir(), ".openclaw") });
     report.set("purge", { store: plan.store, snapshots: plan.snapshots.length, preRestores: plan.preRestores, modelCache: plan.modelCache });
     // a resumed purge asks again (T6-d): an earlier run's confirmation does not carry over
     if (!flags["yes-delete-memories"]) {

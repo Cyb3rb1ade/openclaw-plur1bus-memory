@@ -27,14 +27,18 @@ async function installedSandbox({ previousSlot = null, config = { [SLOT]: ID } }
   const snap = await createSnapshot({ stateDir: sb.stateDir, baseDbPath, label: "pre-test" });
   const legacyTar = join(sb.stateDir, "memory", ".snapshots", "plur1bus-20260101-000000.tar.gz");
   writeFileSync(legacyTar, "TEST ONLY legacy tar");
-  const modelCache = join(sb.stateDir, "models", "plur1bus");
+  // the plugin resolves its model cache as ${OPENCLAW_HOME}/models/plur1bus, whatever OPENCLAW_STATE_DIR says
+  const modelCache = join(sb.home, "models", "plur1bus");
   mkdirSync(modelCache, { recursive: true });
   writeFileSync(join(modelCache, "model.onnx"), "TEST ONLY model");
+  const stateModels = join(sb.stateDir, "models", "plur1bus");
+  mkdirSync(stateModels, { recursive: true });
+  writeFileSync(join(stateModels, "keep.txt"), "TEST ONLY not the plugin's cache");
   const vault = join(sb.stateDir, "vault");
   mkdirSync(vault, { recursive: true });
   writeFileSync(join(vault, "note.md"), "# TEST ONLY\n");
   writeState(sb.stateDir, { previousSlot, installedVersion: "7.16.11", source: "tarball" });
-  return { sb, baseDbPath, snap, legacyTar, modelCache, vault };
+  return { sb, baseDbPath, snap, legacyTar, modelCache, vault, stateModels };
 }
 
 describe("plugin installer: uninstall", () => {
@@ -55,7 +59,7 @@ describe("plugin installer: uninstall", () => {
   });
 
   it("purge without --yes-delete-memories is refused non-interactively", async () => {
-    const { sb, baseDbPath, snap, legacyTar, modelCache, vault } = await installedSandbox();
+    const { sb, baseDbPath, snap, legacyTar, modelCache, vault, stateModels } = await installedSandbox();
     const preRestore = `${baseDbPath}.pre-restore-20260101T000000Z`;
     mkdirSync(preRestore, { recursive: true });
     writeFileSync(join(preRestore, "old.lance"), "TEST ONLY");
@@ -83,7 +87,8 @@ describe("plugin installer: uninstall", () => {
     assert.equal(existsSync(snap.dir), false);
     assert.deepEqual((await listSnapshots({ stateDir: sb.stateDir })).map((s) => s.kind), ["legacy-tar"]);
     assert.ok(existsSync(legacyTar));
-    assert.equal(existsSync(modelCache), false);
+    assert.equal(existsSync(modelCache), false, "purge deletes ${OPENCLAW_HOME}/models/plur1bus");
+    assert.ok(existsSync(join(stateModels, "keep.txt")), "a models dir under OPENCLAW_STATE_DIR is not the plugin's cache and stays");
     assert.equal(existsSync(preRestore), false);
     assert.ok(existsSync(join(vault, "note.md")), "the vault is never purged");
     assert.deepEqual(readdirSync(join(sb.stateDir, "memory")).filter((n) => /\.tmp-/.test(n)), []);
