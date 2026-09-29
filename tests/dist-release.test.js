@@ -3,7 +3,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -100,11 +100,14 @@ describe("plugin release (HM1 Task 10)", () => {
     assert.match(stage, /p\.integrity/);
   });
 
-  it("every checkout in plugin-release.yml and plugin-dist.yml sets persist-credentials: false", () => {
+  it("every checkout in every workflow sets persist-credentials: false", () => {
+    const dir = join(REPO, ".github", "workflows");
+    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
+    for (const want of ["ci.yml", "plugin-release.yml", "plugin-dist.yml"]) assert.ok(files.includes(want), want);
     let n = 0;
-    for (const file of ["plugin-release.yml", "plugin-dist.yml"]) {
-      const wf = parseYaml(readFileSync(join(REPO, ".github", "workflows", file), "utf8"));
-      for (const [name, job] of Object.entries(wf.jobs)) {
+    for (const file of files) {
+      const wf = parseYaml(readFileSync(join(dir, file), "utf8"));
+      for (const [name, job] of Object.entries(wf.jobs ?? {})) {
         for (const step of job.steps ?? []) {
           if (!String(step.uses).startsWith("actions/checkout@")) continue;
           n += 1;
@@ -112,7 +115,7 @@ describe("plugin release (HM1 Task 10)", () => {
         }
       }
     }
-    assert.ok(n >= 7, `found ${n} checkouts`);
+    assert.ok(n >= 14, `found ${n} checkouts`);
   });
 
   it("assemble renders the channel keys into the installer bundle before the feed and SHA256SUMS (HM1-R-F1)", () => {
