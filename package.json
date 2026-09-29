@@ -56,6 +56,7 @@
     "reindex-promotions": "node scripts/embed-promoted-memories.mjs --dry-run",
     "setup-feature-crons": "node scripts/setup-feature-crons.mjs",
     "build:installer": "node scripts/dist/build-installer.mjs",
+    "build:bootstraps": "node scripts/dist/render-bootstraps.mjs",
     "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },
   "engines": {

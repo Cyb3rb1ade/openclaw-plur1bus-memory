@@ -1,0 +1,240 @@
+#!/bin/sh
+# PLUR1BUS memory plugin bootstrap for OpenClaw on Linux and macOS (D87, spec A.3, HM1-R3).
+# @@RENDER_NOTE@@
+#
+#   curl -fsSL https://plur1bus.app/install-plugin.sh | sh -s -- [installer flags]
+#
+# Finds `openclaw` and a Node that satisfies the plugin's engines range (`node` on PATH, else the Node OpenClaw's
+# own wrapper runs on), downloads the signed plugin feed ({channel}.json) and its .minisig into a private temp dir
+# and verifies the signature with the inlined minisign verifier BEFORE trusting any URL or hash in it. Only then it
+# downloads the bundled Node installer named by the feed, checks its SHA-256 and runs
+# `node <installer> --feed-file <verified feed> [installer flags]`; the installer's exit code is this script's.
+# Never uses sudo; writes nothing but its temp dir (removed on exit).
+#
+# Exit codes: 0 ok, 1 failed (nothing changed; bad signature or checksum), 2 needs a choice, 3 incompatible host
+# (openclaw-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from the installer).
+#
+# Environment:
+#   PLUR1BUS_PLUGIN_CHANNEL   release channel, ^[a-z0-9-]+$ (default: stable)
+#   PLUR1BUS_PLUGIN_FEED      feed URL; `{channel}` is replaced (default: https://updates.plur1bus.app/plugin/{channel}.json).
+#                             https:// only.
+# Test seams (only with PLUR1BUS_PLUGIN_INSTALLER_TEST=1): file:// feeds and installer URLs, and
+# PLUR1BUS_PLUGIN_PUBKEY, a TEST ONLY minisign public key used instead of the channel keys below.
+set -eu
+
+PUBKEY_STABLE='@@PUBKEY_STABLE@@'
+PUBKEY_BETA='@@PUBKEY_BETA@@'
+
+fail() {
+  code=$1
+  shift
+  printf 'install-plugin: %s\n' "$*" >&2
+  exit "$code"
+}
+
+say() {
+  printf 'install-plugin: %s\n' "$*" >&2
+}
+
+# The inlined verifier: scripts/dist/minisign.mjs, verbatim.
+minisign_js() {
+  cat <<'PLUR1BUS_MINISIGN_JS'
+@@MINISIGN_JS@@
+PLUR1BUS_MINISIGN_JS
+}
+
+# linux-x64 | linux-arm64 | darwin-arm64, or empty for a host outside the release matrix (as scripts/install/install.sh).
+detect_target() {
+  os=$(uname -s 2>/dev/null || echo unknown)
+  arch=$(uname -m 2>/dev/null || echo unknown)
+  case "$os" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    *) os= ;;
+  esac
+  case "$arch" in
+    x86_64 | amd64) arch=x64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) arch= ;;
+  esac
+  # A shell under Rosetta reports x86_64 on Apple silicon: the host is arm64.
+  if [ "$os" = darwin ] && [ "$arch" = x64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
+    arch=arm64
+  fi
+  case "$os-$arch" in
+    linux-x64 | linux-arm64 | darwin-arm64) echo "$os-$arch" ;;
+    *) echo "" ;;
+  esac
+}
+
+# fetch <url> <file>: https only; file:// only under the test flag; redirects stay on https.
+fetch() {
+  case "$1" in
+    https://*) proto='=https' ;;
+    file://*)
+      [ "$test_mode" = 1 ] || fail 1 "refusing a file:// URL without PLUR1BUS_PLUGIN_INSTALLER_TEST=1: $1"
+      proto='=https,file'
+      ;;
+    *) fail 1 "refusing to download over anything but https: $1" ;;
+  esac
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --proto "$proto" --proto-redir '=https' --max-filesize 536870912 -o "$2" "$1"
+  elif command -v wget >/dev/null 2>&1; then
+    case "$1" in file://*) fail 1 "file:// URLs need curl" ;; esac
+    wget -q --https-only -O "$2" "$1"
+  else
+    fail 3 "neither curl nor wget is installed"
+  fi
+}
+
+# node_ok <node>: its version satisfies the plugin's engines range >=24.16.0 <25 || >=26.1.0.
+node_ok() {
+  [ -x "$1" ] || return 1
+  v=$("$1" --version 2>/dev/null) || return 1
+  v=${v#v}
+  major=${v%%.*}
+  rest=${v#*.}
+  minor=${rest%%.*}
+  case "$major" in "" | *[!0-9]*) return 1 ;; esac
+  case "$minor" in "" | *[!0-9]*) return 1 ;; esac
+  if [ "$major" -eq 24 ] && [ "$minor" -ge 16 ]; then return 0; fi
+  if [ "$major" -eq 26 ] && [ "$minor" -ge 1 ]; then return 0; fi
+  [ "$major" -ge 27 ]
+}
+
+# private_node <openclaw>: the Node OpenClaw itself runs on. install-cli.sh's wrapper is
+# `exec "<prefix>/tools/node/bin/node" "<entry.js>" "$@"`; a `#!/abs/node` shebang names it directly;
+# else <prefix>/tools/node/bin/node beside <prefix>/bin/openclaw.
+private_node() {
+  n=$(sed -n 's/^[[:space:]]*exec[[:space:]][[:space:]]*"\([^"]*\/node\)"[[:space:]][[:space:]]*"[^"]*".*/\1/p' "$1" 2>/dev/null | head -n 1) || n=
+  if [ -n "$n" ] && [ -x "$n" ]; then
+    printf '%s\n' "$n"
+    return 0
+  fi
+  first=$(head -n 1 "$1" 2>/dev/null) || first=
+  case "$first" in
+    '#!/'*/node)
+      n=${first#'#!'}
+      if [ -x "$n" ]; then
+        printf '%s\n' "$n"
+        return 0
+      fi
+      ;;
+  esac
+  n="$(dirname "$1")/../tools/node/bin/node"
+  if [ -x "$n" ]; then
+    printf '%s\n' "$n"
+    return 0
+  fi
+  return 1
+}
+
+# feed_field <feed file> <dotted path>: a string field read with Node's JSON.parse; printable ASCII, no spaces.
+feed_field() {
+  "$node" -e '
+const fs = require("fs");
+const [file, path] = process.argv.slice(1);
+let feed;
+try { feed = JSON.parse(fs.readFileSync(file, "utf8")); } catch { process.stderr.write("the feed is not JSON\n"); process.exit(2); }
+const v = path.split(".").reduce((o, k) => (o !== null && typeof o === "object" ? o[k] : undefined), feed);
+if (typeof v !== "string" || !/^[\x21-\x7e]+$/.test(v)) { process.stderr.write("the feed has no valid " + path + "\n"); process.exit(3); }
+process.stdout.write(v + "\n");
+' "$1" "$2"
+}
+
+# sha256_of <file>: lower-case hex, with Node's crypto (no sha256sum/shasum dependency).
+sha256_of() {
+  "$node" -e '
+const h = require("crypto").createHash("sha256");
+h.update(require("fs").readFileSync(process.argv[1]));
+process.stdout.write(h.digest("hex") + "\n");
+' "$1"
+}
+
+main() {
+  test_mode=0
+  [ "${PLUR1BUS_PLUGIN_INSTALLER_TEST:-}" = 1 ] && test_mode=1
+
+  channel=${PLUR1BUS_PLUGIN_CHANNEL:-stable}
+  case "$channel" in
+    *[!a-z0-9-]* | "") fail 1 "invalid channel: $channel (expected ^[a-z0-9-]+\$)" ;;
+  esac
+  # Not `${VAR:-...{channel}...}`: the `}` of the placeholder would end the expansion.
+  feed_url=${PLUR1BUS_PLUGIN_FEED:-}
+  [ -n "$feed_url" ] || feed_url='https://updates.plur1bus.app/plugin/{channel}.json'
+  feed_url=$(printf '%s' "$feed_url" | sed "s/{channel}/$channel/g")
+  case "$feed_url" in
+    https://*) ;;
+    file://*) [ "$test_mode" = 1 ] || fail 1 "the feed URL must be https:// (file:// only with PLUR1BUS_PLUGIN_INSTALLER_TEST=1): $feed_url" ;;
+    *) fail 1 "the feed URL must be https://: $feed_url" ;;
+  esac
+
+  if [ "$test_mode" = 1 ] && [ -n "${PLUR1BUS_PLUGIN_PUBKEY:-}" ]; then
+    pubkey=$PLUR1BUS_PLUGIN_PUBKEY
+  else
+    case "$channel" in
+      stable) pubkey=$PUBKEY_STABLE ;;
+      beta) pubkey=$PUBKEY_BETA ;;
+      *) pubkey= ;;
+    esac
+  fi
+  [ -n "$pubkey" ] || fail 1 "this bootstrap carries no feed public key for channel $channel"
+
+  target=$(detect_target)
+  [ -n "$target" ] || fail 3 "unsupported-target: $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null); the plugin supports linux-x64, linux-arm64, darwin-arm64, win-x64 and win-arm64"
+
+  openclaw=$(command -v openclaw 2>/dev/null) || openclaw=
+  [ -n "$openclaw" ] || fail 3 "openclaw-not-found: no openclaw on PATH; install OpenClaw first (https://docs.openclaw.ai/install/installer)"
+
+  node=
+  path_node=$(command -v node 2>/dev/null) || path_node=
+  if [ -n "$path_node" ] && node_ok "$path_node"; then
+    node=$path_node
+  else
+    priv=$(private_node "$openclaw") || priv=
+    if [ -n "$priv" ] && node_ok "$priv"; then node=$priv; fi
+  fi
+  [ -n "$node" ] || fail 3 "node-not-found: need Node >=24.16.0 <25 || >=26.1.0 on PATH or OpenClaw's own Node (found: ${path_node:-none} on PATH)"
+
+  old_umask=$(umask)
+  umask 077
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/plur1bus-plugin.XXXXXX") || fail 1 "cannot create a temp dir"
+  trap 'rm -rf "$tmp"' EXIT
+  trap 'exit 1' HUP INT TERM
+
+  feed="$tmp/$channel.json"
+  fetch "$feed_url" "$feed" || fail 1 "could not download the plugin feed $feed_url"
+  fetch "$feed_url.minisig" "$feed.minisig" || fail 1 "could not download the feed signature $feed_url.minisig"
+  js=$(minisign_js)
+  "$node" --input-type=module -e "$js
+process.exitCode = mainVerify(process.argv.slice(1));" -- "$pubkey" "$feed" "$feed.minisig" >&2 ||
+    fail 1 "the plugin feed signature does not verify: $feed_url (nothing downloaded or changed)"
+
+  schema=$(feed_field "$feed" schema) || fail 1 "the plugin feed is invalid"
+  [ "$schema" = plur1bus.plugin-feed/1 ] || fail 1 "unknown feed schema $schema"
+  feed_channel=$(feed_field "$feed" channel) || fail 1 "the plugin feed is invalid"
+  [ "$feed_channel" = "$channel" ] || fail 1 "the feed at $feed_url is for channel $feed_channel, not $channel"
+  url=$(feed_field "$feed" installer.url) || fail 1 "the plugin feed names no installer"
+  want=$(feed_field "$feed" installer.sha256) || fail 1 "the plugin feed names no installer sha256"
+  printf '%s' "$want" | grep -Eq '^[0-9a-f]{64}$' || fail 1 "the plugin feed has no valid installer sha256"
+
+  installer="$tmp/plur1bus-plugin-installer.mjs"
+  say "downloading $url ($target)"
+  fetch "$url" "$installer" || fail 1 "could not download $url"
+  got=$(sha256_of "$installer")
+  [ "$got" = "$want" ] || fail 1 "checksum mismatch for $url: expected $want, got $got (nothing run)"
+
+  # The private umask was for the temp dir only; OpenClaw and the installer write with the user's own.
+  umask "$old_umask"
+  code=0
+  # Piped into sh, stdin is the script itself: give the installer the terminal for its questions when there is one.
+  if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
+    "$node" "$installer" --feed-file "$feed" "$@" </dev/tty || code=$?
+  else
+    "$node" "$installer" --feed-file "$feed" "$@" || code=$?
+  fi
+  exit "$code"
+}
+
+# The whole script is read before main runs, so a truncated download never executes half of it.
+main "$@"
