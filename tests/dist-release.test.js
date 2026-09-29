@@ -10,6 +10,7 @@ import { parse as parseYaml } from "yaml";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW = join(REPO, ".github", "workflows", "plugin-release.yml");
+const text = readFileSync(WORKFLOW, "utf8");
 const readJson = (p) => JSON.parse(readFileSync(join(REPO, p), "utf8"));
 
 describe("plugin release (HM1 Task 10)", () => {
@@ -25,7 +26,6 @@ describe("plugin release (HM1 Task 10)", () => {
   });
 
   it("plugin-release.yml parses and pins every action to a SHA", () => {
-    const text = readFileSync(WORKFLOW, "utf8");
     const wf = parseYaml(text);
     assert.deepEqual(wf.on.push.tags, ["v*"]);
     assert.equal(wf.on.workflow_dispatch.inputs["dry-run"].default, true);
@@ -57,17 +57,45 @@ describe("plugin release (HM1 Task 10)", () => {
   });
 
   it("plugin-release.yml grants id-token and attestations only where needed", () => {
-    const wf = parseYaml(readFileSync(WORKFLOW, "utf8"));
-    assert.deepEqual(Object.keys(wf.jobs), ["check", "dist", "assemble", "github-release", "npm-publish"]);
+    const wf = parseYaml(text);
+    assert.deepEqual(Object.keys(wf.jobs), ["check", "dist", "assemble", "attest", "github-release", "npm-publish"]);
     assert.equal(wf.jobs.dist.uses, "./.github/workflows/plugin-dist.yml");
     for (const [name, job] of Object.entries(wf.jobs)) {
       const p = job.permissions ?? {};
-      if (name === "assemble") assert.deepEqual(p, { contents: "read", "id-token": "write", attestations: "write" });
+      if (name === "assemble") assert.deepEqual(p, { contents: "read" });
+      else if (name === "attest") assert.deepEqual(p, { contents: "read", "id-token": "write", attestations: "write" });
       else if (name === "github-release") assert.deepEqual(p, { contents: "write" });
       else if (name === "npm-publish") assert.deepEqual(p, { contents: "read", "id-token": "write" });
       else assert.ok(!("id-token" in p) && !("attestations" in p), `${name} needs neither`);
     }
     assert.equal(wf.jobs["npm-publish"].environment, "npm-publish");
+    // attestations are real-run only and follow assemble; the release waits for them
+    assert.match(wf.jobs.attest.if, /dry-run != 'true'/);
+    assert.ok(wf.jobs.attest.needs.includes("assemble") && wf.jobs["github-release"].needs.includes("attest"));
+    // the npm decision is made once, in assemble
+    assert.equal(wf.jobs["npm-publish"].if.includes("vars."), false);
+    assert.match(wf.jobs["npm-publish"].if, /needs\.assemble\.outputs\.npm == 'yes'/);
+    assert.equal((text.match(/vars\.PLUR1BUS_NPM_PUBLISH/g) ?? []).length, 1);
+  });
+
+  it("plugin-release.yml: dist-tag per channel, credentials not persisted, SHA256SUMS as published, tarball re-checked", () => {
+    const wf = parseYaml(text);
+    const publish = wf.jobs["npm-publish"].steps.find((s) => /npm publish/.test(s.run ?? "")).run;
+    assert.match(publish, /stable\) dist_tag=latest/);
+    assert.match(publish, /beta\) dist_tag=beta/);
+    assert.match(publish, /npm publish "\.\/\$TGZ" --provenance --access public --tag "\$dist_tag"/);
+    for (const [name, job] of Object.entries(wf.jobs)) {
+      for (const step of job.steps ?? []) {
+        if (String(step.uses).startsWith("actions/checkout@")) assert.equal(step.with?.["persist-credentials"], false, `${name}: checkout`);
+      }
+    }
+    const sums = wf.jobs.assemble.steps.find((s) => s.name === "Write SHA256SUMS").run;
+    assert.match(sums, /"plugin-\$CHANNEL\.unsigned\.json" > SHA256SUMS/);
+    assert.ok(!/"plugin-\$CHANNEL\.json" > SHA256SUMS/.test(sums));
+    const stage = wf.jobs.assemble.steps.find((s) => s.name === "Stage the release files").run;
+    assert.match(stage, /differs from pack\.json/);
+    assert.match(stage, /p\.sha256/);
+    assert.match(stage, /p\.integrity/);
   });
 
   it("the release notes exist in de and en for the package version", () => {

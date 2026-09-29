@@ -231,7 +231,8 @@ describe("plugin-dist workflow", () => {
 
   it("plugin-dist.yml has the triggers, permissions and the ten-leg install matrix of the brief", () => {
     assert.deepEqual(wf.permissions, { contents: "read" });
-    assert.deepEqual(wf.on.push.tags, ["v*"]);
+    assert.ok(!("push" in wf.on), "no own tag trigger: plugin-release.yml calls it");
+    assert.ok("workflow_call" in wf.on && "pull_request" in wf.on);
     assert.equal(wf.on.schedule[0].cron, "17 3 * * *");
     assert.ok("workflow_dispatch" in wf.on);
     for (const p of ["scripts/dist/**", "lib/selftest/**", "lib/snapshot/**", ".github/workflows/plugin-dist.yml", "package*.json", "openclaw.plugin.json"]) {

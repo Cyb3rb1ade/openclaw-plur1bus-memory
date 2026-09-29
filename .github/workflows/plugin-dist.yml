@@ -13,9 +13,8 @@ name: plugin-dist
 permissions:
   contents: read
 
+# A release tag runs this through plugin-release.yml (workflow_call); no tag trigger of its own.
 on:
-  push:
-    tags: ['v*']
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
