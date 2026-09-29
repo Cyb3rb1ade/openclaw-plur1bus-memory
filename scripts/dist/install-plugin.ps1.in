@@ -290,7 +290,11 @@ function Invoke-WithStdin([string]$file, [string[]]$argv, [byte[]]$bytes) {
   $savedInputEncoding = $null
   try { $savedInputEncoding = [Console]::InputEncoding; [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false } catch { $savedInputEncoding = $null }
   try { $p = [System.Diagnostics.Process]::Start($psi) } finally {
-    if ($null -ne $savedInputEncoding) { try { [Console]::InputEncoding = $savedInputEncoding } catch { } }
+    if ($null -ne $savedInputEncoding) {
+      try { [Console]::InputEncoding = $savedInputEncoding } catch {
+        [Console]::Error.WriteLine("install-plugin: warning: could not restore the console input encoding ($($_.Exception.Message)); later output of this console may be decoded differently")
+      }
+    }
   }
   try {
     try {
