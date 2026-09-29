@@ -279,6 +279,11 @@ function makePsCase(o) {
 }
 
 const SHELLS = findShells();
+// ci.yml's bootstrap-stdin-bytes job sets PLUR1BUS_REQUIRE_PS51=1: there the Windows PowerShell 5.1 byte check
+// must run, so a missing powershell.exe fails instead of skipping.
+if (process.env.PLUR1BUS_REQUIRE_PS51 === "1" && !SHELLS.some((s) => s.name === "powershell.exe")) {
+  throw new Error("PLUR1BUS_REQUIRE_PS51=1 but Windows PowerShell 5.1 (powershell.exe) was not found");
+}
 const PS_SKIP = process.platform !== "win32" ? "install-plugin.ps1 runs on Windows only (Task 8/9 Windows CI legs)" : SHELLS.length === 0 && "no PowerShell found";
 const UBUNTU = "Ubuntu-24.04";
 
@@ -389,7 +394,10 @@ describe("install-plugin.ps1", { skip: PS_SKIP }, () => {
         const sh = c.wslCalls().find((e) => e.argv.includes("-s"));
         assert.ok(sh, JSON.stringify(c.wslCalls()));
         assert.deepEqual(sh.argv, ["-d", UBUNTU, "-e", "sh", "-s", "--", "--version", "7.16.11", "--offline", "/mnt/c/TEST ONLY/p.tgz", "--json"]);
+        // Windows PowerShell 5.1 used to prepend the console encoding's UTF-8 preamble (CI byte check, ci.yml).
+        assert.notDeepEqual([...c.wslStdin().subarray(0, 3)], [0xef, 0xbb, 0xbf], "no BOM reaches sh");
         assert.deepEqual(c.wslStdin(), c.shBytes, "stdin is the feed's bootstrap.sh, byte for byte");
+        assert.doesNotMatch(r.stderr, /could not restore the console input encoding/);
         assert.equal(c.installer(), null, "nothing runs natively");
 
         assert.match(sh.WSLENV ?? "", /PLUR1BUS_PLUGIN_CHANNEL\/u/);

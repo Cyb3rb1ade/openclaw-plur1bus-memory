@@ -309,6 +309,8 @@ function createFixture(sessionText) {
         env: {
           ...process.env,
           HOME: homeDir,
+          // os.homedir() reads USERPROFILE instead of HOME on win32.
+          USERPROFILE: homeDir,
           PLUR1BUS_PLUGIN_DIR: pluginDir,
           ...overrides,
         },

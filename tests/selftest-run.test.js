@@ -12,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, normalize } from "node:path";
 import { describe, it } from "node:test";
 
 import { E5_EMBEDDING_PROFILE, BGE_RERANKER_PROFILE } from "../lib/providers/local-model-artifacts.js";
@@ -163,7 +163,9 @@ describe("runSelftest", () => {
     assert.equal(downloaded.model.state, "downloaded");
     assert.equal(downloaded.ok, true, downloaded.errors.join("; "));
     const ensure = seen.find((entry) => entry.op === "ensure");
-    assert.equal(ensure.cacheDir, join(box.openclawHome, "models", "plur1bus"));
+    // normalize(): the default cacheDir is the template "${OPENCLAW_HOME}/models/plur1bus",
+    // so on win32 it mixes separators; the directory is the same one.
+    assert.equal(normalize(ensure.cacheDir), join(box.openclawHome, "models", "plur1bus"));
     assert.equal(ensure.options.acceptNonCommercialLicense, false);
   });
 

@@ -16,7 +16,6 @@ import { execFile } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import {
@@ -30,7 +29,8 @@ import {
 } from "../lib/tombstone.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
-const TOMBSTONE_MODULE = fileURLToPath(new URL("../lib/tombstone.js", import.meta.url));
+// A file: URL: the worker imports it, and a bare Windows path is no ESM specifier.
+const TOMBSTONE_MODULE = new URL("../lib/tombstone.js", import.meta.url).href;
 const AGENT = "torn-agent";
 
 function tempBase(t) {

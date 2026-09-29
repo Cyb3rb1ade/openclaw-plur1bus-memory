@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { SharedMemoryPool, SHARED_MEMORY_UNSUPPORTED, SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE, defaultSharedMemoryMode } from "../lib/shared-memory-pool.js";
@@ -8,6 +9,12 @@ import { safeAgentId } from "../lib/sql-safety.js";
 import { workspacePoolKey } from "../lib/memory-request-context.js";
 import { AgentDbPool } from "../index.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { prepareWin32SharedBase } from "./helpers/win32-shared-owner.js";
+
+// A short POSIX temp root (macOS socket-length habit of this suite); win32 has
+// no /tmp, and an elevated runner's directories need handing to the user
+// before a verified-path write (see helpers/win32-shared-owner.js).
+const TMP_ROOT = process.platform === "win32" ? tmpdir() : "/tmp";
 
 class FakeAgentDbPool {
   constructor(path, _dim, _logger, options = {}) { this.path = path; this.options = options; this.calls = []; }
@@ -26,7 +33,7 @@ const sharedCapabilitiesSupported = defaultSharedMemoryMode() !== "unavailable";
 
 describe("B13 shared memory pool", () => {
   it("routes workspaces and users to separate hashed physical roots", async () => {
-    const base = makeTempDir("b13-shared-", "/tmp");
+    const base = makeTempDir("b13-shared-", TMP_ROOT);
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       if (!sharedCapabilitiesSupported) {
@@ -37,10 +44,11 @@ describe("B13 shared memory pool", () => {
         await pool.shutdown();
         return;
       }
+      prepareWin32SharedBase(base);
       let workspacePath;
-      await pool.withWorkspaceDb(workspaceA, async (db) => { workspacePath = db.path; assert.match(db.path, /\.plur1bus-shared\/workspaces\/w-[a-f0-9]{62}$/); });
+      await pool.withWorkspaceDb(workspaceA, async (db) => { workspacePath = db.path; assert.match(db.path, /\.plur1bus-shared[\\/]workspaces[\\/]w-[a-f0-9]{62}$/); });
       await pool.withWorkspaceDb(workspaceB, async (db) => assert.notEqual(db.path, workspacePath));
-      await pool.withUserDb(userA, async (db) => { assert.match(db.path, /\.plur1bus-shared\/users\/u-[a-f0-9]{62}$/); assert.notEqual(db.path, workspacePath); });
+      await pool.withUserDb(userA, async (db) => { assert.match(db.path, /\.plur1bus-shared[\\/]users[\\/]u-[a-f0-9]{62}$/); assert.notEqual(db.path, workspacePath); });
       for (const key of [...pool.workspaceWritePool.calls, ...pool.userWritePool.calls]) {
         assert.equal(safeAgentId(key), key); assert.ok(key.length <= 64);
       }
@@ -49,7 +57,7 @@ describe("B13 shared memory pool", () => {
   });
 
   it("fails closed for missing bindings and keeps raw identities out of paths", async () => {
-    const base = makeTempDir("b13-shared-", "/tmp");
+    const base = makeTempDir("b13-shared-", TMP_ROOT);
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       await assert.rejects(pool.withWorkspaceDb({}, async () => {}), /bound workspace/);
@@ -58,6 +66,7 @@ describe("B13 shared memory pool", () => {
         await assert.rejects(pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async () => {}), SHARED_MEMORY_UNSUPPORTED_MESSAGE_RE);
         assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
       } else {
+        prepareWin32SharedBase(base);
         await pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async (db) => assert.equal(db.path.includes("../victim"), false));
       }
       await pool.shutdown();
@@ -65,7 +74,7 @@ describe("B13 shared memory pool", () => {
   });
 
   it("does not create optional shared read routes and shutdown is permanent", async () => {
-    const parent = makeTempDir("b13-shared-", "/tmp"); const base = join(parent, "missing", "base");
+    const parent = makeTempDir("b13-shared-", TMP_ROOT); const base = join(parent, "missing", "base");
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.equal(db, null));
@@ -77,7 +86,7 @@ describe("B13 shared memory pool", () => {
   });
 
   it("uses the real AgentDbPool lazily without opening LanceDB", async () => {
-    const base = makeTempDir("b13-shared-", "/tmp");
+    const base = makeTempDir("b13-shared-", TMP_ROOT);
     try {
       const pool = new SharedMemoryPool(base, 4, AgentDbPool);
       await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.equal(db, null));
@@ -88,15 +97,16 @@ describe("B13 shared memory pool", () => {
         await pool.shutdown();
         return;
       }
+      prepareWin32SharedBase(base);
       await pool.withWorkspaceDb(workspaceA, async (db) => {
-        assert.match(db.dbPath, /\.plur1bus-shared\/workspaces\/w-[a-f0-9]{62}$/);
+        assert.match(db.dbPath, /\.plur1bus-shared[\\/]workspaces[\\/]w-[a-f0-9]{62}$/);
       });
       await pool.shutdown();
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
 
   it("returns absent without creating a missing shared kind or key route", async () => {
-    const base = makeTempDir("b13-shared-", "/tmp");
+    const base = makeTempDir("b13-shared-", TMP_ROOT);
     try {
       mkdirSync(join(base, ".plur1bus-shared"));
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
@@ -116,7 +126,7 @@ describe("B13 shared memory pool", () => {
   });
 
   it("keeps callback leases alive until settlement before shutdown", async () => {
-    const base = makeTempDir("b13-shared-", "/tmp");
+    const base = makeTempDir("b13-shared-", TMP_ROOT);
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       if (!sharedCapabilitiesSupported) {
@@ -124,6 +134,7 @@ describe("B13 shared memory pool", () => {
         await pool.shutdown();
         return;
       }
+      prepareWin32SharedBase(base);
       let release; const gate = new Promise((resolve) => { release = resolve; });
       const running = pool.withWorkspaceDb(workspaceA, async () => gate);
       await new Promise((resolve) => setImmediate(resolve));
@@ -134,7 +145,7 @@ describe("B13 shared memory pool", () => {
   });
 
   it("an unsupported pool reports its support and throws a typed error", async () => {
-    const base = makeTempDir("b13-shared-", "/tmp");
+    const base = makeTempDir("b13-shared-", TMP_ROOT);
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       pool.supported = false;

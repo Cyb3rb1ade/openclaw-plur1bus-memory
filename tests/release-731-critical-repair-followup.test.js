@@ -28,6 +28,11 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 const REPAIR_SCRIPT = fileURLToPath(new URL("../scripts/repair-tombstones.mjs", import.meta.url));
 const AGENT = "release731-followup-agent";
 
+/** A path as it appears inside JSON text (win32 backslashes are escaped there). */
+function jsonEscaped(path) {
+  return JSON.stringify(path).slice(1, -1);
+}
+
 function uuidFor(n) {
   return `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
 }
@@ -291,7 +296,7 @@ describe("7.3.1 Sol follow-up critical and repair security", () => {
 
     assert.notEqual(result.status, 0);
     assert.ok(
-      result.report.sourceErrors?.some((entry) => JSON.stringify(entry).includes(unreadableWorkspace)),
+      result.report.sourceErrors?.some((entry) => JSON.stringify(entry).includes(jsonEscaped(unreadableWorkspace))),
       "the unreadable explicit workspace must be reported",
     );
     assert.equal(result.report.reconstructed, 0);
@@ -315,7 +320,7 @@ describe("7.3.1 Sol follow-up critical and repair security", () => {
 
     assert.notEqual(result.status, 0);
     assert.ok(
-      result.report.sourceErrors?.some((entry) => JSON.stringify(entry).includes(unreadableArchiveRoot)),
+      result.report.sourceErrors?.some((entry) => JSON.stringify(entry).includes(jsonEscaped(unreadableArchiveRoot))),
       "the unreadable explicit archive root must be reported",
     );
     assert.equal(result.report.reconstructed, 0);

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, copyFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /**
  * Canonical list of files that must be present and byte-identical in the
@@ -788,7 +789,10 @@ export async function smokeTestExports(expectations) {
     let mod;
     let importError = false;
     try {
-      mod = await import(`${filePath}?smokeTest=${Date.now()}-${Math.random()}`);
+      // A file: URL, not the raw path: a Windows path is no ESM specifier.
+      const url = pathToFileURL(filePath);
+      url.search = `smokeTest=${Date.now()}-${Math.random()}`;
+      mod = await import(url.href);
     } catch {
       importError = true;
     }

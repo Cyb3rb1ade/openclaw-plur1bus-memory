@@ -22,6 +22,7 @@ import {
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import { runFeatureCronRunner } from "../scripts/run-feature-cron.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 
@@ -342,7 +343,7 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
       symlinkSync(join(packageBin, "openclaw.js"), join(pathBin, "openclaw"));
 
       const runtime = await loadOpenClawGatewayRuntime({
-        entryPath: new URL("../scripts/run-feature-cron.mjs", import.meta.url).pathname,
+        entryPath: fileURLToPath(new URL("../scripts/run-feature-cron.mjs", import.meta.url)),
         pathValue: pathBin,
       });
       assert.equal(runtime.runtimeSentinel, "resolved-from-path");

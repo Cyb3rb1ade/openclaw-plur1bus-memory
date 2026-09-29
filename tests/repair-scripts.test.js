@@ -26,6 +26,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { validateDeployment, DEPLOY_FILES } from "../scripts/lib/deploy-integrity.mjs";
 import { run as runWorkspaceWriter } from "../scripts/verify-workspace-writer.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { fileURLToPath } from "node:url";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -50,9 +51,11 @@ function writeStub(dir, relPath) {
 
 // Run a script and return { status, stdout, stderr }
 function runScript(scriptPath, args = [], env = {}) {
+  // os.homedir() reads USERPROFILE on win32: mirror a HOME override there.
+  const home = env.HOME !== undefined && env.USERPROFILE === undefined ? { USERPROFILE: env.HOME } : {};
   const r = spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, ...home },
     timeout: 30000,
   });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
@@ -70,7 +73,7 @@ async function captureConsoleLog(fn) {
   }
 }
 
-const REPO_ROOT = new URL("../", import.meta.url).pathname;
+const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const REPAIR_SCRIPT = join(REPO_ROOT, "scripts", "repair-installed-plugin.mjs");
 const MAINTAIN_SCRIPT = join(REPO_ROOT, "scripts", "maintain-lancedb.mjs");
 const WORKSPACE_SCRIPT = join(REPO_ROOT, "scripts", "verify-workspace-writer.mjs");

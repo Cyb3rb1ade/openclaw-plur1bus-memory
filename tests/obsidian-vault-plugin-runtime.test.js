@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -39,6 +39,16 @@ describe("Obsidian vault path handling", () => {
     assert.throws(() => normalizeVaultPath("   "), /vault path is required/);
     assert.throws(() => normalizeVaultPath("/"), /filesystem root/);
     assert.throws(() => normalizeVaultPath("/tmp"), /filesystem root/);
+  });
+
+  it("applies the same two-segment rule below a win32 drive or UNC root (path.win32)", () => {
+    assert.throws(() => normalizeVaultPath("C:\\", win32), /filesystem root/);
+    assert.throws(() => normalizeVaultPath("C:\\Users", win32), /filesystem root/);
+    assert.throws(() => normalizeVaultPath("\\\\srv\\share\\one", win32), /filesystem root/);
+    assert.equal(normalizeVaultPath("C:\\Users\\Jürgen A\\Vault", win32), "C:\\Users\\Jürgen A\\Vault");
+    assert.equal(normalizeVaultPath("C:/Users/x/Vault", win32), "C:\\Users\\x\\Vault");
+    assert.equal(normalizeVaultPath("/home/u/vault", posix), "/home/u/vault");
+    assert.throws(() => normalizeVaultPath("/home", posix), /filesystem root/);
   });
 
   it("recognises a vault only by its Obsidian marker files", (t) => {

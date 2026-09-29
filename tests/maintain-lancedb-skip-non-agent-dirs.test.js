@@ -36,7 +36,8 @@ function makeTable(base, agentDir, manifestCount) {
 function run(base, extraArgs = []) {
   return execFileSync(process.execPath, [SCRIPT, "--db-path", base, ...extraArgs], {
     encoding: "utf8",
-    env: { ...process.env, HOME: base },
+    // USERPROFILE: os.homedir() reads it instead of HOME on win32.
+    env: { ...process.env, HOME: base, USERPROFILE: base },
   });
 }
 
