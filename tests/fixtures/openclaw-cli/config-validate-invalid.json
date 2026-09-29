@@ -1,0 +1,15 @@
+{
+  "ok": false,
+  "error": {
+    "type": "cli_error",
+    "message": "OpenClaw config is invalid: <state>/openclaw.json"
+  },
+  "valid": false,
+  "path": "<state>/openclaw.json",
+  "issues": [
+    {
+      "path": "<root>",
+      "message": "Unrecognized key: \"bogusKey\""
+    }
+  ]
+}

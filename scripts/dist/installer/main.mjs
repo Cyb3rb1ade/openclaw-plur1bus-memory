@@ -304,7 +304,10 @@ async function install(ctx) {
 
   // ── compatibility (reads only) ────────────────────────────────────────────
   const readonlyConfig = childEnv.OPENCLAW_NIX_MODE === "1" ? "OPENCLAW_NIX_MODE" : childEnv.OPENCLAW_CONFIG_READONLY === "1" ? "OPENCLAW_CONFIG_READONLY" : null;
+  // a fresh state dir has no openclaw.json yet: nothing to validate (install creates it); a present config
+  // OpenClaw rejects stays fatal (Review Focus 3, R-S2)
   const validation = await cli.configValidate();
+  const configState = validation.missing ? "no config file yet" : "config valid";
   let configuredBase = null;
   if (validation.ok) {
     try {
@@ -334,7 +337,7 @@ async function install(ctx) {
       for (const f of cfg) report.note(`  ${f.id}: ${f.detail}`);
       throw new Stop(EXIT.INCOMPATIBLE, "compat", `${cfg.map((f) => f.id).join(", ")}; nothing was changed`);
     }
-    report.step("compat", "ok", "config valid and writable");
+    report.step("compat", "ok", `${configState} and writable`);
   }
   const findings = release === null ? [] : checkCompat({
     openclawVersion: det.version,
@@ -355,7 +358,7 @@ async function install(ctx) {
     for (const f of fatal) report.note(`  ${f.id}: ${f.detail}`);
     throw new Stop(EXIT.INCOMPATIBLE, "compat", `${fatal.length} incompatibilit${fatal.length === 1 ? "y" : "ies"} (${fatal.map((f) => f.id).join(", ")}); nothing was changed`);
   }
-  if (release) report.step("compat", "ok", `${target.target}, OpenClaw ≥ ${release.compat.minGatewayVersion}, node ${release.node}, config valid`);
+  if (release) report.step("compat", "ok", `${target.target}, OpenClaw ≥ ${release.compat.minGatewayVersion}, node ${release.node}, ${configState}`);
   for (const h of harnessHomes) report.note(`Notice: a PLUR1BUS harness home exists at ${h}; OpenClaw host mode and the harness keep separate memories.`);
 
   // ── offline tarball against the feed ──────────────────────────────────────

@@ -22,6 +22,9 @@
  * by the child-process test), and a legacy deploy that is visible only while
  * `<state>/extensions/memory-lancedb-namespaced` exists; `recordDigestsMissingFor` drops
  * the install record's npmIntegrity/clawpackSha256 for these versions.
+ * `config validate` reports a missing config file on a fresh sandbox (as real
+ * OpenClaw does), `configValidateExit` makes it reject the config, and
+ * `configValidateSaysMissing` makes it claim "file not found" regardless.
  *
  * `createInstallerSandbox()` throws if the `openclaw` that PATH resolves is not
  * its own shim (global constraint "never touch a real OpenClaw installation").
@@ -85,12 +88,23 @@ if (args[0] === "--version") {
   done(0);
 }
 
+// Like 2026.8.1 and 2026.9.6 (fixtures config-validate-*.json, captured from real runs): exit 1 with
+// "file not found" while <state>/openclaw.json does not exist yet (a fresh state dir; any install or
+// config set creates it), exit 1 "config is invalid" for a config OpenClaw rejects, exit 0 otherwise.
 if (args[0] === "config" && args[1] === "validate") {
+  const cfgFile = join(stateDir, "openclaw.json");
+  const cfgPresent = existsSync(cfgFile) || state.installed || legacyPresent || Object.keys(state.config).length > 0;
   if (scenario.configValidateExit) {
-    err("Config invalid: TEST ONLY validation failure\nRun: openclaw doctor --fix\n");
+    if (has("--json")) out(JSON.stringify(fixtureJson("config-validate-invalid.json"), null, 2) + "\n");
+    else err("OpenClaw config is invalid: " + cfgFile + "\nRun: openclaw doctor --fix\n");
     done(scenario.configValidateExit);
   }
-  out("Config valid\n");
+  if (scenario.configValidateSaysMissing || !cfgPresent) {
+    if (has("--json")) out(JSON.stringify(fixtureJson("config-validate-missing.json")) + "\n");
+    else out("Config file not found: " + cfgFile + "\nCreate one with openclaw onboard or run openclaw doctor --fix.\n");
+    done(1);
+  }
+  out(has("--json") ? JSON.stringify(fixtureJson("config-validate-valid.json")) + "\n" : "Config valid\n");
   done(0);
 }
 
@@ -103,6 +117,11 @@ if (args[0] === "config" && args[1] === "get") {
   if (path in state.config) {
     out(String(state.config[path]) + "\n");
     done(0);
+  }
+  // Like 2026.8.1 and 2026.9.6: no schema for the plugin's config until the plugin is discoverable (baseDbPath is known).
+  if (path.startsWith("plugins.entries." + PLUGIN + ".config.") && path !== "plugins.entries." + PLUGIN + ".config.baseDbPath" && !state.installed && !legacyPresent) {
+    err("Unknown config path: " + path + ". Run openclaw config schema to inspect valid paths.\n");
+    done(1);
   }
   err("Config path is valid but unset: " + path + " (runtime default applies)\n");
   done(1);

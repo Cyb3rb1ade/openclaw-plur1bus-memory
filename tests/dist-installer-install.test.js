@@ -33,7 +33,7 @@ const mutating = mutatingCalls;
 
 const freshClawhub = (stateDir) => [
   ["--version"],
-  ["config", "validate"],
+  ["config", "validate", "--json"],
   ["config", "get", `${C}.baseDbPath`],
   ["plugins", "inspect", ID, "--json"],
   ["config", "get", SLOT],
@@ -204,7 +204,7 @@ describe("plugin installer: install", () => {
     const r = await run(sb, ["--json"]);
     assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
     assert.deepEqual(mutating(sb.openclawCalls()), []);
-    assert.equal(sb.openclawCalls().filter((a) => a.join(" ") === "config validate").length, 1, "no retry loop");
+    assert.equal(sb.openclawCalls().filter((a) => a.join(" ") === "config validate --json").length, 1, "no retry loop");
     assert.match(r.stderr, /openclaw doctor --fix/);
     assert.ok(JSON.parse(r.stdout).findings.some((f) => f.id === "config-invalid"));
   });

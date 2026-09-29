@@ -10,11 +10,15 @@
  *
  * Facts used (docs/distribution/openclaw-cli-facts.md): (a) version line,
  * (b) inspect JSON pointers and "Plugin not found", (c) `config get` exit 1 +
- * "valid but unset" means unset, (h) Gateway running ⇔ exit 0 and /rpc/ok,
- * (j) the readonly / Nix refusal texts.
+ * "valid but unset" means unset — and so does "Unknown config path" for the plugin's own config keys
+ * before it is installed (2026.8.1, 2026.9.6) —, (h) Gateway running ⇔ exit 0 and /rpc/ok,
+ * (j) the readonly / Nix refusal texts, and `config validate --json`'s "file not found" answer
+ * on a fresh state dir (plugin-dist run 36514170524, 2026.8.1 and 2026.9.6).
  */
 
 import { execFile } from "node:child_process";
+import { lstatSync } from "node:fs";
+import { isAbsolute } from "node:path";
 
 export const PLUGIN_ID = "memory-lancedb-namespaced";
 const C = `plugins.entries.${PLUGIN_ID}.config`;
@@ -49,6 +53,21 @@ const READONLY_RE = /Config is externally managed|Config is managed by Nix/;
 /** True when OpenClaw refused a write because its config is immutable (fact j). */
 export function isReadonlyRefusal(text) {
   return READONLY_RE.test(String(text ?? ""));
+}
+
+/**
+ * Existence probe only (never reads the file): true when anything — a file, a directory, a dangling
+ * symlink — is at `path`, or when that cannot be ruled out (any lstat error but ENOENT/ENOTDIR).
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function pathPresent(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (err) {
+    return !(err && (err.code === "ENOENT" || err.code === "ENOTDIR"));
+  }
 }
 
 /** Quote one argument for `cmd.exe /d /s /c "…"`; refuses characters cmd would reinterpret. */
@@ -105,6 +124,14 @@ function parseJson(text) {
   }
 }
 
+/** The JSON document on stdout, or the last line that is one; null otherwise. */
+function parseJsonDoc(text) {
+  const whole = parseJson(String(text ?? "").trim());
+  if (whole !== null) return whole;
+  const line = String(text ?? "").split(/\r?\n/).map((l) => l.trim()).reverse().find((l) => l.startsWith("{"));
+  return line ? parseJson(line) : null;
+}
+
 function refuse(kind, path) {
   const err = new Error(`config path ${JSON.stringify(path)} is not in the installer's config allow-list (${kind})`);
   err.code = "CONFIG_PATH_NOT_ALLOWED";
@@ -117,9 +144,9 @@ export function tail(text, n = 3) {
 }
 
 /**
- * @param {{ bin: string, env: Record<string,string|undefined>, run?: typeof defaultRun, timeoutMs?: number }} opts
+ * @param {{ bin: string, env: Record<string,string|undefined>, run?: typeof defaultRun, timeoutMs?: number, pathPresent?: (p: string) => boolean }} opts
  */
-export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_000 }) {
+export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_000, pathPresent: present = pathPresent }) {
   const call = (args, ms = timeoutMs) => run(bin, args, { env, timeoutMs: ms });
 
   return {
@@ -156,7 +183,12 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
       if (!ALLOWED_CONFIG_PATHS.get.includes(path)) throw refuse("get", path);
       const r = await call(["config", "get", path], 60_000);
       if (r.code === 0) return { set: true, value: r.stdout.replace(/\r?\n$/, "").trim() };
-      if (/valid but unset/i.test(`${r.stderr}\n${r.stdout}`)) return { set: false, value: null };
+      const text = `${r.stderr}\n${r.stdout}`;
+      if (/valid but unset/i.test(text)) return { set: false, value: null };
+      // Until the plugin is discoverable (a fresh install), OpenClaw has no schema for its config and answers
+      // "Unknown config path" for plugins.entries.<id>.config.<key> (2026.8.1, 2026.9.6): nothing is set there.
+      // Only for the plugin's own config keys; anywhere else an unknown path stays an error.
+      if (!r.timedOut && path.startsWith(`${C}.`) && /^Unknown config path: /m.test(text)) return { set: false, value: null };
       const err = new Error(`openclaw config get ${path} failed (exit ${r.code})`);
       err.result = { code: r.code };
       throw err;
@@ -171,9 +203,22 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
       }
       return r;
     },
+    /**
+     * Review Focus 3 / R-S2. OpenClaw exits 1 with `{"valid":false,"error":{"message":"file not found"},
+     * "path":…}` when its config file does not exist yet (a fresh state dir; install and `config set`
+     * create it): nothing to validate, so `ok` with `missing`. Fails closed: that answer counts as
+     * missing only with an absolute path at which nothing exists; every other non-zero exit, a deadline
+     * or unreadable output is invalid. Only `valid`, `error.message` and `path` are read.
+     * @returns {Promise<{ ok: boolean, missing: boolean, code: number }>}
+     */
     async configValidate() {
-      const r = await call(["config", "validate"], 120_000);
-      return { ok: r.code === 0, code: r.code };
+      const r = await call(["config", "validate", "--json"], 120_000);
+      if (r.code === 0 && !r.timedOut) return { ok: true, missing: false, code: 0 };
+      const json = r.timedOut ? null : parseJsonDoc(r.stdout);
+      const missing =
+        json !== null && typeof json === "object" && json.valid === false && json.error?.message === "file not found" &&
+        typeof json.path === "string" && isAbsolute(json.path) && !present(json.path);
+      return { ok: missing, missing, code: r.code };
     },
     /**
      * Fails closed (T6-e): `running` is false only for a definite "nothing listens" answer —

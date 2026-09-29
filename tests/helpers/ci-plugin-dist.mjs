@@ -187,6 +187,21 @@ async function cmdFacts() {
     serviceLoaded: j?.service?.loaded ?? null,
     installerVerdict: await oc.cli.gatewayStatus(),
   });
+  // Review Focus 3 / R-S2 (run 36514170524): on the fresh state dir the installer leg uses, openclaw.json does not
+  // exist yet; `config validate --json` then exits 1 "file not found", which the installer treats as valid. Seen on
+  // linux-x64 locally for 2026.8.1 and 2026.9.6; this line answers it for every leg. Only valid, error.message and
+  // path are printed, never the issues list.
+  const cv = await oc.call(["config", "validate", "--json"], 120_000);
+  const cvj = parseListing(cv.stdout);
+  const cfgPath = typeof cvj?.path === "string" ? cvj.path : null;
+  fact("config.validate.fresh", {
+    exit: cv.code,
+    valid: cvj?.valid ?? null,
+    error: typeof cvj?.error?.message === "string" ? cvj.error.message.slice(0, 60) : null,
+    pathIsStateDirConfig: cfgPath !== null && resolve(cfgPath) === resolve(env.OPENCLAW_STATE_DIR, "openclaw.json"),
+    configFilePresent: cfgPath !== null && existsSync(cfgPath),
+    installerVerdict: await oc.cli.configValidate(),
+  });
   summary(`### OpenClaw facts (${process.platform}-${process.arch})\n\n\`\`\`\n${facts.map(([k, x]) => `${k}: ${JSON.stringify(x)}`).join("\n")}\n\`\`\`\n`);
 }
 
@@ -371,6 +386,7 @@ async function cmdInstaller(o) {
     row(`raw install ${fromVersion}`, "exit 0");
   } else {
     const r = await bootstrap(["--offline", fromTgz, "--version", fromVersion, "--non-interactive", "--json"]);
+    fact("installer.fresh.compat", { exit: r.code, compat: stepOf(r.doc, "compat") ?? null, findings: r.doc?.findings?.map((f) => f.id) ?? null });
     check(r.code === 0 && r.doc?.ok === true, `fresh install-plugin --offline <${fromVersion}> --non-interactive --json → exit 0 (got ${r.code}: ${JSON.stringify(r.doc?.steps?.filter((s) => s.status === "failed") ?? null)})`);
     row(`fresh install ${fromVersion}`, `exit 0 (${r.doc.steps.map((s) => `${s.id}:${s.status}`).join(" ")})`);
   }
