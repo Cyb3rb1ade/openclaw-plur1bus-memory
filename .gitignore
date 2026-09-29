@@ -24,6 +24,8 @@ docs/**
 !docs/distribution/
 !docs/distribution/**
 !docs/distribution.md
+!docs/release-notes/
+!docs/release-notes/**
 !docs/configuration.md
 !docs/compatibility-openclaw-2026.8.1-beta.3.md
 !docs/compatibility-openclaw.md

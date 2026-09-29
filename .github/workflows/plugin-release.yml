@@ -1,0 +1,388 @@
+name: plugin-release
+
+# HM1 Task 10 (D87, D78, spec A.5, HM1-R3/R4/R14): release artefacts of the PLUR1BUS OpenClaw plugin.
+#
+#   check           tag == v<package.json version> == manifest version == lockfile version
+#   dist            plugin-dist.yml (pack once, run the full suite, install matrix); later jobs download its artefact
+#   assemble        bootstraps rendered with the channel public keys, the unsigned feed, SHA256SUMS, attestations
+#   github-release  GitHub Release with the artefacts (skipped in a dry run)
+#   npm-publish     npmjs.org with provenance (skipped in a dry run and unless the owner enabled it, P5/O1)
+#
+# The feed is NOT signed here, and CI holds no signing key (HM1-R4): the owner signs plugin-<channel>.json offline,
+# after the manual ClawHub publish, in one pass (docs/release-checklist.md, "Distribution (HM1)").
+#
+# Owner setup (names only; no value lives in this repository):
+#   Repository variables (public values, equal to the harness ones, P4): PLUR1BUS_RELEASE_PUBKEY_STABLE,
+#   PLUR1BUS_RELEASE_PUBKEY_BETA (minisign public keys, the base64 line). A dry run without them renders TEST ONLY
+#   bootstraps and warns; a real run without them fails.
+#   Repository variable PLUR1BUS_NPM_PUBLISH = yes to publish to npmjs.org (O1). It needs the GitHub Environment
+#   `npm-publish` and a trusted publisher configured on npmjs.org for this repository, workflow plugin-release.yml,
+#   environment npm-publish (P5). Without it the feed is built with --no-npm and nothing is published.
+#
+# Secrets used: none. The GitHub token is the automatic one (github-release only); npm authenticates by OIDC.
+#
+# Dry run (workflow_dispatch, dry-run true, the default): everything up to and including the uploaded workflow
+# artefact, no release, no npm, no attestation (those would record TEST ONLY bootstraps in the public log).
+# A tag push (v*) is always a real run, on the stable channel; a beta release is dispatched on the tag with
+# channel beta and dry-run false.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and check everything; publish nothing (no release, no npm, no attestations).
+        type: boolean
+        default: true
+      channel:
+        description: Feed channel (stable or beta).
+        type: choice
+        options: [stable, beta]
+        default: stable
+      allow-older:
+        description: Add a version below the published feed's latest as an older release (a hotfix); keeps its installer and bootstraps.
+        type: boolean
+        default: false
+      clawpack-digest:
+        description: ClawPack sha256 (64 hex) from the manual ClawHub publish (HM1-R15); empty for none. Rebuild the feed with it before signing.
+        type: string
+        default: ''
+
+concurrency:
+  group: plugin-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      channel: ${{ steps.check.outputs.channel }}
+      dry-run: ${{ steps.check.outputs.dry-run }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_CLAWPACK_DIGEST: ${{ inputs.clawpack-digest }}
+        run: |
+          set -euo pipefail
+          field() { node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const p=process.argv[2]; process.stdout.write(String(p==="lock.packages"?j.packages[""].version:j.version))' "$1" "$2"; }
+          pkg=$(field package.json version)
+          manifest=$(field openclaw.plugin.json version)
+          lock=$(field package-lock.json version)
+          lock_root=$(field package-lock.json lock.packages)
+          for v in "$manifest" "$lock" "$lock_root"; do
+            if [ "$v" != "$pkg" ]; then
+              echo "::error::version mismatch: package.json $pkg, manifest $manifest, lockfile $lock / $lock_root"
+              exit 1
+            fi
+          done
+          case "$pkg" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::version $pkg is not x.y.z"; exit 1 ;;
+          esac
+
+          dry=false
+          channel=stable
+          if [ "$EVENT" = workflow_dispatch ]; then
+            dry="$INPUT_DRY_RUN"
+            channel="$INPUT_CHANNEL"
+          fi
+          case "$channel" in stable | beta) ;; *) echo "::error::unknown channel $channel"; exit 1 ;; esac
+
+          if [ "$REF_TYPE" = tag ]; then
+            if [ "$REF_NAME" != "v$pkg" ]; then
+              echo "::error::tag $REF_NAME is not v$pkg (package.json version)"
+              exit 1
+            fi
+          elif [ "$dry" != true ]; then
+            echo "::error::a real release runs on the tag v$pkg, not on the branch $REF_NAME"
+            exit 1
+          fi
+          if [ -n "$INPUT_CLAWPACK_DIGEST" ]; then
+            printf '%s' "$INPUT_CLAWPACK_DIGEST" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::clawpack-digest must be 64 lowercase hex characters"; exit 1; }
+          fi
+
+          {
+            echo "version=$pkg"
+            echo "channel=$channel"
+            echo "dry-run=$dry"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $pkg ($channel), dry-run $dry, ref $REF_TYPE $REF_NAME"
+
+  # Pack once (npm pack, the installer bundle) after the full suite; runs the install matrix as the release gate.
+  # Everything below downloads this artefact and never packs again.
+  dist:
+    name: dist
+    needs: check
+    uses: ./.github/workflows/plugin-dist.yml
+
+  assemble:
+    name: assemble
+    needs: [check, dist]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ needs.check.outputs.version }}
+      artifact: ${{ steps.names.outputs.artifact }}
+      tgz: ${{ steps.names.outputs.tgz }}
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      DRY_RUN: ${{ needs.check.outputs.dry-run }}
+      PUBKEY_STABLE: ${{ vars.PLUR1BUS_RELEASE_PUBKEY_STABLE }}
+      PUBKEY_BETA: ${{ vars.PLUR1BUS_RELEASE_PUBKEY_BETA }}
+      NPM_PUBLISH: ${{ vars.PLUR1BUS_NPM_PUBLISH }}
+      ALLOW_OLDER: ${{ inputs.allow-older }}
+      CLAWPACK_DIGEST: ${{ inputs.clawpack-digest }}
+      RELEASE_BASE: https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download
+      FEED_BASE: https://updates.plur1bus.app/plugin
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+      - name: Install dependencies (feed builder)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Download the pack artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.dist.outputs.artifact }}
+          path: ${{ runner.temp }}/pack
+      - name: Stage the release files
+        id: names
+        run: |
+          set -euo pipefail
+          pack="$RUNNER_TEMP/pack"
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out"
+          tgz="cyb3rb1ade-plur1bus-memory-$VERSION.tgz"
+          packed=$(node -e 'const p=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); if(p.version!==process.argv[2]) throw new Error("pack version "+p.version+" is not "+process.argv[2]); process.stdout.write(p.tgz)' "$pack/pack.json" "$VERSION")
+          [ "$packed" = "$tgz" ] || { echo "::error::packed $packed, expected $tgz"; exit 1; }
+          cp "$pack/$tgz" "$pack/plur1bus-plugin-installer.mjs" "$out/"
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          echo "artifact=plugin-release-$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Render the bootstraps (channel public keys, HM1-R3)
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release"
+          if [ -n "$PUBKEY_STABLE" ] && [ -n "$PUBKEY_BETA" ]; then
+            node scripts/dist/render-bootstraps.mjs --pubkey-stable "$PUBKEY_STABLE" --pubkey-beta "$PUBKEY_BETA" --out-dir "$out"
+            echo "keys=release" >> "$RUNNER_TEMP/keys.env"
+          elif [ "$DRY_RUN" = true ]; then
+            echo "::warning::PLUR1BUS_RELEASE_PUBKEY_STABLE / _BETA are not set (P4): rendering TEST ONLY bootstraps that verify no real feed. A real run would fail."
+            node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out"
+            echo "keys=test" >> "$RUNNER_TEMP/keys.env"
+          else
+            echo "::error::PLUR1BUS_RELEASE_PUBKEY_STABLE and PLUR1BUS_RELEASE_PUBKEY_BETA repository variables are required for a real release"
+            exit 1
+          fi
+          grep -q 'TEST ONLY' "$out/install-plugin.sh" && test_key=1 || test_key=0
+          if [ "$DRY_RUN" != true ] && [ "$test_key" = 1 ]; then echo "::error::a real release must not carry a TEST ONLY bootstrap"; exit 1; fi
+      - name: Fetch the published feed (previous releases survive, HM1 T4)
+        id: previous
+        run: |
+          set -euo pipefail
+          url="$FEED_BASE/$CHANNEL.json"
+          prev="$RUNNER_TEMP/previous"
+          mkdir -p "$prev"
+          fetch() { curl --proto '=https' --tlsv1.2 -sS -L --max-time 60 -o "$2" -w '%{http_code}' "$1"; }
+          feed_code=$(fetch "$url" "$prev/$CHANNEL.json")
+          sig_code=$(fetch "$url.minisig" "$prev/$CHANNEL.json.minisig")
+          if [ "$feed_code" = 404 ] && [ "$sig_code" = 404 ]; then
+            echo "no published $CHANNEL feed yet: first release on this channel"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$feed_code" != 200 ] || [ "$sig_code" != 200 ]; then
+            echo "::error::published feed answered $feed_code, its signature $sig_code (expected both 200, or both 404 for a first release)"
+            exit 1
+          fi
+          case "$CHANNEL" in stable) key=$PUBKEY_STABLE ;; beta) key=$PUBKEY_BETA ;; esac
+          if [ -n "$key" ]; then
+            node scripts/dist/minisign.mjs "$key" "$prev/$CHANNEL.json" "$prev/$CHANNEL.json.minisig" > /dev/null
+            echo "published $CHANNEL feed: signature verified"
+          elif [ "$DRY_RUN" = true ]; then
+            echo "::warning::published $CHANNEL feed NOT verified (no public key variable); acceptable in a dry run only"
+          else
+            echo "::error::cannot verify the published feed without the public key"
+            exit 1
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+      - name: Build the unsigned feed
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release"
+          base="$RELEASE_BASE/v$VERSION"
+          args=(
+            --channel "$CHANNEL" --version "$VERSION"
+            --tgz "$out/cyb3rb1ade-plur1bus-memory-$VERSION.tgz" --tarball-url "$base/cyb3rb1ade-plur1bus-memory-$VERSION.tgz"
+            --installer "$out/plur1bus-plugin-installer.mjs" --installer-url "$base/plur1bus-plugin-installer.mjs"
+            --bootstrap-sh "$out/install-plugin.sh" --bootstrap-sh-url "$base/install-plugin.sh"
+            --bootstrap-ps1 "$out/install-plugin.ps1" --bootstrap-ps1-url "$base/install-plugin.ps1"
+            --notes-de "docs/release-notes/$VERSION.de.md" --notes-en "docs/release-notes/$VERSION.en.md"
+            --out "$out/plugin-$CHANNEL.json"
+          )
+          if [ "${{ steps.previous.outputs.present }}" = true ]; then
+            args+=(--previous "$RUNNER_TEMP/previous/$CHANNEL.json")
+            if [ "$ALLOW_OLDER" = true ]; then args+=(--allow-older); fi
+          fi
+          if [ -n "$CLAWPACK_DIGEST" ]; then args+=(--clawpack-digest "$CLAWPACK_DIGEST"); fi
+          # HM1-R14/O1: the npm locator is in the feed only once the owner enabled the npm publish.
+          if [ "$NPM_PUBLISH" != yes ]; then args+=(--no-npm); fi
+          node scripts/dist/build-plugin-feed.mjs "${args[@]}"
+          cp "$out/plugin-$CHANNEL.json" "$out/plugin-$CHANNEL.unsigned.json"
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release"
+          # plugin-<channel>.json is byte-identical to the uploaded plugin-<channel>.unsigned.json and to the file the
+          # owner signs; the signature is a separate file, so this line stays valid after signing.
+          sha256sum "cyb3rb1ade-plur1bus-memory-$VERSION.tgz" plur1bus-plugin-installer.mjs install-plugin.sh install-plugin.ps1 "plugin-$CHANNEL.json" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          ls -l
+      - name: Attest the tarball, the installer and both bootstraps (A.5)
+        if: needs.check.outputs.dry-run != 'true'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/release/cyb3rb1ade-plur1bus-memory-${{ needs.check.outputs.version }}.tgz
+            ${{ runner.temp }}/release/plur1bus-plugin-installer.mjs
+            ${{ runner.temp }}/release/install-plugin.sh
+            ${{ runner.temp }}/release/install-plugin.ps1
+      - name: Job summary
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/release"
+          {
+            echo "### plugin-release $VERSION ($CHANNEL)"
+            echo ""
+            echo "dry-run: \`$DRY_RUN\`, keys: \`$(sed -n 's/^keys=//p' "$RUNNER_TEMP/keys.env")\`, previous feed: \`${{ steps.previous.outputs.present }}\`, npm in feed: \`$([ "$NPM_PUBLISH" = yes ] && echo yes || echo no)\`, attested: \`$([ "$DRY_RUN" = true ] && echo no || echo yes)\`"
+            echo ""
+            echo "The feed below is UNSIGNED. The owner signs it offline, after the ClawHub publish (docs/release-checklist.md)."
+            echo ""
+            echo "#### SHA256SUMS"
+            echo '```'
+            cat "$out/SHA256SUMS"
+            echo '```'
+            echo ""
+            echo "#### plugin-$CHANNEL.unsigned.json"
+            echo '```json'
+            cat "$out/plugin-$CHANNEL.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the release artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.names.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: ${{ needs.check.outputs.dry-run == 'true' && 7 || 90 }}
+
+  github-release:
+    name: github-release
+    needs: [check, assemble]
+    if: needs.check.outputs.dry-run != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Download the release artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.assemble.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Create the release
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/release"
+          sha256sum -c SHA256SUMS
+          {
+            cat "$GITHUB_WORKSPACE/docs/release-notes/$VERSION.en.md"
+            printf '\n---\n\n'
+            cat "$GITHUB_WORKSPACE/docs/release-notes/$VERSION.de.md"
+            printf '\n\nChecksums: `SHA256SUMS`. The feed `plugin-%s.unsigned.json` is unsigned; the signed feed is published at https://updates.plur1bus.app/plugin/%s.json.\n' "$CHANNEL" "$CHANNEL"
+          } > "$RUNNER_TEMP/notes.md"
+          flags=()
+          if [ "$CHANNEL" = beta ]; then flags+=(--prerelease); fi
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "PLUR1BUS Memory $VERSION" --notes-file "$RUNNER_TEMP/notes.md" \
+            ${flags[@]+"${flags[@]}"} \
+            "cyb3rb1ade-plur1bus-memory-$VERSION.tgz" \
+            plur1bus-plugin-installer.mjs install-plugin.sh install-plugin.ps1 \
+            SHA256SUMS "plugin-$CHANNEL.unsigned.json"
+
+  npm-publish:
+    name: npm-publish
+    needs: [check, assemble, github-release]
+    if: needs.check.outputs.dry-run != 'true' && vars.PLUR1BUS_NPM_PUBLISH == 'yes'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      CHANNEL: ${{ needs.check.outputs.channel }}
+      TGZ: ${{ needs.assemble.outputs.tgz }}
+    steps:
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          registry-url: https://registry.npmjs.org
+      - name: Download the release artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.assemble.outputs.artifact }}
+          path: ${{ runner.temp }}/release
+      - name: Publish with provenance (trusted publishing, OIDC)
+        working-directory: ${{ runner.temp }}/release
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          npm --version
+          npm publish "./$TGZ" --provenance --access public
+      - name: The registry's integrity equals the feed's
+        working-directory: ${{ runner.temp }}/release
+        run: |
+          set -euo pipefail
+          want=$(node -e 'const f=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const r=f.hosts.openclaw.releases.find((x)=>x.version===process.argv[2]); if(!r) throw new Error("release not in the feed"); process.stdout.write(r.tarball.integrity)' "plugin-$CHANNEL.json" "$VERSION")
+          got=""
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            got=$(npm view "@cyb3rb1ade/plur1bus-memory@$VERSION" dist.integrity 2>/dev/null || true)
+            [ -n "$got" ] && break
+            sleep 10
+          done
+          echo "feed:     $want"
+          echo "registry: $got"
+          [ "$got" = "$want" ] || { echo "::error::npm integrity differs from the feed's"; exit 1; }
