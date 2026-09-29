@@ -192,9 +192,12 @@ export function planMigration(workspacesDir) {
 /**
  * The `_neo` root above a `…/workspaces` directory. win32 paths end in
  * "\\workspaces"; on POSIX "\\" is an ordinary name character, so only "/" counts.
+ * @param {string} workspacesDir
+ * @param {{platform?: string}} [options] `platform` defaults to `process.platform` (tests inject "win32").
+ * @returns {string}
  */
-function neoRootOf(workspacesDir) {
-  return workspacesDir.replace(process.platform === "win32" ? /[\\/]workspaces$/ : /\/workspaces$/, "");
+export function neoRootOf(workspacesDir, { platform = process.platform } = {}) {
+  return workspacesDir.replace(platform === "win32" ? /[\\/]workspaces$/ : /\/workspaces$/, "");
 }
 
 function backupFile(path, stamp) {
