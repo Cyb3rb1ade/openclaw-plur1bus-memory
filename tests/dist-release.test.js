@@ -7,6 +7,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { renderBootstraps, renderInstallerKeys } from "../scripts/dist/render-bootstraps.mjs";
+import { generateTestKeyPair } from "./helpers/minisign-sign.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW = join(REPO, ".github", "workflows", "plugin-release.yml");
@@ -111,6 +113,41 @@ describe("plugin release (HM1 Task 10)", () => {
       }
     }
     assert.ok(n >= 7, `found ${n} checkouts`);
+  });
+
+  it("assemble renders the channel keys into the installer bundle before the feed and SHA256SUMS (HM1-R-F1)", () => {
+    const wf = parseYaml(text);
+    const steps = wf.jobs.assemble.steps;
+    const idx = (pred) => steps.findIndex(pred);
+    const render = idx((s) => /render-bootstraps\.mjs/.test(s.run ?? ""));
+    assert.ok(render >= 0, "a render step");
+    const run = steps[render].run;
+    assert.match(run, /bundle="\$out\/plur1bus-plugin-installer\.mjs"/);
+    const calls = run.split("\n").filter((l) => /render-bootstraps\.mjs/.test(l));
+    assert.equal(calls.length, 2, "release keys and dry-run TEST ONLY");
+    for (const c of calls) assert.match(c, /--installer "\$bundle"/, c);
+    assert.match(calls[0], /--pubkey-stable "\$PUBKEY_STABLE" --pubkey-beta "\$PUBKEY_BETA"/);
+    assert.match(calls[1], /--test-key/);
+    assert.match(run, /grep -q '@@PLUR1BUS_PLUGIN_PUBKEY_' "\$bundle"/);
+    assert.match(run, /for f in "\$out\/install-plugin\.sh" "\$out\/install-plugin\.ps1" "\$bundle"/);
+    assert.match(run, /if \[ "\$DRY_RUN" != true \] && \[ "\$test_key" = 1 \]; then .*exit 1; fi/);
+    assert.ok(render < idx((s) => s.name === "Build the unsigned feed"), "render before the feed");
+    assert.ok(render < idx((s) => s.name === "Write SHA256SUMS"), "render before SHA256SUMS");
+    assert.ok(render > idx((s) => s.name === "Stage the release files"), "render after staging");
+
+    // The marker the workflow greps is present in every TEST ONLY render and absent from every release render.
+    const marker = /grep -qF '([^']+)' "\$f"/.exec(run)?.[1];
+    assert.ok(marker, "the TEST ONLY marker grep");
+    const raw = readFileSync(join(REPO, "scripts", "dist", "installer", "main.mjs"), "utf8");
+    const stable = generateTestKeyPair().publicKeyLine;
+    const beta = generateTestKeyPair().publicKeyLine;
+    const release = renderBootstraps({ pubkeyStable: stable, pubkeyBeta: beta });
+    const test = renderBootstraps({ testKey: true });
+    for (const t of [release.sh, release.ps1, renderInstallerKeys(raw, { pubkeyStable: stable, pubkeyBeta: beta })]) {
+      assert.ok(!t.includes(marker), "a release render carries no TEST ONLY marker");
+      assert.ok(!t.includes("@@PLUR1BUS_PLUGIN_PUBKEY_"));
+    }
+    for (const t of [test.sh, test.ps1, renderInstallerKeys(raw, { testKey: true })]) assert.ok(t.includes(marker), "a TEST ONLY render carries the marker");
   });
 
   it("the release notes exist in de and en for the package version", () => {

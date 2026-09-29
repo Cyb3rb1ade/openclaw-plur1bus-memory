@@ -280,8 +280,11 @@ a secret key; the release workflow produces the unsigned feed. Promoting
 
 **Where the keys come from.** The channel public keys are plugin repository
 variables, equal to the harness ones, rendered into both bootstraps and into
-the installer bundle at release. A build with an unrendered placeholder
-refuses to run.
+the installer bundle at release, before the feed hashes the bundle. An
+installer build with an unrendered placeholder, or a dry-run `TEST ONLY`
+render, refuses every feed it would have to verify itself (`--feed`) and runs
+only with a bootstrap-verified `--feed-file`; a real release run fails if a
+placeholder survives or any of the three files carries the `TEST ONLY` render.
 
 **Comparison with the harness one-liner (HB19).** The harness one-liner cannot
 verify minisign and relies on HTTPS plus SHA-256. The plugin bootstraps are

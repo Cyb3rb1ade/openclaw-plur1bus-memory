@@ -194,23 +194,30 @@ jobs:
           NPM_VAR: ${{ vars.PLUR1BUS_NPM_PUBLISH }}
         run: |
           if [ "$NPM_VAR" = yes ]; then echo "npm=yes" >> "$GITHUB_OUTPUT"; else echo "npm=no" >> "$GITHUB_OUTPUT"; fi
-      - name: Render the bootstraps (channel public keys, HM1-R3)
+      - name: Render the bootstraps and the installer bundle (channel public keys, HM1-R3, HM1-R-F1)
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/release"
+          bundle="$out/plur1bus-plugin-installer.mjs"
+          # The bundle gets the same keys as the bootstraps, before the feed hashes it and before SHA256SUMS.
           if [ -n "$PUBKEY_STABLE" ] && [ -n "$PUBKEY_BETA" ]; then
-            node scripts/dist/render-bootstraps.mjs --pubkey-stable "$PUBKEY_STABLE" --pubkey-beta "$PUBKEY_BETA" --out-dir "$out"
+            node scripts/dist/render-bootstraps.mjs --pubkey-stable "$PUBKEY_STABLE" --pubkey-beta "$PUBKEY_BETA" --out-dir "$out" --installer "$bundle"
             echo "keys=release" >> "$RUNNER_TEMP/keys.env"
           elif [ "$DRY_RUN" = true ]; then
-            echo "::warning::PLUR1BUS_RELEASE_PUBKEY_STABLE / _BETA are not set (P4): rendering TEST ONLY bootstraps that verify no real feed. A real run would fail."
-            node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out"
+            echo "::warning::PLUR1BUS_RELEASE_PUBKEY_STABLE / _BETA are not set (P4): rendering TEST ONLY bootstraps and installer bundle that verify no real feed. A real run would fail."
+            node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out" --installer "$bundle"
             echo "keys=test" >> "$RUNNER_TEMP/keys.env"
           else
             echo "::error::PLUR1BUS_RELEASE_PUBKEY_STABLE and PLUR1BUS_RELEASE_PUBKEY_BETA repository variables are required for a real release"
             exit 1
           fi
-          grep -q 'TEST ONLY' "$out/install-plugin.sh" && test_key=1 || test_key=0
-          if [ "$DRY_RUN" != true ] && [ "$test_key" = 1 ]; then echo "::error::a real release must not carry a TEST ONLY bootstrap"; exit 1; fi
+          if grep -q '@@PLUR1BUS_PLUGIN_PUBKEY_' "$bundle"; then echo "::error::the installer bundle still carries a public-key placeholder"; exit 1; fi
+          # The render marker, not the bare words: the templates mention "TEST ONLY" keys in their seam comments.
+          test_key=0
+          for f in "$out/install-plugin.sh" "$out/install-plugin.ps1" "$bundle"; do
+            if grep -qF 'rendered with --test-key' "$f"; then test_key=1; fi
+          done
+          if [ "$DRY_RUN" != true ] && [ "$test_key" = 1 ]; then echo "::error::a real release must not carry a TEST ONLY bootstrap or installer bundle"; exit 1; fi
       - name: Fetch the published feed (previous releases survive, HM1 T4)
         id: previous
         run: |
