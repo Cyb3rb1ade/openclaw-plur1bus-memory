@@ -4,26 +4,28 @@
  * Order: feed (signature verified unless the bootstrap already did) → detect →
  * compatibility (every fatal finding printed together, exit 3) → existing
  * install (tracked → the update path; untracked → exit 2 `legacy-deploy`) →
- * install (`clawhub:<pkg>@<v>`, `npm:<pkg>@<v> --pin`, or `npm-pack:<tgz>
- * --force --accept-capabilities` after its SHA-256 matched the feed) → licence
+ * install (`clawhub:<pkg>@<v>` when the feed carries its ClawPack digest,
+ * `npm:<pkg>@<v> --pin`, or `npm-pack:<tgz> --force --accept-capabilities` for
+ * --offline or the feed's own tarball, after its SHA-256 matched the feed, T5-a) → licence
  * config (HM1-R10) and `hooks.allowConversationAccess` (R-S1) →
  * `plugins.slots.memory` (R-S5) → enable if recorded disabled → feature crons
  * (HM1-R7) → verify (A.4) → on any failure `plugins uninstall --force`, restore
- * the previous slot, exit 1 (4 if that fails).
+ * previous config values and the previous slot, exit 1 (4 if that fails; T5-c).
  *
  * OpenClaw is only ever driven through ./openclaw-cli.mjs; nothing here opens
  * openclaw.json or prints a config value outside the allow-list.
  */
 
-import { readFileSync, statfsSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statfsSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { verifyMinisign } from "../minisign.mjs";
 import { validateFeed, PACKAGE_NAME } from "../build-plugin-feed.mjs";
-import { checkCompat, currentGlibcVersion, findHarnessHome, resolveBaseDbPath, resolveTarget } from "./compat.mjs";
+import { checkCompat, currentGlibcVersion, findHarnessHomes, resolveBaseDbPath, resolveTarget } from "./compat.mjs";
 import { detectOpenclaw } from "./detect.mjs";
 import { PROFILE_MODELS, resolveLicence } from "./licence.mjs";
 import { createOpenclawCli, defaultRun, isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
@@ -48,7 +50,8 @@ Installs the PLUR1BUS memory plugin into OpenClaw (plugin id ${PLUGIN_ID}).
 
   --host openclaw|hermes     host to install into (default openclaw; hermes arrives with HM2)
   --version <v>              plugin version (default: the feed's latest)
-  --source clawhub|npm       install source (default clawhub)
+  --source clawhub|npm       install source (default: clawhub when the feed carries its ClawPack digest,
+                             else the feed's GitHub-Release tarball, verified by SHA-256)
   --offline <tgz>            install a local tarball after its SHA-256 matched the feed
   --feed <url>               signed plugin feed (default ${DEFAULT_FEED_URL})
   --feed-file <path>         feed already verified by the bootstrap
@@ -71,7 +74,7 @@ Exit codes: 0 ok, 1 failed (rolled back or nothing changed), 2 needs a choice,
 const OPTIONS = {
   host: { type: "string", default: "openclaw" },
   version: { type: "string" },
-  source: { type: "string", default: "clawhub" },
+  source: { type: "string" },
   offline: { type: "string" },
   feed: { type: "string" },
   "feed-file": { type: "string" },
@@ -250,12 +253,10 @@ async function install(ctx) {
   // ── host and flags ────────────────────────────────────────────────────────
   if (values.host === "hermes") throw new Stop(EXIT.INCOMPATIBLE, "host", "host-not-yet-supported: Hermes host mode arrives with HM2; nothing was changed");
   if (values.host !== "openclaw") throw new Stop(EXIT.FAILED, "args", `unknown --host ${JSON.stringify(values.host)} (openclaw|hermes)`);
-  if (!["clawhub", "npm"].includes(values.source)) throw new Stop(EXIT.FAILED, "args", `unknown --source ${JSON.stringify(values.source)} (clawhub|npm)`);
+  if (values.source !== undefined && !["clawhub", "npm"].includes(values.source)) throw new Stop(EXIT.FAILED, "args", `unknown --source ${JSON.stringify(values.source)} (clawhub|npm)`);
   if (!["de", "en"].includes(values.lang)) throw new Stop(EXIT.FAILED, "args", `unknown --lang ${JSON.stringify(values.lang)} (de|en)`);
   if (values.feed && values["feed-file"]) throw new Stop(EXIT.FAILED, "args", "--feed and --feed-file are exclusive");
   if (mode !== "install") throw new Stop(EXIT.FAILED, "mode", `--${mode} is not available in this build of the installer yet (HM1 Task 6); nothing was changed`);
-  const source = values.offline ? "offline" : values.source;
-  report.set("source", source);
   const testMode = env.PLUR1BUS_PLUGIN_INSTALLER_TEST === "1";
 
   const childEnv = { ...env };
@@ -266,6 +267,15 @@ async function install(ctx) {
   const { feed, release } = await loadFeed({ values, env, testMode, fetchImpl });
   report.set("pluginVersion", release.version);
   report.step("feed", "ok", `${feed.channel} feed, plugin ${release.version}${values["feed-file"] ? " (verified by the bootstrap)" : " (signature verified)"}`);
+
+  // Source (ruling T5-a): the verifiable path wins. Explicit --source is honoured; an explicit
+  // ClawHub source without a ClawPack digest in the feed cannot be verified and refuses before
+  // any change. Without --source: ClawHub when the digest is present, else the feed's tarball.
+  if (values.source === "clawhub" && !values.offline && !release.clawpackDigest) {
+    throw new Stop(EXIT.INCOMPATIBLE, "source", `clawpack-digest-missing: the feed carries no clawpackDigest for ${release.version}, so a ClawHub install cannot be verified; omit --source (the verified GitHub-Release tarball is used) or pass --source npm; nothing was changed`);
+  }
+  const source = values.offline ? "offline" : values.source ?? (release.clawpackDigest ? "clawhub" : "tarball");
+  report.set("source", source);
 
   // ── detect ────────────────────────────────────────────────────────────────
   const det = await detectOpenclaw({ env: childEnv, platform, run });
@@ -290,7 +300,7 @@ async function install(ctx) {
     }
   }
   const baseDbPath = resolveBaseDbPath({ configured: configuredBase, env: childEnv, platform });
-  const harnessHome = findHarnessHome({ env: childEnv, platform });
+  const harnessHomes = findHarnessHomes({ env: childEnv, platform });
   const target = resolveTarget({ platform, arch, glibcVersion });
   report.set("target", target.target);
   const findings = checkCompat({
@@ -298,11 +308,12 @@ async function install(ctx) {
     nodeVersion: det.node.version,
     target,
     release,
-    freeBytes: freeBytesAt(det.stateDir, statfs),
+    // test seam (PLUR1BUS_PLUGIN_INSTALLER_TEST=1 only): a fixed free-space figure for subprocess tests
+    freeBytes: testMode && env.PLUR1BUS_PLUGIN_TEST_FREE_BYTES ? Number(env.PLUR1BUS_PLUGIN_TEST_FREE_BYTES) : freeBytesAt(det.stateDir, statfs),
     readonlyConfig,
     configValid: validation.ok,
     baseDbPath,
-    harnessHome,
+    harnessHomes,
     platform,
   });
   report.set("findings", findings);
@@ -312,7 +323,7 @@ async function install(ctx) {
     throw new Stop(EXIT.INCOMPATIBLE, "compat", `${fatal.length} incompatibilit${fatal.length === 1 ? "y" : "ies"} (${fatal.map((f) => f.id).join(", ")}); nothing was changed`);
   }
   report.step("compat", "ok", `${target.target}, OpenClaw ≥ ${release.compat.minGatewayVersion}, node ${release.node}, config valid`);
-  if (harnessHome) report.note(`Notice: a PLUR1BUS harness home exists at ${harnessHome}; OpenClaw host mode and the harness keep separate memories.`);
+  for (const h of harnessHomes) report.note(`Notice: a PLUR1BUS harness home exists at ${h}; OpenClaw host mode and the harness keep separate memories.`);
 
   // ── offline tarball against the feed ──────────────────────────────────────
   let tgz = null;
@@ -335,8 +346,8 @@ async function install(ctx) {
     report.step("existing", "handover", `tracked install ${existing.json.install.version ?? "(unknown)"} (${existing.json.install.source ?? "?"}) → the update path takes over`);
     return handOverToUpdate(ctx, { report, cli, det, release, existing });
   }
-  if (existing.present) {
-    const legacyDir = `${det.stateDir}${platform === "win32" ? "\\" : "/"}extensions${platform === "win32" ? "\\" : "/"}${PLUGIN_ID}`;
+  const legacyDir = (platform === "win32" ? win32 : posix).join(det.stateDir, "extensions", PLUGIN_ID);
+  if (existing.present || (existing.notFound && existsSync(legacyDir))) {
     const where = existsSync(legacyDir) ? legacyDir : (existing.json?.plugin?.rootDir ?? "an untracked directory");
     throw new Stop(EXIT.NEEDS_CHOICE, "existing", `legacy-deploy: ${PLUGIN_ID} is deployed at ${where} without an OpenClaw install record; re-run with --adopt-legacy to adopt it (the directory and your store are kept); nothing was changed`);
   }
@@ -358,21 +369,58 @@ async function install(ctx) {
     report.set("licence", licence);
   }
 
-  const locator =
-    source === "offline" ? `npm-pack:${tgz}` : source === "npm" ? (release.npm ?? `npm:${PACKAGE_NAME}@${release.version}`) : release.clawhub;
-  const installOpts = source === "offline" ? { force: true, acceptCapabilities: true } : source === "npm" ? { pin: true } : {};
+  const npmPack = source === "offline" || source === "tarball";
+  const locatorFor = (file) => (npmPack ? `npm-pack:${file}` : source === "npm" ? (release.npm ?? `npm:${PACKAGE_NAME}@${release.version}`) : release.clawhub);
+  const installOpts = npmPack ? { force: true, acceptCapabilities: true } : source === "npm" ? { pin: true } : {};
+
+  // Config keys this install will write (closed allow-list) and their previous values (ruling T5-c).
+  const plannedKeys = [
+    ...(licence ? [`${C}.modelPreparation.profile`, `${C}.modelPreparation.acceptNonCommercialLicense`, `${C}.embedding.provider`, `${C}.embedding.model`] : []),
+    ALLOW_CONVERSATION,
+  ];
 
   if (values["dry-run"]) {
-    report.step("install", "planned", `openclaw plugins install ${locator}`);
+    report.step("install", "planned", `openclaw plugins install ${locatorFor(source === "tarball" ? release.tarball.url : tgz)}`);
     if (licence) report.step("licence", "planned", `${licence.profile}${licence.acceptNonCommercialLicense ? " (CC BY-NC 4.0 accepted)" : ""}`);
     report.step("slot", "planned", `${SLOT} = ${PLUGIN_ID}; conversation access for capture and recall enabled`);
     return report.finish(EXIT.OK);
   }
 
+  const previous = new Map();
+  for (const key of plannedKeys) {
+    if (key === `${C}.embedding.provider`) previous.set(key, embeddingProvider);
+    else previous.set(key, await cli.configGet(key));
+  }
+
+  // ── the feed's tarball when no ClawPack digest can verify ClawHub (T5-a, T5-f) ──
+  let tmpDir = null;
+  if (source === "tarball") {
+    const bytes = await readUrl(release.tarball.url, { testMode, fetchImpl });
+    const digest = sha256(bytes);
+    if (digest !== release.tarball.sha256) throw new Stop(EXIT.FAILED, "tarball", `SHA-256 of ${release.tarball.url} (${digest.slice(0, 12)}…) does not match the feed (${release.tarball.sha256.slice(0, 12)}…); nothing was changed`);
+    tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+    tgz = join(tmpDir, `cyb3rb1ade-plur1bus-memory-${release.version}.tgz`);
+    writeFileSync(tgz, bytes, { mode: 0o600 });
+    report.step("tarball", "ok", `downloaded ${release.tarball.url}; SHA-256 matches the feed (no clawpackDigest for ClawHub)`);
+  }
+  try {
+    return await applyInstall({ ...ctx, source, release, det, cli, childEnv, licence, previousSlot, previous, locator: locatorFor(tgz), installOpts, platform });
+  } finally {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function applyInstall(ctx) {
+  const { values, report, run, source, release, det, cli, childEnv, licence, previousSlot, previous, locator, installOpts, platform } = ctx;
   // ── install ───────────────────────────────────────────────────────────────
   const base = { previousSlot, installedVersion: null, source };
   writeState(det.stateDir, { ...base, inProgress: { op: "install", step: "install", snapshotId: null, previousVersion: null } });
-  const rb = { cli, det, report, previousSlot, base };
+  const written = [];
+  const rb = { cli, det, report, previousSlot, base, previous, written };
+  const set = async (key, value) => {
+    await cli.configSet(key, value);
+    if (!written.includes(key)) written.push(key);
+  };
 
   const inst = await cli.install(locator, installOpts);
   if (inst.code !== 0) {
@@ -392,13 +440,13 @@ async function install(ctx) {
   try {
     writeState(det.stateDir, { ...base, inProgress: { op: "install", step: "config", snapshotId: null, previousVersion: null } });
     if (licence) {
-      await cli.configSet(`${C}.modelPreparation.profile`, licence.profile);
-      if (licence.acceptNonCommercialLicense) await cli.configSet(`${C}.modelPreparation.acceptNonCommercialLicense`, "true");
-      await cli.configSet(`${C}.embedding.provider`, "local-transformers");
-      await cli.configSet(`${C}.embedding.model`, PROFILE_MODELS[licence.profile].model);
+      await set(`${C}.modelPreparation.profile`, licence.profile);
+      await set(`${C}.modelPreparation.acceptNonCommercialLicense`, licence.acceptNonCommercialLicense ? "true" : "false");
+      await set(`${C}.embedding.provider`, "local-transformers");
+      await set(`${C}.embedding.model`, PROFILE_MODELS[licence.profile].model);
       report.step("licence", "ok", `${licence.profile} (${PROFILE_MODELS[licence.profile].model})${licence.accepted ? `; CC BY-NC 4.0 accepted by ${licence.accepted.by} at ${licence.accepted.at}` : ""}`);
     }
-    await cli.configSet(ALLOW_CONVERSATION, "true");
+    await set(ALLOW_CONVERSATION, "true");
     await cli.configSet(SLOT, PLUGIN_ID);
     report.step("slot", "ok", `${SLOT} = ${PLUGIN_ID} (previously ${previousSlot ?? "unset"}); conversation access for capture and recall enabled`);
   } catch (err) {
@@ -441,7 +489,7 @@ async function install(ctx) {
 
   // ── verify ────────────────────────────────────────────────────────────────
   writeState(det.stateDir, { ...base, inProgress: { op: "install", step: "verify", snapshotId: null, previousVersion: null } });
-  const checks = await verifyInstall({ cli, release, source, downloadModels: values["download-models"] });
+  const checks = await verifyInstall({ cli, release, source, downloadModels: values["download-models"], stateDir: det.stateDir });
   for (const c of checks) report.step(`verify.${c.id}`, c.ok ? (c.warn ? "warn" : "ok") : "failed", c.detail);
   if (checks.some((c) => !c.ok)) return rollback(rb);
 
@@ -458,9 +506,29 @@ async function handOverToUpdate(ctx, { report }) {
   return report.finish(EXIT.FAILED);
 }
 
-/** Undo a failed fresh install: uninstall, restore the previous slot. */
-async function rollback({ cli, det, report, previousSlot, base }) {
+/**
+ * Undo a failed fresh install (ruling T5-c): restore the previous value of every
+ * plugin-entry key this run wrote (while the plugin is still installed, so OpenClaw
+ * still validates its config), uninstall, then restore the previous slot. Keys that
+ * had no previous value stay set (there is no `config unset` route) and are listed.
+ */
+async function rollback({ cli, det, report, previousSlot, base, previous, written }) {
   const manual = [];
+  const leftSet = [];
+  const restored = [];
+  for (const key of [...written].reverse()) {
+    const prev = previous.get(key);
+    if (!prev?.set) {
+      leftSet.push(key);
+      continue;
+    }
+    try {
+      await cli.configSet(key, prev.value);
+      restored.push(key);
+    } catch {
+      manual.push(`openclaw config set ${key} ${prev.value}`);
+    }
+  }
   const un = await cli.uninstall(PLUGIN_ID);
   if (un.code !== 0) manual.push(`openclaw plugins uninstall ${PLUGIN_ID} --force`);
   const restoreSlot = previousSlot && previousSlot !== "memory-core" && previousSlot !== PLUGIN_ID;
@@ -471,9 +539,11 @@ async function rollback({ cli, det, report, previousSlot, base }) {
       manual.push(`openclaw config set ${SLOT} ${previousSlot}`);
     }
   }
+  report.set("rollback", { restored, leftSet });
+  if (leftSet.length) report.note(`Left set after the rollback (no previous value, no unset route): ${leftSet.join(", ")}`);
   if (manual.length === 0) {
     writeState(det.stateDir, base);
-    report.step("rollback", "ok", `uninstalled ${PLUGIN_ID}${restoreSlot ? `, ${SLOT} restored to ${previousSlot}` : ""}`);
+    report.step("rollback", "ok", `uninstalled ${PLUGIN_ID}${restoreSlot ? `, ${SLOT} restored to ${previousSlot}` : ""}${restored.length ? `, ${restored.length} config value(s) restored` : ""}${leftSet.length ? `, ${leftSet.length} key(s) left set` : ""}`);
     return report.finish(EXIT.FAILED);
   }
   try {

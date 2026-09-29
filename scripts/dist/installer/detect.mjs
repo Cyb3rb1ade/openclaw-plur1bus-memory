@@ -16,7 +16,7 @@
  * `openclaw.cmd` fall back to `node` on PATH.
  */
 
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir as osHomedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { createOpenclawCli, defaultRun } from "./openclaw-cli.mjs";
@@ -100,7 +100,9 @@ export function whichOnPath(name, { env, platform = process.platform }) {
       if (platform === "win32" && ext === "" && !/\.[a-z0-9]+$/i.test(name)) continue;
       const p = path.join(dir, name + ext);
       try {
-        if (statSync(p).isFile()) return p;
+        if (!statSync(p).isFile()) continue;
+        if (platform !== "win32") accessSync(p, fsConstants.X_OK); // skip non-executable files like a shell would
+        return p;
       } catch {
         // next
       }

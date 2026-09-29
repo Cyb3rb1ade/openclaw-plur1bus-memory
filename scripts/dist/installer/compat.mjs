@@ -95,10 +95,11 @@ export function satisfiesRange(version, range) {
 }
 
 /**
- * The harness home that exists on this machine (recognised by its manifest.json, HB9), or null.
- * $PLUR1BUS_HOME, else ~/.plur1bus, else %LOCALAPPDATA%\PLUR1BUS (win32).
+ * Every harness home that exists on this machine (recognised by its manifest.json, HB9):
+ * $PLUR1BUS_HOME, ~/.plur1bus, %LOCALAPPDATA%\PLUR1BUS (win32). All are checked, not just the first.
+ * @returns {string[]}
  */
-export function findHarnessHome({ env, platform = process.platform, homedir = osHomedir, exists = existsSync }) {
+export function findHarnessHomes({ env, platform = process.platform, homedir = osHomedir, exists = existsSync }) {
   const path = platform === "win32" ? win32 : posix;
   const home = env.HOME || env.USERPROFILE || homedir();
   const candidates = [
@@ -106,11 +107,12 @@ export function findHarnessHome({ env, platform = process.platform, homedir = os
     home ? path.join(home, ".plur1bus") : null,
     platform === "win32" && env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, "PLUR1BUS") : null,
   ].filter(Boolean);
+  const found = [];
   for (const c of candidates) {
     const abs = path.resolve(c);
-    if (exists(path.join(abs, "manifest.json"))) return abs;
+    if (!found.includes(abs) && exists(path.join(abs, "manifest.json"))) found.push(abs);
   }
-  return null;
+  return found;
 }
 
 /**
@@ -139,16 +141,17 @@ function inside(child, parent, platform) {
   const path = platform === "win32" ? win32 : posix;
   const norm = (p) => (platform === "win32" ? p.toLowerCase() : p);
   const rel = path.relative(norm(realish(parent)), norm(realish(child)));
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 /**
  * @param {{ openclawVersion: string|null, nodeVersion: string|null, target: {target: string, supported: boolean, detail: string},
  *   release: { compat: { minGatewayVersion: string }, node: string }, freeBytes: number|null, readonlyConfig: null|"OPENCLAW_CONFIG_READONLY"|"OPENCLAW_NIX_MODE",
- *   configValid: boolean, baseDbPath: string, harnessHome: string|null, platform?: string }} a
+ *   configValid: boolean, baseDbPath: string, harnessHomes?: string[], harnessHome?: string|null, platform?: string }} a
  * @returns {Array<{ id: string, fatal: boolean, detail: string }>}
  */
-export function checkCompat({ openclawVersion, nodeVersion, target, release, freeBytes, readonlyConfig, configValid, baseDbPath, harnessHome, platform = process.platform }) {
+export function checkCompat({ openclawVersion, nodeVersion, target, release, freeBytes, readonlyConfig, configValid, baseDbPath, harnessHomes, harnessHome, platform = process.platform }) {
+  const homes = [...(harnessHomes ?? []), ...(harnessHome ? [harnessHome] : [])];
   const findings = [];
   if (!target.supported) findings.push({ id: "unsupported-target", fatal: true, detail: target.detail });
   const min = release.compat.minGatewayVersion;
@@ -171,7 +174,9 @@ export function checkCompat({ openclawVersion, nodeVersion, target, release, fre
   }
   if (readonlyConfig) findings.push({ id: "config-readonly", fatal: true, detail: READONLY_REMEDY[readonlyConfig] });
   if (!configValid) findings.push({ id: "config-invalid", fatal: true, detail: INVALID_CONFIG_REMEDY });
-  if (harnessHome && baseDbPath && inside(baseDbPath, harnessHome, platform)) {
+  const home = baseDbPath ? homes.find((h) => inside(baseDbPath, h, platform)) : undefined;
+  if (home) {
+    const harnessHome = home;
     findings.push({ id: "store-inside-harness-home", fatal: true, detail: `baseDbPath ${baseDbPath} lies inside the PLUR1BUS harness home ${harnessHome}; one engine per store (D89)` });
   }
   return findings;

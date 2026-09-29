@@ -121,6 +121,7 @@ if (args[0] === "plugins" && args[1] === "inspect") {
     j.install.spec = state.source === "clawhub" ? "clawhub:@cyb3rb1ade/plur1bus-memory@" + state.version : "@cyb3rb1ade/plur1bus-memory@" + state.version;
     if (scenario.recordNpmIntegrity) j.install.npmIntegrity = scenario.recordNpmIntegrity;
     if (scenario.recordClawpackSha256) j.install.clawpackSha256 = scenario.recordClawpackSha256;
+    if (!has("--runtime") && scenario.recordStatus) j.plugin.status = scenario.recordStatus;
     if (has("--runtime")) {
       j.plugin.imported = scenario.runtimeImported ?? true;
       j.plugin.status = scenario.runtimeStatus ?? "loaded";
@@ -139,6 +140,10 @@ if (args[0] === "plugins" && args[1] === "inspect") {
 if (args[0] === "plugins" && args[1] === "install") {
   const locator = args[2];
   if (scenario.readonlyEnforced && process.env.OPENCLAW_CONFIG_READONLY === "1") {
+    err("Config is externally managed (OPENCLAW_CONFIG_READONLY=1), so OpenClaw treats openclaw.json as immutable.\n");
+    done(1);
+  }
+  if (scenario.installReadonly) {
     err("Config is externally managed (OPENCLAW_CONFIG_READONLY=1), so OpenClaw treats openclaw.json as immutable.\n");
     done(1);
   }
@@ -243,7 +248,7 @@ function resolveOnPath(name, pathValue) {
 
 /**
  * A minimal valid plur1bus.plugin-feed/1 for the fixtures (TEST ONLY URLs).
- * @param {{ version?: string, clawpackDigest?: string|null, integrity?: string, tarballSha256?: string, minGatewayVersion?: string, node?: string, windowsNativeBeta?: boolean }} [o]
+ * @param {{ version?: string, clawpackDigest?: string|null, integrity?: string, tarballSha256?: string, tarballUrl?: string, minGatewayVersion?: string, node?: string, windowsNativeBeta?: boolean }} [o]
  */
 export function makeTestFeed(o = {}) {
   const version = o.version ?? "7.16.11";
@@ -254,7 +259,7 @@ export function makeTestFeed(o = {}) {
     clawhub: `clawhub:@cyb3rb1ade/plur1bus-memory@${version}`,
     npm: `npm:@cyb3rb1ade/plur1bus-memory@${version}`,
     tarball: {
-      url: `https://example.invalid/TEST-ONLY/cyb3rb1ade-plur1bus-memory-${version}.tgz`,
+      url: o.tarballUrl ?? `https://example.invalid/TEST-ONLY/cyb3rb1ade-plur1bus-memory-${version}.tgz`,
       sha256: o.tarballSha256 ?? zero(4),
       integrity: o.integrity ?? FIXTURE_NPM_INTEGRITY,
     },

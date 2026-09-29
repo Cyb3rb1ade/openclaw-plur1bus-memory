@@ -3,6 +3,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,8 @@ import { runInstaller } from "../scripts/dist/installer/main.mjs";
 import { resolveOpenclawStateDir } from "../scripts/dist/installer/detect.mjs";
 import { ALLOWED_CONFIG_PATHS, createOpenclawCli, defaultRun } from "../scripts/dist/installer/openclaw-cli.mjs";
 import { resolveLicence } from "../scripts/dist/installer/licence.mjs";
+import { checkCompat, findHarnessHomes } from "../scripts/dist/installer/compat.mjs";
+import { whichOnPath } from "../scripts/dist/installer/detect.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState } from "../scripts/dist/installer/state.mjs";
 import { createInstallerSandbox, makeTestFeed, sha256File, sink } from "./helpers/installer-sandbox.js";
@@ -46,15 +49,20 @@ async function run(sb, argv, extra = {}) {
 
 const mutating = (calls) => calls.filter((a) => (a[0] === "plugins" && ["install", "uninstall", "update", "enable"].includes(a[1])) || (a[0] === "config" && a[1] === "set"));
 
-const FRESH_CLAWHUB = [
+const freshClawhub = (stateDir) => [
   ["--version"],
   ["config", "validate"],
   ["config", "get", `${C}.baseDbPath`],
   ["plugins", "inspect", ID, "--json"],
   ["config", "get", SLOT],
   ["config", "get", `${C}.embedding.provider`],
+  ["config", "get", `${C}.modelPreparation.profile`],
+  ["config", "get", `${C}.modelPreparation.acceptNonCommercialLicense`],
+  ["config", "get", `${C}.embedding.model`],
+  ["config", "get", `${P}.hooks.allowConversationAccess`],
   ["plugins", "install", "clawhub:@cyb3rb1ade/plur1bus-memory@7.16.11"],
   ["config", "set", `${C}.modelPreparation.profile`, "e5-multilingual-384"],
+  ["config", "set", `${C}.modelPreparation.acceptNonCommercialLicense`, "false"],
   ["config", "set", `${C}.embedding.provider`, "local-transformers"],
   ["config", "set", `${C}.embedding.model`, "intfloat/multilingual-e5-small"],
   ["config", "set", `${P}.hooks.allowConversationAccess`, "true"],
@@ -62,7 +70,7 @@ const FRESH_CLAWHUB = [
   ["plugins", "inspect", ID, "--json"],
   ["gateway", "status", "--json"],
   ["plugins", "inspect", ID, "--runtime", "--json"],
-  ["plur1bus", "selftest", "--json"],
+  ["plur1bus", "selftest", "--json", "--state-dir", stateDir],
 ];
 
 describe("plugin installer: install", () => {
@@ -70,7 +78,7 @@ describe("plugin installer: install", () => {
     const sb = createInstallerSandbox();
     const r = await run(sb, ["--json"]);
     assert.equal(r.code, EXIT.OK, r.out);
-    assert.deepEqual(sb.openclawCalls(), FRESH_CLAWHUB);
+    assert.deepEqual(sb.openclawCalls(), freshClawhub(sb.stateDir));
     assert.deepEqual(sb.log().filter((e) => e.bin === "node").map((e) => e.argv), [["--version"]]);
     const doc = JSON.parse(r.stdout);
     assert.equal(doc.ok, true);
@@ -181,6 +189,15 @@ describe("plugin installer: install", () => {
     assert.equal(readState(sb.stateDir), null);
   });
 
+  it("an extensions dir OpenClaw does not report is still a legacy deploy (exit 2)", async () => {
+    const sb = createInstallerSandbox();
+    mkdirSync(join(sb.stateDir, "extensions", ID), { recursive: true });
+    const r = await run(sb, []);
+    assert.equal(r.code, EXIT.NEEDS_CHOICE, r.out);
+    assert.match(r.stderr, /legacy-deploy.*--adopt-legacy/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+  });
+
   it("readonly or invalid config stops before any change", async () => {
     for (const [name, value] of [["OPENCLAW_CONFIG_READONLY", "1"], ["OPENCLAW_NIX_MODE", "1"]]) {
       const sb = createInstallerSandbox({ extraEnv: { [name]: value } });
@@ -246,7 +263,8 @@ describe("plugin installer: install", () => {
     assert.equal(r.code, EXIT.OK, r.out);
     const sets = sb.openclawCalls().filter((a) => a[1] === "set").map((a) => a.slice(2));
     assert.deepEqual(sets.find((s) => s[0] === `${C}.modelPreparation.profile`), [`${C}.modelPreparation.profile`, "e5-multilingual-384"]);
-    assert.ok(!sets.some((s) => s[0].endsWith("acceptNonCommercialLicense")), JSON.stringify(sets));
+    assert.deepEqual(sets.find((s) => s[0].endsWith("acceptNonCommercialLicense")), [`${C}.modelPreparation.acceptNonCommercialLicense`, "false"], "E5 writes an explicit false (T5-g)");
+    assert.ok(!sets.some((s) => s[0].endsWith("acceptNonCommercialLicense") && s[1] === "true"), JSON.stringify(sets));
     assert.equal(readState(sb.stateDir).licence, undefined);
 
     // a TTY without --non-interactive asks; declining the use class gives E5, nothing accepted
@@ -305,6 +323,18 @@ describe("plugin installer: install", () => {
     assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
     assert.ok(JSON.parse(r.stdout).findings.some((f) => f.id === "store-inside-harness-home" && f.fatal));
     assert.deepEqual(mutating(sb.openclawCalls()), []);
+
+    // a child named "..foo" is still inside; every candidate home is checked, not just the first
+    const other = join(root, "other");
+    mkdirSync(join(sb.home, ".plur1bus"), { recursive: true });
+    writeFileSync(join(sb.home, ".plur1bus", "manifest.json"), "{}\n");
+    const homes = findHarnessHomes({ env: { PLUR1BUS_HOME: harness, HOME: sb.home }, platform: "linux" });
+    assert.deepEqual(homes, [harness, join(sb.home, ".plur1bus")]);
+    const base = { openclawVersion: "2026.8.1", nodeVersion: "24.21.0", target: { target: "linux-x64", supported: true, detail: "" }, release: sb.feed.hosts.openclaw.releases[0], freeBytes: null, readonlyConfig: null, configValid: true, platform: "linux" };
+    assert.ok(checkCompat({ ...base, baseDbPath: join(harness, "..foo"), harnessHomes: homes }).some((f) => f.id === "store-inside-harness-home"));
+    assert.ok(checkCompat({ ...base, baseDbPath: join(sb.home, ".plur1bus", "store"), harnessHomes: homes }).some((f) => f.id === "store-inside-harness-home"));
+    assert.ok(!checkCompat({ ...base, baseDbPath: join(other, "store"), harnessHomes: homes }).some((f) => f.id === "store-inside-harness-home"));
+    assert.ok(!checkCompat({ ...base, baseDbPath: join(root, "harness home-2", "store"), harnessHomes: homes }).some((f) => f.id === "store-inside-harness-home"));
 
     // a harness home elsewhere only earns a notice
     const sb2 = createInstallerSandbox({ extraEnv: { PLUR1BUS_HOME: harness } });
@@ -434,6 +464,116 @@ describe("plugin installer: install", () => {
     delete noFlag.PLUR1BUS_PLUGIN_INSTALLER_TEST;
     assert.equal(await runInstaller(["--feed", pathToFileURL(feedPath).href], { ...opts, env: noFlag, stderr: e3 }), EXIT.FAILED);
     assert.match(e3.text, /https/);
+  });
+
+  it("without a clawpackDigest the verified feed tarball is installed via npm-pack (T5-a)", async () => {
+    const bytes = Buffer.from("TEST ONLY release tarball");
+    const url = "https://example.invalid/TEST-ONLY/release.tgz";
+    const sb = createInstallerSandbox({ feed: makeTestFeed({ clawpackDigest: null, tarballUrl: url, tarballSha256: createHash("sha256").update(bytes).digest("hex") }) });
+    const fetched = [];
+    let installedFrom = null;
+    const fetchImpl = async (u) => {
+      fetched.push(String(u));
+      return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) };
+    };
+    const r = await run(sb, ["--json"], { fetchImpl });
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.deepEqual(fetched, [url]);
+    const inst = sb.openclawCalls().find((a) => a[1] === "install");
+    assert.match(inst[2], /^npm-pack:.*cyb3rb1ade-plur1bus-memory-7\.16\.11\.tgz$/);
+    assert.deepEqual(inst.slice(3), ["--force", "--accept-capabilities"]);
+    installedFrom = inst[2].slice("npm-pack:".length);
+    assert.equal(existsSync(installedFrom), false, "the downloaded tarball is removed afterwards");
+    const doc = JSON.parse(r.stdout);
+    assert.equal(doc.source, "tarball");
+    assert.equal(doc.steps.find((s) => s.id === "verify.integrity").status, "ok");
+    assert.equal(readState(sb.stateDir).source, "tarball");
+
+    // a tarball whose bytes do not match the feed is refused before any change
+    const sb2 = createInstallerSandbox({ feed: makeTestFeed({ clawpackDigest: null, tarballUrl: url }) });
+    const r2 = await run(sb2, [], { fetchImpl });
+    assert.equal(r2.code, EXIT.FAILED, r2.out);
+    assert.match(r2.stderr, /SHA-256/);
+    assert.deepEqual(mutating(sb2.openclawCalls()), []);
+  });
+
+  it("explicit --source clawhub without a clawpackDigest refuses before any install (T5-a)", async () => {
+    const sb = createInstallerSandbox({ feed: makeTestFeed({ clawpackDigest: null }) });
+    const r = await run(sb, ["--source", "clawhub", "--json"], { fetchImpl: async () => { throw new Error("no download"); } });
+    assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
+    assert.match(r.out, /clawpack-digest-missing/);
+    assert.deepEqual(sb.openclawCalls(), []);
+
+    // with the digest present ClawHub is used, explicit or not
+    const sb2 = createInstallerSandbox();
+    assert.equal((await run(sb2, ["--source", "clawhub"])).code, EXIT.OK);
+    assert.ok(sb2.openclawCalls().some((a) => a.join(" ") === "plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.16.11"));
+  });
+
+  it("rollback restores previous config values and lists keys that were absent (T5-c)", async () => {
+    const sb = createInstallerSandbox({
+      scenario: {
+        config: { [`${C}.modelPreparation.profile`]: "jina-v5-nano-512", [`${P}.hooks.allowConversationAccess`]: "false" },
+        selftest: { schema: "plur1bus.selftest/1", ok: false, addons: [], model: { state: "present" }, steps: [], warnings: [], errors: ["boom"] },
+      },
+    });
+    const r = await run(sb, ["--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    const calls = sb.openclawCalls().map((a) => a.join(" "));
+    const u = calls.indexOf(`plugins uninstall ${ID} --force`);
+    const restores = calls.slice(0, u).filter((c) => c.startsWith("config set")).slice(-2);
+    assert.deepEqual(restores, [`config set ${P}.hooks.allowConversationAccess false`, `config set ${C}.modelPreparation.profile jina-v5-nano-512`]);
+    const doc = JSON.parse(r.stdout);
+    assert.deepEqual(doc.rollback.restored, [`${P}.hooks.allowConversationAccess`, `${C}.modelPreparation.profile`]);
+    assert.deepEqual(doc.rollback.leftSet, [`${C}.embedding.model`, `${C}.embedding.provider`, `${C}.modelPreparation.acceptNonCommercialLicense`]);
+    assert.match(r.stderr, /Left set after the rollback.*embedding\.model/);
+    const cfg = sb.shimState().config;
+    assert.equal(cfg[`${C}.modelPreparation.profile`], "jina-v5-nano-512");
+    assert.equal(cfg[`${P}.hooks.allowConversationAccess`], "false");
+  });
+
+  it("an install that fails with nothing installed changes nothing and does not uninstall", async () => {
+    const sb = createInstallerSandbox({ scenario: { installExit: 1 } });
+    const r = await run(sb, []);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.ok(!sb.openclawCalls().some((a) => a[1] === "uninstall" || a[1] === "set"));
+    const st = readState(sb.stateDir);
+    assert.equal(st.installedVersion, null);
+    assert.equal(st.inProgress, undefined);
+  });
+
+  it("OpenClaw refusing the install as externally managed exits 3 without rollback", async () => {
+    const sb = createInstallerSandbox({ scenario: { installReadonly: true } });
+    const r = await run(sb, []);
+    assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
+    assert.match(r.stderr, /externally managed/);
+    assert.ok(!sb.openclawCalls().some((a) => a[1] === "uninstall" || a[1] === "set"));
+  });
+
+  it("a failing config set rolls the install back", async () => {
+    const sb = createInstallerSandbox({ scenario: { configSetFail: `${P}.hooks.allowConversationAccess` } });
+    const r = await run(sb, ["--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.ok(sb.openclawCalls().some((a) => a.join(" ") === `plugins uninstall ${ID} --force`));
+    assert.equal(sb.shimState().installed, false);
+    assert.equal(JSON.parse(r.stdout).steps.find((s) => s.id === "config").status, "failed");
+  });
+
+  it("a plugin recorded disabled after the slot is set is enabled", async () => {
+    const sb = createInstallerSandbox({ scenario: { recordStatus: "disabled" } });
+    const r = await run(sb, []);
+    assert.equal(r.code, EXIT.OK, r.out);
+    const calls = sb.openclawCalls().map((a) => a.join(" "));
+    assert.ok(calls.indexOf(`plugins enable ${ID}`) > calls.indexOf(`config set ${SLOT} ${ID}`));
+  });
+
+  it("whichOnPath skips non-executable files on POSIX", { skip: process.platform === "win32" && "POSIX execute bit" }, () => {
+    const a = makeTempDir("plur1bus-which-a-");
+    const b = makeTempDir("plur1bus-which-b-");
+    writeFileSync(join(a, "openclaw"), "#!/bin/sh\n", { mode: 0o644 });
+    writeFileSync(join(b, "openclaw"), "#!/bin/sh\n", { mode: 0o755 });
+    assert.equal(whichOnPath("openclaw", { env: { PATH: `${a}:${b}` }, platform: "linux" }), join(b, "openclaw"));
+    assert.equal(whichOnPath("openclaw", { env: { PATH: a }, platform: "linux" }), null);
   });
 
   it("defaultRun never uses a shell and enforces its deadline", async () => {

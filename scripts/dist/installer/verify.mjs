@@ -7,7 +7,7 @@
  *           the release; /install/source "clawhub" → /install/clawpackSha256 equals the
  *           feed's clawpackDigest (R-S6), otherwise /install/npmIntegrity equals the
  *           feed's tarball integrity (fact (b), HM1-R15).
- * selftest  `openclaw plur1bus selftest --json` (schema plur1bus.selftest/1, Task 2): ok.
+ * selftest  `openclaw plur1bus selftest --json --state-dir <stateDir>` (schema plur1bus.selftest/1, Task 2): ok.
  * model     the selftest's model.state: present/downloaded ok, missing → warning (HM1-R6).
  */
 
@@ -31,10 +31,10 @@ export function checkIntegrity(install, release) {
 }
 
 /**
- * @param {{ cli: ReturnType<typeof import("./openclaw-cli.mjs").createOpenclawCli>, release: any, source: string, downloadModels?: boolean }} a
+ * @param {{ cli: ReturnType<typeof import("./openclaw-cli.mjs").createOpenclawCli>, release: any, source: string, downloadModels?: boolean, stateDir?: string }} a
  * @returns {Promise<Array<{ id: "loaded"|"integrity"|"selftest"|"model", ok: boolean, warn?: boolean, detail: string }>>}
  */
-export async function verifyInstall({ cli, release, source, downloadModels = false }) {
+export async function verifyInstall({ cli, release, source, downloadModels = false, stateDir }) {
   const checks = [];
   const rt = await cli.inspect(PLUGIN_ID, { runtime: true });
   const plugin = rt.json?.plugin;
@@ -47,7 +47,7 @@ export async function verifyInstall({ cli, release, source, downloadModels = fal
   const integ = checkIntegrity(rt.present ? rt.json.install : null, release);
   checks.push({ id: "integrity", ...integ });
 
-  const st = await cli.selftest({ downloadModels });
+  const st = await cli.selftest({ downloadModels, stateDir });
   const rep = st.report;
   if (!rep || rep.schema !== SELFTEST_SCHEMA) {
     checks.push({ id: "selftest", ok: false, detail: `no ${SELFTEST_SCHEMA} report (exit ${st.code})${st.detail ? `: ${st.detail}` : ""}` });

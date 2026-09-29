@@ -29,6 +29,9 @@ export const ALLOWED_CONFIG_PATHS = Object.freeze({
     `${C}.modelPreparation.profile`,
     `${C}.reranker.enabled`,
     `${C}.reranker.provider`,
+    // non-secret booleans, read only to restore them on rollback (ruling T5-e)
+    `${C}.modelPreparation.acceptNonCommercialLicense`,
+    `plugins.entries.${PLUGIN_ID}.hooks.allowConversationAccess`,
   ]),
   set: Object.freeze([
     "plugins.slots.memory",
@@ -70,7 +73,7 @@ export function defaultRun(file, args, { env = process.env, timeoutMs = 300_000,
   let verbatim = false;
   if (platform === "win32" && /\.(cmd|bat)$/i.test(file)) {
     try {
-      argv = ["/d", "/s", "/c", `"${[cmdQuote(file), ...args.map(cmdQuote)].join(" ")}"`];
+      argv = ["/d", "/v:off", "/s", "/c", `"${[cmdQuote(file), ...args.map(cmdQuote)].join(" ")}"`];
     } catch (err) {
       return Promise.resolve({ code: 126, stdout: "", stderr: String(err.message), timedOut: false });
     }
@@ -177,8 +180,8 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
       const json = parseJson(r.stdout);
       return { running: r.code === 0 && json?.rpc?.ok === true };
     },
-    async selftest({ downloadModels = false } = {}) {
-      const r = await call(["plur1bus", "selftest", "--json", ...(downloadModels ? ["--download-models"] : [])], downloadModels ? 3_600_000 : 900_000);
+    async selftest({ downloadModels = false, stateDir } = {}) {
+      const r = await call(["plur1bus", "selftest", "--json", ...(stateDir ? ["--state-dir", stateDir] : []), ...(downloadModels ? ["--download-models"] : [])], downloadModels ? 3_600_000 : 900_000);
       const line = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).reverse().find((l) => l.startsWith("{"));
       return { code: r.code, report: line ? parseJson(line) : null, detail: tail(r.stderr) };
     },
