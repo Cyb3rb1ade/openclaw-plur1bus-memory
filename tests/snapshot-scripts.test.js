@@ -14,9 +14,16 @@ const SCRIPT_DIR = fileURLToPath(new URL("../scripts/", import.meta.url));
 const SCRIPTS_PRESENT =
   existsSync(join(SCRIPT_DIR, "backup-snapshot.sh")) &&
   existsSync(join(SCRIPT_DIR, "restore-snapshot.sh"));
-const SKIP = SCRIPTS_PRESENT
-  ? {}
-  : { skip: "scripts/*.sh not present (scripts/ is gitignored)" };
+// engine-windows:posix-only — these are bash operator scripts. execSync runs
+// a command through cmd.exe on win32, and cmd.exe cannot execute a .sh: the
+// call returns at once with no output and no snapshot (Windows run tc3, all 7
+// tests). Until the URL fix (fileURLToPath) SCRIPTS_PRESENT was false on
+// Windows, so these tests were skipped there by accident.
+const SKIP = !SCRIPTS_PRESENT
+  ? { skip: "scripts/*.sh not present (scripts/ is gitignored)" }
+  : process.platform === "win32"
+    ? { skip: "engine-windows:posix-only (bash operator scripts; cmd.exe cannot execute a .sh)" }
+    : {};
 
 function makeTempOpenclawHome() {
   const dir = makeTempDir("plur1bus-snapshot-test-");

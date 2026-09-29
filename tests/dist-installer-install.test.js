@@ -359,10 +359,13 @@ describe("plugin installer: install", () => {
     assert.deepEqual(sb.log(), []);
   });
 
-  // engine-windows:installer-foreign-target — hypothesis: runInstaller with an injected linux/darwin platform on a
-  // win32 host resolves POSIX paths against the win32 sandbox and stops before compat, so stdout has no findings.
-  // Needs a real Windows run (the stdout of that run) before the sandbox or the installer changes.
-  it("unsupported targets exit 3 before any change", { skip: process.platform === "win32" && "engine-windows:installer-foreign-target (injected POSIX platform on a win32 host)" }, async () => {
+  // engine-windows:installer-foreign-target — cause (confirmed by Windows run tc3 and its Linux mirror, an injected
+  // "win32" on a Linux host): the injected platform also drives detection. whichOnPath() then splits the win32 PATH
+  // on ":" and looks for an extensionless `openclaw`, so the sandbox's openclaw.cmd is never found and the run stops
+  // at `detect` with exit 3 (the expected code, which is why only the missing `findings` failed). A POSIX host
+  // cannot be simulated on a win32 host with a runnable fake; resolveTarget/runningUnderRosetta stay covered there.
+  const foreignTarget = { skip: process.platform === "win32" && "engine-windows:installer-foreign-target (an injected POSIX platform also drives openclaw detection on a win32 host)" };
+  it("unsupported targets exit 3 before any change", foreignTarget, async () => {
     for (const extra of [{ platform: "linux", arch: "x64", glibcVersion: null }, { platform: "darwin", arch: "x64" }, { platform: "linux", arch: "ia32", glibcVersion: "2.39" }, { platform: "linux", arch: "arm64", glibcVersion: "2.26" }]) {
       const sb = createInstallerSandbox();
       const r = await run(sb, ["--json"], extra);
@@ -372,7 +375,7 @@ describe("plugin installer: install", () => {
     }
   });
 
-  it("an x64 Node under Rosetta is refused naming Rosetta and the native arm64 Node", async () => {
+  it("an x64 Node under Rosetta is refused naming Rosetta and the native arm64 Node", foreignTarget, async () => {
     const sb = createInstallerSandbox();
     const r = await run(sb, ["--json"], { platform: "darwin", arch: "x64", rosetta: true });
     assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
@@ -381,6 +384,14 @@ describe("plugin installer: install", () => {
     assert.match(f.detail, /Rosetta/);
     assert.match(f.detail, /native arm64 Node/);
     assert.deepEqual(mutating(sb.openclawCalls()), []);
+  });
+
+  it("the foreign targets, the Rosetta probe and the darwin-x64 detail (pure, every host)", () => {
+    for (const extra of [{ platform: "linux", arch: "x64", glibcVersion: null }, { platform: "darwin", arch: "x64" }, { platform: "linux", arch: "ia32", glibcVersion: "2.39" }, { platform: "linux", arch: "arm64", glibcVersion: "2.26" }]) {
+      assert.equal(resolveTarget(extra).supported, false, JSON.stringify(extra));
+    }
+    assert.match(resolveTarget({ platform: "darwin", arch: "x64", rosetta: true }).detail, /Rosetta/);
+    assert.match(resolveTarget({ platform: "darwin", arch: "x64", rosetta: true }).detail, /native arm64 Node/);
     // the probe: sysctl.proc_translated 1, or the machine says arm64; only for darwin x64
     assert.equal(runningUnderRosetta({ platform: "darwin", arch: "x64", sysctl: () => "1\n", machine: () => "x86_64" }), true);
     assert.equal(runningUnderRosetta({ platform: "darwin", arch: "x64", sysctl: () => { throw new Error("no sysctl"); }, machine: () => "arm64" }), true);
