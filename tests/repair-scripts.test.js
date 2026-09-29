@@ -51,9 +51,11 @@ function writeStub(dir, relPath) {
 
 // Run a script and return { status, stdout, stderr }
 function runScript(scriptPath, args = [], env = {}) {
+  // os.homedir() reads USERPROFILE on win32: mirror a HOME override there.
+  const home = env.HOME !== undefined && env.USERPROFILE === undefined ? { USERPROFILE: env.HOME } : {};
   const r = spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, ...home },
     timeout: 30000,
   });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
