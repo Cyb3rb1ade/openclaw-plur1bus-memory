@@ -2,6 +2,7 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createOpenClawMemoryEmbeddingProviderAdapters,
@@ -109,7 +110,8 @@ describe("OpenClaw memory embedding provider adapters", () => {
   });
 
   it("keeps a tool-discovery local adapter usable across activation-owner rotation", async () => {
-    const stateRoot = makeTempDir("plur1bus-adapter-ipc-", "/tmp");
+    // Short POSIX root for the owner.sock path; win32 has no /tmp (named pipe there).
+    const stateRoot = makeTempDir("plur1bus-adapter-ipc-", process.platform === "win32" ? tmpdir() : "/tmp");
     const calls = [];
     const embeddings = {
       model: "intfloat/multilingual-e5-small",

@@ -6,6 +6,7 @@ import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSyn
 import { rm } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 
 import {
@@ -13,13 +14,26 @@ import {
   ReloadSafeIpcScopedEmbeddingProvider,
   createScopedEmbeddingIpcServer,
   registerScopedEmbeddingIpcServiceAfterLifecycle,
+  resolveScopedEmbeddingDefaultEndpoint,
   resolveScopedEmbeddingIpcPaths,
   resolveScopedEmbeddingOwnerClaimAddress,
 } from "../lib/providers/scoped-embedding-ipc.js";
+import { ipcAddress } from "../lib/platform.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
 const STALE_FINGERPRINT_ID = `embedding:v1:sha256:${"b".repeat(64)}`;
+
+const WIN32 = process.platform === "win32";
+// A stale socket *file* (and the recovery that unlinks it) is a POSIX
+// concept: on win32 the owner listens on a named pipe, which disappears with
+// its process and has no filesystem entry.
+const posixSocketFile = { skip: WIN32 && "POSIX socket-file semantics (win32 owners listen on named pipes)" };
+
+/** The address a raw client connects to for the stateRoot's legacy owner. */
+function defaultOwnerAddress(stateRoot) {
+  return resolveScopedEmbeddingDefaultEndpoint(resolveScopedEmbeddingIpcPaths(stateRoot)).address;
+}
 
 async function leaveStaleUnixSocket(socketPath) {
   const child = spawn(process.execPath, [
@@ -78,7 +92,8 @@ function createStateRoot(prefix) {
   // macOS limits filesystem Unix socket names to 103 bytes.  Its default
   // per-user temporary directory is longer than that before this test adds
   // the private IPC path, while /tmp keeps this fixture portable.
-  return makeTempDir(prefix, "/tmp");
+  // win32 has neither /tmp nor socket files (the owner listens on a named pipe).
+  return makeTempDir(prefix, WIN32 ? tmpdir() : "/tmp");
 }
 
 describe("scoped embedding through activation-owned Unix IPC", () => {
@@ -113,6 +128,18 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
       resolveScopedEmbeddingOwnerClaimAddress(directory, "linux"),
       `\0plur1bus-embedding-owner-v1-${digest}`,
     );
+  });
+
+  it("listens on owner.sock off win32 and on a directory-derived named pipe on win32", () => {
+    const posix = { directory: "/state/control/embedding-ipc", socketPath: "/state/control/embedding-ipc/owner.sock" };
+    assert.deepEqual(resolveScopedEmbeddingDefaultEndpoint(posix, "linux"), { address: posix.socketPath, socketPath: posix.socketPath });
+    assert.deepEqual(resolveScopedEmbeddingDefaultEndpoint(posix, "darwin"), { address: posix.socketPath, socketPath: posix.socketPath });
+    const win = { directory: "C:\\state\\control\\embedding-ipc", socketPath: "C:\\state\\control\\embedding-ipc\\owner.sock" };
+    const digest = createHash("sha256").update(win.directory).digest("hex").slice(0, 40);
+    const endpoint = resolveScopedEmbeddingDefaultEndpoint(win, "win32");
+    assert.deepEqual(endpoint, { address: `\\\\.\\pipe\\plur1bus-embedding-owner-sock-v1-${digest}`, socketPath: null });
+    // Distinct from the serve() default (platform.ipcAddress) of the same directory.
+    assert.notEqual(endpoint.address, ipcAddress(win.directory, { platform: "win32" }).address);
   });
 
   it("diagnoses an oversized macOS data socket path before creating IPC children", {
@@ -157,9 +184,12 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
       assert.deepEqual(await provider.embedBatch(["a", "b"]), [[0.5, 0.5], [0.5, 0.5]]);
       assert.deepEqual(calls, [["query", "q"], ["passage", "p"], ["batch", ["a", "b"]]]);
       const paths = resolveScopedEmbeddingIpcPaths(stateRoot);
-      assert.equal(statSync(paths.directory).mode & 0o777, 0o700);
-      assert.equal(statSync(paths.socketPath).mode & 0o777, 0o600);
-      assert.equal(statSync(paths.tokenPath).mode & 0o777, 0o600);
+      if (!WIN32) {
+        // POSIX modes; win32 secures these with ACLs and uses a named pipe.
+        assert.equal(statSync(paths.directory).mode & 0o777, 0o700);
+        assert.equal(statSync(paths.socketPath).mode & 0o777, 0o600);
+        assert.equal(statSync(paths.tokenPath).mode & 0o777, 0o600);
+      }
     } finally {
       await provider?.shutdown();
       await server.shutdown();
@@ -506,7 +536,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     }
   });
 
-  it("atomically elects one owner when two starts recover the same stale socket", async () => {
+  it("atomically elects one owner when two starts recover the same stale socket", posixSocketFile, async () => {
     const stateRoot = createStateRoot("plur1bus-scoped-embedding-owner-race-");
     const paths = resolveScopedEmbeddingIpcPaths(stateRoot);
     const embeddings = {
@@ -553,7 +583,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     let shutdown = null;
     try {
       await server.start();
-      socket = createConnection(resolveScopedEmbeddingIpcPaths(stateRoot).socketPath);
+      socket = createConnection(defaultOwnerAddress(stateRoot));
       await once(socket, "connect");
       const clientClosed = once(socket, "close");
       shutdown = server.shutdown();
@@ -590,7 +620,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     let socket = null;
     try {
       await server.start();
-      socket = createConnection(resolveScopedEmbeddingIpcPaths(stateRoot).socketPath);
+      socket = createConnection(defaultOwnerAddress(stateRoot));
       socket.setEncoding("utf8");
       await once(socket, "connect");
       const outcome = await Promise.race([
@@ -642,10 +672,18 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
     };
   }
 
+  // win32 cannot listen on a filesystem socket path; the same explicit-address
+  // behaviour runs on a unique named pipe there.
   function explicitUnixAddress() {
+    if (WIN32) return { kind: "named-pipe", address: `\\\\.\\pipe\\plur1bus-e3-test-${randomUUID()}` };
     const dir = makeTempDir("e3-sock-");
     chmodSync(dir, 0o700);
     return { kind: "unix-socket", address: join(dir, "e.sock") };
+  }
+
+  /** Whether the explicit address left a filesystem entry (never for a named pipe). */
+  function addressEntryExists(address) {
+    return address.kind === "unix-socket" && existsSync(address.address);
   }
 
   function e3Client(stateRoot, address, fingerprintId = ACTIVE_FINGERPRINT_ID) {
@@ -667,7 +705,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       await server.start();
       provider = e3Client(stateRoot, address);
       assert.deepEqual(await provider.embedQuery("q"), [1, 0]);
-      assert.equal(statSync(address.address).mode & 0o777, 0o600);
+      if (address.kind === "unix-socket") assert.equal(statSync(address.address).mode & 0o777, 0o600);
       assert.deepEqual(server.identity, { model: "fixture/e5", dimensions: 2, fingerprintId: ACTIVE_FINGERPRINT_ID });
       assert.equal(Object.isFrozen(server.identity), true);
       assert.equal(server.tokenPath, resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath);
@@ -676,7 +714,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       await provider?.shutdown();
       await server.shutdown();
     }
-    assert.equal(existsSync(address.address), false);
+    assert.equal(addressEntryExists(address), false);
     assert.equal(existsSync(server.tokenPath), false);
   });
 
@@ -730,7 +768,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
     assert.equal(existsSync(first.tokenPath), false);
   });
 
-  it("recovers a stale unix socket left at the explicit address", async () => {
+  it("recovers a stale unix socket left at the explicit address", posixSocketFile, async () => {
     const stateRoot = makeTempDir("e3-ipc-");
     const address = explicitUnixAddress();
     await leaveStaleUnixSocket(address.address);
@@ -790,7 +828,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       const tokenBefore = readFileSync(first.tokenPath, "utf8");
       await assert.rejects(second.start(), /owner is already active/);
       await second.shutdown();
-      assert.equal(existsSync(secondAddress.address), false);
+      assert.equal(addressEntryExists(secondAddress), false);
       assert.equal(readFileSync(first.tokenPath, "utf8"), tokenBefore);
       assert.deepEqual(await provider.embedPassage("first still served"), [0, 1]);
     } finally {
@@ -824,7 +862,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       const tokenBefore = readFileSync(legacy.tokenPath, "utf8");
       await assert.rejects(unclaimed.start(), /owner is already active/);
       await unclaimed.shutdown();
-      assert.equal(existsSync(address.address), false);
+      assert.equal(addressEntryExists(address), false);
       assert.equal(readFileSync(legacy.tokenPath, "utf8"), tokenBefore);
       assert.deepEqual(await provider.embedQuery("legacy still served"), [1, 0]);
     } finally {
@@ -852,7 +890,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       const tokenBefore = readFileSync(tokenPath);
       await assert.rejects(unclaimed.start(), /owner is already active/);
       await unclaimed.shutdown();
-      assert.equal(existsSync(address.address), false, "the unclaimed server never listened");
+      assert.equal(addressEntryExists(address), false, "the unclaimed server never listened");
       assert.deepEqual(readFileSync(tokenPath), tokenBefore, "the legacy owner's token is byte-identical");
     } finally {
       await unclaimed.shutdown();
@@ -908,7 +946,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       const before = readdirSync(directory).sort();
       await assert.rejects(server.start(), /owner is already active/);
       await server.shutdown();
-      assert.equal(lstatSync(address.address).isSocket(), true);
+      if (address.kind === "unix-socket") assert.equal(lstatSync(address.address).isSocket(), true);
       assert.deepEqual(readdirSync(directory).sort(), before);
       assert.equal(readFileSync(join(directory, "sentinel"), "utf8"), "keep");
     } finally {
@@ -917,7 +955,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
     }
   });
 
-  it("refuses a dangling symlink or a regular file at the explicit address and leaves it untouched", async () => {
+  it("refuses a dangling symlink or a regular file at the explicit address and leaves it untouched", posixSocketFile, async () => {
     const stateRoot = makeTempDir("e3-ipc-");
     const tokenPath = resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath;
     const dangling = explicitUnixAddress();
