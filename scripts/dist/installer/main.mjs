@@ -31,7 +31,7 @@ import { parseArgs } from "node:util";
 
 import { verifyMinisign } from "../minisign.mjs";
 import { validateFeed, PACKAGE_NAME } from "../build-plugin-feed.mjs";
-import { checkCompat, currentGlibcVersion, findHarnessHomes, resolveBaseDbPath, resolveTarget } from "./compat.mjs";
+import { checkCompat, currentGlibcVersion, findHarnessHomes, resolveBaseDbPath, resolveTarget, runningUnderRosetta } from "./compat.mjs";
 import { detectOpenclaw } from "./detect.mjs";
 import { PROFILE_MODELS, resolveLicence } from "./licence.mjs";
 import { createOpenclawCli, defaultRun, isReadonlyRefusal, PLUGIN_ID, failureSummary } from "./openclaw-cli.mjs";
@@ -205,7 +205,7 @@ function defaultPrompt(stderr) {
 
 /**
  * @param {string[]} argv
- * @param {{ env?: Record<string,string|undefined>, platform?: string, arch?: string, glibcVersion?: string|null, run?: typeof defaultRun,
+ * @param {{ env?: Record<string,string|undefined>, platform?: string, arch?: string, glibcVersion?: string|null, rosetta?: boolean, run?: typeof defaultRun,
  *   fetchImpl?: typeof fetch, prompt?: (q: string) => Promise<string>, isTTY?: boolean, stdout?: {write(s:string):unknown}, stderr?: {write(s:string):unknown},
  *   statfs?: (p: string) => {bavail: number|bigint, bsize: number|bigint}, now?: () => number }} [opts]
  * @returns {Promise<number>} exit code
@@ -223,6 +223,7 @@ export async function runInstaller(argv, opts = {}) {
     now = Date.now,
   } = opts;
   const glibcVersion = opts.glibcVersion === undefined ? (platform === process.platform ? currentGlibcVersion() : null) : opts.glibcVersion;
+  const rosetta = opts.rosetta ?? (platform === process.platform && arch === process.arch && runningUnderRosetta({ platform, arch }));
   const isTTY = opts.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
 
   let values;
@@ -244,7 +245,7 @@ export async function runInstaller(argv, opts = {}) {
   report.set("mode", mode);
 
   try {
-    return await install({ values, mode, report, env, platform, arch, glibcVersion, run, fetchImpl, isTTY, prompt: opts.prompt ?? defaultPrompt(stderr), statfs, now });
+    return await install({ values, mode, report, env, platform, arch, glibcVersion, rosetta, run, fetchImpl, isTTY, prompt: opts.prompt ?? defaultPrompt(stderr), statfs, now });
   } catch (err) {
     if (err instanceof Stop) {
       report.step(err.id, "failed", err.message);
@@ -256,7 +257,7 @@ export async function runInstaller(argv, opts = {}) {
 }
 
 async function install(ctx) {
-  const { values, mode, report, env, platform, arch, glibcVersion, run, fetchImpl, isTTY, prompt, statfs, now } = ctx;
+  const { values, mode, report, env, platform, arch, glibcVersion, rosetta, run, fetchImpl, isTTY, prompt, statfs, now } = ctx;
 
   // ── host and flags ────────────────────────────────────────────────────────
   if (values.host === "hermes") throw new Stop(EXIT.INCOMPATIBLE, "host", "host-not-yet-supported: Hermes host mode arrives with HM2; nothing was changed");
@@ -319,7 +320,7 @@ async function install(ctx) {
   }
   const baseDbPath = resolveBaseDbPath({ configured: configuredBase, env: childEnv, platform });
   const harnessHomes = findHarnessHomes({ env: childEnv, platform });
-  const target = resolveTarget({ platform, arch, glibcVersion });
+  const target = resolveTarget({ platform, arch, glibcVersion, rosetta });
   report.set("target", target.target);
   // test seam (PLUR1BUS_PLUGIN_INSTALLER_TEST=1 only): a fixed free-space figure for subprocess tests
   const seamFree = testMode && env.PLUR1BUS_PLUGIN_TEST_FREE_BYTES !== undefined ? Number(env.PLUR1BUS_PLUGIN_TEST_FREE_BYTES) : NaN;

@@ -13,8 +13,8 @@ import { runInstaller } from "../scripts/dist/installer/main.mjs";
 import { resolveOpenclawStateDir } from "../scripts/dist/installer/detect.mjs";
 import { ALLOWED_CONFIG_PATHS, createOpenclawCli, defaultRun } from "../scripts/dist/installer/openclaw-cli.mjs";
 import { resolveLicence } from "../scripts/dist/installer/licence.mjs";
-import { checkCompat, findHarnessHomes } from "../scripts/dist/installer/compat.mjs";
-import { whichOnPath } from "../scripts/dist/installer/detect.mjs";
+import { checkCompat, findHarnessHomes, resolveTarget, runningUnderRosetta } from "../scripts/dist/installer/compat.mjs";
+import { findWindowsNode, whichOnPath } from "../scripts/dist/installer/detect.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState } from "../scripts/dist/installer/state.mjs";
 import { SANDBOX_ARCH, createInstallerSandbox, makeTestFeed, mutatingCalls, runSandboxInstaller, sha256File, sink } from "./helpers/installer-sandbox.js";
@@ -367,6 +367,25 @@ describe("plugin installer: install", () => {
     }
   });
 
+  it("an x64 Node under Rosetta is refused naming Rosetta and the native arm64 Node", async () => {
+    const sb = createInstallerSandbox();
+    const r = await run(sb, ["--json"], { platform: "darwin", arch: "x64", rosetta: true });
+    assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
+    const f = JSON.parse(r.stdout).findings.find((x) => x.id === "unsupported-target");
+    assert.ok(f?.fatal, r.stdout);
+    assert.match(f.detail, /Rosetta/);
+    assert.match(f.detail, /native arm64 Node/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+    // the probe: sysctl.proc_translated 1, or the machine says arm64; only for darwin x64
+    assert.equal(runningUnderRosetta({ platform: "darwin", arch: "x64", sysctl: () => "1\n", machine: () => "x86_64" }), true);
+    assert.equal(runningUnderRosetta({ platform: "darwin", arch: "x64", sysctl: () => { throw new Error("no sysctl"); }, machine: () => "arm64" }), true);
+    assert.equal(runningUnderRosetta({ platform: "darwin", arch: "x64", sysctl: () => "0", machine: () => "x86_64" }), false);
+    assert.equal(runningUnderRosetta({ platform: "darwin", arch: "arm64", sysctl: () => "1", machine: () => "arm64" }), false);
+    assert.equal(runningUnderRosetta({ platform: "linux", arch: "x64", sysctl: () => "1", machine: () => "arm64" }), false);
+    // an Intel Mac keeps the plain refusal
+    assert.doesNotMatch(resolveTarget({ platform: "darwin", arch: "x64" }).detail, /Rosetta/);
+  });
+
   it("openclaw too old, an unsupported node and too little disk are refused", async () => {
     const sb = createInstallerSandbox({ scenario: { versionText: "OpenClaw 2026.7.9 (abc1234)\n", nodeVersion: "22.9.0" } });
     const r = await run(sb, ["--json"]);
@@ -574,6 +593,19 @@ describe("plugin installer: install", () => {
     assert.equal(r.code, EXIT.OK, r.out);
     const calls = sb.openclawCalls().map((a) => a.join(" "));
     assert.ok(calls.indexOf(`plugins enable ${ID}`) > calls.indexOf(`config set ${SLOT} ${ID}`));
+  });
+
+  it("win32 prefers a real node.exe over a node.cmd shim", () => {
+    const oc = "C:\\Users\\u\\AppData\\Roaming\\npm\\openclaw.cmd";
+    const beside = "C:\\Users\\u\\AppData\\Roaming\\npm\\node.exe";
+    const table = (m) => (name) => m[name] ?? null;
+    // PATHEXT would resolve `node` to the shim first; node.exe on PATH wins
+    assert.equal(findWindowsNode(oc, table({ node: "C:\\shims\\node.cmd", "node.exe": "C:\\Program Files\\nodejs\\node.exe" }), () => false), "C:\\Program Files\\nodejs\\node.exe");
+    // no node.exe on PATH: the one beside openclaw.cmd
+    assert.equal(findWindowsNode(oc, table({ node: "C:\\shims\\node.cmd" }), (p) => p === beside), beside);
+    // neither: whatever `node` resolves to (a shim still works through cmdQuote)
+    assert.equal(findWindowsNode(oc, table({ node: "C:\\shims\\node.cmd" }), () => false), "C:\\shims\\node.cmd");
+    assert.equal(findWindowsNode(oc, table({}), () => false), null);
   });
 
   it("whichOnPath skips non-executable files on POSIX", { skip: process.platform === "win32" && "POSIX execute bit" }, () => {

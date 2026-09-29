@@ -10,8 +10,9 @@
  * (HM1-R17).
  */
 
+import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
-import { homedir as osHomedir } from "node:os";
+import { homedir as osHomedir, machine as osMachine } from "node:os";
 import { posix, win32 } from "node:path";
 import { compareVersions } from "../build-plugin-feed.mjs";
 
@@ -29,13 +30,44 @@ export const READONLY_REMEDY = Object.freeze({
 export const INVALID_CONFIG_REMEDY = "OpenClaw's config does not validate. Run `openclaw doctor --fix` (details: `openclaw config validate`), then re-run the installer.";
 
 /**
- * The installer's target id, or an unsupported descriptor.
- * @param {{ platform: string, arch: string, glibcVersion?: string|null }} a
+ * True when this is an x64 Node translated by Rosetta on Apple silicon: `sysctl.proc_translated` is 1, or the
+ * machine reports arm64 while the process is x64. Only asked on darwin with arch x64; any probe error → false.
+ * @param {{ platform: string, arch: string, sysctl?: () => string, machine?: () => string }} a
+ */
+export function runningUnderRosetta({ platform, arch, sysctl = defaultProcTranslated, machine = osMachine }) {
+  if (platform !== "darwin" || arch !== "x64") return false;
+  try {
+    if (String(sysctl()).trim() === "1") return true;
+  } catch {
+    // no sysctl answer: fall through to the machine name
+  }
+  try {
+    return String(machine()).trim() === "arm64";
+  } catch {
+    return false;
+  }
+}
+
+function defaultProcTranslated() {
+  return execFileSync("/usr/sbin/sysctl", ["-n", "sysctl.proc_translated"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+}
+
+/**
+ * The installer's target id, or an unsupported descriptor. `rosetta` (runningUnderRosetta) makes the darwin-x64
+ * refusal say that this is an x64 Node under Rosetta, not an Intel Mac, and what to install instead.
+ * @param {{ platform: string, arch: string, glibcVersion?: string|null, rosetta?: boolean }} a
  * @returns {{ target: string, supported: boolean, detail: string }}
  */
-export function resolveTarget({ platform, arch, glibcVersion }) {
+export function resolveTarget({ platform, arch, glibcVersion, rosetta = false }) {
   const os = platform === "win32" ? "win" : platform;
   const base = `${os}-${arch}`;
+  if (platform === "darwin" && arch === "x64" && rosetta) {
+    return {
+      target: base,
+      supported: false,
+      detail: "this Node is an x64 build running under Rosetta on Apple silicon (darwin-x64 is not supported); install the native arm64 Node (and run OpenClaw with it), then re-run the installer",
+    };
+  }
   if (platform === "linux") {
     if (!glibcVersion) return { target: `linux-musl-${arch}`, supported: false, detail: `musl/non-glibc Linux (${arch}) is not supported; supported: ${SUPPORTED_TARGETS.join(", ")}` };
     if (SUPPORTED_TARGETS.includes(base) && versionLess(glibcVersion, MIN_GLIBC)) {

@@ -127,6 +127,21 @@ export function nodeFromLauncher(bin) {
 }
 
 /**
+ * win32: a real node.exe before any node.cmd shim (PATHEXT would find either), as the .ps1 bootstrap's Find-Node does:
+ * node.exe on PATH, then node.exe beside openclaw.cmd (npm's cmd shim prefers it), and only then whatever `node`
+ * resolves to. A .cmd shim still works (cmdQuote), but runs every child through cmd.exe.
+ * @param {string} openclawBin
+ * @param {(name: string) => string|null} find
+ */
+export function findWindowsNode(openclawBin, find, exists = existsSync) {
+  const onPath = find("node.exe");
+  if (onPath) return onPath;
+  const beside = win32.join(win32.dirname(openclawBin), "node.exe");
+  if (exists(beside)) return beside;
+  return find("node");
+}
+
+/**
  * @param {{ env: Record<string,string|undefined>, platform?: string, run?: typeof defaultRun, which?: (name: string) => string|null, homedir?: () => string }} a
  * @returns {Promise<null | { bin: string, version: string, commit: string, node: { bin: string|null, version: string|null }, stateDir: string, configPath: string, profile: string|null, legacy: boolean, versionDetail?: string }>}
  */
@@ -136,7 +151,7 @@ export async function detectOpenclaw({ env, platform = process.platform, run = d
   if (!bin) return null;
   const cli = createOpenclawCli({ bin, env, run });
   const v = await cli.version();
-  const nodeBin = (platform === "win32" ? null : nodeFromLauncher(bin)) ?? find("node");
+  const nodeBin = platform === "win32" ? findWindowsNode(bin, find) : (nodeFromLauncher(bin) ?? find("node"));
   let nodeVersion = null;
   if (nodeBin) {
     const r = await run(nodeBin, ["--version"], { env, timeoutMs: 30_000 });

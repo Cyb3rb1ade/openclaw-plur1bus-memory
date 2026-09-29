@@ -31,7 +31,9 @@ The OpenClaw behaviour the installer relies on is recorded in
 ## Targets
 
 Five targets only. Anything else (musl/Alpine, darwin-x64, 32-bit, glibc older
-than 2.27) is refused with exit 3 `unsupported-target` before any change.
+than 2.27) is refused with exit 3 `unsupported-target` before any change. An
+x64 Node running under Rosetta on Apple silicon counts as darwin-x64; the
+refusal says so and asks for the native arm64 Node.
 
 | Target | Host | Script |
 |---|---|---|
