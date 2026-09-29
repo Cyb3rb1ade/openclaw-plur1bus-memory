@@ -197,7 +197,13 @@ jobs:
           Write-Host "openclaw.cmd in $dir"
           Add-Content -LiteralPath $env:GITHUB_PATH -Value $dir
       - name: assert-disposable (first step after installing OpenClaw, HM1-R11)
-        run: node tests/helpers/assert-disposable.mjs
+        # POSIX: every OpenClaw call runs with HOME = OPENCLAW_HOME (install-cli.sh step, ci-plugin-dist.mjs)
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            node tests/helpers/assert-disposable.mjs
+          else
+            HOME="$OPENCLAW_HOME" node tests/helpers/assert-disposable.mjs --var HOME
+          fi
       - name: Restore the E5 model cache (HM1-R21)
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -219,7 +225,7 @@ jobs:
         run: node tests/helpers/ci-plugin-dist.mjs installer --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$OC_FEED_DIR"
       - name: ClawHub non-TTY install with and without --accept-capabilities (T5-b, informational)
         continue-on-error: true
-        run: node tests/helpers/ci-plugin-dist.mjs clawhub
+        run: node tests/helpers/ci-plugin-dist.mjs clawhub --artefacts "$RUNNER_TEMP/plugin-dist"
 
   # C8: non-blocking for four weeks. windows-11-arm has no WSL leg (F14).
   wsl:
@@ -303,9 +309,9 @@ jobs:
           set -euo pipefail
           tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
           mkdir -p "$RUNNER_TEMP/release"
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.tgz' --dir "$RUNNER_TEMP/release"
-          f=$(find "$RUNNER_TEMP/release" -maxdepth 1 -name '*.tgz' | sort | head -n 1)
-          [ -n "$f" ] || { echo "release $tag has no .tgz asset" >&2; exit 1; }
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'cyb3rb1ade-plur1bus-memory-*.tgz' --dir "$RUNNER_TEMP/release"
+          f=$(find "$RUNNER_TEMP/release" -maxdepth 1 -name 'cyb3rb1ade-plur1bus-memory-*.tgz' | sort | head -n 1)
+          [ -n "$f" ] || { echo "release $tag has no cyb3rb1ade-plur1bus-memory-*.tgz asset" >&2; exit 1; }
           rv=$(node --input-type=module -e 'import { readFileSync } from "node:fs"; import { readPackageJsonFromTgz } from "./scripts/dist/build-plugin-feed.mjs"; process.stdout.write(readPackageJsonFromTgz(readFileSync(process.argv[1])).version)' "$f")
           { echo "RELEASE_TGZ=$f"; echo "RELEASE_VERSION=$rv"; } >> "$GITHUB_ENV"
           printf '### upgrade-from-release: %s (%s) → pack %s\n\n' "$tag" "$rv" "${{ needs.pack.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
@@ -321,7 +327,13 @@ jobs:
           curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --prefix "$RUNNER_TEMP/oc" --version "$OC_VERSION" --json
           echo "$RUNNER_TEMP/oc/bin" >> "$GITHUB_PATH"
       - name: assert-disposable (first step after installing OpenClaw, HM1-R11)
-        run: node tests/helpers/assert-disposable.mjs
+        # POSIX: every OpenClaw call runs with HOME = OPENCLAW_HOME (install-cli.sh step, ci-plugin-dist.mjs)
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            node tests/helpers/assert-disposable.mjs
+          else
+            HOME="$OPENCLAW_HOME" node tests/helpers/assert-disposable.mjs --var HOME
+          fi
       - name: Restore the E5 model cache (HM1-R21)
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

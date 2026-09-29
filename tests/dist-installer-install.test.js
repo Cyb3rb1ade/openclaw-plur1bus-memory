@@ -419,7 +419,11 @@ describe("plugin installer: install", () => {
     const sb = createInstallerSandbox({ feed: makeTestFeed({ tarballSha256: sha256File(tgz) }) });
     const r = await run(sb, ["--offline", tgz]);
     assert.equal(r.code, EXIT.OK, r.out);
-    assert.ok(sb.openclawCalls().some((a) => a.join("|") === `plugins|install|npm-pack:${tgz}|--force|--accept-capabilities`), JSON.stringify(sb.openclawCalls()));
+    // T8-b: installed from the kept, verified copy, not from the path the person passed
+    const kept = join(sb.stateDir, "plur1bus-installer", "artefacts", "7.16.11.tgz");
+    assert.ok(sb.openclawCalls().some((a) => a.join("|") === `plugins|install|npm-pack:${kept}|--force|--accept-capabilities`), JSON.stringify(sb.openclawCalls()));
+    assert.equal(sha256File(kept), sha256File(tgz));
+    assert.deepEqual(readState(sb.stateDir).artefacts, { "7.16.11": { file: kept, sha256: sha256File(tgz) } });
 
     const bad = createInstallerSandbox();
     const r2 = await run(bad, ["--offline", tgz]);
@@ -471,10 +475,10 @@ describe("plugin installer: install", () => {
     assert.equal(r.code, EXIT.OK, r.out);
     assert.deepEqual(fetched, [url]);
     const inst = sb.openclawCalls().find((a) => a[1] === "install");
-    assert.match(inst[2], /^npm-pack:.*cyb3rb1ade-plur1bus-memory-7\.16\.11\.tgz$/);
+    assert.equal(inst[2], `npm-pack:${join(sb.stateDir, "plur1bus-installer", "artefacts", "7.16.11.tgz")}`);
     assert.deepEqual(inst.slice(3), ["--force", "--accept-capabilities"]);
     installedFrom = inst[2].slice("npm-pack:".length);
-    assert.equal(existsSync(installedFrom), false, "the downloaded tarball is removed afterwards");
+    assert.equal(existsSync(installedFrom), true, "the verified copy is kept for later rollbacks and --offline updates (T8-b)");
     const doc = JSON.parse(r.stdout);
     assert.equal(doc.source, "tarball");
     assert.equal(doc.steps.find((s) => s.id === "verify.integrity").status, "ok");

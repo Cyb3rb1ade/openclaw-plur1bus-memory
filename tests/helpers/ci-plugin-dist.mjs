@@ -13,7 +13,7 @@
  *   cmd-argv                (win32) check that cmd.exe /v:off passes spaces, `!`, `^`, `&` and non-ASCII unchanged
  *   raw --tgz <v.tgz> | --artefacts <pack dir>   npm-pack install, slot, inspect --runtime (status loaded, imported, no sdk-incompatible,
  *                           CLI root plur1bus), selftest --json --download-models (ok), dot-dir scan check, uninstall
- *   clawhub [--version v] [--compare-tgz t]   non-TTY ClawHub install without/with --accept-capabilities (T5-b, k);
+ *   clawhub [--version v | --artefacts d] [--compare-tgz t]   non-TTY ClawHub install without/with --accept-capabilities (T5-b, k);
  *                           informational, exit 0 unless the environment is not disposable
  *   installer --artefacts d --feed-dir f --bootstrap sh|ps1 [--ps powershell|pwsh] [--from installer|raw]
  *             [--from-tgz t] [--skip-forced-failure]
@@ -78,6 +78,15 @@ const parseDoc = (buf) => {
     return null;
   }
 };
+
+/** A JSON document on stdout, tolerating log lines before it; null when there is none. */
+function parseListing(stdout) {
+  const t = String(stdout ?? "");
+  const direct = parseDoc(t);
+  if (direct !== null) return direct;
+  const i = t.search(/^[[{]/m);
+  return i >= 0 ? parseDoc(t.slice(i)) : null;
+}
 
 /** Run a program with raw stdout bytes; never rejects. */
 function runBytes(file, args, { env, timeoutMs = 3_600_000, input } = {}) {
@@ -248,10 +257,16 @@ async function cmdRaw({ tgz, stateDir }) {
   for (const f of ["openclaw.plugin.json", "package.json", "index.js"]) copyFileSync(join(installPath, f), join(dot, f)); // copies, never hard links (R-S8)
   const list = await oc.call(["plugins", "list", "--json"]);
   const again = await inspectJson(oc, false);
+  const listing = parseListing(list.stdout);
+  const realListing = list.code === 0 && listing !== null && JSON.stringify(listing).includes(`"${PLUGIN_ID}"`);
   const text = `${list.stdout}\n${list.stderr}\n${again.text}`;
-  const scanned = text.includes(".plur1bus-legacy-");
-  fact("dotDirScanned", { scanned, listExit: list.code, inspectExit: again.code, rootDir: again.json?.plugin?.rootDir ?? null });
-  check(!scanned && again.code === 0 && again.json?.install != null, "OpenClaw does not scan <state>/extensions/.plur1bus-legacy-<ts> (no mention in plugins list/inspect, the tracked install stays)");
+  const diagMessages = [...(again.json?.diagnostics ?? []), ...(again.json?.plugin?.diagnostics ?? [])].map((d) => String(d?.message ?? d?.code ?? ""));
+  const duplicate = new RegExp(`duplicate[^\\n]*${PLUGIN_ID}|${PLUGIN_ID}[^\\n]*duplicate`, "i").test(text) || diagMessages.some((m) => /duplicate/i.test(m));
+  const mentioned = text.includes(".plur1bus-legacy-");
+  const scanned = realListing ? mentioned || duplicate : "unknown";
+  fact("dotDirScanned", { scanned, listExit: list.code, realListing, mentioned, duplicate, inspectExit: again.code, rootDir: again.json?.plugin?.rootDir ?? null });
+  check(realListing, `plugins list --json gives a real listing that names ${PLUGIN_ID} (exit ${list.code}; ${tail(list.stderr || list.stdout, 2)}); without it the dot-dir question stays unknown`);
+  check(scanned === false && again.code === 0 && again.json?.install != null, "OpenClaw does not scan <state>/extensions/.plur1bus-legacy-<ts> (no mention and no duplicate-id diagnostic in plugins list/inspect, the tracked install stays)");
   rmSync(dot, { recursive: true, force: true });
 
   const un = await oc.call(["plugins", "uninstall", PLUGIN_ID, "--force"]);
@@ -274,7 +289,10 @@ async function cmdRaw({ tgz, stateDir }) {
 }
 
 // ─── clawhub (informational) ────────────────────────────────────────────────
-async function cmdClawhub({ version = "7.5.4", compareTgz, stateDir }) {
+async function cmdClawhub({ version: asked, artefacts, compareTgz, stateDir }) {
+  // default: the version this run packed (pack.json); the nightly job passes the release's version
+  const version = asked ?? (artefacts ? JSON.parse(readFileSync(join(resolve(artefacts), "pack.json"), "utf8")).version : null);
+  if (!version) throw new Failed("clawhub needs --version or --artefacts (pack.json)");
   const env = instanceEnv(stateDir ?? process.env.OC_STATE_CLAWHUB);
   const oc = openclaw(env);
   const spec = `clawhub:@cyb3rb1ade/plur1bus-memory@${version}`;
@@ -379,24 +397,25 @@ async function cmdInstaller(o) {
     check(df.rows === d0.rows && df.sha256 === d0.sha256, `digest after the rolled-back update equals before (${df.rows} rows)`);
     check((await version()) === fromVersion, `the rollback reinstalled ${fromVersion}`);
     check((await snapshots()) === snaps0 + 1, "the failed update left exactly one snapshot");
+    // T8-b: the tarball a later rollback or --offline update will use is the installer's kept copy
+    const kept = join(stateDir, "plur1bus-installer", "artefacts", `${fromVersion}.tgz`);
+    const recorded = safe(() => JSON.parse(readFileSync(join(stateDir, "memory", ".plur1bus-installer.json"), "utf8")).artefacts?.[fromVersion]?.file);
+    const recordPath = (await inspectJson(oc, false)).json?.install?.sourcePath ?? null;
+    fact("installer.keptArtefact", { kept, exists: existsSync(kept), recorded, openclawSourcePath: recordPath });
+    check(existsSync(kept) && recorded === kept, `the installer keeps ${fromVersion} at plur1bus-installer/artefacts/${fromVersion}.tgz and records it in its state`);
     row("forced failing update", `exit 1, rollback ok, digest equal, version ${fromVersion}`);
   }
 
-  // 4. the real update. After the rolled-back update OpenClaw's install record points at the installer's rollback
-  // copy of the -ci.0 tarball, which the installer deleted with its work dir, so an `--offline` update would now
-  // refuse with no-rollback-artefact (reported as a Task 6 follow-up). This update therefore takes the feed's own
-  // tarballs (file:// in the TEST ONLY feed, SHA-256 checked against the signed feed, T5-a); without the forced
-  // failure it is the --offline update of the brief.
+  // 4. the real update, --offline (T8-b: the rollback copy of the start version is kept by the installer)
   const snaps1 = await snapshots();
-  const viaFeed = !o["skip-forced-failure"];
-  const u = await bootstrap(["--update", ...(viaFeed ? [] : ["--offline", toTgz]), "--yes", "--json"]);
-  check(u.code === 0 && u.doc?.ok === true, `install-plugin --update ${viaFeed ? "(feed tarball)" : `--offline <${toVersion}>`} --yes --json → exit 0 (got ${u.code}: ${JSON.stringify(u.doc?.steps?.filter((s) => s.status === "failed") ?? null)})`);
+  const u = await bootstrap(["--update", "--offline", toTgz, "--yes", "--json"]);
+  check(u.code === 0 && u.doc?.ok === true, `install-plugin --update --offline <${toVersion}> --yes --json → exit 0 (got ${u.code}: ${JSON.stringify(u.doc?.steps?.filter((s) => s.status === "failed") ?? null)})`);
   check((await version()) === toVersion, `install record version ${toVersion}`);
   const newPath = (await inspectJson(oc, false)).json?.install?.installPath;
   const d1 = await storeDigest({ baseDbPath, pluginDir: newPath });
   check(d1.rows === d0.rows && d1.sha256 === d0.sha256, `digest after the update equals before (${d1.rows} rows)`);
   check((await snapshots()) === snaps1 + 1, "the update listed exactly one new snapshot");
-  row(`update ${fromVersion} → ${toVersion}`, `exit 0 (${viaFeed ? "feed tarball" : "--offline"}), digest equal, snapshots ${snaps1} → ${snaps1 + 1}`);
+  row(`update ${fromVersion} → ${toVersion}`, `exit 0 (--offline), digest equal, snapshots ${snaps1} → ${snaps1 + 1}`);
 
   // 5. the bootstrap hands the installer's --json stdout through byte for byte
   const ref = await direct(["--update", "--yes", "--json"]);
@@ -528,7 +547,7 @@ export async function main(argv) {
       if (!tgz) throw new Failed("raw needs --tgz or --artefacts");
       return cmdRaw({ tgz, stateDir: values["state-dir"] });
     }
-    case "clawhub": return cmdClawhub({ version: values.version, compareTgz: values["compare-tgz"], stateDir: values["state-dir"] });
+    case "clawhub": return cmdClawhub({ version: values.version, artefacts: values.artefacts, compareTgz: values["compare-tgz"], stateDir: values["state-dir"] });
     case "installer":
       if (!values.artefacts || !values["feed-dir"]) throw new Failed("installer needs --artefacts and --feed-dir");
       if (!["sh", "ps1"].includes(values.bootstrap) || !["installer", "raw"].includes(values.from)) throw new Failed("--bootstrap sh|ps1, --from installer|raw");

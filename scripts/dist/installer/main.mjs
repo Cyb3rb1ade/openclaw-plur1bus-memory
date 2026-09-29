@@ -38,6 +38,7 @@ import { createOpenclawCli, defaultRun, isReadonlyRefusal, PLUGIN_ID, tail } fro
 import { createReport, EXIT, Stop } from "./report.mjs";
 import { readState, writeState } from "./state.mjs";
 import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
+import { keepArtefact, pruneArtefacts } from "./artefacts.mjs";
 import { fetchBytes, runUpdate } from "./update.mjs";
 import { runUninstall } from "./uninstall.mjs";
 import { runAdoptLegacy } from "./legacy.mjs";
@@ -480,6 +481,14 @@ async function install(ctx) {
       writeFileSync(tgz, bytes, { mode: 0o600 });
       report.step("tarball", "ok", `downloaded ${release.tarball.url}; SHA-256 matches the feed (no clawpackDigest for ClawHub)`);
     }
+    if (npmPack) {
+      // T8-b: install from a kept, verified copy, so OpenClaw's recorded sourcePath outlives this run
+      try {
+        tgz = keepArtefact(det.stateDir, release.version, tgz, release.tarball.sha256).file;
+      } catch (err) {
+        throw new Stop(EXIT.FAILED, "artefact", `${err?.message ?? err}; nothing was changed`);
+      }
+    }
     return await applyInstall({ ...ctx, source, release, det, cli, childEnv, licence, previousSlot, previous, locator: locatorFor(tgz), installOpts, platform, testMode });
   } finally {
     if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
@@ -570,6 +579,7 @@ async function applyInstall(ctx) {
   if (checks.some((c) => !c.ok)) return rollback(rb);
 
   writeState(det.stateDir, { ...base, installedVersion: release.version, ...(licence?.accepted ? { licence: licence.accepted } : {}) });
+  pruneArtefacts(det.stateDir, [release.version]);
   report.note(`Installed ${PACKAGE_NAME}@${release.version} into OpenClaw (${det.stateDir}).`);
   report.note(`Conversation access for capture and recall: enabled (${ALLOW_CONVERSATION}).`);
   report.note(gw.confirmed ? "The running Gateway picks the plugin up; if not, run `openclaw gateway restart`." : "The plugin becomes active on the next Gateway start (`openclaw gateway restart`).");

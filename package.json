@@ -82,7 +82,8 @@
   "devDependencies": {
     "c8": "^11.0.0",
     "esbuild": "0.28.2",
-    "openclaw": "2026.8.2"
+    "openclaw": "2026.8.2",
+    "yaml": "2.9.0"
   },
   "overrides": {
     "@huggingface/transformers": {

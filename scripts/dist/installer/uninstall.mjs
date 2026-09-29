@@ -25,6 +25,7 @@ import { PLUGIN_ID, tail } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { statePath, writeState } from "./state.mjs";
 import { removeWorkDir } from "./update.mjs";
+import { removeArtefacts } from "./artefacts.mjs";
 import { rmTree, withWinRetry } from "./fsutil.mjs";
 
 const SLOT = "plugins.slots.memory";
@@ -170,6 +171,7 @@ export async function runUninstall(ctx) {
     for (const m of manual) report.note(`  ${m}`);
     return report.finish(EXIT.FAILED);
   }
+  removeArtefacts(stateDir); // the kept tarballs (T8-b) belong to the install that is gone
   withWinRetry(() => rmSync(statePath(stateDir), { force: true }));
   if (!plan) {
     report.note(`Kept your store at ${baseDbPath}, the snapshots under ${join(stateDir, "memory", ".snapshots")} and the model cache; \`--uninstall --purge\` deletes them.`);

@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
@@ -15,6 +15,7 @@ import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState, writeState } from "../scripts/dist/installer/state.mjs";
 import { listSnapshots } from "../lib/snapshot/store-snapshot.js";
 import { createInstallerSandbox, makeTestFeed, mutatingCalls, runSandboxInstaller, sink, treeDigest, walkTree } from "./helpers/installer-sandbox.js";
+import { makeTempDir } from "./helpers/temp-dir.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MAIN = pathToFileURL(join(REPO, "scripts", "dist", "installer", "main.mjs")).href;
@@ -121,9 +122,10 @@ describe("plugin installer: update", () => {
     assert.deepEqual(fetched.sort(), [url("7.16.11"), url("7.17.0")].sort(), "target and rollback tarball are fetched before any change");
     const inst = mutating(sb.openclawCalls());
     assert.equal(inst.length, 1, JSON.stringify(inst));
-    assert.match(inst[0][2], /^npm-pack:.*cyb3rb1ade-plur1bus-memory-7\.17\.0\.tgz$/);
+    const artefacts = join(sb.stateDir, "plur1bus-installer", "artefacts");
+    assert.equal(inst[0][2], `npm-pack:${join(artefacts, "7.17.0.tgz")}`);
     assert.deepEqual(inst[0].slice(3), ["--force", "--accept-capabilities"]);
-    assert.equal(existsSync(inst[0][2].slice("npm-pack:".length)), false, "downloaded tarballs are removed");
+    assert.deepEqual(readdirSync(artefacts).sort(), ["7.16.11.tgz", "7.17.0.tgz"], "the current and the previous tarball are kept (T8-b)");
     assert.equal(readState(sb.stateDir).source, "tarball");
     assert.ok(existsSync(join(oldGen, "blob")), "old npm generation folders are never deleted (R-S4)");
     assert.match(r.stderr, /old npm generation/i);
@@ -211,6 +213,59 @@ describe("plugin installer: update", () => {
     const r = await run({ ...sb, env }, ["--update", "--yes", "--json"]);
     assert.equal(r.code, EXIT.OK, r.out);
     assert.equal(sb.shimState().version, "7.17.0");
+  });
+
+  it("after a rolled-back update, --update --offline <tgz> succeeds from the kept artefact (T8-b)", async () => {
+    const dir = makeTempDir("plur1bus-offline-t8b-");
+    const files = {};
+    const tarballs = {};
+    for (const v of ["7.16.11", "7.17.0"]) {
+      files[v] = join(dir, `TEST ONLY ${v}.tgz`);
+      writeFileSync(files[v], `TEST ONLY tarball ${v}`);
+      tarballs[v] = { url: `https://example.invalid/TEST-ONLY/${v}.tgz`, sha256: createHash("sha256").update(readFileSync(files[v])).digest("hex") };
+    }
+    const sb = createInstallerSandbox({ feed: feed3({ clawpackDigest: null, tarballs }) });
+    assert.equal((await run(sb, ["--offline", files["7.16.11"], "--version", "7.16.11", "--non-interactive"])).code, EXIT.OK);
+    const artefacts = join(sb.stateDir, "plur1bus-installer", "artefacts");
+
+    const failed = await run({ ...sb, env: { ...sb.env, PLUR1BUS_SELFTEST_FORCE_FAIL: "1" } }, ["--update", "--offline", files["7.17.0"], "--yes", "--json"]);
+    assert.equal(failed.code, EXIT.FAILED, failed.out);
+    assert.equal(sb.shimState().version, "7.16.11");
+    assert.equal(sb.shimState().sourcePath, join(artefacts, "7.16.11.tgz"), "the rolled-back install record points at the kept artefact");
+    assert.ok(existsSync(join(artefacts, "7.16.11.tgz")));
+
+    // the tarball the person installed from is gone; the kept copy is enough
+    rmSync(files["7.16.11"]);
+    const r = await run(sb, ["--update", "--offline", files["7.17.0"], "--yes", "--json"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.equal(sb.shimState().version, "7.17.0");
+    assert.match(JSON.parse(r.stdout).steps.find((x) => x.id === "rollback-source").detail, /artefacts/);
+  });
+
+  it("artefact retention keeps exactly the current and the previous tarball (T8-b)", async () => {
+    const dir = makeTempDir("plur1bus-retention-t8b-");
+    const files = {};
+    const tarballs = {};
+    for (const v of ["7.16.11", "7.16.12", "7.17.0"]) {
+      files[v] = join(dir, `${v}.tgz`);
+      writeFileSync(files[v], `TEST ONLY tarball ${v}`);
+      tarballs[v] = { url: `https://example.invalid/TEST-ONLY/${v}.tgz`, sha256: createHash("sha256").update(readFileSync(files[v])).digest("hex") };
+    }
+    const sb = createInstallerSandbox({ feed: feed3({ clawpackDigest: null, tarballs }) });
+    const artefacts = join(sb.stateDir, "plur1bus-installer", "artefacts");
+    assert.equal((await run(sb, ["--offline", files["7.16.11"], "--version", "7.16.11", "--non-interactive"])).code, EXIT.OK);
+    assert.deepEqual(readdirSync(artefacts), ["7.16.11.tgz"]);
+    assert.equal((await run(sb, ["--update", "--offline", files["7.16.12"], "--version", "7.16.12", "--yes"])).code, EXIT.OK);
+    assert.deepEqual(readdirSync(artefacts).sort(), ["7.16.11.tgz", "7.16.12.tgz"]);
+    assert.equal((await run(sb, ["--update", "--offline", files["7.17.0"], "--yes"])).code, EXIT.OK);
+    assert.deepEqual(readdirSync(artefacts).sort(), ["7.16.12.tgz", "7.17.0.tgz"]);
+    assert.deepEqual(Object.keys(readState(sb.stateDir).artefacts).sort(), ["7.16.12", "7.17.0"]);
+    if (process.platform !== "win32") {
+      for (const n of readdirSync(artefacts)) assert.equal(statSync(join(artefacts, n)).mode & 0o777, 0o600, n);
+    }
+    // uninstall removes the installer's kept tarballs with its state
+    assert.equal((await run(sb, ["--uninstall"])).code, EXIT.OK);
+    assert.equal(existsSync(artefacts), false);
   });
 
   it("a failed rollback exits 4 and prints the manual steps", async () => {

@@ -34,6 +34,7 @@ import { isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { writeState } from "./state.mjs";
 import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
+import { keepArtefact, keptArtefact, pruneArtefacts } from "./artefacts.mjs";
 import { rmTree, writeFileAtomic } from "./fsutil.mjs";
 
 const ALLOW_CONVERSATION = `plugins.entries.${PLUGIN_ID}.hooks.allowConversationAccess`;
@@ -270,25 +271,30 @@ function targetSource({ flags, recorded, release }) {
 
 /**
  * The previous exact version, reinstallable without asking the network where possible.
- * npm-pack installs need the previous release in the signed feed: its recorded tarball
- * when it still matches the feed, else the feed's download (not with --offline).
+ * npm-pack installs use, in this order: the installer's kept artefact of that version
+ * (T8-b; verified against a signed feed when it was installed), the tarball at OpenClaw's
+ * recorded sourcePath when it still matches the feed, else the feed's download (not with
+ * --offline). Whatever is used is kept as an artefact, so the rolled-back install record
+ * points at a file that outlives this run.
  */
 async function prepareRollback({ previous, feed, flags, stateDir, testMode, fetchImpl }) {
   const { version, source } = previous;
   if (source === "clawhub" || source === "npm") return { ...installSpec(source, version), file: null, sha256: null };
   const rel = feed.hosts.openclaw.releases.find((r) => r.version === version);
+  const kept = keptArtefact(stateDir, version, rel?.tarball?.sha256 ?? null);
+  if (kept) return { ...installSpec(source, version, { file: kept.file }), file: kept.file, sha256: kept.sha256 };
   if (!rel) throw new Stop(EXIT.FAILED, "rollback-source", `no-rollback-artefact: the installed ${version} is not in the ${feed.channel} feed, so it could not be reinstalled after a failed update; update with --source clawhub|npm or reinstall by hand; nothing was changed`);
   if (previous.sourcePath && existsSync(previous.sourcePath)) {
     const bytes = readFileSync(previous.sourcePath);
     if (sha256(bytes) === rel.tarball.sha256) {
-      const file = join(workDir(stateDir), `cyb3rb1ade-plur1bus-memory-${version}.tgz`);
-      writeFileAtomic(file, bytes);
-      return { ...installSpec(source, version, { file }), file, sha256: rel.tarball.sha256 };
+      const k = keepArtefact(stateDir, version, previous.sourcePath, rel.tarball.sha256);
+      return { ...installSpec(source, version, { file: k.file }), file: k.file, sha256: k.sha256 };
     }
   }
-  if (flags.offline) throw new Stop(EXIT.FAILED, "rollback-source", `no-rollback-artefact: with --offline the tarball of the installed ${version} must still be at its recorded path and match the feed; nothing was changed`);
+  if (flags.offline) throw new Stop(EXIT.FAILED, "rollback-source", `no-rollback-artefact: with --offline the tarball of the installed ${version} must be kept by the installer or still be at its recorded path and match the feed; nothing was changed`);
   const d = await downloadReleaseTarball({ release: rel, stateDir, testMode, fetchImpl, id: "rollback-source" });
-  return { ...installSpec(source, version, { file: d.file }), file: d.file, sha256: d.sha256 };
+  const k = keepArtefact(stateDir, version, d.file, d.sha256);
+  return { ...installSpec(source, version, { file: k.file }), file: k.file, sha256: k.sha256 };
 }
 
 /** A rollback artefact left by an interrupted run, if it is still intact. */
@@ -392,7 +398,7 @@ export async function runUpdate(ctx) {
   try {
     // everything the rollback and the update need is fetched and verified before any change
     const rollback = await prepareRollback({ previous, feed, flags, stateDir, testMode: ctx.testMode, fetchImpl: ctx.fetchImpl });
-    report.step("rollback-source", "ok", `previous ${installed} reinstallable (${rollback.file ? "verified tarball kept for the rollback" : rollback.locator})`);
+    report.step("rollback-source", "ok", `previous ${installed} reinstallable (${rollback.file ? `verified tarball kept at ${rollback.file}` : rollback.locator})`);
     const progress = { op: "update", step: "snapshot", snapshotId: null, previousVersion: installed, targetVersion: target, source, previous, rollback };
     const plan = { base, progress, target: await targetSpec(ctx, source, release) };
     started = true;
@@ -406,12 +412,12 @@ async function targetSpec(ctx, source, release) {
   if (source === "tarball") {
     const d = await downloadReleaseTarball({ release, stateDir: ctx.stateDir, testMode: ctx.testMode, fetchImpl: ctx.fetchImpl });
     ctx.report.step("tarball", "ok", `downloaded ${release.tarball.url}; SHA-256 matches the feed`);
-    return installSpec(source, release.version, { file: d.file });
+    return installSpec(source, release.version, { file: keepArtefact(ctx.stateDir, release.version, d.file, d.sha256).file });
   }
   if (source === "offline") {
     if (!ctx.tgz) throw new Stop(EXIT.FAILED, "offline", `the interrupted update installs from a local tarball: re-run with --offline <tgz> of ${release.version}, or with --rollback`);
     assertOfflineTarball(ctx.tgz, release);
-    return installSpec(source, release.version, { file: ctx.tgz });
+    return installSpec(source, release.version, { file: keepArtefact(ctx.stateDir, release.version, ctx.tgz, release.tarball.sha256).file });
   }
   return installSpec(source, release.version, { release });
 }
@@ -482,6 +488,7 @@ async function applyUpdate(ctx, plan, from) {
     if (checks.some((c) => !c.ok)) return rollbackUpdate(ctx, plan);
 
     clearProgress(ctx, plan, { installedVersion: target, source: plan.progress.source });
+    pruneArtefacts(stateDir, [target, prev]);
     const rec = await cli.inspect(PLUGIN_ID);
     const gens = oldGenerations(rec.installed ? rec.json.install.installPath : null);
     if (gens.folders.length) {
@@ -543,6 +550,7 @@ async function rollbackUpdate(ctx, plan) {
   if (manual.length === 0) {
     dropPreRestore(restored.preRestorePath);
     clearProgress(ctx, plan);
+    pruneArtefacts(stateDir, [plan.progress.previousVersion, plan.progress.targetVersion]);
     report.step("rollback", "ok", `${PACKAGE_NAME}@${plan.progress.previousVersion} reinstalled${plan.progress.snapshotId ? `, store restored from ${plan.progress.snapshotId}` : ""}`);
     return report.finish(EXIT.FAILED);
   }

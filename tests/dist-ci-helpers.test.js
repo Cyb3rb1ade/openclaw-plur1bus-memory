@@ -187,11 +187,13 @@ describe("plugin-dist CI helpers", () => {
       timeout: 600_000,
     });
     assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`.slice(-6000));
-    const packs = sb.openclawCalls().filter((c) => c[0] === "plugins" && c[1] === "install").map((c) => /memory-([0-9][^/]*)\.tgz$/.exec(c[2])?.[1]);
-    assert.deepEqual(packs, [a.ciVersion, a.version, a.ciVersion, a.version], "fresh -ci.0, forced failing update, rollback, update");
+    const installs = sb.openclawCalls().filter((c) => c[0] === "plugins" && c[1] === "install").map((c) => c[2]);
+    const artefacts = join(sb.stateDir, "plur1bus-installer", "artefacts");
+    assert.deepEqual(installs, [a.ciVersion, a.version, a.ciVersion, a.version].map((v) => `npm-pack:${join(artefacts, `${v}.tgz`)}`), "fresh -ci.0, forced failing update, rollback, update — all from the kept artefacts (T8-b)");
+    assert.match(r.stdout, /FACT installer\.keptArtefact: \{"kept":"[^"]+","exists":true/);
     assert.match(r.stdout, /FACT bootstrap\.jsonByteIdentical\.sh: \{"same":true/);
     const md = readFileSync(summaryFile, "utf8");
-    for (const want of [/store before \| 50 rows/, /forced failing update \| exit 1, rollback ok, digest equal/, /update 7\.16\.11-ci\.0 → 7\.16\.11 \| exit 0 \(feed tarball\), digest equal, snapshots 1 → 2/, /uninstall \| exit 0, store kept/]) assert.match(md, want);
+    for (const want of [/store before \| 50 rows/, /forced failing update \| exit 1, rollback ok, digest equal/, /update 7\.16\.11-ci\.0 → 7\.16\.11 \| exit 0 \(--offline\), digest equal, snapshots 1 → 2/, /uninstall \| exit 0, store kept/]) assert.match(md, want);
     assert.equal((await storeDigest({ baseDbPath: join(sb.stateDir, "memory", "lancedb-namespaced") })).rows, 50);
 
     // the driver refuses an instance outside the temp root before calling anything

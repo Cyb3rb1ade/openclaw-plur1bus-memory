@@ -2,7 +2,10 @@
  * scripts/dist/installer/state.mjs — the installer's own state file.
  *
  * `<stateDir>/memory/.plur1bus-installer.json`, mode 0600:
- *   { schema: 1, previousSlot, installedVersion, source, licence?, inProgress?: { op, step, snapshotId, previousVersion } }
+ *   { schema: 1, previousSlot, installedVersion, source, licence?, inProgress?: { op, step, snapshotId, previousVersion },
+ *     artefacts?: { <version>: { file, sha256 } } }
+ * `artefacts` (./artefacts.mjs, ruling T8-b) is carried over from the file on disk unless the
+ * caller passes it, so the many writers that rebuild the document from their own fields keep it.
  * Written atomically (temp `<name>.tmp-<pid>` → fsync → rename; on Windows the
  * rename retries EPERM/EBUSY/EACCES for up to 10 s). It never holds config
  * values or credentials.
@@ -42,6 +45,15 @@ export function writeState(stateDir, s) {
   const doc = { schema: STATE_SCHEMA, previousSlot: s.previousSlot ?? null, installedVersion: s.installedVersion ?? null, source: s.source ?? null };
   if (s.licence) doc.licence = s.licence;
   if (s.inProgress) doc.inProgress = s.inProgress;
+  let artefacts = s.artefacts;
+  if (artefacts === undefined) {
+    try {
+      artefacts = readState(stateDir)?.artefacts;
+    } catch {
+      artefacts = undefined;
+    }
+  }
+  if (artefacts && typeof artefacts === "object" && Object.keys(artefacts).length) doc.artefacts = artefacts;
   writeFileAtomic(target, `${JSON.stringify(doc, null, 2)}\n`);
   return doc;
 }

@@ -41,6 +41,7 @@ import {
 } from "./update.mjs";
 import { renameWithRetry } from "./fsutil.mjs";
 import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
+import { keepArtefact, pruneArtefacts } from "./artefacts.mjs";
 
 export const GUARD_NAME = "protect-plur1bus-deploy";
 const SLOT = "plugins.slots.memory";
@@ -177,12 +178,12 @@ async function adoptSpec(ctx, source) {
   if (source === "tarball") {
     const d = await downloadReleaseTarball({ release, stateDir: ctx.stateDir, testMode: ctx.testMode, fetchImpl: ctx.fetchImpl });
     ctx.report.step("tarball", "ok", `downloaded ${release.tarball.url}; SHA-256 matches the feed`);
-    return installSpec(source, release.version, { file: d.file });
+    return installSpec(source, release.version, { file: keepArtefact(ctx.stateDir, release.version, d.file, d.sha256).file });
   }
   if (source === "offline") {
     if (!ctx.tgz) throw new Stop(EXIT.FAILED, "offline", `the adoption installs from a local tarball: re-run with --offline <tgz> of ${release.version}, or with --rollback`);
     assertOfflineTarball(ctx.tgz, release);
-    return installSpec(source, release.version, { file: ctx.tgz });
+    return installSpec(source, release.version, { file: keepArtefact(ctx.stateDir, release.version, ctx.tgz, release.tarball.sha256).file });
   }
   return installSpec(source, release.version, { release });
 }
@@ -274,6 +275,7 @@ async function applyAdopt(ctx, plan, from) {
     if (checks.some((c) => !c.ok)) return rollbackAdopt(ctx, plan);
     const prevSlot = p.previousSlot?.set && p.previousSlot.value !== PLUGIN_ID ? p.previousSlot.value : null;
     clear(ctx, plan, { previousSlot: prevSlot, installedVersion: p.targetVersion, source: p.source });
+    pruneArtefacts(ctx.stateDir, [p.targetVersion]);
     report.note(`Adopted the legacy deploy: ${PLUGIN_ID} ${p.targetVersion} is now tracked by OpenClaw.`);
     report.note(`The old deploy is kept at ${p.legacyBackup}; delete it yourself once the adopted plugin runs well. ${joinLike(stateDir, "plur1bus-release")} is no longer needed by the plugin and was left as it is.`);
     report.note("Do not re-enable protect-plur1bus-deploy.sh: it would restore the untracked copy. Restart the Gateway: `openclaw gateway restart`.");

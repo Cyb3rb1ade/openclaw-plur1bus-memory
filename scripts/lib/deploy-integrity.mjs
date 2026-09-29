@@ -333,6 +333,7 @@ export const DEPLOY_FILES = [
   // ── plugin distribution: update, uninstall/purge, legacy adoption (HM1 Task 6) ──
   "scripts/dist/installer/update.mjs",
   "scripts/dist/installer/uninstall.mjs",
+  "scripts/dist/installer/artefacts.mjs", // kept verified tarballs for rollback and --offline (HM1 Task 8, T8-b)
   "scripts/dist/installer/legacy.mjs",
   "scripts/dist/installer/fsutil.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────

@@ -173,7 +173,7 @@ if (args[0] === "plugins" && args[1] === "install") {
   let m;
   let version = null;
   if ((m = /^clawhub:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator)) || (m = /^npm:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator))) version = m[1];
-  else if (locator.startsWith("npm-pack:")) version = (/cyb3rb1ade-plur1bus-memory-([0-9][^/\\]*)\.tgz$/.exec(locator) ?? [])[1] ?? scenario.packVersion;
+  else if (locator.startsWith("npm-pack:")) version = (/cyb3rb1ade-plur1bus-memory-([0-9][^/\\]*)\.tgz$/.exec(locator) ?? /[\\/]artefacts[\\/]([0-9][^/\\]*)\.tgz$/.exec(locator) ?? [])[1] ?? scenario.packVersion;
   if ((scenario.installExitVersions ?? []).includes(version)) {
     err("TEST ONLY install failure for " + version + "\n");
     done(1);
