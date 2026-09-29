@@ -34,7 +34,7 @@ import { validateFeed, PACKAGE_NAME } from "../build-plugin-feed.mjs";
 import { checkCompat, currentGlibcVersion, findHarnessHomes, resolveBaseDbPath, resolveTarget } from "./compat.mjs";
 import { detectOpenclaw } from "./detect.mjs";
 import { PROFILE_MODELS, resolveLicence } from "./licence.mjs";
-import { createOpenclawCli, defaultRun, isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
+import { createOpenclawCli, defaultRun, isReadonlyRefusal, PLUGIN_ID, failureSummary } from "./openclaw-cli.mjs";
 import { createReport, EXIT, Stop } from "./report.mjs";
 import { readState, writeState } from "./state.mjs";
 import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
@@ -515,12 +515,12 @@ async function applyInstall(ctx) {
     const text = `${inst.stderr}\n${inst.stdout}`;
     const after = await cli.inspect(PLUGIN_ID);
     if (after.installed) {
-      report.step("install", "failed", `exit ${inst.code}: ${tail(text)}`);
+      report.step("install", "failed", `exit ${inst.code}: ${failureSummary(inst)}`);
       return rollback(rb);
     }
     writeState(det.stateDir, base);
-    if (isReadonlyRefusal(text)) throw new Stop(EXIT.INCOMPATIBLE, "install", `OpenClaw refused: ${tail(text, 2)}`);
-    throw new Stop(EXIT.FAILED, "install", `openclaw plugins install ${locator} failed (exit ${inst.code}${inst.timedOut ? ", deadline exceeded" : ""}): ${tail(text)}; nothing was changed`);
+    if (isReadonlyRefusal(text)) throw new Stop(EXIT.INCOMPATIBLE, "install", `OpenClaw refused: ${failureSummary(inst, 2)}`);
+    throw new Stop(EXIT.FAILED, "install", `openclaw plugins install ${locator} failed (exit ${inst.code}${inst.timedOut ? ", deadline exceeded" : ""}): ${failureSummary(inst)}; nothing was changed`);
   }
   report.step("install", "ok", `openclaw plugins install ${locator}`);
 
@@ -552,7 +552,7 @@ async function applyInstall(ctx) {
   if (rec.json.plugin?.status === "disabled") {
     const en = await cli.enable(PLUGIN_ID);
     if (en.code !== 0) {
-      report.step("enable", "failed", tail(en.stderr || en.stdout));
+      report.step("enable", "failed", failureSummary(en));
       return rollback(rb);
     }
     report.step("enable", "ok", `enabled ${PLUGIN_ID}`);

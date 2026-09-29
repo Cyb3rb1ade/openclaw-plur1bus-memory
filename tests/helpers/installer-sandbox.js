@@ -221,7 +221,8 @@ if (args[0] === "plugins" && args[1] === "install") {
 
 if (args[0] === "plugins" && args[1] === "uninstall") {
   if (scenario.uninstallExit) {
-    err("TEST ONLY uninstall failure\n");
+    // OpenClaw's generic failure block (src/cli/failure-output.ts): title, Reason, then three hint lines
+    err("[openclaw] Command failed\n[openclaw] Reason: TEST ONLY uninstall failure\n[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.\n[openclaw] Try: openclaw doctor\n[openclaw] Help: openclaw --help\n");
     done(scenario.uninstallExit);
   }
   state.installed = false;

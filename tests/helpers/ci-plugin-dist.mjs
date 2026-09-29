@@ -38,8 +38,6 @@ import { createOpenclawCli, defaultRun, PLUGIN_ID } from "../../scripts/dist/ins
 import { nodeFromLauncher, whichOnPath } from "../../scripts/dist/installer/detect.mjs";
 import { listSnapshots } from "../../lib/snapshot/store-snapshot.js";
 import { assertDisposable } from "./assert-disposable.mjs";
-import { seedStore } from "./seed-store.mjs";
-import { storeDigest } from "./store-digest.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WIN = process.platform === "win32";
@@ -100,6 +98,47 @@ function runBytes(file, args, { env, timeoutMs = 3_600_000, input } = {}) {
       done({ code, stdout: stdout ?? Buffer.alloc(0), stderr: String(stderr ?? "") });
     });
   });
+}
+
+/**
+ * seed-store.mjs / store-digest.mjs in a child process. They load the installed plugin's native @lancedb/lancedb
+ * binary; in this long-lived driver process that .node file stayed mapped until the job ended, and Windows cannot
+ * delete a loaded module, so `openclaw plugins uninstall` (one fs.rm of the plugin's npm project dir, no retries)
+ * failed at the last step of every Windows installer leg (run 36518766808). A child unloads it when it exits.
+ */
+async function helperChild(script, args) {
+  const r = await runBytes(process.execPath, [join(REPO, "tests", "helpers", script), ...args], { env: process.env, timeoutMs: 900_000 });
+  const doc = lastJsonLine(r.stdout.toString("utf8"));
+  if (r.code !== 0 || !doc) throw new Failed(`${script} ${args.join(" ")} → exit ${r.code}: ${tail(r.stderr, 8)}`);
+  return doc;
+}
+const seedStore = ({ stateDir, baseDbPath, pluginDir, count }) =>
+  helperChild("seed-store.mjs", ["--state-dir", stateDir, "--base-db-path", baseDbPath, "--plugin-dir", pluginDir, "--count", String(count)]);
+const storeDigest = ({ baseDbPath, pluginDir }) => helperChild("store-digest.mjs", ["--base-db-path", baseDbPath, ...(pluginDir ? ["--plugin-dir", pluginDir] : [])]);
+
+/** Relative paths under `root` (depth-first, at most `max`), plus every native `.node` file found. */
+function listTree(root, max = 200) {
+  const entries = [];
+  const nodeFiles = [];
+  let total = 0;
+  const walk = (dir, rel) => {
+    let list;
+    try {
+      list = readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      entries.push(`${rel || "."}: ${err.code ?? err.message}`);
+      return;
+    }
+    for (const e of list) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      total++;
+      if (entries.length < max) entries.push(e.isDirectory() ? `${r}/` : r);
+      if (e.isFile() && e.name.endsWith(".node")) nodeFiles.push(r);
+      if (e.isDirectory() && !e.isSymbolicLink()) walk(join(dir, e.name), r);
+    }
+  };
+  if (existsSync(root)) walk(root, "");
+  return { root, exists: existsSync(root), total, entries, nodeFiles };
 }
 
 /** The child environment for one disposable OpenClaw instance. */
@@ -461,9 +500,20 @@ async function cmdInstaller(o) {
     row("win32 inside()", "store-inside-harness-home, exit 3");
   }
 
-  // 7. uninstall keeps the store
-  const un = await bootstrap(["--uninstall", "--json"]);
-  check(un.code === 0 && un.doc?.ok === true, `install-plugin --uninstall --json → exit 0 (got ${un.code})`);
+  // 7. uninstall keeps the store (OPENCLAW_DEBUG=1: a failing openclaw call prints its stack)
+  const un = await bootstrap(["--uninstall", "--json"], { OPENCLAW_DEBUG: "1" });
+  fact("installer.uninstall", { exit: un.code, uninstall: stepOf(un.doc, "uninstall") ?? null });
+  if (un.code !== 0) {
+    // what is left of the plugin, and OpenClaw's own full answer to a retry (it leaves the plugin "disabled and
+    // tracked so uninstall can be retried" when removing the directory fails)
+    const ins = await inspectJson(oc, false);
+    const p = ins.json?.install?.installPath ?? newPath ?? "";
+    const i = p.lastIndexOf(`${WIN ? "\\" : "/"}node_modules${WIN ? "\\" : "/"}`);
+    fact("installer.uninstall.leftovers", { inspectExit: ins.code, installPath: p, status: ins.json?.plugin?.status ?? null, enabled: ins.json?.plugin?.enabled ?? null, tree: listTree(i > 0 ? p.slice(0, i) : p) });
+    const again = await defaultRun(oc.bin, ["plugins", "uninstall", PLUGIN_ID, "--force"], { env: { ...env, OPENCLAW_DEBUG: "1" }, timeoutMs: 600_000 });
+    process.stderr.write(`openclaw plugins uninstall (OPENCLAW_DEBUG=1) → exit ${again.code}\nstdout:\n${tail(again.stdout, 40)}\nstderr:\n${tail(again.stderr, 80)}\n`);
+  }
+  check(un.code === 0 && un.doc?.ok === true, `install-plugin --uninstall --json → exit 0 (got ${un.code}: ${stepOf(un.doc, "uninstall")?.detail ?? "no JSON document"})`);
   const d2 = await storeDigest({ baseDbPath });
   check(d2.rows === d0.rows && d2.sha256 === d0.sha256, "the store is still present after --uninstall (digest equal)");
   row("uninstall", "exit 0, store kept");

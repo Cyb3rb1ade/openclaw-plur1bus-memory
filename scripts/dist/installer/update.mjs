@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 
 import { compareVersions, PACKAGE_NAME } from "../build-plugin-feed.mjs";
 import { createSnapshot, restoreSnapshot, SnapshotError } from "../../../lib/snapshot/store-snapshot.js";
-import { isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
+import { isReadonlyRefusal, PLUGIN_ID, failureSummary } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { writeState } from "./state.mjs";
 import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
@@ -472,10 +472,10 @@ async function applyUpdate(ctx, plan, from) {
       if (after.installed && after.json.install.version === prev) {
         // OpenClaw refused before replacing anything: the running plugin and its store are untouched
         clearProgress(ctx, plan);
-        if (isReadonlyRefusal(text)) throw new Stop(EXIT.INCOMPATIBLE, "update", `OpenClaw refused: ${tail(text, 2)}`);
-        throw new Stop(EXIT.FAILED, "update", `openclaw plugins install ${plan.target.locator} failed (exit ${r.code}${r.timedOut ? ", deadline exceeded" : ""}): ${tail(text)}; ${prev} is still installed, nothing was changed`);
+        if (isReadonlyRefusal(text)) throw new Stop(EXIT.INCOMPATIBLE, "update", `OpenClaw refused: ${failureSummary(r, 2)}`);
+        throw new Stop(EXIT.FAILED, "update", `openclaw plugins install ${plan.target.locator} failed (exit ${r.code}${r.timedOut ? ", deadline exceeded" : ""}): ${failureSummary(r)}; ${prev} is still installed, nothing was changed`);
       }
-      report.step("update", "failed", `exit ${r.code}: ${tail(text)}`);
+      report.step("update", "failed", `exit ${r.code}: ${failureSummary(r)}`);
       return rollbackUpdate(ctx, plan);
     }
     report.step("update", "ok", `openclaw plugins install ${plan.target.locator} (${prev} → ${target})`);

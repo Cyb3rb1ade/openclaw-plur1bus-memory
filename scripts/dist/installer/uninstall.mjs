@@ -21,7 +21,7 @@ import { basename, dirname, join, parse, resolve, sep } from "node:path";
 
 import { listSnapshots } from "../../../lib/snapshot/store-snapshot.js";
 import { legacyDirOf } from "./legacy.mjs";
-import { PLUGIN_ID, tail } from "./openclaw-cli.mjs";
+import { PLUGIN_ID, failureSummary } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { statePath, writeState } from "./state.mjs";
 import { removeWorkDir } from "./update.mjs";
@@ -130,7 +130,7 @@ export async function runUninstall(ctx) {
     if (un.code !== 0) {
       const after = await cli.inspect(PLUGIN_ID);
       writeState(stateDir, base);
-      throw new Stop(EXIT.FAILED, "uninstall", `openclaw plugins uninstall ${PLUGIN_ID} failed (exit ${un.code}): ${tail(un.stderr || un.stdout)}; ${after.installed ? "the plugin is still installed and " : ""}nothing was deleted`);
+      throw new Stop(EXIT.FAILED, "uninstall", `openclaw plugins uninstall ${PLUGIN_ID} failed (exit ${un.code}): ${un.summary ?? failureSummary(un)}${un.attempts > 1 ? ` (${un.attempts} attempts)` : ""}; ${after.installed ? "the plugin is still installed; " : ""}your store and snapshots were not touched; re-run --uninstall once the cause is fixed`);
     }
     report.step("uninstall", "ok", `openclaw plugins uninstall ${PLUGIN_ID} --force (version ${existing.json.install.version ?? "?"})`);
   } else report.step("uninstall", "skipped", "not installed");

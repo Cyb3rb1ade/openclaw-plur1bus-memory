@@ -143,10 +143,41 @@ export function tail(text, n = 3) {
   return String(text ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-n).join(" | ");
 }
 
+// OpenClaw's generic failure block (src/cli/failure-output.ts, 2026.8.1 and 2026.9.6) ends with these hints; they
+// carry no error text. Node's own warnings are noise too.
+const HINT_LINE_RE = /^\[openclaw\] (?:Debug|Try|Help): /;
+const NODE_NOISE_RE = /^\(node:\d+\) \w*Warning: |^\(Use `node --trace-warnings/;
+const isErrorLine = (l) => /\bE[A-Z]{3,}\b/.test(l) || /\b(?:error|failed|refused|denied)\b/i.test(l);
+
+function meaningfulLines(text) {
+  return String(text ?? "")
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !HINT_LINE_RE.test(l) && !NODE_NOISE_RE.test(l));
+}
+
 /**
- * @param {{ bin: string, env: Record<string,string|undefined>, run?: typeof defaultRun, timeoutMs?: number, pathPresent?: (p: string) => boolean }} opts
+ * The error text of a failed `openclaw` call, for a human report line: OpenClaw's Debug/Try/Help hints and Node
+ * warnings dropped, the first `n` meaningful stderr lines (the "[openclaw] <title>" / "Reason: …" pair), then up to
+ * two stdout lines that read as errors (e.g. `plugins uninstall`'s "Failed to remove plugin directory …: EPERM …");
+ * stdout's first lines when stderr has nothing.
+ * @param {string | { stderr?: string, stdout?: string }} out
+ * @param {number} [n]
+ * @returns {string}
  */
-export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_000, pathPresent: present = pathPresent }) {
+export function failureSummary(out, n = 3) {
+  const { stderr = "", stdout = "" } = typeof out === "string" ? { stderr: out } : (out ?? {});
+  const err = meaningfulLines(stderr);
+  const std = meaningfulLines(stdout);
+  const lines = err.length ? [...err.slice(0, n), ...std.filter((l) => isErrorLine(l) && !err.includes(l)).slice(0, 2)] : std.slice(0, n);
+  return lines.length ? lines.join(" | ") : "(no error text from openclaw)";
+}
+
+/**
+ * @param {{ bin: string, env: Record<string,string|undefined>, run?: typeof defaultRun, timeoutMs?: number, pathPresent?: (p: string) => boolean, sleep?: (ms: number) => Promise<unknown> }} opts
+ */
+export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_000, pathPresent: present = pathPresent, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const call = (args, ms = timeoutMs) => run(bin, args, { env, timeoutMs: ms });
 
   return {
@@ -155,7 +186,7 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
       const r = await call(["--version"], 60_000);
       const first = r.stdout.split(/\r?\n/)[0]?.trim() ?? "";
       const m = VERSION_RE.exec(first);
-      if (r.code !== 0 || !m) return { ok: false, version: null, commit: null, detail: tail(r.stderr || r.stdout) };
+      if (r.code !== 0 || !m) return { ok: false, version: null, commit: null, detail: failureSummary(r) };
       return { ok: true, version: m[1], commit: m[2] };
     },
     /** @returns {Promise<{ code: number, json: any, installed: boolean, present: boolean, notFound: boolean, detail: string }>} */
@@ -164,7 +195,7 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
       const json = parseJson(r.stdout);
       const present = r.code === 0 && json !== null && typeof json === "object" && json.ok !== false;
       const notFound = r.code !== 0 && json?.ok === false && /^Plugin not found:/.test(String(json?.error?.message ?? ""));
-      return { code: r.code, json, present, installed: present && json.install != null && typeof json.install === "object", notFound, detail: notFound ? "not installed" : tail(json?.error?.message ?? r.stderr) };
+      return { code: r.code, json, present, installed: present && json.install != null && typeof json.install === "object", notFound, detail: notFound ? "not installed" : typeof json?.error?.message === "string" ? tail(json.error.message) : failureSummary(r) };
     },
     install(spec, { force = false, pin = false, acceptCapabilities = false } = {}) {
       return call(["plugins", "install", spec, ...(pin ? ["--pin"] : []), ...(force ? ["--force"] : []), ...(acceptCapabilities ? ["--accept-capabilities"] : [])], 1_800_000);
@@ -172,8 +203,23 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
     update(spec) {
       return call(["plugins", "update", spec], 1_800_000);
     },
-    uninstall(id, { keepFiles = false } = {}) {
-      return call(["plugins", "uninstall", id, ...(keepFiles ? ["--keep-files"] : []), "--force"]);
+    /**
+     * `plugins uninstall <id> --force`. OpenClaw removes the plugin dir with a single fs.rm (no retries); when that
+     * fails (Windows: EPERM/EBUSY on a file still in use, Defender) it leaves the plugin disabled and tracked "so
+     * uninstall can be retried" — so that answer is retried twice, after 2 s and 4 s (spec B.5's 10 s budget).
+     * @returns {Promise<{ code: number, stdout: string, stderr: string, timedOut: boolean, summary: string, attempts: number }>}
+     */
+    async uninstall(id, { keepFiles = false } = {}) {
+      const argv = ["plugins", "uninstall", id, ...(keepFiles ? ["--keep-files"] : []), "--force"];
+      let r;
+      let attempts = 0;
+      for (const wait of [2000, 4000, null]) {
+        r = await call(argv);
+        attempts++;
+        if (r.code === 0 || r.timedOut || wait === null || !/Failed to remove plugin directory/.test(`${r.stderr}\n${r.stdout}`)) break;
+        await sleep(wait);
+      }
+      return { ...r, summary: r.code === 0 ? "" : failureSummary(r), attempts };
     },
     enable(id) {
       return call(["plugins", "enable", id]);
@@ -197,7 +243,7 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
       if (!ALLOWED_CONFIG_PATHS.set.includes(path)) throw refuse("set", path);
       const r = await call(["config", "set", path, String(value)], 120_000);
       if (r.code !== 0) {
-        const err = new Error(`openclaw config set ${path} failed (exit ${r.code}): ${tail(r.stderr || r.stdout)}`);
+        const err = new Error(`openclaw config set ${path} failed (exit ${r.code}): ${failureSummary(r)}`);
         err.readonly = isReadonlyRefusal(`${r.stderr}\n${r.stdout}`);
         throw err;
       }
@@ -248,7 +294,7 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
     async selftest({ downloadModels = false, stateDir } = {}) {
       const r = await call(["plur1bus", "selftest", "--json", ...(stateDir ? ["--state-dir", stateDir] : []), ...(downloadModels ? ["--download-models"] : [])], downloadModels ? 3_600_000 : 900_000);
       const line = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).reverse().find((l) => l.startsWith("{"));
-      return { code: r.code, report: line ? parseJson(line) : null, detail: tail(r.stderr) };
+      return { code: r.code, report: line ? parseJson(line) : null, detail: String(r.stderr ?? "").trim() ? failureSummary({ stderr: r.stderr }) : "" };
     },
   };
 }

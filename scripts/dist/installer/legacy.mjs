@@ -24,7 +24,7 @@ import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 
 import { whichOnPath } from "./detect.mjs";
-import { isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
+import { isReadonlyRefusal, PLUGIN_ID, failureSummary } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { writeState } from "./state.mjs";
 import {
@@ -236,15 +236,15 @@ async function applyAdopt(ctx, plan, from) {
     const r = await cli.install(plan.target.locator, plan.target.opts);
     if (r.code !== 0) {
       const text = `${r.stderr}\n${r.stdout}`;
-      report.step("install", "failed", `exit ${r.code}: ${tail(text)}`);
+      report.step("install", "failed", `exit ${r.code}: ${failureSummary(r)}`);
       const after = await cli.inspect(PLUGIN_ID);
       if (!after.installed) {
         // nothing was installed: the legacy plugin never stopped owning the store, so the
         // snapshot is not restored over writes the Gateway made meanwhile
         const code = await rollbackAdopt(ctx, plan, { finish: false, restore: false });
         if (code !== EXIT.FAILED) return code;
-        if (isReadonlyRefusal(text)) throw new Stop(EXIT.INCOMPATIBLE, "install", `OpenClaw refused: ${tail(text, 2)}; the legacy deploy is back in place`);
-        throw new Stop(EXIT.FAILED, "install", `openclaw plugins install ${plan.target.locator} failed (exit ${r.code}): ${tail(text)}; the legacy deploy is back in place, nothing was changed`);
+        if (isReadonlyRefusal(text)) throw new Stop(EXIT.INCOMPATIBLE, "install", `OpenClaw refused: ${failureSummary(r, 2)}; the legacy deploy is back in place`);
+        throw new Stop(EXIT.FAILED, "install", `openclaw plugins install ${plan.target.locator} failed (exit ${r.code}): ${failureSummary(r)}; the legacy deploy is back in place, nothing was changed`);
       }
       return rollbackAdopt(ctx, plan);
     }

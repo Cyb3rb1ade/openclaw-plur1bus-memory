@@ -149,5 +149,8 @@ describe("plugin installer: uninstall", () => {
     assert.equal(r.code, EXIT.FAILED, r.out);
     assert.ok(existsSync(baseDbPath));
     assert.equal(readState(sb.stateDir).installedVersion, "7.16.11");
+    // run 36518766808: the summary kept only OpenClaw's Debug/Try/Help hints
+    assert.match(r.stderr, /uninstall: openclaw plugins uninstall .* failed \(exit 1\): \[openclaw\] Command failed \| \[openclaw\] Reason: TEST ONLY uninstall failure;/);
+    assert.doesNotMatch(r.stderr, /OPENCLAW_DEBUG|Try: openclaw doctor/);
   });
 });
