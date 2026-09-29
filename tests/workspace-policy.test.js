@@ -51,7 +51,7 @@ describe("workspace policy store", () => {
     );
   });
 
-  it("persists an override atomically with mode 0600 and survives reload", async () => {
+  it("persists an override atomically with mode 0600 and survives reload", { skip: process.platform === "win32" && "POSIX file modes (0600) are not represented on win32" }, async () => {
     const root = temporaryStateRoot();
     const store = createWorkspacePolicyStore({ stateRoot: root, now: () => 1234 });
     const disabled = await store.set({
@@ -123,7 +123,7 @@ describe("workspace policy store", () => {
     assert.equal(readFileSync(statePath, "utf8"), "{malformed");
   });
 
-  it("repairs an overly broad existing state-file mode on successful write", async () => {
+  it("repairs an overly broad existing state-file mode on successful write", { skip: process.platform === "win32" && "POSIX file modes (chmod/0600) are not represented on win32" }, async () => {
     const root = temporaryStateRoot();
     const store = createWorkspacePolicyStore({ stateRoot: root });
     await store.set({ ...alpha, enabled: false, expectedRevision: 0, actorId: "operator:test" });

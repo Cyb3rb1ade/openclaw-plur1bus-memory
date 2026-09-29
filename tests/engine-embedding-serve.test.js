@@ -118,7 +118,7 @@ async function leaveStaleUnixSocket(socketPath) {
   assert.equal(statSync(socketPath).isSocket(), true);
 }
 
-const posixOnly = { skip: process.platform === "win32" };
+const posixOnly = { skip: process.platform === "win32" && "POSIX unix-socket and mode semantics" };
 
 describe("EmbeddingService.serve() (E3 Task 4)", () => {
   it("(a) serves an explicit unix socket; the result carries tokenPath and identity, never the token", posixOnly, async () => {
@@ -165,7 +165,7 @@ describe("EmbeddingService.serve() (E3 Task 4)", () => {
     }
   });
 
-  it("(c) serve() without an address binds the platform default", { skip: process.platform !== "linux" }, async () => {
+  it("(c) serve() without an address binds the platform default", { skip: process.platform !== "linux" && "platform default address is the Linux abstract socket" }, async () => {
     const { engine, host, baseDbPath } = setup("e3-serve-c-");
     try {
       const result = await engine.embedding.serve();

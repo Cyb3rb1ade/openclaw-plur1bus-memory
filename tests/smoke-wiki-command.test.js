@@ -1232,7 +1232,7 @@ describe("wiki-command smoke", () => {
     assert.equal(readJsonl(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl")).length, 0);
   });
 
-  it("fails closed before archive or delete when the canonical audit directory is not writable", async (t) => {
+  it("fails closed before archive or delete when the canonical audit directory is not writable", { skip: process.platform === "win32" && "chmod read-only directory semantics differ on win32" }, async (t) => {
     const workspaceDir = realpathSync(makeTempDir("plur1bus-wiki-audit-readonly-ws-"));
     const localArchiveDir = realpathSync(makeTempDir("plur1bus-wiki-audit-readonly-archive-"));
     const auditDir = join(workspaceDir, ".adaptive-learning");
@@ -1325,7 +1325,7 @@ describe("wiki-command smoke", () => {
     assert.deepEqual(readdirSync(auditPath), []);
   });
 
-  it("fails closed before archive or delete when the existing audit target is unwritable", async (t) => {
+  it("fails closed before archive or delete when the existing audit target is unwritable", { skip: process.platform === "win32" && "chmod 0444 read-only file semantics differ on win32" }, async (t) => {
     const workspaceDir = realpathSync(makeTempDir("plur1bus-wiki-audit-target-readonly-ws-"));
     const localArchiveDir = realpathSync(makeTempDir("plur1bus-wiki-audit-target-readonly-archive-"));
     const auditDir = join(workspaceDir, ".adaptive-learning");

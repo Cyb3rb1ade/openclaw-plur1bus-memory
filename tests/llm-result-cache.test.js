@@ -431,7 +431,7 @@ test("partial hit usage counts each available token field and marks missing usag
   assert.equal(cacheMetrics.hitsMissingUsage, 1);
 });
 
-test("persistent cache survives instances without storing prompt or API key", async (t) => {
+test("persistent cache survives instances without storing prompt or API key", { skip: process.platform === "win32" && "POSIX file modes (0600) are not represented on win32" }, async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -456,7 +456,7 @@ test("persistent cache survives instances without storing prompt or API key", as
   assert.equal(statSync(dbPath).mode & 0o777, 0o600);
 });
 
-test("persistent cache initializes an absent configured base and isolates agents", async (t) => {
+test("persistent cache initializes an absent configured base and isolates agents", { skip: process.platform === "win32" && "POSIX file modes (0600) are not represented on win32" }, async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const trustedParent = makeTempDir("plur1bus-llm-cache-parent-");
   const baseDbPath = join(trustedParent, "absent-cache-base");
@@ -845,7 +845,7 @@ test("WAL-heavy hard-limit cleanup reclaims space and persists the new result", 
   assert.equal(recovered.count, 1);
 });
 
-test("persistent cache directory is created with owner-only permissions", async (t) => {
+test("persistent cache directory is created with owner-only permissions", { skip: process.platform === "win32" && "POSIX directory modes (0700) are not represented on win32" }, async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));

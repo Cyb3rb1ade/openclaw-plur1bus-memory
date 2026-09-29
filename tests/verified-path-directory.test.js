@@ -589,7 +589,7 @@ describe("readDirectoryAcl: Windows PowerShell 5.1 ConvertTo-Json shapes (E4.2 f
 });
 
 describe("VerifiedPathDirectory on real Windows (E4 Task 10)", () => {
-  it("icacls restricts a real directory, PowerShell reads its ACL, identity is pinned", { skip: process.platform !== "win32" }, () => {
+  it("icacls restricts a real directory, PowerShell reads its ACL, identity is pinned", { skip: process.platform !== "win32" && "win32-only icacls/PowerShell ACL path" }, () => {
     const base = privateBase("e4-vp-realwin-");
     const dir = openVerifiedPathDirectory(join(base, "s"), { create: true });
     try {
