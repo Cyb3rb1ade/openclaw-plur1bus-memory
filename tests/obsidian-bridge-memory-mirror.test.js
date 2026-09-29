@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +30,27 @@ function memoryFile(vault, id) {
   return join(vault, "plur1bus", "memories", `${id}.md`);
 }
 
+// Every service a test creates is stopped after it, also when an assertion or a rejected rebuild threw before the
+// test's own stop(): a started `watch: true` service keeps its timer, and the file's process then never exited
+// (windows-2025 test-cross, 2026-09-29: 34 minutes until the job timeout, 248 later tests cancelled).
+const liveServices = new Set();
+
+afterEach(async () => {
+  const services = [...liveServices];
+  liveServices.clear();
+  for (const service of services) {
+    // bounded: a test may leave a loader hung on purpose, and stop() drains fail-closed
+    await settlesWithin(Promise.resolve().then(() => service.stop()).catch(() => {}), 2_000);
+  }
+});
+
 function createTestService(config, options = {}) {
+  const service = createTestServiceUntracked(config, options);
+  liveServices.add(service);
+  return service;
+}
+
+function createTestServiceUntracked(config, options = {}) {
   return createObsidianBridgeService(config, {
     ...options,
     mutationPolicyForWorkspace(workspace) {

@@ -55,7 +55,12 @@ jobs:
   test-cross:
     name: test-cross (${{ matrix.os }}, node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Windows: 60. The suite ran 2649 s on windows-2025 on 2026-09-29, 2029 s of it one hung test file
+    # (obsidian-bridge-memory-mirror kept a watch timer after failed assertions; fixed, and --test-force-exit below
+    # stops any file that leaks a handle after its tests end). Without the hang ~620 s covered 326 of 586 files,
+    # including ~215 s of powershell.exe start-ups in the .ps1 bootstrap tests; windows-11-arm is slower still.
+    # 60 keeps a margin; macOS stays at 45.
+    timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 60 || 45 }}
     # Windows legs are informational until they are green; then drop this line
     # so they become required (HM1-R22). macOS stays blocking.
     continue-on-error: ${{ startsWith(matrix.os, 'windows') }}
@@ -80,8 +85,11 @@ jobs:
           cache: 'npm'
       - name: Install dependencies
         run: npm ci
+      # test:cross = the suite with --test-force-exit (a file whose tests all ended cannot hold the job hostage with a
+      # leaked timer or handle) and --test-timeout=600000 (a hung test fails after 10 min instead of running into the
+      # job timeout, which cancels every later file). The Linux `test` job keeps plain `npm test`.
       - name: Run tests
-        run: npm test
+        run: npm run test:cross
 
   dependency-review:
     runs-on: ubuntu-latest

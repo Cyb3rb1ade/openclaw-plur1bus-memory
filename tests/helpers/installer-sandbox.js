@@ -408,7 +408,21 @@ export function createInstallerSandbox(opts = {}) {
     ...(opts.profile ? { OPENCLAW_PROFILE: opts.profile } : { OPENCLAW_STATE_DIR: stateDir }),
     ...(opts.extraEnv ?? {}),
   };
-  if (process.platform === "win32") env.PATHEXT = ".COM;.EXE;.BAT;.CMD";
+  if (process.platform === "win32") {
+    env.PATHEXT = ".COM;.EXE;.BAT;.CMD";
+    // OpenClaw's openclaw.cmd and the shims are .cmd files, run through cmd.exe (openclaw-cli.mjs defaultRun), and the
+    // .ps1 bootstrap reads the architecture from PROCESSOR_ARCHITECTURE: without SystemRoot/ComSpec and System32 on
+    // PATH every shim call exited 127 and the installer saw no OpenClaw ("unknown version", config-invalid) on the
+    // Windows test-cross legs. System32 holds no openclaw or node, so the shim check below still holds.
+    const sysRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+    env.SystemRoot = sysRoot;
+    env.windir = sysRoot;
+    env.ComSpec = process.env.ComSpec ?? process.env.COMSPEC ?? join(sysRoot, "System32", "cmd.exe");
+    for (const k of ["PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "NUMBER_OF_PROCESSORS", "OS", "SystemDrive"]) {
+      if (process.env[k] !== undefined) env[k] = process.env[k];
+    }
+    env.PATH = [binDir, join(sysRoot, "System32"), join(sysRoot, "System32", "WindowsPowerShell", "v1.0")].join(delimiter);
+  }
 
   const resolved = resolveOnPath("openclaw", env.PATH);
   const expected = join(binDir, process.platform === "win32" ? "openclaw.cmd" : "openclaw");

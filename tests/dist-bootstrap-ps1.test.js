@@ -215,6 +215,10 @@ function makePsCase(o) {
     SystemRoot: sysRoot,
     windir: sysRoot,
     ComSpec: process.env.ComSpec ?? join(sysRoot, "System32", "cmd.exe"),
+    // the .ps1 maps PROCESSOR_ARCHITEW6432 / PROCESSOR_ARCHITECTURE to win-x64 | win-arm64 ("unsupported-target:
+    // windows/" on every Windows test-cross leg without them)
+    ...(process.env.PROCESSOR_ARCHITECTURE ? { PROCESSOR_ARCHITECTURE: process.env.PROCESSOR_ARCHITECTURE } : {}),
+    ...(process.env.PROCESSOR_ARCHITEW6432 ? { PROCESSOR_ARCHITEW6432: process.env.PROCESSOR_ARCHITEW6432 } : {}),
     TEMP: tmp,
     TMP: tmp,
     PLUR1BUS_PLUGIN_FEED: pathToFileURL(join(feedDir, "stable.json")).href,

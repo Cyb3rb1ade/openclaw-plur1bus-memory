@@ -1,0 +1,3 @@
+# Check out text files with LF on every OS (Windows runners default to core.autocrlf=true): the rendered
+# install-plugin.sh must be POSIX sh, golden fixtures are compared byte for byte, and tests split sources on "\n".
+* text=auto eol=lf
