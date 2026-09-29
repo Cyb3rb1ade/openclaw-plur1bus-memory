@@ -319,6 +319,16 @@ export const DEPLOY_FILES = [
   // ── plugin distribution: feed verifier and builder (HM1) ──────────────────
   "scripts/dist/minisign.mjs",
   "scripts/dist/build-plugin-feed.mjs",
+  // ── plugin distribution: Node installer sources and bundler (HM1 Task 5) ──
+  "scripts/dist/build-installer.mjs",
+  "scripts/dist/installer/main.mjs",
+  "scripts/dist/installer/detect.mjs",
+  "scripts/dist/installer/compat.mjs",
+  "scripts/dist/installer/openclaw-cli.mjs",
+  "scripts/dist/installer/licence.mjs",
+  "scripts/dist/installer/verify.mjs",
+  "scripts/dist/installer/state.mjs",
+  "scripts/dist/installer/report.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
