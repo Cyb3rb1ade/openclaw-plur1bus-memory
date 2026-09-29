@@ -37,13 +37,40 @@ export function readSkipExpression(src, start) {
   return src.slice(start, i);
 }
 
-// A platform skip carries a reason when, after removing the bare comparisons
-// against `process.platform`, a string or template literal remains.
-export function skipHasReason(expression) {
-  const stripped = expression.replace(/process\.platform\s*[!=]==?\s*(["'])[^"']*\1/g, "");
-  return /(["'`])(?:\\.|(?!\1)[^\\])+\1/.test(stripped);
+// Split the expression at top-level-or-nested `&&`, `||`, `? :` operators
+// (ignoring quotes and optional chaining) and return the trimmed segments.
+function valueSegments(expression) {
+  const segments = [];
+  let current = "";
+  for (let i = 0; i < expression.length; i += 1) {
+    const ch = expression[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      for (; j < expression.length && expression[j] !== ch; j += 1) if (expression[j] === "\\") j += 1;
+      current += expression.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    const two = expression.slice(i, i + 2);
+    if (two === "&&" || two === "||") { segments.push(current); current = ""; i += 1; continue; }
+    if (ch === "?" && expression[i + 1] !== ".") { segments.push(current); current = ""; continue; }
+    if (ch === ":") { segments.push(current); current = ""; continue; }
+    current += ch;
+  }
+  segments.push(current);
+  return segments.map((segment) => segment.replace(/^[\s(]+|[\s)]+$/g, ""));
 }
 
+// A platform skip carries a reason when one of the expression's value segments
+// is, by itself, a non-empty string or template literal (`cond && "why"`,
+// `cond ? "why" : false`, or a bare template). A literal that is only the
+// operand of a comparison (`=== "win32"`) does not count.
+export function skipHasReason(expression) {
+  return valueSegments(expression).some((segment) => /^(["'`])(?:\\.|(?!\1)[^\\])+\1$/.test(segment));
+}
+
+// Covered forms: `skip:` option values mentioning `platform`, and an argument-less
+// `x.skip()` directly under an `if (... process.platform ...)` condition.
 export function findReasonlessPlatformSkips(src) {
   const bad = [];
   const re = /\bskip\s*:\s*/g;
@@ -52,6 +79,8 @@ export function findReasonlessPlatformSkips(src) {
     if (!/process\.platform|\bplatform\b/.test(expr)) continue;
     if (!skipHasReason(expr)) bad.push({ index: m.index, expr: expr.trim() });
   }
+  const bare = /\bif\s*\([^)\n]*process\.platform[^)\n]*\)\s*\{?\s*(?:return\s+)?\w+\.skip\(\s*\)/g;
+  for (let m = bare.exec(src); m; m = bare.exec(src)) bad.push({ index: m.index, expr: m[0].trim() });
   return bad;
 }
 
@@ -76,5 +105,9 @@ describe("platform skips", () => {
     assert.equal(findReasonlessPlatformSkips('const s = { skip: process.platform === "win32" ? "why" : false };').length, 0);
     assert.equal(findReasonlessPlatformSkips("const s = { skip: `unavailable on ${process.platform}` };").length, 0);
     assert.equal(findReasonlessPlatformSkips('it("x", { skip: typeof y !== "function" }, f)').length, 0);
+    assert.equal(findReasonlessPlatformSkips('const s = { skip: process.platform === "win32" || "" };').length, 1);
+    assert.equal(findReasonlessPlatformSkips('const s = { skip: process.getuid?.() === 0 || (process.platform === "win32" && "why") };').length, 0);
+    assert.equal(findReasonlessPlatformSkips('if (process.platform === "win32") return t.skip();').length, 1);
+    assert.equal(findReasonlessPlatformSkips('if (process.platform === "win32") return t.skip("why");').length, 0);
   });
 });

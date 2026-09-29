@@ -51,7 +51,7 @@ describe("workspace policy store", () => {
     );
   });
 
-  it("persists an override atomically with mode 0600 and survives reload", { skip: process.platform === "win32" && "POSIX file modes (0600) are not represented on win32" }, async () => {
+  it("persists an override atomically with mode 0600 and survives reload", async () => {
     const root = temporaryStateRoot();
     const store = createWorkspacePolicyStore({ stateRoot: root, now: () => 1234 });
     const disabled = await store.set({
@@ -69,7 +69,7 @@ describe("workspace policy store", () => {
       actorId: "operator:test",
     });
     const statePath = join(root, "control", "workspace-policy.json");
-    assert.equal(statSync(statePath).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(statSync(statePath).mode & 0o777, 0o600); // POSIX mode only
     assert.deepStrictEqual(
       createWorkspacePolicyStore({ stateRoot: root }).get(alpha),
       disabled,

@@ -431,7 +431,7 @@ test("partial hit usage counts each available token field and marks missing usag
   assert.equal(cacheMetrics.hitsMissingUsage, 1);
 });
 
-test("persistent cache survives instances without storing prompt or API key", { skip: process.platform === "win32" && "POSIX file modes (0600) are not represented on win32" }, async (t) => {
+test("persistent cache survives instances without storing prompt or API key", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const dir = makeTempDir("plur1bus-llm-cache-");
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -453,10 +453,10 @@ test("persistent cache survives instances without storing prompt or API key", { 
   const bytes = readFileSync(dbPath);
   assert.equal(bytes.includes(Buffer.from("PRIVATE-PROMPT-123")), false);
   assert.equal(bytes.includes(Buffer.from("API-SECRET-456")), false);
-  assert.equal(statSync(dbPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(dbPath).mode & 0o777, 0o600); // POSIX mode only
 });
 
-test("persistent cache initializes an absent configured base and isolates agents", { skip: process.platform === "win32" && "POSIX file modes (0600) are not represented on win32" }, async (t) => {
+test("persistent cache initializes an absent configured base and isolates agents", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const trustedParent = makeTempDir("plur1bus-llm-cache-parent-");
   const baseDbPath = join(trustedParent, "absent-cache-base");
@@ -493,7 +493,7 @@ test("persistent cache initializes an absent configured base and isolates agents
   assert.equal(firstMetrics.persistActive, true);
   const agentADbPath = join(baseDbPath, "llm-result-cache-v1", "agent-a.db");
   assert.equal(existsSync(agentADbPath), true);
-  assert.equal(statSync(agentADbPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(agentADbPath).mode & 0o777, 0o600); // POSIX mode only
   await first.close();
 
   reopened = createLlmResultCache({ persist: true, baseDbPath });
@@ -515,7 +515,7 @@ test("persistent cache initializes an absent configured base and isolates agents
   assert.equal(reopened.getMetrics("agent-b").persistWrites, 1);
   const agentBDbPath = join(baseDbPath, "llm-result-cache-v1", "agent-b.db");
   assert.equal(existsSync(agentBDbPath), true);
-  assert.equal(statSync(agentBDbPath).mode & 0o777, 0o600);
+  if (process.platform !== "win32") assert.equal(statSync(agentBDbPath).mode & 0o777, 0o600); // POSIX mode only
 });
 
 test("persistent TTL is absolute across instances", async (t) => {

@@ -82,7 +82,7 @@ describe("durable reembedding state and confirmations", () => {
     );
   });
 
-  it("persists mode 0600 atomically and rejects secret-bearing state fields", { skip: process.platform === "win32" && "POSIX file modes (0600) are not represented on win32" }, async () => {
+  it("persists mode 0600 atomically and rejects secret-bearing state fields", async () => {
     const store = createMigrationStateStore({ stateRoot, now: () => 1_000 });
     await store.create({
       id: "migration-0001",
@@ -102,7 +102,7 @@ describe("durable reembedding state and confirmations", () => {
     });
 
     const statePath = join(stateRoot, "control", "reembedding-state.json");
-    assert.equal(statSync(statePath).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(statSync(statePath).mode & 0o777, 0o600); // POSIX mode only
     const persisted = readFileSync(statePath, "utf8");
     assert.doesNotMatch(persisted, /reemb_v1_/);
 

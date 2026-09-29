@@ -56,6 +56,9 @@ jobs:
     name: test-cross (${{ matrix.os }}, node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    # Windows legs are informational until they are green; then drop this line
+    # so they become required (HM1-R22). macOS stays blocking.
+    continue-on-error: ${{ startsWith(matrix.os, 'windows') }}
     strategy:
       fail-fast: false
       matrix:
