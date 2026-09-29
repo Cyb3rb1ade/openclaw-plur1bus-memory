@@ -9,11 +9,21 @@
  *           feed's tarball integrity (fact (b), HM1-R15).
  * selftest  `openclaw plur1bus selftest --json --state-dir <stateDir>` (schema plur1bus.selftest/1, Task 2): ok.
  * model     the selftest's model.state: present/downloaded ok, missing → warning (HM1-R6).
+ *
+ * Test seam (HM1 Task 8 CI): with PLUR1BUS_PLUGIN_INSTALLER_TEST=1 and PLUR1BUS_SELFTEST_FORCE_FAIL=1
+ * the selftest check of a new version fails after the real selftest ran, so CI can drive a real
+ * rollback on a real OpenClaw; a rollback's own verify (`release.lenient`) is never forced.
  */
 
 import { PLUGIN_ID } from "./openclaw-cli.mjs";
 
 export const SELFTEST_SCHEMA = "plur1bus.selftest/1";
+export const FORCE_FAIL_ENV = "PLUR1BUS_SELFTEST_FORCE_FAIL";
+
+/** Whether the forced-failure test seam is on: only together with the installer test flag. */
+export function selftestForcedToFail({ testMode, env }) {
+  return testMode === true && env?.[FORCE_FAIL_ENV] === "1";
+}
 
 /** Compare the install record with the release; returns { ok, detail }. */
 export function checkIntegrity(install, release) {
@@ -37,10 +47,10 @@ export function checkIntegrity(install, release) {
 }
 
 /**
- * @param {{ cli: ReturnType<typeof import("./openclaw-cli.mjs").createOpenclawCli>, release: any, source: string, downloadModels?: boolean, stateDir?: string }} a
+ * @param {{ cli: ReturnType<typeof import("./openclaw-cli.mjs").createOpenclawCli>, release: any, source: string, downloadModels?: boolean, stateDir?: string, forceFail?: boolean }} a
  * @returns {Promise<Array<{ id: "loaded"|"integrity"|"selftest"|"model", ok: boolean, warn?: boolean, detail: string }>>}
  */
-export async function verifyInstall({ cli, release, source, downloadModels = false, stateDir }) {
+export async function verifyInstall({ cli, release, source, downloadModels = false, stateDir, forceFail = false }) {
   const checks = [];
   const rt = await cli.inspect(PLUGIN_ID, { runtime: true });
   const plugin = rt.json?.plugin;
@@ -60,7 +70,8 @@ export async function verifyInstall({ cli, release, source, downloadModels = fal
     checks.push({ id: "model", ok: true, warn: true, detail: "unknown (no selftest report)" });
     return checks;
   }
-  if (rep.ok === true && st.code === 0) checks.push({ id: "selftest", ok: true, detail: `selftest ok (${(rep.steps ?? []).length} steps)` });
+  if (forceFail && release?.lenient !== true) checks.push({ id: "selftest", ok: false, detail: `selftest failed: forced by ${FORCE_FAIL_ENV}=1 (test seam; the real selftest reported ok=${rep.ok === true})` });
+  else if (rep.ok === true && st.code === 0) checks.push({ id: "selftest", ok: true, detail: `selftest ok (${(rep.steps ?? []).length} steps)` });
   else {
     const failedAddon = (rep.addons ?? []).find((a) => a && a.ok === false);
     const first = (rep.errors ?? [])[0] ?? (failedAddon ? `addon ${failedAddon.name} failed${failedAddon.package ? ` (${failedAddon.package})` : ""}` : `exit ${st.code}`);

@@ -33,7 +33,7 @@ import { createSnapshot, restoreSnapshot, SnapshotError } from "../../../lib/sna
 import { isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { writeState } from "./state.mjs";
-import { verifyInstall } from "./verify.mjs";
+import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
 import { rmTree, writeFileAtomic } from "./fsutil.mjs";
 
 const ALLOW_CONVERSATION = `plugins.entries.${PLUGIN_ID}.hooks.allowConversationAccess`;
@@ -477,7 +477,7 @@ async function applyUpdate(ctx, plan, from) {
 
   if (step === "verify") {
     save("verify");
-    const checks = await verifyInstall({ cli, release, source: plan.progress.source, downloadModels: flags["download-models"], stateDir });
+    const checks = await verifyInstall({ cli, release, source: plan.progress.source, downloadModels: flags["download-models"], stateDir, forceFail: selftestForcedToFail({ testMode: ctx.testMode, env: ctx.childEnv }) });
     for (const c of checks) report.step(`verify.${c.id}`, c.ok ? (c.warn ? "warn" : "ok") : "failed", c.detail);
     if (checks.some((c) => !c.ok)) return rollbackUpdate(ctx, plan);
 

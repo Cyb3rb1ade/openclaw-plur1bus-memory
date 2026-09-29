@@ -37,7 +37,7 @@ import { PROFILE_MODELS, resolveLicence } from "./licence.mjs";
 import { createOpenclawCli, defaultRun, isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
 import { createReport, EXIT, Stop } from "./report.mjs";
 import { readState, writeState } from "./state.mjs";
-import { verifyInstall } from "./verify.mjs";
+import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
 import { fetchBytes, runUpdate } from "./update.mjs";
 import { runUninstall } from "./uninstall.mjs";
 import { runAdoptLegacy } from "./legacy.mjs";
@@ -480,7 +480,7 @@ async function install(ctx) {
       writeFileSync(tgz, bytes, { mode: 0o600 });
       report.step("tarball", "ok", `downloaded ${release.tarball.url}; SHA-256 matches the feed (no clawpackDigest for ClawHub)`);
     }
-    return await applyInstall({ ...ctx, source, release, det, cli, childEnv, licence, previousSlot, previous, locator: locatorFor(tgz), installOpts, platform });
+    return await applyInstall({ ...ctx, source, release, det, cli, childEnv, licence, previousSlot, previous, locator: locatorFor(tgz), installOpts, platform, testMode });
   } finally {
     if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -548,7 +548,7 @@ async function applyInstall(ctx) {
 
   // ── feature crons (HM1-R7) ────────────────────────────────────────────────
   const gw = await cli.gatewayStatus();
-  if (!gw.running) report.step("crons", "skipped", "gateway-start-reconciles (no running Gateway; the plugin provisions its jobs on the next start)");
+  if (!gw.confirmed) report.step("crons", "skipped", `gateway-start-reconciles (no confirmed running Gateway: ${gw.detail}; the plugin provisions its jobs on the next start)`);
   else if (!det.node.bin || !installPath) report.step("crons", "warn", "no node or plugin dir to run setup-feature-crons.mjs; the Gateway reconciles the jobs");
   else {
     const script = `${installPath}${platform === "win32" ? "\\" : "/"}scripts${platform === "win32" ? "\\" : "/"}setup-feature-crons.mjs`;
@@ -565,14 +565,14 @@ async function applyInstall(ctx) {
 
   // ── verify ────────────────────────────────────────────────────────────────
   writeState(det.stateDir, { ...base, inProgress: { op: "install", step: "verify", snapshotId: null, previousVersion: null } });
-  const checks = await verifyInstall({ cli, release, source, downloadModels: values["download-models"], stateDir: det.stateDir });
+  const checks = await verifyInstall({ cli, release, source, downloadModels: values["download-models"], stateDir: det.stateDir, forceFail: selftestForcedToFail({ testMode: ctx.testMode, env: childEnv }) });
   for (const c of checks) report.step(`verify.${c.id}`, c.ok ? (c.warn ? "warn" : "ok") : "failed", c.detail);
   if (checks.some((c) => !c.ok)) return rollback(rb);
 
   writeState(det.stateDir, { ...base, installedVersion: release.version, ...(licence?.accepted ? { licence: licence.accepted } : {}) });
   report.note(`Installed ${PACKAGE_NAME}@${release.version} into OpenClaw (${det.stateDir}).`);
   report.note(`Conversation access for capture and recall: enabled (${ALLOW_CONVERSATION}).`);
-  report.note(gw.running ? "The running Gateway picks the plugin up; if not, run `openclaw gateway restart`." : "The plugin becomes active on the next Gateway start (`openclaw gateway restart`).");
+  report.note(gw.confirmed ? "The running Gateway picks the plugin up; if not, run `openclaw gateway restart`." : "The plugin becomes active on the next Gateway start (`openclaw gateway restart`).");
   return report.finish(EXIT.OK);
 }
 

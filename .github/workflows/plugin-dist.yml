@@ -1,0 +1,338 @@
+name: plugin-dist
+
+# HM1 Task 8 (D86, spec A.2): pack the plugin once, install it into disposable OpenClaw instances (min and latest)
+# on the five release targets, run the selftest, and drive the installer end to end: fresh install, an upgrade that
+# keeps every stored row (D89, HM1-R13), a forced failing verify that rolls back, uninstall. Plus a non-blocking WSL
+# leg (C8) and a nightly upgrade from the newest GitHub Release (HM1-R13).
+#
+# Every OpenClaw here lives under $RUNNER_TEMP (OPENCLAW_HOME, OPENCLAW_STATE_DIR; HOME too on POSIX) and
+# tests/helpers/assert-disposable.mjs runs right after installing it (HM1-R11). No Gateway is installed or started.
+# Feeds are TEST ONLY: signed per leg with an ephemeral key (tests/helpers/sign-feed-for-ci.mjs), file:// URLs,
+# honoured only with PLUR1BUS_PLUGIN_INSTALLER_TEST=1. No secrets are used.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/dist/**'
+      - 'lib/selftest/**'
+      - 'lib/snapshot/**'
+      - '.github/workflows/plugin-dist.yml'
+      - 'package*.json'
+      - 'openclaw.plugin.json'
+      - 'tests/helpers/assert-disposable.mjs'
+      - 'tests/helpers/seed-store.mjs'
+      - 'tests/helpers/store-digest.mjs'
+      - 'tests/helpers/sign-feed-for-ci.mjs'
+      - 'tests/helpers/ci-plugin-dist.mjs'
+  workflow_call:
+    outputs:
+      artifact:
+        description: Name of the pack artefact (plugin tarball, its -ci.0 twin, installer bundle, TEST ONLY bootstraps, pack.json)
+        value: ${{ jobs.pack.outputs.artifact }}
+
+jobs:
+  pack:
+    name: pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+      ci-version: ${{ steps.pack.outputs.ci-version }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+      artifact: ${{ steps.pack.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+      - name: Pack the plugin, its -ci.0 twin, the installer bundle and TEST ONLY bootstraps
+        id: pack
+        env:
+          ARTIFACT: plugin-dist-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/plugin-dist"
+          mkdir -p "$out"
+          field() { node -e 'const [f,k]=process.argv.slice(1); process.stdout.write(String(JSON.parse(require("fs").readFileSync(f,"utf8"))[0][k]))' "$1" "$2"; }
+
+          npm pack --json --pack-destination "$out" > "$RUNNER_TEMP/npm-pack.json"
+          version=$(field "$RUNNER_TEMP/npm-pack.json" version)
+          tgz=$(field "$RUNNER_TEMP/npm-pack.json" filename)
+          integrity=$(field "$RUNNER_TEMP/npm-pack.json" integrity)
+          sha256=$(sha256sum "$out/$tgz" | cut -d' ' -f1)
+
+          # HM1-R13: the same commit packed again as <v>-ci.0, the start version of the upgrade leg.
+          ci_version="$version-ci.0"
+          npm version --no-git-tag-version --allow-same-version "$ci_version" > /dev/null
+          node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync("openclaw.plugin.json","utf8")); m.version=process.argv[1]; fs.writeFileSync("openclaw.plugin.json", JSON.stringify(m,null,2)+"\n")' "$ci_version"
+          npm pack --json --pack-destination "$out" > "$RUNNER_TEMP/npm-pack-ci.json"
+          ci_tgz=$(field "$RUNNER_TEMP/npm-pack-ci.json" filename)
+          git checkout -- package.json package-lock.json openclaw.plugin.json
+
+          node scripts/dist/build-installer.mjs --out "$out/plur1bus-plugin-installer.mjs"
+          node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out"
+          node -e 'const [f,...v]=process.argv.slice(1); const k=["version","ciVersion","tgz","ciTgz","sha256","integrity"]; require("fs").writeFileSync(f, JSON.stringify(Object.fromEntries(k.map((x,i)=>[x,v[i]])),null,2)+"\n")' \
+            "$out/pack.json" "$version" "$ci_version" "$tgz" "$ci_tgz" "$sha256" "$integrity"
+          # smoke: both tarballs make a valid, signed feed (each install leg signs its own, with its own paths)
+          node tests/helpers/sign-feed-for-ci.mjs --artefacts "$out" --out-dir "$RUNNER_TEMP/feed-smoke"
+          ls -l "$out"
+
+          {
+            echo "version=$version"
+            echo "ci-version=$ci_version"
+            echo "sha256=$sha256"
+            echo "integrity=$integrity"
+            echo "artifact=$ARTIFACT"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### pack"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| version | \`$version\` (\`$tgz\`) |"
+            echo "| sha256 | \`$sha256\` |"
+            echo "| integrity | \`$integrity\` |"
+            echo "| ci twin | \`$ci_version\` (\`$ci_tgz\`) |"
+            echo "| artefact | \`$ARTIFACT\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the pack artefact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/plugin-dist
+          if-no-files-found: error
+          retention-days: 7
+
+  install:
+    name: install (${{ matrix.runner }}, OpenClaw ${{ matrix.openclaw }})
+    needs: pack
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025, windows-11-arm]
+        openclaw: [min, latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Audit artefacts under docs/ exceed MAX_PATH; must be set before checkout.
+      - name: Enable git long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+      # The helpers read stores with this repo's @lancedb/lancedb once the plugin is uninstalled; no lifecycle scripts.
+      - name: Install dependencies (helpers only)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Download the pack artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/plugin-dist
+      - name: Disposable OpenClaw locations (HM1-R11)
+        run: node tests/helpers/ci-plugin-dist.mjs env
+      - name: Resolve the OpenClaw version (HM1-R12)
+        id: oc
+        env:
+          WHICH: ${{ matrix.openclaw }}
+        run: |
+          set -euo pipefail
+          if [ "$WHICH" = min ]; then
+            v=$(node -p "require('./package.json').openclaw.compat.minGatewayVersion")
+          else
+            v=$(npm view openclaw dist-tags.latest)
+          fi
+          printf 'version=%s\n' "$v" >> "$GITHUB_OUTPUT"
+          printf '### %s, OpenClaw %s = %s\n\n' "${{ matrix.runner }}" "$WHICH" "$v" >> "$GITHUB_STEP_SUMMARY"
+      - name: Install OpenClaw (POSIX, install-cli.sh)
+        if: runner.os != 'Windows'
+        env:
+          OC_VERSION: ${{ steps.oc.outputs.version }}
+        run: |
+          set -euo pipefail
+          # install-cli.sh writes ~/.npm and shell rc files under HOME (fact sheet step 1): HOME is disposable too.
+          export HOME="$OPENCLAW_HOME"
+          curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --prefix "$RUNNER_TEMP/oc" --version "$OC_VERSION" --json
+          echo "$RUNNER_TEMP/oc/bin" >> "$GITHUB_PATH"
+      # A global npm install; acceptable only because the runner is disposable (HM1-R11).
+      - name: Install OpenClaw (Windows, install.ps1)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OC_VERSION: ${{ steps.oc.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://openclaw.ai/install.ps1).Content)) -Tag $env:OC_VERSION -NoOnboard
+      # install.ps1 may end its script with `exit`, so finding openclaw.cmd is a step of its own.
+      - name: Install OpenClaw (Windows, put openclaw.cmd on PATH)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @((npm prefix -g).Trim(), (Join-Path $env:APPDATA 'npm'), (Join-Path $env:LOCALAPPDATA 'OpenClaw\deps\portable-node')) +
+            @(([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') | Where-Object { $_ })
+          $dir = $candidates | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'openclaw.cmd') } | Select-Object -First 1
+          if (-not $dir) { throw "openclaw.cmd not found in: $($candidates -join '; ')" }
+          Write-Host "openclaw.cmd in $dir"
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $dir
+      - name: assert-disposable (first step after installing OpenClaw, HM1-R11)
+        run: node tests/helpers/assert-disposable.mjs
+      - name: Restore the E5 model cache (HM1-R21)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/oc-home/models/plur1bus
+          key: e5-614241f6-${{ runner.os }}-${{ runner.arch }}
+      # FACT lines answer the fact sheet's "verify in Task 8" questions (layout, openclaw.cmd, gateway status fields).
+      - name: OpenClaw facts for docs/distribution/openclaw-cli-facts.md
+        run: node tests/helpers/ci-plugin-dist.mjs facts
+      - name: cmd.exe /v:off argv (Windows)
+        if: runner.os == 'Windows'
+        run: node tests/helpers/ci-plugin-dist.mjs cmd-argv
+      - name: Raw path (npm-pack install, inspect --runtime, selftest --download-models, dot-dir scan, uninstall)
+        run: node tests/helpers/ci-plugin-dist.mjs raw --artefacts "$RUNNER_TEMP/plugin-dist"
+      - name: Sign a TEST ONLY feed over the pack artefact
+        run: node tests/helpers/sign-feed-for-ci.mjs --artefacts "$RUNNER_TEMP/plugin-dist" --out-dir "$OC_FEED_DIR" --github-env "$GITHUB_ENV"
+      # install-plugin.sh on POSIX, install-plugin.ps1 under Windows PowerShell 5.1 on Windows (the byte-identical
+      # --json check also runs it under pwsh 7).
+      - name: Installer path (fresh -ci.0, seed 50 rows, forced failing update, update, byte-identical --json, uninstall)
+        run: node tests/helpers/ci-plugin-dist.mjs installer --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$OC_FEED_DIR"
+      - name: ClawHub non-TTY install with and without --accept-capabilities (T5-b, informational)
+        continue-on-error: true
+        run: node tests/helpers/ci-plugin-dist.mjs clawhub
+
+  # C8: non-blocking for four weeks. windows-11-arm has no WSL leg (F14).
+  wsl:
+    name: wsl (windows-2025, Ubuntu-24.04, OpenClaw latest)
+    needs: pack
+    runs-on: windows-2025
+    continue-on-error: true
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Enable git long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Download the pack artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/plugin-dist
+      - name: Disposable locations
+        run: node tests/helpers/ci-plugin-dist.mjs env
+      - name: Resolve OpenClaw latest (HM1-R12)
+        id: oc
+        run: |
+          v=$(npm view openclaw dist-tags.latest)
+          printf 'version=%s\n' "$v" >> "$GITHUB_OUTPUT"
+          printf '### WSL Ubuntu-24.04, OpenClaw latest = %s\n\n' "$v" >> "$GITHUB_STEP_SUMMARY"
+      # Vampire/setup-wsl v7.0.0 (tag object 5fae231e, commit d1da7f2c), current release on 2026-09-29.
+      - name: Set up WSL Ubuntu-24.04
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: curl ca-certificates git
+      - name: Install OpenClaw latest inside WSL (install-cli.sh, prefix and state under /tmp/plur1bus-ci)
+        env:
+          OC_VERSION: ${{ steps.oc.outputs.version }}
+        run: node tests/helpers/ci-plugin-dist.mjs wsl-setup --distro Ubuntu-24.04 --openclaw-version "$OC_VERSION"
+      - name: Sign a TEST ONLY feed over the pack artefact
+        run: node tests/helpers/sign-feed-for-ci.mjs --artefacts "$RUNNER_TEMP/plugin-dist" --out-dir "$OC_FEED_DIR"
+      - name: install-plugin.ps1 -Target wsl:Ubuntu-24.04 --offline <tgz> --non-interactive --json
+        run: node tests/helpers/ci-plugin-dist.mjs wsl-install --distro Ubuntu-24.04 --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$OC_FEED_DIR"
+      - name: Selftest inside WSL
+        run: node tests/helpers/ci-plugin-dist.mjs wsl-selftest --distro Ubuntu-24.04
+
+  # HM1-R13: nightly upgrade from the newest GitHub Release .tgz; non-blocking until 7.17.0 is released.
+  upgrade-from-release:
+    name: upgrade-from-release (nightly)
+    needs: pack
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+      - name: Install dependencies (helpers only)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Download the pack artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/plugin-dist
+      - name: Disposable OpenClaw locations (HM1-R11)
+        run: node tests/helpers/ci-plugin-dist.mjs env
+      - name: Download the newest GitHub Release tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          mkdir -p "$RUNNER_TEMP/release"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern '*.tgz' --dir "$RUNNER_TEMP/release"
+          f=$(find "$RUNNER_TEMP/release" -maxdepth 1 -name '*.tgz' | sort | head -n 1)
+          [ -n "$f" ] || { echo "release $tag has no .tgz asset" >&2; exit 1; }
+          rv=$(node --input-type=module -e 'import { readFileSync } from "node:fs"; import { readPackageJsonFromTgz } from "./scripts/dist/build-plugin-feed.mjs"; process.stdout.write(readPackageJsonFromTgz(readFileSync(process.argv[1])).version)' "$f")
+          { echo "RELEASE_TGZ=$f"; echo "RELEASE_VERSION=$rv"; } >> "$GITHUB_ENV"
+          printf '### upgrade-from-release: %s (%s) → pack %s\n\n' "$tag" "$rv" "${{ needs.pack.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Resolve OpenClaw latest (HM1-R12)
+        id: oc
+        run: printf 'version=%s\n' "$(npm view openclaw dist-tags.latest)" >> "$GITHUB_OUTPUT"
+      - name: Install OpenClaw (POSIX, install-cli.sh)
+        env:
+          OC_VERSION: ${{ steps.oc.outputs.version }}
+        run: |
+          set -euo pipefail
+          export HOME="$OPENCLAW_HOME"
+          curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --prefix "$RUNNER_TEMP/oc" --version "$OC_VERSION" --json
+          echo "$RUNNER_TEMP/oc/bin" >> "$GITHUB_PATH"
+      - name: assert-disposable (first step after installing OpenClaw, HM1-R11)
+        run: node tests/helpers/assert-disposable.mjs
+      - name: Restore the E5 model cache (HM1-R21)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/oc-home/models/plur1bus
+          key: e5-614241f6-${{ runner.os }}-${{ runner.arch }}
+      - name: Sign a TEST ONLY feed over the release and the pack
+        run: node tests/helpers/sign-feed-for-ci.mjs --artefacts "$RUNNER_TEMP/plugin-dist" --tgz "$RELEASE_TGZ" --out-dir "$OC_FEED_DIR"
+      # The release predates `plur1bus selftest`, so it is installed raw and the forced-failure rollback (whose verify
+      # runs the old version's selftest) is skipped; the upgrade itself goes through install-plugin.sh --update.
+      - name: Upgrade the release to the pack through the installer (store digest equal)
+        run: node tests/helpers/ci-plugin-dist.mjs installer --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$OC_FEED_DIR" --bootstrap sh --from raw --from-tgz "$RELEASE_TGZ" --skip-forced-failure
+      - name: ClawHub install record vs the GitHub Release tarball (fact k, informational)
+        continue-on-error: true
+        run: node tests/helpers/ci-plugin-dist.mjs clawhub --version "$RELEASE_VERSION" --compare-tgz "$RELEASE_TGZ"

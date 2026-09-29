@@ -94,6 +94,15 @@ describe("plugin installer: install", () => {
     assert.ok(cron[0].argv[0].startsWith(join(sb.stateDir, "npm", "projects")), cron[0].argv[0]);
   });
 
+  it("PLUR1BUS_SELFTEST_FORCE_FAIL=1 with the test flag fails a fresh install's verify and rolls it back (Task 8 CI seam)", async () => {
+    const sb = createInstallerSandbox();
+    const r = await run({ ...sb, env: { ...sb.env, PLUR1BUS_SELFTEST_FORCE_FAIL: "1" } }, ["--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    const doc = JSON.parse(r.stdout);
+    assert.match(doc.steps.find((s) => s.id === "verify.selftest").detail, /forced by PLUR1BUS_SELFTEST_FORCE_FAIL=1/);
+    assert.ok(sb.openclawCalls().some((a) => a[0] === "plugins" && a[1] === "uninstall"));
+  });
+
   it("an install whose selftest fails is uninstalled and the previous slot restored, exit 1", async () => {
     const sb = createInstallerSandbox({
       scenario: {

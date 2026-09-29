@@ -291,6 +291,12 @@ files.
 **Use this:** Gateway running ⇔ `gateway status --json` exits 0 **and**
 `/rpc/ok === true`; anything else (including a non-zero exit) is "not running"
 → `skipped: gateway-start-reconciles` (HM1-R7). Never use the exit code alone.
+The store-restore gate (T6-e) fails the other way round: it treats the Gateway as
+**stopped only** on exit 0 with `/rpc/ok === false`, `/port/status` not `"busy"` and
+`/rpc/connectFailure/kind === "unreachable"` (or, without that field, `/port/status
+"free"` or an `ECONNREFUSED` `/rpc/error`); a deadline, a non-zero exit, unparseable
+output or any other RPC failure counts as running (HM1 Task 8,
+`scripts/dist/installer/openclaw-cli.mjs` `gatewayStatus()`).
 
 ## (i) Root CLI `plur1bus` with `hasSubcommands: true`
 
@@ -380,3 +386,38 @@ asset is reachable.
 | `plugins update <id>` keeping `plugins.entries.<id>.config` across a real version change | unverified (no npm-registry install possible, P5); Task 8 upgrade leg |
 | Exact byte digest of the GitHub-Release `.tgz` vs ClawHub | unverified (asset unreachable); see (k) |
 | Whether OpenClaw ever garbage-collects old `__openclaw-generation__` dirs | not observed during the spike |
+
+## Task 8 CI answers — TODO (controller fills this from the first green `plugin-dist` run)
+
+> **TODO:** replace every `TODO` below with the value the run printed, then drop this note.
+> Workflow `.github/workflows/plugin-dist.yml`; every answer is a `FACT <key>: <json>` line on stdout of
+> `tests/helpers/ci-plugin-dist.mjs` (also in the job summary). Nothing is assumed until it is filled in.
+
+Run: `TODO` (URL, commit). Resolved OpenClaw versions (HM1-R12): min `TODO`, latest `TODO`.
+
+| Question (section above) | Where the run prints it | Answer |
+|---|---|---|
+| `install.ps1 -Tag <v> -NoOnboard`: where `node` lands, `openclaw.cmd` / `.ps1` shim contents (step 1) | `windows-2025` and `windows-11-arm` legs, step "OpenClaw facts": `FACT win32.shims`, `FACT win32.node`; step "Install OpenClaw (Windows, put openclaw.cmd on PATH)" log line `openclaw.cmd in <dir>` | TODO |
+| Argument quoting through `openclaw.cmd` (spaces, `!`, `^`, `&`, non-ASCII, trailing `\`) | Windows legs, step "cmd.exe /v:off argv": `FACT win32.cmdArgv` (blocking) | TODO |
+| `install-cli.sh` layout on macOS (step 1) | `macos-15` legs, step "OpenClaw facts": `FACT posix.wrapper` | TODO |
+| `gateway status --json` fields without a Gateway on each version (h); the installer's fail-closed verdict | every leg, step "OpenClaw facts": `FACT gateway.status` (`rpcOk`, `connectFailure`, `portStatus`, `installerVerdict`) — `min` legs answer whether 2026.8.1 has `/rpc/connectFailure` and `/port/status` | TODO |
+| Does `plugins install npm-pack:` set `plugins.slots.memory` (c), per version and OS | step "Raw path": `FACT raw.slotAfterInstall` | TODO |
+| `inspect --runtime --json` of the packed tarball: status, imported, CLI root `plur1bus` (b, i) | step "Raw path": `FACT raw.inspectRuntime` | TODO |
+| Is `<state>/extensions/.plur1bus-legacy-<ts>` scanned by OpenClaw (HM1-R9 adoption keeps it) | step "Raw path": `FACT dotDirScanned` (blocking) | TODO |
+| Fresh non-TTY ClawHub install, without and with `--accept-capabilities` (T5-b) | step "ClawHub non-TTY install" (informational): `FACT clawhub.nonTtyWithoutAccept`, `FACT clawhub.nonTtyWithAccept`, `FACT clawhub.installRecord` | TODO |
+| ClawHub `npmIntegrity` vs the real GitHub-Release `.tgz` (k) | nightly `upgrade-from-release`, last step: `FACT clawhub.installRecord` → `npmIntegrityEqualsRelease` | TODO |
+| `install-plugin.ps1 --json` stdout byte-identical to the installer's under Windows PowerShell 5.1 and pwsh 7 | Windows legs, step "Installer path": `FACT bootstrap.jsonByteIdentical.powershell.exe`, `…pwsh` (blocking); POSIX: `…sh` | TODO |
+| win32 `inside()` with a differently cased store path in a harness home | Windows legs, step "Installer path": `FACT win32.insideHarnessHome` (blocking) | TODO |
+| WSL: `install-plugin.ps1 -Target wsl:Ubuntu-24.04` and the selftest inside the distro (C8, non-blocking) | job `wsl`: `FACT wsl.install`, `FACT wsl.selftest` | TODO |
+| `plugins update <id>` keeping `plugins.entries.<id>.config` across a real version change (f) | not answerable in CI while the package is not on npmjs.org (P5); stays unverified | unverified |
+| Old `__openclaw-generation__` dirs garbage-collected? | the installer's update summary line "Kept N old npm generation folder(s)" in step "Installer path" | TODO |
+
+Per-target selftest timings (step "Raw path", job summary table "Raw path"):
+
+| Target | OpenClaw min | OpenClaw latest |
+|---|---|---|
+| linux-x64 (`ubuntu-24.04`) | TODO | TODO |
+| linux-arm64 (`ubuntu-24.04-arm`) | TODO | TODO |
+| darwin-arm64 (`macos-15`) | TODO | TODO |
+| win-x64 (`windows-2025`) | TODO | TODO |
+| win-arm64 (`windows-11-arm`) | TODO | TODO |

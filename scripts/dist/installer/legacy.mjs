@@ -40,7 +40,7 @@ import {
   waitForGatewayStopped,
 } from "./update.mjs";
 import { renameWithRetry } from "./fsutil.mjs";
-import { verifyInstall } from "./verify.mjs";
+import { selftestForcedToFail, verifyInstall } from "./verify.mjs";
 
 export const GUARD_NAME = "protect-plur1bus-deploy";
 const SLOT = "plugins.slots.memory";
@@ -269,7 +269,7 @@ async function applyAdopt(ctx, plan, from) {
 
   if (step === "verify") {
     save("verify");
-    const checks = await verifyInstall({ cli, release, source: p.source, downloadModels: flags["download-models"], stateDir });
+    const checks = await verifyInstall({ cli, release, source: p.source, downloadModels: flags["download-models"], stateDir, forceFail: selftestForcedToFail({ testMode: ctx.testMode, env: ctx.childEnv }) });
     for (const c of checks) report.step(`verify.${c.id}`, c.ok ? (c.warn ? "warn" : "ok") : "failed", c.detail);
     if (checks.some((c) => !c.ok)) return rollbackAdopt(ctx, plan);
     const prevSlot = p.previousSlot?.set && p.previousSlot.value !== PLUGIN_ID ? p.previousSlot.value : null;

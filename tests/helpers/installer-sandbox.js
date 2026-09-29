@@ -133,6 +133,7 @@ if (args[0] === "plugins" && args[1] === "inspect") {
     j.install.version = state.version;
     j.install.spec = state.source === "clawhub" ? "clawhub:@cyb3rb1ade/plur1bus-memory@" + state.version : "@cyb3rb1ade/plur1bus-memory@" + state.version;
     if (scenario.recordNpmIntegrity) j.install.npmIntegrity = scenario.recordNpmIntegrity;
+    if (scenario.recordNpmIntegrityByVersion?.[state.version]) j.install.npmIntegrity = scenario.recordNpmIntegrityByVersion[state.version];
     if (scenario.recordClawpackSha256) j.install.clawpackSha256 = scenario.recordClawpackSha256;
     if (!has("--runtime") && scenario.recordStatus) j.plugin.status = scenario.recordStatus;
     if (has("--runtime")) {
@@ -216,6 +217,10 @@ if (args[0] === "plugins" && args[1] === "enable") {
 }
 
 if (args[0] === "gateway" && args[1] === "status") {
+  if (scenario.gatewayAmbiguous) {
+    err("gateway status: could not inspect the service\n");
+    done(1);
+  }
   const j = fixtureJson("gateway-status-stopped.json");
   if (scenario.gatewayRunning) j.rpc.ok = true;
   out(JSON.stringify(j, null, 2) + "\n");

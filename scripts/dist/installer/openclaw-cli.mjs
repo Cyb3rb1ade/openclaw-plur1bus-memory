@@ -175,10 +175,30 @@ export function createOpenclawCli({ bin, env, run = defaultRun, timeoutMs = 300_
       const r = await call(["config", "validate"], 120_000);
       return { ok: r.code === 0, code: r.code };
     },
+    /**
+     * Fails closed (T6-e): `running` is false only for a definite "nothing listens" answer —
+     * exit 0, JSON, /rpc/ok false with /rpc/connectFailure/kind "unreachable" (or, for a version
+     * without that field, /port/status "free" or an ECONNREFUSED /rpc/error), and /port/status not
+     * "busy" (fact h). A deadline, a non-zero exit,
+     * unparseable output or any other RPC failure counts as running, so the store is never
+     * restored under a Gateway that merely failed to answer. `confirmed` (exit 0 and /rpc/ok
+     * true) is what HM1-R7's feature-cron step needs.
+     * @returns {Promise<{ running: boolean, confirmed: boolean, detail: string }>}
+     */
     async gatewayStatus() {
       const r = await call(["gateway", "status", "--json"], 60_000);
       const json = parseJson(r.stdout);
-      return { running: r.code === 0 && json?.rpc?.ok === true };
+      if (r.code !== 0 || r.timedOut) return { running: true, confirmed: false, detail: `gateway status failed (exit ${r.code}${r.timedOut ? ", deadline exceeded" : ""}); assuming it runs` };
+      const rpc = json !== null && typeof json === "object" ? json.rpc : null;
+      if (!rpc || typeof rpc !== "object") return { running: true, confirmed: false, detail: "gateway status gave no rpc result; assuming it runs" };
+      if (rpc.ok === true) return { running: true, confirmed: true, detail: "rpc ok" };
+      const kind = rpc.connectFailure?.kind;
+      const port = json.port?.status;
+      const refused = kind === undefined && /\bECONNREFUSED\b/.test(String(rpc.error ?? ""));
+      const stopped = rpc.ok === false && port !== "busy" && (kind === "unreachable" || (kind === undefined && (port === "free" || refused)));
+      return stopped
+        ? { running: false, confirmed: false, detail: `rpc ${kind ?? "failed"}, port ${port ?? "unknown"}` }
+        : { running: true, confirmed: false, detail: `rpc not ok (${kind ?? "no failure kind"}), port ${port ?? "unknown"}; assuming it runs` };
     },
     async selftest({ downloadModels = false, stateDir } = {}) {
       const r = await call(["plur1bus", "selftest", "--json", ...(stateDir ? ["--state-dir", stateDir] : []), ...(downloadModels ? ["--download-models"] : [])], downloadModels ? 3_600_000 : 900_000);

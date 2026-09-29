@@ -188,6 +188,31 @@ describe("plugin installer: update", () => {
     assert.equal((await listSnapshots({ stateDir: sb.stateDir })).filter((s) => s.kind === "snapshot").length, 1);
   });
 
+  it("PLUR1BUS_SELFTEST_FORCE_FAIL=1 (test flag only) fails the update's verify, not the rollback's (Task 8 CI seam)", async () => {
+    const { sb, baseDbPath } = await trackedSandbox();
+    const before = treeDigest(baseDbPath);
+    const r = await run({ ...sb, env: { ...sb.env, PLUR1BUS_SELFTEST_FORCE_FAIL: "1" } }, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    const doc = JSON.parse(r.stdout);
+    const byId = Object.fromEntries(doc.steps.map((s) => [s.id, s]));
+    assert.equal(byId["verify.selftest"].status, "failed");
+    assert.match(byId["verify.selftest"].detail, /PLUR1BUS_SELFTEST_FORCE_FAIL/);
+    assert.equal(byId["rollback.verify.selftest"].status, "ok", "the rollback verify is never forced");
+    assert.equal(byId.rollback.status, "ok");
+    assert.equal(sb.shimState().version, "7.16.11");
+    assert.equal(treeDigest(baseDbPath), before);
+    assert.ok(sb.openclawCalls().filter((a) => a[0] === "plur1bus").length >= 2, "the real selftest still runs under the seam");
+  });
+
+  it("PLUR1BUS_SELFTEST_FORCE_FAIL is ignored without PLUR1BUS_PLUGIN_INSTALLER_TEST=1", async () => {
+    const { sb } = await trackedSandbox();
+    const env = { ...sb.env, PLUR1BUS_SELFTEST_FORCE_FAIL: "1" };
+    delete env.PLUR1BUS_PLUGIN_INSTALLER_TEST;
+    const r = await run({ ...sb, env }, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.equal(sb.shimState().version, "7.17.0");
+  });
+
   it("a failed rollback exits 4 and prints the manual steps", async () => {
     const { sb, baseDbPath } = await trackedSandbox({ scenario: { failVersions: ["7.17.0", "7.16.11"] } });
     const r = await run(sb, ["--update", "--yes", "--json"]);
