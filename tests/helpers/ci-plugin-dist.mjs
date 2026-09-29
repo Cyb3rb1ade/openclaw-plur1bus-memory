@@ -478,8 +478,8 @@ async function cmdWslSetup({ distro, "openclaw-version": ocVersion }) {
   const repo = REPO.replaceAll("\\", "/");
   const script = [
     "set -eu",
-    // file:// URLs of the Windows-side feed (file:///D:/a/...) read as /D:/a/... inside the distro
-    'for d in /mnt/[a-z]; do [ -d "$d" ] || continue; L=$(basename "$d" | tr a-z A-Z); ln -sfn "$d" "/$L:"; done',
+    // No /D: links: curl refuses drive-letter file:// URLs whatever exists (run 36514170524); install-plugin.sh maps
+    // file:///D:/... through wslpath under the test flag.
     `R=${LINUX_ROOT}`,
     'mkdir -p "$R/oc-home" "$R/oc-state"',
     'export HOME="$R/oc-home" OPENCLAW_HOME="$R/oc-home" OPENCLAW_STATE_DIR="$R/oc-state"',
@@ -519,7 +519,7 @@ async function cmdWslInstall({ distro, artefacts, "feed-dir": feedDirArg }) {
   const r = await runBytes("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(dir, "install-plugin.ps1"), ...args], { env });
   process.stderr.write(`${tail(r.stderr, 80)}\n`);
   const doc = parseDoc(r.stdout);
-  fact("wsl.install", { exit: r.code, ok: doc?.ok ?? null, steps: doc?.steps?.map((s) => `${s.id}:${s.status}`) ?? null });
+  fact("wsl.install", { exit: r.code, ok: doc?.ok ?? null, steps: doc?.steps?.map((s) => `${s.id}:${s.status}`) ?? null, badFileUrl: /Bad file:\/\/ URL/.test(r.stderr) });
   summary(`### WSL install (${distro})\n\nexit ${r.code}; ${doc?.steps?.map((s) => `${s.id}:${s.status}`).join(" ") ?? "(no JSON document)"}\n`);
   check(r.code === 0 && doc?.ok === true, `install-plugin.ps1 -Target wsl:${distro} --offline <tgz> --non-interactive --json → exit 0`);
 }

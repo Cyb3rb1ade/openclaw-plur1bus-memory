@@ -77,8 +77,22 @@ fetch() {
       ;;
     *) fail 1 "refusing to download over anything but https: $1" ;;
   esac
+  src=$1
+  case "$src" in
+    # Test flag only (checked above). Handed over by install-plugin.ps1 -Target wsl:<d>, a file:// URL of the Windows
+    # side names a drive (file:///D:/...), which curl on Linux refuses ("Bad file:// URL"): inside WSL, map the drive
+    # through wslpath (file:///D:/x -> file:///mnt/d/x); the rest of the URL, still percent-encoded, is kept as is.
+    file:///[A-Za-z]:/*)
+      if command -v wslpath >/dev/null 2>&1; then
+        drive=$(printf '%s' "$src" | cut -c9)
+        root=$(wslpath -u "$drive:\\") || return 1
+        case "$root" in /*) ;; *) return 1 ;; esac
+        src="file://${root%/}/${src#file:///?:/}"
+      fi
+      ;;
+  esac
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --proto "$proto" --proto-redir '=https' --max-filesize 536870912 -o "$2" "$1"
+    curl -fsSL --proto "$proto" --proto-redir '=https' --max-filesize 536870912 -o "$2" "$src"
   elif command -v wget >/dev/null 2>&1; then
     case "$1" in file://*) fail 1 "file:// URLs need curl" ;; esac
     wget -q --https-only -O "$2" "$1"

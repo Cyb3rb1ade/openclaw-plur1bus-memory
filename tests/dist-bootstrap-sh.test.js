@@ -11,7 +11,7 @@ import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,7 +49,7 @@ let script;
 /**
  * @param {{ pathNode?: "good"|"old"|"none", privateNode?: "good"|"old"|"none", openclaw?: boolean,
  *   feedPatch?: (feed: object) => void, badSignature?: boolean, channel?: string, feedUrl?: string,
- *   testFlag?: boolean, installerExit?: number }} [o]
+ *   testFlag?: boolean, installerExit?: number, wslpath?: boolean }} [o]
  */
 function makeBootstrapCase(o = {}) {
   const { pathNode = "good", privateNode = "good", openclaw = true, testFlag = true } = o;
@@ -74,6 +74,24 @@ function makeBootstrapCase(o = {}) {
   const realCurl = which("curl");
   writeFileSync(join(bin, "curl"), `#!/bin/sh\nfor a in "$@"; do case "$a" in *://*) printf '%s\\n' "$a" >>"${curlLog}" ;; esac; done\nif [ -n "\${CURL_BLOCK:-}" ]; then : >"\$CURL_BLOCK.started"; while [ ! -e "\$CURL_BLOCK" ]; do sleep 0.05; done; fi\nexec "${realCurl}" "$@"\n`, { mode: 0o755 });
 
+  // TEST ONLY `wslpath` (as inside a WSL distro): `-u X:\` → <root>/mnt/x/, every call logged.
+  const wslLog = join(root, "wslpath.log");
+  if (o.wslpath) {
+    mkdirSync(join(root, "mnt"), { recursive: true });
+    symlinkSync(root, join(root, "mnt", "d")); // drive D: is the sandbox root
+    const shim = [
+      "#!/bin/sh",
+      `printf '%s\\n' "$*" >>"${wslLog}"`,
+      'if [ "$1" = -u ] && printf \'%s\' "$2" | grep -Eq \'^[A-Za-z]:\\\\$\'; then',
+      `  printf '%s/mnt/%s/\\n' "${root}" "$(printf '%s' "$2" | cut -c1 | tr A-Z a-z)"`,
+      "  exit 0",
+      "fi",
+      'echo "wslpath shim: unexpected $*" >&2',
+      "exit 2",
+      "",
+    ].join("\n");
+    writeFileSync(join(bin, "wslpath"), shim, { mode: 0o755 });
+  }
   const installerPath = join(root, "fake-installer.mjs");
   writeFileSync(installerPath, FAKE_INSTALLER);
   const channel = o.channel ?? "stable";
@@ -240,6 +258,29 @@ describe("install-plugin.sh", { skip: SKIP }, () => {
     assert.match(r2.stderr, /node-not-found/);
     assert.deepEqual(old.curlUrls(), []);
     assert.ok(!old.nodeCalls().some((l) => l.endsWith("-old-used")), "a too-old node never runs anything");
+  });
+
+  it("inside WSL, file:// URLs of the Windows side (file:///D:/...) are read through wslpath (test flag only)", () => {
+    // plugin-dist run 36514170524: install-plugin.ps1 -Target wsl:<d> hands the distro its Windows file:// feed URL,
+    // and curl on Linux refuses drive letters ("curl: (3) URL rejected: Bad file:// URL").
+    const c = makeBootstrapCase({
+      wslpath: true,
+      feedUrl: "file:///D:/feed/{channel}.json",
+      feedPatch: (feed) => {
+        feed.installer.url = "file:///D:/fake-installer.mjs";
+      },
+    });
+    const r = c.run(["--json"]);
+    assert.equal(r.code, 0, r.out);
+    assert.ok(c.installer(), `installer did not run: ${r.out}`);
+    assert.deepEqual(c.curlUrls(), [`file://${c.root}/mnt/d/feed/stable.json`, `file://${c.root}/mnt/d/feed/stable.json.minisig`, `file://${c.root}/mnt/d/fake-installer.mjs`]);
+    assert.match(r.stderr, /downloading file:\/\/\/D:\/fake-installer\.mjs/, "messages keep the URL as given");
+
+    const off = makeBootstrapCase({ wslpath: true, testFlag: false, feedUrl: "file:///D:/feed/{channel}.json" });
+    const r2 = off.run([]);
+    assert.equal(r2.code, 1, r2.out);
+    assert.deepEqual(off.curlUrls(), []);
+    assert.equal(readFileSync(join(off.root, "wslpath.log"), { encoding: "utf8", flag: "a+" }), "", "no wslpath without the test flag");
   });
 
   it("an https-only feed refuses file:// without the test flag", () => {
