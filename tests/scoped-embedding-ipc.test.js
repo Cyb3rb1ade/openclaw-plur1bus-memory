@@ -116,7 +116,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("diagnoses an oversized macOS data socket path before creating IPC children", {
-    skip: process.platform !== "darwin",
+    skip: process.platform !== "darwin" && "macOS-only socket path length limit (sun_path 104)",
   }, async () => {
     const parent = createStateRoot("plur1bus-scoped-embedding-path-");
     const stateRoot = join(parent, "x".repeat(100));
@@ -705,7 +705,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("serves an abstract socket and refuses a second owner on the same address", {
-    skip: process.platform !== "linux",
+    skip: process.platform !== "linux" && "abstract sockets are Linux-only",
   }, async () => {
     const stateRoot = makeTempDir("e3-ipc-");
     const address = { kind: "abstract-socket", address: "\0plur1bus-e3-test-" + randomUUID() };

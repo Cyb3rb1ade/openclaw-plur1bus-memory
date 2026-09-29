@@ -316,6 +316,26 @@ export const DEPLOY_FILES = [
   "scripts/run-feature-cron.mjs",
   "scripts/lib/openclaw-cli.mjs",
   "scripts/lib/find-deploy-dir.mjs",
+  // ── plugin distribution: feed verifier and builder (HM1) ──────────────────
+  "scripts/dist/minisign.mjs",
+  "scripts/dist/build-plugin-feed.mjs",
+  "scripts/dist/render-bootstraps.mjs", // renders install-plugin.sh/.ps1 (HM1 Task 7)
+  // ── plugin distribution: Node installer sources and bundler (HM1 Task 5) ──
+  "scripts/dist/build-installer.mjs",
+  "scripts/dist/installer/main.mjs",
+  "scripts/dist/installer/detect.mjs",
+  "scripts/dist/installer/compat.mjs",
+  "scripts/dist/installer/openclaw-cli.mjs",
+  "scripts/dist/installer/licence.mjs",
+  "scripts/dist/installer/verify.mjs",
+  "scripts/dist/installer/state.mjs",
+  "scripts/dist/installer/report.mjs",
+  // ── plugin distribution: update, uninstall/purge, legacy adoption (HM1 Task 6) ──
+  "scripts/dist/installer/update.mjs",
+  "scripts/dist/installer/uninstall.mjs",
+  "scripts/dist/installer/artefacts.mjs", // kept verified tarballs for rollback and --offline (HM1 Task 8, T8-b)
+  "scripts/dist/installer/legacy.mjs",
+  "scripts/dist/installer/fsutil.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
@@ -433,6 +453,14 @@ export const DEPLOY_FILES = [
   "scripts/lib/deploy-integrity.mjs",
   "scripts/lib/installer-config.mjs",
   "scripts/lib/patch-agents-memory-instructions.mjs",
+  // HM1 Task 3: store snapshot step (installer update/adoption path).
+  "scripts/snapshot-store.mjs",
+  "lib/snapshot/store-snapshot.js",
+  // HM1 Task 2: `openclaw plur1bus selftest`.
+  "lib/setup/selftest-plugin-runtime.js",
+  "lib/selftest/addon-probes.js",
+  "lib/selftest/run-selftest.js",
+  "lib/selftest/selftest-host.js",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;

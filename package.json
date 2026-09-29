@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.16.11",
+  "version": "7.17.0",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -45,6 +45,7 @@
     "typecheck": "node scripts/typecheck.mjs",
     "gen:config-schema": "node scripts/gen-openclaw-config-schema.mjs",
     "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
+    "test:cross": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 --test-timeout=600000 tests/*.test.js test/*.test.js",
     "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
     "repair": "node scripts/repair-installed-plugin.mjs",
     "repair:dry-run": "node scripts/repair-installed-plugin.mjs --dry-run",
@@ -55,6 +56,8 @@
     "repair-dreaming-cron": "node scripts/repair-dreaming-cron.mjs",
     "reindex-promotions": "node scripts/embed-promoted-memories.mjs --dry-run",
     "setup-feature-crons": "node scripts/setup-feature-crons.mjs",
+    "build:installer": "node scripts/dist/build-installer.mjs",
+    "build:bootstraps": "node scripts/dist/render-bootstraps.mjs",
     "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },
   "engines": {
@@ -79,7 +82,9 @@
   },
   "devDependencies": {
     "c8": "^11.0.0",
-    "openclaw": "2026.8.2"
+    "esbuild": "0.28.2",
+    "openclaw": "2026.8.2",
+    "yaml": "2.9.0"
   },
   "overrides": {
     "@huggingface/transformers": {

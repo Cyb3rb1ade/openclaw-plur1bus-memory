@@ -44,6 +44,7 @@ import { registerFeatureCronNativeDispatch, loadOpenClawPluginSdkRuntime } from 
 import { resolveAgentWorkspaceDir } from "../../lib/setup/memory-host-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "../../lib/setup/obsidian-vault-plugin-runtime.js";
 import { registerReembeddingRuntime } from "../../lib/setup/reembedding-plugin-runtime.js";
+import { registerSelftestRuntime } from "../../lib/setup/selftest-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "../../lib/setup/workspace-policy-plugin-runtime.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { listFeatures, renderFeatureList, renderToggleResult, toggleFeature } from "../../lib/telegram-commands/feature-toggle.js";
@@ -127,6 +128,12 @@ export function registerChatCommands(ctx) {
     workspacePolicyGuard,
     workspacePolicyStore,
   } = ctx;
+
+  // `openclaw plur1bus selftest` (HM1-R5) runs in the CLI process without a
+  // Gateway, so it only needs registerCli — on every registration mode.
+  if (typeof api.registerCli === "function") {
+    registerSelftestRuntime({ api });
+  }
 
   if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
     registerFeatureCronNativeDispatch({

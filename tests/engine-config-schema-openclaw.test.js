@@ -169,9 +169,16 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     }
     assert.deepStrictEqual(afterHints, before.uiHints);
     assert.deepStrictEqual(Object.keys(afterHints), Object.keys(before.uiHints));
+    // Allow-list of cliCommands additions since 72b6697f (HM1-R5): exactly
+    // the maintenance root `plur1bus` (`openclaw plur1bus selftest`).
+    const selftestRoot = after.cliCommands.filter((entry) => entry.name === "plur1bus");
+    assert.deepStrictEqual(selftestRoot, [{ name: "plur1bus", description: "PLUR1BUS maintenance commands (selftest)", hasSubcommands: true }]);
+    const afterCli = after.cliCommands.filter((entry) => entry.name !== "plur1bus");
+    // The release version moves with every release (HM1 Task 10: 7.17.0); it must equal package.json, nothing else.
+    assert.equal(after.version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
     for (const key of Object.keys(before)) {
-      if (key === "configSchema" || key === "uiHints") continue;
-      assert.deepStrictEqual(after[key], before[key], `manifest field ${key} changed`);
+      if (key === "configSchema" || key === "uiHints" || key === "version") continue;
+      assert.deepStrictEqual(key === "cliCommands" ? afterCli : after[key], before[key], `manifest field ${key} changed`);
     }
   });
 });

@@ -1,0 +1,393 @@
+{
+  "workspaceDir": "<state>/workspace",
+  "plugin": {
+    "id": "memory-lancedb-namespaced",
+    "name": "Memory (LanceDB, per-Agent)",
+    "description": "Per-agent isolated LanceDB memory",
+    "packageVersion": "7.16.11",
+    "version": "7.16.11",
+    "builtWithOpenClawVersion": "2026.8.2",
+    "packageName": "<at>cyb3rb1ade/plur1bus-memory",
+    "format": "openclaw",
+    "source": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory/index.js",
+    "rootDir": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory",
+    "origin": "global",
+    "workspaceDir": "<state>/workspace",
+    "trust": {
+      "reason": "origin-path",
+      "registryPath": "<state>/state/openclaw.sqlite",
+      "origin": "global",
+      "installSource": "npm",
+      "installSpec": "<at>cyb3rb1ade/plur1bus-memory<at>7.16.11"
+    },
+    "enabled": true,
+    "compat": [],
+    "explicitlyEnabled": true,
+    "activated": true,
+    "activationSource": "explicit",
+    "activationReason": "selected memory slot",
+    "syntheticAuthRefs": [],
+    "status": "loaded",
+    "toolNames": [
+      "memory_recall",
+      "memory_search",
+      "memory_store",
+      "memory_forget",
+      "knowledge_update"
+    ],
+    "hookNames": [],
+    "channelIds": [],
+    "cliBackendIds": [],
+    "providerIds": [],
+    "embeddingProviderIds": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "speechProviderIds": [],
+    "realtimeTranscriptionProviderIds": [],
+    "realtimeVoiceProviderIds": [],
+    "mediaUnderstandingProviderIds": [],
+    "transcriptSourceProviderIds": [],
+    "imageGenerationProviderIds": [],
+    "videoGenerationProviderIds": [],
+    "musicGenerationProviderIds": [],
+    "webFetchProviderIds": [],
+    "webSearchProviderIds": [],
+    "migrationProviderIds": [],
+    "contextEngineIds": [],
+    "agentHarnessIds": [],
+    "cliCommands": [
+      "plur1bus-command",
+      "plur1bus-feature-cron",
+      "plur1bus-workspace",
+      "plur1bus-reembedding",
+      "plur1bus-obsidian"
+    ],
+    "services": [
+      "plur1bus-reembedding-switch-recovery"
+    ],
+    "gatewayDiscoveryServiceIds": [],
+    "commands": [
+      "plur1bus",
+      "plur1bus_start",
+      "plur1bus_temperament",
+      "plur1bus_persona",
+      "plur1bus_status",
+      "plur1bus_doctor",
+      "plur1bus_state",
+      "plur1bus_enable",
+      "plur1bus_disable",
+      "plur1bus_memory",
+      "plur1bus_forget",
+      "plur1bus_correct",
+      "plur1bus_critical",
+      "plur1bus_dashboards",
+      "plur1bus_conflicts",
+      "state",
+      "enable",
+      "disable",
+      "speaker",
+      "memory",
+      "mf",
+      "forget",
+      "correct",
+      "share",
+      "teile",
+      "wiki"
+    ],
+    "httpRoutes": 1,
+    "hookCount": 12,
+    "configSchema": true,
+    "configUiHints": "<trimmed: plugin manifest uiHints, not OpenClaw behaviour>",
+    "configJsonSchema": "<trimmed: plugin manifest configSchema, not OpenClaw behaviour>",
+    "contracts": {
+      "embeddingProviders": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "tools": [
+        "knowledge_update",
+        "memory_forget",
+        "memory_recall",
+        "memory_search",
+        "memory_store"
+      ]
+    },
+    "kind": "memory",
+    "memorySlotSelected": true,
+    "imported": true,
+    "dependencyStatus": {
+      "hasDependencies": true,
+      "installed": true,
+      "requiredInstalled": true,
+      "optionalInstalled": true,
+      "missing": [],
+      "missingOptional": [],
+      "dependencies": [
+        {
+          "name": "<at>lancedb/lancedb",
+          "spec": "^0.26.2",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>lancedb/lancedb"
+        },
+        {
+          "name": "apache-arrow",
+          "spec": "18.1.0",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/apache-arrow"
+        },
+        {
+          "name": "openai",
+          "spec": "^6.27.0",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/openai"
+        }
+      ],
+      "optionalDependencies": [
+        {
+          "name": "<at>huggingface/transformers",
+          "spec": "4.2.0",
+          "installed": true,
+          "optional": true,
+          "resolvedPath": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>huggingface/transformers"
+        },
+        {
+          "name": "typescript",
+          "spec": "^5.9.3",
+          "installed": true,
+          "optional": true,
+          "resolvedPath": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/typescript"
+        }
+      ]
+    }
+  },
+  "shape": "plain-capability",
+  "capabilityMode": "plain",
+  "capabilityCount": 1,
+  "capabilities": [
+    {
+      "kind": "embedding",
+      "ids": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ]
+    }
+  ],
+  "typedHooks": [
+    {
+      "name": "before_compaction"
+    },
+    {
+      "name": "before_dispatch"
+    },
+    {
+      "name": "gateway_start"
+    },
+    {
+      "name": "gateway_start"
+    },
+    {
+      "name": "gateway_start"
+    },
+    {
+      "name": "gateway_start"
+    },
+    {
+      "name": "gateway_start"
+    },
+    {
+      "name": "gateway_stop"
+    },
+    {
+      "name": "gateway_stop"
+    },
+    {
+      "name": "gateway_stop"
+    },
+    {
+      "name": "reply_dispatch",
+      "priority": -9007199254740991
+    },
+    {
+      "name": "skill_proposal_changed"
+    }
+  ],
+  "customHooks": [],
+  "tools": [
+    {
+      "names": [
+        "memory_recall",
+        "memory_search",
+        "memory_store",
+        "memory_forget",
+        "knowledge_update"
+      ],
+      "optional": false
+    }
+  ],
+  "commands": [
+    "plur1bus",
+    "plur1bus_start",
+    "plur1bus_temperament",
+    "plur1bus_persona",
+    "plur1bus_status",
+    "plur1bus_doctor",
+    "plur1bus_state",
+    "plur1bus_enable",
+    "plur1bus_disable",
+    "plur1bus_memory",
+    "plur1bus_forget",
+    "plur1bus_correct",
+    "plur1bus_critical",
+    "plur1bus_dashboards",
+    "plur1bus_conflicts",
+    "state",
+    "enable",
+    "disable",
+    "speaker",
+    "memory",
+    "mf",
+    "forget",
+    "correct",
+    "share",
+    "teile",
+    "wiki"
+  ],
+  "cliCommands": [
+    "plur1bus-command",
+    "plur1bus-feature-cron",
+    "plur1bus-workspace",
+    "plur1bus-reembedding",
+    "plur1bus-obsidian"
+  ],
+  "services": [
+    "plur1bus-reembedding-switch-recovery"
+  ],
+  "decisions": [],
+  "gatewayDiscoveryServices": [],
+  "gatewayMethods": [
+    "plur1bus.feature.run",
+    "plur1bus.command.run",
+    "plur1bus.workspacePolicy.get",
+    "plur1bus.workspacePolicy.list",
+    "plur1bus.workspacePolicy.set",
+    "plur1bus.reembedding.status",
+    "plur1bus.reembedding.plan",
+    "plur1bus.reembedding.apply",
+    "plur1bus.reembedding.resume",
+    "plur1bus.reembedding.switch",
+    "plur1bus.reembedding.rollback",
+    "plur1bus.obsidian.detect",
+    "plur1bus.obsidian.prepare",
+    "plur1bus.obsidian.confirm",
+    "plur1bus.control.status"
+  ],
+  "mcpServers": [],
+  "lspServers": [],
+  "httpRouteCount": 1,
+  "bundleCapabilities": [],
+  "diagnostics": [
+    {
+      "level": "warn",
+      "pluginId": "memory-lancedb-namespaced",
+      "source": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory/index.js",
+      "message": "typed hook \"before_agent_reply\" blocked because non-bundled plugins must set plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true"
+    },
+    {
+      "level": "warn",
+      "pluginId": "memory-lancedb-namespaced",
+      "source": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory/index.js",
+      "message": "typed hook \"agent_end\" blocked because non-bundled plugins must set plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true"
+    },
+    {
+      "level": "warn",
+      "pluginId": "memory-lancedb-namespaced",
+      "source": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory/index.js",
+      "message": "typed hook \"agent_end\" blocked because non-bundled plugins must set plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true"
+    },
+    {
+      "level": "warn",
+      "pluginId": "memory-lancedb-namespaced",
+      "source": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory/index.js",
+      "message": "typed hook \"before_prompt_build\" blocked because non-bundled plugins must set plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true"
+    },
+    {
+      "level": "warn",
+      "pluginId": "memory-lancedb-namespaced",
+      "source": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory/index.js",
+      "message": "typed hook \"agent_end\" blocked because non-bundled plugins must set plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true"
+    },
+    {
+      "level": "warn",
+      "pluginId": "memory-lancedb-namespaced",
+      "source": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory/index.js",
+      "message": "typed hook \"before_prompt_build\" blocked because non-bundled plugins must set plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true"
+    }
+  ],
+  "policy": {
+    "allowedModels": [],
+    "hasAllowedModelsConfig": false
+  },
+  "compatibility": [],
+  "install": {
+    "source": "npm",
+    "spec": "<at>cyb3rb1ade/plur1bus-memory<at>7.16.11",
+    "sourcePath": "<tmp>/cyb3rb1ade-plur1bus-memory-7.16.11.tgz",
+    "installPath": "<state>/npm/projects/cyb3rb1ade-plur1bus-memory-1ff39c963c/node_modules/<at>cyb3rb1ade/plur1bus-memory",
+    "version": "7.16.11",
+    "resolvedName": "<at>cyb3rb1ade/plur1bus-memory",
+    "resolvedVersion": "7.16.11",
+    "resolvedSpec": "<at>cyb3rb1ade/plur1bus-memory<at>7.16.11",
+    "integrity": "sha512-Bornxw96JMFWNjL8leXhU8sd7PVZFoa6RcYmVirmO7OptuoD9R7SFxnokzvGoUkh5QvYUTu89AbwBNhCf+kW6A==",
+    "shasum": "4f2ab74ba77717296eab7bbcefe4ae0b746472f6",
+    "resolvedAt": "2026-09-28T21:47:02.883Z",
+    "installedAt": "2026-09-28T21:47:16.221Z",
+    "artifactKind": "npm-pack",
+    "artifactFormat": "tgz",
+    "npmIntegrity": "sha512-Bornxw96JMFWNjL8leXhU8sd7PVZFoa6RcYmVirmO7OptuoD9R7SFxnokzvGoUkh5QvYUTu89AbwBNhCf+kW6A==",
+    "npmShasum": "4f2ab74ba77717296eab7bbcefe4ae0b746472f6",
+    "npmTarballName": "cyb3rb1ade-plur1bus-memory-7.16.11.tgz",
+    "acceptedSurface": {
+      "channels": [],
+      "providers": [],
+      "tools": [
+        "knowledge_update",
+        "memory_forget",
+        "memory_recall",
+        "memory_search",
+        "memory_store"
+      ],
+      "contracts": [
+        "embeddingProviders: plur1bus-e5-small",
+        "embeddingProviders: plur1bus-openai",
+        "embeddingProviders: plur1bus-openai-compatible",
+        "tools: knowledge_update",
+        "tools: memory_forget",
+        "tools: memory_recall",
+        "tools: memory_search",
+        "tools: memory_store"
+      ],
+      "hooks": [],
+      "mcpServers": [],
+      "cliCommands": [
+        "plur1bus-command",
+        "plur1bus-feature-cron",
+        "plur1bus-obsidian",
+        "plur1bus-reembedding",
+        "plur1bus-workspace"
+      ],
+      "cliBackends": [],
+      "skills": [],
+      "dangerousConfigFlags": []
+    },
+    "acceptedSurfaceHash": "7796025811d480594c513a29021f809fabf6bd50392ce810f33d2c76618f89a3",
+    "acceptedSurfaceAt": "2026-09-28T21:47:16.219Z",
+    "acceptedSurfaceIntegrity": "sha512-Bornxw96JMFWNjL8leXhU8sd7PVZFoa6RcYmVirmO7OptuoD9R7SFxnokzvGoUkh5QvYUTu89AbwBNhCf+kW6A=="
+  }
+}

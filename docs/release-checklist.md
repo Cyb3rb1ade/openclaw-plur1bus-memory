@@ -76,6 +76,22 @@
 - [ ] ClawHub scan/moderation state recorded
 - [ ] Fresh disposable OpenClaw install of exact ClawHub `7.1.0`
 
+## Distribution (HM1)
+
+Per release, in order. Details of the installer, the feed and its signature:
+[`distribution.md`](distribution.md). Nothing here is done by CI on its own:
+the feed is signed offline by the owner and published by hand.
+
+- [ ] Dry run of `plugin-release.yml` (dry-run mode): builds the tarball, the installer bundle (`dist-installer/plur1bus-plugin-installer.mjs`), both rendered bootstraps and the **unsigned** `plugin-<channel>.json`; review the job summary (versions, SHA-256, sizes)
+- [ ] Real run of `plugin-release.yml`: GitHub Release with the tarball, installer bundle, `install-plugin.sh`, `install-plugin.ps1`, the unsigned feed; attestations; npm publish with provenance if the package is published to npmjs.org
+- [ ] `plugin-dist.yml` green on the release commit (five targets, min and latest OpenClaw, upgrade and forced-rollback legs)
+- [ ] ClawHub manual publish of `@cyb3rb1ade/plur1bus-memory@<version>` (section "ClawHub" above), **before signing**. If ClawHub's ClawPack digest differs from the tarball's integrity, take it from a test install's record (`clawpackSha256`) and rebuild the feed with `--clawpack-digest <sha256>`. Without a digest in the feed the installer installs the verified GitHub Release tarball instead of ClawHub
+- [ ] Owner signs the final feed **offline**, in one pass: `minisign -S -s <channel>.key -m plugin-<channel>.json`, producing `plugin-<channel>.json.minisig`. Same key and procedure as the harness `release.json`; link: the plugin-feed section of the harness `docs/manual-release.md` (to be added by harness Task 12; link placeholder until it exists). Promoting `beta` to `stable` re-signs identical bytes
+- [ ] Feed check before publishing: the feed validates (`scripts/dist/build-plugin-feed.mjs` validates against `scripts/dist/plugin-feed.schema.json` when it writes it); `latest` is the new version; release notes exist in German and English; `hosts.openclaw.windowsNativeBeta` is intentional (flip to `false` only after four weeks of green Windows legs); a version below the previous latest was built with `--allow-older` on purpose
+- [ ] Publish `plugin/{channel}.json` and `plugin/{channel}.json.minisig` to `https://updates.plur1bus.app/`, and `install-plugin.sh` and `install-plugin.ps1` to `https://plur1bus.app/`; the installer bundle and tarball stay on the GitHub Release. Fetch all of them back and compare SHA-256 with the feed
+- [ ] Smoke through the **published** one-liners in a fresh VM or user account per OS: Linux (x64 or arm64), macOS (Apple silicon), Windows native, and Windows with WSL. Each: fresh install, `openclaw plur1bus selftest`, `--update` from the previous release, `--uninstall`
+- [ ] Owner's VPS (legacy rsync deploy) only if not yet migrated: first disable the `protect-plur1bus-deploy.sh` cron line and move the script away, then `--adopt-legacy --dry-run`, then `--adopt-legacy` (steps in [`distribution.md`](distribution.md#adopting-an-rsync-deploy-legacy))
+
 ## Compatibility and Rollback
 
 - No manual LanceDB migration is required for an ordinary upgrade.

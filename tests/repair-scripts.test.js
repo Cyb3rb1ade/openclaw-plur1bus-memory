@@ -441,7 +441,7 @@ describe("verify-workspace-writer", () => {
     }
   });
 
-  it("exits 1 when memory/.healthcheck/ directory is not writable", { skip: process.getuid?.() === 0 }, async () => {
+  it("exits 1 when memory/.healthcheck/ directory is not writable", { skip: process.getuid?.() === 0 || (process.platform === "win32" && "chmod 0444 directory semantics differ on win32") }, async () => {
     // Root can always write everywhere, so skip if running as root.
     mkdirSync(join(dir, "workspace", "memory"), { recursive: true });
     const hcDir = join(dir, "workspace", "memory", ".healthcheck");

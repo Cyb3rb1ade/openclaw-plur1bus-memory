@@ -69,7 +69,7 @@ describe("workspace policy store", () => {
       actorId: "operator:test",
     });
     const statePath = join(root, "control", "workspace-policy.json");
-    assert.equal(statSync(statePath).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(statSync(statePath).mode & 0o777, 0o600); // POSIX mode only
     assert.deepStrictEqual(
       createWorkspacePolicyStore({ stateRoot: root }).get(alpha),
       disabled,
@@ -123,7 +123,7 @@ describe("workspace policy store", () => {
     assert.equal(readFileSync(statePath, "utf8"), "{malformed");
   });
 
-  it("repairs an overly broad existing state-file mode on successful write", async () => {
+  it("repairs an overly broad existing state-file mode on successful write", { skip: process.platform === "win32" && "POSIX file modes (chmod/0600) are not represented on win32" }, async () => {
     const root = temporaryStateRoot();
     const store = createWorkspacePolicyStore({ stateRoot: root });
     await store.set({ ...alpha, enabled: false, expectedRevision: 0, actorId: "operator:test" });

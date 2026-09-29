@@ -9,6 +9,7 @@ import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { randomBytes } from "node:crypto";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
@@ -53,10 +54,16 @@ function stubEmbedder() {
   };
 }
 
+// macOS: $TMPDIR realpaths to /private/var/folders/<..>/T/ (~57 bytes), so
+// <baseDbPath>/control/embedding-ipc/owner.sock exceeds the 103-byte sun_path
+// limit that resolveScopedEmbeddingIpcPaths() enforces for every serve() on
+// darwin. A real store (~/.openclaw/memory/...) is far shorter; /tmp is too.
+const shortTmp = process.platform === "darwin" ? "/tmp" : tmpdir();
+
 function setup(prefix) {
   const warned = [];
   const stateDir = makeTempDir(`${prefix}state-`);
-  const baseDbPath = join(makeTempDir(`${prefix}root-`), "lancedb-namespaced");
+  const baseDbPath = join(makeTempDir(`${prefix}root-`, shortTmp), "lancedb-namespaced");
   const host = stubHost(stateDir, warned);
   const engine = createEngine(host, config(baseDbPath), { internals: { embeddings: stubEmbedder() } });
   return { engine, host, baseDbPath, warned };
@@ -118,7 +125,7 @@ async function leaveStaleUnixSocket(socketPath) {
   assert.equal(statSync(socketPath).isSocket(), true);
 }
 
-const posixOnly = { skip: process.platform === "win32" };
+const posixOnly = { skip: process.platform === "win32" && "POSIX unix-socket and mode semantics" };
 
 describe("EmbeddingService.serve() (E3 Task 4)", () => {
   it("(a) serves an explicit unix socket; the result carries tokenPath and identity, never the token", posixOnly, async () => {
@@ -165,7 +172,7 @@ describe("EmbeddingService.serve() (E3 Task 4)", () => {
     }
   });
 
-  it("(c) serve() without an address binds the platform default", { skip: process.platform !== "linux" }, async () => {
+  it("(c) serve() without an address binds the platform default", { skip: process.platform !== "linux" && "platform default address is the Linux abstract socket" }, async () => {
     const { engine, host, baseDbPath } = setup("e3-serve-c-");
     try {
       const result = await engine.embedding.serve();

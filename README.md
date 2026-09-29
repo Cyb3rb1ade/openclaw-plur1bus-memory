@@ -1124,29 +1124,77 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
-PLUR1BUS 7.7.1 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
-On an older host the installer refuses the package instead of deploying it:
+PLUR1BUS requires Node.js `>=24.16.0 <25 || >=26.1.0` (the Node that OpenClaw
+runs on) and OpenClaw 2026.8.1 or newer (`openclaw.compat`). On an older host
+OpenClaw refuses the package instead of deploying it:
 `requires plugin API >=2026.8.1, but this OpenClaw runtime exposes <version>`.
+Supported targets: Linux x64 and arm64 (glibc 2.27 or newer), macOS on Apple
+silicon, and Windows x64 and arm64.
+
+### One-line installer (recommended)
+
+The installer verifies the signed release feed before it trusts anything in
+it, installs through OpenClaw's own `plugins install`, checks the result with
+`openclaw plur1bus selftest`, and rolls back on failure. It needs no `sudo`
+and no administrator rights.
+
+Linux and macOS:
+
+```bash
+curl -fsSL https://plur1bus.app/install-plugin.sh | sh
+```
+
+Windows PowerShell (5.1 or 7):
+
+```powershell
+$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF)))
+```
+
+(`.Content` is a byte array under PowerShell 7 when the host does not serve the
+script as `text/*`; the form above decodes it as UTF-8 and drops a BOM, so it
+works on both PowerShell versions whatever the content type.)
+
+Options go after the one-liner: `sh -s -- --accept-nc-licence` on Linux and
+macOS, `... --accept-nc-licence` after the closing parenthesis on Windows.
+`--accept-nc-licence` accepts the CC BY-NC 4.0 licence of the recommended local
+embedding model (Jina v5 Text Nano, non-commercial use only) without a
+question; without it a non-interactive run uses the MIT-licensed E5-small
+model, and an interactive run asks. The same is available as
+`PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1`.
+
+The same scripts update (`--update`, with a store snapshot first and automatic
+rollback), uninstall (`--uninstall`, `--purge` also deletes the memories after
+two confirmations) and adopt a plugin that was deployed by
+`install-memory-system.sh` (`--adopt-legacy`). Every flag, exit code and the
+details are in [docs/distribution.md](docs/distribution.md).
+
+Windows native support is in beta. If OpenClaw runs inside WSL2, the Windows
+one-liner finds the distro and hands over to the Linux installer inside it
+(`-Target wsl:<distro>` chooses one); you can also run the Linux one-liner
+inside the distro yourself.
+
+### Manual installation
 
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.5.3 \
-  --acknowledge-clawhub-risk --pin
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.17.0
 ```
 
-The same release is on the npm-compatible registry, if your `@cyb3rb1ade`
-scope already points there:
+The same release is on npmjs.org, once its first publish is done (see
+`docs/release-checklist.md`):
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.5.3 --pin
+openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.17.0 --pin
 ```
 
-Or install the immutable GitHub Release tarball:
+Or install the immutable GitHub Release tarball. Download it, compare its
+SHA-256 with the release's checksum, then:
 
 ```bash
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.5.3/cyb3rb1ade-plur1bus-memory-7.5.3.tgz
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.17.0.tgz \
+  --force --accept-capabilities
 ```
 
 To build from this source checkout instead, produce a tarball and install that
@@ -1158,12 +1206,19 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.5.3.tgz --force
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.17.0.tgz \
+  --force --accept-capabilities
 ```
 
-Record the tarball's SHA-256 before transferring it. PLUR1BUS 7.5.3 never
-patches OpenClaw runtime files. Existing release artifacts remain unchanged and
-must not be relabelled as 7.5.0.
+Record the tarball's SHA-256 before transferring it. PLUR1BUS never patches
+OpenClaw runtime files. Existing release artifacts remain unchanged and must
+not be relabelled.
+
+A manual install does not write any configuration: set
+`plugins.slots.memory` to `memory-lancedb-namespaced`, enable
+`plugins.entries["memory-lancedb-namespaced"].hooks.allowConversationAccess`
+(capture and recall do not work without it) and add the config block below. The
+one-line installer does these steps for you.
 
 Restart the gateway after installing, so the new plugin version is loaded.
 

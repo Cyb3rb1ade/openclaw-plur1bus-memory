@@ -1,0 +1,164 @@
+{
+  "workspaceDir": "<state>/workspace",
+  "plugin": {
+    "id": "memory-lancedb-namespaced",
+    "name": "PLUR1BUS Memory: Make your agent yours",
+    "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
+    "packageVersion": "7.16.11",
+    "version": "7.16.11",
+    "builtWithOpenClawVersion": "2026.8.2",
+    "packageName": "<at>cyb3rb1ade/plur1bus-memory",
+    "format": "openclaw",
+    "source": "<state>/extensions/memory-lancedb-namespaced/index.js",
+    "rootDir": "<state>/extensions/memory-lancedb-namespaced",
+    "origin": "global",
+    "trust": {
+      "reason": "record-missing",
+      "registryPath": "<state>/state/openclaw.sqlite",
+      "origin": "global"
+    },
+    "enabled": true,
+    "compat": [],
+    "explicitlyEnabled": true,
+    "activated": true,
+    "activationSource": "explicit",
+    "activationReason": "selected memory slot",
+    "syntheticAuthRefs": [],
+    "status": "loaded",
+    "toolNames": [],
+    "hookNames": [],
+    "channelIds": [],
+    "cliBackendIds": [],
+    "providerIds": [],
+    "embeddingProviderIds": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "speechProviderIds": [],
+    "realtimeTranscriptionProviderIds": [],
+    "realtimeVoiceProviderIds": [],
+    "mediaUnderstandingProviderIds": [],
+    "transcriptSourceProviderIds": [],
+    "imageGenerationProviderIds": [],
+    "videoGenerationProviderIds": [],
+    "musicGenerationProviderIds": [],
+    "webFetchProviderIds": [],
+    "webSearchProviderIds": [],
+    "migrationProviderIds": [],
+    "contextEngineIds": [],
+    "agentHarnessIds": [],
+    "cliCommands": [],
+    "services": [],
+    "gatewayDiscoveryServiceIds": [],
+    "commands": [],
+    "httpRoutes": 0,
+    "hookCount": 0,
+    "configSchema": true,
+    "configUiHints": "<trimmed: plugin manifest uiHints, not OpenClaw behaviour>",
+    "configJsonSchema": "<trimmed: plugin manifest configSchema, not OpenClaw behaviour>",
+    "contracts": {
+      "embeddingProviders": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "tools": [
+        "knowledge_update",
+        "memory_forget",
+        "memory_recall",
+        "memory_search",
+        "memory_store"
+      ]
+    },
+    "kind": "memory",
+    "memorySlotSelected": true,
+    "imported": false,
+    "dependencyStatus": {
+      "hasDependencies": true,
+      "installed": true,
+      "requiredInstalled": true,
+      "optionalInstalled": true,
+      "missing": [],
+      "missingOptional": [],
+      "dependencies": [
+        {
+          "name": "<at>lancedb/lancedb",
+          "spec": "^0.26.2",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/<at>lancedb/lancedb"
+        },
+        {
+          "name": "apache-arrow",
+          "spec": "18.1.0",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/apache-arrow"
+        },
+        {
+          "name": "openai",
+          "spec": "^6.27.0",
+          "installed": true,
+          "optional": false,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/openai"
+        }
+      ],
+      "optionalDependencies": [
+        {
+          "name": "<at>huggingface/transformers",
+          "spec": "4.2.0",
+          "installed": true,
+          "optional": true,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/<at>huggingface/transformers"
+        },
+        {
+          "name": "typescript",
+          "spec": "^5.9.3",
+          "installed": true,
+          "optional": true,
+          "resolvedPath": "<state>/extensions/memory-lancedb-namespaced/node_modules/typescript"
+        }
+      ]
+    }
+  },
+  "shape": "plain-capability",
+  "capabilityMode": "plain",
+  "capabilityCount": 1,
+  "capabilities": [
+    {
+      "kind": "embedding",
+      "ids": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ]
+    }
+  ],
+  "typedHooks": [],
+  "customHooks": [],
+  "tools": [],
+  "commands": [],
+  "cliCommands": [],
+  "services": [],
+  "decisions": [],
+  "gatewayDiscoveryServices": [],
+  "gatewayMethods": [],
+  "mcpServers": [],
+  "lspServers": [],
+  "httpRouteCount": 0,
+  "bundleCapabilities": [],
+  "diagnostics": [
+    {
+      "level": "warn",
+      "pluginId": "memory-lancedb-namespaced",
+      "source": "<state>/extensions/memory-lancedb-namespaced/index.js",
+      "message": "OpenClaw can't verify where this plugin came from. Review it with 'openclaw plugins inspect memory-lancedb-namespaced'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features."
+    }
+  ],
+  "policy": {
+    "allowedModels": [],
+    "hasAllowedModelsConfig": false
+  },
+  "compatibility": []
+}

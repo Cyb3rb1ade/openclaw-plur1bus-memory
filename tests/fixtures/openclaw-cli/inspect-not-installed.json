@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "type": "cli_error",
+    "message": "Plugin not found: memory-lancedb-namespaced. Run `openclaw plugins list` to see installed plugins, or `openclaw plugins search memory-lancedb-namespaced` to look for installable plugins."
+  }
+}

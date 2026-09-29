@@ -21,6 +21,11 @@ docs/**
 !docs/runbooks/**
 !docs/superpowers/
 !docs/superpowers/**
+!docs/distribution/
+!docs/distribution/**
+!docs/distribution.md
+!docs/release-notes/
+!docs/release-notes/**
 !docs/configuration.md
 !docs/compatibility-openclaw-2026.8.1-beta.3.md
 !docs/compatibility-openclaw.md
@@ -58,6 +63,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/reindex-provider.mjs
 !scripts/embed-promoted-memories.mjs
 !scripts/install-memory-system.sh
+!scripts/snapshot-store.mjs
 !scripts/provider-wizard.mjs
 !scripts/setup-feature-crons.mjs
 !scripts/run-feature-cron.mjs
@@ -70,6 +76,10 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
 !scripts/lib/find-deploy-dir.mjs
+!scripts/dist/
+!scripts/dist/installer/
+# Built installer bundle (npm run build:installer); a release artefact, never committed.
+dist-installer/
 .openclaw/*
 !.openclaw/extensions/
 .openclaw/extensions/*
