@@ -268,7 +268,7 @@ function runDeployGuard(fixture, env = {}) {
 // ":"-joined PATH. Needs a real Windows run (and a .cmd-aware spawn) to settle.
 const repairOpenClawSpawn = { skip: process.platform === "win32" && "engine-windows:repair-openclaw-spawn (POSIX sh openclaw fake; spawnSync cannot run a .cmd shim)" };
 // A `#!/bin/sh` stand-in for node on PATH only runs on POSIX.
-const posixShFake = { skip: process.platform === "win32" && "POSIX sh fake on PATH" };
+const posixShFake = { skip: process.platform === "win32" && "engine-windows:posix-only (POSIX sh fake on PATH)" };
 // engine-windows:b9-bash-path-fakes — hypothesis: under Git Bash the fake `cp`
 // never shadows /bin/cp, because PATH is ":"-joined with a Windows bin path and
 // Node passes both the inherited "Path" and this "PATH" key. Needs a real

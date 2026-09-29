@@ -143,8 +143,11 @@ describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => 
 
     const sameInstance = new MemoryDB(dbPath, VECTOR_DIM);
     // POSIX says ENOTDIR (os error 20); Windows reports ERROR_ALREADY_EXISTS
-    // (os error 183) when a directory would be created over the file.
-    await assert.rejects(() => sameInstance.init(), /not a directory|Not a directory|os error 20\b|os error 183\b/i);
+    // (os error 183) when a directory would be created over the file — accepted there only.
+    const notADirectory = process.platform === "win32"
+      ? /not a directory|Not a directory|os error 20\b|os error 183\b/i
+      : /not a directory|Not a directory|os error 20/i;
+    await assert.rejects(() => sameInstance.init(), notADirectory);
 
     assert.equal(sameInstance.initPromise, null, "a rejected generation must not poison future init calls");
     assert.equal(sameInstance.table, null, "a failed generation must clear a partial table handle");

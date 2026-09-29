@@ -41,7 +41,7 @@ describe("lib/platform isFilesystemPath", () => {
 
 // Mode bits and filesystem Unix sockets are POSIX; on win32 chmod only toggles
 // the read-only bit and a socket path cannot be listened on.
-const posixModes = { skip: process.platform === "win32" && "needs POSIX modes" };
+const posixModes = { skip: process.platform === "win32" && "engine-windows:posix-only (needs POSIX modes; no file-ACL reader in the repo to assert instead)" };
 
 describe("lib/platform securePath", () => {
   it("chmods a regular file on POSIX", posixModes, () => {
@@ -66,7 +66,7 @@ describe("lib/platform securePath", () => {
     assert.equal(statSync(file).mode & 0o777, 0o600);
   });
 
-  it("secures a live unix domain socket rather than refusing it", { skip: process.platform === "win32" && "POSIX unix-socket and mode semantics" }, async () => {
+  it("secures a live unix domain socket rather than refusing it", { skip: process.platform === "win32" && "engine-windows:posix-only (POSIX unix-socket and mode semantics)" }, async () => {
     const dir = makeTempDir("plur1bus-platform-sock-");
     const socketPath = join(dir, "owner.sock");
     const server = createServer();
