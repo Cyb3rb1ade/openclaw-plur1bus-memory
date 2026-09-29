@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -53,6 +53,20 @@ describe("persona-voice", () => {
     assert.ok(!directive.includes("GEHEIM"));
     assert.ok(directive.length <= DEFAULT_MAX_DIRECTIVE_CHARS);
     assert.match(directive, /Grundstimme/);
+  });
+
+  it("loadPersonaDirective sieht eine Neufassung im selben Zeitstempel-Tick (Windows: grobe mtime)", () => {
+    const dir = makeTempDir("pv-");
+    writePersonaVoice(dir, SEED);
+    const path = join(dir, "persona-voice.md");
+    const tick = new Date(Math.floor(Date.now() / 1000) * 1000);
+    utimesSync(path, tick, tick); // a whole-second mtime both reads see identically
+    assert.ok(!loadPersonaDirective(dir).includes("zählt gern auf"));
+    // Same mtime, different content: what a rewrite within one coarse timestamp tick looks like.
+    writeFileSync(path, readFileSync(path, "utf8").replace("<!-- persona:end -->", "- Marotte: zählt gern auf.\n<!-- persona:end -->"), "utf8");
+    utimesSync(path, tick, tick);
+    assert.strictEqual(statSync(path).mtimeMs, tick.getTime());
+    assert.ok(loadPersonaDirective(dir).includes("zählt gern auf"));
   });
 
   it("loadPersonaDirective (7.12.38): 24 Zeilen passen ohne Kappung, Grenze konfigurierbar, Cache kennt die Grenze", () => {
