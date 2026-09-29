@@ -544,11 +544,30 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   shutdown removes it). A local user who binds the then-free abstract or pipe
   name first therefore receives the tokens clients send and can answer with
   forged vectors — or simply holds the name so the real owner's `serve()`
-  answers `conflict`. The legacy OpenClaw data socket (`owner.sock` inside
-  the `0700` embedding-ipc directory) is stronger on that point: only the
-  owning user can bind or reach it. Server authentication (a challenge on
-  the token, or peer-credential checks) is a follow-up for PR-11, alongside
-  the Windows pipe ACL.
+  answers `conflict`. The legacy OpenClaw owner endpoint (no `address`) is
+  stronger on that point, per platform:
+  - **POSIX**: `owner.sock` inside the `0700` embedding-ipc directory; only
+    the owning user can bind or reach it.
+  - **Windows**: libuv cannot listen on a filesystem socket path there, so
+    the legacy owner listens on the named pipe
+    `\\.\pipe\plur1bus-embedding-owner-v2-<40 hex>`, the SHA-256 of the
+    embedding-ipc directory's canonical path (`realpathSync.native`,
+    lower-cased) and a 256-bit random nonce. The nonce is created once
+    (exclusive create) in `owner-pipe.nonce` inside the embedding-ipc
+    directory, which carries an owner-only ACL (`icacls /inheritance:r`,
+    the user only; the file too), and is kept across restarts; owner and
+    clients read it from there. Another local user cannot read the nonce and
+    so cannot predict or pre-bind the name (ruling EW-R1). The pipe itself
+    still has Node's default security descriptor (no DACL can be set from
+    `net`), so the name, not an ACL, keeps other users out; the token still
+    authenticates every request. A missing, non-regular or malformed nonce
+    file fails closed with `scoped_embedding_pipe_nonce_unavailable`: the
+    owner does not start (checked before any listener or token exists) and a
+    client request fails. An unclaimed `serve()` probing for a legacy owner
+    treats a missing nonce as "no legacy owner" and any other nonce error as
+    that failure.
+  Server authentication (a challenge on the token, or peer-credential checks)
+  is a follow-up for PR-11, alongside the Windows pipe ACL.
 - **One serving engine per `stateRoot`, across processes, is the operator's
   responsibility.** The transport's single-owner guard
   (`scoped_embedding_owner_already_active`) is in-process only, and the
@@ -789,6 +808,21 @@ What is checked, and when:
   synchronous `execFileSync` calls (typically 0.3-2 s, capped at 30 s each)
   and block the event loop — recall budgets and the `status()` cap included —
   while they run.
+
+**Known limitation — elevated Windows gateway** (`engine-windows:elevated-owner`,
+ruling EW-R4). A process running elevated (a member of Administrators with a
+full token, e.g. an OpenClaw gateway started "as administrator", or GitHub's
+Windows runners) creates every new directory with owner `BUILTIN\Administrators`
+(`S-1-5-32-544`), not the user's SID. The base check (owner SID = user SID)
+and `assertOwnerOnlyDirectory` refuse such a base or root with `unsafe-root`,
+so on an elevated gateway every workspace/user share and proposal accept
+answers `storage` ("memory write failed") on the first attempt and
+`unsupported` (taint) afterwards; private memory is unaffected. The owner
+checks are deliberately **not** loosened to accept Administrators ownership.
+Workarounds: run the gateway unelevated, or hand the shared base and a
+pre-created `.plur1bus-shared` to the user (`icacls <dir> /setowner <user>`,
+root owner-only) — what `tests/helpers/win32-shared-owner.js` does for the
+test suite.
 
 A failure **taints** the pool until restart: `support()` answers `{
 supported: false, mode: "verified-path", reason }` with the error's reason

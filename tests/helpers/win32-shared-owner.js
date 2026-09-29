@@ -6,8 +6,12 @@
  * creates is owned by BUILTIN\Administrators, not by the runner user. The
  * verified-path shared pool (ADR 0001, E4-R12) deliberately refuses a base or
  * root with a foreign owner (`unsafe-root`), so every share in such a test
- * answered `storage` ("memory write failed"). The product is right to refuse;
- * the test environment is what differs from a normal user's machine.
+ * answered `storage` ("memory write failed"). The owner checks are
+ * deliberately not loosened (ruling EW-R4): on a real elevated Windows gateway
+ * shared writes are refused the same way. That is a documented known
+ * limitation, `engine-windows:elevated-owner` (docs/engine-api.md, "Shared
+ * memory on macOS and Windows"; CHANGELOG). This helper only makes the suite
+ * exercise the success path the way an unelevated user's machine would.
  *
  * This helper does what tests/b13-shared-memory-verified-path.test.js's
  * "user-owned, owner-only base and root" case does: it pre-creates the base
