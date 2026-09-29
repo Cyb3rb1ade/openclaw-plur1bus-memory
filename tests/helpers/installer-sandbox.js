@@ -372,8 +372,10 @@ export function createInstallerSandbox(opts = {}) {
   writeFileSync(join(binDir, "node-shim.mjs"), NODE_SHIM.replace("__SANDBOX__", q(root)));
   const real = process.execPath;
   if (process.platform === "win32") {
-    writeFileSync(join(binDir, "node.cmd"), `@"${real}" "${join(binDir, "node-shim.mjs")}" %*\r\n`);
-    writeFileSync(join(binDir, "openclaw.cmd"), `@"${real}" "${join(binDir, "openclaw-shim.mjs")}" %*\r\n`);
+    // %~dp0 (the .cmd's own directory), as npm's shims do: cmd.exe reads a batch file in the OEM code page, so a
+    // literal UTF-8 sandbox path such as ".../p b/Jürgen" came out garbled and every shim call failed.
+    writeFileSync(join(binDir, "node.cmd"), `@"${real}" "%~dp0node-shim.mjs" %*\r\n`);
+    writeFileSync(join(binDir, "openclaw.cmd"), `@"${real}" "%~dp0openclaw-shim.mjs" %*\r\n`);
   } else {
     writeFileSync(join(binDir, "node"), `#!/bin/sh\nexec "${real}" "${join(binDir, "node-shim.mjs")}" "$@"\n`, { mode: 0o755 });
     writeFileSync(join(binDir, "openclaw"), `#!/bin/sh\nexec "${join(binDir, "node")}" "${join(binDir, "openclaw-shim.mjs")}" "$@"\n`, { mode: 0o755 });

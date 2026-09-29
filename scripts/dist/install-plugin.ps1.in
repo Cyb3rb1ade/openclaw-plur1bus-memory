@@ -284,7 +284,14 @@ function Invoke-WithStdin([string]$file, [string[]]$argv, [byte[]]$bytes) {
   $psi.Arguments = (@($argv) | ForEach-Object { ConvertTo-WinArg $_ }) -join ' '
   $psi.UseShellExecute = $false
   $psi.RedirectStandardInput = $true
-  $p = [System.Diagnostics.Process]::Start($psi)
+  # Windows PowerShell 5.1 (.NET Framework) wraps the child's stdin in a StreamWriter over [Console]::InputEncoding
+  # with AutoFlush on, which writes that encoding's preamble at once: a UTF-8 console put a BOM before the piped sh
+  # (seen on windows-2025). A BOM-less UTF-8 input encoding for the start keeps the stream byte for byte.
+  $savedInputEncoding = $null
+  try { $savedInputEncoding = [Console]::InputEncoding; [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false } catch { $savedInputEncoding = $null }
+  try { $p = [System.Diagnostics.Process]::Start($psi) } finally {
+    if ($null -ne $savedInputEncoding) { try { [Console]::InputEncoding = $savedInputEncoding } catch { } }
+  }
   try {
     try {
       $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
