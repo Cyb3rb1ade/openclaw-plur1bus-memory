@@ -4,16 +4,15 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
 
-import { runInstaller } from "../scripts/dist/installer/main.mjs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { detectLegacyDeploy } from "../scripts/dist/installer/legacy.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState } from "../scripts/dist/installer/state.mjs";
 import { listSnapshots } from "../lib/snapshot/store-snapshot.js";
-import { createInstallerSandbox, sink } from "./helpers/installer-sandbox.js";
+import { createInstallerSandbox, mutatingCalls, runSandboxInstaller, treeDigest, walkTree } from "./helpers/installer-sandbox.js";
 
 const ID = "memory-lancedb-namespaced";
 const SLOT = "plugins.slots.memory";
@@ -21,49 +20,11 @@ const PKG = "@cyb3rb1ade/plur1bus-memory";
 const CRON_MARKER = "TEST-ONLY-CRON-MARKER-7f3a";
 const posixOnly = { skip: process.platform === "win32" && "crontab is POSIX-only" };
 
-async function run(sb, argv, extra = {}) {
-  const stdout = sink();
-  const stderr = sink();
-  const code = await runInstaller(["--feed-file", sb.feedFile, ...argv], {
-    env: sb.env,
-    platform: process.platform,
-    arch: "x64",
-    glibcVersion: "2.39",
-    isTTY: false,
-    statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }),
-    prompt: async () => {
-      throw new Error("prompt must not be called");
-    },
-    stdout,
-    stderr,
-    ...extra,
-  });
-  return { code, stdout: stdout.text, stderr: stderr.text, out: stdout.text + stderr.text };
-}
+const run = runSandboxInstaller;
 
-const mutating = (calls) => calls.filter((a) => (a[0] === "plugins" && ["install", "uninstall", "update", "enable"].includes(a[1])) || (a[0] === "config" && a[1] === "set"));
+const mutating = mutatingCalls;
 
-function walk(dir) {
-  const out = [];
-  if (!existsSync(dir)) return out;
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    out.push(p);
-    if (e.isDirectory()) out.push(...walk(p));
-  }
-  return out;
-}
-
-function treeDigest(dir) {
-  const h = createHash("sha256");
-  for (const p of walk(dir).sort()) {
-    h.update(relative(dir, p));
-    h.update("\0");
-    if (statSync(p).isFile()) h.update(readFileSync(p));
-    h.update("\0");
-  }
-  return h.digest("hex");
-}
+const walk = walkTree;
 
 /** The owner's VPS shape: rsync deploy, release copy, stock plugin, a store; untracked by OpenClaw. */
 function legacySandbox(scenario = {}) {
@@ -187,6 +148,20 @@ describe("plugin installer: legacy adoption", () => {
     assert.ok(!sb.openclawCalls().some((c) => c[1] === "uninstall"));
     assert.equal(JSON.parse(r.stdout).steps.find((s) => s.id === "restore"), undefined);
     assert.equal(readState(sb.stateDir)?.inProgress, undefined);
+  });
+
+  it("a legacy backup name that already exists gets a unique suffix", async () => {
+    const { sb, legacyDir } = legacySandbox();
+    const legacy = treeDigest(legacyDir);
+    const fixed = Date.UTC(2026, 8, 29, 1, 2, 3);
+    const taken = join(sb.stateDir, "extensions", ".plur1bus-legacy-20260929T010203Z");
+    mkdirSync(taken, { recursive: true });
+    writeFileSync(join(taken, "keep.txt"), "TEST ONLY earlier backup\n");
+    const r = await run(sb, ["--adopt-legacy"], { now: () => fixed });
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.deepEqual(backups(sb).sort(), [".plur1bus-legacy-20260929T010203Z", ".plur1bus-legacy-20260929T010203Z-2"]);
+    assert.deepEqual(readdirSync(taken), ["keep.txt"]);
+    assert.equal(treeDigest(join(sb.stateDir, "extensions", ".plur1bus-legacy-20260929T010203Z-2")), legacy);
   });
 
   it("adoption leaves memory-lancedb-stock and plur1bus-release untouched", async () => {

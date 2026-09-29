@@ -20,15 +20,16 @@
  * the "new version" writes into on install), `killParentOnInstall` (kills the
  * installer process; honoured only with PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT=1, set
  * by the child-process test), and a legacy deploy that is visible only while
- * `<state>/extensions/memory-lancedb-namespaced` exists.
+ * `<state>/extensions/memory-lancedb-namespaced` exists; `recordDigestsMissingFor` drops
+ * the install record's npmIntegrity/clawpackSha256 for these versions.
  *
  * `createInstallerSandbox()` throws if the `openclaw` that PATH resolves is not
  * its own shim (global constraint "never touch a real OpenClaw installation").
  */
 
-import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeTempDir } from "./temp-dir.js";
 
@@ -139,6 +140,10 @@ if (args[0] === "plugins" && args[1] === "inspect") {
       j.plugin.status = scenario.runtimeStatus ?? "loaded";
     }
     if (state.sourcePath) j.install.sourcePath = state.sourcePath;
+    if ((scenario.recordDigestsMissingFor ?? []).includes(state.version)) {
+      delete j.install.npmIntegrity;
+      delete j.install.clawpackSha256;
+    }
     out(JSON.stringify(j, null, 2) + "\n");
     done(0);
   }
@@ -431,4 +436,59 @@ export function sha256File(p) {
 export function sink() {
   let text = "";
   return { write: (c) => { text += String(c); return true; }, get text() { return text; } };
+}
+
+/**
+ * Run the installer in-process against the sandbox (never a TTY unless `extra.isTTY`;
+ * a prompt fails the test unless `extra.prompt` is given; free space is stubbed).
+ * @returns {Promise<{ code: number, stdout: string, stderr: string, out: string }>}
+ */
+export async function runSandboxInstaller(sb, argv, extra = {}) {
+  const { runInstaller } = await import("../../scripts/dist/installer/main.mjs");
+  const stdout = sink();
+  const stderr = extra.stderr ?? sink();
+  const code = await runInstaller(["--feed-file", sb.feedFile, ...argv], {
+    env: sb.env,
+    platform: process.platform,
+    arch: "x64",
+    glibcVersion: "2.39",
+    isTTY: false,
+    statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }),
+    prompt: async () => {
+      throw new Error("prompt must not be called");
+    },
+    stdout,
+    ...extra,
+    stderr,
+  });
+  return { code, stdout: stdout.text, stderr: stderr.text, out: stdout.text + stderr.text };
+}
+
+/** The `openclaw` calls that change something (install/uninstall/update/enable, config set). */
+export function mutatingCalls(calls) {
+  return calls.filter((a) => (a[0] === "plugins" && ["install", "uninstall", "update", "enable"].includes(a[1])) || (a[0] === "config" && a[1] === "set"));
+}
+
+/** Every path below `dir` (depth first); [] when `dir` does not exist. */
+export function walkTree(dir) {
+  const out = [];
+  if (!existsSync(dir)) return out;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    out.push(p);
+    if (e.isDirectory()) out.push(...walkTree(p));
+  }
+  return out;
+}
+
+/** SHA-256 over the relative paths and file contents below `dir`. */
+export function treeDigest(dir) {
+  const h = createHash("sha256");
+  for (const p of walkTree(dir).sort()) {
+    h.update(relative(dir, p));
+    h.update("\0");
+    if (statSync(p).isFile()) h.update(readFileSync(p));
+    h.update("\0");
+  }
+  return h.digest("hex");
 }

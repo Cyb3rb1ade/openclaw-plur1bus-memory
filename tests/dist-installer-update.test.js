@@ -6,16 +6,15 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 
-import { runInstaller } from "../scripts/dist/installer/main.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState, writeState } from "../scripts/dist/installer/state.mjs";
 import { listSnapshots } from "../lib/snapshot/store-snapshot.js";
-import { createInstallerSandbox, makeTestFeed, sink } from "./helpers/installer-sandbox.js";
+import { createInstallerSandbox, makeTestFeed, mutatingCalls, runSandboxInstaller, sink, treeDigest, walkTree } from "./helpers/installer-sandbox.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MAIN = pathToFileURL(join(REPO, "scripts", "dist", "installer", "main.mjs")).href;
@@ -31,27 +30,9 @@ const NOTES = {
 };
 const feed3 = (o = {}) => makeTestFeed({ versions: ["7.17.0", "7.16.12", "7.16.11"], notes: NOTES, ...o });
 
-async function run(sb, argv, extra = {}) {
-  const stdout = sink();
-  const stderr = sink();
-  const code = await runInstaller(["--feed-file", sb.feedFile, ...argv], {
-    env: sb.env,
-    platform: process.platform,
-    arch: "x64",
-    glibcVersion: "2.39",
-    isTTY: false,
-    statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }),
-    prompt: async () => {
-      throw new Error("prompt must not be called");
-    },
-    stdout,
-    stderr,
-    ...extra,
-  });
-  return { code, stdout: stdout.text, stderr: stderr.text, out: stdout.text + stderr.text };
-}
+const run = runSandboxInstaller;
 
-const mutating = (calls) => calls.filter((a) => (a[0] === "plugins" && ["install", "uninstall", "update", "enable"].includes(a[1])) || (a[0] === "config" && a[1] === "set"));
+const mutating = mutatingCalls;
 
 /** A tracked install of `version` with a real (tiny) LanceDB store at the default baseDbPath (R-S7). */
 async function trackedSandbox({ version = "7.16.11", source = "clawhub", stateSource, scenario = {}, feed = feed3() } = {}) {
@@ -69,28 +50,7 @@ async function trackedSandbox({ version = "7.16.11", source = "clawhub", stateSo
   return { sb, baseDbPath };
 }
 
-function walk(dir) {
-  const out = [];
-  if (!existsSync(dir)) return out;
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    out.push(p);
-    if (e.isDirectory()) out.push(...walk(p));
-  }
-  return out;
-}
-
-function treeDigest(dir) {
-  const h = createHash("sha256");
-  for (const p of walk(dir).sort()) {
-    const rel = relative(dir, p);
-    h.update(rel);
-    h.update("\0");
-    if (statSync(p).isFile()) h.update(readFileSync(p));
-    h.update("\0");
-  }
-  return h.digest("hex");
-}
+const walk = walkTree;
 
 /** Anything a killed or half-finished run could leave behind. */
 function strays(...roots) {
@@ -265,6 +225,7 @@ describe("plugin installer: update", () => {
     assert.equal(r.code, EXIT.OK, r.out);
     assert.deepEqual(sb.openclawCalls().filter((a) => a[0] === "config" && a[1] === "set"), []);
     assert.deepEqual(sb.shimState().config, config);
+    assert.ok(!r.stderr.includes("allowConversationAccess true"), "a person's false is not questioned");
   });
 
   it("a killed update is completed or rolled back by the next run", { skip: process.platform === "win32" && "POSIX kill of the parent process" }, async () => {
@@ -339,6 +300,84 @@ describe("plugin installer: update", () => {
     assert.equal(r2.code, EXIT.FAILED, r2.out);
     assert.match(r2.stderr, /PLUR1BUS_PLUGIN_TEST_FREE_BYTES/);
     assert.deepEqual(mutating(sb.openclawCalls()), []);
+  });
+
+  it("a store restore never runs under a running Gateway: non-interactive exits 4, --rollback finishes later (T6-e)", async () => {
+    const { sb, baseDbPath } = await trackedSandbox({ scenario: { failVersions: ["7.17.0"], gatewayRunning: true } });
+    const before = treeDigest(baseDbPath);
+    const r = await run(sb, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.ROLLBACK_FAILED, r.out);
+    assert.match(r.stderr, /stop the Gateway/i);
+    assert.match(r.stderr, /--rollback/);
+    assert.equal(sb.shimState().version, "7.16.11", "the plugin reinstall part of the rollback still ran");
+    assert.notEqual(treeDigest(baseDbPath), before, "the store was not restored under the running Gateway");
+    assert.deepEqual(walk(dirname(baseDbPath)).filter((p) => p.includes(".pre-restore-")), []);
+    assert.equal(readState(sb.stateDir).inProgress?.step, "rollback-failed");
+    assert.ok(sb.openclawCalls().some((a) => a.join(" ") === "gateway status --json"));
+
+    sb.setScenario({ gatewayRunning: false });
+    const r2 = await run(sb, ["--rollback"]);
+    assert.equal(r2.code, EXIT.FAILED, r2.out);
+    assert.equal(treeDigest(baseDbPath), before);
+    assert.equal(readState(sb.stateDir).inProgress, undefined);
+    assert.deepEqual(strays(sb.root, sb.home), []);
+  });
+
+  it("a store restore on a TTY waits until the person stopped the Gateway (T6-e)", async () => {
+    const { sb, baseDbPath } = await trackedSandbox({ scenario: { failVersions: ["7.17.0"], gatewayRunning: true } });
+    const before = treeDigest(baseDbPath);
+    const asked = [];
+    const prompt = async (q) => {
+      asked.push(q);
+      if (asked.length === 2) sb.setScenario({ gatewayRunning: false });
+      return "";
+    };
+    const r = await run(sb, ["--update", "--yes"], { isTTY: true, prompt });
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.equal(asked.length, 2, "asked again while the Gateway still ran");
+    assert.match(asked[0], /Gateway/);
+    assert.equal(treeDigest(baseDbPath), before);
+    assert.equal(readState(sb.stateDir).inProgress, undefined);
+  });
+
+  it("--dry-run never resumes an interrupted run (T6-d)", async () => {
+    const { sb, baseDbPath } = await trackedSandbox();
+    writeState(sb.stateDir, {
+      previousSlot: null, installedVersion: "7.16.11", source: "clawhub",
+      inProgress: { op: "update", step: "update", snapshotId: null, previousVersion: "7.16.11", targetVersion: "7.17.0", source: "clawhub",
+        previous: { version: "7.16.11", source: "clawhub", npmIntegrity: null, clawpackSha256: null, sourcePath: null },
+        rollback: { locator: `clawhub:${PKG}@7.16.11`, opts: { force: true, acceptCapabilities: true }, file: null, sha256: null } },
+    });
+    const stateFile = join(sb.stateDir, "memory", ".plur1bus-installer.json");
+    const bytes = readFileSync(stateFile);
+    const before = treeDigest(baseDbPath);
+    for (const argv of [["--dry-run", "--json"], ["--update", "--dry-run"], ["--rollback", "--dry-run"]]) {
+      const r = await run(sb, argv);
+      assert.equal(r.code, EXIT.OK, r.out);
+      assert.match(r.stderr, /interrupted update to 7\.17\.0 at step update/);
+      assert.match(r.stderr, /--rollback/);
+    }
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+    assert.deepEqual(readFileSync(stateFile), bytes);
+    assert.equal(treeDigest(baseDbPath), before);
+  });
+
+  it("a successful update names an unset allowConversationAccess and never sets it (T6-b)", async () => {
+    const { sb } = await trackedSandbox();
+    const r = await run(sb, ["--update", "--yes"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.ok(r.stderr.includes(`openclaw config set plugins.entries.${ID}.hooks.allowConversationAccess true`), r.stderr);
+    assert.deepEqual(sb.openclawCalls().filter((a) => a[0] === "config" && a[1] === "set"), []);
+  });
+
+  it("a rollback whose previous install record carries no digests exits 1, not 4", async () => {
+    const { sb, baseDbPath } = await trackedSandbox({ scenario: { failVersions: ["7.17.0"], recordDigestsMissingFor: ["7.16.11"] } });
+    const before = treeDigest(baseDbPath);
+    const r = await run(sb, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.doesNotMatch(r.out, /TypeError|unexpected error/);
+    assert.equal(JSON.parse(r.stdout).steps.find((s) => s.id === "rollback")?.status, "ok");
+    assert.equal(treeDigest(baseDbPath), before);
   });
 
   it("--update without any install exits 1 and a legacy deploy exits 2 naming --adopt-legacy", async () => {

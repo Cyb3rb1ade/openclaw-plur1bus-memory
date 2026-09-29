@@ -15,16 +15,17 @@
  * the first change.
  */
 
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, parse, resolve, sep } from "node:path";
+import { basename, dirname, join, parse, resolve, sep } from "node:path";
 
 import { listSnapshots } from "../../../lib/snapshot/store-snapshot.js";
 import { legacyDirOf } from "./legacy.mjs";
 import { PLUGIN_ID, tail } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { statePath, writeState } from "./state.mjs";
-import { removeWorkDir, withWinRetry } from "./update.mjs";
+import { removeWorkDir } from "./update.mjs";
+import { rmTree, withWinRetry } from "./fsutil.mjs";
 
 const SLOT = "plugins.slots.memory";
 
@@ -48,11 +49,15 @@ async function purgePlan({ stateDir, baseDbPath, home }) {
     snapshots = [];
   }
   const modelCache = join(stateDir, "models", "plur1bus");
-  return { store: existsSync(store) ? store : null, snapshots, modelCache: existsSync(modelCache) ? modelCache : null };
-}
-
-function rmTree(p) {
-  withWinRetry(() => rmSync(p, { recursive: true, force: true }));
+  // the `.pre-restore-*` copies a restore left beside the store are older states of the same memories
+  let preRestores = [];
+  try {
+    const prefix = `${basename(store)}.pre-restore-`;
+    preRestores = readdirSync(dirname(store)).filter((n) => n.startsWith(prefix)).map((n) => join(dirname(store), n));
+  } catch {
+    preRestores = [];
+  }
+  return { store: existsSync(store) ? store : null, snapshots, preRestores, modelCache: existsSync(modelCache) ? modelCache : null };
 }
 
 /**
@@ -84,11 +89,13 @@ export async function runUninstall(ctx) {
   if (purge) {
     const home = (ctx.platform === "win32" ? ctx.env?.USERPROFILE : ctx.env?.HOME) || homedir();
     plan = await purgePlan({ stateDir, baseDbPath, home });
-    report.set("purge", { store: plan.store, snapshots: plan.snapshots.length, modelCache: plan.modelCache });
-    if (!resume && !flags["yes-delete-memories"]) {
+    report.set("purge", { store: plan.store, snapshots: plan.snapshots.length, preRestores: plan.preRestores, modelCache: plan.modelCache });
+    // a resumed purge asks again (T6-d): an earlier run's confirmation does not carry over
+    if (!flags["yes-delete-memories"]) {
       report.note("--purge permanently deletes:");
       report.note(`  your memories (the store) at ${plan.store ?? `${baseDbPath} (not present)`}`);
       report.note(`  ${plan.snapshots.length} snapshot(s) under ${join(stateDir, "memory", ".snapshots")}`);
+      for (const p of plan.preRestores) report.note(`  the earlier store copy ${p}`);
       report.note(`  the model cache ${plan.modelCache ?? "(not present)"}`);
       if (!isTTY || flags["non-interactive"]) {
         throw new Stop(EXIT.NEEDS_CHOICE, "purge", "--purge deletes your memories and needs two confirmations; there is no TTY to ask, so pass --yes-delete-memories to confirm; nothing was changed");
@@ -143,7 +150,7 @@ export async function runUninstall(ctx) {
   if (plan) {
     save("purge");
     const gone = [];
-    for (const p of [plan.store, ...plan.snapshots, plan.modelCache].filter(Boolean)) {
+    for (const p of [plan.store, ...plan.preRestores, ...plan.snapshots, plan.modelCache].filter(Boolean)) {
       try {
         rmTree(p);
         gone.push(p);
@@ -151,7 +158,7 @@ export async function runUninstall(ctx) {
         manual.push(`delete ${p} (${err?.code ?? err?.message})`);
       }
     }
-    report.step("purge", manual.length ? "warn" : "ok", `deleted ${gone.length} path(s): store, ${plan.snapshots.length} snapshot(s), model cache`);
+    report.step("purge", manual.length ? "warn" : "ok", `deleted ${gone.length} path(s): store, ${plan.preRestores.length} earlier store copy(ies), ${plan.snapshots.length} snapshot(s), model cache`);
   }
 
   // ── installer state ───────────────────────────────────────────────────────

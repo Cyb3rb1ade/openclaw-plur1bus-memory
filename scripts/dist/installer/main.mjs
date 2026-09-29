@@ -382,10 +382,25 @@ async function install(ctx) {
   const interrupted = state?.inProgress ?? null;
   if (values.rollback && !interrupted) throw new Stop(EXIT.FAILED, "rollback", "nothing to roll back: no interrupted installer run was found; nothing was changed");
   if (interrupted) {
+    const label = describeInterrupted(interrupted);
+    if (values["dry-run"]) {
+      // T6-d: a dry run never resumes; it says what a real run would do
+      report.set("interrupted", { op: interrupted.op, step: interrupted.step });
+      report.step("resume", "planned", `${label}: re-running without --dry-run would ${resumePlan(interrupted).continue}; with --rollback it would ${resumePlan(interrupted).rollback}`);
+      return report.finish(EXIT.OK);
+    }
+    if (interrupted.op === "uninstall" && !(mode === "uninstall" && (!interrupted.purge || values.purge))) {
+      // T6-d: a destructive step never continues in another mode
+      report.set("interrupted", { op: interrupted.op, step: interrupted.step });
+      throw new Stop(EXIT.NEEDS_CHOICE, "resume", `${label}; this run (${modeLabel(mode, values)}) does not continue it: re-run with --uninstall${interrupted.purge ? " --purge (the purge asks for its confirmation again)" : ""} to finish it; nothing was changed`);
+    }
+    const compatible = { install: ["install", "update"], update: ["install", "update"], adopt: ["install", "adopt-legacy"], uninstall: ["uninstall"] }[interrupted.op] ?? [];
+    if (!compatible.includes(mode)) report.note(`Note: ${modeLabel(mode, values)} is not run now: the ${label} is handled first; re-run ${modeLabel(mode, values)} afterwards.`);
     if (interrupted.op === "install") {
       const code = await resumeInstall(shared, interrupted);
       if (code !== undefined) return code;
       state = readState(det.stateDir);
+      shared.state = state;
     } else {
       if (!feed && interrupted.op !== "uninstall") await needFeed();
       const resumeRelease = interrupted.targetVersion ? (feed?.hosts.openclaw.releases.find((r) => r.version === interrupted.targetVersion) ?? null) : release;
@@ -559,6 +574,44 @@ async function applyInstall(ctx) {
   report.note(`Conversation access for capture and recall: enabled (${ALLOW_CONVERSATION}).`);
   report.note(gw.running ? "The running Gateway picks the plugin up; if not, run `openclaw gateway restart`." : "The plugin becomes active on the next Gateway start (`openclaw gateway restart`).");
   return report.finish(EXIT.OK);
+}
+
+function modeLabel(mode, values) {
+  if (mode === "uninstall") return values.purge ? "--uninstall --purge" : "--uninstall";
+  if (mode === "install") return "the install";
+  return `--${mode}`;
+}
+
+/** "interrupted <op> … at step <s>", the line every resume report starts with. */
+function describeInterrupted(p) {
+  if (p.op === "update") return `interrupted update to ${p.targetVersion} at step ${p.step}`;
+  if (p.op === "adopt") return `interrupted adoption of the legacy deploy (${p.targetVersion}) at step ${p.step}`;
+  if (p.op === "uninstall") return `interrupted uninstall${p.purge ? " with purge" : ""} at step ${p.step}`;
+  return `interrupted install (fresh install) at step ${p.step}`;
+}
+
+/** What continuing or rolling back an interrupted run would do (for --dry-run, T6-d). */
+function resumePlan(p) {
+  const snap = p.snapshotId ? ` and restore the store from snapshot ${p.snapshotId} (only while the Gateway is stopped)` : "";
+  if (p.op === "update") {
+    return {
+      continue: p.step === "snapshot" ? `start the update to ${p.targetVersion} again (nothing had changed)` : p.step.startsWith("rollback") ? `finish the rollback to ${p.previousVersion}${snap}` : `finish the update to ${p.targetVersion} (reinstall it and verify; on failure roll back)`,
+      rollback: p.step === "snapshot" ? "only clear the interrupted state (nothing had changed)" : `reinstall ${p.previousVersion}${snap}`,
+    };
+  }
+  if (p.op === "adopt") {
+    return {
+      continue: p.step.startsWith("rollback") ? `finish putting the legacy deploy back${snap}` : `finish adopting the legacy deploy as ${p.targetVersion}`,
+      rollback: `uninstall the tracked plugin, rename ${p.legacyBackup ?? "the kept legacy dir"} back${snap}`,
+    };
+  }
+  if (p.op === "uninstall") {
+    return {
+      continue: p.purge ? "finish the uninstall and the purge, only under --uninstall --purge after the purge confirmation is given again" : "finish the uninstall, only under --uninstall",
+      rollback: "nothing: an uninstall cannot be rolled back",
+    };
+  }
+  return { continue: "remove the partial install and install again", rollback: "remove the partial install and restore the previous memory slot" };
 }
 
 /**

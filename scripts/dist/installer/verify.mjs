@@ -19,6 +19,12 @@ export const SELFTEST_SCHEMA = "plur1bus.selftest/1";
 export function checkIntegrity(install, release) {
   if (!install || typeof install !== "object") return { ok: false, detail: "no install record after install" };
   if (install.version !== release.version) return { ok: false, detail: `install record version ${install.version} ≠ feed ${release.version}` };
+  if (release.lenient) {
+    // a rollback target described by its old install record: missing digests warn, never fail
+    const field = install.source === "clawhub" ? "clawpackSha256" : "npmIntegrity";
+    const expected = install.source === "clawhub" ? release.clawpackDigest : release.tarball?.integrity;
+    if (install[field] == null || !expected) return { ok: true, warn: true, detail: `no ${field} to compare for ${release.version} (the install record or the feed lacks it); integrity not checked` };
+  }
   if (install.source === "clawhub") {
     if (!release.clawpackDigest) return { ok: false, detail: `the feed has no clawpackDigest for ${release.version}; cannot verify a ClawHub install (use --source npm or --offline)` };
     return install.clawpackSha256 === release.clawpackDigest
@@ -26,8 +32,8 @@ export function checkIntegrity(install, release) {
       : { ok: false, detail: `clawpackSha256 ${String(install.clawpackSha256).slice(0, 12)}… ≠ feed clawpackDigest ${release.clawpackDigest.slice(0, 12)}…` };
   }
   return install.npmIntegrity === release.tarball.integrity
-    ? { ok: true, detail: `npmIntegrity ${release.tarball.integrity.slice(0, 19)}… matches the feed` }
-    : { ok: false, detail: `npmIntegrity ${String(install.npmIntegrity).slice(0, 19)}… ≠ feed ${release.tarball.integrity.slice(0, 19)}…` };
+    ? { ok: true, detail: `npmIntegrity ${String(release.tarball.integrity).slice(0, 19)}… matches the feed` }
+    : { ok: false, detail: `npmIntegrity ${String(install.npmIntegrity).slice(0, 19)}… ≠ feed ${String(release.tarball?.integrity).slice(0, 19)}…` };
 }
 
 /**

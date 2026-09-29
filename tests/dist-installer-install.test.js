@@ -17,7 +17,7 @@ import { checkCompat, findHarnessHomes } from "../scripts/dist/installer/compat.
 import { whichOnPath } from "../scripts/dist/installer/detect.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState } from "../scripts/dist/installer/state.mjs";
-import { createInstallerSandbox, makeTestFeed, sha256File, sink } from "./helpers/installer-sandbox.js";
+import { createInstallerSandbox, makeTestFeed, mutatingCalls, runSandboxInstaller, sha256File, sink } from "./helpers/installer-sandbox.js";
 import { generateTestKeyPair } from "./helpers/minisign-sign.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -27,27 +27,9 @@ const C = `${P}.config`;
 const SLOT = "plugins.slots.memory";
 const SECRET = "sk-TEST-DO-NOT-LOG";
 
-async function run(sb, argv, extra = {}) {
-  const stdout = sink();
-  const stderr = sink();
-  const code = await runInstaller(["--feed-file", sb.feedFile, ...argv], {
-    env: sb.env,
-    platform: process.platform,
-    arch: "x64",
-    glibcVersion: "2.39",
-    isTTY: false,
-    statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }),
-    prompt: async () => {
-      throw new Error("prompt must not be called");
-    },
-    stdout,
-    stderr,
-    ...extra,
-  });
-  return { code, stdout: stdout.text, stderr: stderr.text, out: stdout.text + stderr.text };
-}
+const run = runSandboxInstaller;
 
-const mutating = (calls) => calls.filter((a) => (a[0] === "plugins" && ["install", "uninstall", "update", "enable"].includes(a[1])) || (a[0] === "config" && a[1] === "set"));
+const mutating = mutatingCalls;
 
 const freshClawhub = (stateDir) => [
   ["--version"],

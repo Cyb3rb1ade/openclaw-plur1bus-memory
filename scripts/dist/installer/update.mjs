@@ -23,7 +23,7 @@
  * reported with their size (R-S4). Nothing here is ever hard-linked (R-S8).
  */
 
-import { closeSync, existsSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, rmSync, mkdirSync, writeSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,58 +34,23 @@ import { isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { writeState } from "./state.mjs";
 import { verifyInstall } from "./verify.mjs";
+import { rmTree, writeFileAtomic } from "./fsutil.mjs";
+
+const ALLOW_CONVERSATION = `plugins.entries.${PLUGIN_ID}.hooks.allowConversationAccess`;
 
 /** Upper bound for any tarball the installer downloads itself (the feed carries no size). */
 export const MAX_TARBALL_BYTES = 200 * 1024 * 1024;
 /** `<stateDir>/memory/<WORK_DIR>` holds downloaded tarballs while an operation is in progress. */
 export const WORK_DIR = ".plur1bus-installer-work";
 
-const WIN_RETRY = new Set(["EPERM", "EBUSY", "EACCES"]);
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
-
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/** Run `fn`; on win32 retry EPERM/EBUSY/EACCES with backoff for up to 10 s (spec B.5). */
-export function withWinRetry(fn) {
-  const deadline = Date.now() + 10_000;
-  for (let delay = 50; ; delay = Math.min(delay * 2, 1000)) {
-    try {
-      return fn();
-    } catch (err) {
-      if (process.platform !== "win32" || !WIN_RETRY.has(err?.code) || Date.now() > deadline) throw err;
-      sleepSync(delay);
-    }
-  }
-}
 
 export function workDir(stateDir) {
   return join(stateDir, "memory", WORK_DIR);
 }
 
 export function removeWorkDir(stateDir) {
-  withWinRetry(() => rmSync(workDir(stateDir), { recursive: true, force: true }));
-}
-
-/** temp `<name>.tmp-<pid>` → fsync → rename (global constraint "Atomic writes"). */
-export function writeFileAtomic(path, bytes) {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}`;
-  rmSync(tmp, { force: true });
-  const fd = openSync(tmp, "wx", 0o600);
-  try {
-    writeSync(fd, bytes);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    withWinRetry(() => renameSync(tmp, path));
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
+  rmTree(workDir(stateDir));
 }
 
 /**
@@ -244,10 +209,33 @@ export function manualRestoreLines({ stateDir, baseDbPath, snapshotId, preRestor
 }
 
 /**
- * Restore the snapshot into the store. Returns { ok, preRestorePath, manual }.
+ * T6-e: the store is never restored under a running Gateway. Non-interactive → false;
+ * on a TTY the person is asked to stop it and the status is checked again.
  */
-export async function restoreStep({ report, stateDir, baseDbPath, snapshotId }) {
+export async function waitForGatewayStopped({ cli, isTTY, flags = {}, prompt }) {
+  for (let asked = 0; ; asked++) {
+    const gw = await cli.gatewayStatus();
+    if (!gw.running) return true;
+    if (!isTTY || flags["non-interactive"] || typeof prompt !== "function" || asked >= 10) return false;
+    const a = String((await prompt('The OpenClaw Gateway is running, and the store is never restored under it. Stop the Gateway (for example `openclaw gateway stop`), then press Enter to check again, or type "abort": ')) ?? "").trim().toLowerCase();
+    if (a === "abort") return false;
+  }
+}
+
+/**
+ * Restore the snapshot into the store, but only once `gate()` (the Gateway check) passed.
+ * Returns { ok, preRestorePath, manual }.
+ */
+export async function restoreStep({ report, stateDir, baseDbPath, snapshotId, gate = null }) {
   if (!snapshotId) return { ok: true, preRestorePath: null, manual: [] };
+  if (gate && !(await gate())) {
+    report.step("restore", "failed", `the OpenClaw Gateway is running; the store was not restored from ${snapshotId}`);
+    return {
+      ok: false,
+      preRestorePath: null,
+      manual: [`stop the Gateway (for example \`openclaw gateway stop\`, or through its service manager), then re-run the installer with --rollback to restore the store from snapshot ${snapshotId}`],
+    };
+  }
   try {
     const r = await restoreSnapshot({ stateDir, baseDbPath, id: snapshotId });
     report.step("restore", "ok", `store restored from ${snapshotId}`);
@@ -260,7 +248,7 @@ export async function restoreStep({ report, stateDir, baseDbPath, snapshotId }) 
 
 /** Delete the `.pre-restore-*` copy only after the rolled-back state verified (brief, D89). */
 export function dropPreRestore(preRestorePath) {
-  if (preRestorePath) withWinRetry(() => rmSync(preRestorePath, { recursive: true, force: true }));
+  if (preRestorePath) rmTree(preRestorePath);
 }
 
 /** Print the manual steps and finish with exit 4. */
@@ -312,9 +300,19 @@ async function ensureRollback(ctx, progress) {
   return fresh;
 }
 
-/** The previous version as `verifyInstall` checks it: the digests its own install record carried. */
-function previousAsRelease(previous) {
-  return { version: previous.version, tarball: { integrity: previous.npmIntegrity }, clawpackDigest: previous.clawpackSha256 ?? undefined };
+/**
+ * The previous version as `verifyInstall` checks it: the digests its own install record
+ * carried, else the feed's entry for that version; `lenient` lets a record without any
+ * digest pass with a warning instead of failing the rollback (no spurious exit 4).
+ */
+function previousAsRelease(previous, feed) {
+  const rel = feed?.hosts?.openclaw?.releases?.find((r) => r.version === previous.version);
+  return {
+    version: previous.version,
+    tarball: { integrity: previous.npmIntegrity ?? rel?.tarball?.integrity ?? null },
+    clawpackDigest: previous.clawpackSha256 ?? rel?.clawpackDigest ?? undefined,
+    lenient: true,
+  };
 }
 
 /**
@@ -412,9 +410,21 @@ async function targetSpec(ctx, source, release) {
   }
   if (source === "offline") {
     if (!ctx.tgz) throw new Stop(EXIT.FAILED, "offline", `the interrupted update installs from a local tarball: re-run with --offline <tgz> of ${release.version}, or with --rollback`);
+    assertOfflineTarball(ctx.tgz, release);
     return installSpec(source, release.version, { file: ctx.tgz });
   }
   return installSpec(source, release.version, { release });
+}
+
+/** The --offline tarball must match the release actually being installed (a resumed target may differ from the feed's latest). */
+export function assertOfflineTarball(file, release) {
+  let digest;
+  try {
+    digest = sha256(readFileSync(file));
+  } catch (err) {
+    throw new Stop(EXIT.FAILED, "offline", `cannot read ${file}: ${err?.code ?? err?.message}`);
+  }
+  if (digest !== release.tarball.sha256) throw new Stop(EXIT.FAILED, "offline", `SHA-256 of ${file} (${digest.slice(0, 12)}…) does not match the feed's ${release.version} (${release.tarball.sha256.slice(0, 12)}…)`);
 }
 
 function saver(ctx, plan) {
@@ -478,6 +488,15 @@ async function applyUpdate(ctx, plan, from) {
       report.set("oldGenerations", { dir: gens.dir, count: gens.folders.length, bytes: gens.bytes });
       report.note(`Kept ${gens.folders.length} old npm generation folder(s) of the plugin under ${gens.dir} (${formatBytes(gens.bytes)}); the installer never deletes them, remove them yourself once ${target} runs well.`);
     }
+    try {
+      const allow = await cli.configGet(ALLOW_CONVERSATION);
+      if (!allow.set) {
+        report.set("conversationAccess", "unset");
+        report.note(`Conversation access for capture and recall is not enabled, and an update never changes it. To enable it: openclaw config set ${ALLOW_CONVERSATION} true`);
+      }
+    } catch {
+      // the summary line is advice only
+    }
     if (plan.progress.snapshotId) report.note(`The pre-update snapshot ${plan.progress.snapshotId} is kept (the newest 5 are kept).`);
     report.note(`Updated ${PACKAGE_NAME} ${prev} → ${target}. Restart the Gateway to load it: \`openclaw gateway restart\`.`);
     return report.finish(EXIT.OK);
@@ -509,11 +528,11 @@ async function rollbackUpdate(ctx, plan) {
     if (r.code !== 0) manual.push(manualInstallCommand(rb));
     else report.step("rollback.reinstall", "ok", `openclaw plugins install ${rb.locator}`);
   }
-  const restored = await restoreStep({ report, stateDir, baseDbPath, snapshotId: plan.progress.snapshotId });
+  const restored = await restoreStep({ report, stateDir, baseDbPath, snapshotId: plan.progress.snapshotId, gate: () => waitForGatewayStopped(ctx) });
   manual.push(...restored.manual);
 
   if (manual.length === 0) {
-    const checks = await verifyInstall({ cli, release: previousAsRelease(plan.progress.previous), source: plan.progress.previous.source, downloadModels: false, stateDir });
+    const checks = await verifyInstall({ cli, release: previousAsRelease(plan.progress.previous, ctx.feed), source: plan.progress.previous.source, downloadModels: false, stateDir });
     for (const c of checks) report.step(`rollback.verify.${c.id}`, c.ok ? (c.warn ? "warn" : "ok") : "failed", c.detail);
     if (checks.some((c) => !c.ok)) {
       manual.push(manualInstallCommand(rb));

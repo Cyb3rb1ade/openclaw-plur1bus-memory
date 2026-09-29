@@ -6,36 +6,17 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { runInstaller } from "../scripts/dist/installer/main.mjs";
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { readState, writeState } from "../scripts/dist/installer/state.mjs";
 import { createSnapshot, listSnapshots } from "../lib/snapshot/store-snapshot.js";
-import { createInstallerSandbox, sink } from "./helpers/installer-sandbox.js";
+import { createInstallerSandbox, mutatingCalls, runSandboxInstaller } from "./helpers/installer-sandbox.js";
 
 const ID = "memory-lancedb-namespaced";
 const SLOT = "plugins.slots.memory";
 
-async function run(sb, argv, extra = {}) {
-  const stdout = sink();
-  const stderr = sink();
-  const code = await runInstaller(["--feed-file", sb.feedFile, ...argv], {
-    env: sb.env,
-    platform: process.platform,
-    arch: "x64",
-    glibcVersion: "2.39",
-    isTTY: false,
-    statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }),
-    prompt: async () => {
-      throw new Error("prompt must not be called");
-    },
-    stdout,
-    stderr,
-    ...extra,
-  });
-  return { code, stdout: stdout.text, stderr: stderr.text, out: stdout.text + stderr.text };
-}
+const run = runSandboxInstaller;
 
-const mutating = (calls) => calls.filter((a) => (a[0] === "plugins" && ["install", "uninstall", "update", "enable"].includes(a[1])) || (a[0] === "config" && a[1] === "set"));
+const mutating = mutatingCalls;
 
 /** Tracked install (installed from the feed tarball) with a store, a Node snapshot, a legacy tar and the model cache. */
 async function installedSandbox({ previousSlot = null, config = { [SLOT]: ID } } = {}) {
@@ -75,8 +56,12 @@ describe("plugin installer: uninstall", () => {
 
   it("purge without --yes-delete-memories is refused non-interactively", async () => {
     const { sb, baseDbPath, snap, legacyTar, modelCache, vault } = await installedSandbox();
+    const preRestore = `${baseDbPath}.pre-restore-20260101T000000Z`;
+    mkdirSync(preRestore, { recursive: true });
+    writeFileSync(join(preRestore, "old.lance"), "TEST ONLY");
     const r = await run(sb, ["--uninstall", "--purge"]);
     assert.equal(r.code, EXIT.NEEDS_CHOICE, r.out);
+    assert.ok(r.stderr.includes(preRestore), "the purge lists the .pre-restore-* copies it deletes");
     assert.match(r.stderr, /--yes-delete-memories/);
     assert.deepEqual(mutating(sb.openclawCalls()), []);
     assert.ok(existsSync(baseDbPath));
@@ -99,8 +84,31 @@ describe("plugin installer: uninstall", () => {
     assert.deepEqual((await listSnapshots({ stateDir: sb.stateDir })).map((s) => s.kind), ["legacy-tar"]);
     assert.ok(existsSync(legacyTar));
     assert.equal(existsSync(modelCache), false);
+    assert.equal(existsSync(preRestore), false);
     assert.ok(existsSync(join(vault, "note.md")), "the vault is never purged");
     assert.deepEqual(readdirSync(join(sb.stateDir, "memory")).filter((n) => /\.tmp-/.test(n)), []);
+  });
+
+  it("an interrupted purge is continued only by --uninstall --purge with fresh confirmation (T6-d)", async () => {
+    const { sb, baseDbPath, snap } = await installedSandbox();
+    writeState(sb.stateDir, { previousSlot: null, installedVersion: "7.16.11", source: "tarball", inProgress: { op: "uninstall", step: "uninstall", purge: true, snapshotId: null, previousVersion: "7.16.11" } });
+    for (const argv of [[], ["--update", "--yes"], ["--uninstall"], ["--adopt-legacy"]]) {
+      const r = await run(sb, argv);
+      assert.equal(r.code, EXIT.NEEDS_CHOICE, `${argv}: ${r.out}`);
+      assert.match(r.stderr, /interrupted uninstall with purge at step uninstall/);
+      assert.match(r.stderr, /--uninstall --purge/);
+    }
+    // the same mode still needs the confirmation again
+    const r2 = await run(sb, ["--uninstall", "--purge"]);
+    assert.equal(r2.code, EXIT.NEEDS_CHOICE, r2.out);
+    assert.match(r2.stderr, /--yes-delete-memories/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+    assert.ok(existsSync(join(baseDbPath, "main", "TEST-ONLY.lance")), "store kept");
+    assert.ok(existsSync(snap.dir), "snapshots kept");
+
+    const r3 = await run(sb, ["--uninstall", "--purge", "--yes-delete-memories"]);
+    assert.equal(r3.code, EXIT.OK, r3.out);
+    assert.equal(existsSync(baseDbPath), false);
   });
 
   it("purge after two interactive confirmations", async () => {

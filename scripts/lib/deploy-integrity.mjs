@@ -333,6 +333,7 @@ export const DEPLOY_FILES = [
   "scripts/dist/installer/update.mjs",
   "scripts/dist/installer/uninstall.mjs",
   "scripts/dist/installer/legacy.mjs",
+  "scripts/dist/installer/fsutil.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",

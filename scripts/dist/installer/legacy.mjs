@@ -20,7 +20,7 @@
  * --rollback, undone by the next run.
  */
 
-import { existsSync, renameSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { posix, win32 } from "node:path";
 
 import { whichOnPath } from "./detect.mjs";
@@ -28,6 +28,7 @@ import { isReadonlyRefusal, PLUGIN_ID, tail } from "./openclaw-cli.mjs";
 import { EXIT, Stop } from "./report.mjs";
 import { writeState } from "./state.mjs";
 import {
+  assertOfflineTarball,
   downloadReleaseTarball,
   dropPreRestore,
   finishRollbackFailed,
@@ -36,8 +37,9 @@ import {
   removeWorkDir,
   restoreStep,
   snapshotStep,
-  withWinRetry,
+  waitForGatewayStopped,
 } from "./update.mjs";
+import { renameWithRetry } from "./fsutil.mjs";
 import { verifyInstall } from "./verify.mjs";
 
 export const GUARD_NAME = "protect-plur1bus-deploy";
@@ -99,6 +101,16 @@ function guardSteps({ report, stateDir, guardSource }) {
   report.set("guard", { source: guardSource });
 }
 
+/** `<state>/extensions/.plur1bus-legacy-<ts>`, with `-2`, `-3`… when that name is taken. */
+function uniqueBackup(stateDir, ts) {
+  const first = joinLike(stateDir, "extensions", `.plur1bus-legacy-${ts}`);
+  if (!existsSync(first)) return first;
+  for (let k = 2; ; k++) {
+    const p = `${first}-${k}`;
+    if (!existsSync(p)) return p;
+  }
+}
+
 function stamp(ms) {
   return new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
@@ -148,7 +160,7 @@ export async function runAdoptLegacy(ctx) {
       targetVersion: release.version,
       source,
       legacyDir,
-      legacyBackup: joinLike(stateDir, "extensions", `.plur1bus-legacy-${stamp(now())}`),
+      legacyBackup: uniqueBackup(stateDir, stamp(now())),
       previousSlot,
       previousAllow,
       written: [],
@@ -169,6 +181,7 @@ async function adoptSpec(ctx, source) {
   }
   if (source === "offline") {
     if (!ctx.tgz) throw new Stop(EXIT.FAILED, "offline", `the adoption installs from a local tarball: re-run with --offline <tgz> of ${release.version}, or with --rollback`);
+    assertOfflineTarball(ctx.tgz, release);
     return installSpec(source, release.version, { file: ctx.tgz });
   }
   return installSpec(source, release.version, { release });
@@ -207,7 +220,7 @@ async function applyAdopt(ctx, plan, from) {
     save("rename");
     if (existsSync(p.legacyDir) && !existsSync(p.legacyBackup)) {
       try {
-        withWinRetry(() => renameSync(p.legacyDir, p.legacyBackup));
+        renameWithRetry(p.legacyDir, p.legacyBackup);
       } catch (err) {
         clear(ctx, plan);
         throw new Stop(EXIT.FAILED, "rename", `cannot rename ${p.legacyDir} to ${p.legacyBackup}: ${err?.code ?? err?.message}; nothing was changed`);
@@ -241,9 +254,10 @@ async function applyAdopt(ctx, plan, from) {
   if (step === "config") {
     save("config");
     try {
-      await cli.configSet(ALLOW_CONVERSATION, "true");
+      // record the intent first, so an interrupted run knows to restore the previous value
       if (!p.written.includes(ALLOW_CONVERSATION)) p.written.push(ALLOW_CONVERSATION);
       save("config");
+      await cli.configSet(ALLOW_CONVERSATION, "true");
       await cli.configSet(SLOT, PLUGIN_ID);
       report.step("slot", "ok", `${SLOT} = ${PLUGIN_ID}; conversation access for capture and recall enabled`);
     } catch (err) {
@@ -287,14 +301,14 @@ async function rollbackAdopt(ctx, plan, { finish = true, restore = true } = {}) 
     if (existsSync(p.legacyDir)) manual.push(`move ${p.legacyDir} aside, then rename ${p.legacyBackup} back to ${p.legacyDir}`);
     else {
       try {
-        withWinRetry(() => renameSync(p.legacyBackup, p.legacyDir));
+        renameWithRetry(p.legacyBackup, p.legacyDir);
         report.step("rollback.rename", "ok", `legacy deploy back at ${p.legacyDir}`);
       } catch (err) {
         manual.push(`rename ${p.legacyBackup} back to ${p.legacyDir} (${err?.code ?? err?.message})`);
       }
     }
   }
-  const restored = await restoreStep({ report, stateDir, baseDbPath, snapshotId: restore ? p.snapshotId : null });
+  const restored = await restoreStep({ report, stateDir, baseDbPath, snapshotId: restore ? p.snapshotId : null, gate: () => waitForGatewayStopped(ctx) });
   manual.push(...restored.manual);
 
   const leftSet = [];
