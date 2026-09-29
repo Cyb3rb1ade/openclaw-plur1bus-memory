@@ -54,6 +54,16 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Windows (engine-windows):** Die Link-Prüfung `isUnsafeLink()` verglich
+  unter Windows den `realpathSync.native` eines Pfads mit seiner Schreibweise.
+  Ein Vorfahr in 8.3-Kurzschreibweise (etwa `C:\Users\RUNNER~1\…\Temp`) oder
+  in anderer Groß-/Kleinschreibung ließ damit jede Datei darunter als Reparse
+  Point gelten — u. a. wurde die frisch angelegte `owner-pipe.nonce` als
+  „not a regular file“ abgewiesen und der Embedding-Owner startete nicht.
+  Geprüft wird jetzt nur das letzte Segment (Realpath des Eintrags gegen
+  Realpath des Elternverzeichnisses plus Name, ohne Groß-/Kleinschreibung);
+  Junctions und Symlinks am Eintrag selbst bleiben abgewiesen. POSIX und macOS
+  unverändert.
 - **Windows (engine-windows):** Der Embedding-Owner ohne explizite Adresse
   lauschte unter Windows auf der Datei `control/embedding-ipc/owner.sock`, was
   libuv dort nicht kann (`listen EACCES`) — der lokale Embedding-Owner startete
