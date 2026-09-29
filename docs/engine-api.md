@@ -565,7 +565,19 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
     owner does not start (checked before any listener or token exists) and a
     client request fails. An unclaimed `serve()` probing for a legacy owner
     treats a missing nonce as "no legacy owner" and any other nonce error as
-    that failure.
+    that failure. The nonce is published atomically (written, fsynced and
+    secured in a temp file, then hard-linked into place; a concurrent reader
+    sees no file or the whole nonce). If `icacls` is missing, the nonce file
+    keeps the directory's inherited ACL and a one-time warning is logged.
+  - **The `stateRoot` must be private to the user (both platforms).** The
+    nonce and `owner.token` are only as trustworthy as the embedding-ipc
+    directory: an existing `owner-pipe.nonce` or token is used as found, and
+    the directory's owner is not verified on Windows (that check would collide
+    with `engine-windows:elevated-owner`). The default `stateRoot` under the
+    user profile (`~/.openclaw/memory/lancedb-namespaced`, i.e. below
+    `%USERPROFILE%` on Windows) is safe. A `stateRoot` that other users can
+    write (a shared or world-writable directory) is **unsupported**: another
+    user could plant the nonce and pre-bind the pipe, or replace the token.
   Server authentication (a challenge on the token, or peer-credential checks)
   is a follow-up for PR-11, alongside the Windows pipe ACL.
 - **One serving engine per `stateRoot`, across processes, is the operator's

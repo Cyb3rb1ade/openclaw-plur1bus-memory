@@ -80,6 +80,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Groß-/Kleinschreibung und ohne abschließende Punkte/Leerzeichen, auf allen
   Plattformen (`.OBSIDIAN`, `.obsidian.`, `.obsidian ` umgingen sie auf NTFS
   und case-insensitiven APFS-Volumes).
+- **Verhaltensänderung, alle Plattformen:** Vault-relative Pfade im
+  Obsidian-Bridge (beide `assertSafeRelativePath`, `resolveUnder`) weisen jetzt
+  jedes Segment ab, das nur aus Punkten und/oder Leerzeichen besteht — auch `.`
+  (`a/./b`, ein `reviewRoot` von `./plur1bus` ergeben nun „Path traversal
+  rejected“), `...`, `.. `, ` .`. Unter Windows zusätzlich: Segmente mit
+  abschließendem Punkt oder Leerzeichen (Windows entfernt sie), mit `:`
+  (NTFS-Streams wie `.obsidian::$INDEX_ALLOCATION`, laufwerksrelatives `C:x`)
+  und in 8.3-Kurznamen-Form (`~` plus Ziffer, z. B. `OBSIDI~1`) — alle
+  verweisen sonst auf einen anderen Namen.
 - Der Persona-Direktiven-Cache ist an einen Hash des Dateiinhalts gebunden
   statt an `mtimeMs`; eine (gleich große) Neufassung im selben Zeitstempel-Tick
   lieferte die alte Direktive.
