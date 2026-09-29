@@ -232,7 +232,7 @@ node --test tests/*.test.js
   helpers), `tests/protect-plur1bus-deploy.test.js`, the selftest and snapshot
   suites. `.github/workflows/plugin-dist.yml` installs the packed plugin into
   disposable OpenClaw instances on five targets, upgrades, forces a rollback
-  and uninstalls; the Windows and macOS legs also run the full suite.
+  and uninstalls; the full suite on Windows and macOS runs in `ci.yml` (`test-cross`).
 - The installer's test seams (`PLUR1BUS_PLUGIN_INSTALLER_TEST=1` with
   `PLUR1BUS_PLUGIN_FEED` `file://`, `PLUR1BUS_PLUGIN_PUBKEY`,
   `PLUR1BUS_PLUGIN_WSL_EXE`, `PLUR1BUS_PLUGIN_TEST_FREE_BYTES`,

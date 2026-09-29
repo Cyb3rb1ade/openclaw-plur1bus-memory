@@ -442,6 +442,22 @@ describe("plugin installer: update", () => {
     assert.equal(treeDigest(baseDbPath), before);
   });
 
+  it("--update --dry-run prints the plan without --yes, without a TTY and without changes", async () => {
+    const { sb, baseDbPath } = await trackedSandbox();
+    const before = treeDigest(baseDbPath);
+    for (const argv of [["--update", "--dry-run"], ["--dry-run"]]) {
+      const r = await run(sb, argv, { isTTY: false });
+      assert.equal(r.code, EXIT.OK, r.out);
+      assert.match(r.stderr, /EN-NOTE 7\.17\.0/);
+      assert.match(r.stderr, /\[plan\] snapshot/);
+      assert.match(r.stderr, /\[plan\] update: openclaw plugins install/);
+      assert.doesNotMatch(r.stderr, /needs a choice/);
+    }
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+    assert.equal(treeDigest(baseDbPath), before);
+    assert.equal(readState(sb.stateDir).inProgress, undefined);
+  });
+
   it("a successful update names an unset allowConversationAccess and never sets it (T6-b)", async () => {
     const { sb } = await trackedSandbox();
     const r = await run(sb, ["--update", "--yes"]);

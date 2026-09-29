@@ -99,6 +99,12 @@ Neither script uses `sudo` or writes outside its temp dir; the `.ps1` is
 unsigned (Authenticode pending) and the bootstraps are hosted at
 `https://plur1bus.app/` beside the harness installers.
 
+Details worth knowing: the installer's SHA-256 check happens after its
+download but before it runs, so a mismatch runs nothing; without `curl` and
+`wget` the shell script exits 3; the WSL delegation of the `.ps1` needs a Node
+(`node.exe`) on the Windows side, because the feed signature is verified there
+before anything is handed to the distro.
+
 Channel: `PLUR1BUS_PLUGIN_CHANNEL=beta` selects `beta.json` and the beta key;
 the default is `stable`.
 
@@ -199,7 +205,7 @@ Gateway, OpenClaw applies the install live.
 | `--version <v>` | Plugin version. Default: the feed's `latest`. |
 | `--source clawhub\|npm` | Install source, see step 2. |
 | `--offline <tgz>` | Install a local tarball after its SHA-256 matched the feed. |
-| `--feed <url>` | Signed plugin feed. Default `https://updates.plur1bus.app/plugin/stable.json`. |
+| `--feed <url>` | Signed plugin feed. Default `https://updates.plur1bus.app/plugin/stable.json`. Works only when you run the installer bundle directly; the bootstraps always pass `--feed-file`, so through the one-liner use `PLUR1BUS_PLUGIN_FEED`. |
 | `--feed-file <path>` | A feed the bootstrap already verified. Exclusive with `--feed`. |
 | `--accept-nc-licence` | Accept CC BY-NC 4.0 for Jina v5 Text Nano ([licence gate](#the-licence-gate)). |
 | `--non-interactive` | Never prompt; the licence defaults to E5-small. |
@@ -238,7 +244,7 @@ Identical for the bootstraps and the installer.
 | Variable | Effect |
 |---|---|
 | `PLUR1BUS_PLUGIN_CHANNEL` | Bootstraps: release channel `^[a-z0-9-]+$`, default `stable`. |
-| `PLUR1BUS_PLUGIN_FEED` | Bootstraps: feed URL, `{channel}` is replaced, **https only**. A supported mirror override that needs no test flag, because the feed signature is still verified with the key built into the script. The `.ps1` forwards it into a WSL distro. The installer run directly ignores it unless the test flag is set; use `--feed`. |
+| `PLUR1BUS_PLUGIN_FEED` | Bootstraps: feed URL, `{channel}` is replaced, **https only**. A supported mirror override that needs no test flag, because the feed signature is still verified with the key built into the script. The `.ps1` forwards it into a WSL distro. The installer bundle run directly ignores it unless the test flag is set; use `--feed` there. |
 | `PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1` | Same as `--accept-nc-licence`. |
 | `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE`, `OPENCLAW_HOME`, `OPENCLAW_CONFIG_READONLY`, `OPENCLAW_NIX_MODE` | OpenClaw's own, honoured as OpenClaw honours them. |
 
@@ -297,7 +303,7 @@ A tracked install (or `--update`) takes this path:
 2. Prints the release notes of every version after the installed one up to the
    target, in `--lang`, with security fixes marked, then asks **Now / Later /
    Skip** on a terminal. `--yes` means Now; without a terminal and without
-   `--yes` it exits 2. Later and Skip change nothing and record nothing; there
+   `--yes` it exits 2. Later and Skip change nothing and record nothing (nothing is remembered between runs); there
    is no skip list.
 3. Before any change: the rollback artefact for the installed version and, for
    the tarball source, the target tarball are fetched and verified against the
@@ -316,7 +322,19 @@ A tracked install (or `--update`) takes this path:
    `.pre-restore-*` copy of the failed store; exit 1 (4 with manual commands if
    this fails).
 7. Success: records the version, keeps the current and previous tarball, and
-   tells you to restart the Gateway.
+   tells you to restart the Gateway. If `allowConversationAccess` is still
+   unset, the summary names it and prints `openclaw config set
+   plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess
+   true`; an update never sets it itself.
+
+Source on update: the recorded source is reused (`--source` overrides). A
+ClawHub install whose target release has no `clawpackDigest` in the feed moves
+to the verified GitHub Release tarball for that update, because a ClawHub
+install could not be verified.
+
+`--update --dry-run` (and `--dry-run` on a tracked install) prints the release
+notes and the plan and exits 0 without `--yes` and without a terminal; it
+changes nothing.
 
 **Snapshots** live at `<stateDir>/memory/.snapshots/plur1bus-<UTC
 yyyymmddTHHMMSSZ>-<label>/` with a SHA-256 manifest (`snapshot.json`, schema
@@ -327,7 +345,7 @@ and `memory/merge-proposals.jsonl` when present. Not the Obsidian vault, never
 config or credentials. Files are copied, never hard-linked (OpenClaw rejects
 hard-linked plugin files). A LanceDB table that a running Gateway compacts
 during the copy is copied again, three tries, then `source-busy`; free space of
-1.1 times the copy is required (`insufficient-disk`). The **newest five** Node
+1.1 times the copy is required (`insufficient-disk`). A store path that is a symlink resolving outside its own parent directory is refused (`unsafe-path`) rather than followed; move the store or point `baseDbPath` at the real location. The **newest five** Node
 snapshots are kept and older ones pruned; the bash tool's `*.tar.gz` snapshots
 are listed as legacy and never pruned or restored by the installer.
 A manual tool exists in a source checkout: `node scripts/snapshot-store.mjs
@@ -370,12 +388,21 @@ The store, the snapshots, the model cache and the vault are **kept**.
 `--uninstall --purge` additionally deletes the store, the Node snapshots
 (`<stateDir>/memory/.snapshots/plur1bus-*`, never the legacy `*.tar.gz`), the
 `.pre-restore-*` copies beside the store and the plugin's model cache
-(`<stateDir>/models/plur1bus`). It lists exactly what it will delete, then asks
+(`${OPENCLAW_HOME}/models/plur1bus`, where the plugin resolves it, `~/.openclaw/models/plur1bus` by default; a `models` folder under `OPENCLAW_STATE_DIR` is not touched). It lists exactly what it will delete, then asks
 twice (type `delete`, then `y`), or takes `--yes-delete-memories`. Without a
 terminal and without that flag it exits 2 before any change. It refuses to
 delete a filesystem root, a home directory, the state directory or an ancestor
-of either (`unsafe-purge-path`, exit 3). Nothing else in the installer ever
-deletes a store, a snapshot or a legacy directory.
+of either (`unsafe-purge-path`, exit 3). The exact deletion rules of the whole installer:
+the store is deleted only by `--uninstall --purge`; snapshots are pruned to the
+newest five Node snapshots after a new one is taken (legacy tarballs never) and
+all of them go with `--purge`; the `.pre-restore-*` copy of a failed store is
+deleted only after a verified rollback; installed-tarball artefacts are pruned
+to the current and the previous version; the legacy `.plur1bus-legacy-<ts>`
+directory of an adoption is never deleted by the installer.
+
+A bare `--uninstall` on an rsync deploy that OpenClaw does not track exits 2
+`legacy-deploy` and changes nothing: adopt it first (`--adopt-legacy`) or
+remove it by hand.
 
 ## Adopting an rsync deploy (legacy)
 
@@ -400,11 +427,16 @@ or (`--rollback`) undone by the next run.
 
 **The deploy guard.** `protect-plur1bus-deploy.sh` (run from cron every 15
 minutes) restores the deploy directory from `<state>/plur1bus-release` whenever
-it differs, and would silently revert an adoption. The installer detects it
-(the file `<state>/scripts/protect-plur1bus-deploy.sh` exists, or a line of
-`crontab -l` mentions `protect-plur1bus-deploy`; the matched line is never
-printed) and `--adopt-legacy` then exits 3 `legacy-deploy-guard`, changing
-nothing. It never edits your crontab. Steps for the owner's VPS:
+it differs, and **may** silently revert an adoption (the live copy on a server
+can differ from the repository mirror, so treat it as active). Detection is
+limited: the file `<state>/scripts/protect-plur1bus-deploy.sh` exists, or a
+non-comment line of the **invoking user's** `crontab -l` mentions
+`protect-plur1bus-deploy` (the matched line is never printed). `/etc/cron.d`,
+other users' crontabs and systemd timers are **not** detected. Run the installer
+as the user that owns the state directory and the crontab. With a guard found,
+`--adopt-legacy` exits 3 `legacy-deploy-guard`, changing nothing. The installer
+never edits your crontab. Steps for the owner's VPS (check `/etc/cron.d` and
+systemd timers by hand too):
 
 1. Run `crontab -e` and comment out or delete the line that runs
    `protect-plur1bus-deploy.sh`. **Do this first.**
@@ -413,7 +445,8 @@ nothing. It never edits your crontab. Steps for the owner's VPS:
    copy remains under `<state>/scripts/`.
 3. Re-run with `--adopt-legacy` (add `--dry-run` first to see the plan).
 4. Do not re-enable the guard afterwards: it would restore the untracked copy.
-   Delete `.plur1bus-legacy-<timestamp>` yourself once the adopted plugin runs
+   A rolled-back adoption leaves the guard disabled; re-enable it only if you
+   go back to the rsync deploy for good. Delete `.plur1bus-legacy-<timestamp>` yourself once the adopted plugin runs
    well; `plur1bus-release` is no longer needed by the plugin.
 
 ## The licence gate

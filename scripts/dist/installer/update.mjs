@@ -361,6 +361,16 @@ export async function runUpdate(ctx) {
     for (const l of n.text.split(/\r?\n/)) report.note(`  ${l}`);
   }
 
+  const recorded = recordedSource(state, install);
+  const source = targetSource({ flags, recorded, release });
+  report.set("source", source);
+  // a dry run prints the plan without the consent gate (nothing is changed either way)
+  if (flags["dry-run"]) {
+    report.step("snapshot", "planned", `store at ${ctx.baseDbPath} → ${join(stateDir, "memory", ".snapshots")} (pre-${target})`);
+    report.step("update", "planned", `openclaw plugins install <${source} ${target}> --force --accept-capabilities`);
+    return report.finish(EXIT.OK);
+  }
+
   // ── Now / Later / Skip ───────────────────────────────────────────────────
   if (!ctx.consented && !flags.yes) {
     if (!isTTY || flags["non-interactive"]) {
@@ -375,15 +385,6 @@ export async function runUpdate(ctx) {
       report.step("update", "skipped", `later: run the installer with --update when you are ready; nothing was changed`);
       return report.finish(EXIT.OK);
     }
-  }
-
-  const recorded = recordedSource(state, install);
-  const source = targetSource({ flags, recorded, release });
-  report.set("source", source);
-  if (flags["dry-run"]) {
-    report.step("snapshot", "planned", `store at ${ctx.baseDbPath} → ${join(stateDir, "memory", ".snapshots")} (pre-${target})`);
-    report.step("update", "planned", `openclaw plugins install <${source} ${target}> --force --accept-capabilities`);
-    return report.finish(EXIT.OK);
   }
 
   const previous = {

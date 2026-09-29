@@ -749,7 +749,8 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
 - **Signierter Plugin-Feed** `plur1bus.plugin-feed/1`
   (`scripts/dist/build-plugin-feed.mjs`, offline vom Owner signiert).
 - **`plugin-dist.yml`**: Installations- und Upgrade-Matrix auf den fünf Zielen
-  mit echtem OpenClaw (min und latest), Windows/macOS-Vollsuite.
+  mit echtem OpenClaw (min und latest). Die Vollsuite auf Windows und macOS
+  läuft in `ci.yml` (`test-cross`).
 
 ### Geändert
 
