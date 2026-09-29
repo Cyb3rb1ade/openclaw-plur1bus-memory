@@ -18,7 +18,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, win32 } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import {
   syncWorkspace,
   confirmVaultPath,
@@ -292,14 +292,45 @@ describe("obsidian-smoke-p5", () => {
 
   it("the .obsidian write gate folds case and trailing dots/spaces on every platform", () => {
     const gate = /\.obsidian writes require obsidianBridge\.allowDotObsidianWrite=true/;
+    const trailing = /Unsafe path segment rejected \(trailing dot or space\)/;
     for (const segment of [".obsidian", ".OBSIDIAN", ".Obsidian", ".obsidian.", ".obsidian ", ".OBSIDIAN. ."]) {
-      assert.throws(() => resolveUnder("C:\\Vault", `${segment}/plugins/x.js`, {}, win32), gate, segment);
-      assert.throws(() => resolveUnder("/vault", `${segment}/plugins/x.js`), gate, segment);
-      assert.throws(() => safeAssertRelative(`${segment}/plugins/x.js`), gate, segment);
-      assert.equal(resolveUnder("C:\\Vault", `${segment}/plugins/x.js`, { allowDotObsidianWrite: true }, win32).endsWith("x.js"), true);
+      const rel = `${segment}/plugins/x.js`;
+      const hasTrailing = /[. ]$/.test(segment);
+      // POSIX: the gate catches every spelling.
+      assert.throws(() => resolveUnder("/vault", rel, {}, posix), gate, segment);
+      assert.throws(() => safeAssertRelative(rel, { platform: "linux" }), gate, segment);
+      // win32: a trailing dot/space is refused outright (Windows would strip it), even with the opt-in.
+      assert.throws(() => resolveUnder("C:\\Vault", rel, {}, win32), hasTrailing ? trailing : gate, segment);
+      assert.throws(() => safeAssertRelative(rel, { platform: "win32" }), hasTrailing ? trailing : gate, segment);
+      if (hasTrailing) assert.throws(() => resolveUnder("C:\\Vault", rel, { allowDotObsidianWrite: true }, win32), trailing, segment);
+      else assert.equal(resolveUnder("C:\\Vault", rel, { allowDotObsidianWrite: true }, win32), `C:\\Vault\\${segment}\\plugins\\x.js`);
     }
     assert.equal(resolveUnder("C:\\Vault", ".obsidianx/notes.md", {}, win32), "C:\\Vault\\.obsidianx\\notes.md");
     assert.equal(isDotObsidianSegment("obsidian"), false);
+  });
+
+  it("refuses segments made only of dots and/or spaces on every platform", () => {
+    for (const segment of [".", "..", "...", "... ", " .", ".  .", "  ", ". .."]) {
+      for (const rel of [`${segment}/x.md`, `notes/${segment}/x.md`, `notes/${segment}`]) {
+        assert.throws(() => resolveUnder("/vault", rel, {}, posix), /Path traversal rejected/, JSON.stringify(rel));
+        assert.throws(() => resolveUnder("C:\\Vault", rel, {}, win32), /Path traversal rejected/, JSON.stringify(rel));
+        assert.throws(() => safeAssertRelative(rel, { platform: "linux" }), /Path traversal rejected/, JSON.stringify(rel));
+        assert.throws(() => safeAssertRelative(rel, { platform: "win32" }), /Path traversal rejected/, JSON.stringify(rel));
+      }
+    }
+    // Dots inside or leading a real name stay legal.
+    assert.equal(resolveUnder("/vault", "notes/.hidden/a..b.md", {}, posix), "/vault/notes/.hidden/a..b.md");
+    assert.equal(resolveUnder("C:\\Vault", "notes/.hidden/a..b.md", {}, win32), "C:\\Vault\\notes\\.hidden\\a..b.md");
+  });
+
+  it("on win32 refuses any segment with a trailing dot or space; POSIX keeps such names", () => {
+    const trailing = /Unsafe path segment rejected \(trailing dot or space\)/;
+    for (const rel of ["notes./x.md", "notes /x.md", "notes/x.md.", "notes/x.md ", "a. ./b"]) {
+      assert.throws(() => resolveUnder("C:\\Vault", rel, {}, win32), trailing, JSON.stringify(rel));
+      assert.throws(() => safeAssertRelative(rel, { platform: "win32" }), trailing, JSON.stringify(rel));
+      assert.doesNotThrow(() => resolveUnder("/vault", rel, {}, posix), JSON.stringify(rel));
+      assert.doesNotThrow(() => safeAssertRelative(rel, { platform: "linux" }), JSON.stringify(rel));
+    }
   });
 
   it("blocks path traversal via safeBridgePath", () => {
