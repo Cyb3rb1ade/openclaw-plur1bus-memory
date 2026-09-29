@@ -169,6 +169,12 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     assert.match(nonce, /^[a-f0-9]{64}$/);
     assert.equal(ensureScopedEmbeddingPipeNonce(paths, { platform: "linux" }), false, "an existing nonce is kept");
     assert.equal(readScopedEmbeddingPipeNonce(paths), nonce);
+    // Windows run tc3: the directory below an 8.3 ancestor (C:\Users\RUNNER~1\…)
+    // was refused as "not a regular file". A parent reached through a link
+    // stands in for that spelling; the win32 link check must accept it.
+    const alias = join(makeTempDir("plur1bus-ipc-nonce-alias-"), "alias");
+    symlinkSync(directory, alias, "dir");
+    assert.equal(readScopedEmbeddingPipeNonce({ directory: alias }, { platform: "win32" }), nonce);
     // No file-ACL reader in the repo for the win32 nonce file: engine-windows:posix-only for this mode check.
     if (!WIN32) assert.equal(statSync(file).mode & 0o777, 0o600);
     writeFileSync(file, "not-a-nonce\n");

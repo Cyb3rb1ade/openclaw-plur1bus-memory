@@ -201,10 +201,42 @@ describe("lib/platform isUnsafeLink", () => {
   });
 });
 
+describe("lib/platform isUnsafeLink (win32 ancestors)", () => {
+  // Windows run tc3: every file under C:\Users\RUNNER~1\AppData\Local\Temp was
+  // "unsafe", because realpath expands the 8.3 ancestor. An ancestor that
+  // resolves elsewhere (a short name, another case, a linked parent) is not a
+  // link at the entry itself; a symlinked parent stands in for it here.
+  it("does not treat an entry below a differently spelled ancestor as a link", () => {
+    const dir = makeTempDir("plur1bus-platform-ancestor-");
+    const real = join(dir, "real");
+    mkdirSync(real);
+    writeFileSync(join(real, "file.txt"), "x");
+    const alias = join(dir, "alias");
+    symlinkSync(real, alias, "dir");
+    assert.equal(isUnsafeLink(join(alias, "file.txt"), { platform: "win32", stat: { isSymbolicLink: () => false } }), false);
+    // The link itself is still refused.
+    assert.equal(isUnsafeLink(alias, { platform: "win32", stat: { isSymbolicLink: () => false } }), true);
+  });
+
+  it("accepts a real file in the host temp directory (8.3 ancestors on Windows runners)", () => {
+    const file = join(makeTempDir("plur1bus-platform-tmpfile-"), "owner-pipe.nonce");
+    writeFileSync(file, "x");
+    assert.equal(isUnsafeLink(file), false);
+    assert.equal(isUnsafeLink(file, { platform: "win32" }), false);
+  });
+});
+
 describe("lib/platform canonicalIdentityPath", () => {
-  it("resolves a real directory on POSIX and preserves case", () => {
+  it("resolves a real directory on the host (POSIX keeps case; win32 folds it)", () => {
     const dir = makeTempDir("plur1bus-platform-Canon-");
     // realpathSync, not the raw path: on macOS os.tmpdir() is /var -> /private/var.
+    if (process.platform === "win32") {
+      // The POSIX flavour cannot resolve a drive path on a win32 host (it
+      // prefixes the cwd); the host's own platform is the real case there.
+      assert.equal(canonicalIdentityPath(dir), realpathSync(dir).replace(/\//g, "\\").toLowerCase());
+      assert.match(canonicalIdentityPath(dir), /canon-/);
+      return;
+    }
     assert.equal(canonicalIdentityPath(dir, { platform: "linux" }), realpathSync(dir));
     assert.match(canonicalIdentityPath(dir, { platform: "linux" }), /Canon-/);
   });
