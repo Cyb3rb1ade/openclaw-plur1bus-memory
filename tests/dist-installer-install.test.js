@@ -167,12 +167,12 @@ describe("plugin installer: install", () => {
     const existing = doc.steps.find((s) => s.id === "existing");
     assert.match(existing.detail, /tracked install 7\.16\.10/);
 
-    // --update itself is Task 6: until then it refuses before touching OpenClaw
-    const before = sb.log().length;
+    // without a TTY and without --yes the update needs a choice (Task 6) and changes nothing
+    assert.equal(r.code, EXIT.NEEDS_CHOICE, r.out);
     const u = await run(sb, ["--update"]);
-    assert.equal(u.code, EXIT.FAILED, u.out);
-    assert.match(u.stderr, /Task 6/);
-    assert.equal(sb.log().length, before);
+    assert.equal(u.code, EXIT.NEEDS_CHOICE, u.out);
+    assert.match(u.stderr, /--yes/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
   });
 
   it("an untracked extensions dir exits 2 naming --adopt-legacy and changes nothing", async () => {

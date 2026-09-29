@@ -13,11 +13,20 @@
  * cron script and hands anything else (the openclaw shim itself) to the real
  * Node in-process.
  *
+ * A `crontab` shim (POSIX) answers only `-l`, from `<root>/crontab.txt`
+ * (`setCrontab()`), and logs its argv, so the HM1-R9 guard probe never reads or
+ * edits a real crontab. Task 6 scenario keys: `failVersions` (runtime import
+ * fails for these versions), `installExitVersions`, `mutateStore` (a store dir
+ * the "new version" writes into on install), `killParentOnInstall` (kills the
+ * installer process; honoured only with PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT=1, set
+ * by the child-process test), and a legacy deploy that is visible only while
+ * `<state>/extensions/memory-lancedb-namespaced` exists.
+ *
  * `createInstallerSandbox()` throws if the `openclaw` that PATH resolves is not
  * its own shim (global constraint "never touch a real OpenClaw installation").
  */
 
-import { accessSync, constants, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +75,9 @@ function done(code) {
   process.exit(code);
 }
 const has = (flag) => args.includes(flag);
+// a legacy (untracked) deploy is visible only while its directory exists (HM1-R9 adoption renames it)
+const legacyPresent = Boolean(scenario.legacy) && existsSync(join(stateDir, "extensions", PLUGIN));
+const failing = (v) => (scenario.failVersions ?? []).includes(v);
 
 if (args[0] === "--version") {
   out(scenario.versionText ?? fixtureText(scenario.openclawVersion === "latest" ? "version-latest.txt" : "version-2026.8.1.txt"));
@@ -101,7 +113,7 @@ if (args[0] === "config" && args[1] === "set") {
     err("Config is externally managed (OPENCLAW_CONFIG_READONLY=1), so OpenClaw treats openclaw.json as immutable.\n");
     done(1);
   }
-  if (path === SLOT && value === PLUGIN && !state.installed && !scenario.legacy) {
+  if (path === SLOT && value === PLUGIN && !state.installed && !legacyPresent) {
     err("Config validation failed: plugins.slots.memory: plugin not found: " + PLUGIN + "\n");
     done(1);
   }
@@ -123,13 +135,14 @@ if (args[0] === "plugins" && args[1] === "inspect") {
     if (scenario.recordClawpackSha256) j.install.clawpackSha256 = scenario.recordClawpackSha256;
     if (!has("--runtime") && scenario.recordStatus) j.plugin.status = scenario.recordStatus;
     if (has("--runtime")) {
-      j.plugin.imported = scenario.runtimeImported ?? true;
+      j.plugin.imported = failing(state.version) ? false : (scenario.runtimeImported ?? true);
       j.plugin.status = scenario.runtimeStatus ?? "loaded";
     }
+    if (state.sourcePath) j.install.sourcePath = state.sourcePath;
     out(JSON.stringify(j, null, 2) + "\n");
     done(0);
   }
-  if (scenario.legacy) {
+  if (legacyPresent) {
     out(JSON.stringify(fixtureJson("inspect-legacy-untracked.json"), null, 2) + "\n");
     done(0);
   }
@@ -152,9 +165,26 @@ if (args[0] === "plugins" && args[1] === "install") {
     done(scenario.installExit);
   }
   let m;
-  if ((m = /^clawhub:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator))) Object.assign(state, { source: "clawhub", version: m[1] });
-  else if ((m = /^npm:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator))) Object.assign(state, { source: "npm", version: m[1] });
-  else if (locator.startsWith("npm-pack:")) Object.assign(state, { source: "npm", version: scenario.packVersion });
+  let version = null;
+  if ((m = /^clawhub:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator)) || (m = /^npm:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator))) version = m[1];
+  else if (locator.startsWith("npm-pack:")) version = (/cyb3rb1ade-plur1bus-memory-([0-9][^/\\]*)\.tgz$/.exec(locator) ?? [])[1] ?? scenario.packVersion;
+  if ((scenario.installExitVersions ?? []).includes(version)) {
+    err("TEST ONLY install failure for " + version + "\n");
+    done(1);
+  }
+  // TEST ONLY: a new plugin version that writes into the store before anything else happens
+  if (scenario.mutateStore && version !== state.version && existsSync(scenario.mutateStore)) {
+    writeFileSync(join(scenario.mutateStore, "written-by-" + version + ".txt"), "TEST ONLY\n");
+  }
+  // TEST ONLY: the installer process itself is killed while OpenClaw installs (Review Focus 5)
+  if (scenario.killParentOnInstall && process.env.PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT === "1") {
+    appendFileSync(join(SANDBOX, "argv.log"), JSON.stringify({ bin: "kill", argv: [String(process.ppid)] }) + "\n");
+    process.kill(process.ppid, "SIGKILL");
+    done(137);
+  }
+  if ((m = /^clawhub:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator))) Object.assign(state, { source: "clawhub", version: m[1], sourcePath: undefined });
+  else if ((m = /^npm:@cyb3rb1ade\/plur1bus-memory@(.+)$/.exec(locator))) Object.assign(state, { source: "npm", version: m[1], sourcePath: undefined });
+  else if (locator.startsWith("npm-pack:")) Object.assign(state, { source: "npm", version, sourcePath: locator.slice("npm-pack:".length) });
   else {
     err("shim: unexpected locator " + locator + "\n");
     done(2);
@@ -251,24 +281,10 @@ function resolveOnPath(name, pathValue) {
  * @param {{ version?: string, clawpackDigest?: string|null, integrity?: string, tarballSha256?: string, tarballUrl?: string, minGatewayVersion?: string, node?: string, windowsNativeBeta?: boolean }} [o]
  */
 export function makeTestFeed(o = {}) {
-  const version = o.version ?? "7.16.11";
+  const versions = o.versions ?? [o.version ?? "7.16.11"];
   const zero = (n) => String(n).padStart(64, "0");
-  const release = {
-    version,
-    pluginId: "memory-lancedb-namespaced",
-    clawhub: `clawhub:@cyb3rb1ade/plur1bus-memory@${version}`,
-    npm: `npm:@cyb3rb1ade/plur1bus-memory@${version}`,
-    tarball: {
-      url: o.tarballUrl ?? `https://example.invalid/TEST-ONLY/cyb3rb1ade-plur1bus-memory-${version}.tgz`,
-      sha256: o.tarballSha256 ?? zero(4),
-      integrity: o.integrity ?? FIXTURE_NPM_INTEGRITY,
-    },
-    ...(o.clawpackDigest === null ? {} : { clawpackDigest: o.clawpackDigest ?? FIXTURE_CLAWPACK_SHA256 }),
-    compat: { pluginApi: ">=2026.8.1", minGatewayVersion: o.minGatewayVersion ?? "2026.8.1" },
-    node: o.node ?? ">=24.16.0 <25 || >=26.1.0",
-    security: false,
-    notes: { de: "TEST ONLY", en: "TEST ONLY" },
-  };
+  const releases = versions.map((version) => makeTestRelease(version, o));
+  const version = versions[0];
   return {
     schema: "plur1bus.plugin-feed/1",
     channel: "stable",
@@ -278,7 +294,33 @@ export function makeTestFeed(o = {}) {
       sh: { url: "https://example.invalid/TEST-ONLY/install-plugin.sh", sha256: zero(2) },
       ps1: { url: "https://example.invalid/TEST-ONLY/install-plugin.ps1", sha256: zero(3) },
     },
-    hosts: { openclaw: { windowsNativeBeta: o.windowsNativeBeta ?? true, latest: version, releases: [release] } },
+    hosts: { openclaw: { windowsNativeBeta: o.windowsNativeBeta ?? true, latest: version, releases } },
+  };
+}
+
+/**
+ * One feed release; `o.tarballs[version]` ({ url, sha256 }) and `o.notes[version]` ({ de, en }) override per version.
+ * @param {string} version
+ * @param {object} o
+ */
+function makeTestRelease(version, o) {
+  const zero = (n) => String(n).padStart(64, "0");
+  const t = o.tarballs?.[version] ?? {};
+  return {
+    version,
+    pluginId: "memory-lancedb-namespaced",
+    clawhub: `clawhub:@cyb3rb1ade/plur1bus-memory@${version}`,
+    npm: `npm:@cyb3rb1ade/plur1bus-memory@${version}`,
+    tarball: {
+      url: t.url ?? o.tarballUrl ?? `https://example.invalid/TEST-ONLY/cyb3rb1ade-plur1bus-memory-${version}.tgz`,
+      sha256: t.sha256 ?? o.tarballSha256 ?? zero(4),
+      integrity: o.integrity ?? FIXTURE_NPM_INTEGRITY,
+    },
+    ...(o.clawpackDigest === null ? {} : { clawpackDigest: o.clawpackDigest ?? FIXTURE_CLAWPACK_SHA256 }),
+    compat: { pluginApi: ">=2026.8.1", minGatewayVersion: o.minGatewayVersion ?? "2026.8.1" },
+    node: o.node ?? ">=24.16.0 <25 || >=26.1.0",
+    security: false,
+    notes: o.notes?.[version] ?? { de: "TEST ONLY", en: "TEST ONLY" },
   };
 }
 
@@ -305,6 +347,12 @@ export function createInstallerSandbox(opts = {}) {
   } else {
     writeFileSync(join(binDir, "node"), `#!/bin/sh\nexec "${real}" "${join(binDir, "node-shim.mjs")}" "$@"\n`, { mode: 0o755 });
     writeFileSync(join(binDir, "openclaw"), `#!/bin/sh\nexec "${join(binDir, "node")}" "${join(binDir, "openclaw-shim.mjs")}" "$@"\n`, { mode: 0o755 });
+    // `crontab` shim (HM1-R9 guard probe): logs its argv, prints <root>/crontab.txt, never edits anything
+    writeFileSync(
+      join(binDir, "crontab"),
+      `#!/bin/sh\nprintf '{"bin":"crontab","argv":["%s"]}\\n' "$*" >> "${join(root, "argv.log")}"\nif [ "$*" != "-l" ]; then echo "crontab shim: refusing $*" >&2; exit 2; fi\nif [ -f "${join(root, "crontab.txt")}" ]; then cat "${join(root, "crontab.txt")}"; exit 0; fi\necho "no crontab for sandbox-user" >&2\nexit 1\n`,
+      { mode: 0o755 },
+    );
   }
 
   const scenario = { stateDir, packVersion: "7.16.11", ...(opts.scenario ?? {}) };
@@ -361,6 +409,12 @@ export function createInstallerSandbox(opts = {}) {
     setScenario(patch) {
       const cur = JSON.parse(readFileSync(scenarioPath, "utf8"));
       writeFileSync(scenarioPath, JSON.stringify({ ...cur, ...patch }, null, 2));
+    },
+    /** TEST ONLY crontab listing the `crontab` shim prints (null removes it). */
+    setCrontab(text) {
+      const p = join(root, "crontab.txt");
+      if (text === null) rmSync(p, { force: true });
+      else writeFileSync(p, text);
     },
     writeFeed(f) {
       writeFileSync(feedFile, JSON.stringify(f, null, 2));

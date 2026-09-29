@@ -1,0 +1,356 @@
+// tests/dist-installer-update.test.js — installer update with store snapshot, automatic
+// rollback and resume (HM1 Task 6, D89, Review Focus 5). Only the sandbox's openclaw/node
+// shims; never a real OpenClaw, store outside the sandbox, or crontab.
+
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import * as lancedb from "@lancedb/lancedb";
+
+import { runInstaller } from "../scripts/dist/installer/main.mjs";
+import { EXIT } from "../scripts/dist/installer/report.mjs";
+import { readState, writeState } from "../scripts/dist/installer/state.mjs";
+import { listSnapshots } from "../lib/snapshot/store-snapshot.js";
+import { createInstallerSandbox, makeTestFeed, sink } from "./helpers/installer-sandbox.js";
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+const MAIN = pathToFileURL(join(REPO, "scripts", "dist", "installer", "main.mjs")).href;
+const ID = "memory-lancedb-namespaced";
+const C = `plugins.entries.${ID}.config`;
+const SLOT = "plugins.slots.memory";
+const PKG = "@cyb3rb1ade/plur1bus-memory";
+
+const NOTES = {
+  "7.17.0": { de: "DE-HINWEIS 7.17.0: Selbsttest", en: "EN-NOTE 7.17.0: selftest" },
+  "7.16.12": { de: "DE-HINWEIS 7.16.12: Korrekturen", en: "EN-NOTE 7.16.12: fixes" },
+  "7.16.11": { de: "DE-HINWEIS 7.16.11: alt", en: "EN-NOTE 7.16.11: old" },
+};
+const feed3 = (o = {}) => makeTestFeed({ versions: ["7.17.0", "7.16.12", "7.16.11"], notes: NOTES, ...o });
+
+async function run(sb, argv, extra = {}) {
+  const stdout = sink();
+  const stderr = sink();
+  const code = await runInstaller(["--feed-file", sb.feedFile, ...argv], {
+    env: sb.env,
+    platform: process.platform,
+    arch: "x64",
+    glibcVersion: "2.39",
+    isTTY: false,
+    statfs: () => ({ bavail: 1 << 20, bsize: 1 << 20 }),
+    prompt: async () => {
+      throw new Error("prompt must not be called");
+    },
+    stdout,
+    stderr,
+    ...extra,
+  });
+  return { code, stdout: stdout.text, stderr: stderr.text, out: stdout.text + stderr.text };
+}
+
+const mutating = (calls) => calls.filter((a) => (a[0] === "plugins" && ["install", "uninstall", "update", "enable"].includes(a[1])) || (a[0] === "config" && a[1] === "set"));
+
+/** A tracked install of `version` with a real (tiny) LanceDB store at the default baseDbPath (R-S7). */
+async function trackedSandbox({ version = "7.16.11", source = "clawhub", stateSource, scenario = {}, feed = feed3() } = {}) {
+  const sb = createInstallerSandbox({ feed, scenario: { installed: true, installedSource: source === "clawhub" ? "clawhub" : "npm", installedVersion: version, ...scenario } });
+  const baseDbPath = join(sb.home, ".openclaw", "memory", "lancedb-namespaced");
+  mkdirSync(baseDbPath, { recursive: true });
+  const db = await lancedb.connect(join(baseDbPath, "main"));
+  const table = await db.createTable("memories", [
+    { id: "m-1", text: "TEST ONLY one", vector: [1, 0] },
+    { id: "m-2", text: "TEST ONLY two", vector: [0, 1] },
+  ]);
+  await table.add([{ id: "m-3", text: "TEST ONLY three", vector: [1, 1] }]);
+  writeState(sb.stateDir, { previousSlot: null, installedVersion: version, source: stateSource ?? source });
+  sb.setScenario({ mutateStore: baseDbPath });
+  return { sb, baseDbPath };
+}
+
+function walk(dir) {
+  const out = [];
+  if (!existsSync(dir)) return out;
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    out.push(p);
+    if (e.isDirectory()) out.push(...walk(p));
+  }
+  return out;
+}
+
+function treeDigest(dir) {
+  const h = createHash("sha256");
+  for (const p of walk(dir).sort()) {
+    const rel = relative(dir, p);
+    h.update(rel);
+    h.update("\0");
+    if (statSync(p).isFile()) h.update(readFileSync(p));
+    h.update("\0");
+  }
+  return h.digest("hex");
+}
+
+/** Anything a killed or half-finished run could leave behind. */
+function strays(...roots) {
+  return roots.flatMap((r) => walk(r)).filter((p) => /\.tmp-\d+$|\.pre-restore-|\.restore-\d+$|\.staging-/.test(p));
+}
+
+/** Run the installer in a child process (so the shim can kill it like Ctrl-C/OOM would). */
+function runChild(sb, argv) {
+  const code = `import { runInstaller } from ${JSON.stringify(MAIN)};\nprocess.exitCode = await runInstaller(process.argv.slice(1));\n`;
+  return spawnSync(process.execPath, ["--input-type=module", "-e", code, "--", "--feed-file", sb.feedFile, ...argv], {
+    env: { ...sb.env, PLUR1BUS_PLUGIN_TEST_FREE_BYTES: String(64 * 1024 ** 3), PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT: "1" },
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+}
+
+describe("plugin installer: update", () => {
+  it("update snapshots, updates, verifies and records the new version", async () => {
+    const { sb, baseDbPath } = await trackedSandbox();
+    const before = treeDigest(baseDbPath);
+    const r = await run(sb, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.deepEqual(mutating(sb.openclawCalls()), [["plugins", "install", `clawhub:${PKG}@7.17.0`, "--force", "--accept-capabilities"]]);
+    assert.ok(!sb.openclawCalls().some((a) => a[1] === "update"), "plugins update rejects clawhub:/npm: locators (R-S4)");
+    const snaps = (await listSnapshots({ stateDir: sb.stateDir })).filter((s) => s.kind === "snapshot");
+    assert.equal(snaps.length, 1);
+    assert.equal(snaps[0].label, "pre-7.17.0");
+    const doc = JSON.parse(r.stdout);
+    assert.equal(doc.mode, "update");
+    const byId = Object.fromEntries(doc.steps.map((s) => [s.id, s]));
+    for (const id of ["snapshot", "update", "verify.loaded", "verify.integrity", "verify.selftest"]) assert.equal(byId[id]?.status, "ok", `${id}: ${JSON.stringify(byId[id])}`);
+    // the snapshot step comes before the change
+    assert.ok(doc.steps.findIndex((s) => s.id === "snapshot") < doc.steps.findIndex((s) => s.id === "update"));
+    const st = readState(sb.stateDir);
+    assert.equal(st.installedVersion, "7.17.0");
+    assert.equal(st.source, "clawhub");
+    assert.equal(st.inProgress, undefined);
+    assert.equal(sb.shimState().version, "7.17.0");
+    // the new plugin wrote into the store; nothing else touched it
+    assert.notEqual(treeDigest(baseDbPath), before);
+    assert.deepEqual(strays(sb.root, sb.home), []);
+
+    // equal version → up-to-date, nothing changes
+    const calls = sb.openclawCalls().length;
+    const again = await run(sb, ["--update", "--json"]);
+    assert.equal(again.code, EXIT.OK, again.out);
+    assert.match(again.out, /up-to-date/);
+    assert.deepEqual(mutating(sb.openclawCalls().slice(calls)), []);
+  });
+
+  it("an update of a tarball install downloads and verifies both tarballs and keeps old npm generations", async () => {
+    const bytes = { "7.17.0": Buffer.from("TEST ONLY 7.17.0"), "7.16.11": Buffer.from("TEST ONLY 7.16.11") };
+    const url = (v) => `https://example.invalid/TEST-ONLY/cyb3rb1ade-plur1bus-memory-${v}.tgz`;
+    const tarballs = Object.fromEntries(Object.entries(bytes).map(([v, b]) => [v, { url: url(v), sha256: createHash("sha256").update(b).digest("hex") }]));
+    const { sb } = await trackedSandbox({ source: "npm", stateSource: "tarball", feed: feed3({ clawpackDigest: null, tarballs }) });
+    const oldGen = join(sb.stateDir, "npm", "projects", "cyb3rb1ade-plur1bus-memory-1ff39c963c__openclaw-generation__g-0000000000000000");
+    mkdirSync(oldGen, { recursive: true });
+    writeFileSync(join(oldGen, "blob"), Buffer.alloc(4096));
+    const fetched = [];
+    const fetchImpl = async (u) => {
+      fetched.push(String(u));
+      const b = Object.entries(bytes).find(([v]) => String(u) === url(v))?.[1];
+      if (!b) return { ok: false, status: 404 };
+      return { ok: true, status: 200, headers: new Headers({ "content-length": String(b.length) }), arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.length) };
+    };
+    const r = await run(sb, ["--update", "--yes", "--json"], { fetchImpl });
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.deepEqual(fetched.sort(), [url("7.16.11"), url("7.17.0")].sort(), "target and rollback tarball are fetched before any change");
+    const inst = mutating(sb.openclawCalls());
+    assert.equal(inst.length, 1, JSON.stringify(inst));
+    assert.match(inst[0][2], /^npm-pack:.*cyb3rb1ade-plur1bus-memory-7\.17\.0\.tgz$/);
+    assert.deepEqual(inst[0].slice(3), ["--force", "--accept-capabilities"]);
+    assert.equal(existsSync(inst[0][2].slice("npm-pack:".length)), false, "downloaded tarballs are removed");
+    assert.equal(readState(sb.stateDir).source, "tarball");
+    assert.ok(existsSync(join(oldGen, "blob")), "old npm generation folders are never deleted (R-S4)");
+    assert.match(r.stderr, /old npm generation/i);
+    assert.deepEqual(strays(sb.root, sb.home), []);
+    assert.deepEqual(readdirSync(join(sb.stateDir, "memory")).filter((n) => n.startsWith(".plur1bus-installer-work")), []);
+  });
+
+  it("release notes are printed before anything changes and Skip changes nothing", async () => {
+    const { sb, baseDbPath } = await trackedSandbox();
+    const stateBytes = readFileSync(join(sb.stateDir, "memory", ".plur1bus-installer.json"));
+    const before = treeDigest(baseDbPath);
+    let seenAtPrompt = null;
+    const stderr = sink();
+    const prompt = async (q) => {
+      seenAtPrompt = { text: stderr.text, question: q, mutations: mutating(sb.openclawCalls()).length };
+      return "s";
+    };
+    const r = await run(sb, ["--update", "--lang", "de"], { isTTY: true, prompt, stderr });
+    assert.equal(r.code, EXIT.OK, stderr.text);
+    assert.ok(seenAtPrompt, "the choice was asked");
+    assert.match(seenAtPrompt.question, /Now.*Later.*Skip/i);
+    assert.equal(seenAtPrompt.mutations, 0);
+    assert.match(seenAtPrompt.text, /DE-HINWEIS 7\.17\.0/);
+    assert.match(seenAtPrompt.text, /DE-HINWEIS 7\.16\.12/);
+    assert.doesNotMatch(seenAtPrompt.text, /DE-HINWEIS 7\.16\.11/, "the installed version's notes are not shown");
+    assert.doesNotMatch(seenAtPrompt.text, /EN-NOTE/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+    assert.deepEqual(await listSnapshots({ stateDir: sb.stateDir }), []);
+    assert.deepEqual(readFileSync(join(sb.stateDir, "memory", ".plur1bus-installer.json")), stateBytes);
+    assert.equal(treeDigest(baseDbPath), before);
+
+    // --lang defaults from LANG, fallback en; Later also changes nothing
+    const e2 = sink();
+    const r2 = await run(sb, ["--update"], { isTTY: true, prompt: async () => "later", stderr: e2, env: { ...sb.env, LANG: "de_DE.UTF-8" } });
+    assert.equal(r2.code, EXIT.OK, e2.text);
+    assert.match(e2.text, /DE-HINWEIS 7\.17\.0/);
+    const e3 = sink();
+    await run(sb, ["--update"], { isTTY: true, prompt: async () => "l", stderr: e3, env: { ...sb.env, LANG: "fr_FR.UTF-8" } });
+    assert.match(e3.text, /EN-NOTE 7\.17\.0/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+  });
+
+  it("a failed verify restores the previous version and the snapshot and exits 1", async () => {
+    const { sb, baseDbPath } = await trackedSandbox({ scenario: { failVersions: ["7.17.0"] } });
+    const before = treeDigest(baseDbPath);
+    const r = await run(sb, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.deepEqual(mutating(sb.openclawCalls()), [
+      ["plugins", "install", `clawhub:${PKG}@7.17.0`, "--force", "--accept-capabilities"],
+      ["plugins", "install", `clawhub:${PKG}@7.16.11`, "--force", "--accept-capabilities"],
+    ]);
+    assert.equal(sb.shimState().version, "7.16.11");
+    assert.equal(treeDigest(baseDbPath), before, "store digest equal to before");
+    assert.deepEqual(strays(sb.root, sb.home), [], "the .pre-restore-* copy is removed after the rolled-back verify passed");
+    const st = readState(sb.stateDir);
+    assert.equal(st.installedVersion, "7.16.11");
+    assert.equal(st.inProgress, undefined);
+    const doc = JSON.parse(r.stdout);
+    assert.equal(doc.steps.find((s) => s.id === "rollback")?.status, "ok");
+    assert.equal(doc.steps.find((s) => s.id === "verify.loaded")?.status, "failed");
+    // the snapshot stays for manual recovery
+    assert.equal((await listSnapshots({ stateDir: sb.stateDir })).filter((s) => s.kind === "snapshot").length, 1);
+  });
+
+  it("a failed rollback exits 4 and prints the manual steps", async () => {
+    const { sb, baseDbPath } = await trackedSandbox({ scenario: { failVersions: ["7.17.0", "7.16.11"] } });
+    const r = await run(sb, ["--update", "--yes", "--json"]);
+    assert.equal(r.code, EXIT.ROLLBACK_FAILED, r.out);
+    assert.match(r.stderr, new RegExp(`openclaw plugins install clawhub:${PKG.replace("/", "\\/")}@7\\.16\\.11 --force --accept-capabilities`));
+    const snap = (await listSnapshots({ stateDir: sb.stateDir })).find((s) => s.kind === "snapshot");
+    assert.ok(r.stderr.includes(snap.id), "the manual steps name the snapshot");
+    const doc = JSON.parse(r.stdout);
+    assert.ok(Array.isArray(doc.manualSteps) && doc.manualSteps.length > 0);
+    const pre = walk(dirname(baseDbPath)).filter((p) => p.includes(".pre-restore-"));
+    assert.ok(pre.length > 0, "the pre-restore copy is kept when the rolled-back verify fails");
+    assert.equal(readState(sb.stateDir).inProgress?.step, "rollback-failed");
+  });
+
+  it("no TTY and no --yes exits 2", async () => {
+    const { sb, baseDbPath } = await trackedSandbox();
+    const before = treeDigest(baseDbPath);
+    const r = await run(sb, ["--update"]);
+    assert.equal(r.code, EXIT.NEEDS_CHOICE, r.out);
+    assert.match(r.stderr, /EN-NOTE 7\.17\.0/);
+    assert.match(r.stderr, /--yes/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+    assert.deepEqual(await listSnapshots({ stateDir: sb.stateDir }), []);
+    assert.equal(treeDigest(baseDbPath), before);
+    // a tracked install found by a plain install run takes the same path
+    const r2 = await run(sb, []);
+    assert.equal(r2.code, EXIT.NEEDS_CHOICE, r2.out);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+  });
+
+  it("an existing embedding choice is never changed by an update", async () => {
+    const config = { [SLOT]: ID, [`${C}.embedding.provider`]: "openai", [`${C}.embedding.model`]: "text-embedding-3-small", [`plugins.entries.${ID}.hooks.allowConversationAccess`]: "false" };
+    const { sb } = await trackedSandbox({ scenario: { config } });
+    const r = await run(sb, ["--update", "--yes", "--accept-nc-licence"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.deepEqual(sb.openclawCalls().filter((a) => a[0] === "config" && a[1] === "set"), []);
+    assert.deepEqual(sb.shimState().config, config);
+  });
+
+  it("a killed update is completed or rolled back by the next run", { skip: process.platform === "win32" && "POSIX kill of the parent process" }, async () => {
+    // A: killed while OpenClaw installs (after the snapshot) → the next run completes the update
+    const a = await trackedSandbox({ scenario: { killParentOnInstall: true } });
+    const k = runChild(a.sb, ["--update", "--yes"]);
+    assert.equal(k.signal, "SIGKILL", `${k.status} ${k.stderr}`);
+    const mid = readState(a.sb.stateDir);
+    assert.equal(mid.inProgress?.op, "update");
+    assert.equal(mid.inProgress?.step, "update");
+    assert.ok(mid.inProgress?.snapshotId, "the snapshot was taken before the change");
+    a.sb.setScenario({ killParentOnInstall: false });
+    const r = await run(a.sb, []);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.match(r.stderr, /interrupted update to 7\.17\.0 at step update/);
+    const st = readState(a.sb.stateDir);
+    assert.equal(st.installedVersion, "7.17.0");
+    assert.equal(st.inProgress, undefined);
+    assert.equal(a.sb.shimState().version, "7.17.0");
+    assert.deepEqual(strays(a.sb.root, a.sb.home), []);
+
+    // B: the same interruption, then --rollback → previous version and the snapshot's store
+    const b = await trackedSandbox({ scenario: { killParentOnInstall: true } });
+    const before = treeDigest(b.baseDbPath);
+    const k2 = runChild(b.sb, ["--update", "--yes"]);
+    assert.equal(k2.signal, "SIGKILL", `${k2.status} ${k2.stderr}`);
+    assert.notEqual(treeDigest(b.baseDbPath), before, "the new version wrote into the store before the kill");
+    b.sb.setScenario({ killParentOnInstall: false });
+    const r2 = await run(b.sb, ["--rollback", "--json"]);
+    assert.equal(r2.code, EXIT.FAILED, r2.out);
+    assert.match(r2.stderr, /interrupted update to 7\.17\.0 at step update/);
+    assert.equal(JSON.parse(r2.stdout).steps.find((s) => s.id === "rollback")?.status, "ok");
+    assert.equal(b.sb.shimState().version, "7.16.11");
+    assert.equal(treeDigest(b.baseDbPath), before);
+    assert.equal(readState(b.sb.stateDir).inProgress, undefined);
+    assert.deepEqual(strays(b.sb.root, b.sb.home), []);
+
+    // --rollback with nothing interrupted changes nothing
+    const n = b.sb.openclawCalls().length;
+    const r3 = await run(b.sb, ["--rollback"]);
+    assert.equal(r3.code, EXIT.FAILED, r3.out);
+    assert.match(r3.stderr, /nothing to roll back/);
+    assert.deepEqual(mutating(b.sb.openclawCalls().slice(n)), []);
+  });
+
+  it("an interrupted fresh install is rolled back and installed again by the next run", async () => {
+    const sb = createInstallerSandbox({ scenario: { installed: true, config: { [SLOT]: "memory-lancedb-stock" } } });
+    writeState(sb.stateDir, { previousSlot: "memory-lancedb-stock", installedVersion: null, source: "clawhub", inProgress: { op: "install", step: "config", snapshotId: null, previousVersion: null } });
+    const r = await run(sb, []);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.match(r.stderr, /interrupted install .*at step config/);
+    const calls = mutating(sb.openclawCalls()).map((a) => a.slice(0, 3).join(" "));
+    assert.equal(calls[0], `plugins uninstall ${ID}`);
+    assert.ok(calls.includes(`plugins install clawhub:${PKG}@7.16.11`), JSON.stringify(calls));
+    const st = readState(sb.stateDir);
+    assert.equal(st.installedVersion, "7.16.11");
+    assert.equal(st.previousSlot, "memory-lancedb-stock");
+    assert.equal(st.inProgress, undefined);
+  });
+
+  it("downloads are capped and a malformed free-space test seam is refused", async () => {
+    const huge = { ok: true, status: 200, headers: new Headers({ "content-length": String(300 * 1024 * 1024) }), arrayBuffer: async () => { throw new Error("must not read the body"); } };
+    const { sb } = await trackedSandbox({ source: "npm", stateSource: "tarball", feed: feed3({ clawpackDigest: null }) });
+    const r = await run(sb, ["--update", "--yes"], { fetchImpl: async () => huge });
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.match(r.stderr, /200 MB limit/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+    assert.deepEqual(await listSnapshots({ stateDir: sb.stateDir }), []);
+    assert.equal(readState(sb.stateDir).inProgress, undefined);
+
+    const r2 = await run(sb, ["--update", "--yes"], { env: { ...sb.env, PLUR1BUS_PLUGIN_TEST_FREE_BYTES: "lots" } });
+    assert.equal(r2.code, EXIT.FAILED, r2.out);
+    assert.match(r2.stderr, /PLUR1BUS_PLUGIN_TEST_FREE_BYTES/);
+    assert.deepEqual(mutating(sb.openclawCalls()), []);
+  });
+
+  it("--update without any install exits 1 and a legacy deploy exits 2 naming --adopt-legacy", async () => {
+    const sb = createInstallerSandbox();
+    const r = await run(sb, ["--update"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.match(r.stderr, /not installed/);
+    const lg = createInstallerSandbox({ scenario: { legacy: true } });
+    mkdirSync(join(lg.stateDir, "extensions", ID), { recursive: true });
+    const r2 = await run(lg, ["--update"]);
+    assert.equal(r2.code, EXIT.NEEDS_CHOICE, r2.out);
+    assert.match(r2.stderr, /legacy-deploy.*--adopt-legacy/);
+    assert.deepEqual(mutating(lg.openclawCalls()), []);
+  });
+});

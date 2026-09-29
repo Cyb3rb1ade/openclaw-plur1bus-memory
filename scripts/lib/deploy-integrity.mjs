@@ -329,6 +329,10 @@ export const DEPLOY_FILES = [
   "scripts/dist/installer/verify.mjs",
   "scripts/dist/installer/state.mjs",
   "scripts/dist/installer/report.mjs",
+  // ── plugin distribution: update, uninstall/purge, legacy adoption (HM1 Task 6) ──
+  "scripts/dist/installer/update.mjs",
+  "scripts/dist/installer/uninstall.mjs",
+  "scripts/dist/installer/legacy.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",

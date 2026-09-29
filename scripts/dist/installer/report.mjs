@@ -55,3 +55,12 @@ export function createReport({ json = false, stderr = process.stderr, stdout = p
     },
   };
 }
+
+/** A planned stop of the installer: step `id` failed with exit `code` (spec A.3 step 8). */
+export class Stop extends Error {
+  constructor(code, id, detail) {
+    super(detail);
+    this.code = code;
+    this.id = id;
+  }
+}
