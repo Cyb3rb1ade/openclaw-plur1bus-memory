@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import {
   OWNER_PIPE_NONCE_FILE,
   ensureScopedEmbeddingPipeNonce,
   readScopedEmbeddingPipeNonce,
+  resetScopedEmbeddingNonceWarningForTests,
   resolveScopedEmbeddingDefaultEndpoint,
   resolveScopedEmbeddingIpcPaths,
   resolveScopedEmbeddingOwnerClaimAddress,
@@ -175,6 +176,74 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     rmSync(file);
     mkdirSync(file);
     assert.throws(() => readScopedEmbeddingPipeNonce(paths), unavailable, "not a regular file");
+  });
+
+  it("publishes the nonce atomically: a complete, secured temp file is linked into place (review N2)", () => {
+    const directory = makeTempDir("plur1bus-ipc-nonce-atomic-");
+    const paths = { directory };
+    const file = join(directory, OWNER_PIPE_NONCE_FILE);
+    const seen = [];
+    const created = ensureScopedEmbeddingPipeNonce(paths, {
+      platform: "linux",
+      secure: (target) => { seen.push(["secure", target]); return { applied: true, mechanism: "chmod" }; },
+      link: (from, to) => {
+        // At the moment it becomes visible, the file is already complete and secured,
+        // and until then a reader sees no file at all (never an empty one).
+        assert.equal(existsSync(to), false);
+        assert.match(readFileSync(from, "utf8"), /^[a-f0-9]{64}\n$/);
+        assert.deepEqual(seen, [["secure", from]]);
+        linkSync(from, to);
+      },
+    });
+    assert.equal(created, true);
+    assert.match(readScopedEmbeddingPipeNonce(paths), /^[a-f0-9]{64}$/);
+    assert.deepEqual(readdirSync(directory), [OWNER_PIPE_NONCE_FILE], "the temp file is gone");
+    // A creator that loses the link race keeps the winner's file and cleans up.
+    const before = readFileSync(file, "utf8");
+    const lost = ensureScopedEmbeddingPipeNonce(paths, { platform: "linux", link: () => { throw Object.assign(new Error("exists"), { code: "EEXIST" }); } });
+    assert.equal(lost, false);
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.deepEqual(readdirSync(directory), [OWNER_PIPE_NONCE_FILE]);
+  });
+
+  it("concurrent creators and readers in separate processes never see an empty or differing nonce (review N2)", async () => {
+    const directory = makeTempDir("plur1bus-ipc-nonce-race-");
+    const moduleUrl = new URL("../lib/providers/scoped-embedding-ipc.js", import.meta.url).href;
+    const source = [
+      "const m = await import(process.argv[1]);",
+      "const paths = { directory: process.argv[2] };",
+      "const seen = new Set();",
+      "for (let i = 0; i < 400; i += 1) {",
+      "  if (i === 20) m.ensureScopedEmbeddingPipeNonce(paths, { platform: 'linux' });",
+      "  try { seen.add(m.readScopedEmbeddingPipeNonce(paths)); }",
+      "  catch (e) { if (e.cause?.code !== 'ENOENT') { process.stdout.write('BAD ' + e.message + ' ' + (e.cause?.message ?? '')); process.exit(1); } }",
+      "}",
+      "process.stdout.write([...seen].join(','));",
+    ].join("\n");
+    const runs = await Promise.all(Array.from({ length: 4 }, () => new Promise((resolve) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", source, moduleUrl, directory], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      child.stdout.on("data", (chunk) => { out += chunk; });
+      child.on("exit", (code) => resolve({ code, out }));
+    })));
+    for (const run of runs) assert.equal(run.code, 0, run.out);
+    const nonces = new Set(runs.flatMap((run) => run.out.split(",").filter(Boolean)));
+    assert.equal(nonces.size, 1, [...nonces].join(" | "));
+    assert.equal([...nonces][0], readScopedEmbeddingPipeNonce({ directory }));
+    assert.deepEqual(readdirSync(directory), [OWNER_PIPE_NONCE_FILE]);
+  });
+
+  it("warns once per process when the ACL tool is missing for the nonce (review N4, gate G2 a)", () => {
+    resetScopedEmbeddingNonceWarningForTests();
+    const warnings = [];
+    const logger = { warn: (message) => warnings.push(String(message)) };
+    const unavailable = () => ({ applied: false, reason: "acl-tool-unavailable" });
+    for (const prefix of ["plur1bus-ipc-nonce-acl-a-", "plur1bus-ipc-nonce-acl-b-"]) {
+      assert.equal(ensureScopedEmbeddingPipeNonce({ directory: makeTempDir(prefix) }, { platform: "win32", logger, secure: unavailable }), true);
+    }
+    assert.equal(warnings.length, 1, warnings.join("\n"));
+    assert.match(warnings[0], /icacls\) is unavailable/);
+    resetScopedEmbeddingNonceWarningForTests();
   });
 
   it("a win32 legacy owner without its nonce does not start and says why; a client fails closed too (EW-R1)", async () => {
