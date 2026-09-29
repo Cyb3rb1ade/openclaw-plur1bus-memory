@@ -64,9 +64,9 @@ one stream and callers must match on the combined output, not on stderr alone.
 **Use this:** POSIX: `node` = `<prefix>/tools/node/bin/node` (resolve the
 symlink or read it from the wrapper's `exec` line); CI passes
 `--prefix "$RUNNER_TEMP/oc"` and sets `HOME`, `OPENCLAW_HOME` and
-`OPENCLAW_STATE_DIR` under `$RUNNER_TEMP`. `install.ps1` Node location and
-the `openclaw.cmd` shim: **unverified on Windows; macOS layout unverified on
-macOS — verify in Task 8 CI** (see "Not answered").
+`OPENCLAW_STATE_DIR` under `$RUNNER_TEMP`. `install.ps1` Node location, the
+`openclaw.cmd` shim and the macOS layout: answered by Task 8 CI (see "Task 8 CI
+answers": npm global prefix with npm's cmd-shim on Windows; macOS identical to Linux).
 
 ## (a) `openclaw --version`
 
@@ -380,45 +380,61 @@ asset is reachable.
 
 | Question | Status |
 |---|---|
-| `install.ps1 -Tag <v> -NoOnboard`: where `node` lands, `openclaw.cmd`/`.ps1` shim contents, argument quoting of paths with spaces/non-ASCII | **unverified on Windows, verify in Task 8 CI** |
-| `install-cli.sh` layout on macOS (`darwin-arm64`) | **unverified on macOS, verify in Task 8 CI** (expected identical, not observed) |
+| `install.ps1 -Tag <v> -NoOnboard`: where `node` lands, `openclaw.cmd`/`.ps1` shim contents, argument quoting of paths with spaces/non-ASCII | answered by Task 8 CI (run 36528979525), see "Task 8 CI answers" |
+| `install-cli.sh` layout on macOS (`darwin-arm64`) | answered by Task 8 CI (run 36528979525): identical to Linux |
 | Throw-away `windows-2025` / `macos-15` workflow run | **not dispatched**: the spike may not push the branch and this sandbox has neither `gh` nor GitHub API access, so no run URL exists |
 | `plugins update <id>` keeping `plugins.entries.<id>.config` across a real version change | unverified (no npm-registry install possible, P5); Task 8 upgrade leg |
 | Exact byte digest of the GitHub-Release `.tgz` vs ClawHub | unverified (asset unreachable); see (k) |
 | Whether OpenClaw ever garbage-collects old `__openclaw-generation__` dirs | not observed during the spike |
 
-## Task 8 CI answers — TODO (controller fills this from the first green `plugin-dist` run)
+## Task 8 CI answers
 
-> **TODO:** replace every `TODO` below with the value the run printed, then drop this note.
-> Workflow `.github/workflows/plugin-dist.yml`; every answer is a `FACT <key>: <json>` line on stdout of
-> `tests/helpers/ci-plugin-dist.mjs` (also in the job summary). Nothing is assumed until it is filled in.
+From the first fully green `plugin-dist` run: every answer below is a `FACT <key>: <json>` line printed by
+`tests/helpers/ci-plugin-dist.mjs` (workflow `.github/workflows/plugin-dist.yml`). The copy of the run log these
+answers were read from cuts each line at about 236 characters, so fields past that point (marked "cut") are
+not recorded here; the job summaries of the run have them.
 
-Run: `TODO` (URL, commit). Resolved OpenClaw versions (HM1-R12): min `TODO`, latest `TODO`.
+Run: [36528979525](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/actions/runs/36528979525) at
+`fcab978b`, 2026-09-29; all 10 `install` legs green, `wsl` green. Plugin packed as `7.17.0` (twin
+`7.17.0-ci.0`). Resolved OpenClaw versions (HM1-R12): min `2026.8.1` (`OpenClaw 2026.8.1 (ea80657)`), latest
+`2026.9.6` (`OpenClaw 2026.9.6 (eb377ac)`).
 
 | Question (section above) | Where the run prints it | Answer |
 |---|---|---|
-| `install.ps1 -Tag <v> -NoOnboard`: where `node` lands, `openclaw.cmd` / `.ps1` shim contents (step 1) | `windows-2025` and `windows-11-arm` legs, step "OpenClaw facts": `FACT win32.shims`, `FACT win32.node`; step "Install OpenClaw (Windows, put openclaw.cmd on PATH)" log line `openclaw.cmd in <dir>` | TODO |
-| Argument quoting through `openclaw.cmd` (spaces, `!`, `^`, `&`, non-ASCII, trailing `\`) | Windows legs, step "cmd.exe /v:off argv": `FACT win32.cmdArgv` (blocking) | TODO |
-| `install-cli.sh` layout on macOS (step 1) | `macos-15` legs, step "OpenClaw facts": `FACT posix.wrapper` | TODO |
-| `gateway status --json` fields without a Gateway on each version (h); the installer's fail-closed verdict | every leg, step "OpenClaw facts": `FACT gateway.status` (`rpcOk`, `connectFailure`, `portStatus`, `installerVerdict`) — `min` legs answer whether 2026.8.1 has `/rpc/connectFailure` and `/port/status` | TODO |
-| Does `plugins install npm-pack:` set `plugins.slots.memory` (c), per version and OS | step "Raw path": `FACT raw.slotAfterInstall` | TODO |
-| `inspect --runtime --json` of the packed tarball: status, imported, CLI root `plur1bus` (b, i) | step "Raw path": `FACT raw.inspectRuntime` | TODO |
-| Is `<state>/extensions/.plur1bus-legacy-<ts>` scanned by OpenClaw (HM1-R9 adoption keeps it) | step "Raw path": `FACT dotDirScanned` (blocking; needs a real `plugins list --json` listing naming the plugin, else `scanned: "unknown"` and the check fails; a duplicate-id diagnostic counts as scanned) | TODO |
-| After a rolled-back update, the install record's `/install/sourcePath` and the installer's kept artefact (T8-b) | step "Installer path": `FACT installer.keptArtefact` (blocking) | TODO |
-| Fresh non-TTY ClawHub install, without and with `--accept-capabilities` (T5-b) | step "ClawHub non-TTY install" (informational): `FACT clawhub.nonTtyWithoutAccept`, `FACT clawhub.nonTtyWithAccept`, `FACT clawhub.installRecord` | TODO |
-| ClawHub `npmIntegrity` vs the real GitHub-Release `.tgz` (k) | nightly `upgrade-from-release`, last step: `FACT clawhub.installRecord` → `npmIntegrityEqualsRelease` | TODO |
-| `install-plugin.ps1 --json` stdout byte-identical to the installer's under Windows PowerShell 5.1 and pwsh 7 | Windows legs, step "Installer path": `FACT bootstrap.jsonByteIdentical.powershell.exe`, `…pwsh` (blocking); POSIX: `…sh` | TODO |
-| win32 `inside()` with a differently cased store path in a harness home | Windows legs, step "Installer path": `FACT win32.insideHarnessHome` (blocking) | TODO |
-| WSL: `install-plugin.ps1 -Target wsl:Ubuntu-24.04` and the selftest inside the distro (C8, non-blocking) | job `wsl`: `FACT wsl.install`, `FACT wsl.selftest` | TODO |
-| `plugins update <id>` keeping `plugins.entries.<id>.config` across a real version change (f) | not answerable in CI while the package is not on npmjs.org (P5); stays unverified | unverified |
-| Old `__openclaw-generation__` dirs garbage-collected? | the installer's update summary line "Kept N old npm generation folder(s)" in step "Installer path" | TODO |
+| `install.ps1 -Tag <v> -NoOnboard`: where `node` lands, `openclaw.cmd` / `.ps1` shim contents (step 1) | `FACT win32.shims`, `FACT win32.node`, `FACT win32.installPs1` | Global npm install: `C:\npm\prefix` holds `openclaw`, `openclaw.cmd`, `openclaw.ps1`; `openclaw.cmd` is npm's cmd-shim (`@ECHO off` / `GOTO start` / `:find_dp0` / `SET dp0=%~dp0` …, CRLF; rest cut). `node` is the runner's `C:\hostedtoolcache\windows\node\24.21.0\<x64|arm64>\node.exe` on PATH; no portable Node under `%LOCALAPPDATA%\OpenClaw\deps\portable-node` (`portableNode: false`). Same on `windows-2025` and `windows-11-arm`, both versions. `https://openclaw.ai/install.ps1` is served as `application/octet-stream` (97416 chars): pwsh 7 hands `Invoke-WebRequest(...).Content` back as `byte[]`, so it must be decoded as UTF-8 before `[scriptblock]::Create` (run 36514170524). |
+| Argument quoting through `openclaw.cmd` (spaces, `!`, `^`, `&`, non-ASCII, trailing `\`) | `FACT win32.cmdArgv` (blocking) | exit 0 on all four Windows legs; `a b`, `x!y!`, `caret^`, `amp&ersand`, `Jürgen A`, `trailing\`, `(paren)`, `C:\Users\Jürgen A\.openclaw` arrive unchanged through `cmd.exe /d /v:off /s /c` (the check compares sent and received arrays and is blocking); an argument containing `%` is refused before cmd.exe sees it. |
+| `install-cli.sh` layout on macOS (step 1) | `FACT posix.wrapper` | Identical to Linux: `<prefix>/bin/openclaw` is `#!/usr/bin/env bash` / `set -euo pipefail` / `exec "<prefix>/tools/node/bin/node" "<prefix>/tools/node-v24.21.0/…"` (rest cut), private Node 24.21.0, on `macos-15` (darwin-arm64) for both versions. |
+| `gateway status --json` fields without a Gateway on each version (h); the installer's fail-closed verdict | `FACT gateway.status` | Every leg, **both 2026.8.1 and 2026.9.6**: exit 0, `rpcOk: false`, `connectFailure: {"kind":"unreachable"}`, `rpcError: "connect ECONNREFUSED 127.0.0.1:18789"`, `portStatus: "free"`, `serviceLoaded: false`; so 2026.8.1 already has `/rpc/connectFailure` and `/port/status`. `installerVerdict` (cut) — the installer leg's `crons: skipped (no confirmed running Gateway: rpc unreachable, port free)` shows it reads this as "not running". |
+| Does `plugins install npm-pack:` set `plugins.slots.memory` (c), per version and OS | `FACT raw.slotAfterInstall` | **2026.8.1: no** (`null`) on linux-x64, linux-arm64, darwin-arm64, win-x64, win-arm64; **2026.9.6: yes** (`"memory-lancedb-namespaced"`) on all five. Matches (c); the installer always sets the slot (R-S5). |
+| `inspect --runtime --json` of the packed tarball: status, imported, CLI root `plur1bus` (b, i) | `FACT raw.inspectRuntime` | All 10 legs: exit 0, `status: "loaded"`, `imported: true`, `version: "7.17.0"`, `source: "npm"`, `artifactKind: "npm-pack"`; the CLI-command field is cut — the raw step's blocking check "CLI root plur1bus" passed on every leg. |
+| Is `<state>/extensions/.plur1bus-legacy-<ts>` scanned by OpenClaw (HM1-R9 adoption keeps it) | `FACT dotDirScanned` (blocking) | **Not scanned**, all 10 legs: `scanned: false` with a real listing (`listExit: 0`, `realListing: true`), `mentioned: false`, `duplicate: false`, `inspectExit: 0`. |
+| After a rolled-back update, the install record's `/install/sourcePath` and the installer's kept artefact (T8-b) | `FACT installer.keptArtefact` (blocking) | The kept copy is `<state>/plur1bus-installer/artefacts/7.17.0-ci.0.tgz` and exists on every leg; `recorded` and `openclawSourcePath` point at the same file (full values cut here; the same shape was printed in full by run 36518766808: `kept` = `recorded` = `openclawSourcePath`). |
+| Fresh non-TTY ClawHub install, without and with `--accept-capabilities` (T5-b) | `FACT clawhub.nonTtyWithoutAccept`, `FACT clawhub.nonTtyWithAccept`, `FACT clawhub.installRecord` | **Not answerable yet**: both exit 1 with `Version not found on ClawHub: @cyb3rb1ade/plur1bus-memory@7.17.0` on every leg (7.17.0 is not published; ClawHub publishing is out of scope for CI). On Windows the with-accept tail also carries a PowerShell `#< CLIXML` progress record. No `clawhub.installRecord` line. Re-check after the 7.17.0 ClawHub publish. |
+| ClawHub `npmIntegrity` vs the real GitHub-Release `.tgz` (k) | nightly `upgrade-from-release`: `FACT clawhub.installRecord` → `npmIntegrityEqualsRelease` | Not in this run (nightly job; no 7.17.0 release yet). Stays unverified; see (k). |
+| `install-plugin.ps1 --json` stdout byte-identical to the installer's under Windows PowerShell 5.1 and pwsh 7 | `FACT bootstrap.jsonByteIdentical.*` (blocking) | `same: true` everywhere: `powershell.exe` and `pwsh` 820 bytes (`windows-2025`) and 824 bytes (`windows-11-arm`); `sh` 854 (linux-x64), 858 (linux-arm64), 863 (darwin-arm64). |
+| win32 `inside()` with a differently cased store path in a harness home | `FACT win32.insideHarnessHome` (blocking) | exit 3 with `store-inside-harness-home` on all four Windows legs. |
+| WSL: `install-plugin.ps1 -Target wsl:Ubuntu-24.04` and the selftest inside the distro (C8, non-blocking) | job `wsl`: `FACT wsl.install`, `FACT wsl.selftest` | Install exit 0, `ok: true`, steps `feed, detect, compat, offline, existing, install, licence, …` all `ok` (rest cut). Selftest exit 0, `ok: true`, 45991 ms wall, model `intfloat/multilingual-e5-small` rev `614241f622f53c4eeff9890bdc4f31cfecc418b3` `downloaded`. Needed the `file:///X:/…` → `wslpath` mapping in install-plugin.sh (test flag only; curl on Linux refuses drive-letter file URLs). |
+| `plugins update <id>` keeping `plugins.entries.<id>.config` across a real version change (f) | not answerable in CI while the package is not on npmjs.org (P5) | unverified |
+| Old `__openclaw-generation__` dirs garbage-collected? | installer update summary "Kept N old npm generation folder(s)" | **No** within a run: after fresh install, a rolled-back update and an update, the installer reported "Kept 3 old npm generation folder(s) of the plugin under `<state>\npm\projects` (1.7 GB)" (run 36518766808, `windows-2025`; 1.6 GB on linux-x64 locally). `plugins uninstall` removes only the current project dir. |
 
-Per-target selftest timings (step "Raw path", job summary table "Raw path"):
+Also recorded by the run (not questions of the spike):
+
+- `config validate --json` on a fresh state dir (`FACT config.validate.fresh`), every leg and both versions:
+  exit 1, `valid: false`, `error: "file not found"`, path = `<state>/openclaw.json`, no file present; the
+  installer's verdict `ok: true, missing: true` (fixed in `4674ecea` after run 36514170524, where the installer
+  treated this as `config-invalid`).
+- `FACT installer.fresh.compat` / `FACT installer.uninstall`: exit 0 on every leg (the uninstall was fixed in
+  `fcab978b`: the CI driver had kept the plugin's lancedb `.node` loaded, which Windows cannot delete).
+
+Per-target selftest timings (step "Raw path", job summary table "Raw path"): the `inspectRuntimeMs` /
+selftest fields of the timing line are cut in the log copy used here; read them from the run's job summaries.
+Every leg's `selftest --json --download-models` returned `ok: true` (blocking check).
 
 | Target | OpenClaw min | OpenClaw latest |
 |---|---|---|
-| linux-x64 (`ubuntu-24.04`) | TODO | TODO |
-| linux-arm64 (`ubuntu-24.04-arm`) | TODO | TODO |
-| darwin-arm64 (`macos-15`) | TODO | TODO |
-| win-x64 (`windows-2025`) | TODO | TODO |
-| win-arm64 (`windows-11-arm`) | TODO | TODO |
+| linux-x64 (`ubuntu-24.04`) | ok (timing: job summary) | ok (timing: job summary) |
+| linux-arm64 (`ubuntu-24.04-arm`) | ok (timing: job summary) | ok (timing: job summary) |
+| darwin-arm64 (`macos-15`) | ok (timing: job summary) | ok (timing: job summary) |
+| win-x64 (`windows-2025`) | ok (timing: job summary) | ok (timing: job summary) |
+| win-arm64 (`windows-11-arm`) | ok (timing: job summary) | ok (timing: job summary) |
+| WSL Ubuntu-24.04 (`windows-2025`) | — | selftest 45991 ms wall |
