@@ -354,7 +354,7 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
     }
   });
 
-  it("(f) Linux default stays fd-capability", { skip: process.platform !== "linux" }, async () => {
+  it("(f) Linux default stays fd-capability", { skip: process.platform !== "linux" && "fd-capability default is Linux-only" }, async () => {
     const pool = new SharedMemoryPool(makeTempDir("b13-vp-f-"), DIM, AgentDbPool);
     try {
       assert.equal(defaultSharedMemoryMode(), "fd-capability");
@@ -373,7 +373,7 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
     assert.equal(defaultSharedMemoryMode(), process.platform === "darwin" || process.platform === "win32" ? "verified-path" : "unavailable");
   });
 
-  it("win32: a user-owned, owner-only base and root succeed even on an elevated runner", { skip: process.platform !== "win32" }, async () => {
+  it("win32: a user-owned, owner-only base and root succeed even on an elevated runner", { skip: process.platform !== "win32" && "win32-only ACL path" }, async () => {
     // GitHub's windows-latest runs elevated, so new directories are owned by
     // Administrators and the default path is refused (E4-R12). Handing the
     // base and root to the user makes the success path reachable there:
@@ -405,7 +405,7 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
     }
   });
 
-  it("win32: the real ACL path restricts the root or refuses it (E4-R12)", { skip: process.platform !== "win32" }, async () => {
+  it("win32: the real ACL path restricts the root or refuses it (E4-R12)", { skip: process.platform !== "win32" && "win32-only ACL path" }, async () => {
     const base = makeTempDir("b13-vp-win-");
     const pool = new SharedMemoryPool(base, DIM, AgentDbPool, recordingLogger());
     try {

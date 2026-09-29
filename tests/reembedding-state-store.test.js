@@ -102,7 +102,7 @@ describe("durable reembedding state and confirmations", () => {
     });
 
     const statePath = join(stateRoot, "control", "reembedding-state.json");
-    assert.equal(statSync(statePath).mode & 0o777, 0o600);
+    if (process.platform !== "win32") assert.equal(statSync(statePath).mode & 0o777, 0o600); // POSIX mode only
     const persisted = readFileSync(statePath, "utf8");
     assert.doesNotMatch(persisted, /reemb_v1_/);
 
