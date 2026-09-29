@@ -36,7 +36,7 @@ describe("lib/host-paths", () => {
     assert.equal(hostStateDir(), join(homedir(), ".openclaw"));
     env.OPENCLAW_HOME = "/srv/oc";
     assert.equal(hostStateDir(), "/srv/oc");
-    assert.equal(hostConfigPath(), "/srv/oc/openclaw.json");
+    assert.equal(hostConfigPath(), join("/srv/oc", "openclaw.json"));
     env.OPENCLAW_CONFIG_PATH = "/etc/oc.json";
     assert.equal(hostConfigPath(), "/etc/oc.json");
     assert.equal(hostConfigPathOverride(), "/etc/oc.json");
@@ -57,7 +57,7 @@ describe("HostServices 1.3.0 members", () => {
 
   it("createStubHost has a configPath under its stateDir and no routing", () => {
     const host = createStubHost({ stateDir: "/tmp/stub-state" });
-    assert.equal(host.configPath(), "/tmp/stub-state/openclaw.json");
+    assert.equal(host.configPath(), join("/tmp/stub-state", "openclaw.json"));
     assert.equal(host.routing, undefined);
     assert.equal(host.pathOverrides, undefined);
   });

@@ -25,9 +25,10 @@ function configFile(contents, { name = "openclaw.json" } = {}) {
 
 test("der Pfad der Konfigurationsdatei folgt derselben Rangfolge wie beim Host", () => {
   assert.equal(resolveHostConfigPath({ OPENCLAW_CONFIG_PATH: "/x/y.json" }, "/home/u"), "/x/y.json");
-  assert.equal(resolveHostConfigPath({ OPENCLAW_STATE_DIR: "/state" }, "/home/u"), "/state/openclaw.json");
-  assert.equal(resolveHostConfigPath({ OPENCLAW_HOME: "/oc" }, "/home/u"), "/oc/openclaw.json");
-  assert.equal(resolveHostConfigPath({}, "/home/u"), "/home/u/.openclaw/openclaw.json");
+  // join(): the host joins with the platform separator ("\\" on win32).
+  assert.equal(resolveHostConfigPath({ OPENCLAW_STATE_DIR: "/state" }, "/home/u"), join("/state", "openclaw.json"));
+  assert.equal(resolveHostConfigPath({ OPENCLAW_HOME: "/oc" }, "/home/u"), join("/oc", "openclaw.json"));
+  assert.equal(resolveHostConfigPath({}, "/home/u"), join("/home/u", ".openclaw", "openclaw.json"));
 });
 
 test("liest genau den Plugin-Teilbaum und meldet Fehler als Zustand, nicht als Ausnahme", () => {

@@ -8,8 +8,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,11 +40,15 @@ describe("PR-01b platform call sites", () => {
     assert.match(source, /homedir\(\)/);
   });
 
-  it("no module outside lib/platform.js calls chmodSync or fchmodSync", async () => {
-    const { execFileSync } = await import("node:child_process");
-    const out = execFileSync("grep", [
-      "-rn", "--include=*.js", "-E", "\\b(f?chmodSync)\\s*\\(", "lib", "index.js",
-    ], { cwd: root, encoding: "utf8" }).trim().split("\n").filter(Boolean)
+  it("no module outside lib/platform.js calls chmodSync or fchmodSync", () => {
+    // A Node walk, not `grep -rn`: Windows runners have no POSIX grep on PATH
+    // (Git's grep mangled the pattern there). Lines read `lib/x.js:N:source`.
+    const files = ["index.js", ...readdirSync(join(root, "lib"), { recursive: true })
+      .map((entry) => `lib/${String(entry).split(sep).join("/")}`)
+      .filter((relative) => relative.endsWith(".js"))];
+    const out = files.flatMap((relative) => readFileSync(join(root, relative), "utf8").split(/\r?\n/)
+      .map((line, index) => (/\b(f?chmodSync)\s*\(/.test(line) ? `${relative}:${index + 1}:${line}` : null))
+      .filter(Boolean))
       .filter((line) => !line.startsWith("lib/platform.js:"));
     assert.deepEqual(out, [], `unrouted chmod call sites:\n${out.join("\n")}`);
   });

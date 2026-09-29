@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import { describe, it } from "node:test";
 
 import { selectSemanticDiscoveryWorkspaces } from "../index.js";
@@ -16,8 +17,9 @@ describe("semantic discovery cron scope", () => {
     assert.deepEqual(
       workspaces.map(({ workspaceId, agentId, path }) => ({ workspaceId, agentId, path })),
       [
-        { workspaceId: "alpha-primary", agentId: "alpha", path: "/tmp/alpha-primary" },
-        { workspaceId: "alpha-secondary", agentId: "alpha", path: "/tmp/alpha-secondary" },
+        // resolve(): workspace paths come back absolute in the platform's form.
+        { workspaceId: "alpha-primary", agentId: "alpha", path: resolve("/tmp/alpha-primary") },
+        { workspaceId: "alpha-secondary", agentId: "alpha", path: resolve("/tmp/alpha-secondary") },
       ],
     );
   });
