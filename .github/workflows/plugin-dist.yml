@@ -181,9 +181,17 @@ jobs:
         shell: pwsh
         env:
           OC_VERSION: ${{ steps.oc.outputs.version }}
+        # openclaw.ai serves install.ps1 with a content type pwsh 7 does not treat as text, so .Content is a byte[] and
+        # [scriptblock]::Create got "35 32 79 112 ..." ("# OpenClaw Installer", run 36514170524): decode it as UTF-8.
         run: |
           $ErrorActionPreference = 'Stop'
-          & ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing https://openclaw.ai/install.ps1).Content)) -Tag $env:OC_VERSION -NoOnboard
+          $ProgressPreference = 'SilentlyContinue'
+          $r = Invoke-WebRequest -UseBasicParsing https://openclaw.ai/install.ps1
+          $isBytes = $r.Content -is [byte[]]
+          $text = if ($isBytes) { [Text.Encoding]::UTF8.GetString($r.Content) } else { [string]$r.Content }
+          $text = $text.TrimStart([char]0xFEFF)
+          Write-Host ('FACT win32.installPs1: ' + (ConvertTo-Json -Compress @{ contentType = "$($r.Headers['Content-Type'])"; contentIsBytes = $isBytes; chars = $text.Length }))
+          & ([scriptblock]::Create($text)) -Tag $env:OC_VERSION -NoOnboard
       # install.ps1 may end its script with `exit`, so finding openclaw.cmd is a step of its own.
       - name: Install OpenClaw (Windows, put openclaw.cmd on PATH)
         if: runner.os == 'Windows'
