@@ -227,6 +227,20 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
+- Plugin distribution (HM1, `docs/distribution.md`): `tests/dist-*.test.js`
+  (bootstraps, feed, minisign, installer bundle and modes, gateway status, CI
+  helpers), `tests/protect-plur1bus-deploy.test.js`, the selftest and snapshot
+  suites. `.github/workflows/plugin-dist.yml` installs the packed plugin into
+  disposable OpenClaw instances on five targets, upgrades, forces a rollback
+  and uninstalls; the Windows and macOS legs also run the full suite.
+- The installer's test seams (`PLUR1BUS_PLUGIN_INSTALLER_TEST=1` with
+  `PLUR1BUS_PLUGIN_FEED` `file://`, `PLUR1BUS_PLUGIN_PUBKEY`,
+  `PLUR1BUS_PLUGIN_WSL_EXE`, `PLUR1BUS_PLUGIN_TEST_FREE_BYTES`,
+  `PLUR1BUS_SELFTEST_FORCE_FAIL`) exist for tests only. Installer tests never
+  touch a real OpenClaw: they use `openclaw`, `node` and `wsl.exe` shims in a
+  temp home through `tests/helpers/installer-sandbox.js`, which throws if the
+  `openclaw` on `PATH` is not its own shim. Real OpenClaw runs only in CI on
+  disposable runners (`tests/helpers/assert-disposable.mjs`).
 - Current baseline: 3,609 tests (3,608 passing, 0 failing, 1 skipped), 630 suites.
 
 ## Dependency Audit

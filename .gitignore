@@ -23,6 +23,7 @@ docs/**
 !docs/superpowers/**
 !docs/distribution/
 !docs/distribution/**
+!docs/distribution.md
 !docs/configuration.md
 !docs/compatibility-openclaw-2026.8.1-beta.3.md
 !docs/compatibility-openclaw.md
