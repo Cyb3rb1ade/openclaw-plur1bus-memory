@@ -5,8 +5,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { fileURLToPath } from "node:url";
 
-const SCRIPT_DIR = new URL("../scripts/", import.meta.url).pathname;
+const SCRIPT_DIR = fileURLToPath(new URL("../scripts/", import.meta.url));
 
 // scripts/ is gitignored (operator-local helper scripts), so on a clean clone
 // these scripts are absent. Skip rather than fail when they aren't present.

@@ -6,8 +6,10 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { forgetTempDir, makeTempDir, trackedTempDirs } from "./helpers/temp-dir.js";
+import { fileURLToPath } from "node:url";
 
-const HELPER = new URL("./helpers/temp-dir.js", import.meta.url).pathname;
+// A file: URL, not a path: the child imports it (a bare Windows path is no ESM specifier).
+const HELPER = new URL("./helpers/temp-dir.js", import.meta.url).href;
 
 function runChild(body) {
   return execFileSync(process.execPath, ["--input-type=module", "-e", `
@@ -60,7 +62,7 @@ describe("Aufräumender Test-Temp-Helfer", () => {
   // Wächter: neue Tests sollen nicht wieder selbst mkdtemp aufrufen, sonst
   // sammeln sich die Verzeichnisse erneut an (33 000 Reste im September 2026).
   it("kein Test legt noch selbst ein temporäres Verzeichnis an", () => {
-    const testsDir = new URL("./", import.meta.url).pathname;
+    const testsDir = fileURLToPath(new URL("./", import.meta.url));
     const self = "temp-dir-helper.test.js";
     const direct = ["mkdtemp", "Sync("].join("");
     const offenders = readdirSync(testsDir)

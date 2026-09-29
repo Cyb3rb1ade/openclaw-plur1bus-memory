@@ -11,13 +11,13 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { withRegistryLock } from "../lib/registry-lock.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
-const LOCK_MODULE = fileURLToPath(new URL("../lib/registry-lock.js", import.meta.url));
+// A file: URL: the worker imports it, and a bare Windows path is no ESM specifier.
+const LOCK_MODULE = new URL("../lib/registry-lock.js", import.meta.url).href;
 
 function tempDir(t) {
   const dir = makeTempDir("registry-lock-");
