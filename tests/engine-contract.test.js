@@ -62,17 +62,66 @@ describe("Engine", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
-  it("recall() aborted at 100 ms cancels the embedder and resolves within 50 ms (criterion 3)", async () => {
+  it("recall() aborted at 100 ms cancels the embedder and resolves within 50 ms (criterion 3)", async (t) => {
+    // Proved by ordering, not wall clock (Windows round 4). The old version
+    // armed AbortSignal.timeout(100) before recall() and then required the
+    // embedder to have been entered by then and recall() to settle <= 50 ms
+    // after the abort. On a loaded runner the engine's first-recall setup
+    // (store open, workspace resolution) can outlast 100 ms, so the abort
+    // landed before the embedder (windows-2025 tc6: probe.calls 0; also seen
+    // on Linux under load). Now:
+    //  - the abort is fired from inside the embedder, so it always lands
+    //    while the embedder is pending (the "at 100 ms" point of criterion 3
+    //    is "mid-embedding", which this pins exactly);
+    //  - timers are frozen (mock setTimeout/setInterval) from the moment the
+    //    embedder is entered until recall() settles, so no timer created
+    //    after that point can fire, and the only earlier engine timer that
+    //    could end a recall is the scheduler's 10 s budget, twice the 5 s
+    //    real-timer ceiling. recall() can therefore only settle because the
+    //    abort propagated. That is the property behind "within 50 ms" (no
+    //    wait on anything but the abort), and it holds on every host. The
+    //    ceiling is only reached on failure. (Freezing before recall() is not
+    //    possible: the pre-embedding path itself yields through a timer.)
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
     const probe = { calls: 0, abortedAt: null };
+    const order = [];
+    const controller = new AbortController();
+    let armed = false;
+    const embeddings = hangingEmbedder(probe);
+    const enter = embeddings.embedQuery;
+    const abortWhileEmbedding = (text, options) => {
+      const pending = enter(text, options);
+      pending.catch(() => order.push("embedder-rejected"));
+      order.push("embedder-entered");
+      if (!armed) {
+        armed = true;
+        t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+        queueMicrotask(() => { order.push("abort"); controller.abort(); });
+      }
+      return pending;
+    };
+    embeddings.embed = abortWhileEmbedding;
+    embeddings.embedQuery = abortWhileEmbedding;
+    embeddings.embedPassage = abortWhileEmbedding;
     const host = createStubHost({ stateDir: makeTempDir("ec-state-"), workspaceDir: async () => makeTempDir("ec-ws-") });
-    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: hangingEmbedder(probe) } });
-    const signal = AbortSignal.timeout(100);
-    const result = await engine.recall({ query: "what happened while I was away", principal, agent, signal });
-    const resolvedAt = Date.now();
+    const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings } });
+    let ceiling;
+    const result = await Promise.race([
+      engine.recall({ query: "what happened while I was away", principal, agent, signal: controller.signal }).then((value) => { order.push("recall-settled"); return value; }),
+      new Promise((resolve) => { ceiling = realSetTimeout(() => resolve("NOT_SETTLED"), 5_000); }),
+    ]).finally(() => {
+      realClearTimeout(ceiling);
+      t.mock.timers.reset();
+    });
+    assert.notEqual(result, "NOT_SETTLED", `recall() did not settle on the abort alone (order: ${order.join(" > ")})`);
     assert.deepEqual(result.degraded, { reason: "aborted", capability: "recall" });
-    assert.ok(probe.calls >= 1);
-    assert.ok(probe.abortedAt !== null);
-    assert.ok(resolvedAt - probe.abortedAt <= 50, `resolved ${resolvedAt - probe.abortedAt} ms after the abort`);
+    assert.ok(probe.calls >= 1, "the embedder was reached");
+    assert.ok(probe.abortedAt !== null, "the embedder saw its signal abort");
+    const settledAt = order.indexOf("recall-settled");
+    assert.ok(order.indexOf("embedder-entered") < order.indexOf("abort"), `order: ${order.join(" > ")}`);
+    assert.ok(order.indexOf("abort") < order.indexOf("embedder-rejected"), `order: ${order.join(" > ")}`);
+    assert.ok(order.indexOf("embedder-rejected") < settledAt, `order: ${order.join(" > ")}`);
     await engine.close({ budgetMs: 5_000 });
   });
 
