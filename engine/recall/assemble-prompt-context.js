@@ -8,7 +8,7 @@
  */
 
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { throwIfAborted } from "../../lib/abort.js";
 import { checkAccess } from "../../lib/acl-middleware.js";
 import { filterAssociativeCandidates, filterPatternCandidates } from "../../lib/continuity-gate.js";
@@ -991,7 +991,8 @@ export function createPromptContextAssembler(ctx) {
           const resolvedWorkspaceDir = resolve(hookCtx.workspaceDir);
           const outcomesPath = join(resolvedWorkspaceDir, ".adaptive-learning", "reply-outcomes.jsonl");
           const cooldownPath = join(resolvedWorkspaceDir, OPEN_THREADS_SHOWN_FILE);
-          if (!outcomesPath.startsWith(resolvedWorkspaceDir + "/") || !cooldownPath.startsWith(resolvedWorkspaceDir + "/")) throw new Error("open-threads: path escapes workspaceDir");
+          // sep, not "/": on win32 join() yields backslashes and the check refused every workspace.
+          if (!outcomesPath.startsWith(resolvedWorkspaceDir + sep) || !cooldownPath.startsWith(resolvedWorkspaceDir + sep)) throw new Error("open-threads: path escapes workspaceDir");
           const todayUtc = new Date(nowMs).toISOString().slice(0, 10);
           let cooldownOk = true;
           try {

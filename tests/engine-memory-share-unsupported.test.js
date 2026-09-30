@@ -7,7 +7,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { internalsOf } from "../engine/internals.js";
@@ -26,6 +26,13 @@ describe("Engine.memory.share on a platform without shared memory (E4 Task 6, E4
     internals.sharedMemoryPool.supported = false;
 
     const archivesBefore = archiveCount(stateDir, "anna");
+    // On win32 setup() pre-creates the shared root for the elevated runner
+    // (tests/helpers/win32-shared-owner.js), so "not created" means "exactly
+    // as before": absent elsewhere, unchanged (still empty) on win32.
+    const sharedRoot = join(baseDbPath, ".plur1bus-shared");
+    const sharedRootState = () => (existsSync(sharedRoot) ? readdirSync(sharedRoot).sort() : null);
+    const rootBefore = sharedRootState();
+    if (process.platform !== "win32") assert.equal(rootBefore, null);
 
     await assert.rejects(
       () => engine.memory.share(id, "workspace", anna, userAgent),
@@ -34,7 +41,7 @@ describe("Engine.memory.share on a platform without shared memory (E4 Task 6, E4
         && err.detail && Object.keys(err.detail).length === 2
         && err.detail.capability === "shared-memory" && err.detail.reason === "platform",
     );
-    assert.equal(existsSync(join(baseDbPath, ".plur1bus-shared")), false, "no shared root was created");
+    assert.deepEqual(sharedRootState(), rootBefore, "no shared root was created or written");
     assert.equal(archiveCount(stateDir, "anna"), archivesBefore, "nothing was archived");
 
     // A source id that doesn't even exist still answers unsupported: the

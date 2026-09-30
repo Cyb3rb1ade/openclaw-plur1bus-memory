@@ -54,6 +54,65 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Windows (engine-windows):** Die Link-Prüfung `isUnsafeLink()` verglich
+  unter Windows den `realpathSync.native` eines Pfads mit seiner Schreibweise.
+  Ein Vorfahr in 8.3-Kurzschreibweise (etwa `C:\Users\RUNNER~1\…\Temp`) oder
+  in anderer Groß-/Kleinschreibung ließ damit jede Datei darunter als Reparse
+  Point gelten — u. a. wurde die frisch angelegte `owner-pipe.nonce` als
+  „not a regular file“ abgewiesen und der Embedding-Owner startete nicht.
+  Geprüft wird jetzt nur das letzte Segment (Realpath des Eintrags gegen
+  Realpath des Elternverzeichnisses plus Name, ohne Groß-/Kleinschreibung);
+  Junctions und Symlinks am Eintrag selbst bleiben abgewiesen. POSIX und macOS
+  unverändert.
+- **Windows (engine-windows):** Der Embedding-Owner ohne explizite Adresse
+  lauschte unter Windows auf der Datei `control/embedding-ipc/owner.sock`, was
+  libuv dort nicht kann (`listen EACCES`) — der lokale Embedding-Owner startete
+  unter nativem Windows nie. Er lauscht jetzt auf der Named Pipe
+  `\\.\pipe\plur1bus-embedding-owner-v2-<40 hex>`: SHA-256 über den
+  kanonischen Pfad des embedding-ipc-Verzeichnisses (`realpathSync.native`,
+  kleingeschrieben) und eine 256-Bit-Nonce, die einmal in
+  `owner-pipe.nonce` im ACL-geschützten embedding-ipc-Verzeichnis angelegt wird
+  (Datei ebenfalls nur für den Benutzer). Andere lokale Benutzer können den
+  Namen daher weder vorhersagen noch vorab belegen (EW-R1); die Pipe selbst hat
+  weiter Nodes Standard-Sicherheitsdeskriptor, das Token authentifiziert jede
+  Anfrage. Fehlt die Nonce oder ist sie unlesbar, startet der Owner nicht und
+  Clients scheitern mit `scoped_embedding_pipe_nonce_unavailable`
+  (fail-closed). POSIX unverändert (`owner.sock`).
+- **Windows (engine-windows):** Pfad-Containment im Obsidian-Bridge
+  (`resolveUnder`, Open-Threads) prüfte mit `/` und wies jeden Vault-Pfad ab;
+  die Vault-Wurzelprüfung zählte Segmente mit `/`; `splitAgentDbPath` trennte
+  nur an `/` (Tombstone-Guard las die falsche Registry); der Critical-Push-
+  Zustandsordner wurde nie angelegt; das Verzeichnis-`fsync` scheiterte mit
+  EPERM (SKILL.md-Aktivierung, epistemischer Cutoff); Module wurden per
+  Dateipfad statt `file:`-URL importiert; die Neo-Generationen-Migration
+  entfernte `\workspaces` nicht. Alle unter POSIX unverändert.
+- Die `.obsidian`-Schreibsperre vergleicht das erste Segment jetzt ohne
+  Groß-/Kleinschreibung und ohne abschließende Punkte/Leerzeichen, auf allen
+  Plattformen (`.OBSIDIAN`, `.obsidian.`, `.obsidian ` umgingen sie auf NTFS
+  und case-insensitiven APFS-Volumes).
+- **Verhaltensänderung, alle Plattformen:** Vault-relative Pfade im
+  Obsidian-Bridge (beide `assertSafeRelativePath`, `resolveUnder`) weisen jetzt
+  jedes Segment ab, das nur aus Punkten und/oder Leerzeichen besteht — auch `.`
+  (`a/./b`, ein `reviewRoot` von `./plur1bus` ergeben nun „Path traversal
+  rejected“), `...`, `.. `, ` .`. Unter Windows zusätzlich: Segmente mit
+  abschließendem Punkt oder Leerzeichen (Windows entfernt sie), mit `:`
+  (NTFS-Streams wie `.obsidian::$INDEX_ALLOCATION`, laufwerksrelatives `C:x`)
+  und in 8.3-Kurznamen-Form (`~` plus Ziffer, z. B. `OBSIDI~1`) — alle
+  verweisen sonst auf einen anderen Namen.
+- Der Persona-Direktiven-Cache ist an einen Hash des Dateiinhalts gebunden
+  statt an `mtimeMs`; eine (gleich große) Neufassung im selben Zeitstempel-Tick
+  lieferte die alte Direktive.
+- `install-plugin.ps1`: Unter Windows PowerShell 5.1 kam vor dem an WSL
+  geleiteten `bootstrap.sh` ein BOM an; ein fehlgeschlagenes Zurücksetzen der
+  Konsolen-Kodierung wird jetzt gewarnt. Neuer CI-Job `bootstrap-stdin-bytes`.
+- **Bekannte Einschränkung (`engine-windows:elevated-owner`, EW-R4):** Auf
+  einem erhöht (als Administrator) laufenden Windows-Gateway gehören neue
+  Verzeichnisse `BUILTIN\Administrators`; die Verified-Path-Prüfung des
+  Shared-Memory-Pools verlangt den Benutzer als Besitzer und weist geteilte
+  Schreibvorgänge daher ab („memory write failed“, danach `unsupported`).
+  Die Prüfungen werden bewusst nicht gelockert; Abhilfe: Gateway nicht erhöht
+  starten oder Basis und `.plur1bus-shared` dem Benutzer übereignen (siehe
+  `docs/engine-api.md`, Abschnitt „Shared memory on macOS and Windows“).
 - `process.env.HOME` wird nicht mehr als Home-Verzeichnis benutzt
   (`lib/providers/openclaw-memory-embedding-adapters.js`); unter Windows ist
   die Variable nicht gesetzt, der Modell-Cache landete im Arbeitsverzeichnis.

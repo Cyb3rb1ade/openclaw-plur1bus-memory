@@ -43,11 +43,19 @@ function removeTempDir(dir) {
   rmSync(dir, { recursive: true, force: true });
 }
 
+/**
+ * The child's os.homedir() is HOME on POSIX but USERPROFILE on win32, so a
+ * HOME override is mirrored there (a no-op for POSIX children).
+ */
+function withHomeOverride(env) {
+  return env.HOME !== undefined && env.USERPROFILE === undefined ? { ...env, USERPROFILE: env.HOME } : env;
+}
+
 function runNode(script, args = [], { env = {}, cwd = REPO_ROOT, timeout = 30_000 } = {}) {
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...withHomeOverride(env) },
     timeout,
   });
   return {
@@ -254,6 +262,19 @@ function runDeployGuard(fixture, env = {}) {
 // `declare -A`); runDeployGuard invokes `bash` resolved from PATH, so probe
 // exactly that interpreter. macOS ships bash 3.2, where the full-restore-path
 // tests below cannot run — on Linux (bash 4+) they execute unchanged.
+// engine-windows:repair-openclaw-spawn — hypothesis: scripts/repair-installed-plugin.mjs
+// runs spawnSync("openclaw") without a shell, which cannot start OpenClaw's
+// openclaw.cmd shim on win32, and this fake is a POSIX sh script on a
+// ":"-joined PATH. Needs a real Windows run (and a .cmd-aware spawn) to settle.
+const repairOpenClawSpawn = { skip: process.platform === "win32" && "engine-windows:repair-openclaw-spawn (POSIX sh openclaw fake; spawnSync cannot run a .cmd shim)" };
+// A `#!/bin/sh` stand-in for node on PATH only runs on POSIX.
+const posixShFake = { skip: process.platform === "win32" && "engine-windows:posix-only (POSIX sh fake on PATH)" };
+// engine-windows:b9-bash-path-fakes — hypothesis: under Git Bash the fake `cp`
+// never shadows /bin/cp, because PATH is ":"-joined with a Windows bin path and
+// Node passes both the inherited "Path" and this "PATH" key. Needs a real
+// Windows run to confirm before the fixture is rewritten.
+const bashPathFakes = { skip: process.platform === "win32" && "engine-windows:b9-bash-path-fakes (fake cp on a Git Bash PATH)" };
+
 const requiresModernBash = (() => {
   const probe = spawnSync("bash", ["-c", 'printf "%s" "$BASH_VERSINFO"'], { encoding: "utf8" });
   const major = Number.parseInt(probe.stdout ?? "", 10);
@@ -511,7 +532,7 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
     }
   });
 
-  it("lists but never runs an errored cron during --dry-run --run-cron", () => {
+  it("lists but never runs an errored cron during --dry-run --run-cron", repairOpenClawSpawn, () => {
     const root = makeTempDir("plur1bus-b9-repair-cron-dry-");
     try {
       const binDir = join(root, "bin");
@@ -536,7 +557,7 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
     }
   });
 
-  it("still runs an errored cron when --run-cron is applying", () => {
+  it("still runs an errored cron when --run-cron is applying", repairOpenClawSpawn, () => {
     const root = makeTempDir("plur1bus-b9-repair-cron-apply-");
     try {
       const binDir = join(root, "bin");
@@ -614,7 +635,7 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
     }
   });
 
-  it("propagates a nonzero maintenance child exit", () => {
+  it("propagates a nonzero maintenance child exit", posixShFake, () => {
     const root = makeTempDir("plur1bus-b9-repair-exit-");
     try {
       const versionsDir = makeElevatedHome(root);
@@ -634,7 +655,7 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
     }
   });
 
-  it("propagates a signalled maintenance child", () => {
+  it("propagates a signalled maintenance child", posixShFake, () => {
     const root = makeTempDir("plur1bus-b9-repair-signal-");
     try {
       makeElevatedHome(root);
@@ -925,7 +946,7 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     }
   });
 
-  it("revalidates a source-parent swap after backup and before the first restore copy", requiresModernBash, () => {
+  it("revalidates a source-parent swap after backup and before the first restore copy", { ...requiresModernBash, ...(process.platform === "win32" ? bashPathFakes : {}) }, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const externalLib = join(fixture.root, "external-lib");
@@ -960,7 +981,7 @@ exec /bin/cp "$@"
     }
   });
 
-  it("rejects a regular source replacement after preflight and before restore copy", requiresModernBash, () => {
+  it("rejects a regular source replacement after preflight and before restore copy", { ...requiresModernBash, ...(process.platform === "win32" ? bashPathFakes : {}) }, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const binDir = join(fixture.root, "bin");
@@ -991,7 +1012,7 @@ exec /bin/cp "$@"
     }
   });
 
-  it("fails verified restore when copy reports success without changing the deploy", requiresModernBash, () => {
+  it("fails verified restore when copy reports success without changing the deploy", { ...requiresModernBash, ...(process.platform === "win32" ? bashPathFakes : {}) }, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const binDir = join(fixture.root, "bin");

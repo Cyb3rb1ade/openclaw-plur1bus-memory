@@ -7,6 +7,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { PLUGIN_ROOT } from "../../lib/plugin-meta.js";
 
 const LANCEDB_LEGACY_PATH = join(PLUGIN_ROOT, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
@@ -27,12 +28,12 @@ async function getLanceDB() {
     } catch (directErr) {
       // v6.2.1 — Versuche Plugin-eigenes node_modules (P0-Fix)
       if (existsSync(LANCEDB_PLUGIN_PATH)) {
-        _lancedb = await import(LANCEDB_PLUGIN_PATH);
+        _lancedb = await import(pathToFileURL(LANCEDB_PLUGIN_PATH).href);
         return _lancedb;
       }
       // v6.2.1 — Versuche Legacy-Pfad (P0-Fix)
       if (existsSync(LANCEDB_LEGACY_PATH)) {
-        _lancedb = await import(LANCEDB_LEGACY_PATH);
+        _lancedb = await import(pathToFileURL(LANCEDB_LEGACY_PATH).href);
         return _lancedb;
       }
       throw new Error(
@@ -54,13 +55,13 @@ async function getOpenAI() {
     } catch (directErr) {
       // v6.2.1 — Versuche Plugin-eigenes node_modules (P0-Fix)
       if (existsSync(OPENAI_PLUGIN_PATH)) {
-        const m = await import(OPENAI_PLUGIN_PATH);
+        const m = await import(pathToFileURL(OPENAI_PLUGIN_PATH).href);
         _OpenAI = m.default;
         return _OpenAI;
       }
       // v6.2.1 — Versuche Legacy-Pfad (P0-Fix)
       if (existsSync(OPENAI_LEGACY_PATH)) {
-        const m = await import(OPENAI_LEGACY_PATH);
+        const m = await import(pathToFileURL(OPENAI_LEGACY_PATH).href);
         _OpenAI = m.default;
         return _OpenAI;
       }

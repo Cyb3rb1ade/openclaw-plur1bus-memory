@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { runInstaller } from "../scripts/dist/installer/main.mjs";
@@ -91,7 +91,8 @@ describe("plugin installer: install", () => {
     const cron = sb.log().filter((e) => e.bin === "node" && e.argv[0].endsWith("setup-feature-crons.mjs"));
     assert.equal(cron.length, 1);
     assert.deepEqual(cron[0].argv.slice(1), ["--json"]);
-    assert.ok(cron[0].argv[0].startsWith(join(sb.stateDir, "npm", "projects")), cron[0].argv[0]);
+    // normalize(): the fake OpenClaw reports its install path "/"-separated (fixture), so on win32 it is mixed.
+    assert.ok(normalize(cron[0].argv[0]).startsWith(join(sb.stateDir, "npm", "projects")), cron[0].argv[0]);
   });
 
   it("PLUR1BUS_SELFTEST_FORCE_FAIL=1 with the test flag fails a fresh install's verify and rolls it back (Task 8 CI seam)", async () => {
@@ -319,9 +320,10 @@ describe("plugin installer: install", () => {
     const other = join(root, "other");
     mkdirSync(join(sb.home, ".plur1bus"), { recursive: true });
     writeFileSync(join(sb.home, ".plur1bus", "manifest.json"), "{}\n");
-    const homes = findHarnessHomes({ env: { PLUR1BUS_HOME: harness, HOME: sb.home }, platform: "linux" });
+    // The host's own platform: these are real host paths (a "linux" path flavour cannot resolve C:\\… on win32).
+    const homes = findHarnessHomes({ env: { PLUR1BUS_HOME: harness, HOME: sb.home }, platform: process.platform });
     assert.deepEqual(homes, [harness, join(sb.home, ".plur1bus")]);
-    const base = { openclawVersion: "2026.8.1", nodeVersion: "24.21.0", target: { target: "linux-x64", supported: true, detail: "" }, release: sb.feed.hosts.openclaw.releases[0], freeBytes: null, readonlyConfig: null, configValid: true, platform: "linux" };
+    const base = { openclawVersion: "2026.8.1", nodeVersion: "24.21.0", target: { target: "linux-x64", supported: true, detail: "" }, release: sb.feed.hosts.openclaw.releases[0], freeBytes: null, readonlyConfig: null, configValid: true, platform: process.platform };
     assert.ok(checkCompat({ ...base, baseDbPath: join(harness, "..foo"), harnessHomes: homes }).some((f) => f.id === "store-inside-harness-home"));
     assert.ok(checkCompat({ ...base, baseDbPath: join(sb.home, ".plur1bus", "store"), harnessHomes: homes }).some((f) => f.id === "store-inside-harness-home"));
     assert.ok(!checkCompat({ ...base, baseDbPath: join(other, "store"), harnessHomes: homes }).some((f) => f.id === "store-inside-harness-home"));
@@ -357,7 +359,13 @@ describe("plugin installer: install", () => {
     assert.deepEqual(sb.log(), []);
   });
 
-  it("unsupported targets exit 3 before any change", async () => {
+  // engine-windows:installer-foreign-target — cause (confirmed by Windows run tc3 and its Linux mirror, an injected
+  // "win32" on a Linux host): the injected platform also drives detection. whichOnPath() then splits the win32 PATH
+  // on ":" and looks for an extensionless `openclaw`, so the sandbox's openclaw.cmd is never found and the run stops
+  // at `detect` with exit 3 (the expected code, which is why only the missing `findings` failed). A POSIX host
+  // cannot be simulated on a win32 host with a runnable fake; resolveTarget/runningUnderRosetta stay covered there.
+  const foreignTarget = { skip: process.platform === "win32" && "engine-windows:installer-foreign-target (an injected POSIX platform also drives openclaw detection on a win32 host)" };
+  it("unsupported targets exit 3 before any change", foreignTarget, async () => {
     for (const extra of [{ platform: "linux", arch: "x64", glibcVersion: null }, { platform: "darwin", arch: "x64" }, { platform: "linux", arch: "ia32", glibcVersion: "2.39" }, { platform: "linux", arch: "arm64", glibcVersion: "2.26" }]) {
       const sb = createInstallerSandbox();
       const r = await run(sb, ["--json"], extra);
@@ -367,7 +375,7 @@ describe("plugin installer: install", () => {
     }
   });
 
-  it("an x64 Node under Rosetta is refused naming Rosetta and the native arm64 Node", async () => {
+  it("an x64 Node under Rosetta is refused naming Rosetta and the native arm64 Node", foreignTarget, async () => {
     const sb = createInstallerSandbox();
     const r = await run(sb, ["--json"], { platform: "darwin", arch: "x64", rosetta: true });
     assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
@@ -376,6 +384,14 @@ describe("plugin installer: install", () => {
     assert.match(f.detail, /Rosetta/);
     assert.match(f.detail, /native arm64 Node/);
     assert.deepEqual(mutating(sb.openclawCalls()), []);
+  });
+
+  it("the foreign targets, the Rosetta probe and the darwin-x64 detail (pure, every host)", () => {
+    for (const extra of [{ platform: "linux", arch: "x64", glibcVersion: null }, { platform: "darwin", arch: "x64" }, { platform: "linux", arch: "ia32", glibcVersion: "2.39" }, { platform: "linux", arch: "arm64", glibcVersion: "2.26" }]) {
+      assert.equal(resolveTarget(extra).supported, false, JSON.stringify(extra));
+    }
+    assert.match(resolveTarget({ platform: "darwin", arch: "x64", rosetta: true }).detail, /Rosetta/);
+    assert.match(resolveTarget({ platform: "darwin", arch: "x64", rosetta: true }).detail, /native arm64 Node/);
     // the probe: sysctl.proc_translated 1, or the machine says arm64; only for darwin x64
     assert.equal(runningUnderRosetta({ platform: "darwin", arch: "x64", sysctl: () => "1\n", machine: () => "x86_64" }), true);
     assert.equal(runningUnderRosetta({ platform: "darwin", arch: "x64", sysctl: () => { throw new Error("no sysctl"); }, machine: () => "arm64" }), true);

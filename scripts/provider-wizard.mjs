@@ -9,11 +9,11 @@
 import { createInterface } from "node:readline/promises";
 import { once } from "node:events";
 import { stdin, stdout } from "node:process";
-import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __dir = dirname(fileURLToPath(import.meta.url));
-const { t, resolveLocale } = await import(join(__dir, "../lib/i18n.js"));
+// A specifier relative to this module, not a filesystem path: on win32 an
+// absolute Windows path is no valid ESM specifier (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+const { t, resolveLocale } = await import("../lib/i18n.js");
 
 const lang = resolveLocale();
 const tone = "default";

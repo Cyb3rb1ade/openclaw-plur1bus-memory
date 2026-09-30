@@ -13,6 +13,7 @@ import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { prepareEngineSharedBase } from "./helpers/win32-shared-owner.js";
 import { readTombstonesFromRegistry } from "../lib/tombstone.js";
 
 // The tombstone registry lives beside baseDbPath's PARENT directory
@@ -442,7 +443,7 @@ describe("Engine.memory on a workspace-shared card (E1 final review I3)", () => 
     const stateDir = makeTempDir("e1-share-state-");
     const host = stubHostForSharedWorkspace(stateDir);
     const baseDbPath = freshBaseDbPath("e1-share-");
-    const engine = createEngine(host, { ...config(baseDbPath), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const engine = prepareEngineSharedBase(createEngine(host, { ...config(baseDbPath), autoCapture: true }, { internals: { embeddings: flatEmbedder() } }));
     const sourceId = await seedAndGetId(engine, "bernd", "The team's printer toner is ordered from the stationery portal.", "printer toner", principalForDestructive);
     const { sharedId } = await engine.memory.share(sourceId, "workspace", principalForDestructive("bernd"), agent);
 
@@ -512,7 +513,7 @@ describe("Engine.memory.share (E1 Task 6)", () => {
   it("(a) share to workspace returns sharedId, and a second agent in the same workspace lists it with scope 'workspace'", async () => {
     const stateDir = makeTempDir("e1-share-state-");
     const host = stubHostForSharedWorkspace(stateDir);
-    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const engine = prepareEngineSharedBase(createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } }));
     const ownerId = "share-owner";
     const id = await seedAndGetId(engine, ownerId, "The team's shared VPN config lives in the ops repo.", "shared VPN config", principalForDestructive);
 
@@ -539,7 +540,7 @@ describe("Engine.memory.share (E1 Task 6)", () => {
   it("(b) a sensitive card is approval-required, and { allowSensitive: true } succeeds", async () => {
     const stateDir = makeTempDir("e1-share-state-");
     const host = stubHostForSharedWorkspace(stateDir);
-    const engine = createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } });
+    const engine = prepareEngineSharedBase(createEngine(host, { ...config(freshBaseDbPath("e1-share-")), autoCapture: true }, { internals: { embeddings: flatEmbedder() } }));
     const ownerId = "share-sensitive";
     const id = await seedAndGetId(engine, ownerId, "The safe combination is written in the back of the notebook.", "safe combination", principalForDestructive);
 

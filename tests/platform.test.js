@@ -39,8 +39,12 @@ describe("lib/platform isFilesystemPath", () => {
   });
 });
 
+// Mode bits and filesystem Unix sockets are POSIX; on win32 chmod only toggles
+// the read-only bit and a socket path cannot be listened on.
+const posixModes = { skip: process.platform === "win32" && "engine-windows:posix-only (needs POSIX modes; no file-ACL reader in the repo to assert instead)" };
+
 describe("lib/platform securePath", () => {
-  it("chmods a regular file on POSIX", () => {
+  it("chmods a regular file on POSIX", posixModes, () => {
     const dir = makeTempDir("plur1bus-platform-");
     const file = join(dir, "state.json");
     writeFileSync(file, "{}", { mode: 0o644 });
@@ -49,7 +53,7 @@ describe("lib/platform securePath", () => {
     assert.equal(statSync(file).mode & 0o777, 0o600);
   });
 
-  it("chmods through a file descriptor when one is given", () => {
+  it("chmods through a file descriptor when one is given", posixModes, () => {
     const dir = makeTempDir("plur1bus-platform-fd-");
     const file = join(dir, "report.json");
     const fd = openSync(file, "wx", 0o644);
@@ -62,7 +66,7 @@ describe("lib/platform securePath", () => {
     assert.equal(statSync(file).mode & 0o777, 0o600);
   });
 
-  it("secures a live unix domain socket rather than refusing it", async () => {
+  it("secures a live unix domain socket rather than refusing it", { skip: process.platform === "win32" && "engine-windows:posix-only (POSIX unix-socket and mode semantics)" }, async () => {
     const dir = makeTempDir("plur1bus-platform-sock-");
     const socketPath = join(dir, "owner.sock");
     const server = createServer();
@@ -197,10 +201,42 @@ describe("lib/platform isUnsafeLink", () => {
   });
 });
 
+describe("lib/platform isUnsafeLink (win32 ancestors)", () => {
+  // Windows run tc3: every file under C:\Users\RUNNER~1\AppData\Local\Temp was
+  // "unsafe", because realpath expands the 8.3 ancestor. An ancestor that
+  // resolves elsewhere (a short name, another case, a linked parent) is not a
+  // link at the entry itself; a symlinked parent stands in for it here.
+  it("does not treat an entry below a differently spelled ancestor as a link", () => {
+    const dir = makeTempDir("plur1bus-platform-ancestor-");
+    const real = join(dir, "real");
+    mkdirSync(real);
+    writeFileSync(join(real, "file.txt"), "x");
+    const alias = join(dir, "alias");
+    symlinkSync(real, alias, "dir");
+    assert.equal(isUnsafeLink(join(alias, "file.txt"), { platform: "win32", stat: { isSymbolicLink: () => false } }), false);
+    // The link itself is still refused.
+    assert.equal(isUnsafeLink(alias, { platform: "win32", stat: { isSymbolicLink: () => false } }), true);
+  });
+
+  it("accepts a real file in the host temp directory (8.3 ancestors on Windows runners)", () => {
+    const file = join(makeTempDir("plur1bus-platform-tmpfile-"), "owner-pipe.nonce");
+    writeFileSync(file, "x");
+    assert.equal(isUnsafeLink(file), false);
+    assert.equal(isUnsafeLink(file, { platform: "win32" }), false);
+  });
+});
+
 describe("lib/platform canonicalIdentityPath", () => {
-  it("resolves a real directory on POSIX and preserves case", () => {
+  it("resolves a real directory on the host (POSIX keeps case; win32 folds it)", () => {
     const dir = makeTempDir("plur1bus-platform-Canon-");
     // realpathSync, not the raw path: on macOS os.tmpdir() is /var -> /private/var.
+    if (process.platform === "win32") {
+      // The POSIX flavour cannot resolve a drive path on a win32 host (it
+      // prefixes the cwd); the host's own platform is the real case there.
+      assert.equal(canonicalIdentityPath(dir), realpathSync(dir).replace(/\//g, "\\").toLowerCase());
+      assert.match(canonicalIdentityPath(dir), /canon-/);
+      return;
+    }
     assert.equal(canonicalIdentityPath(dir, { platform: "linux" }), realpathSync(dir));
     assert.match(canonicalIdentityPath(dir, { platform: "linux" }), /Canon-/);
   });

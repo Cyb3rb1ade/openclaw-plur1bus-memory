@@ -184,6 +184,11 @@ export function baseConfig(baseDbPath, overrides = {}) {
     dreaming: { enabled: false },
     skillMiner: { enabled: false },
     runtime: { recallTimeoutMs: 10_000 },
+    // The style directive's time-of-day hint reads the hour in this zone; the
+    // default (null) is the host's local zone, which made the recorded output
+    // depend on the runner's TZ (windows-11-arm is not UTC). The fixtures were
+    // recorded in UTC.
+    styleDirective: { timezone: "UTC" },
     recall: {
       dedup: false,
       canonicalFirst: true,

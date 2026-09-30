@@ -252,8 +252,10 @@ describe("native capability probe budget", () => {
 
 describe("Runner-Pfad bei Capture-Kopien (OpenClaw 2026.9.6)", async () => {
   const { stableFeatureCronRunnerPath } = await import("../lib/setup/feature-cron-native.js");
-  const capture = "/srv/state/tmp/plugin-captures/1fc1/captures/openclaw-plugin-build-Bq14oR/package-0/node_modules/memory-lancedb-namespaced/scripts/run-feature-cron.mjs";
-  const installed = "/srv/state/extensions/memory-lancedb-namespaced/scripts/run-feature-cron.mjs";
+  const { join } = await import("node:path");
+  // Platform-native separators: the product matches `${sep}tmp${sep}plugin-captures${sep}`.
+  const capture = join("/srv/state/tmp/plugin-captures/1fc1/captures/openclaw-plugin-build-Bq14oR/package-0/node_modules/memory-lancedb-namespaced/scripts/run-feature-cron.mjs");
+  const installed = join("/srv/state/extensions/memory-lancedb-namespaced/scripts/run-feature-cron.mjs");
 
   it("zeigt aus einer Capture-Kopie auf die feste Installation desselben State-Verzeichnisses", () => {
     assert.equal(stableFeatureCronRunnerPath(capture, (path) => path === installed), installed);

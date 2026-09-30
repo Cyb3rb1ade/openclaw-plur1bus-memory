@@ -168,6 +168,14 @@ function findShells() {
 
 let ps1Script;
 
+// Per-run limit. Windows PowerShell 5.1 needs 12-25 s per run of the .ps1 on the hosted runners even when warm (pwsh:
+// about 1 s), and its first run in a job has taken 28-70 s inside test-cross. In the standalone bootstrap-stdin-bytes
+// job (a fresh VM right after npm ci) the first run passed the old 120 s limit and was killed with no output (tc4,
+// run 109525089835), although the same byte check passed under powershell.exe in test-cross at the same commit.
+function psRunTimeoutMs(shell) {
+  return shell.name === "powershell.exe" ? 360_000 : 120_000;
+}
+
 function linkOrCopy(src, dest) {
   mkdirSync(dirname(dest), { recursive: true });
   try {
@@ -254,14 +262,19 @@ function makePsCase(o) {
     goodNode: join(goodNodeDir, "node.exe"),
     privateNodePath,
     run(args = [], { raw = false } = {}) {
+      const started = Date.now();
       const r = spawnSync(o.shell.exe, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps1Script, ...args], {
         env,
         encoding: raw ? "buffer" : "utf8",
         stdio: ["pipe", "pipe", "pipe"],
         input: "",
-        timeout: 120_000,
+        timeout: psRunTimeoutMs(o.shell),
       });
-      return { code: r.status, stdout: r.stdout, stderr: r.stderr, out: `${r.stdout}\n${r.stderr}` };
+      // A killed run has status null and often no output at all: say so, with how far the wsl.exe shim got.
+      const spawnNote = r.error
+        ? `\n[spawn ${r.error.code ?? r.error.message} after ${Date.now() - started} ms (limit ${psRunTimeoutMs(o.shell)} ms); wsl.exe calls so far: ${readFileSync(wslLog, "utf8").split("\n").filter(Boolean).length}]`
+        : "";
+      return { code: r.status, stdout: r.stdout, stderr: r.stderr, out: `${r.stdout}\n${r.stderr}${spawnNote}` };
     },
     markText() {
       return existsSync(mark) ? readFileSync(mark, "utf8") : null;
@@ -279,6 +292,11 @@ function makePsCase(o) {
 }
 
 const SHELLS = findShells();
+// ci.yml's bootstrap-stdin-bytes job sets PLUR1BUS_REQUIRE_PS51=1: there the Windows PowerShell 5.1 byte check
+// must run, so a missing powershell.exe fails instead of skipping.
+if (process.env.PLUR1BUS_REQUIRE_PS51 === "1" && !SHELLS.some((s) => s.name === "powershell.exe")) {
+  throw new Error("PLUR1BUS_REQUIRE_PS51=1 but Windows PowerShell 5.1 (powershell.exe) was not found");
+}
 const PS_SKIP = process.platform !== "win32" ? "install-plugin.ps1 runs on Windows only (Task 8/9 Windows CI legs)" : SHELLS.length === 0 && "no PowerShell found";
 const UBUNTU = "Ubuntu-24.04";
 
@@ -389,7 +407,10 @@ describe("install-plugin.ps1", { skip: PS_SKIP }, () => {
         const sh = c.wslCalls().find((e) => e.argv.includes("-s"));
         assert.ok(sh, JSON.stringify(c.wslCalls()));
         assert.deepEqual(sh.argv, ["-d", UBUNTU, "-e", "sh", "-s", "--", "--version", "7.16.11", "--offline", "/mnt/c/TEST ONLY/p.tgz", "--json"]);
+        // Windows PowerShell 5.1 used to prepend the console encoding's UTF-8 preamble (CI byte check, ci.yml).
+        assert.notDeepEqual([...c.wslStdin().subarray(0, 3)], [0xef, 0xbb, 0xbf], "no BOM reaches sh");
         assert.deepEqual(c.wslStdin(), c.shBytes, "stdin is the feed's bootstrap.sh, byte for byte");
+        assert.doesNotMatch(r.stderr, /could not restore the console input encoding/);
         assert.equal(c.installer(), null, "nothing runs natively");
 
         assert.match(sh.WSLENV ?? "", /PLUR1BUS_PLUGIN_CHANNEL\/u/);

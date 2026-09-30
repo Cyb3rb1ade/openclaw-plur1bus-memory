@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendTombstoneToRegistry, buildTombstone } from "../lib/tombstone.js";
-import { assertCardWriteAllowed, isContentChangingUpdate } from "../lib/tombstone-write-guard.js";
+import { assertCardWriteAllowed, isContentChangingUpdate, splitAgentDbPath } from "../lib/tombstone-write-guard.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const UUID = "00000000-0000-4000-8000-000000000001";
@@ -54,5 +54,22 @@ describe("tombstone write guard", () => {
     });
     // Missing registry is empty (no tombstones), not corrupt. Corrupt is fail-closed.
     assert.equal(blocked.allowed, true);
+  });
+});
+
+describe("splitAgentDbPath", () => {
+  it("splits a POSIX MemoryDB path at the last '/' and keeps '\\' as a name character", () => {
+    assert.deepEqual(splitAgentDbPath("/s/lancedb-namespaced/agent-a", { platform: "linux" }), { baseDbPath: "/s/lancedb-namespaced", agentId: "agent-a" });
+    assert.deepEqual(splitAgentDbPath("/s/lancedb-namespaced/agent-a/", { platform: "linux" }), { baseDbPath: "/s/lancedb-namespaced", agentId: "agent-a" });
+    assert.deepEqual(splitAgentDbPath("/s/odd\\name", { platform: "darwin" }), { baseDbPath: "/s", agentId: "odd\\name" });
+  });
+
+  it("splits a win32 MemoryDB path at the last '\\' or '/' (a win32 agentId used to come back empty)", () => {
+    assert.deepEqual(
+      splitAgentDbPath("C:\\Users\\a\\.openclaw\\memory\\lancedb-namespaced\\agent-a", { platform: "win32" }),
+      { baseDbPath: "C:\\Users\\a\\.openclaw\\memory\\lancedb-namespaced", agentId: "agent-a" },
+    );
+    assert.deepEqual(splitAgentDbPath("C:\\s\\lancedb-namespaced\\agent-a\\", { platform: "win32" }), { baseDbPath: "C:\\s\\lancedb-namespaced", agentId: "agent-a" });
+    assert.deepEqual(splitAgentDbPath("C:/s/lancedb-namespaced/agent-a", { platform: "win32" }), { baseDbPath: "C:/s/lancedb-namespaced", agentId: "agent-a" });
   });
 });

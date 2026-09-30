@@ -97,6 +97,48 @@ jobs:
       - name: Run tests
         run: npm run test:cross
 
+  # engine-win review item 8: the .ps1 bootstrap's wsl:<distro> path pipes the verified bootstrap.sh into
+  # `wsl.exe ... sh -s`. Under Windows PowerShell 5.1 (.NET Framework) a UTF-8 console input encoding used to put
+  # a BOM (EF BB BF) in front of it. This blocking byte check runs that path under powershell.exe (and pwsh) against
+  # the wsl.exe shim and asserts the child's stdin is the feed's sh byte for byte, with no BOM.
+  # The test runs the .ps1 three times per shell; each powershell.exe run may take up to 360 s (psRunTimeoutMs in the
+  # test: a cold first run on a fresh VM passed the old 120 s limit, tc4), so 15 minutes no longer bound the job.
+  bootstrap-stdin-bytes:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Enable git long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Windows PowerShell 5.1 is present
+        shell: pwsh
+        run: |
+          $v = & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command '$PSVersionTable.PSVersion.Major'
+          if ("$v".Trim() -ne '5') { throw "expected Windows PowerShell 5.x, got '$v'" }
+      # --test-name-pattern reports filtered-out tests as skipped and exits 0, so a renamed test would leave this
+      # green without any byte check: the TAP output must show the byte check passing (not skipped) at least once.
+      - name: Piped sh reaches wsl.exe without a BOM
+        shell: pwsh
+        env:
+          PLUR1BUS_REQUIRE_PS51: '1'
+        run: |
+          $out = node --test --test-reporter=tap '--test-name-pattern=wsl:<d> pipes the verified sh' tests/dist-bootstrap-ps1.test.js 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Output $out
+          if ($code -ne 0) { exit $code }
+          $ran = @([regex]::Matches($out, '(?m)^\s*ok \d+ - wsl:<d> pipes the verified sh(?![^\r\n]*# SKIP)')).Count
+          $pass = [regex]::Match($out, '(?m)^# pass (\d+)').Groups[1].Value
+          if ($ran -lt 1 -or [int]$pass -lt 1) { throw "the byte check did not run (matching ok lines: $ran, # pass: $pass)" }
+
   dependency-review:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
