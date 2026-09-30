@@ -101,9 +101,11 @@ jobs:
   # `wsl.exe ... sh -s`. Under Windows PowerShell 5.1 (.NET Framework) a UTF-8 console input encoding used to put
   # a BOM (EF BB BF) in front of it. This blocking byte check runs that path under powershell.exe (and pwsh) against
   # the wsl.exe shim and asserts the child's stdin is the feed's sh byte for byte, with no BOM.
+  # The test runs the .ps1 three times per shell; each powershell.exe run may take up to 360 s (psRunTimeoutMs in the
+  # test: a cold first run on a fresh VM passed the old 120 s limit, tc4), so 15 minutes no longer bound the job.
   bootstrap-stdin-bytes:
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Enable git long paths
         run: git config --global core.longpaths true

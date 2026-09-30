@@ -168,6 +168,14 @@ function findShells() {
 
 let ps1Script;
 
+// Per-run limit. Windows PowerShell 5.1 needs 12-25 s per run of the .ps1 on the hosted runners even when warm (pwsh:
+// about 1 s), and its first run in a job has taken 28-70 s inside test-cross. In the standalone bootstrap-stdin-bytes
+// job (a fresh VM right after npm ci) the first run passed the old 120 s limit and was killed with no output (tc4,
+// run 109525089835), although the same byte check passed under powershell.exe in test-cross at the same commit.
+function psRunTimeoutMs(shell) {
+  return shell.name === "powershell.exe" ? 360_000 : 120_000;
+}
+
 function linkOrCopy(src, dest) {
   mkdirSync(dirname(dest), { recursive: true });
   try {
@@ -254,14 +262,19 @@ function makePsCase(o) {
     goodNode: join(goodNodeDir, "node.exe"),
     privateNodePath,
     run(args = [], { raw = false } = {}) {
+      const started = Date.now();
       const r = spawnSync(o.shell.exe, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps1Script, ...args], {
         env,
         encoding: raw ? "buffer" : "utf8",
         stdio: ["pipe", "pipe", "pipe"],
         input: "",
-        timeout: 120_000,
+        timeout: psRunTimeoutMs(o.shell),
       });
-      return { code: r.status, stdout: r.stdout, stderr: r.stderr, out: `${r.stdout}\n${r.stderr}` };
+      // A killed run has status null and often no output at all: say so, with how far the wsl.exe shim got.
+      const spawnNote = r.error
+        ? `\n[spawn ${r.error.code ?? r.error.message} after ${Date.now() - started} ms (limit ${psRunTimeoutMs(o.shell)} ms); wsl.exe calls so far: ${readFileSync(wslLog, "utf8").split("\n").filter(Boolean).length}]`
+        : "";
+      return { code: r.status, stdout: r.stdout, stderr: r.stderr, out: `${r.stdout}\n${r.stderr}${spawnNote}` };
     },
     markText() {
       return existsSync(mark) ? readFileSync(mark, "utf8") : null;
