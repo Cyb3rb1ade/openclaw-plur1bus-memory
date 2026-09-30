@@ -9,7 +9,7 @@ import {
   registerOpenClawMemoryEmbeddingProviders,
 } from "../lib/providers/openclaw-memory-embedding-adapters.js";
 import { createScopedEmbeddingIpcServer } from "../lib/providers/scoped-embedding-ipc.js";
-import { makeTempDir } from "./helpers/temp-dir.js";
+import { makeClaimableStateRoot } from "./helpers/claimable-state-root.js";
 
 const originalFetch = globalThis.fetch;
 const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
@@ -111,7 +111,9 @@ describe("OpenClaw memory embedding provider adapters", () => {
 
   it("keeps a tool-discovery local adapter usable across activation-owner rotation", async () => {
     // Short POSIX root for the owner.sock path; win32 has no /tmp (named pipe there).
-    const stateRoot = makeTempDir("plur1bus-adapter-ipc-", process.platform === "win32" ? tmpdir() : "/tmp");
+    // Off Linux the owner claim port derives from the path; a port the host
+    // reserves (Windows excluded ranges: listen EACCES) re-rolls the directory.
+    const stateRoot = await makeClaimableStateRoot("plur1bus-adapter-ipc-", process.platform === "win32" ? tmpdir() : "/tmp");
     const calls = [];
     const embeddings = {
       model: "intfloat/multilingual-e5-small",

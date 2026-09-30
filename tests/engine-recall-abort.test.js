@@ -15,7 +15,16 @@ const aborted = () => SCENARIOS.find((s) => s.name === "recall-aborted");
 
 describe("recall abort", () => {
   it("scheduler-timeout path: the adapter's own signal fires and resolves with degraded.reason=timeout (scheduler owns the budget, fix round 1)", async () => {
-    const scenario = { ...aborted(), config: { ...aborted().config, runtime: { recallTimeoutMs: 100 } } };
+    // Windows round 4: the budget was 100 ms with "embedder reached" and
+    // "recall < 150 ms" asserted on top. Both are wall-clock races on a
+    // loaded runner (the pre-embedding path can outlast 100 ms, and the
+    // caller-abort sibling measured 135 of 150 ms on an idle Linux box). A
+    // 1 s budget still lands inside the hanging embedder on any runner; that
+    // the scheduler's own timer ended the recall is proved by the reason
+    // ("timeout", not "aborted": the adapter's signal fires only 250 ms
+    // later) and by the recall not ending before the budget elapsed.
+    const recallTimeoutMs = 1_000;
+    const scenario = { ...aborted(), config: { ...aborted().config, runtime: { recallTimeoutMs } } };
     const events = [];
     const embedder = { calls: 0, abortedAt: null };
     let recallMs = null;
@@ -26,7 +35,8 @@ describe("recall abort", () => {
     });
     assert.ok(embedder.calls >= 1, "the embedder was reached");
     assert.ok(embedder.abortedAt !== null, "the embedder saw its signal abort");
-    assert.ok(recallMs < 150, `recall took ${recallMs} ms`);
+    // Node timers may fire up to ~1 ms early; the recall cannot end sooner than that.
+    assert.ok(recallMs >= recallTimeoutMs - 2, `recall ended after ${recallMs} ms, before the ${recallTimeoutMs} ms budget`);
     const degraded = events.find((e) => e.name === "recall.degraded");
     assert.ok(degraded, "recall.degraded emitted");
     // Fix round 1 (controller ruling): register-recall-hook's own signal now
@@ -45,30 +55,47 @@ describe("recall abort", () => {
     // Unlike the scheduler-timeout test above, recallTimeoutMs is large (10s)
     // so the scheduler's own internal timer cannot fire first: only the
     // caller's own AbortController — driven through the real
-    // assembler/scheduler/pipeline via runScenario's `abortAfterMs` option —
+    // assembler/scheduler/pipeline via runScenario's `callerSignal` option —
     // can produce this result. This is the end-to-end proof success criterion
     // 3 asks for; the mocked-runRecall test below stays as a fast, fully
     // deterministic pin of the same outer-exit mapping.
     //
-    // fix round 3: `abortAfterMs` (not a `setTimeout` armed here, before
-    // runScenario's own setup — temp dirs, fixture writes, plugin.register —
-    // which could itself eat 30-100+ ms and land the abort at an
-    // unpredictable point) arms its timer immediately before the one
-    // `hook(...)` call, so the 100 ms is measured from the start of the
-    // actual recall.
+    // History: fix round 3 armed the abort with `abortAfterMs: 100` right
+    // before the hook. Windows round 4 fires it from inside the hanging
+    // embedder instead (a microtask after its first call, i.e. after it
+    // registered its abort listener), so it always lands mid-embedding
+    // however long the pre-embedding path takes on a loaded runner; "recall < 150 ms" (135 ms measured on an idle Linux box)
+    // is replaced by: the recall.degraded event follows the embedder's abort
+    // within 5 s, half the scheduler's 10 s budget, so only the caller's abort
+    // can have ended it (the reason "aborted" says the same). The ceiling is
+    // only reached on failure.
     const scenario = { ...aborted(), config: { ...aborted().config, runtime: { recallTimeoutMs: 10_000 } } };
     const events = [];
-    const embedder = { calls: 0, abortedAt: null };
-    let recallMs = null;
+    const controller = new AbortController();
+    let calls = 0;
+    const embedder = {
+      abortedAt: null,
+      get calls() { return calls; },
+      set calls(value) {
+        calls = value;
+        if (calls === 1) queueMicrotask(() => controller.abort());
+      },
+    };
+    let degradedAt = null;
     const prefix = await runScenario(scenario, {
-      hostEvents: { emit: (name, payload) => events.push({ name, payload }) },
+      hostEvents: {
+        emit: (name, payload) => {
+          if (name === "recall.degraded") degradedAt = performance.now();
+          events.push({ name, payload });
+        },
+      },
       embedderProbe: embedder,
-      onTiming: (t) => { recallMs = t.recallMs; },
-      abortAfterMs: 100,
+      callerSignal: controller.signal,
     });
     assert.ok(embedder.calls >= 1, "the embedder was reached");
     assert.ok(embedder.abortedAt !== null, "the embedder saw its signal abort");
-    assert.ok(recallMs < 150, `recall took ${recallMs} ms`);
+    assert.ok(degradedAt !== null && degradedAt >= embedder.abortedAt, "recall.degraded follows the embedder's abort");
+    assert.ok(degradedAt - embedder.abortedAt < 5_000, `recall.degraded came ${degradedAt - embedder.abortedAt} ms after the abort`);
     const degraded = events.find((e) => e.name === "recall.degraded");
     assert.ok(degraded, "recall.degraded emitted");
     assert.equal(degraded.payload.degraded.reason, "aborted");

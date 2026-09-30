@@ -50,16 +50,28 @@ function writeStub(dir, relPath) {
 }
 
 // Run a script and return { status, stdout, stderr }
-function runScript(scriptPath, args = [], env = {}) {
+function runScript(scriptPath, args = [], env = {}, { timeoutMs = 30_000 } = {}) {
   // os.homedir() reads USERPROFILE on win32: mirror a HOME override there.
   const home = env.HOME !== undefined && env.USERPROFILE === undefined ? { USERPROFILE: env.HOME } : {};
   const r = spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: "utf8",
     env: { ...process.env, ...env, ...home },
-    timeout: 30000,
+    timeout: timeoutMs,
   });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  const killed = r.error?.code === "ETIMEDOUT"
+    ? `\n[spawn ETIMEDOUT after the ${timeoutMs} ms limit; signal ${r.signal}]`
+    : "";
+  return { status: r.status, stdout: r.stdout ?? "", stderr: `${r.stderr ?? ""}${killed}` };
 }
+
+// Repairing every DEPLOY_FILES stub is slow, not hung: validateDeployment
+// re-hashes the whole source snapshot before and after each file it copies
+// (sourceSnapshotMatches, a TOCTOU guard), i.e. about 2 x 400 x 400 sha256
+// reads for the ~400 stubs below. Measured: ~17 s on Linux, 13-28.5 s on
+// windows-2025 and past the old 30 s spawn limit on windows-11-arm (tc6: the
+// child was killed, status null, after 30.8 s). 180 s leaves room for the
+// slowest runner; a real hang still fails, with the timeout named.
+const FULL_REPAIR_TIMEOUT_MS = 180_000;
 
 async function captureConsoleLog(fn) {
   const originalLog = console.log;
@@ -196,7 +208,7 @@ describe("repair-installed-plugin — backup before repair", () => {
     const result = runScript(REPAIR_SCRIPT, ["--deploy-dir", deployDir, "--no-smoke"], {
       // Override home so backups land in our temp dir
       HOME: dir,
-    });
+    }, { timeoutMs: FULL_REPAIR_TIMEOUT_MS });
 
     // Script should succeed (repaired = exit 0) or warn (exit 3)
     assert.ok(result.status === 0 || result.status === 3, `unexpected exit ${result.status}\n${result.stderr}`);

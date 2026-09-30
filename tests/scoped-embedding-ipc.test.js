@@ -23,6 +23,7 @@ import {
   resolveScopedEmbeddingOwnerClaimAddress,
 } from "../lib/providers/scoped-embedding-ipc.js";
 import { ipcAddress, readDirectoryAcl } from "../lib/platform.js";
+import { makeClaimableStateRoot } from "./helpers/claimable-state-root.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
@@ -92,17 +93,19 @@ function fixtureEmbeddings() {
   };
 }
 
-function createStateRoot(prefix) {
+async function createStateRoot(prefix) {
   // macOS limits filesystem Unix socket names to 103 bytes.  Its default
   // per-user temporary directory is longer than that before this test adds
   // the private IPC path, while /tmp keeps this fixture portable.
   // win32 has neither /tmp nor socket files (the owner listens on a named pipe).
-  return makeTempDir(prefix, WIN32 ? tmpdir() : "/tmp");
+  // Off Linux the owner claim port derives from the path; a port the host
+  // reserves (Windows excluded ranges: listen EACCES) re-rolls the directory.
+  return makeClaimableStateRoot(prefix, WIN32 ? tmpdir() : "/tmp");
 }
 
 describe("scoped embedding through activation-owned Unix IPC", () => {
   it("keeps token and socket paths confined to the private IPC directory", async () => {
-    const stateRoot = createStateRoot("plur1bus-ipc-containment-");
+    const stateRoot = await createStateRoot("plur1bus-ipc-containment-");
     try {
       const paths = resolveScopedEmbeddingIpcPaths(stateRoot);
       const sibling = join(stateRoot, "must-not-touch");
@@ -255,7 +258,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   it("a win32 legacy owner without its nonce does not start and says why; a client fails closed too (EW-R1)", async () => {
     // Driven with platform "win32" on any host: the nonce is read before any
     // listener or token exists, so nothing binds here.
-    const stateRoot = createStateRoot("plur1bus-ipc-nonce-owner-");
+    const stateRoot = await createStateRoot("plur1bus-ipc-nonce-owner-");
     const paths = resolveScopedEmbeddingIpcPaths(stateRoot);
     const nonceFile = join(paths.directory, OWNER_PIPE_NONCE_FILE);
     const server = createScopedEmbeddingIpcServer({ stateRoot, embeddings: fixtureEmbeddings(), fingerprintId: ACTIVE_FINGERPRINT_ID, platform: "win32" });
@@ -279,7 +282,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   it("diagnoses an oversized macOS data socket path before creating IPC children", {
     skip: process.platform !== "darwin" && "macOS-only socket path length limit (sun_path 104)",
   }, async () => {
-    const parent = createStateRoot("plur1bus-scoped-embedding-path-");
+    const parent = await createStateRoot("plur1bus-scoped-embedding-path-");
     const stateRoot = join(parent, "x".repeat(100));
     try {
       assert.throws(
@@ -294,7 +297,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("routes query, passage, and batch work to the full-runtime provider", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-");
     const calls = [];
     const embeddings = {
       model: "intfloat/multilingual-e5-small",
@@ -340,7 +343,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("carries a memory-only persist: false across the IPC call and omits it otherwise (E5 R26)", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-memonly-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-memonly-");
     const calls = [];
     const embeddings = {
       model: "intfloat/multilingual-e5-small",
@@ -377,7 +380,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("fails closed before transport for invalid inputs or an absent owner service", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-absent-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-absent-");
     const provider = new IpcScopedEmbeddingProvider({
       stateRoot,
       model: "fixture/e5",
@@ -395,7 +398,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("binds a discovery provider prepared before the first activated owner", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-cold-prepare-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-cold-prepare-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -429,7 +432,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("binds a replacement discovery provider only to the next activated owner epoch", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-reload-prepare-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-reload-prepare-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -472,7 +475,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("rotates private authentication on restart and never rebinds a stale scoped provider", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-restart-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-restart-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -515,7 +518,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("binds an unused scoped provider to the owner epoch present at construction", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-unused-epoch-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-unused-epoch-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -550,7 +553,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("binds IPC requests to the complete immutable embedding fingerprint", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-fingerprint-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-fingerprint-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -581,7 +584,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("fails closed when a scoped registry requests a different model identity", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-identity-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-identity-");
     const embeddings = {
       model: "fixture/active-e5",
       dimensions: () => 2,
@@ -611,7 +614,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("refuses a second owner without unlinking the active owner's socket or token", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-owner-collision-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-owner-collision-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -642,7 +645,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("refuses a live cross-process owner and recovers after its crash", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-owner-crash-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-owner-crash-");
     const child = await startOwnerInChild(stateRoot);
     const contender = createScopedEmbeddingIpcServer({
       stateRoot,
@@ -681,7 +684,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   // On win32 there is no stale socket file to plant; the concurrent election
   // itself (claim port, then the nonce pipe) is still asserted there.
   it("atomically elects one owner when two starts recover the same stale socket", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-owner-race-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-owner-race-");
     const paths = resolveScopedEmbeddingIpcPaths(stateRoot);
     const embeddings = {
       model: "fixture/e5",
@@ -714,7 +717,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("closes an incomplete unauthenticated connection during owner shutdown", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-incomplete-frame-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-incomplete-frame-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -747,7 +750,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
   });
 
   it("bounds the unauthenticated request-frame window", async () => {
-    const stateRoot = createStateRoot("plur1bus-scoped-embedding-frame-timeout-");
+    const stateRoot = await createStateRoot("plur1bus-scoped-embedding-frame-timeout-");
     const embeddings = {
       model: "fixture/e5",
       dimensions: () => 1,
@@ -881,7 +884,8 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("opens no claim listener when claim is false", async () => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    // The probe binds the claim port itself: a host-reserved port re-rolls.
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const address = explicitUnixAddress();
     const server = createScopedEmbeddingIpcServer({
       stateRoot,
@@ -1001,7 +1005,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("refuses an unclaimed owner beside a live claimed legacy owner of the same stateRoot", async () => {
-    const stateRoot = createStateRoot("e3-ipc-legacy-");
+    const stateRoot = await createStateRoot("e3-ipc-legacy-");
     const address = explicitUnixAddress();
     const legacy = createScopedEmbeddingIpcServer({
       stateRoot,
@@ -1036,7 +1040,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("refuses an unclaimed owner while a claimed legacy owner of the same stateRoot runs in another process", async () => {
-    const stateRoot = createStateRoot("e3-ipc-xproc-");
+    const stateRoot = await createStateRoot("e3-ipc-xproc-");
     const address = explicitUnixAddress();
     const tokenPath = resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath;
     let child = null;
@@ -1068,7 +1072,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   it("does not delete a token file another owner replaced, on either path", async () => {
     const foreignToken = `${"c".repeat(64)}\n`;
     for (const explicit of [true, false]) {
-      const stateRoot = createStateRoot("e3-ipc-foreign-token-");
+      const stateRoot = await createStateRoot("e3-ipc-foreign-token-");
       const server = createScopedEmbeddingIpcServer({
         stateRoot,
         embeddings: e3Embeddings(),

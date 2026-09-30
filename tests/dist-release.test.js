@@ -100,6 +100,15 @@ describe("plugin release (HM1 Task 10)", () => {
     assert.match(stage, /p\.integrity/);
   });
 
+  it("ci.yml test-cross: the windows-2025 and macOS legs are required, only windows-11-arm is informational (Windows round 4)", () => {
+    const wf = parseYaml(readFileSync(join(REPO, ".github", "workflows", "ci.yml"), "utf8"));
+    const job = wf.jobs["test-cross"];
+    const legs = job.strategy.matrix.include.map((leg) => leg.os);
+    assert.deepEqual([...new Set(legs)].sort(), ["macos-15", "windows-11-arm", "windows-2025"]);
+    assert.equal(job["continue-on-error"], "${{ matrix.os == 'windows-11-arm' }}");
+    assert.equal(job.strategy["fail-fast"], false);
+  });
+
   it("every checkout in every workflow sets persist-credentials: false", () => {
     const dir = join(REPO, ".github", "workflows");
     const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f));
