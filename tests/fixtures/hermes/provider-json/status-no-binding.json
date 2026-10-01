@@ -1,0 +1,21 @@
+{
+  "schema": "plur1bus.hermes-status/1",
+  "hermesHome": "<hermes-home>",
+  "binding": null,
+  "bindingError": "missing",
+  "core": {
+    "reachable": false,
+    "rpc": null,
+    "contract": null,
+    "instanceId": null,
+    "error": "E_NO_BINDING"
+  },
+  "journal": {
+    "path": "<hermes-home>/plur1bus/journal.ndjson",
+    "queued": 0,
+    "dropped": 0,
+    "rejected": 0,
+    "lost": 0
+  },
+  "lastError": null
+}

@@ -1,0 +1,97 @@
+{
+  "schema": "plur1bus.harness-fixture-sources/1",
+  "description": "Byte copies of harness fixtures (PLUR1BUS-Harness, ruling F11/F12): the shared binding and Hermes-home vectors, the Task 5 provider JSON documents and the Task 1 Hermes CLI captures. tests/dist-hermes-install.test.js checks every file against the sha256 here, and against the harness file itself when PLUR1BUS_HARNESS_DIR points at a harness checkout; the harness release job byte-compares the vector files the other way. The provider tarball is the real output of `node scripts/build-hermes-provider.mjs` and is checked by its MANIFEST.json, not by this hash (T7 review).",
+  "harnessCommit": "c0140f8",
+  "files": {
+    "hermes/binding-vectors.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/binding-vectors.json",
+      "sha256": "90e79555a6fa5f304b7873d8dde1b7e3cc66dd54383fc38f627161b358afa882"
+    },
+    "hermes/hermes-home-vectors.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-home-vectors.json",
+      "sha256": "672de94ec5e2e27661b3809f31271f89af630c0dfb01cba85f97970f13fd5cb4"
+    },
+    "hermes/provider-json/bind-conflict.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/bind-conflict.json",
+      "sha256": "6725be9e0b445b6394aa13c9775a33380f3982ca25b29f57e13de69f1bb09c30"
+    },
+    "hermes/provider-json/bind-ok.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/bind-ok.json",
+      "sha256": "33cf9365d050c208c8b824febe3a3ecbb8a1ece3fabe89b8ae57810179ec441f"
+    },
+    "hermes/provider-json/binding.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/binding.json",
+      "sha256": "a4649d4748fd7fce78a524466afebcd4f7569b70aed0c02ff3f3c81e6831c43b"
+    },
+    "hermes/provider-json/bindings.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/bindings.json",
+      "sha256": "ae603f065953cbb85f7908faae5dab555da1fc9b243117c05433435c68f43f52"
+    },
+    "hermes/provider-json/selftest-fail.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/selftest-fail.json",
+      "sha256": "ca3ce8b4518c0ba4b28383a6c70bab2b1cd69c682e23a66ec023c7750cac88c0"
+    },
+    "hermes/provider-json/selftest-ok.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/selftest-ok.json",
+      "sha256": "b48c8aa99c56996b219786b64833a3e703622736b08e2f5db05cf767f6ce1d8a"
+    },
+    "hermes/provider-json/status-no-binding.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/status-no-binding.json",
+      "sha256": "a144fdc23821560e27581e2bca419c33ac4f73a9ddcf2f356ad481df1c740b8c"
+    },
+    "hermes/provider-json/status.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/provider-json/status.json",
+      "sha256": "317ce466cbaee64447ffb3b5b7591fefc718706dc6a3f71941f37206dff2b806"
+    },
+    "hermes-cli/config-get-provider-set.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/config-get-provider-set.txt",
+      "sha256": "f4392bd1d9c7e5116a6316d576a7553bd8d50440bbf1ede627851251ca060ef9"
+    },
+    "hermes-cli/config-get-provider-unset.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/config-get-provider-unset.txt",
+      "sha256": "8663f3e777dc0617618bb2273cd248390b16b9bd5315f1571ca807c563458cca"
+    },
+    "hermes-cli/config-set-ok.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/config-set-ok.txt",
+      "sha256": "86d1a08fdacf64bf6a4bd07063ad6ad60c0d065e68c9e3a0a1d2b2a7aa3f3154"
+    },
+    "hermes-cli/init-kwargs-cli.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/init-kwargs-cli.json",
+      "sha256": "e5f7bd7be842e434c4f0dddb899ab3d9a8716e90784fd42a14b567b58cafaa04"
+    },
+    "hermes-cli/init-kwargs-custom.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/init-kwargs-custom.json",
+      "sha256": "b76dc72fe405da8f169b07bb879fe130db0ecbb07c7e9b23f6135a3316bde403"
+    },
+    "hermes-cli/init-kwargs-profile.json": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/init-kwargs-profile.json",
+      "sha256": "b42296ff3831d9022596a0ce250589858c78f59a2b623f0bc3e141aac38cc476"
+    },
+    "hermes-cli/memory-status-plur1bus.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/memory-status-plur1bus.txt",
+      "sha256": "ac02e5bd11e5da611cfca101d1cf450be2f1c09f5dba86c11a61b8cdd586a4db"
+    },
+    "hermes-cli/memory-status-unavailable.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/memory-status-unavailable.txt",
+      "sha256": "b8ebbc364773452f0d58b6c4253e830f306bf5a575d76edd12766de6421de3f5"
+    },
+    "hermes-cli/plur1bus-help.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/plur1bus-help.txt",
+      "sha256": "bf406cdd782bd39671c459d3c2d9fa248aef3479cd425a036f6e00af409f1fea"
+    },
+    "hermes-cli/version-latest.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/version-latest.txt",
+      "sha256": "fa36cd16a8c882b05aa6c95760cfe462499e81ebd82e4ca3b063aa762db346da"
+    },
+    "hermes-cli/version-min.txt": {
+      "harnessPath": "hosts/hermes/tests/fixtures/hermes-cli/version-min.txt",
+      "sha256": "8a1e0485b7f1ce1f221ae9e8736e6682027101c45df196f758799af438a14178"
+    }
+  },
+  "providerTarball": {
+    "path": "hermes/plur1bus-hermes-provider-0.1.0.tar.gz",
+    "sha256": "de62210a0f2c5ce04b088abad25b4a5aa0aacdfa17f496c7767352ff4ee11806",
+    "manifestSha256": "9da0a8f13537117f110c851dfc4dc987c537890e2bd63a887e19712c61328407",
+    "builtBy": "node scripts/build-hermes-provider.mjs --out <dir> (harness c0140f8, Node 24.21.0; byte-identical to the 257f037 build)"
+  }
+}

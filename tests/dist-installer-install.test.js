@@ -272,6 +272,15 @@ describe("plugin installer: install", () => {
     // non-interactive never prompts
     const ni = await resolveLicence({ interactive: false, acceptNc: false, env: {}, prompt: async () => { throw new Error("no prompt"); } });
     assert.equal(ni.profile, "e5-multilingual-384");
+    // F2 / HM2-R18: the use class for the harness setup — commercial only when personal use is answered no
+    assert.equal(e5.useClass, "commercial");
+    assert.equal(e5b.useClass, "general");
+    assert.equal(ni.useClass, "general");
+    const acc = await resolveLicence({ interactive: false, acceptNc: true, env: { USER: "tester" }, prompt: null });
+    assert.deepEqual([acc.useClass, acc.acceptNonCommercialLicense], ["general", true]);
+    const own = [];
+    await resolveLicence({ interactive: true, acceptNc: false, env: {}, prompt: async (q) => (own.push(q), "y"), ncQuestion: "TEST own licence question? " });
+    assert.equal(own[1], "TEST own licence question? ");
   });
 
   it("--accept-nc-licence records who, when, model, revision and licence", async () => {
@@ -350,13 +359,16 @@ describe("plugin installer: install", () => {
     assert.ok(!ids(join(root, "link", "other", "store")).includes("store-inside-harness-home"));
   });
 
-  it("--host hermes exits 3 naming HM2", async () => {
+  it("--host hermes with a feed that carries no Hermes release exits 3 and runs nothing", async () => {
     const sb = createInstallerSandbox();
     const r = await run(sb, ["--host", "hermes", "--json"]);
     assert.equal(r.code, EXIT.INCOMPATIBLE, r.out);
-    assert.match(r.out, /HM2/);
-    assert.match(r.out, /host-not-yet-supported/);
+    assert.match(r.out, /no hermes release/);
     assert.deepEqual(sb.log(), []);
+    // Hermes-only flags do not apply to OpenClaw
+    const f = await run(createInstallerSandbox(), ["--replace-provider"]);
+    assert.equal(f.code, EXIT.FAILED, f.out);
+    assert.match(f.out, /--replace-provider does not apply to --host openclaw/);
   });
 
   // engine-windows:installer-foreign-target — cause (confirmed by Windows run tc3 and its Linux mirror, an injected

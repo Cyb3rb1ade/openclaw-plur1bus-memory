@@ -46,7 +46,17 @@
             "releases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/release" } }
           }
         },
-        "hermes": false
+        "hermes": {
+          "type": "object",
+          "description": "Hermes host mode (HM2, D87/D88). Semantic rules: `latest` equals releases[0].version; releases are sorted newest first by semver and versions are unique; minHermesVersion is not above testedHermesVersion. Saved HM1 installer bundles (7.17.x) reject a feed carrying this key; the bootstraps always run the bundle the feed names (ruling F38).",
+          "required": ["windowsNativeBeta", "latest", "releases"],
+          "additionalProperties": false,
+          "properties": {
+            "windowsNativeBeta": { "type": "boolean", "description": "While true the installer prints that Hermes on native Windows is in beta (Q7)." },
+            "latest": { "$ref": "#/$defs/version" },
+            "releases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/hermesRelease" } }
+          }
+        }
       }
     }
   },
@@ -97,15 +107,52 @@
         },
         "node": { "type": "string", "minLength": 1, "description": "package.json engines.node of the released tarball." },
         "security": { "type": "boolean", "description": "True when the release fixes a security issue." },
-        "notes": {
+        "notes": { "$ref": "#/$defs/notes" }
+      }
+    },
+    "notes": {
+      "type": "object",
+      "description": "Release notes (Markdown). German and English are required (D78); other languages may be added.",
+      "required": ["de", "en"],
+      "properties": {
+        "de": { "type": "string", "minLength": 1 },
+        "en": { "type": "string", "minLength": 1 }
+      }
+    },
+    "hermesRelease": {
+      "type": "object",
+      "description": "One Hermes host-mode release: the directory provider tarball and the pinned sidecar binaries of one harness release (scripts/dist/hermes-sidecar.lock.json; HM2-R17, HM2-R21, HM2-R22).",
+      "required": ["version", "provider", "sidecar", "minHermesVersion", "testedHermesVersion", "python", "security", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "provider": { "$ref": "#/$defs/artefact" },
+        "sidecar": {
           "type": "object",
-          "description": "Release notes (Markdown). German and English are required (D78); other languages may be added.",
-          "required": ["de", "en"],
+          "required": ["version", "binary"],
+          "additionalProperties": false,
           "properties": {
-            "de": { "type": "string", "minLength": 1 },
-            "en": { "type": "string", "minLength": 1 }
+            "version": { "$ref": "#/$defs/version" },
+            "binary": {
+              "type": "object",
+              "description": "All five targets (D8) are required.",
+              "required": ["linux-x64", "linux-arm64", "darwin-arm64", "win-x64", "win-arm64"],
+              "additionalProperties": false,
+              "properties": {
+                "linux-x64": { "$ref": "#/$defs/artefact" },
+                "linux-arm64": { "$ref": "#/$defs/artefact" },
+                "darwin-arm64": { "$ref": "#/$defs/artefact" },
+                "win-x64": { "$ref": "#/$defs/artefact" },
+                "win-arm64": { "$ref": "#/$defs/artefact" }
+              }
+            }
           }
-        }
+        },
+        "minHermesVersion": { "$ref": "#/$defs/version" },
+        "testedHermesVersion": { "$ref": "#/$defs/version" },
+        "python": { "type": "string", "minLength": 1, "description": "The provider's Python floor (PEP 440 specifiers); the ceiling is Hermes' own requires-python, read at detect time (HM2-R25)." },
+        "security": { "type": "boolean", "description": "True when the release fixes a security issue." },
+        "notes": { "$ref": "#/$defs/notes" }
       }
     }
   }

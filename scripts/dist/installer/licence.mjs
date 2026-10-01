@@ -6,6 +6,11 @@
  * gives E5-small (MIT). Non-interactive: E5-small unless `--accept-nc-licence`
  * or PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1 (C11). Never a silent acceptance:
  * an acceptance always carries who (OS user), when, model, revision and licence.
+ *
+ * `useClass` (ruling F2, HM2-R18) is the harness setup's `--use-class`: `commercial` when the
+ * personal-use question is answered no, else `general` (non-interactive, declined or accepted NC
+ * licence). The Hermes installer passes its own licence question (`ncQuestion`) because the harness
+ * sidecar, not this plugin, chooses the model.
  */
 
 import { userInfo } from "node:os";
@@ -38,24 +43,25 @@ function accept(env, now) {
   return {
     profile: JINA_V5_PROFILE_ID,
     acceptNonCommercialLicense: true,
+    useClass: "general",
     accepted: { by: osUser(env), at: new Date(now()).toISOString(), model: p.model, revision: p.revision, licence: NC_LICENCE },
   };
 }
 
-const E5 = () => ({ profile: E5_PROFILE_ID, acceptNonCommercialLicense: false });
+const E5 = (useClass = "general") => ({ profile: E5_PROFILE_ID, acceptNonCommercialLicense: false, useClass });
 
 /**
- * @param {{ interactive: boolean, acceptNc: boolean, env: Record<string,string|undefined>, prompt: ((q: string) => Promise<string>) | null, now?: () => number }} a
- * @returns {Promise<{ profile: string, acceptNonCommercialLicense: boolean, accepted?: { by: string, at: string, model: string, revision: string, licence: "CC-BY-NC-4.0" } }>}
+ * @param {{ interactive: boolean, acceptNc: boolean, env: Record<string,string|undefined>, prompt: ((q: string) => Promise<string>) | null, now?: () => number, ncQuestion?: string }} a
+ * @returns {Promise<{ profile: string, acceptNonCommercialLicense: boolean, useClass: "general"|"commercial", accepted?: { by: string, at: string, model: string, revision: string, licence: "CC-BY-NC-4.0" } }>}
  */
-export async function resolveLicence({ interactive, acceptNc, env, prompt, now = Date.now }) {
+export async function resolveLicence({ interactive, acceptNc, env, prompt, now = Date.now, ncQuestion }) {
   if (acceptNc || env.PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE === "1") return accept(env, now);
   if (!interactive || typeof prompt !== "function") return E5();
   const personal = await prompt("Is this installation for personal, non-commercial use? [y/N] ");
-  if (!yes(personal)) return E5();
+  if (!yes(personal)) return E5("commercial");
   const p = PROFILE_MODELS[JINA_V5_PROFILE_ID];
   const ok = await prompt(
-    `The recommended model ${p.model} (revision ${p.revision.slice(0, 12)}) is licensed ${NC_LICENCE} (non-commercial use only). Accept this licence? [y/N] `,
+    ncQuestion ?? `The recommended model ${p.model} (revision ${p.revision.slice(0, 12)}) is licensed ${NC_LICENCE} (non-commercial use only). Accept this licence? [y/N] `,
   );
   return yes(ok) ? accept(env, now) : E5();
 }

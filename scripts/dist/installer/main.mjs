@@ -20,6 +20,9 @@
  *
  * OpenClaw is only ever driven through ./openclaw-cli.mjs; nothing here opens
  * openclaw.json or prints a config value outside the allow-list.
+ *
+ * `--host hermes` (HM2 Task 8) loads `hosts.hermes` from the same signed feed (ruling F16:
+ * `loadFeed(host)`) and hands over to ./hermes/install.mjs.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, statfsSync, writeFileSync } from "node:fs";
@@ -42,6 +45,7 @@ import { keepArtefact, pruneArtefacts } from "./artefacts.mjs";
 import { fetchBytes, runUpdate } from "./update.mjs";
 import { runUninstall } from "./uninstall.mjs";
 import { runAdoptLegacy } from "./legacy.mjs";
+import { runHermesInstall } from "./hermes/install.mjs";
 import { READONLY_REMEDY, INVALID_CONFIG_REMEDY } from "./compat.mjs";
 
 export const DEFAULT_FEED_URL = "https://updates.plur1bus.app/plugin/stable.json";
@@ -57,9 +61,10 @@ const ALLOW_CONVERSATION = `plugins.entries.${PLUGIN_ID}.hooks.allowConversation
 
 export const USAGE = `Usage: node plur1bus-plugin-installer.mjs [options]
 
-Installs the PLUR1BUS memory plugin into OpenClaw (plugin id ${PLUGIN_ID}).
+Installs the PLUR1BUS memory plugin into OpenClaw (plugin id ${PLUGIN_ID}), or the PLUR1BUS
+memory provider and its local sidecar into Hermes (--host hermes).
 
-  --host openclaw|hermes     host to install into (default openclaw; hermes arrives with HM2)
+  --host openclaw|hermes     host to install into (default openclaw)
   --version <v>              plugin version (default: the feed's latest)
   --source clawhub|npm       install source (default: clawhub when the feed carries its ClawPack digest,
                              else the feed's GitHub-Release tarball, verified by SHA-256)
@@ -81,6 +86,12 @@ Installs the PLUR1BUS memory plugin into OpenClaw (plugin id ${PLUGIN_ID}).
   --profile <name>           OpenClaw profile (sets OPENCLAW_PROFILE for OpenClaw)
   --lang de|en               release-notes language (default from LANG, else en)
   -h, --help                 this help
+
+Hermes (--host hermes):
+  --hermes-profile <name>    install into this Hermes profile (<root>/profiles/<name>)
+  --hermes-home <dir>        install into this Hermes home (overrides HERMES_HOME and detection)
+  --replace-provider         replace another active memory provider (restored on rollback and uninstall)
+  --accept-nc-licence, --non-interactive, --rollback, --dry-run and --json apply as above
 
 Exit codes: 0 ok, 1 failed (rolled back or nothing changed), 2 needs a choice,
 3 incompatible host or environment, 4 verification failed and rollback failed.
@@ -109,7 +120,13 @@ const OPTIONS = {
   profile: { type: "string" },
   lang: { type: "string" },
   help: { type: "boolean", short: "h", default: false },
+  "hermes-profile": { type: "string" },
+  "hermes-home": { type: "string" },
+  "replace-provider": { type: "boolean", default: false },
 };
+
+const HERMES_ONLY = ["hermes-profile", "hermes-home", "replace-provider"];
+const OPENCLAW_ONLY = ["source", "offline", "state-dir", "profile", "download-models", "adopt-legacy"];
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
@@ -136,9 +153,10 @@ async function readUrl(url, { testMode, fetchImpl }) {
 
 /**
  * Load and validate the feed, verify its minisign signature (unless handed over
- * by the bootstrap as --feed-file), and pick the release.
+ * by the bootstrap as --feed-file), and pick the release of `host` (ruling F16: the
+ * two hosts' versions are independent; --version selects from hosts.<host>.releases).
  */
-async function loadFeed({ values, env, testMode, fetchImpl }) {
+export async function loadFeed({ values, env, testMode, fetchImpl, host = "openclaw" }) {
   let bytes;
   let origin;
   if (values["feed-file"]) {
@@ -168,9 +186,11 @@ async function loadFeed({ values, env, testMode, fetchImpl }) {
   const valid = validateFeed(feed, { allowFile: testMode });
   if (!valid.ok) throw new Stop(EXIT.FAILED, "feed", `feed is invalid: ${valid.errors.slice(0, 3).join("; ")}`);
   if (!values["feed-file"] && feed.channel !== channelOf(origin)) throw new Stop(EXIT.FAILED, "feed", `feed channel ${feed.channel} does not match ${origin}`);
-  const version = values.version ?? feed.hosts.openclaw.latest;
-  const release = feed.hosts.openclaw.releases.find((r) => r.version === version);
-  if (!release) throw new Stop(EXIT.FAILED, "feed", `version ${version} is not in the ${feed.channel} feed`);
+  const hostFeed = feed.hosts[host];
+  if (!hostFeed) throw new Stop(EXIT.INCOMPATIBLE, "feed", `the ${feed.channel} feed carries no ${host} release yet; nothing was changed`);
+  const version = values.version ?? hostFeed.latest;
+  const release = hostFeed.releases.find((r) => r.version === version);
+  if (!release) throw new Stop(EXIT.FAILED, "feed", `version ${version} is not in the ${feed.channel} feed${host === "openclaw" ? "" : ` for ${host}`}`);
   return { feed, release };
 }
 
@@ -260,8 +280,9 @@ async function install(ctx) {
   const { values, mode, report, env, platform, arch, glibcVersion, rosetta, run, fetchImpl, isTTY, prompt, statfs, now } = ctx;
 
   // ── host and flags ────────────────────────────────────────────────────────
-  if (values.host === "hermes") throw new Stop(EXIT.INCOMPATIBLE, "host", "host-not-yet-supported: Hermes host mode arrives with HM2; nothing was changed");
-  if (values.host !== "openclaw") throw new Stop(EXIT.FAILED, "args", `unknown --host ${JSON.stringify(values.host)} (openclaw|hermes)`);
+  if (values.host !== "openclaw" && values.host !== "hermes") throw new Stop(EXIT.FAILED, "args", `unknown --host ${JSON.stringify(values.host)} (openclaw|hermes)`);
+  const foreign = (values.host === "hermes" ? OPENCLAW_ONLY : HERMES_ONLY).filter((k) => values[k] !== undefined && values[k] !== false);
+  if (foreign.length) throw new Stop(EXIT.FAILED, "args", `${foreign.map((k) => `--${k}`).join(", ")} ${foreign.length === 1 ? "does" : "do"} not apply to --host ${values.host}`);
   if (values.source !== undefined && !["clawhub", "npm"].includes(values.source)) throw new Stop(EXIT.FAILED, "args", `unknown --source ${JSON.stringify(values.source)} (clawhub|npm)`);
   const lang = values.lang ?? (/^de([_.-]|$)/i.test(env.LC_ALL || env.LC_MESSAGES || env.LANG || "") ? "de" : "en");
   if (!["de", "en"].includes(lang)) throw new Stop(EXIT.FAILED, "args", `unknown --lang ${JSON.stringify(values.lang)} (de|en)`);
@@ -269,6 +290,14 @@ async function install(ctx) {
   if ([values.update, values.uninstall, values["adopt-legacy"]].filter(Boolean).length > 1) throw new Stop(EXIT.FAILED, "args", "--update, --uninstall and --adopt-legacy are exclusive");
   if (values.purge && !values.uninstall) throw new Stop(EXIT.FAILED, "args", "--purge only applies together with --uninstall");
   const testMode = env.PLUR1BUS_PLUGIN_INSTALLER_TEST === "1";
+
+  if (values.host === "hermes") {
+    if (mode !== "install") throw new Stop(EXIT.FAILED, "args", `--${mode} is not supported for --host hermes yet; nothing was changed`);
+    const { feed, release } = await loadFeed({ values, env, testMode, fetchImpl, host: "hermes" });
+    report.set("pluginVersion", release.version);
+    report.step("feed", "ok", `${feed.channel} feed, Hermes provider ${release.version}${values["feed-file"] ? " (verified by the bootstrap)" : " (signature verified)"}`);
+    return runHermesInstall({ ...ctx, flags: values, feed, release, testMode, lang });
+  }
 
   const childEnv = { ...env };
   if (values["state-dir"]) childEnv.OPENCLAW_STATE_DIR = resolve(values["state-dir"]);

@@ -1,0 +1,31 @@
+{
+  "schema": "plur1bus.hermes-selftest/1",
+  "ok": false,
+  "checks": [
+    {
+      "id": "binding",
+      "ok": false,
+      "detail": "missing; run `hermes plur1bus bind`"
+    },
+    {
+      "id": "connect",
+      "ok": false,
+      "detail": "not run"
+    },
+    {
+      "id": "core.status",
+      "ok": false,
+      "detail": "not run"
+    },
+    {
+      "id": "agent.status",
+      "ok": false,
+      "detail": "not run"
+    },
+    {
+      "id": "memory.recall",
+      "ok": false,
+      "detail": "not run"
+    }
+  ]
+}

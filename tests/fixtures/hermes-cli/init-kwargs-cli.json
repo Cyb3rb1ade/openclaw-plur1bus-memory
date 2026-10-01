@@ -1,0 +1,57 @@
+{
+  "schema": "plur1bus.hm2-spike.init-kwargs/1",
+  "captured_with": [
+    "Hermes 0.21.4 (743ee72, tag v2026.9.21 line)",
+    "Hermes 0.21.5 (tag v2026.9.24)"
+  ],
+  "identical_across_versions": true,
+  "os": "linux-x64 (Ubuntu 24.04, Python 3.11.15)",
+  "command": "hermes chat -q \"scratch probe: say ok\" -Q  (stdin </dev/null, model = local OpenAI-compatible stub)",
+  "provider": "hosts/hermes/tests/scratch_provider copied to <hermes-home>/plugins/scratch, memory.provider=scratch",
+  "redaction": "<home> = $HOME, <hermes-home> = a HERMES_HOME outside $HOME/.hermes, <session-id> = Hermes session id; callbacks shown as <method>",
+  "cases": [
+    {
+      "hermes_home": "<home>/.hermes",
+      "note": "HERMES_HOME=$HOME/.hermes (the standard default home)",
+      "initialize": {
+        "session_id": "<session-id>",
+        "kwargs": {
+          "agent_context": "primary",
+          "agent_identity": "default",
+          "agent_workspace": "hermes",
+          "hermes_home": "<home>/.hermes",
+          "platform": "cli",
+          "status_callback": "<method>",
+          "warning_callback": "<method>"
+        }
+      },
+      "hook_order": [
+        "register",
+        "is_available",
+        "get_tool_schemas",
+        "initialize",
+        "get_tool_schemas",
+        "system_prompt_block",
+        "on_turn_start",
+        "prefetch",
+        "sync_turn",
+        "queue_prefetch",
+        "on_session_end",
+        "shutdown"
+      ],
+      "hook_threads": {
+        "register": "MainThread",
+        "is_available": "MainThread",
+        "get_tool_schemas": "MainThread",
+        "initialize": "MainThread",
+        "system_prompt_block": "MainThread",
+        "on_turn_start": "MainThread",
+        "prefetch": "memory-prefetch-scratch",
+        "sync_turn": "mem-sync_0",
+        "queue_prefetch": "mem-sync_0",
+        "on_session_end": "MainThread",
+        "shutdown": "MainThread"
+      }
+    }
+  ]
+}
