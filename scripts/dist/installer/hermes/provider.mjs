@@ -89,7 +89,7 @@ export function removeStaging(hermesHome) {
  *   `previousDirName` lets the caller record where an existing directory will go before anything moves.
  * @returns {Promise<{ dir: string, previousDir: string|null, files: number }>}
  */
-export async function installProvider({ hermesHome, tarball, sha256 = null, version = null, now = Date.now, previousDirName = null }) {
+export async function installProvider({ hermesHome, tarball, sha256 = null, version = null, now = Date.now, previousDirName = null, onPoint = null }) {
   if (sha256) {
     const got = sha256Hex(readFileSync(tarball));
     if (got !== sha256) throw new Error(`SHA-256 of the provider tarball (${got.slice(0, 12)}…) does not match the feed (${sha256.slice(0, 12)}…)`);
@@ -106,9 +106,11 @@ export async function installProvider({ hermesHome, tarball, sha256 = null, vers
     const check = checkProviderDir(staged, { version });
     if (!check.ok) throw new Error(`the provider tarball fails its MANIFEST.json check: ${check.detail}`);
     const target = providerDir(hermesHome);
+    onPoint?.("provider.staged");
     if (existsSync(target)) {
       previousDir = previousDirName ?? previousProviderPath(hermesHome, now);
-      renameWithRetry(target, previousDir);
+      renameWithRetry(target, previousDir); // one atomic rename: the existing directory is never copied or deleted here
+      onPoint?.("provider.moved-aside");
     }
     try {
       renameWithRetry(staged, target);
@@ -123,11 +125,33 @@ export async function installProvider({ hermesHome, tarball, sha256 = null, vers
   }
 }
 
-/** Undo installProvider: remove ours, rename the previous directory back (R17a: only after memory.provider was restored). */
-export async function restoreProvider({ hermesHome, previousDir }) {
+/**
+ * Undo installProvider (R17a: only after memory.provider was restored). Only what this run created is removed:
+ *   * `preexisted` false: `plugins/plur1bus` (if any) is ours → removed;
+ *   * `preexisted` true and `previousDir` on disk: the existing directory was moved aside → ours (if any) is
+ *     removed and the previous one renamed back;
+ *   * `preexisted` true and `previousDir` not on disk: the move never happened (or was already undone), so
+ *     `plugins/plur1bus` is still the pre-existing directory → left as it is.
+ * `preexisted` defaults to `Boolean(previousDir)` (the install records `previousDir` only for an existing directory).
+ * @returns {"removed"|"restored"|"kept"}
+ */
+export async function restoreProvider({ hermesHome, previousDir, preexisted = Boolean(previousDir) }) {
   const target = providerDir(hermesHome);
-  rmTree(target);
-  if (previousDir && existsSync(previousDir) && statSync(previousDir).isDirectory()) renameWithRetry(previousDir, target);
+  if (!preexisted) {
+    rmTree(target);
+    return "removed";
+  }
+  if (previousDir && existsSync(previousDir) && statSync(previousDir).isDirectory()) {
+    rmTree(target);
+    renameWithRetry(previousDir, target);
+    return "restored";
+  }
+  return "kept";
+}
+
+/** True when `plugins/plur1bus` is this run's copy (resume: never replace a pre-existing directory that was not moved aside). */
+export function providerDirIsOurs({ preexisted, previousDir }) {
+  return !preexisted || Boolean(previousDir && existsSync(previousDir));
 }
 
 export function dropPreviousProvider(previousDir) {

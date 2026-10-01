@@ -30,7 +30,7 @@ const FIELDS = [
   "installedVersion", "previousProvider", "plur1busHome", "bin", "agentId", "sidecarFresh", "binFresh", "previousBin",
   "providerPrev", "agentCreated", "registryAdded", "bindingPrev", "configEdit", "useClass", "licence", "inProgress",
   // progress marks, set before each change (a killed run's rollback undoes exactly what they name)
-  "sidecarInstalled", "setupRan", "providerInstalled", "pluginsDirCreated", "bindingWritten",
+  "sidecarInstalled", "setupRan", "providerInstalled", "providerPreexisted", "pluginsDirCreated", "bindingWritten", "registryPending",
 ];
 
 export function hermesStatePath(hermesHome) {

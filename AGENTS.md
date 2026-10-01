@@ -236,7 +236,8 @@ node --test tests/*.test.js
 - The installer's test seams (`PLUR1BUS_PLUGIN_INSTALLER_TEST=1` with
   `PLUR1BUS_PLUGIN_FEED` `file://`, `PLUR1BUS_PLUGIN_PUBKEY`,
   `PLUR1BUS_PLUGIN_WSL_EXE`, `PLUR1BUS_PLUGIN_TEST_FREE_BYTES`,
-  `PLUR1BUS_SELFTEST_FORCE_FAIL`) exist for tests only. Installer tests never
+  `PLUR1BUS_SELFTEST_FORCE_FAIL`, and for `--host hermes` `PLUR1BUS_PLUGIN_TEST_NO_SERVICE`
+  and `PLUR1BUS_PLUGIN_TEST_KILL_AT=<point>`, which kills the installer at a named step) exist for tests only. Installer tests never
   touch a real OpenClaw: they use `openclaw`, `node` and `wsl.exe` shims in a
   temp home through `tests/helpers/installer-sandbox.js`, which throws if the
   `openclaw` on `PATH` is not its own shim. Real OpenClaw runs only in CI on

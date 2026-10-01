@@ -6,15 +6,16 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT } from "../scripts/dist/installer/report.mjs";
-import { resolveHermesHome, parseHermesVersion } from "../scripts/dist/installer/hermes/detect.mjs";
-import { classifyHome, foldProfile, otherBoundHomes, readBinding, readRegistry, registerBinding, registryAdd, BindingConflict } from "../scripts/dist/installer/hermes/binding.mjs";
+import { findHermesBin, resolveHermesHome, parseHermesVersion } from "../scripts/dist/installer/hermes/detect.mjs";
+import { classifyHome, foldCase, foldProfile, otherBoundHomes, REGISTRY_LOCK_FILE, samePath, withRegistryLock, readBinding, readRegistry, registerBinding, registryAdd, BindingConflict } from "../scripts/dist/installer/hermes/binding.mjs";
 import { ALLOWED_HERMES_CONFIG_KEYS, createHermesCli, parseMemoryStatus, readSelftestDoc } from "../scripts/dist/installer/hermes/hermes-cli.mjs";
-import { planProviderEdit, planProviderUndo, setProviderLine, undoProviderLine } from "../scripts/dist/installer/hermes/config-edit.mjs";
+import { checkConfigEditable, planProviderEdit, planProviderUndo, readProviderLine, setProviderLine, undoProviderLine } from "../scripts/dist/installer/hermes/config-edit.mjs";
 import { plur1busHome, sidecarBinPath } from "../scripts/dist/installer/hermes/sidecar.mjs";
 import { pep440Satisfies } from "../scripts/dist/installer/hermes/install.mjs";
 import { readHermesState } from "../scripts/dist/installer/hermes/state.mjs";
@@ -52,10 +53,10 @@ function freshCalls(sb, { useClass = "general", acceptNc = false, agentId = "her
 const calls = (sb) => sb.log().filter((e) => e.bin === "hermes" || e.bin === "plur1bus").map((e) => [e.bin, e.argv]);
 
 /** Run the installer in a child process, so the shim can kill it (Review Focus 5). */
-function runChild(sb, argv) {
+function runChild(sb, argv, { killAt } = {}) {
   const code = `import { runInstaller } from ${JSON.stringify(MAIN)};\nprocess.exitCode = await runInstaller(process.argv.slice(1));\n`;
   return spawnSync(process.execPath, ["--input-type=module", "-e", code, "--", "--host", "hermes", "--feed-file", sb.feedFile, ...argv], {
-    env: { ...sb.env, PLUR1BUS_PLUGIN_TEST_FREE_BYTES: String(64 * 1024 ** 3), PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT: "1" },
+    env: { ...sb.env, PLUR1BUS_PLUGIN_TEST_FREE_BYTES: String(64 * 1024 ** 3), PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT: "1", ...(killAt ? { PLUR1BUS_PLUGIN_TEST_KILL_AT: killAt } : {}) },
     encoding: "utf8",
     timeout: 120_000,
   });
@@ -243,6 +244,20 @@ describe("hermes installer: install", () => {
     assert.deepEqual(older.plur1busCalls().find((a) => a[3] === "setup").slice(7, 9), ["--use-class", "commercial"]);
   });
 
+  it("--accept-nc-licence against a kept use class says it is not applied; the dry run prints real values", async () => {
+    const sb = createHermesSandbox();
+    sb.seedHostSidecar({ version: "0.1.0", useClass: "commercial" });
+    const r = await run(sb, ["--accept-nc-licence", "--json"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.match(r.out, /--accept-nc-licence is not applied: the existing sidecar keeps its recorded use class commercial/);
+    assert.ok(!sb.plur1busCalls().find((a) => a[3] === "setup").includes("--accept-nc-licence"));
+
+    const d = await run(createHermesSandbox({ scenario: { hermesVersion: "0.21.4" } }), ["--dry-run"]);
+    assert.equal(d.code, EXIT.OK, d.out);
+    assert.match(d.out, /backed-up line edit \(Hermes below 0\.21\.5 or of unknown version\)/);
+    assert.ok(!d.out.includes("${"), "no unexpanded template text");
+  });
+
   it("a binary or tarball hash mismatch installs nothing", async () => {
     for (const which of ["provider", "binary"]) {
       const sb = createHermesSandbox();
@@ -277,6 +292,120 @@ describe("hermes installer: install", () => {
     assert.ok(p.includes("daemon stop") && p.includes("service uninstall"), p.join("\n"));
     assert.ok(p.indexOf("daemon stop") > p.indexOf("agent create hermes-default"));
     assertNothingInstalled(sb, before);
+  });
+
+
+  // F19 / Review Focus 5: every step and kill point, each followed by a resumed run and, separately, by --rollback.
+  // The Hermes home already holds a plugins/plur1bus (not ours) and ~/.local/bin a plur1bus binary (not ours):
+  // a rollback must leave both exactly as they were, a finished resume must leave no stray copy.
+  const KILL_POINTS = [
+    { point: "sidecar.planned", how: "seam", step: "sidecar" },
+    { point: "sidecar.moved-aside", how: "seam", step: "sidecar" },
+    { point: "setup.before", how: "seam", step: "setup" },
+    { point: "setup", how: "shim", step: "setup" },
+    { point: "agent create", how: "shim", step: "agent" },
+    { point: "provider.staged", how: "seam", step: "provider" },
+    { point: "provider.moved-aside", how: "seam", step: "provider" },
+    { point: "binding.before", how: "seam", step: "binding" },
+    { point: "config set", how: "shim", step: "activate" },
+    { point: "activate.line-planned", how: "seam", step: "activate", hermesVersion: "0.21.4" },
+  ];
+  const USER_PROVIDER = "# TEST ONLY: a plugins/plur1bus directory this installer did not create\n";
+  const USER_BIN = "#!/bin/sh\necho TEST ONLY: a plur1bus binary this installer did not install\n";
+
+  function killedSandbox({ point, how, hermesVersion = "0.21.5" }) {
+    const sb = createHermesSandbox({ scenario: { hermesVersion, ...(how === "shim" ? { killOn: point } : {}) } });
+    mkdirSync(join(sb.hermesHome, "plugins", "plur1bus"), { recursive: true });
+    writeFileSync(join(sb.hermesHome, "plugins", "plur1bus", "__init__.py"), USER_PROVIDER);
+    mkdirSync(dirname(sb.sidecarBin), { recursive: true });
+    writeFileSync(sb.sidecarBin, USER_BIN, { mode: 0o755 });
+    const before = treeDigest(sb.hermesHome);
+    const binBefore = sha256File(sb.sidecarBin);
+    const k = runChild(sb, [], how === "seam" ? { killAt: point } : {});
+    assert.notEqual(k.status, 0, `${point}: the installer was not killed\n${k.stdout}${k.stderr}`);
+    if (how === "shim") sb.setScenario({ killOn: null });
+    return { sb, before, binBefore };
+  }
+
+  for (const kp of KILL_POINTS) {
+    it(`killed at ${kp.point}: the next run finishes the install`, { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+      const { sb } = killedSandbox(kp);
+      assert.equal(readHermesState(sb.hermesHome).inProgress.step, kp.step);
+      const r = await run(sb, ["--json"]);
+      assert.equal(r.code, EXIT.OK, r.out);
+      assert.match(r.out, new RegExp(`interrupted install at step ${kp.step}; finishing it`));
+      assert.equal(readHermesState(sb.hermesHome).inProgress, undefined);
+      assert.equal(readHermesState(sb.hermesHome).sidecarFresh, true, "the first attempt's facts are carried");
+      assert.equal(sb.provider(), "plur1bus");
+      assert.equal(sha256File(sb.sidecarBin), sha256File(sb.binArtefact));
+      assert.deepEqual(strays(sb), []);
+      assert.equal(readFileSync(join(sb.hermesHome, "plugins", "plur1bus", "__init__.py"), "utf8") === USER_PROVIDER, false, "the release's provider is in place");
+    });
+
+    it(`killed at ${kp.point}: --rollback restores exactly what was there`, { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+      const { sb, before, binBefore } = killedSandbox(kp);
+      const r = await run(sb, ["--rollback", "--json"]);
+      assert.equal(r.code, EXIT.FAILED, r.out);
+      assert.equal(JSON.parse(r.stdout).steps.find((x) => x.id === "rollback").status, "ok", r.out);
+      assert.equal(readFileSync(join(sb.hermesHome, "plugins", "plur1bus", "__init__.py"), "utf8"), USER_PROVIDER, "the pre-existing provider directory is kept");
+      assert.equal(treeDigest(sb.hermesHome), before, "the Hermes home is as it was");
+      assert.equal(sha256File(sb.sidecarBin), binBefore, "the pre-existing binary is back");
+      assert.equal(existsSync(sb.plur1busHome), false, "the PLUR1BUS home this run created is gone");
+      assert.deepEqual(strays(sb), []);
+    });
+  }
+
+  it("a stale sidecarFresh rollback keeps a PLUR1BUS home another Hermes home is bound to by now (F4 class)", { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+    const sb = createHermesSandbox({ scenario: { killOn: "setup" } });
+    const k = runChild(sb, []);
+    assert.notEqual(k.status, 0);
+    sb.setScenario({ killOn: null });
+    assert.equal(readHermesState(sb.hermesHome).sidecarFresh, true);
+    // profile work installs against the home the killed run created
+    const work = join(sb.hermesRoot, "profiles", "work");
+    mkdirSync(work, { recursive: true });
+    writeFileSync(join(work, "config.yaml"), TEMPLATE_CONFIG);
+    assert.equal((await run(sb, ["--hermes-profile", "work"])).code, EXIT.OK);
+    const binBefore = sha256File(sb.sidecarBin);
+    const r = await run(sb, ["--rollback", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.match(r.out, /is kept: hermes-work/);
+    assert.equal(existsSync(join(sb.plur1busHome, "manifest.json")), true, "the shared home stays");
+    assert.equal(sha256File(sb.sidecarBin), binBefore, "the shared binary stays");
+    const reg = JSON.parse(readFileSync(join(sb.plur1busHome, "hosts", "hermes-bindings.json"), "utf8")).bindings;
+    assert.deepEqual(Object.keys(reg), ["hermes-work"], "only this home is unbound");
+    assert.equal(existsSync(join(sb.hermesHome, ".plur1bus-installer.json")), false);
+  });
+
+  it("an unreadable memory.provider during rollback keeps the provider directory and asks for the manual step (HM2-R17a)", { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+    const sb = createHermesSandbox();
+    const k = runChild(sb, [], { killAt: "binding.before" });
+    assert.notEqual(k.status, 0);
+    sb.setScenario({ configGetExit: 1 });
+    const r = await run(sb, ["--rollback", "--json"]);
+    assert.equal(r.code, EXIT.ROLLBACK_FAILED, r.out);
+    assert.ok(JSON.parse(r.stdout).manualSteps.some((m) => /could not be read/.test(m)), r.out);
+    assert.equal(existsSync(join(sb.hermesHome, "plugins", "plur1bus", "__init__.py")), true, "kept while memory.provider is unknown");
+    sb.setScenario({ configGetExit: 0 });
+    const again = await run(sb, []);
+    assert.equal(again.code, EXIT.FAILED, again.out);
+    assert.equal(existsSync(join(sb.hermesHome, "plugins", "plur1bus")), false);
+    assert.equal(existsSync(join(sb.hermesHome, ".plur1bus-installer.json")), false);
+  });
+
+  it("a resumed run re-checks the provider-in-use guard and records the provider active now", { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+    const sb = createHermesSandbox();
+    const k = runChild(sb, [], { killAt: "binding.before" });
+    assert.notEqual(k.status, 0);
+    // the user switched to another provider meanwhile
+    const cfg = join(sb.hermesHome, "config.yaml");
+    writeFileSync(cfg, readFileSync(cfg, "utf8").replace("memory:\n", "memory:\n  provider: honcho\n"));
+    const r = await run(sb, ["--json"]);
+    assert.equal(r.code, EXIT.NEEDS_CHOICE, r.out);
+    assert.match(r.out, /provider-in-use: memory.provider is honcho/);
+    const r2 = await run(sb, ["--replace-provider", "--json"]);
+    assert.equal(r2.code, EXIT.OK, r2.out);
+    assert.equal(readHermesState(sb.hermesHome).previousProvider, "honcho");
   });
 
   it("a killed install is completed or rolled back by the next run", { skip: process.platform === "win32" && "POSIX kill of the parent process" }, async () => {
@@ -675,6 +804,87 @@ describe("hermes installer: shared rules", () => {
     assert.equal(readFileSync(join(hh, "config.yaml"), "utf8"), "memory:\n  provider: plur1bus\n");
     undoProviderLine({ hermesHome: hh, undo, value: "plur1bus" });
     assert.equal(existsSync(join(hh, "config.yaml")), false);
+  });
+
+  it("the line edit keeps a BOM and each line's ending, writes through a symlink, and refuses sequences and nested values", () => {
+    // BOM before a first-line memory: is recognised (no second top-level memory:), and kept
+    const bom = planProviderEdit("\uFEFFmemory:\n  memory_enabled: true\n", "plur1bus");
+    assert.equal(bom.text, "\uFEFFmemory:\n  provider: plur1bus\n  memory_enabled: true\n");
+    assert.equal(planProviderUndo(bom.text, bom.undo, "plur1bus").text, "\uFEFFmemory:\n  memory_enabled: true\n");
+    assert.equal(planProviderEdit("\uFEFFa: 1\n", "plur1bus").text, "\uFEFFa: 1\nmemory:\n  provider: plur1bus\n");
+    // mixed endings stay mixed; the new line takes the memory: line's ending
+    const mixed = "a: 1\r\nmemory:\n  x: 1\r\nb: 2\n";
+    const m = planProviderEdit(mixed, "plur1bus");
+    assert.equal(m.text, "a: 1\r\nmemory:\n  provider: plur1bus\n  x: 1\r\nb: 2\n");
+    assert.equal(planProviderUndo(m.text, m.undo, "plur1bus").text, mixed);
+    const rmixed = "memory:\r\n  provider: honcho\nb: 2\r\n";
+    const rm = planProviderEdit(rmixed, "plur1bus");
+    assert.equal(rm.text, "memory:\r\n  provider: plur1bus\nb: 2\r\n");
+    assert.equal(planProviderUndo(rm.text, rm.undo, "plur1bus").text, rmixed);
+    // a memory: without a final newline
+    assert.equal(planProviderEdit("memory:", "plur1bus").text, "memory:\n  provider: plur1bus");
+    // unsafe shapes are refused (compat: exit 3 hermes-config-uneditable)
+    for (const bad of ["memory:\n- a\n", "memory:\n  - a\n", "memory:\n  provider:\n    name: x\n", "memory:\n  provider:\n  - x\n", "a: 1\n\uFEFFmemory:\n  x: 1\n"]) {
+      assert.equal(planProviderEdit(bad, "plur1bus").ok, false, JSON.stringify(bad));
+    }
+    assert.equal(planProviderEdit("memory:\n  provider:\n  other: 1\n", "plur1bus").ok, true, "an empty provider: before a sibling key is a scalar");
+    const hh = makeTempDir("hermes-config-");
+    writeFileSync(join(hh, "config.yaml"), "memory:\n- a\n");
+    assert.match(checkConfigEditable(hh).reason, /sequence/);
+    // a symlinked config.yaml: the target changes, the link stays a link, the backup sits beside the link
+    if (process.platform !== "win32") {
+      const home = makeTempDir("hermes-config-");
+      const dotfiles = makeTempDir("hermes-dotfiles-");
+      const target = join(dotfiles, "hermes.yaml");
+      writeFileSync(target, "memory:\n  provider: honcho\n", { mode: 0o640 });
+      symlinkSync(target, join(home, "config.yaml"));
+      const { undo, backup } = setProviderLine({ hermesHome: home, value: "plur1bus" });
+      assert.equal(lstatSync(join(home, "config.yaml")).isSymbolicLink(), true);
+      assert.equal(readFileSync(target, "utf8"), "memory:\n  provider: plur1bus\n");
+      assert.equal(statSync(target).mode & 0o777, 0o640, "mode kept");
+      assert.equal(dirname(backup), home);
+      assert.equal(readFileSync(backup, "utf8"), "memory:\n  provider: honcho\n");
+      assert.equal(readProviderLine(home), "plur1bus");
+      undoProviderLine({ hermesHome: home, undo, value: "plur1bus" });
+      assert.equal(lstatSync(join(home, "config.yaml")).isSymbolicLink(), true);
+      assert.equal(readFileSync(target, "utf8"), "memory:\n  provider: honcho\n");
+    }
+  });
+
+  it("Windows home comparison is Python casefold (\u00df, sigma, \u0130) and the registry lock is the provider's file", () => {
+    assert.equal(foldCase("STRA\u1E9EE stra\u00dfe"), "strasse strasse");
+    assert.equal(foldCase("\u039f\u0394\u039f\u03a3 \u03bf\u03b4\u03bf\u03c2"), "\u03bf\u03b4\u03bf\u03c3 \u03bf\u03b4\u03bf\u03c3");
+    assert.equal(foldCase("\u0130"), "i\u0307");
+    assert.equal(foldCase("\u0131"), "\u0131", "dotless i stays (casefold keeps it)");
+    assert.equal(samePath("C:/Users/STRASSE", "c:\\users\\stra\u00dfe", "win32"), true);
+    assert.equal(samePath("/u/STRASSE", "/u/strasse", "linux"), false);
+    // the lock: hosts/.hermes-bindings.lock (binding.py register_binding), O_EXCL, removed on release
+    assert.equal(REGISTRY_LOCK_FILE, ".hermes-bindings.lock");
+    const ph = makeTempDir("hermes-lock-");
+    const lock = join(ph, "hosts", REGISTRY_LOCK_FILE);
+    withRegistryLock(ph, () => {
+      assert.match(readFileSync(lock, "utf8"), new RegExp(`^${process.pid} `));
+      assert.throws(() => openSync(lock, "wx"), (e) => e.code === "EEXIST", "held exclusively");
+    });
+    assert.equal(existsSync(lock), false, "released");
+    // a lock left by a dead process of this host is stale; an old one (> 60 s) too
+    writeFileSync(lock, `999999999 ${hostname()} 0\n`);
+    utimesSync(lock, new Date(Date.now() - 5000), new Date(Date.now() - 5000));
+    assert.equal(withRegistryLock(ph, () => "ran"), "ran");
+    writeFileSync(lock, "");
+    utimesSync(lock, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    assert.equal(withRegistryLock(ph, () => "ran"), "ran");
+  });
+
+  it("with a custom HERMES_HOME the Windows launcher search also looks in %LOCALAPPDATA%\\hermes\\bin", () => {
+    const seen = [];
+    const hit = findHermesBin({
+      env: { LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local", USERPROFILE: "C:\\Users\\u" }, platform: "win32",
+      root: "D:\\hh", home: "D:\\hh", homedir: "C:\\Users\\u", which: () => null,
+      isExec: (p) => (seen.push(p), p === "C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.cmd"),
+    });
+    assert.equal(hit, "C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.cmd");
+    assert.deepEqual(seen.slice(0, 2), ["D:\\hh\\bin\\hermes.exe", "D:\\hh\\bin\\hermes.cmd"]);
   });
 
   it("the harness fixtures are byte copies (F11, F12)", () => {

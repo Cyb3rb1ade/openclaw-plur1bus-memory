@@ -15,7 +15,8 @@
  * sidecar does: `<plur1bus home>/manifest.json` and `config.json`.
  *
  * Scenario keys (`setScenario`): hermesVersion ("0.21.4" | "0.21.5" | "vgit"), python, killOn ("config set"
- * kills the installer after the change; honoured only with PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT=1),
+ * kills the installer after the change, as do "setup" and "agent create" in the plur1bus shim; honoured only
+ * with PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT=1), configGetExit (every `config get memory.provider` fails),
  * providerUnavailable, selftestFail, setupExit, setupWritesNoConfig, sidecarVersion, agentCreateExit,
  * configSetExit, configSetFailFor (fails `config set memory.provider <that value>` only). Nothing here touches a real Hermes, a real PLUR1BUS home or a service manager.
  */
@@ -116,6 +117,7 @@ if (args[0] === "--version") {
 }
 if (args[0] === "config" && args[1] === "get") {
   if (args[2] !== "memory.provider") { err("Config key not set: " + args[2] + "\n"); process.exit(1); }
+  if (scenario.configGetExit) { err("TEST ONLY config get failure\n"); process.exit(scenario.configGetExit); }
   const v = readProvider();
   out(args.includes("--json") ? JSON.stringify(v) + "\n" : v + "\n");
   process.exit(0);
@@ -172,6 +174,13 @@ function fail(code, message, exit = 1) {
   out({ schema: "error/1", error: { code, message } });
   process.exit(exit);
 }
+function killIfAsked(step) {
+  if (scenario.killOn === step && process.env.PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT === "1") {
+    appendFileSync(join(SANDBOX, "argv.log"), JSON.stringify({ bin: "kill", argv: [String(process.ppid)] }) + "\n");
+    process.kill(process.ppid, "SIGKILL");
+    process.exit(137);
+  }
+}
 if (args[0] === "--version") { process.stdout.write("plur1bus " + (scenario.sidecarVersion ?? "0.1.0") + "\n"); process.exit(0); }
 if (args[0] !== "--home" || args[2] !== "--json") fail("E_TEST", "shim: expected --home <dir> --json first", 2);
 const home = args[1];
@@ -192,6 +201,7 @@ if (rest[0] === "setup") {
   mkdirSync(join(home, "run"), { recursive: true });
   writeFileSync(manifestFile, JSON.stringify({ schemaVersion: 1, profile: "host", channel: "stable", binary: { version: scenario.sidecarVersion ?? "0.1.0", sha256: null }, modules: [], skills: [] }, null, 2));
   if (!scenario.setupWritesNoConfig) writeConfig({ ...(readConfig() ?? {}), embedding: { useClass }, agents: readConfig()?.agents ?? {} });
+  killIfAsked("setup");
   out({ schema: "setup/1", home, target: "test", steps: [{ id: "modules.bundled", status: "skipped", reason: "profile-host" }], manifest: manifestFile, check: { ok: true } });
   process.exit(0);
 }
@@ -206,6 +216,7 @@ if (rest[0] === "agent" && rest[1] === "create") {
   if (c.agents[rest[2]]) fail("E_INVALID_PARAMS", "agent " + rest[2] + " already exists");
   c.agents[rest[2]] = { createdAt: "2026-09-30T00:00:00Z" };
   writeConfig(c);
+  killIfAsked("agent create");
   out({ schema: "agent.create/1", agentId: rest[2], created: true, opened: true });
   process.exit(0);
 }

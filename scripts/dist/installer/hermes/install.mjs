@@ -39,17 +39,17 @@ import { fetchBytes } from "../update.mjs";
 import { sha256Hex } from "../untar.mjs";
 import { selftestForcedToFail } from "../verify.mjs";
 import {
-  agentIdFor, BindingConflict, bindingPath, checkBinding, INSTALLED_BY, makeBinding, readBinding, registerBinding, removeBinding, unregisterBinding, writeBinding,
+  agentIdFor, BindingConflict, bindingPath, checkBinding, INSTALLED_BY, makeBinding, otherBoundHomes, readBinding, registerBinding, removeBinding, unregisterBinding, writeBinding,
 } from "./binding.mjs";
-import { checkConfigEditable, setProviderLine, undoProviderLine } from "./config-edit.mjs";
+import { checkConfigEditable, readProviderLine, setProviderLine, undoProviderLine } from "./config-edit.mjs";
 import { detectHermes } from "./detect.mjs";
 import { BUILTIN_PROVIDER_VALUES, createHermesCli } from "./hermes-cli.mjs";
 import { createPlur1busCli, USE_CLASSES } from "./plur1bus-cli.mjs";
 import {
-  checkProviderDir, dropPreviousProvider, MAX_PROVIDER_BYTES, previousProviderPath, providerDir, PROVIDER_NAME, installProvider, removeStaging, restoreProvider,
+  checkProviderDir, dropPreviousProvider, MAX_PROVIDER_BYTES, previousProviderPath, providerDir, providerDirIsOurs, PROVIDER_NAME, installProvider, removeStaging, restoreProvider,
 } from "./provider.mjs";
 import { hermesStatePath, readHermesState, writeHermesState } from "./state.mjs";
-import { dropPreviousBin, installSidecar, plur1busHome, readSidecar, restoreSidecarBin, sidecarBinPath } from "./sidecar.mjs";
+import { binaryMatches, dropPreviousBin, removeStaleBinTemps, installSidecar, plur1busHome, readSidecar, restoreSidecarBin, sidecarBinPath } from "./sidecar.mjs";
 
 /** Node runtime + core payload of a host sidecar, one model later, and headroom. */
 export const HERMES_REQUIRED_FREE_BYTES = 1024 * 1024 * 1024;
@@ -66,7 +66,10 @@ export function hasPlaceholderHash(release) {
   return ZERO_SHA256.test(String(release?.provider?.sha256 ?? "")) || bins.some((b) => ZERO_SHA256.test(String(b?.sha256 ?? "")));
 }
 
-const builtin = (v) =>BUILTIN_PROVIDER_VALUES.includes(String(v ?? "").trim().toLowerCase());
+/** Whether plugins/plur1bus existed before this run (states before the explicit flag: providerPrev is set only then). */
+const providerPreexisted = (s) => (typeof s.providerPreexisted === "boolean" ? s.providerPreexisted : Boolean(s.providerPrev));
+
+const builtin = (v) => BUILTIN_PROVIDER_VALUES.includes(String(v ?? "").trim().toLowerCase());
 
 /** PEP 440 subset: comma-separated `>=`, `>`, `<=`, `<`, `==`, `!=` over numeric versions. null = cannot tell. */
 export function pep440Satisfies(version, spec) {
@@ -162,6 +165,7 @@ export async function runHermesInstall(ctx) {
       return report.finish(EXIT.OK);
     }
     removeStaging(hermesHome);
+    if (state.bin) removeStaleBinTemps(state.bin);
     if (flags.rollback || interrupted.step === "rollback-failed") {
       report.step("resume", "info", `interrupted install at step ${interrupted.step}; rolling it back${flags.rollback ? "" : " (re-run the installer afterwards to install again)"}`);
       return rollback({ ...ctx, hermes, hermesHome, s: state, reason: flags.rollback ? "rollback requested" : "finishing a failed rollback" });
@@ -234,7 +238,8 @@ export async function runHermesInstall(ctx) {
 
   // the value before any install; a resumed run carries the one its first attempt recorded
   const currentProvider = builtin(prev.value) ? null : prev.value.trim();
-  const previousProvider = resuming ? (state.previousProvider ?? null) : currentProvider;
+  // a resumed run keeps the value its first attempt recorded; a state written before that value existed reads it now
+  let previousProvider = resuming && Object.hasOwn(state, "previousProvider") ? state.previousProvider : currentProvider;
 
   // ── an existing plur1bus install → the update path (F17) ──────────────────
   const binding = readBinding(hermesHome);
@@ -251,7 +256,8 @@ export async function runHermesInstall(ctx) {
   }
 
   // ── another memory provider (Review Focus 5) ──────────────────────────────
-  if (currentProvider && currentProvider !== PROVIDER_NAME && !resuming) {
+  // a resumed run re-checks too: a provider switched to since the killed run is neither plur1bus nor the recorded one
+  if (currentProvider && currentProvider !== PROVIDER_NAME && (!resuming || currentProvider !== previousProvider)) {
     const interactive = ctx.isTTY && !flags["non-interactive"];
     let ok = flags["replace-provider"] === true;
     if (!ok && interactive && !flags["dry-run"]) {
@@ -260,6 +266,7 @@ export async function runHermesInstall(ctx) {
     }
     if (!ok && !flags["dry-run"]) throw new Stop(EXIT.NEEDS_CHOICE, "provider", `provider-in-use: memory.provider is ${currentProvider}; re-run with --replace-provider to replace it (it is restored on rollback and uninstall); nothing was changed`);
     report.step("provider-choice", ok ? "ok" : "planned", `${currentProvider} will be replaced by plur1bus${ok ? "" : " (needs --replace-provider)"}`);
+    if (resuming && ok) previousProvider = currentProvider; // restore what is active now, not the stale recorded value
   }
 
   // ── licence (HM2-R18, F2, F3) ─────────────────────────────────────────────
@@ -269,12 +276,16 @@ export async function runHermesInstall(ctx) {
     useClass = state.useClass;
     licence = state.licence ?? null;
     report.step("licence", "skipped", `use class ${useClass} recorded by the interrupted run`);
+    if (flags["accept-nc-licence"] && !licence?.acceptNonCommercialLicense) report.note(`Note: --accept-nc-licence is not applied: the interrupted run recorded use class ${useClass} without it; roll it back (--rollback) to choose again.`);
   } else if (hostSidecar && existsSync(bin)) {
     // F3: a host sidecar's recorded use class is kept, also when its binary is about to be updated
     const got = await createPlur1busCli({ bin, home, env, run, platform }).configGet("embedding.useClass");
     if (got.set && USE_CLASSES.includes(got.value)) {
       useClass = got.value;
       report.step("licence", "skipped", `the sidecar's recorded use class ${useClass} is kept`);
+      if (flags["accept-nc-licence"] || env.PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE === "1") {
+        report.note(`Note: --accept-nc-licence is not applied: the existing sidecar keeps its recorded use class ${useClass} and licence choice (\`plur1bus setup\` changes them).`);
+      }
     }
   }
   if (!useClass) {
@@ -299,7 +310,7 @@ export async function runHermesInstall(ctx) {
     report.step("setup", "planned", `plur1bus --home ${home} setup --profile host --non-interactive --use-class ${useClass}${acceptNc ? " --accept-nc-licence" : ""}`);
     report.step("agent", "planned", `agent ${agentId} bound to ${hermesHome}`);
     report.step("provider", "planned", `${release.provider.url} → ${providerDir(hermesHome)}`);
-    report.step("activate", "planned", `memory.provider = plur1bus (previously ${currentProvider ?? "built-in"})${lineEdit ? " by a backed-up line edit (Hermes below ${CONFIG_SET_SAFE_FROM} or of unknown version)" : ""}`);
+    report.step("activate", "planned", `memory.provider = plur1bus (previously ${currentProvider ?? "built-in"})${lineEdit ? ` by a backed-up line edit (Hermes below ${CONFIG_SET_SAFE_FROM} or of unknown version)` : ""}`);
     return report.finish(EXIT.OK);
   }
 
@@ -315,19 +326,31 @@ export async function runHermesInstall(ctx) {
 
     // s: everything the rollback needs; persisted before each change
     const s = resuming
-      ? { ...state, useClass, licence }
+      ? { ...state, useClass, licence, previousProvider }
       : { previousProvider, plur1busHome: home, bin, agentId, sidecarFresh: !homeExisted, useClass, licence };
     const save = (step) => writeHermesState(hermesHome, { ...s, inProgress: { op: "install", step, version: release.version } });
+    // TEST ONLY: PLUR1BUS_PLUGIN_TEST_KILL_AT=<point> kills the installer there, as a killed process (F19 tests)
+    const killAt = (point) => {
+      if (testMode && env.PLUR1BUS_PLUGIN_TEST_KILL_AT === point) process.kill(process.pid, "SIGKILL");
+    };
     const rb = (reason) => rollback({ ...ctx, hermes, hermesHome, s, reason });
 
     // ── sidecar binary ──────────────────────────────────────────────────────
     save("sidecar");
+    const binArt = release.sidecar.binary[target.target];
+    const ownCopyInPlace = Boolean(resuming && s.sidecarInstalled && binArt && binaryMatches({ bin, sha256: binArt.sha256 }));
     if (reuseSidecar) {
       report.step("sidecar", "skipped", `host sidecar ${hostSidecar.binaryVersion} at ${bin} is at least ${release.sidecar.version}`);
+    } else if (ownCopyInPlace) {
+      report.step("sidecar", "skipped", `${bin} already holds the release's binary (installed by the interrupted run)`);
     } else {
       try {
         await installSidecar({
           release, target: target.target, bin, fetchImpl: ctx.fetchImpl, testMode, now, platform,
+          // a resumed run: the binary there is ours when the first attempt created it or already moved the old one aside
+          ownBin: Boolean(resuming && s.sidecarInstalled && (s.binFresh || (s.previousBin && existsSync(s.previousBin)))),
+          previousBinName: s.previousBin ?? null,
+          onPoint: killAt,
           beforeChange: ({ fresh, previousBin }) => {
             if (!s.sidecarInstalled) Object.assign(s, { binFresh: fresh, previousBin });
             s.sidecarInstalled = true;
@@ -349,6 +372,7 @@ export async function runHermesInstall(ctx) {
     save("setup");
     const p1 = createPlur1busCli({ bin, home, env, run, platform });
     const noService = testMode && env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE === "1";
+    killAt("setup.before");
     const st = await p1.setup({ useClass, acceptNc, noService });
     s.setupRan = true;
     const after = readSidecar({ home });
@@ -372,10 +396,17 @@ export async function runHermesInstall(ctx) {
         return rb("agent");
       }
       s.agentCreated = true;
+      save("agent");
     }
     try {
+      if (!s.registryAdded) {
+        s.registryPending = true; // set before the write: a kill right after it still unregisters on rollback
+        save("agent");
+      }
       const reg = registerBinding(home, agentId, hermesHome, platform);
       if (reg.added) s.registryAdded = true;
+      else if (!s.registryAdded) delete s.registryPending; // the pair was there before this run
+      save("agent");
     } catch (err) {
       report.step("agent", "failed", err?.message ?? String(err));
       return rb("agent");
@@ -390,14 +421,17 @@ export async function runHermesInstall(ctx) {
       report.step("provider", "skipped", `${pdir} already holds provider ${release.version}`);
     } else {
       try {
-        if (resuming && s.providerInstalled) rmSync(pdir, { recursive: true, force: true }); // our own partial copy
         if (!s.providerInstalled) {
-          s.providerPrev = existsSync(pdir) ? previousProviderPath(hermesHome, now) : null;
+          // recorded before anything moves: did a plugins/plur1bus exist, and where will it go
+          s.providerPreexisted = existsSync(pdir);
+          s.providerPrev = s.providerPreexisted ? previousProviderPath(hermesHome, now) : null;
           s.pluginsDirCreated = !existsSync(dirname(pdir));
           s.providerInstalled = true;
           save("provider");
+        } else if (existsSync(pdir) && providerDirIsOurs({ preexisted: providerPreexisted(s), previousDir: s.providerPrev })) {
+          rmSync(pdir, { recursive: true, force: true }); // our own partial copy; a pre-existing directory not yet moved aside stays
         }
-        await installProvider({ hermesHome, tarball, sha256: release.provider.sha256, version: release.version, now, previousDirName: s.providerPrev ?? null });
+        await installProvider({ hermesHome, tarball, sha256: release.provider.sha256, version: release.version, now, previousDirName: s.providerPrev ?? null, onPoint: killAt });
       } catch (err) {
         report.step("provider", "failed", err?.message ?? String(err));
         return rb("provider");
@@ -413,6 +447,7 @@ export async function runHermesInstall(ctx) {
         s.bindingWritten = true;
         save("binding");
       }
+      killAt("binding.before");
       writeBinding(hermesHome, makeBinding({ home, bin, agentId, version: release.version }));
     } catch (err) {
       report.step("binding", "failed", err?.message ?? String(err));
@@ -430,6 +465,7 @@ export async function runHermesInstall(ctx) {
             onPlan: ({ backup, undo }) => {
               s.configEdit = { method: "line", backup, undo };
               save("activate");
+              killAt("activate.line-planned");
             },
           });
         } else if ((await hermes.configGet("memory.provider")).value !== PROVIDER_NAME) {
@@ -478,21 +514,38 @@ export async function runHermesInstall(ctx) {
 
 /**
  * Undo a failed or interrupted install from the recorded state `s` (HM2-R17a order). Exit 1, or 4 with manual steps.
+ * Only what this run created is removed: a pre-existing plugins/plur1bus that was never moved aside stays (F19), a
+ * memory.provider value that cannot be read keeps the provider directory (R17a), and a PLUR1BUS home this run
+ * created is kept when another Hermes home is bound to it by now (only this home is unbound, F4's class).
  */
 export async function rollback(ctx) {
   const { report, hermes, hermesHome, s, env, run, platform } = ctx;
   const manual = [];
   const done = [];
   const prev = s.previousProvider ?? null;
+  const prevName = prev ?? "built-in";
+  const restoreCmd = prev ? `hermes config set memory.provider ${prev}` : "hermes config unset memory.provider";
+
+  // the current value: Hermes' CLI, else (line-edit path) the line itself; null = unknown
+  const readCurrent = async () => {
+    let r = null;
+    try {
+      r = await hermes.configGet("memory.provider");
+    } catch {
+      r = null;
+    }
+    if (r?.ok) return r.value;
+    if (s.configEdit?.method === "line") return readProviderLine(hermesHome);
+    return null;
+  };
 
   // 1. memory.provider first, while our directory still exists (R17a)
-  let current = null;
-  try {
-    current = (await hermes.configGet("memory.provider")).value;
-  } catch {
-    current = null;
-  }
-  if (current === PROVIDER_NAME && prev !== PROVIDER_NAME) {
+  const current = await readCurrent();
+  let providerStillActive = false;
+  if (current === null) {
+    providerStillActive = true; // unknown: the directory memory.provider may still name is kept
+    manual.push(`check \`hermes config get memory.provider\` (it could not be read); if it is plur1bus: ${restoreCmd}`);
+  } else if (current === PROVIDER_NAME && prev !== PROVIDER_NAME) {
     try {
       if (s.configEdit?.method === "line") {
         undoProviderLine({ hermesHome, undo: s.configEdit.undo, value: PROVIDER_NAME });
@@ -501,22 +554,28 @@ export async function rollback(ctx) {
       } else {
         await hermes.configUnset("memory.provider");
       }
-      const again = (await hermes.configGet("memory.provider")).value;
-      if (again === PROVIDER_NAME) throw new Error("still plur1bus");
-      done.push(`memory.provider restored to ${prev ?? "built-in"}`);
+      const again = await readCurrent();
+      if (again === null || again === PROVIDER_NAME) throw new Error(again === null ? "cannot be read back" : "still plur1bus");
+      done.push(`memory.provider restored to ${prevName}`);
     } catch (err) {
-      manual.push(prev ? `hermes config set memory.provider ${prev}` : "hermes config unset memory.provider");
-      if (s.configEdit?.backup) manual.push(`(backup of the Hermes config: ${s.configEdit.backup})`);
+      providerStillActive = true;
+      manual.push(restoreCmd);
       void err;
     }
+    if (providerStillActive && s.configEdit?.backup) manual.push(`(backup of the Hermes config: ${s.configEdit.backup})`);
   }
-  const providerStillActive = manual.length > 0;
+  // the line edit's backup is this run's own file: once the value is back (or was never changed) it goes too
+  if (!providerStillActive && s.configEdit?.backup && existsSync(s.configEdit.backup)) {
+    rmSync(s.configEdit.backup, { force: true });
+    done.push("config backup removed");
+  }
 
-  // 2. the provider directory (never while memory.provider still names it)
+  // 2. the provider directory (never while memory.provider names it or may name it)
   removeStaging(hermesHome);
+  if (s.bin) removeStaleBinTemps(s.bin);
   if (s.providerInstalled && !providerStillActive) {
     try {
-      await restoreProvider({ hermesHome, previousDir: s.providerPrev ?? null });
+      const r = await restoreProvider({ hermesHome, previousDir: s.providerPrev ?? null, preexisted: providerPreexisted(s) });
       if (s.pluginsDirCreated) {
         try {
           rmdirSync(dirname(providerDir(hermesHome))); // only when still empty
@@ -524,12 +583,13 @@ export async function rollback(ctx) {
           // Hermes or the user put something there meanwhile: kept
         }
       }
-      done.push(s.providerPrev ? "previous provider directory restored" : "provider directory removed");
+      done.push(r === "restored" ? "previous provider directory restored" : r === "kept" ? "the pre-existing provider directory was left as it was" : "provider directory removed");
     } catch {
       manual.push(`remove ${providerDir(hermesHome)}${s.providerPrev ? ` and rename ${s.providerPrev} to ${providerDir(hermesHome)}` : ""}`);
     }
   } else if (s.providerInstalled) {
-    manual.push(`after restoring memory.provider: remove ${providerDir(hermesHome)}${s.providerPrev ? ` and rename ${s.providerPrev} back` : ""}`);
+    const ours = providerDirIsOurs({ preexisted: providerPreexisted(s), previousDir: s.providerPrev });
+    if (ours) manual.push(`after restoring memory.provider: remove ${providerDir(hermesHome)}${s.providerPrev && existsSync(s.providerPrev) ? ` and rename ${s.providerPrev} back` : ""}`);
   }
 
   // 3. the binding file
@@ -543,41 +603,59 @@ export async function rollback(ctx) {
     }
   }
 
-  // 4. the registry entry this run added
-  if (s.registryAdded && s.plur1busHome && !s.sidecarFresh) {
+  // 4. the PLUR1BUS home: is anyone else bound to it by now? (a stale sidecarFresh must not delete their store)
+  let others = [];
+  let othersUnknown = false;
+  if (s.plur1busHome && existsSync(s.plur1busHome)) {
     try {
-      unregisterBinding(s.plur1busHome, s.agentId, hermesHome, platform);
-      done.push("registry entry removed");
+      others = otherBoundHomes(s.plur1busHome, hermesHome, platform);
+    } catch (err) {
+      othersUnknown = true;
+      void err;
+    }
+  }
+  const keepSidecar = !s.sidecarFresh || others.length > 0 || othersUnknown;
+
+  // 5. this home's registry entry
+  if ((s.registryAdded || s.registryPending) && s.plur1busHome && existsSync(s.plur1busHome) && keepSidecar) {
+    try {
+      if (unregisterBinding(s.plur1busHome, s.agentId, hermesHome, platform)) done.push("registry entry removed");
     } catch {
       manual.push(`remove ${s.agentId} from ${join(s.plur1busHome, "hosts", "hermes-bindings.json")}`);
     }
   }
 
-  // 5. a sidecar this run created: service, binary, home
-  if (s.sidecarFresh && s.plur1busHome && s.bin && existsSync(s.bin) && existsSync(s.plur1busHome)) {
-    const p1 = createPlur1busCli({ bin: s.bin, home: s.plur1busHome, env, run, platform });
-    const ds = await p1.daemonStop();
-    const su = await p1.serviceUninstall();
-    if (!su.ok) manual.push(`plur1bus --home "${s.plur1busHome}" service uninstall`);
-    void ds;
-  }
-  if (s.sidecarFresh && s.plur1busHome && existsSync(s.plur1busHome)) {
-    try {
-      rmSync(s.plur1busHome, { recursive: true, force: true });
-      done.push(`sidecar home ${s.plur1busHome} removed`);
-    } catch {
-      manual.push(`remove ${s.plur1busHome}`);
+  // 6. a sidecar this run created: service, binary, home — only while nobody else uses it
+  if (s.sidecarFresh && keepSidecar) {
+    if (othersUnknown) manual.push(`check ${join(s.plur1busHome, "hosts", "hermes-bindings.json")} (unreadable); remove ${s.plur1busHome} and ${s.bin} only if no other Hermes home uses them`);
+    else if (others.length) report.note(`Note: the PLUR1BUS sidecar ${s.plur1busHome} this run created is kept: ${others.map((o) => `${o.agentId} (${o.home})`).join(", ")} ${others.length === 1 ? "is" : "are"} bound to it now.`);
+  } else if (s.sidecarFresh) {
+    if (s.plur1busHome && s.bin && existsSync(s.bin) && existsSync(s.plur1busHome)) {
+      const p1 = createPlur1busCli({ bin: s.bin, home: s.plur1busHome, env, run, platform });
+      await p1.daemonStop();
+      const su = await p1.serviceUninstall();
+      if (!su.ok) manual.push(`plur1bus --home "${s.plur1busHome}" service uninstall`);
+    }
+    if (s.plur1busHome && existsSync(s.plur1busHome)) {
+      try {
+        rmSync(s.plur1busHome, { recursive: true, force: true });
+        done.push(`sidecar home ${s.plur1busHome} removed`);
+      } catch {
+        manual.push(`remove ${s.plur1busHome}`);
+      }
     }
   }
-  if (s.sidecarInstalled && s.bin) {
+  if (s.sidecarInstalled && s.bin && !(s.sidecarFresh && keepSidecar && (others.length || othersUnknown))) {
     try {
       const r = restoreSidecarBin({ bin: s.bin, fresh: s.binFresh, previousBin: s.previousBin });
       if (r !== "kept") done.push(r === "restored" ? "previous sidecar binary restored" : "sidecar binary removed");
     } catch {
       manual.push(s.previousBin ? `rename ${s.previousBin} to ${s.bin}` : `remove ${s.bin}`);
     }
+  } else if (s.sidecarInstalled && s.previousBin && existsSync(s.previousBin)) {
+    report.note(`Note: the sidecar binary is kept for the other bound Hermes homes; the one it replaced is at ${s.previousBin}.`);
   }
-  if (s.agentCreated && !s.sidecarFresh) report.note(`Note: the agent ${s.agentId} stays registered in ${s.plur1busHome} (its data is kept); \`plur1bus agent remove ${s.agentId}\` removes it.`);
+  if (s.agentCreated && keepSidecar) report.note(`Note: the agent ${s.agentId} stays registered in ${s.plur1busHome} (its data is kept); \`plur1bus agent remove ${s.agentId}\` removes it.`);
 
   report.set("rollback", { reason: ctx.reason, done });
   if (manual.length) {

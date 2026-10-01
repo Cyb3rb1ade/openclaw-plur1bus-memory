@@ -14,7 +14,7 @@
  * `requires-python` comes from `<Install directory>/pyproject.toml` (HM2-R25).
  *
  * Launcher (fact sheet §j): `hermes` on PATH (`hermes.exe`, then `hermes.cmd` on Windows),
- * then `$HERMES_HOME/bin`, `%LOCALAPPDATA%\hermes\bin` (Windows) or `~/.local/bin` (POSIX).
+ * then `$HERMES_HOME/bin`, `<root>/bin` and `%LOCALAPPDATA%\hermes\bin` (Windows) or `~/.local/bin` (POSIX).
  */
 
 import { accessSync, constants as fsConstants, readFileSync, statSync } from "node:fs";
@@ -161,7 +161,7 @@ function isExecutable(p, platform) {
 }
 
 /** The hermes launcher, or null (fact sheet §j). */
-export function findHermesBin({ env, platform = process.platform, root, home, homedir, which }) {
+export function findHermesBin({ env, platform = process.platform, root, home, homedir, which, isExec = isExecutable }) {
   const P = pathFor(platform);
   const find = which ?? ((name) => whichOnPath(name, { env, platform }));
   const names = platform === "win32" ? ["hermes.exe", "hermes.cmd"] : ["hermes"];
@@ -169,13 +169,15 @@ export function findHermesBin({ env, platform = process.platform, root, home, ho
     const hit = find(n);
     if (hit) return hit;
   }
+  // Windows: the home's and root's bin, then %LOCALAPPDATA%\hermes\bin (install.ps1's place), also when a custom
+  // HERMES_HOME points elsewhere
   const dirs = platform === "win32"
-    ? [P.join(home, "bin"), P.join(root, "bin")]
+    ? [...new Set([P.join(home, "bin"), P.join(root, "bin"), P.join(defaultHermesRoot({ env, platform, homedir }), "bin")])]
     : [P.join(userHome(env, homedir, platform), ".local", "bin")];
   for (const d of dirs) {
     for (const n of names) {
       const p = P.join(d, n);
-      if (isExecutable(p, platform)) return p;
+      if (isExec(p, platform)) return p;
     }
   }
   return null;
