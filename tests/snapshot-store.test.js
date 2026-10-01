@@ -492,3 +492,36 @@ describe("snapshot-store CLI", () => {
     assert.equal(JSON.parse(missing.stdout).error.reason, "not-found");
   });
 });
+
+describe("store snapshot: a custom snapshotsDir (ruling F18)", () => {
+  it("create, list, compare, restore and prune use snapshotsDir, and a store inside it is refused", async () => {
+    const { root, stateDir, baseDbPath } = await makeState();
+    const snapshotsDir = join(root, "hermes-snapshots");
+    const opts = { stateDir, baseDbPath, snapshotsDir };
+    const a = await createSnapshot({ ...opts, label: "a", now: () => Date.UTC(2026, 8, 30, 10, 0, 0) });
+    assert.ok(a.dir.startsWith(snapshotsDir + sep), a.dir);
+    assert.equal(existsSync(join(stateDir, "memory", ".snapshots")), false, "the default dir is not used");
+    assert.deepEqual((await listSnapshots(opts)).map((s) => s.id), [a.id]);
+    assert.deepEqual(await listSnapshots({ stateDir }), []);
+    assert.equal((await compareStoreWithSnapshot({ ...opts, id: a.id })).unchanged, true);
+    await assert.rejects(compareStoreWithSnapshot({ stateDir, baseDbPath, id: a.id }), (e) => e instanceof SnapshotError && e.reason === "not-found");
+
+    writeFileSync(join(baseDbPath, "registry.json"), "{\"agents\":[\"changed\"]}\n");
+    assert.equal((await compareStoreWithSnapshot({ ...opts, id: a.id })).unchanged, false);
+    const restored = await restoreSnapshot({ ...opts, id: a.id });
+    assert.equal(readFileSync(join(baseDbPath, "registry.json"), "utf8"), "{\"agents\":[\"main\",\"work\"]}\n");
+    assert.ok(restored.preRestorePath);
+    rmSync(restored.preRestorePath, { recursive: true, force: true });
+
+    const b = await createSnapshot({ ...opts, label: "b", now: () => Date.UTC(2026, 8, 30, 11, 0, 0) });
+    assert.deepEqual(await pruneSnapshots({ ...opts, maxKeep: 1 }), [a.id]);
+    assert.deepEqual((await listSnapshots(opts)).map((s) => s.id), [b.id]);
+
+    // assertSafeBase checks the custom dir, too
+    const inside = join(snapshotsDir, "store");
+    mkdirSync(inside, { recursive: true });
+    await assert.rejects(createSnapshot({ stateDir, baseDbPath: inside, snapshotsDir }), (e) => e instanceof SnapshotError && e.reason === "unsafe-path");
+    await assert.rejects(restoreSnapshot({ stateDir, baseDbPath: inside, snapshotsDir, id: b.id }), (e) => e.reason === "unsafe-path");
+    await assert.rejects(createSnapshot({ stateDir, baseDbPath, snapshotsDir: join(baseDbPath, "snaps") }), (e) => e.reason === "unsafe-path");
+  });
+});
