@@ -12,7 +12,8 @@
  * downloads, both verified against the signed feed before anything changes → sidecar binary (skipped
  * when a host sidecar is at least the release's version) → `plur1bus setup --profile host` →
  * `agent create` + registry → provider directory → binding file → memory.provider (after the directory
- * exists, HM2-R17a; `hermes config set` from 0.21.5, a backed-up line edit on 0.21.4, HM2-R24) → verify
+ * exists, HM2-R17a; `hermes config set` only for a parsed version ≥ 0.21.5, else — 0.21.4 or an unknown
+ * version — a backed-up line edit, HM2-R24/R24a) → verify
  * (`hermes memory status` names plur1bus, `hermes plur1bus selftest` ok) → on any failure the rollback:
  * memory.provider back first, then the provider directory, the binding, the registry entry and — for a
  * sidecar this run created — daemon stop, service uninstall, binary and home; exit 1 (4 with manual
@@ -214,10 +215,11 @@ export async function runHermesInstall(ctx) {
     if (err instanceof BindingConflict) findings.push({ id: "agent-id-conflict", fatal: true, detail: `${err.message}: both fold to ${agentId}; use another profile name` });
     else findings.push({ id: "bindings-registry-invalid", fatal: true, detail: err.message });
   }
-  const lineEdit = det.version !== null && compareVersions(det.version, CONFIG_SET_SAFE_FROM) < 0;
+  // HM2-R24a: only a parsed version >= 0.21.5 may use `hermes config set`; an unknown one (vgit.<sha>) gets the line edit
+  const lineEdit = det.version === null || compareVersions(det.version, CONFIG_SET_SAFE_FROM) < 0;
   if (lineEdit && isDir(hermesHome)) {
     const c = checkConfigEditable(hermesHome);
-    if (!c.ok) findings.push({ id: "hermes-config-uneditable", fatal: true, detail: `Hermes ${det.version}'s \`config set\` would strip its config file, and the installer cannot edit memory.provider there safely: ${c.reason}; update Hermes (≥ ${CONFIG_SET_SAFE_FROM}) or fix the file, then re-run` });
+    if (!c.ok) findings.push({ id: "hermes-config-uneditable", fatal: true, detail: `Hermes ${det.version ?? "(unknown version)"}'s \`config set\` may strip its config file, and the installer cannot edit memory.provider there safely: ${c.reason}; update Hermes (≥ ${CONFIG_SET_SAFE_FROM}) or fix the file, then re-run` });
   }
   const prev = isDir(hermesHome) ? await hermes.configGet("memory.provider") : { ok: true, set: false, value: "" };
   if (!prev.ok) findings.push({ id: "hermes-config-unreadable", fatal: true, detail: `\`hermes config get memory.provider\` failed (exit ${prev.code}): ${prev.detail}` });
@@ -297,7 +299,7 @@ export async function runHermesInstall(ctx) {
     report.step("setup", "planned", `plur1bus --home ${home} setup --profile host --non-interactive --use-class ${useClass}${acceptNc ? " --accept-nc-licence" : ""}`);
     report.step("agent", "planned", `agent ${agentId} bound to ${hermesHome}`);
     report.step("provider", "planned", `${release.provider.url} → ${providerDir(hermesHome)}`);
-    report.step("activate", "planned", `memory.provider = plur1bus (previously ${currentProvider ?? "built-in"})${lineEdit ? " by a backed-up line edit (Hermes 0.21.4)" : ""}`);
+    report.step("activate", "planned", `memory.provider = plur1bus (previously ${currentProvider ?? "built-in"})${lineEdit ? " by a backed-up line edit (Hermes below ${CONFIG_SET_SAFE_FROM} or of unknown version)" : ""}`);
     return report.finish(EXIT.OK);
   }
 

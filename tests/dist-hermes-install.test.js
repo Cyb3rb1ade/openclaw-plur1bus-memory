@@ -527,7 +527,11 @@ describe("hermes installer: install", () => {
     const r = await run(v, ["--json"]);
     assert.equal(r.code, EXIT.OK, r.out);
     assert.match(r.out, /hermes-version-unknown/);
-    assert.deepEqual(mutating(v.hermesCalls()), [["config", "set", "memory.provider", "plur1bus"]], "an unreleased build is newer than 0.21.4: config set");
+    // HM2-R24a: an unknown version never gets `hermes config set`; the backed-up line edit activates the provider
+    assert.deepEqual(mutating(v.hermesCalls()), [], "no hermes config set for an unknown version");
+    assert.equal(readHermesState(v.hermesHome).configEdit.method, "line");
+    assert.equal(readdirSync(v.hermesHome).filter((n) => n.startsWith("config.yaml.plur1bus-bak-")).length, 1, "a backup is kept");
+    assert.match(readFileSync(join(v.hermesHome, "config.yaml"), "utf8"), /^ +provider: plur1bus\s*$/m);
 
     const py = createHermesSandbox({ scenario: { python: "3.14.1" } });
     const r2 = await run(py, []);
