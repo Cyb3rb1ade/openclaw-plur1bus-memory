@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.2] — 2026-10-01
+
+### Behoben
+
+- **Skill-Miner blockierte den Gateway minutenlang.** Das Clustering der Evidenz (`aggregateEvidence`) verglich jedes Paar von Erinnerungen, baute dabei je Paar zwei neue Mengen und prüfte beide Besitzertupel neu. Am 01.10.2026 stand der Gateway dadurch 121 s (Bernd, 2496 Erinnerungen) und 168 s (Bernhardine, 2662) still — dieselbe Stau-Klasse, die am Vortag die Agent-DB-Blockade auslöste. Jetzt werden Besitzertupel und Schlüsselwortzählungen einmal je Erinnerung vorberechnet, Kandidaten kommen aus einem invertierten Schlüsselwortindex desselben Besitzers, und Schnitt und Vereinigung werden über die Postings aufsummiert. Das Ergebnis ist identisch (geprüft gegen die alte Paarschleife auf Zufallsdaten und auf den echten Daten aller drei Agenten); auf Bernhardines 3732 Erinnerungen sinkt die Laufzeit von 82,7 s auf 1,8 s.
+
 ## [7.18.1] — 2026-10-01
 
 ### Behoben
