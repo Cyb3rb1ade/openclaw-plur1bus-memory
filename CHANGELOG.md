@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.1] — 2026-10-01
+
+### Behoben
+
+- **Feature-Crons wurden unter OpenClaw 2026.9.7 bei jedem Gateway-Start abgeschaltet.** Der Bootstrap prüft, ob OpenClaw native Command-Crons kann, und ruft dafür `openclaw plur1bus-feature-cron --help` auf. Unter 9.7 dauert das 38–42 s statt 11,6 s; das Limit von 30 s lief ab, und `afterthought` sowie `classify-recent` (Critical Push) wurden mit `[plur1bus:host-dispatch-unavailable]` deaktiviert. Das Limit liegt jetzt bei 120 s (`NATIVE_PROBE_TIMEOUT_MS`); der nächste Bootstrap holt die Jobs selbst zurück.
+
 ## [7.18.0] — 2026-10-01
 
 ### Hinzugefügt
