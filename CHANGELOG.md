@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.5] — 2026-10-02
+
+### Hinzugefügt
+
+- **Diagnose `runtime.traceRegistrations` (Standard aus).** OpenClaw 2026.9.7 lädt das Plugin nach einem Gateway-Start in Wellen mitten im Turn neu, jede Neuladung blockiert den Gateway 40–70 s (openclaw/openclaw#163029). Upstream braucht den Aufruf-Stack einer solchen Neuladung. Eingeschaltet schreibt jede Registrierung eine Warnung mit laufender Nummer je Prozess, Uptime, Abstand zur vorigen Registrierung und Aufruf-Stack ins Gateway-Log.
+
 ## [7.18.4] — 2026-10-02
 
 ### Behoben

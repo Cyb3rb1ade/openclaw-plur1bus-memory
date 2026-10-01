@@ -104,6 +104,7 @@ import {
   scanGatewayLog,
 } from "./lib/health-watch.js";
 import { createPostTurnDetacher } from "./lib/post-turn-detach.js";
+import { formatRegistrationTrace, recordRegistration } from "./lib/register-trace.js";
 import {
   createControlPlaneHealthInspector,
   createControlPlaneHealthScan,
@@ -6267,6 +6268,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     }
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
+    // 7.18.5: openclaw/openclaw#163029 — where mid-turn reloads come from.
+    const registrationTrace = formatRegistrationTrace(
+      recordRegistration({ enabled: cfg.runtime?.traceRegistrations === true }),
+    );
+    if (registrationTrace) api.logger.warn(registrationTrace);
 
     function resolveStoreScopeAccess(memoryCtx, rawScope) {
       const scope = MEMORY_SCOPES.includes(rawScope) ? rawScope : "agent-private";
