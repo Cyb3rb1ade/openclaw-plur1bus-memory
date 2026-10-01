@@ -5,6 +5,19 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.0] — 2026-10-01
+
+### Hinzugefügt
+
+- **Health-Überwachung im Dashboard.** Unter „Memory Health“ stehen zwei neue Karten mit eigenem Status:
+  - **LLM failures (24 h):** fehlgeschlagene Hintergrund-LLM-Aufrufe des Plugins, gezählt im Prozess, nach Feature, Agent und Fehlerkategorie. „Degraded“, sobald ein Feature dreimal auf dieselbe Art scheitert; Timeouts unter Last zählen nicht. Anlass: Bernhardines `dream-narrative` scheiterte tagelang mit `transport-failed`, ohne dass es jemand sah.
+  - **Gateway signals (24 h):** vier Signale aus dem OpenClaw-Gateway-Log — Agent-DB-Cleanup-Fehler („failed“, wenn jünger als 15 min: dann scheitert jeder Agent bis zum Neustart), hängende Ingress-Annahme, Turns ohne Antwort-Payload (`cause=completed`) und kritischer Speicherdruck.
+- Neuer Config-Block `healthWatch` (`gatewayLog`, `gatewayLogDir`). Ohne Angabe liest das Plugin das Verzeichnis von `logging.file`, sonst `/tmp/openclaw`.
+
+### Sicherheit
+
+- Ins Dashboard gelangen nur Zähler, Kategorien und Zeitpunkte — kein Log-Text, keine Fehlermeldung, kein Pfad. Gelesen wird nur das Ende der Logs von heute und gestern (max. 8 MiB je Datei), höchstens einmal pro Minute und nur beim Öffnen des Dashboards, über `resolveInside`.
+
 ## [7.17.1] — 2026-09-26
 
 ### Geändert

@@ -98,6 +98,12 @@ import {
 import { registerReembeddingRuntime } from "./lib/setup/reembedding-plugin-runtime.js";
 import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
 import {
+  createGatewayLogWatch,
+  createLlmFailureRecorder,
+  resolveGatewayLogFiles,
+  scanGatewayLog,
+} from "./lib/health-watch.js";
+import {
   createControlPlaneHealthInspector,
   createControlPlaneHealthScan,
 } from "./lib/control-plane-health.js";
@@ -4600,6 +4606,8 @@ const plugin = {
     });
     const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
     cfg = providerMigration.config;
+    // 7.18.0: Fehlgeschlagene LLM-Aufrufe der letzten 24 h fuer die Health-Ansicht.
+    const llmFailureRecorder = createLlmFailureRecorder();
     const llmResultCache = createLlmResultCache({
       enabled: cfg.runtime?.llmResultCacheEnabled !== false,
       ttlMs: cfg.runtime?.llmResultCacheTtlMs,
@@ -4655,6 +4663,7 @@ const plugin = {
         diagnosticsPath: cfg.llmRouter?.errorDiagnostics === true
           ? join(baseDbPath, "llm-router-errors.log")
           : "",
+        failureRecorder: llmFailureRecorder,
       });
       return isLlmRouteAvailable(route) ? route : null;
     };
@@ -9575,6 +9584,20 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           };
         })();
         if (typeof api.registerGatewayMethod === "function") {
+          // 7.18.0: Gateway-Log-Signale (verlorene Antworten, Agent-DB-Blockade,
+          // Ingress-Stau, Speicherdruck). Nur beim Oeffnen des Dashboards, max.
+          // einmal pro Minute, nur das Ende von heute/gestern.
+          const gatewayLogWatch = createGatewayLogWatch({
+            scan: () => {
+              const nowMs = Date.now();
+              const { dir, files } = resolveGatewayLogFiles({
+                gatewayLogDir: cfg.healthWatch?.gatewayLogDir,
+                loggingFile: api.config?.logging?.file,
+                nowMs,
+              });
+              return scanGatewayLog({ dir, files, nowMs, logger: api.logger });
+            },
+          });
           registerControlUiRuntime({
             api,
             write: controlUiWriteSurface,
@@ -9673,6 +9696,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 // The gc job runs from the main agent and reports on every agent.
                 gcReport: readGcReport(resolveAgentWorkspaceDir(api.config, "main")),
                 pressure: checkRuntimePressure(cfg.runtime || {}),
+                healthWatch: {
+                  llmFailures: llmFailureRecorder.snapshot(),
+                  logScan: cfg.healthWatch?.gatewayLog === false
+                    ? null
+                    : await gatewayLogWatch.snapshot().catch((err) => {
+                        safeDebug(api.logger, "health-watch", err, { component: "gateway-log" });
+                        return null;
+                      }),
+                },
                 // Saved-vs-running marker: the file may be ahead of this plugin instance.
                 fileConfig: readPluginConfigFile({ env: process.env }),
                 env: process.env,

@@ -425,6 +425,34 @@ Adapters, die Zeile zeigt „compacting…" und danach das Ergebnis. Angenommen
 werden nur Partitionen, die der Health-Scan selbst gelistet hat. Der naechste
 Health-Scan zeigt den neuen Speicherstand.
 
+## Health-Überwachung im Dashboard (7.18.0)
+
+Unter **Memory Health** zeigt der Reiter zwei Karten, die der LanceDB-Scan nicht sieht:
+
+- **LLM failures (24 h)** — fehlgeschlagene Hintergrund-LLM-Aufrufe des Plugins im Gateway-Prozess seit dem letzten Gateway-Start bzw. Plugin-Reload (höchstens 24 h; Feature-Crons, die als eigener Prozess laufen, zählen nicht), je Feature, Agent und Fehlerkategorie (`unavailable`, `denied`, `auth`, `timeout` …). Status `degraded`, sobald ein Feature dreimal auf dieselbe Art scheitert; `timeout` und `aborted` zählen dafür nicht, weil sie unter Last normal sind. Den Originaltext eines Fehlers zeigt die Karte nie; dafür gibt es `llmRouter.errorDiagnostics`.
+- **Gateway signals (24 h)** — gezählt aus dem OpenClaw-Gateway-Log:
+
+| Signal | Bedeutung | Status |
+|---|---|---|
+| Agent database cleanup failed | Eine Agent-DB-Ressource ließ sich nicht schließen; danach scheitert jeder Turn aller Agenten bis zum Neustart (openclaw#157325). | `failed`, wenn jünger als 15 min, sonst `degraded` |
+| Channel ingress adoption stalled | Eine eingehende Nachricht hing 300 s in der Annahme (openclaw#142116). | `degraded` |
+| Turn completed without a reply payload | Ein Turn endete ohne zustellbare Antwort (`cause=completed`); die `skipped:*`-Ursachen zählen nicht. | `degraded` |
+| Gateway memory pressure critical | OpenClaws eigene Speicherdiagnose meldet `level=critical` wegen der absoluten RSS-Schwelle (`reason=rss_threshold`). `reason=rss_growth` zählt nicht: Das feuert nach jedem Neustart beim Aufwärmen. | `degraded` |
+
+```json
+{
+  "healthWatch": {
+    "gatewayLog": true,
+    "gatewayLogDir": "/tmp/openclaw"
+  }
+}
+```
+
+- `gatewayLog` (Standard `true`): `false` schaltet das Lesen des Gateway-Logs ab; die Karte zeigt dann `unavailable`.
+- `gatewayLogDir`: Verzeichnis mit OpenClaws rollierenden `openclaw-YYYY-MM-DD.log`. Ohne Angabe das Verzeichnis von `logging.file`, sonst `/tmp/openclaw`. Ist `logging.file` eine feste Datei ohne Datum, wird genau diese gelesen.
+
+Gelesen wird nur das Ende der Logs von heute und gestern (höchstens 8 MiB je Datei; mehrere Zeilen desselben Signals in derselben Sekunde zählen als ein Ereignis), höchstens einmal pro Minute und nur, wenn jemand den Reiter öffnet — kein Timer. Ins Dashboard gelangen nur Zähler, Kategorien und Zeitpunkte, nie eine Logzeile oder ein Pfad.
+
 ## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
 
 Der Skill Miner läuft wöchentlich je Agent, bündelt belastbare Erinnerungen
