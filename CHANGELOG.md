@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.4] — 2026-10-02
+
+### Behoben
+
+- **Doppelte Critical-Pushes für lange Nachrichten.** Die Aufteilung (`keepWhole`) speichert eine lange Nachricht als Ganzes und zusätzlich als Teile. Der Critical-Cron hat beide einzeln klassifiziert: Dieselbe Aussage kam als zwei Pushes mit zwei Referenzen (Bernd, 01.10.2026), verbrauchte den Tagesdeckel doppelt und kostete je Teil einen Modellaufruf. Teile, deren Ganzes im selben Turn unter den Kandidaten liegt (gleiche `sourceTurnId`, mindestens die Hälfte der Teiltexte darin enthalten, Satzzeichen ignoriert), werden jetzt ohne Modellaufruf als `fakt` getypt und nie gepusht. Auf den echten Daten der letzten sieben Tage greift das bei 322 von 326 Gruppen, ohne ein Ganzes zu treffen. Ohne Ganzes (Modus „geteilt“) bleibt alles wie bisher. Bereits gepushte Duplikate werden nicht rückwirkend bereinigt.
+
 ## [7.18.3] — 2026-10-01
 
 ### Hinzugefügt
