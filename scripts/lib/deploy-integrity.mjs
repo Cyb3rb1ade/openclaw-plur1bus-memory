@@ -337,6 +337,17 @@ export const DEPLOY_FILES = [
   "scripts/dist/installer/artefacts.mjs", // kept verified tarballs for rollback and --offline (HM1 Task 8, T8-b)
   "scripts/dist/installer/legacy.mjs",
   "scripts/dist/installer/fsutil.mjs",
+  // ── plugin distribution: Hermes host mode (HM2 Task 8) ─────────────────────
+  "scripts/dist/installer/untar.mjs",
+  "scripts/dist/installer/hermes/binding.mjs",
+  "scripts/dist/installer/hermes/config-edit.mjs",
+  "scripts/dist/installer/hermes/detect.mjs",
+  "scripts/dist/installer/hermes/hermes-cli.mjs",
+  "scripts/dist/installer/hermes/install.mjs",
+  "scripts/dist/installer/hermes/plur1bus-cli.mjs",
+  "scripts/dist/installer/hermes/provider.mjs",
+  "scripts/dist/installer/hermes/sidecar.mjs",
+  "scripts/dist/installer/hermes/state.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
