@@ -7,15 +7,17 @@
  *   * agent ids key on realpath(HERMES_HOME): the default root is `hermes-default`,
  *     `<default root>/profiles/<p>` is `hermes-<fold(p)>`, any other home `hermes-home-<sha256(realpath)[:8]>`;
  *   * fold = `hermes-` + ASCII A-Z lower-cased, every other code point outside [a-z0-9_-] → `-`, 64 chars;
- *   * Windows compares homes case-insensitively; the hash is over the exact UTF-8 string.
+ *   * Windows compares homes with full Unicode case folding (Python casefold); the hash is over the exact UTF-8 string.
  * Files: `$HERMES_HOME/plur1bus.json` (`plur1bus.hermes-binding/1`, 0600) and
  * `<plur1bus home>/hosts/hermes-bindings.json` (`plur1bus.hermes-bindings/1`, `{agentId: hermesHome}`).
  * Registry readers ignore unknown keys (ruling F12). Writes are atomic; the registry's
- * read-modify-write is serialised against other installer runs by an exclusive lock file.
+ * read-modify-write is serialised against other installer runs and the provider's `hermes plur1bus bind` by the
+ * shared O_EXCL lock file `hosts/.hermes-bindings.lock` (withRegistryLock).
  */
 
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join, posix, resolve, win32 } from "node:path";
 
 import { sleepSync, writeFileAtomic } from "../fsutil.mjs";
@@ -53,9 +55,22 @@ export function homeHash8(realHome) {
   return createHash("sha256").update(Buffer.from(realHome, "utf8")).digest("hex").slice(0, 8);
 }
 
-/** Python's ntpath.normcase + casefold, close enough for paths: `/` → `\`, lower case. */
+/**
+ * Full Unicode case folding as Python's `str.casefold()` compares (binding.py `_same_path`): per code point
+ * lower → upper → lower, so ß/ẞ fold to `ss`, every sigma (final ς too) to `σ`, ligatures expand, and İ becomes
+ * `i̇` (never plain `i`). The one exception is U+0131 (dotless ı), which casefold keeps. Checked against
+ * CPython's casefold for every code point both Unicode versions assign (the remaining differences are
+ * characters newer than CPython's Unicode database). Cherokee folds to one case on both sides.
+ */
+export function foldCase(text) {
+  let out = "";
+  for (const ch of String(text)) out += ch === "\u0131" ? ch : ch.toLowerCase().toUpperCase().toLowerCase();
+  return out;
+}
+
+/** Python's `ntpath.normcase(..).casefold()` on win32 (`/` → `\`, full case folding), exact match elsewhere. */
 export function samePath(a, b, platform) {
-  if (platform === "win32") return a.replaceAll("/", "\\").toLowerCase() === b.replaceAll("/", "\\").toLowerCase();
+  if (platform === "win32") return foldCase(a.replaceAll("/", "\\")) === foldCase(b.replaceAll("/", "\\"));
   return a === b;
 }
 
@@ -195,10 +210,45 @@ export function checkBinding(plur1busHome, agentId, hermesHome, platform = proce
   return agentId in bindings;
 }
 
-function withRegistryLock(plur1busHome, fn) {
-  const lock = join(plur1busHome, "hosts", ".hermes-bindings.installer.lock");
+/**
+ * The registry lock shared with the Python provider (hosts/hermes/plur1bus/binding.py `register_binding`):
+ * `<plur1bus home>/hosts/.hermes-bindings.lock`, taken by creating it with O_EXCL (Node has no flock) and
+ * removed on release; it holds `<pid> <hostname> <ms>`. A lock is stale when it is older than 60 s, or when it
+ * names a process of this host that no longer runs (a killed run). Deadline 10 s, as the Python side.
+ */
+export const REGISTRY_LOCK_FILE = ".hermes-bindings.lock";
+const LOCK_STALE_MS = 60_000;
+const LOCK_DEADLINE_MS = 10_000;
+
+function lockIsStale(lock) {
+  let st;
+  try {
+    st = statSync(lock);
+  } catch {
+    return false; // gone meanwhile: the next O_EXCL try decides
+  }
+  const age = Date.now() - st.mtimeMs;
+  if (age > LOCK_STALE_MS) return true;
+  let text = "";
+  try {
+    text = readFileSync(lock, "utf8");
+  } catch {
+    return false;
+  }
+  const [pid, host] = text.trim().split(/\s+/);
+  if (!/^\d+$/.test(pid ?? "") || host !== hostname() || age < 1000) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return false;
+  } catch (err) {
+    return err?.code === "ESRCH";
+  }
+}
+
+export function withRegistryLock(plur1busHome, fn) {
+  const lock = join(plur1busHome, "hosts", REGISTRY_LOCK_FILE);
   mkdirSync(dirname(lock), { recursive: true });
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + LOCK_DEADLINE_MS;
   let fd;
   for (;;) {
     try {
@@ -206,17 +256,16 @@ function withRegistryLock(plur1busHome, fn) {
       break;
     } catch (err) {
       if (err?.code !== "EEXIST") throw err;
-      // a lock left by a killed run: stale after 60 s
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > 60_000) rmSync(lock, { force: true });
-      } catch {
-        // gone meanwhile
+      if (lockIsStale(lock)) {
+        rmSync(lock, { force: true });
+        continue;
       }
       if (Date.now() > deadline) throw new Error(`the bindings registry is locked (${lock})`);
       sleepSync(25);
     }
   }
   try {
+    writeSync(fd, `${process.pid} ${hostname()} ${Date.now()}\n`);
     return fn();
   } finally {
     closeSync(fd);

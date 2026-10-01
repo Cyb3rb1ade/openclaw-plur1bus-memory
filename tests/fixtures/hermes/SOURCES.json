@@ -5,7 +5,7 @@
   "files": {
     "hermes/binding-vectors.json": {
       "harnessPath": "hosts/hermes/tests/fixtures/binding-vectors.json",
-      "sha256": "90e79555a6fa5f304b7873d8dde1b7e3cc66dd54383fc38f627161b358afa882"
+      "sha256": "8a3f875d9b6e1e29b714c076cd8b2a7844e4968ead062db494ee5edc7a79407d"
     },
     "hermes/hermes-home-vectors.json": {
       "harnessPath": "hosts/hermes/tests/fixtures/hermes-home-vectors.json",

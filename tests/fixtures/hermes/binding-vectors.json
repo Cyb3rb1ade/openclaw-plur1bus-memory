@@ -65,6 +65,32 @@
         { "agentId": "hermes-home-fbdca692", "home": "/srv/hermes", "result": "ok" }
       ],
       "bindings": { "hermes-default": "/home/u/.hermes", "hermes-home-fbdca692": "/srv/hermes" }
+    },
+    {
+      "name": "Windows folds case fully, as Python casefold: \u00df and SS, every sigma, \u0130 is not plain i",
+      "platform": "win32",
+      "steps": [
+        { "agentId": "hermes-a", "home": "C:\\Users\\STRASSE\\hermes", "result": "ok" },
+        { "agentId": "hermes-a", "home": "c:\\users\\stra\u00dfe\\Hermes", "result": "ok" },
+        { "agentId": "hermes-a", "home": "C:\\Users\\STRA\u1e9eE\\hermes", "result": "ok" },
+        { "agentId": "hermes-b", "home": "C:\\h\\\u039f\u0394\u039f\u03a3", "result": "ok" },
+        { "agentId": "hermes-b", "home": "c:\\h\\\u03bf\u03b4\u03bf\u03c3", "result": "ok" },
+        { "agentId": "hermes-b", "home": "C:\\h\\\u03bf\u03b4\u03bf\u03c2", "result": "ok" },
+        { "agentId": "hermes-c", "home": "C:\\h\\\u0130nfo", "result": "ok" },
+        { "agentId": "hermes-c", "home": "c:\\h\\i\u0307nfo", "result": "ok" },
+        { "agentId": "hermes-c", "home": "C:\\h\\info", "result": { "conflict": "C:\\h\\\u0130nfo" } },
+        { "agentId": "hermes-c", "home": "C:\\h\\\u0131nfo", "result": { "conflict": "C:\\h\\\u0130nfo" } }
+      ],
+      "bindings": { "hermes-a": "C:\\Users\\STRASSE\\hermes", "hermes-b": "C:\\h\\\u039f\u0394\u039f\u03a3", "hermes-c": "C:\\h\\\u0130nfo" }
+    },
+    {
+      "name": "POSIX compares homes exactly: \u00df and ss are different homes",
+      "platform": "linux",
+      "steps": [
+        { "agentId": "hermes-a", "home": "/home/u/stra\u00dfe", "result": "ok" },
+        { "agentId": "hermes-a", "home": "/home/u/strasse", "result": { "conflict": "/home/u/stra\u00dfe" } }
+      ],
+      "bindings": { "hermes-a": "/home/u/stra\u00dfe" }
     }
   ]
 }
