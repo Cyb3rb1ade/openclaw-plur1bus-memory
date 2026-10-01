@@ -103,6 +103,7 @@ import {
   resolveGatewayLogFiles,
   scanGatewayLog,
 } from "./lib/health-watch.js";
+import { createPostTurnDetacher } from "./lib/post-turn-detach.js";
 import {
   createControlPlaneHealthInspector,
   createControlPlaneHealthScan,
@@ -4608,6 +4609,10 @@ const plugin = {
     cfg = providerMigration.config;
     // 7.18.0: Fehlgeschlagene LLM-Aufrufe der letzten 24 h fuer die Health-Ansicht.
     const llmFailureRecorder = createLlmFailureRecorder();
+    // 7.18.3: Captured here, at registration and outside any turn. Post-turn
+    // work enqueued from agent_end runs in this context when the switch is on
+    // (openclaw/openclaw#162941).
+    const detachPostTurnWork = createPostTurnDetacher({ enabled: cfg.runtime?.detachPostTurnWork === true });
     const llmResultCache = createLlmResultCache({
       enabled: cfg.runtime?.llmResultCacheEnabled !== false,
       ttlMs: cfg.runtime?.llmResultCacheTtlMs,
@@ -10688,7 +10693,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
-        return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+        return runtimeScheduler.enqueueCapture(agentId, { background }, detachPostTurnWork(async (signal) => {
           const captureStartedAt = Date.now();
           const throwIfCaptureAborted = () => {
             if (!signal?.aborted) return;
@@ -11579,7 +11584,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
             }
           }
-        }); // runtimeScheduler.enqueueCapture
+        })); // runtimeScheduler.enqueueCapture (detachPostTurnWork)
       }, { timeoutMs: 60_000 });
     }
 

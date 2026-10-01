@@ -453,6 +453,12 @@ Unter **Memory Health** zeigt der Reiter zwei Karten, die der LanceDB-Scan nicht
 
 Gelesen wird nur das Ende der Logs von heute und gestern (höchstens 8 MiB je Datei; mehrere Zeilen desselben Signals in derselben Sekunde zählen als ein Ereignis), höchstens einmal pro Minute und nur, wenn jemand den Reiter öffnet — kein Timer. Ins Dashboard gelangen nur Zähler, Kategorien und Zeitpunkte, nie eine Logzeile oder ein Pfad.
 
+## Nachbearbeitung vom Turn abkoppeln (7.18.3)
+
+`runtime.detachPostTurnWork` (Standard `false`) ist ein Workaround für openclaw/openclaw#162941. OpenClaw reicht die Identität eines Turns per `AsyncLocalStorage` an alle asynchronen Folgeaufrufe weiter. Die Nachbearbeitung, die PLUR1BUS nach `agent_end` einreiht (Capture, Episoden, Gesprächserkenntnisse, Light Dream), läuft erst nach dem Turn — dessen Identität ist dann widerrufen, und Plugin-LLM-Aufrufe scheitern mit `LLM_COMPLETION_NOT_AUTHORIZED` (im Dashboard: Ursache „turn authority already expired“).
+
+Mit `true` läuft diese Arbeit in einem Snapshot, der bei der Plugin-Registrierung genommen wird. Ein Snapshot stellt alle Host-Kontexte jenes Moments wieder her, nicht nur die Turn-Identität; deshalb ist der Schalter standardmäßig aus und sollte nach dem Einschalten ein paar Turns lang beobachtet werden. Wirkt nach einem Gateway-Neustart.
+
 ## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
 
 Der Skill Miner läuft wöchentlich je Agent, bündelt belastbare Erinnerungen

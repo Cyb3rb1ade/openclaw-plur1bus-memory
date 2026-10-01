@@ -5,6 +5,13 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.3] — 2026-10-01
+
+### Hinzugefügt
+
+- **Schalter `runtime.detachPostTurnWork` (Standard aus).** Unter OpenClaw 2026.9.7 scheitern die LLM-Aufrufe der Nachbearbeitung nach einem Turn (Episoden, Gesprächserkenntnisse, Traumerzählung) mit `LLM_COMPLETION_NOT_AUTHORIZED: agent tool caller authority is no longer active`: Die Arbeit erbt die Identität des schon beendeten Turns (openclaw/openclaw#162941). Eingeschaltet läuft die eingereihte Capture-Arbeit in einem `AsyncLocalStorage`-Snapshot, der bei der Plugin-Registrierung genommen wird, also außerhalb jedes Turns. Weil ein Snapshot alle Host-Kontexte dieses Moments wiederherstellt, bleibt der Schalter aus, bis er live beobachtet ist.
+- Fehlerkategorie `authority-expired` im LLM-Router und in der Karte „LLM failures (24 h)“ (statt `other`).
+
 ## [7.18.2] — 2026-10-01
 
 ### Behoben
