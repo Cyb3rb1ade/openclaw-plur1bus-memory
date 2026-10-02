@@ -16,7 +16,12 @@
  * `--hermes-lock` (HM2 Task 8) adds a `hosts.hermes` release from scripts/dist/hermes-sidecar.lock.json (the
  * harness release's provider tarball and five sidecar binaries) with its own German and English notes, merged
  * into --previous's Hermes releases the same way. A lock marked `"placeholder": true` or carrying an all-zero hash
- * is refused (ruling F31). Without --hermes-lock, --previous's `hosts.hermes` is carried over unchanged.
+ * is refused (ruling F31). When --previous already holds the lock's version with the same provider and binary
+ * hashes (a later plugin release over an unchanged lock), its `hosts.hermes` is carried over unchanged and no
+ * notes are read; the same version with any other hash is refused, so a re-tag cannot change artefacts silently.
+ * Without --hermes-lock, --previous's `hosts.hermes` is carried over unchanged (none before the first Hermes
+ * release). The release workflow leaves --hermes-lock out while the lock is a placeholder (I3: OpenClaw-only
+ * releases are never blocked by it) and warns in its log and summary.
  */
 
 import { createHash } from "node:crypto";
@@ -395,9 +400,18 @@ export function readHermesLock(path, { allowPlaceholder = false } = {}) {
 function buildHermesHost(opts, previous) {
   const prev = previous?.hosts.hermes ?? null;
   if (!opts.hermesLock) return prev ? structuredClone(prev) : null;
-  if (!opts.hermesNotesDe || !opts.hermesNotesEn) throw new Error("--hermes-lock needs --hermes-notes-de and --hermes-notes-en");
   const lock = readHermesLock(opts.hermesLock, { allowPlaceholder: opts.allowPlaceholderLock === true });
-  if (prev?.releases.some((r) => r.version === lock.version)) throw new Error(`Hermes release ${lock.version} is already in the previous feed`);
+  const same = prev?.releases.find((r) => r.version === lock.version);
+  if (same) {
+    // I3(a): a later plugin release over the unchanged lock carries the published Hermes release over as it is
+    const differs = [
+      ...(same.provider?.sha256 !== lock.provider.sha256 ? ["provider"] : []),
+      ...HERMES_TARGETS.filter((t) => same.sidecar?.binary?.[t]?.sha256 !== lock.binary[t].sha256),
+    ];
+    if (differs.length) throw new Error(`Hermes release ${lock.version} is already in the previous feed with other hashes (${differs.join(", ")}); a published release's artefacts never change: bump the harness release instead`);
+    return structuredClone(prev);
+  }
+  if (!opts.hermesNotesDe || !opts.hermesNotesEn) throw new Error("--hermes-lock needs --hermes-notes-de and --hermes-notes-en");
   const release = {
     version: lock.version,
     provider: { url: lock.provider.url, sha256: lock.provider.sha256 },

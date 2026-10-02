@@ -132,7 +132,20 @@ describe("feed: hosts.hermes", () => {
     assert.equal(next.hosts.hermes.latest, "0.2.0");
     const carried = buildFeed({ ...inputs(makeTempDir("hermes-feed-"), { version: "7.18.2" }), hermesLock: undefined, previous: prevFile });
     assert.deepEqual(carried.hosts.hermes, feed.hosts.hermes);
-    assert.throws(() => buildFeed({ ...inputs(makeTempDir("hermes-feed-"), { version: "7.18.3" }), previous: prevFile }), /Hermes release 0\.1\.0 is already in the previous feed/);
+    // I3(a): a later plugin release over the unchanged lock keeps the published Hermes release as it is (no notes read)
+    const same = buildFeed({ ...inputs(makeTempDir("hermes-feed-"), { version: "7.18.3" }), hermesNotesDe: undefined, hermesNotesEn: undefined, previous: prevFile });
+    assert.deepEqual(same.hosts.hermes, feed.hosts.hermes);
+    assert.deepEqual(validateFeed(same), { ok: true, errors: [] });
+    // the same version with another hash is a re-tag and refused
+    const baseLock = JSON.parse(readFileSync(opts.hermesLock, "utf8"));
+    assert.throws(
+      () => buildFeed({ ...inputs(makeTempDir("hermes-feed-"), { version: "7.18.4", lock: { provider: { ...baseLock.provider, sha256: "a".repeat(64) } } }), previous: prevFile }),
+      /Hermes release 0\.1\.0 is already in the previous feed with other hashes \(provider\)/,
+    );
+    assert.throws(
+      () => buildFeed({ ...inputs(makeTempDir("hermes-feed-"), { version: "7.18.4", lock: { binary: { ...baseLock.binary, "win-x64": { ...baseLock.binary["win-x64"], sha256: "b".repeat(64) } } } }), previous: prevFile }),
+      /with other hashes \(win-x64\)/,
+    );
     assert.throws(() => buildFeed({ ...opts, hermesNotesEn: undefined }), /--hermes-notes-de and --hermes-notes-en/);
 
     // the CLI flags

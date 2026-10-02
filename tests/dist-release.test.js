@@ -31,8 +31,15 @@ describe("plugin release (HM1 Task 10)", () => {
     const feedStep = text.slice(text.indexOf("- name: Build the unsigned feed"), text.indexOf("- name: Write SHA256SUMS"));
     assert.match(feedStep, /args\+=\(--hermes-lock "\$lock" --hermes-notes-de "docs\/release-notes\/\$VERSION\.de\.md" --hermes-notes-en "docs\/release-notes\/\$VERSION\.en\.md"\)/);
     assert.match(feedStep, /lock=scripts\/dist\/hermes-sidecar\.lock\.json/);
-    // a placeholder lock is skipped only in a dry run (the builder refuses it in a real run, F31)
-    assert.match(feedStep, /placeholder === true[\s\S]*\[ "\$DRY_RUN" = true \]/);
+    // I3(b): a placeholder lock never blocks a release, dry or real: no --hermes-lock, a warning in the log and the
+    // job summary (the builder itself still refuses a placeholder passed to it, F31)
+    const gate = /if node -e '[^']*placeholder === true \? 0 : 1\)' "\$lock"; then\n([\s\S]*?)\n\s*else\n([\s\S]*?)\n\s*fi/.exec(feedStep);
+    assert.ok(gate, "the placeholder gate");
+    assert.ok(!/DRY_RUN/.test(gate[0]), "the same in a dry and a real run");
+    assert.match(gate[1], /::warning title=Hermes host omitted::/);
+    assert.match(gate[1], />> "\$GITHUB_STEP_SUMMARY"/);
+    assert.ok(!gate[1].includes("--hermes-lock"));
+    assert.match(gate[2], /--hermes-lock "\$lock"/);
     const renders = text.split("\n").filter((l) => /render-bootstraps\.mjs/.test(l));
     assert.equal(renders.length, 2);
     for (const l of renders) assert.match(l, /--node-pins scripts\/dist\/node-pins\.json/, l);

@@ -270,12 +270,16 @@ jobs:
           if [ -n "$CLAWPACK_DIGEST" ]; then args+=(--clawpack-digest "$CLAWPACK_DIGEST"); fi
           # HM1-R14/O1: the npm locator is in the feed only once the owner enabled the npm publish.
           if [ "$NPM" != yes ]; then args+=(--no-npm); fi
-          # HM2 Task 12 (F31, F32): hosts.hermes from the sidecar lock, with the release's own notes. A placeholder lock
-          # (no harness release P4 yet) is refused by the builder in a real run; a dry run builds without hosts.hermes
-          # and says so.
+          # HM2 Task 12 (F31, F32): hosts.hermes from the sidecar lock, with the release's own notes. When the previous
+          # feed already carries the lock's version with the same hashes, the builder keeps that Hermes release as it is
+          # (a refused re-tag otherwise). I3: a placeholder lock (no harness release P4 yet) never blocks a release: the
+          # feed is built without --hermes-lock (hosts.hermes as in the previous feed, none before P4), with a warning in
+          # the log and the job summary. The builder itself still refuses a placeholder lock passed to it.
           lock=scripts/dist/hermes-sidecar.lock.json
-          if node -e 'process.exit(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).placeholder === true ? 0 : 1)' "$lock" && [ "$DRY_RUN" = true ]; then
-            echo "::warning::$lock is a placeholder (harness release P4 not filled in): this dry-run feed carries no hosts.hermes; a real release refuses it"
+          if node -e 'process.exit(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).placeholder === true ? 0 : 1)' "$lock"; then
+            msg="$lock is a placeholder (harness release P4 not filled in): this feed adds no Hermes release; hosts.hermes stays as in the previous feed (none before P4)"
+            echo "::warning title=Hermes host omitted::$msg"
+            { echo "> [!WARNING]"; echo "> **Hermes host omitted.** $msg"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
           else
             args+=(--hermes-lock "$lock" --hermes-notes-de "docs/release-notes/$VERSION.de.md" --hermes-notes-en "docs/release-notes/$VERSION.en.md")
           fi
