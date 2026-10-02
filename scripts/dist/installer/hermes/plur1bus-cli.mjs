@@ -9,6 +9,7 @@
  *   config get <key> → config.get/1 { key, value };  daemon stop (→ { stopped, wasRunning }) | start;
  *   service status (→ { registered, running }) | uninstall
  *   memory list --agent <id> --since <t> → memory.list/1 (for ruling F4's purge count, Task 9)
+ *   --version → "plur1bus <semver>" (plain text, no --home; the binary's own version, I1)
  * The host setup may leave no config.json (Task 4 carry): `config get` failing is "unknown", not an error.
  */
 
@@ -61,6 +62,12 @@ export function createPlur1busCli({ bin, home, env, run = defaultRun, platform =
       if (acceptNc) args.push("--accept-nc-licence");
       if (noService) args.push("--no-service");
       return call(args, 30 * 60_000);
+    },
+    /** The version the binary itself reports; null when it names none (an unknown binary is never reused, I1). */
+    async binaryVersion() {
+      const r = await run(bin, ["--version"], { env, timeoutMs: 30_000, platform });
+      const m = r.code === 0 ? /\bplur1bus\s+v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(String(r.stdout ?? "")) : null;
+      return m ? m[1] : null;
     },
     async agentList() {
       const r = await call(["agent", "list"]);

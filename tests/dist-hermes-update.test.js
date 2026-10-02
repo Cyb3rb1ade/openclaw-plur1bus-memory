@@ -23,7 +23,7 @@ const strays = (sb) => [...walkTree(sb.home), ...walkTree(sb.root)].filter((p) =
 const providerVersion = (sb) => JSON.parse(readFileSync(join(sb.hermesHome, "plugins", "plur1bus", "MANIFEST.json"), "utf8")).version;
 const bindingVersion = (sb) => JSON.parse(readFileSync(join(sb.hermesHome, "plur1bus.json"), "utf8")).version;
 const storeDir = (sb) => join(sb.plur1busHome, "state", "lancedb");
-const mutatingPlur1bus = (sb, from = 0) => sb.plur1busCalls().slice(from).map((a) => a.slice(3).join(" ")).filter((c) => !/^(agent list|config get|service status)/.test(c));
+const mutatingPlur1bus = (sb, from = 0) => sb.plur1busCalls().slice(from).filter((a) => a[0] !== "--version").map((a) => a.slice(3).join(" ")).filter((c) => !/^(agent list|config get|service status)/.test(c));
 
 function runChild(sb, argv, { killAt } = {}) {
   const code = `import { runInstaller } from ${JSON.stringify(MAIN)};\nprocess.exitCode = await runInstaller(process.argv.slice(1));\n`;

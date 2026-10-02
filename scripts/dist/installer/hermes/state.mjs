@@ -33,6 +33,8 @@ const FIELDS = [
   "providerPrev", "agentCreated", "registryAdded", "bindingPrev", "configEdit", "useClass", "licence", "inProgress",
   // Task 9: an update's or uninstall's own progress (op "update" | "uninstall")
   "update", "uninstall",
+  // I1: an install's update-grade progress when it replaces an older shared host sidecar (same shape as update)
+  "hostUpdate",
   // memory.provider exactly as Hermes reported it before the install ("" for unset; "none", "builtin" … kept apart)
   "previousProviderRaw",
   // progress marks, set before each change (a killed run's rollback undoes exactly what they name)

@@ -183,7 +183,10 @@ export async function runHermesUpdate(ctx) {
   const installed = binding.version ?? state.installedVersion ?? null;
   const sidecar = readSidecar({ home });
   const sidecarVersion = sidecar && !sidecar.invalid ? sidecar.binaryVersion : null;
-  const sidecarUpdate = !existsSync(bin) || !sidecarVersion || compareVersions(sidecarVersion, release.sidecar.version) < 0;
+  // the manifest and the binary itself must both be at least the release's: a manifest a failed run left newer than
+  // its binary never makes an old binary stick (I1)
+  const binVersion = existsSync(bin) && sidecarVersion && compareVersions(sidecarVersion, release.sidecar.version) >= 0 ? await p1().binaryVersion() : null;
+  const sidecarUpdate = !binVersion || compareVersions(binVersion, release.sidecar.version) < 0;
   report.set("installedVersion", installed);
   report.set("sidecarVersion", sidecarVersion);
   if (sidecar?.invalid) throw new Stop(EXIT.INCOMPATIBLE, "compat", `sidecar-manifest-invalid: ${home}/manifest.json is ${sidecar.invalid}; run \`plur1bus --home "${home}" 1staid repair\`; nothing was changed`);
@@ -298,81 +301,8 @@ async function applyUpdate(ctx) {
     report.step("download", "ok", `provider ${release.version}: SHA-256 matches the feed`);
 
     if (u.sidecarUpdate) {
-      // ── stop the sidecar ─────────────────────────────────────────────────
-      save("stop");
-      if (existsSync(bin) && !u.daemonStopped) {
-        // what ran before: the rollback restarts only that (T9 review 6)
-        const svc = await p1().serviceStatus();
-        const ds = await p1().daemonStop();
-        u.serviceRegistered = svc.registered === true;
-        u.wasRunning = ds.ok ? ds.doc?.wasRunning !== false : true;
-        if (!ds.ok) {
-          report.step("stop", "failed", `plur1bus daemon stop failed (${ds.detail})`);
-          return rb("stop");
-        }
-      }
-      u.daemonStopped = true;
-      save("stop");
-      killAt("update.daemon-stopped");
-
-      // ── the home's manifest.json and config.json, byte for byte ──────────
-      if (!u.homeBackup) {
-        u.homeBackup = saveHomeFiles(home, now);
-        save("home");
-        report.step("home-backup", "ok", `${HOME_FILES.join(", ")} saved to ${u.homeBackup.dir}`);
-      }
-      killAt("update.home-saved");
-
-      // ── the store snapshot (F18) ─────────────────────────────────────────
-      if (!u.snapshotDone) {
-        save("snapshot");
-        try {
-          u.snapshotId = await snapshotStore({ report, home, label: `pre-${u.toVersion}`, now });
-        } catch (err) {
-          report.step("snapshot", "failed", err?.message ?? String(err));
-          return rb("snapshot");
-        }
-        u.snapshotDone = true;
-        save("snapshot");
-      }
-      killAt("update.snapshotted");
-
-      // ── the pinned binary ────────────────────────────────────────────────
-      save("sidecar");
-      const binArt = release.sidecar.binary[target.target];
-      if (resuming && u.sidecarInstalled && binArt && binaryMatches({ bin, sha256: binArt.sha256 })) {
-        report.step("sidecar", "skipped", `${bin} already holds the release's binary (installed by the interrupted run)`);
-      } else {
-        try {
-          await installSidecar({
-            release, target: target.target, bin, fetchImpl: ctx.fetchImpl, testMode, now, platform: ctx.platform,
-            ownBin: Boolean(resuming && u.sidecarInstalled && (u.binFresh || (u.previousBin && existsSync(u.previousBin)))),
-            previousBinName: u.previousBin ?? null,
-            onPoint: killAt,
-            beforeChange: ({ fresh, previousBin }) => {
-              if (!u.sidecarInstalled) Object.assign(u, { binFresh: fresh, previousBin });
-              u.sidecarInstalled = true;
-              save("sidecar");
-            },
-          });
-        } catch (err) {
-          report.step("sidecar", "failed", err?.message ?? String(err));
-          return rb("sidecar");
-        }
-        report.step("sidecar", "ok", `${binArt.url} → ${bin} (SHA-256 matches the feed; the previous binary is kept until the update finishes)`);
-      }
-
-      // ── setup --profile host with the new binary ─────────────────────────
-      u.setupRan = true;
-      save("setup");
-      const noService = testMode && env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE === "1";
-      const st = await p1().setup({ useClass: u.useClass, acceptNc: u.acceptNc, noService });
-      const after = readSidecar({ home });
-      if (!st.ok || !after || after.invalid || after.profile !== "host") {
-        report.step("setup", "failed", st.ok ? `no host manifest in ${home} after setup` : `plur1bus setup --profile host failed (${st.detail})`);
-        return rb("setup");
-      }
-      report.step("setup", "ok", `plur1bus setup --profile host in ${home} (${u.useClass ? `use class ${u.useClass}, kept` : "the recorded use class kept by setup"})`);
+      const failed = await applySidecarUpdate({ ...ctx, u, save, killAt, target });
+      if (failed) return rb(failed);
     }
 
     // ── provider directory ─────────────────────────────────────────────────
@@ -439,6 +369,94 @@ async function applyUpdate(ctx) {
 }
 
 /**
+ * The guarded sidecar replacement (I1): `daemon stop` → manifest.json and config.json saved → store snapshot (F18) →
+ * the pinned binary (the previous one kept) → `setup --profile host` with it. Shared by `--update` and by an install
+ * into a new Hermes home whose shared host sidecar is older than the release. Progress goes to `u` (persisted by
+ * `save`); a resumed run skips what is done. Returns null, or the id of the step that failed (the caller rolls back
+ * with rollbackSidecarUpdate).
+ */
+export async function applySidecarUpdate(ctx) {
+  const { report, env, home, bin, p1, release, u, save, killAt, resuming, testMode, now, target } = ctx;
+  // ── stop the sidecar ─────────────────────────────────────────────────
+  save("stop");
+  if (existsSync(bin) && !u.daemonStopped) {
+    // what ran before: the rollback restarts only that (T9 review 6)
+    const svc = await p1().serviceStatus();
+    const ds = await p1().daemonStop();
+    u.serviceRegistered = svc.registered === true;
+    u.wasRunning = ds.ok ? ds.doc?.wasRunning !== false : true;
+    if (!ds.ok) {
+      report.step("stop", "failed", `plur1bus daemon stop failed (${ds.detail})`);
+      return "stop";
+    }
+    report.step("stop", "ok", `plur1bus daemon stop (${u.wasRunning ? "it was running" : "it was not running"}${u.serviceRegistered ? ", registered service" : ""})`);
+  }
+  u.daemonStopped = true;
+  save("stop");
+  killAt("update.daemon-stopped");
+
+  // ── the home's manifest.json and config.json, byte for byte ──────────
+  if (!u.homeBackup) {
+    u.homeBackup = saveHomeFiles(home, now);
+    save("home");
+    report.step("home-backup", "ok", `${HOME_FILES.join(", ")} saved to ${u.homeBackup.dir}`);
+  }
+  killAt("update.home-saved");
+
+  // ── the store snapshot (F18) ─────────────────────────────────────────
+  if (!u.snapshotDone) {
+    save("snapshot");
+    try {
+      u.snapshotId = await snapshotStore({ report, home, label: `pre-${u.toVersion}`, now });
+    } catch (err) {
+      report.step("snapshot", "failed", err?.message ?? String(err));
+      return "snapshot";
+    }
+    u.snapshotDone = true;
+    save("snapshot");
+  }
+  killAt("update.snapshotted");
+
+  // ── the pinned binary ────────────────────────────────────────────────
+  save("sidecar");
+  const binArt = release.sidecar.binary[target.target];
+  if (resuming && u.sidecarInstalled && binArt && binaryMatches({ bin, sha256: binArt.sha256 })) {
+    report.step("sidecar", "skipped", `${bin} already holds the release's binary (installed by the interrupted run)`);
+  } else {
+    try {
+      await installSidecar({
+        release, target: target.target, bin, fetchImpl: ctx.fetchImpl, testMode, now, platform: ctx.platform,
+        ownBin: Boolean(resuming && u.sidecarInstalled && (u.binFresh || (u.previousBin && existsSync(u.previousBin)))),
+        previousBinName: u.previousBin ?? null,
+        onPoint: killAt,
+        beforeChange: ({ fresh, previousBin }) => {
+          if (!u.sidecarInstalled) Object.assign(u, { binFresh: fresh, previousBin });
+          u.sidecarInstalled = true;
+          save("sidecar");
+        },
+      });
+    } catch (err) {
+      report.step("sidecar", "failed", err?.message ?? String(err));
+      return "sidecar";
+    }
+    report.step("sidecar", "ok", `${binArt.url} → ${bin} (SHA-256 matches the feed; the previous binary is kept until the update finishes)`);
+  }
+
+  // ── setup --profile host with the new binary ─────────────────────────
+  u.setupRan = true;
+  save("setup");
+  const noService = testMode && env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE === "1";
+  const st = await p1().setup({ useClass: u.useClass, acceptNc: u.acceptNc, noService });
+  const after = readSidecar({ home });
+  if (!st.ok || !after || after.invalid || after.profile !== "host") {
+    report.step("setup", "failed", st.ok ? `no host manifest in ${home} after setup` : `plur1bus setup --profile host failed (${st.detail})`);
+    return "setup";
+  }
+  report.step("setup", "ok", `plur1bus setup --profile host in ${home} (${u.useClass ? `use class ${u.useClass}, kept` : "the recorded use class kept by setup"})`);
+  return null;
+}
+
+/**
  * Undo an update from its recorded progress `s.update`. Exit 1, or 4 with manual steps (the state then reads
  * `rollback-failed`, and the next run finishes the rollback).
  */
@@ -456,46 +474,7 @@ export async function rollbackUpdate(ctx) {
   removeStaging(hermesHome);
   removeStaleBinTemps(bin);
 
-  if (u.sidecarUpdate && u.daemonStopped) {
-    // 1. the new binary stops, the previous one comes back and sets its runtime up again
-    if (existsSync(bin)) await p1().daemonStop();
-    if (u.sidecarInstalled) {
-      try {
-        const r = restoreSidecarBin({ bin, fresh: u.binFresh, previousBin: u.previousBin });
-        if (r !== "kept") done.push(r === "restored" ? "previous sidecar binary restored" : "sidecar binary removed");
-      } catch {
-        manual.push(u.previousBin ? `rename ${u.previousBin} to ${bin}` : `remove ${bin}`);
-      }
-    }
-    killAt("update.rollback-binary");
-    if (u.setupRan && manual.length === 0 && existsSync(bin)) {
-      const noService = testMode && env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE === "1";
-      const st = await p1().setup({ useClass: u.useClass ?? null, acceptNc: Boolean(u.acceptNc), noService });
-      if (st.ok) done.push("setup re-run with the previous binary");
-      else manual.push(`plur1bus --home "${home}" setup --profile host --non-interactive${u.useClass ? ` --use-class ${u.useClass}` : ""} (failed: ${st.detail})`);
-      await p1().daemonStop();
-    }
-    // 2. manifest.json and config.json byte for byte
-    if (u.homeBackup) {
-      try {
-        restoreHomeFiles(home, u.homeBackup);
-        done.push(`${HOME_FILES.join(" and ")} restored`);
-      } catch {
-        manual.push(`copy ${HOME_FILES.join(" and ")} back from ${u.homeBackup.dir} to ${home}`);
-      }
-    }
-    // 3. the store, only when it changed (HM1-R-F2)
-    await restoreStore({ report, home, snapshotId: u.snapshotId ?? null, manual, affected: u.affectedHomes ?? [] });
-    // 4. the sidecar runs again, only when it ran before the update (`daemon start` goes through the registered
-    // service when there is one)
-    if (existsSync(bin) && u.wasRunning !== false) {
-      const ds = await p1().daemonStart();
-      if (ds.ok) done.push(u.serviceRegistered ? "sidecar started through its service" : "sidecar daemon started");
-      else manual.push(`plur1bus --home "${home}" daemon start`);
-    } else if (u.wasRunning === false) {
-      done.push("the sidecar stays stopped, as it was before the update");
-    }
-  }
+  if (u.sidecarUpdate && u.daemonStopped) await rollbackSidecarUpdate({ report, env, home, bin, u, manual, done, killAt, testMode, p1 });
 
   // 5. the previous provider directory (memory.provider stays plur1bus: the previous version serves it)
   if (u.providerInstalled) {
@@ -529,4 +508,51 @@ export async function rollbackUpdate(ctx) {
   writeHermesState(hermesHome, stripProgress(s));
   report.step("rollback", "ok", done.length ? done.join("; ") : "nothing had changed");
   return report.finish(EXIT.FAILED);
+}
+
+/**
+ * Undo applySidecarUpdate from `u` (I1): the previous binary back and set up again, manifest.json and config.json byte
+ * for byte, the store only when it changed (HM1-R-F2), `daemon start` only when it ran before. Appends to `done` and
+ * `manual`.
+ */
+export async function rollbackSidecarUpdate({ report, env, home, bin, u, manual, done, killAt, testMode, p1 }) {
+  const before = manual.length;
+  // 1. the new binary stops, the previous one comes back and sets its runtime up again
+  if (existsSync(bin)) await p1().daemonStop();
+  if (u.sidecarInstalled) {
+    try {
+      const r = restoreSidecarBin({ bin, fresh: u.binFresh, previousBin: u.previousBin });
+      if (r !== "kept") done.push(r === "restored" ? "previous sidecar binary restored" : "sidecar binary removed");
+    } catch {
+      manual.push(u.previousBin ? `rename ${u.previousBin} to ${bin}` : `remove ${bin}`);
+    }
+  }
+  killAt("update.rollback-binary");
+  if (u.setupRan && manual.length === before && existsSync(bin)) {
+    const noService = testMode && env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE === "1";
+    const st = await p1().setup({ useClass: u.useClass ?? null, acceptNc: Boolean(u.acceptNc), noService });
+    if (st.ok) done.push("setup re-run with the previous binary");
+    else manual.push(`plur1bus --home "${home}" setup --profile host --non-interactive${u.useClass ? ` --use-class ${u.useClass}` : ""} (failed: ${st.detail})`);
+    await p1().daemonStop();
+  }
+  // 2. manifest.json and config.json byte for byte
+  if (u.homeBackup) {
+    try {
+      restoreHomeFiles(home, u.homeBackup);
+      done.push(`${HOME_FILES.join(" and ")} restored`);
+    } catch {
+      manual.push(`copy ${HOME_FILES.join(" and ")} back from ${u.homeBackup.dir} to ${home}`);
+    }
+  }
+  // 3. the store, only when it changed (HM1-R-F2)
+  await restoreStore({ report, home, snapshotId: u.snapshotId ?? null, manual, affected: u.affectedHomes ?? [] });
+  // 4. the sidecar runs again, only when it ran before the update (`daemon start` goes through the registered
+  // service when there is one)
+  if (existsSync(bin) && u.wasRunning !== false) {
+    const ds = await p1().daemonStart();
+    if (ds.ok) done.push(u.serviceRegistered ? "sidecar started through its service" : "sidecar daemon started");
+    else manual.push(`plur1bus --home "${home}" daemon start`);
+  } else if (u.wasRunning === false) {
+    done.push("the sidecar stays stopped, as it was before the update");
+  }
 }

@@ -295,6 +295,144 @@ describe("hermes installer: install", () => {
   });
 
 
+  it("a failed install on Hermes 0.21.5 restores memory.provider exactly: builtin, none, or no key (I2)", async () => {
+    for (const previous of ["builtin", "none", null]) {
+      const sb = createHermesSandbox({ scenario: { hermesVersion: "0.21.5", selftestFail: true } });
+      const cfg = join(sb.hermesHome, "config.yaml");
+      if (previous) writeFileSync(cfg, `${TEMPLATE_CONFIG}  provider: ${previous}\n`);
+      const r = await run(sb, ["--json"]);
+      assert.equal(r.code, EXIT.FAILED, `${previous}: ${r.out}`);
+      const doc = JSON.parse(r.stdout);
+      assert.equal(doc.steps.find((x) => x.id === "rollback").status, "ok", r.out);
+      assert.equal(sb.provider(), previous ?? "", `${previous}: the exact previous value is back`);
+      const restore = mutating(sb.hermesCalls()).at(-1).join(" ");
+      assert.equal(restore, previous ? `config set memory.provider ${previous}` : "config unset memory.provider", `${previous}: ${restore}`);
+      assert.ok(doc.rollback.done.includes(`memory.provider restored to ${previous ?? "unset (Hermes' built-in memory)"}`), doc.rollback.done.join("; "));
+    }
+    // the manual step names the exact value too
+    const m = createHermesSandbox({ scenario: { hermesVersion: "0.21.5", selftestFail: true, configSetFailFor: "builtin" } });
+    writeFileSync(join(m.hermesHome, "config.yaml"), `${TEMPLATE_CONFIG}  provider: builtin\n`);
+    const r = await run(m, ["--json"]);
+    assert.equal(r.code, EXIT.ROLLBACK_FAILED, r.out);
+    assert.ok(JSON.parse(r.stdout).manualSteps.includes("hermes config set memory.provider builtin"), r.out);
+  });
+
+  // I1: a second Hermes home installed with a newer release than the shared host sidecar
+  async function olderSharedSidecar(scenario = {}) {
+    const sb = createHermesSandbox();
+    assert.equal((await run(sb, [])).code, EXIT.OK);
+    const store = join(sb.plur1busHome, "state", "lancedb");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "memories.lance"), "TEST ONLY store\n");
+    const work = join(sb.hermesRoot, "profiles", "work");
+    mkdirSync(work, { recursive: true });
+    writeFileSync(join(work, "config.yaml"), TEMPLATE_CONFIG);
+    await sb.addRelease({ version: "0.2.0" });
+    sb.setScenario({ setupMigratesStoreFrom: "0.2.0", ...scenario });
+    const before = {
+      manifest: readFileSync(join(sb.plur1busHome, "manifest.json")),
+      config: readFileSync(join(sb.plur1busHome, "config.json")),
+      bin: sha256File(sb.sidecarBin),
+      store: treeDigest(store),
+      registry: readFileSync(join(sb.plur1busHome, "hosts", "hermes-bindings.json"), "utf8"),
+      work: treeDigest(work),
+    };
+    return { sb, work, store, before };
+  }
+  function assertSidecarAsBefore({ sb, work, store, before }) {
+    assert.deepEqual(readFileSync(join(sb.plur1busHome, "manifest.json")), before.manifest, "manifest.json byte for byte");
+    assert.deepEqual(readFileSync(join(sb.plur1busHome, "config.json")), before.config, "config.json byte for byte");
+    assert.equal(sha256File(sb.sidecarBin), before.bin, "the previous binary is back");
+    assert.equal(treeDigest(store), before.store, "the store is as it was");
+    assert.equal(readFileSync(join(sb.plur1busHome, "hosts", "hermes-bindings.json"), "utf8"), before.registry, "only the other home stays bound");
+    assert.equal(treeDigest(work), before.work, "the new Hermes home is unchanged");
+    assert.deepEqual(readdirSync(dirname(sb.sidecarBin)), [process.platform === "win32" ? "plur1bus.exe" : "plur1bus"]);
+    assert.equal(sb.provider(), "plur1bus", "the other home is untouched");
+    const hb = join(sb.plur1busHome, "backups", "host-update-home");
+    assert.deepEqual(existsSync(hb) ? readdirSync(hb) : [], [], "the home-file backup goes with a finished rollback");
+  }
+
+  it("an install over an older shared host sidecar stops, backs up, snapshots and updates it like --update (I1)", async () => {
+    const { sb, work } = await olderSharedSidecar();
+    const n = sb.plur1busCalls().length;
+    const r = await run(sb, ["--hermes-profile", "work", "--json"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    const doc = JSON.parse(r.stdout);
+    const ids = doc.steps.map((x) => x.id);
+    for (const id of ["stop", "home-backup", "snapshot", "sidecar", "setup"]) assert.ok(ids.includes(id), `${id}: ${ids.join(", ")}`);
+    assert.ok(ids.indexOf("stop") < ids.indexOf("sidecar") && ids.indexOf("snapshot") < ids.indexOf("sidecar"));
+    assert.equal(doc.sidecar.updatedFrom, "0.1.0");
+    assert.match(r.out, /also affects the other Hermes homes bound to .*hermes-default/s);
+    const p = sb.plur1busCalls().slice(n).filter((a) => a[0] !== "--version").map((a) => a.slice(3).join(" "));
+    assert.ok(p.indexOf("daemon stop") < p.findIndex((c) => c.startsWith("setup")), p.join("\n"));
+    assert.equal(JSON.parse(readFileSync(join(sb.plur1busHome, "manifest.json"), "utf8")).binary.version, "0.2.0");
+    assert.equal(sb.provider(work), "plur1bus");
+    const st = readHermesState(work);
+    assert.equal(st.hostUpdate, undefined, "the progress record is not kept");
+    assert.equal(st.sidecarFresh, false);
+    assert.equal(existsSync(join(sb.plur1busHome, "backups", "host-update-home")) && readdirSync(join(sb.plur1busHome, "backups", "host-update-home")).length, 0, "the home-file backup goes once the install finished");
+    assert.equal(readdirSync(join(sb.plur1busHome, "backups", "host-update")).length > 0, true, "the store snapshot is kept");
+    assert.deepEqual(strays(sb), []);
+  });
+
+  it("a failed install over an older shared host sidecar restores its binary, setup, home files, store and daemon (I1)", async () => {
+    const ctx = await olderSharedSidecar({ selftestFail: true });
+    const { sb } = ctx;
+    const n = sb.plur1busCalls().length;
+    const r = await run(sb, ["--hermes-profile", "work", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    const doc = JSON.parse(r.stdout);
+    assert.equal(doc.steps.find((x) => x.id === "rollback").status, "ok", r.out);
+    assert.equal(doc.steps.find((x) => x.id === "restore").status, "ok", "the new setup changed the store, so it is restored");
+    const p = sb.plur1busCalls().slice(n).filter((a) => a[0] !== "--version").map((a) => a.slice(3).join(" "));
+    assert.equal(p.filter((c) => c.startsWith("setup")).length, 2, `the previous binary set itself up again:\n${p.join("\n")}`);
+    assert.ok(p.includes("daemon start"), "the daemon runs again, as before");
+    assert.ok(!p.includes("service uninstall"), "a shared sidecar's service is never removed");
+    assertSidecarAsBefore(ctx);
+    // the next install over it is still treated as an older sidecar (no manifest newer than its binary is left)
+    sb.setScenario({ selftestFail: false });
+    const again = await run(sb, ["--hermes-profile", "work", "--json"]);
+    assert.equal(again.code, EXIT.OK, again.out);
+    assert.equal(JSON.parse(again.stdout).sidecar.updatedFrom, "0.1.0");
+  });
+
+  for (const point of ["update.snapshotted", "sidecar.moved-aside"]) {
+    it(`an install over an older shared host sidecar killed at ${point}: --rollback restores it, a re-run finishes it (I1)`, { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+      for (const mode of ["rollback", "resume"]) {
+        const ctx = await olderSharedSidecar();
+        const { sb, work } = ctx;
+        const k = runChild(sb, ["--hermes-profile", "work"], { killAt: point });
+        assert.notEqual(k.status, 0, `${point}: not killed\n${k.stdout}${k.stderr}`);
+        assert.ok(readHermesState(work)?.hostUpdate, `the update-grade progress is recorded\n${k.stdout}${k.stderr}`);
+        if (mode === "rollback") {
+          const r = await run(sb, ["--hermes-profile", "work", "--rollback", "--json"]);
+          assert.equal(r.code, EXIT.FAILED, r.out);
+          assert.equal(JSON.parse(r.stdout).steps.find((x) => x.id === "rollback").status, "ok", r.out);
+          assertSidecarAsBefore(ctx);
+        } else {
+          const r = await run(sb, ["--hermes-profile", "work", "--json"]);
+          assert.equal(r.code, EXIT.OK, r.out);
+          assert.equal(JSON.parse(readFileSync(join(sb.plur1busHome, "manifest.json"), "utf8")).binary.version, "0.2.0");
+          assert.equal(sb.provider(work), "plur1bus");
+          assert.deepEqual(strays(sb), []);
+        }
+      }
+    });
+  }
+
+  it("a sidecar is reused only when its binary reports at least the release's version, not just its manifest (I1)", async () => {
+    const sb = createHermesSandbox();
+    sb.seedHostSidecar({ version: "0.2.0", useClass: "commercial" }); // the manifest says 0.2.0, the binary is 0.1.0
+    const { binArtefact } = await sb.addRelease({ version: "0.2.0" });
+    const r = await run(sb, ["--json"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.match(r.out, /names sidecar 0\.2\.0, but .* reports 0\.1\.0; it is replaced like an older sidecar/s);
+    const doc = JSON.parse(r.stdout);
+    assert.equal(doc.sidecar.reused, false);
+    assert.ok(doc.steps.some((x) => x.id === "snapshot"), "the update-grade sequence ran");
+    assert.equal(sha256File(sb.sidecarBin), sha256File(binArtefact));
+  });
+
   // F19 / Review Focus 5: every step and kill point, each followed by a resumed run and, separately, by --rollback.
   // The Hermes home already holds a plugins/plur1bus (not ours) and ~/.local/bin a plur1bus binary (not ours):
   // a rollback must leave both exactly as they were, a finished resume must leave no stray copy.
@@ -521,7 +659,7 @@ describe("hermes installer: install", () => {
     const f = JSON.parse(r.stdout).findings.find((x) => x.id === "agent-id-conflict");
     assert.ok(f, r.out);
     assert.ok(f.detail.includes(join(realpathSync.native(sb.hermesRoot), "profiles", "Work")) && f.detail.includes(join(realpathSync.native(sb.hermesRoot), "profiles", "work")), f.detail);
-    assert.deepEqual(sb.log().slice(n).filter((e) => e.bin === "plur1bus"), []);
+    assert.deepEqual(sb.log().slice(n).filter((e) => e.bin === "plur1bus" && e.argv[0] !== "--version"), [], "only the binary's version is read");
     assert.equal(treeDigest(workHome), before);
   });
 
@@ -704,7 +842,7 @@ describe("hermes installer: install", () => {
     assert.match(r.out, /up-to-date/);
     assert.equal(JSON.parse(r.stdout).mode, "update");
     assert.deepEqual(mutating(sb.log().slice(n).filter((e) => e.bin === "hermes").map((e) => e.argv)), []);
-    assert.deepEqual(sb.log().slice(n).filter((e) => e.bin === "plur1bus"), []);
+    assert.deepEqual(sb.log().slice(n).filter((e) => e.bin === "plur1bus" && e.argv[0] !== "--version"), [], "only the binary's version is read");
     // a newer release needs the update path
     const f = structuredClone(sb.feed);
     f.hosts.hermes.releases[0].version = "0.2.0";
