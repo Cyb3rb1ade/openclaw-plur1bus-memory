@@ -194,7 +194,7 @@ describe("scripts/dist/build-plugin-feed.mjs", () => {
     assert.match(c.stderr, /channel/);
   });
 
-  it("rejects hosts.hermes", () => {
+  it("rejects a malformed hosts.hermes", () => {
     assert.deepEqual(validateFeed(fixtureFeed), { ok: true, errors: [] });
     const withHermes = clone(fixtureFeed);
     withHermes.hosts.hermes = { latest: "0.1.0", releases: [] };

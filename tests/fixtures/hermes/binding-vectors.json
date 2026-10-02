@@ -1,0 +1,96 @@
+{
+  "schema": "plur1bus.hermes-binding-vectors/1",
+  "description": "Agent-id rules of HM2-R8a, shared by the Python provider (hosts/hermes/plur1bus/binding.py) and the installer (plugin repo, scripts/dist/installer/hermes/binding.mjs); the harness release job byte-compares the plugin repo's copy. fold: hermes- + profile, ASCII A-Z lower-cased, every other code point outside [a-z0-9_-] -> '-', cut to 64 characters. classify: inputs are already realpath-resolved; the hash is sha256 over the exact UTF-8 home string, first 8 hex (values computed with sha256sum). registry: each step adds agentId -> home; 'conflict' names the home already holding the id.",
+  "fold": [
+    { "profile": "default", "agentId": "hermes-default" },
+    { "profile": "work", "agentId": "hermes-work" },
+    { "profile": "Work", "agentId": "hermes-work" },
+    { "profile": "Work.v2", "agentId": "hermes-work-v2" },
+    { "profile": "UPPER_case-1", "agentId": "hermes-upper_case-1" },
+    { "profile": "my profile", "agentId": "hermes-my-profile" },
+    { "profile": "J\u00fcrgen", "agentId": "hermes-j-rgen" },
+    { "profile": "\u0130nfo", "agentId": "hermes--nfo" },
+    { "profile": "\ud83d\ude00x", "agentId": "hermes--x" },
+    { "profile": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "agentId": "hermes-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+  ],
+  "classify": [
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/home/u/.hermes", "agentId": "hermes-default" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/home/u/.hermes/profiles/work", "agentId": "hermes-work" },
+    { "platform": "darwin", "defaultRoot": "/home/u/.hermes", "home": "/home/u/.hermes/profiles/Work.v2", "agentId": "hermes-work-v2" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/srv/hermes", "agentId": "hermes-home-fbdca692" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/srv/hermes/profiles/work", "agentId": "hermes-home-daa12254" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/home/u/.hermes/custom-x", "agentId": "hermes-home-5b36e088" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/home/u/.hermes/profiles/work/sub", "agentId": "hermes-home-b86a1870" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/home/u/.hermes-other", "agentId": "hermes-home-c614157b" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/home/u/hh", "agentId": "hermes-home-31de8886" },
+    { "platform": "linux", "defaultRoot": "/home/u/.hermes", "home": "/opt/h\u0130/x", "agentId": "hermes-home-f86b1b62" },
+    { "platform": "win32", "defaultRoot": "C:\\Users\\u\\AppData\\Local\\hermes", "home": "C:\\Users\\u\\AppData\\Local\\hermes", "agentId": "hermes-default" },
+    { "platform": "win32", "defaultRoot": "C:\\Users\\u\\AppData\\Local\\hermes", "home": "c:\\users\\U\\appdata\\local\\HERMES", "agentId": "hermes-default" },
+    { "platform": "win32", "defaultRoot": "C:\\Users\\u\\AppData\\Local\\hermes", "home": "C:\\Users\\u\\AppData\\Local\\hermes\\Profiles\\Work", "agentId": "hermes-work" },
+    { "platform": "win32", "defaultRoot": "C:\\Users\\u\\AppData\\Local\\hermes", "home": "C:\\Users\\J\u00fcrgen A\\hermes-alt", "agentId": "hermes-home-cefc57df" }
+  ],
+  "registry": [
+    {
+      "name": "the same home twice is idempotent",
+      "platform": "linux",
+      "steps": [
+        { "agentId": "hermes-work", "home": "/home/u/.hermes/profiles/work", "result": "ok" },
+        { "agentId": "hermes-work", "home": "/home/u/.hermes/profiles/work", "result": "ok" }
+      ],
+      "bindings": { "hermes-work": "/home/u/.hermes/profiles/work" }
+    },
+    {
+      "name": "Work and work fold to one id and are refused, naming both",
+      "platform": "linux",
+      "steps": [
+        { "agentId": "hermes-work", "home": "/home/u/.hermes/profiles/Work", "result": "ok" },
+        { "agentId": "hermes-work", "home": "/home/u/.hermes/profiles/work", "result": { "conflict": "/home/u/.hermes/profiles/Work" } }
+      ],
+      "bindings": { "hermes-work": "/home/u/.hermes/profiles/Work" }
+    },
+    {
+      "name": "Windows compares homes case-insensitively",
+      "platform": "win32",
+      "steps": [
+        { "agentId": "hermes-work", "home": "C:\\Users\\u\\AppData\\Local\\hermes\\profiles\\Work", "result": "ok" },
+        { "agentId": "hermes-work", "home": "c:\\users\\u\\appdata\\local\\hermes\\profiles\\work", "result": "ok" }
+      ],
+      "bindings": { "hermes-work": "C:\\Users\\u\\AppData\\Local\\hermes\\profiles\\Work" }
+    },
+    {
+      "name": "different ids coexist",
+      "platform": "linux",
+      "steps": [
+        { "agentId": "hermes-default", "home": "/home/u/.hermes", "result": "ok" },
+        { "agentId": "hermes-home-fbdca692", "home": "/srv/hermes", "result": "ok" }
+      ],
+      "bindings": { "hermes-default": "/home/u/.hermes", "hermes-home-fbdca692": "/srv/hermes" }
+    },
+    {
+      "name": "Windows folds case fully, as Python casefold: \u00df and SS, every sigma, \u0130 is not plain i",
+      "platform": "win32",
+      "steps": [
+        { "agentId": "hermes-a", "home": "C:\\Users\\STRASSE\\hermes", "result": "ok" },
+        { "agentId": "hermes-a", "home": "c:\\users\\stra\u00dfe\\Hermes", "result": "ok" },
+        { "agentId": "hermes-a", "home": "C:\\Users\\STRA\u1e9eE\\hermes", "result": "ok" },
+        { "agentId": "hermes-b", "home": "C:\\h\\\u039f\u0394\u039f\u03a3", "result": "ok" },
+        { "agentId": "hermes-b", "home": "c:\\h\\\u03bf\u03b4\u03bf\u03c3", "result": "ok" },
+        { "agentId": "hermes-b", "home": "C:\\h\\\u03bf\u03b4\u03bf\u03c2", "result": "ok" },
+        { "agentId": "hermes-c", "home": "C:\\h\\\u0130nfo", "result": "ok" },
+        { "agentId": "hermes-c", "home": "c:\\h\\i\u0307nfo", "result": "ok" },
+        { "agentId": "hermes-c", "home": "C:\\h\\info", "result": { "conflict": "C:\\h\\\u0130nfo" } },
+        { "agentId": "hermes-c", "home": "C:\\h\\\u0131nfo", "result": { "conflict": "C:\\h\\\u0130nfo" } }
+      ],
+      "bindings": { "hermes-a": "C:\\Users\\STRASSE\\hermes", "hermes-b": "C:\\h\\\u039f\u0394\u039f\u03a3", "hermes-c": "C:\\h\\\u0130nfo" }
+    },
+    {
+      "name": "POSIX compares homes exactly: \u00df and ss are different homes",
+      "platform": "linux",
+      "steps": [
+        { "agentId": "hermes-a", "home": "/home/u/stra\u00dfe", "result": "ok" },
+        { "agentId": "hermes-a", "home": "/home/u/strasse", "result": { "conflict": "/home/u/stra\u00dfe" } }
+      ],
+      "bindings": { "hermes-a": "/home/u/stra\u00dfe" }
+    }
+  ]
+}

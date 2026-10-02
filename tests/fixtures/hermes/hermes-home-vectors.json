@@ -1,0 +1,17 @@
+{
+  "schema": "plur1bus.hermes-home-vectors/1",
+  "description": "Hermes' default root per OS and the HERMES_HOME profile rule, the table of packages/core/test/import/roots.test.ts ('Hermes root per OS (G1)') as data. Checked by that test, by hosts/hermes/tests/test_binding.py (defaultRoot rows) and by the installer's resolveHermesHome (plugin repo copy, byte-compared at release).",
+  "cases": [
+    { "platform": "linux", "env": {}, "homedir": "/home/u", "root": "/home/u/.hermes", "resolvedFrom": "default", "profile": null },
+    { "platform": "darwin", "env": {}, "homedir": "/home/u", "root": "/home/u/.hermes", "resolvedFrom": "default", "profile": null },
+    { "platform": "win32", "env": { "LOCALAPPDATA": "D:\\Local" }, "homedir": "C:\\Users\\u", "root": "D:\\Local\\hermes", "resolvedFrom": "default", "profile": null },
+    { "platform": "win32", "env": { "LOCALAPPDATA": "  ", "USERPROFILE": "C:\\Users\\J\u00fcrgen" }, "homedir": "C:\\x", "root": "C:\\Users\\J\u00fcrgen\\AppData\\Local\\hermes", "resolvedFrom": "default", "profile": null },
+    { "platform": "win32", "env": {}, "homedir": "C:\\Users\\u", "root": "C:\\Users\\u\\AppData\\Local\\hermes", "resolvedFrom": "default", "profile": null },
+    { "platform": "linux", "env": { "HERMES_HOME": "$XDG_DATA_HOME/hermes", "XDG_DATA_HOME": "/data" }, "homedir": "/home/u", "root": "/data/hermes", "resolvedFrom": "env:HERMES_HOME", "profile": null },
+    { "platform": "linux", "env": { "HERMES_HOME": "~/hh" }, "homedir": "/home/u", "root": "/home/u/hh", "resolvedFrom": "env:HERMES_HOME", "profile": null },
+    { "platform": "win32", "env": { "HERMES_HOME": "%LOCALAPPDATA%\\hermes-alt", "LOCALAPPDATA": "C:\\L" }, "homedir": "C:\\Users\\u", "root": "C:\\L\\hermes-alt", "resolvedFrom": "env:HERMES_HOME", "profile": null },
+    { "platform": "win32", "env": { "HERMES_HOME": "~\\hh", "USERPROFILE": "C:\\Users\\u" }, "homedir": "C:\\x", "root": "C:\\Users\\u\\hh", "resolvedFrom": "env:HERMES_HOME", "profile": null },
+    { "platform": "linux", "env": { "HERMES_HOME": "/srv/h/profiles/work" }, "homedir": "/home/u", "root": "/srv/h", "resolvedFrom": "env:HERMES_HOME", "profile": "work" },
+    { "platform": "win32", "env": { "HERMES_HOME": "C:\\L\\hermes\\Profiles\\Work" }, "homedir": "C:\\x", "root": "C:\\L\\hermes", "resolvedFrom": "env:HERMES_HOME", "profile": "Work" }
+  ]
+}

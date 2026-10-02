@@ -30,11 +30,14 @@
  * its own shim (global constraint "never touch a real OpenClaw installation").
  */
 
-import { accessSync, constants, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeTempDir } from "./temp-dir.js";
+import { addWindowsEnv, assertShimOnPath, sink, writeLauncher } from "./sandbox-common.js";
+
+export { sink };
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const FIXTURES = join(HERE, "..", "fixtures", "openclaw-cli");
@@ -289,23 +292,6 @@ if (target.endsWith("openclaw-shim.mjs")) {
 }
 `;
 
-/** Find `name` on a PATH string the way the installer does (first executable hit). */
-function resolveOnPath(name, pathValue) {
-  const exts = process.platform === "win32" ? [".cmd", ".exe", ""] : [""];
-  for (const dir of pathValue.split(delimiter).filter(Boolean)) {
-    for (const ext of exts) {
-      const p = join(dir, name + ext);
-      try {
-        accessSync(p, constants.X_OK);
-        return p;
-      } catch {
-        // keep looking
-      }
-    }
-  }
-  return null;
-}
-
 /**
  * A minimal valid plur1bus.plugin-feed/1 for the fixtures (TEST ONLY URLs).
  * @param {{ version?: string, clawpackDigest?: string|null, integrity?: string, tarballSha256?: string, tarballUrl?: string, minGatewayVersion?: string, node?: string, windowsNativeBeta?: boolean }} [o]
@@ -370,15 +356,10 @@ export function createInstallerSandbox(opts = {}) {
   const q = (s) => JSON.stringify(s);
   writeFileSync(join(binDir, "openclaw-shim.mjs"), OPENCLAW_SHIM.replace("__SANDBOX__", q(root)).replace("__FIXTURES__", q(FIXTURES)));
   writeFileSync(join(binDir, "node-shim.mjs"), NODE_SHIM.replace("__SANDBOX__", q(root)));
-  const real = process.execPath;
-  if (process.platform === "win32") {
-    // %~dp0 (the .cmd's own directory), as npm's shims do: cmd.exe reads a batch file in the OEM code page, so a
-    // literal UTF-8 sandbox path such as ".../p b/Jürgen" came out garbled and every shim call failed.
-    writeFileSync(join(binDir, "node.cmd"), `@"${real}" "%~dp0node-shim.mjs" %*\r\n`);
-    writeFileSync(join(binDir, "openclaw.cmd"), `@"${real}" "%~dp0openclaw-shim.mjs" %*\r\n`);
-  } else {
-    writeFileSync(join(binDir, "node"), `#!/bin/sh\nexec "${real}" "${join(binDir, "node-shim.mjs")}" "$@"\n`, { mode: 0o755 });
-    writeFileSync(join(binDir, "openclaw"), `#!/bin/sh\nexec "${join(binDir, "node")}" "${join(binDir, "openclaw-shim.mjs")}" "$@"\n`, { mode: 0o755 });
+  writeLauncher(binDir, "node", "node-shim.mjs");
+  // the openclaw shim has install-cli.sh's shape (`exec "<node>" "<entry>"`), so node detection finds the node shim
+  writeLauncher(binDir, "openclaw", "openclaw-shim.mjs", { via: join(binDir, "node") });
+  if (process.platform !== "win32") {
     // `crontab` shim (HM1-R9 guard probe): logs its argv, prints <root>/crontab.txt, never edits anything
     writeFileSync(
       join(binDir, "crontab"),
@@ -410,27 +391,10 @@ export function createInstallerSandbox(opts = {}) {
     ...(opts.profile ? { OPENCLAW_PROFILE: opts.profile } : { OPENCLAW_STATE_DIR: stateDir }),
     ...(opts.extraEnv ?? {}),
   };
-  if (process.platform === "win32") {
-    env.PATHEXT = ".COM;.EXE;.BAT;.CMD";
-    // OpenClaw's openclaw.cmd and the shims are .cmd files, run through cmd.exe (openclaw-cli.mjs defaultRun), and the
-    // .ps1 bootstrap reads the architecture from PROCESSOR_ARCHITECTURE: without SystemRoot/ComSpec and System32 on
-    // PATH every shim call exited 127 and the installer saw no OpenClaw ("unknown version", config-invalid) on the
-    // Windows test-cross legs. System32 holds no openclaw or node, so the shim check below still holds.
-    const sysRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
-    env.SystemRoot = sysRoot;
-    env.windir = sysRoot;
-    env.ComSpec = process.env.ComSpec ?? process.env.COMSPEC ?? join(sysRoot, "System32", "cmd.exe");
-    for (const k of ["PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "NUMBER_OF_PROCESSORS", "OS", "SystemDrive"]) {
-      if (process.env[k] !== undefined) env[k] = process.env[k];
-    }
-    env.PATH = [binDir, join(sysRoot, "System32"), join(sysRoot, "System32", "WindowsPowerShell", "v1.0")].join(delimiter);
-  }
-
-  const resolved = resolveOnPath("openclaw", env.PATH);
-  const expected = join(binDir, process.platform === "win32" ? "openclaw.cmd" : "openclaw");
-  if (!resolved || realpathSync(resolved) !== realpathSync(expected)) {
-    throw new Error(`installer-sandbox: PATH resolves openclaw to ${resolved}, not the sandbox shim ${expected}`);
-  }
+  // OpenClaw's openclaw.cmd and the shims are .cmd files run through cmd.exe (openclaw-cli.mjs defaultRun), and the
+  // .ps1 bootstrap reads the architecture from PROCESSOR_ARCHITECTURE (sandbox-common.js addWindowsEnv).
+  addWindowsEnv(env, binDir);
+  assertShimOnPath("openclaw", env, binDir, "installer-sandbox");
 
   return {
     root,
@@ -471,12 +435,6 @@ export function createInstallerSandbox(opts = {}) {
 /** SHA-256 hex of a file. */
 export function sha256File(p) {
   return createHash("sha256").update(readFileSync(p)).digest("hex");
-}
-
-/** Collect a writable's output. */
-export function sink() {
-  let text = "";
-  return { write: (c) => { text += String(c); return true; }, get text() { return text; } };
 }
 
 /**

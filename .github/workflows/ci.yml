@@ -44,6 +44,9 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+        env:
+          # tests/dist-hermes-lock-interop.test.js: Node and Python (>= 3.11, on the image) on one registry lock
+          PLUR1BUS_REQUIRE_LOCK_INTEROP: '1'
       # Informational policy retained. The pinned optional inference patches
       # (adm-zip 0.6.1, sharp 0.35.4) are covered by local-inference regressions;
       # audit output remains visible for newly published advisories.
@@ -102,6 +105,9 @@ jobs:
       # late run (85 of 5962 tests silently missing on Linux). The Linux `test` job keeps plain `npm test`.
       - name: Run tests
         run: npm run test:cross
+        env:
+          # tests/dist-hermes-lock-interop.test.js on macOS and Windows (harness cab7783's Windows lock retries)
+          PLUR1BUS_REQUIRE_LOCK_INTEROP: '1'
 
   # engine-win review item 8: the .ps1 bootstrap's wsl:<distro> path pipes the verified bootstrap.sh into
   # `wsl.exe ... sh -s`. Under Windows PowerShell 5.1 (.NET Framework) a UTF-8 console input encoding used to put

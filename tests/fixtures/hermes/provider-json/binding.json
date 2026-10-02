@@ -1,0 +1,10 @@
+{
+  "schema": "plur1bus.hermes-binding/1",
+  "version": "0.1.0",
+  "installedBy": "plur1bus-plugin-installer",
+  "home": "/home/u/.plur1bus",
+  "bin": "/usr/local/bin/plur1bus",
+  "agentId": "hermes-work",
+  "recallHardMs": 600,
+  "capture": true
+}

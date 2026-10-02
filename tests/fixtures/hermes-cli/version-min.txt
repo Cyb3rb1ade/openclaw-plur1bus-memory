@@ -1,0 +1,7 @@
+$ hermes --version
+Hermes Agent v0.21.4 (2026.9.21) · upstream 16c59d0e · local 743ee725 (+39948 carried commits)
+Install directory: <install-dir>
+Install method: git
+Python: 3.11.15
+OpenAI SDK: 2.24.0
+[exit 0]

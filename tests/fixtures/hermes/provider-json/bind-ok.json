@@ -1,0 +1,8 @@
+{
+  "schema": "plur1bus.hermes-bind/1",
+  "ok": true,
+  "hermesHome": "<home>/.hermes/profiles/work",
+  "home": "<plur1bus-home>",
+  "agentId": "hermes-work",
+  "created": true
+}

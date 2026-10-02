@@ -1,0 +1,28 @@
+$ hermes memory status
+
+Memory status
+────────────────────────────────────────
+  Built-in (MEMORY.md / USER.md):
+    Memory injection:   enabled ✓
+    User profile:       enabled ✓
+    Memory tool:        enabled ✓
+  Provider:  plur1bus
+
+  Plugin:    installed ✓
+  Status:    not available ✗
+  Note: systemd/gateway services do not inherit ~/.hermes/.env —
+        set any variables above in the service environment.
+
+  Installed plugins:
+    • byterover  (API key / local)
+    • hindsight  (API key / local)
+    • holographic  (local)
+    • honcho  (API key / local)
+    • mem0  (API key / local)
+    • openviking  (API key / local)
+    • retaindb  (API key / local)
+    • supermemory  (requires API key)
+    • plur1bus  (no setup needed) ← active
+    • scratch  (no setup needed)
+
+[exit 0]

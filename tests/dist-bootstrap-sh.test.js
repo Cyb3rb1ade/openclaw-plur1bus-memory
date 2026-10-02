@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createInstallerSandbox, makeTestFeed } from "./helpers/installer-sandbox.js";
+import { makeTarGz } from "./helpers/ustar.js";
 import { generateTestKeyPair } from "./helpers/minisign-sign.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -127,9 +128,9 @@ function makeBootstrapCase(o = {}) {
     env,
     feedBytes,
     tmpDir: env.TMPDIR,
-    run(args = []) {
+    run(args = [], scriptPath = script) {
       // umask 022 first: the bootstrap's private 077 must not leak into the installer.
-      const r = spawnSync("sh", ["-c", 'umask 022 && exec sh "$0" "$@"', script, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
+      const r = spawnSync("sh", ["-c", 'umask 022 && exec sh "$0" "$@"', scriptPath, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 });
       return { code: r.status, stdout: r.stdout, stderr: r.stderr, out: r.stdout + r.stderr };
     },
     /** Start the bootstrap, SIGTERM it (only it) once `startedFile` exists, then create `goFile`; resolves {code, signal}. */
@@ -156,6 +157,8 @@ function makeBootstrapCase(o = {}) {
     installer() {
       return existsSync(mark) ? JSON.parse(readFileSync(mark, "utf8")) : null;
     },
+    nodeLog,
+    bin,
     nodeCalls() {
       return readFileSync(nodeLog, "utf8").split("\n").filter(Boolean);
     },
@@ -168,7 +171,7 @@ function makeBootstrapCase(o = {}) {
 describe("install-plugin.sh", { skip: SKIP }, () => {
   before(() => {
     const out = makeTempDir("plur1bus-bootstraps-");
-    const r = spawnSync(process.execPath, [RENDER, "--test-key", "--out-dir", out], { encoding: "utf8" });
+    const r = spawnSync(process.execPath, [RENDER, "--test-key", "--node-pins", join(ROOT, "scripts", "dist", "node-pins.json"), "--out-dir", out], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     script = join(out, "install-plugin.sh");
   });
@@ -347,5 +350,162 @@ describe("install-plugin.sh", { skip: SKIP }, () => {
       .join("\n");
     assert.ok(shell.length < text.length, "the verifier is inlined as a here-document");
     assert.doesNotMatch(shell, /(^|\s)\[\[\s|\bfunction\s+\w+|\blocal\s|\$\{[A-Za-z_]+\/\/|<<<|\bsudo\b|\bsource\s/m);
+  });
+});
+
+// ── --host hermes (HM2 Task 10, HM2-R16) ─────────────────────────────────────
+const NODE_PINS_FILE = join(ROOT, "scripts", "dist", "node-pins.json");
+const HOST_TARGET = `${process.platform === "darwin" ? "darwin" : "linux"}-${process.arch === "arm64" ? "arm64" : "x64"}`;
+
+/** A bootstrap rendered with node pins whose host-target hash is `sha` (TEST ONLY). */
+function renderWithPins(sha) {
+  const pins = JSON.parse(readFileSync(NODE_PINS_FILE, "utf8"));
+  pins.targets[HOST_TARGET].sha256 = sha;
+  const dir = makeTempDir("plur1bus-bootstraps-pins-");
+  const file = join(dir, "node-pins.json");
+  writeFileSync(file, JSON.stringify(pins));
+  const r = spawnSync(process.execPath, [RENDER, "--test-key", "--node-pins", file, "--out-dir", dir], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return join(dir, "install-plugin.sh");
+}
+
+/** A Hermes case: hermes on PATH (unless `hermes: false`), a too-old node on PATH, optional Hermes/sidecar Node. */
+function makeHermesCase(o = {}) {
+  const c = makeBootstrapCase({ pathNode: o.pathNode ?? "old", privateNode: "none", openclaw: false });
+  const home = c.env.HOME;
+  if (o.hermes !== false) writeFileSync(join(c.bin, "hermes"), "#!/bin/sh\necho 'Hermes Agent v0.21.5 (2026.9.24) TEST ONLY'\n", { mode: 0o755 });
+  const good = (label, version) => `#!/bin/sh\nif [ "$1" = --version ] && [ -n "${version ?? ""}" ]; then echo ${version ?? ""}; exit 0; fi\nprintf '%s\\n' "${label}" >>"${c.nodeLog}"\nexec "${process.execPath}" "$@"\n`;
+  const old = "#!/bin/sh\nif [ \"$1\" = --version ]; then echo v22.22.2; exit 0; fi\nexit 97\n";
+  const put = (p, text) => {
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, text, { mode: 0o755 });
+  };
+  if (o.hermesNode === "good") put(join(home, ".hermes", "node", "bin", "node"), good("hermes-node"));
+  if (o.hermesNode === "node26") put(join(home, ".hermes", "tools", "node-26.7.0-x", "bin", "node"), good("hermes-node26", "v26.7.0"));
+  if (o.hermesNode === "old") put(join(home, ".hermes", "node", "bin", "node"), old);
+  if (o.sidecarNode === "good") put(join(home, ".plur1bus", "runtime", "node-v24.21.0-x", "bin", "node"), good("sidecar-node"));
+  // the pinned Node archive under a file:// "nodejs.org/dist"
+  const base = join(c.root, "nodejs-dist");
+  const name = `node-v24.21.0-${HOST_TARGET}`;
+  mkdirSync(join(base, "v24.21.0"), { recursive: true });
+  const archive = join(base, "v24.21.0", `${name}.tar.gz`);
+  writeFileSync(archive, makeTarGz([
+    { name: `${name}/`, type: "5", mode: 0o755 },
+    { name: `${name}/bin/`, type: "5", mode: 0o755 },
+    { name: `${name}/bin/node`, mode: 0o755, data: good("pinned") },
+  ]));
+  c.env.PLUR1BUS_PLUGIN_TEST_NODE_BASE = `file://${base}`;
+  const cacheRoot = process.platform === "darwin" ? join(home, "Library", "Caches") : (c.env.XDG_CACHE_HOME || join(home, ".cache"));
+  return { ...c, archive, archiveSha: sha256(readFileSync(archive)), cachedArchive: join(cacheRoot, "plur1bus", "bootstrap-node-24.21.0", `${name}.tar.gz`) };
+}
+
+describe("install-plugin.sh --host hermes", { skip: SKIP }, () => {
+  it("--host hermes without hermes exits 3 hermes-not-found", () => {
+    const c = makeHermesCase({ hermes: false });
+    const r = c.run(["--host", "hermes"]);
+    assert.equal(r.code, 3, r.out);
+    assert.match(r.stderr, /hermes-not-found/);
+    assert.deepEqual(c.curlUrls(), []);
+    assert.equal(c.installer(), null);
+  });
+
+  it("uses Hermes' own Node when in range (Node 26 too), else a sidecar's Node", () => {
+    const c = makeHermesCase({ hermesNode: "good" });
+    const r = c.run(["--host", "hermes", "--json"]);
+    assert.equal(r.code, 0, r.out);
+    assert.deepEqual(c.installer().argv.slice(2), ["--host", "hermes", "--json"], "--host reaches the installer");
+    assert.ok(c.nodeCalls().length && c.nodeCalls().every((l) => l === "hermes-node"), c.nodeCalls().join(","));
+    assert.ok(!c.curlUrls().some((u) => u.includes("nodejs-dist")), "no Node download");
+
+    const n26 = makeHermesCase({ hermesNode: "node26" });
+    assert.equal(n26.run(["--host=hermes"]).code, 0);
+    assert.ok(n26.nodeCalls().every((l) => l === "hermes-node26"), "Hermes main's Node 26.7.0 is in the engines range (HM2-R25)");
+
+    const side = makeHermesCase({ hermesNode: "old", sidecarNode: "good" });
+    assert.equal(side.run(["--host", "hermes"]).code, 0);
+    assert.ok(side.nodeCalls().every((l) => l === "sidecar-node"), side.nodeCalls().join(","));
+  });
+
+  it("falls back to the pinned Node download and verifies its sha256", () => {
+    const c = makeHermesCase();
+    const s = renderWithPins(c.archiveSha);
+    const r = c.run(["--host", "hermes"], s);
+    assert.equal(r.code, 0, r.out);
+    assert.ok(c.installer(), r.out);
+    assert.ok(c.nodeCalls().length && c.nodeCalls().every((l) => l === "pinned"), c.nodeCalls().join(","));
+    assert.equal(c.curlUrls().filter((u) => u.endsWith(`node-v24.21.0-${HOST_TARGET}.tar.gz`)).length, 1);
+    assert.equal(sha256(readFileSync(c.cachedArchive)), c.archiveSha, "the verified archive is cached");
+    assert.deepEqual(spawnSync("ls", ["-A", c.tmpDir], { encoding: "utf8" }).stdout, "", "the extracted Node lived in the private temp dir");
+    // host openclaw never downloads a Node
+    const oc = makeBootstrapCase({ pathNode: "old", privateNode: "old" });
+    assert.equal(oc.run([], s).code, 3);
+  });
+
+  it("a Node archive hash mismatch exits 1 and runs nothing", () => {
+    const c = makeHermesCase();
+    const r = c.run(["--host", "hermes"], renderWithPins("f".repeat(64)));
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.stderr, /checksum mismatch .*node-v24\.21\.0/);
+    assert.equal(c.installer(), null);
+    assert.deepEqual(c.nodeCalls(), [], "nothing ran");
+    assert.equal(existsSync(c.cachedArchive), false, "a mismatching download is not cached");
+  });
+
+  it("a cached Node archive is re-hashed before reuse", () => {
+    const c = makeHermesCase();
+    const s = renderWithPins(c.archiveSha);
+    assert.equal(c.run(["--host", "hermes"], s).code, 0);
+    const downloads = () => c.curlUrls().filter((u) => u.endsWith(".tar.gz")).length;
+    assert.equal(downloads(), 1);
+    // a good cached archive is reused (hashed again, not fetched again)
+    assert.equal(c.run(["--host", "hermes"], s).code, 0);
+    assert.equal(downloads(), 1);
+    // a tampered cached archive is detected and fetched again
+    writeFileSync(c.cachedArchive, Buffer.concat([readFileSync(c.cachedArchive), Buffer.from("x")]));
+    const r = c.run(["--host", "hermes"], s);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.stderr, /does not match its pinned SHA-256; downloading it again/);
+    assert.equal(downloads(), 2);
+    assert.equal(sha256(readFileSync(c.cachedArchive)), c.archiveSha);
+  });
+
+  it("an unknown --host is refused", () => {
+    const c = makeHermesCase();
+    const r = c.run(["--host", "claude"]);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.stderr, /unknown --host claude/);
+  });
+});
+
+describe("install-plugin.sh --host hermes (T10 review 1, 3)", { skip: SKIP }, () => {
+  it("the Node archive is hashed and extracted as a private copy in the temp dir, never from the cache path", () => {
+    const c = makeHermesCase();
+    const s = renderWithPins(c.archiveSha);
+    const tarLog = join(c.root, "tar.log");
+    const realTar = which("tar");
+    writeFileSync(join(c.bin, "tar"), `#!/bin/sh\nprintf '%s\\n' "$*" >>"${tarLog}"\nexec "${realTar}" "$@"\n`, { mode: 0o755 });
+    for (const round of [1, 2]) {
+      const r = c.run(["--host", "hermes"], s);
+      assert.equal(r.code, 0, `${round}: ${r.out}`);
+    }
+    const calls = readFileSync(tarLog, "utf8").split("\n").filter(Boolean);
+    assert.equal(calls.length, 2, calls.join("\n"));
+    for (const call of calls) {
+      assert.ok(call.includes(c.tmpDir), `extracts from the private temp dir: ${call}`);
+      assert.ok(!call.includes(dirname(c.cachedArchive)), `never from the cache: ${call}`);
+    }
+  });
+
+  it("HERMES_HOME is expanded as Hermes does (~, $VAR, ${VAR}) before Hermes' own Node is looked up", () => {
+    for (const [hh, dir] of [["~/hh", "hh"], ["$HOME/hh2", "hh2"], ["${HOME}/hh3/profiles/work", "hh3"]]) {
+      const c = makeHermesCase();
+      const node = join(c.env.HOME, dir, "node", "bin", "node");
+      mkdirSync(dirname(node), { recursive: true });
+      writeFileSync(node, `#!/bin/sh\nprintf '%s\\n' expanded >>"${c.nodeLog}"\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+      c.env.HERMES_HOME = hh;
+      const r = c.run(["--host", "hermes"]);
+      assert.equal(r.code, 0, `${hh}: ${r.out}`);
+      assert.ok(c.nodeCalls().length && c.nodeCalls().every((l) => l === "expanded"), `${hh}: ${c.nodeCalls().join(",")}`);
+    }
   });
 });

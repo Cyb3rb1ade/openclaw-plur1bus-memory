@@ -201,11 +201,11 @@ jobs:
           bundle="$out/plur1bus-plugin-installer.mjs"
           # The bundle gets the same keys as the bootstraps, before the feed hashes it and before SHA256SUMS.
           if [ -n "$PUBKEY_STABLE" ] && [ -n "$PUBKEY_BETA" ]; then
-            node scripts/dist/render-bootstraps.mjs --pubkey-stable "$PUBKEY_STABLE" --pubkey-beta "$PUBKEY_BETA" --out-dir "$out" --installer "$bundle"
+            node scripts/dist/render-bootstraps.mjs --pubkey-stable "$PUBKEY_STABLE" --pubkey-beta "$PUBKEY_BETA" --node-pins scripts/dist/node-pins.json --out-dir "$out" --installer "$bundle"
             echo "keys=release" >> "$RUNNER_TEMP/keys.env"
           elif [ "$DRY_RUN" = true ]; then
             echo "::warning::PLUR1BUS_RELEASE_PUBKEY_STABLE / _BETA are not set (P4): rendering TEST ONLY bootstraps and installer bundle that verify no real feed. A real run would fail."
-            node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out" --installer "$bundle"
+            node scripts/dist/render-bootstraps.mjs --test-key --node-pins scripts/dist/node-pins.json --out-dir "$out" --installer "$bundle"
             echo "keys=test" >> "$RUNNER_TEMP/keys.env"
           else
             echo "::error::PLUR1BUS_RELEASE_PUBKEY_STABLE and PLUR1BUS_RELEASE_PUBKEY_BETA repository variables are required for a real release"
@@ -270,6 +270,19 @@ jobs:
           if [ -n "$CLAWPACK_DIGEST" ]; then args+=(--clawpack-digest "$CLAWPACK_DIGEST"); fi
           # HM1-R14/O1: the npm locator is in the feed only once the owner enabled the npm publish.
           if [ "$NPM" != yes ]; then args+=(--no-npm); fi
+          # HM2 Task 12 (F31, F32): hosts.hermes from the sidecar lock, with the release's own notes. When the previous
+          # feed already carries the lock's version with the same hashes, the builder keeps that Hermes release as it is
+          # (a refused re-tag otherwise). I3: a placeholder lock (no harness release P4 yet) never blocks a release: the
+          # feed is built without --hermes-lock (hosts.hermes as in the previous feed, none before P4), with a warning in
+          # the log and the job summary. The builder itself still refuses a placeholder lock passed to it.
+          lock=scripts/dist/hermes-sidecar.lock.json
+          if node -e 'process.exit(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).placeholder === true ? 0 : 1)' "$lock"; then
+            msg="$lock is a placeholder (harness release P4 not filled in): this feed adds no Hermes release; hosts.hermes stays as in the previous feed (none before P4)"
+            echo "::warning title=Hermes host omitted::$msg"
+            { echo "> [!WARNING]"; echo "> **Hermes host omitted.** $msg"; echo ""; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            args+=(--hermes-lock "$lock" --hermes-notes-de "docs/release-notes/$VERSION.de.md" --hermes-notes-en "docs/release-notes/$VERSION.en.md")
+          fi
           node scripts/dist/build-plugin-feed.mjs "${args[@]}"
           # The published name; the feed keeps the plain name too (npm-publish reads it, the owner signs its bytes).
           cp "$out/plugin-$CHANNEL.json" "$out/plugin-$CHANNEL.unsigned.json"

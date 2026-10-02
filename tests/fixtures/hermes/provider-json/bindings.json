@@ -1,0 +1,8 @@
+{
+  "schema": "plur1bus.hermes-bindings/1",
+  "bindings": {
+    "hermes-default": "<home>/.hermes",
+    "hermes-work": "<home>/.hermes/profiles/work",
+    "hermes-home-fbdca692": "/srv/hermes"
+  }
+}

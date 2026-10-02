@@ -1,0 +1,13 @@
+{
+  "schema": "plur1bus.hermes-bind/1",
+  "ok": false,
+  "hermesHome": "<home>/.hermes/profiles/work",
+  "home": "<plur1bus-home>",
+  "agentId": "hermes-work",
+  "created": false,
+  "error": {
+    "code": "E_BINDING_CONFLICT",
+    "message": "agent hermes-work is already bound to the Hermes home <home>/.hermes/profiles/Work (this home: <home>/.hermes/profiles/work)",
+    "otherHome": "<home>/.hermes/profiles/Work"
+  }
+}

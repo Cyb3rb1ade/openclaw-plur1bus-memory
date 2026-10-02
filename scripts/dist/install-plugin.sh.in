@@ -1,26 +1,37 @@
 #!/bin/sh
-# PLUR1BUS memory plugin bootstrap for OpenClaw on Linux and macOS (D87, spec A.3, HM1-R3).
+# PLUR1BUS memory plugin bootstrap for OpenClaw and Hermes on Linux and macOS (D87, spec A.3, HM1-R3, HM2-R16).
 # @@RENDER_NOTE@@
 #
-#   curl -fsSL https://plur1bus.app/install-plugin.sh | sh -s -- [installer flags]
+#   curl -fsSL https://plur1bus.app/install-plugin.sh | sh -s -- [--host openclaw|hermes] [installer flags]
 #
-# Finds `openclaw` and a Node that satisfies the plugin's engines range (`node` on PATH, else the Node OpenClaw's
-# own wrapper runs on), downloads the signed plugin feed ({channel}.json) and its .minisig into a private temp dir
+# Finds the host (`openclaw`, or with `--host hermes` the `hermes` launcher) and a Node that satisfies the installer's
+# engines range (>=24.16.0 <25 || >=26.1.0, so Hermes' Node 26 counts too). OpenClaw: `node` on PATH, else the Node
+# OpenClaw's own wrapper runs on. Hermes (HM2-R16): `node` on PATH, else Hermes' own Node (<root>/node/bin/node,
+# <root>/tools/node-*/bin/node), else an existing PLUR1BUS sidecar's <home>/runtime/node-v*/bin/node, else the pinned
+# portable Node below, downloaded into <user cache>/plur1bus/bootstrap-node-<v>/, its SHA-256 checked before every
+# extraction (a cached archive is re-hashed on every reuse and fetched again when it does not match), extracted into the
+# private temp dir. Then it downloads the signed plugin feed ({channel}.json) and its .minisig into a private temp dir
 # and verifies the signature with the inlined minisign verifier BEFORE trusting any URL or hash in it. Only then it
 # downloads the bundled Node installer named by the feed, checks its SHA-256 and runs
 # `node <installer> --feed-file <verified feed> [installer flags]`; the installer's exit code is this script's.
-# Never uses sudo; writes nothing but its temp dir (removed on exit).
+# Never uses sudo; writes nothing but its temp dir (removed on exit) and, for `--host hermes` without a usable Node, the
+# pinned Node archive cache in <user cache>/plur1bus ($XDG_CACHE_HOME or ~/.cache; macOS ~/Library/Caches).
 #
 # Exit codes: 0 ok, 1 failed (nothing changed; bad signature or checksum), 2 needs a choice, 3 incompatible host
-# (openclaw-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from the installer).
+# (openclaw-not-found, hermes-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from
+# the installer).
 #
 # Environment:
 #   PLUR1BUS_PLUGIN_CHANNEL   release channel, ^[a-z0-9-]+$ (default: stable)
 #   PLUR1BUS_PLUGIN_FEED      feed URL; `{channel}` is replaced (default: https://updates.plur1bus.app/plugin/{channel}.json).
 #                             https:// only.
 # Test seams (only with PLUR1BUS_PLUGIN_INSTALLER_TEST=1): file:// feeds and installer URLs, and
-# PLUR1BUS_PLUGIN_PUBKEY, a TEST ONLY minisign public key used instead of the channel keys below.
+# PLUR1BUS_PLUGIN_PUBKEY, a TEST ONLY minisign public key used instead of the channel keys below, and
+# PLUR1BUS_PLUGIN_TEST_NODE_BASE, a TEST ONLY file:// directory that replaces https://nodejs.org/dist for the pinned Node.
 set -eu
+
+# The pinned portable Node (HM2-R16; scripts/dist/node-pins.json, the harness's own Node pin).
+@@NODE_PINS@@
 
 PUBKEY_STABLE='@@PUBKEY_STABLE@@'
 PUBKEY_BETA='@@PUBKEY_BETA@@'
@@ -143,6 +154,148 @@ private_node() {
   return 1
 }
 
+# sha256_tool <file>: lower-case hex without Node (the pinned Node is checked before any Node runs).
+sha256_tool() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r "$1" | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# expand_path <p>: Python's os.path.expanduser(os.path.expandvars(p)), as Hermes reads HERMES_HOME (detect.mjs does
+# the same): $NAME and ${NAME} are replaced when set (an unknown one stays as written), then a leading ~ is HOME.
+expand_path() {
+  ep=$1
+  eout=
+  eval_val=
+  while :; do
+    case "$ep" in *'$'*) ;; *) break ;; esac
+    epre=${ep%%\$*}
+    erest=${ep#*\$}
+    case "$erest" in
+      '{'*'}'*)
+        ename=${erest#\{}
+        ename=${ename%%\}*}
+        eafter=${erest#*\}}
+        eraw="\${$ename}"
+        ;;
+      *)
+        ename=$(printf '%s' "$erest" | sed 's/^\([A-Za-z0-9_]*\).*/\1/')
+        eafter=${erest#"$ename"}
+        eraw="\$$ename"
+        ;;
+    esac
+    case "$ename" in
+      [A-Za-z_]*)
+        case "$ename" in *[!A-Za-z0-9_]*) eval_ok=0 ;; *) eval_ok=1 ;; esac
+        ;;
+      *) eval_ok=0 ;;
+    esac
+    if [ "$eval_ok" = 1 ] && eval "[ -n \"\${$ename+x}\" ]"; then
+      eval "eval_val=\${$ename}"
+      eout="$eout$epre$eval_val"
+    else
+      eout="$eout$epre$eraw"
+    fi
+    ep=$eafter
+  done
+  ep="$eout$ep"
+  case "$ep" in
+    "~") ep=$HOME ;;
+    \~/*) ep="$HOME/${ep#\~/}" ;;
+  esac
+  printf '%s\n' "$ep"
+}
+
+# hermes_root: Hermes' default root (a profile home <root>/profiles/<p> maps to <root>; an empty HERMES_HOME is unset).
+hermes_root() {
+  r=${HERMES_HOME:-}
+  [ -n "$r" ] && r=$(expand_path "$r")
+  [ -n "$r" ] || r="$HOME/.hermes"
+  case "$r" in */profiles/*) r=${r%/profiles/*} ;; esac
+  printf '%s\n' "$r"
+}
+
+# hermes_node: Hermes' own Node in range (fact sheet (h)), else an existing sidecar's (<plur1bus home>/runtime).
+hermes_node() {
+  root=$(hermes_root)
+  for n in "$root/node/bin/node" "$root"/tools/node-*/bin/node; do
+    if node_ok "$n"; then
+      printf '%s\n' "$n"
+      return 0
+    fi
+  done
+  home=${PLUR1BUS_HOME:-}
+  [ -n "$home" ] || home="$HOME/.plur1bus"
+  for n in "$home"/runtime/node-v*/bin/node "$home"/runtime/node/bin/node; do
+    if node_ok "$n"; then
+      printf '%s\n' "$n"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# pinned_node <target> <dest dir>: the pinned portable Node, its archive cached under <user cache> and SHA-256-checked
+# before every extraction; extracted (tar -xzf into a staging dir, then renamed) under <dest dir>. Prints the node path.
+pinned_node() {
+  pin=$(node_pin "$1") || return 3
+  # "<url> <sha256> <archive>": split without word splitting (shellcheck SC2086)
+  purl=${pin%% *}
+  pin_rest=${pin#* }
+  pwant=${pin_rest%% *}
+  if [ "$test_mode" = 1 ] && [ -n "${PLUR1BUS_PLUGIN_TEST_NODE_BASE:-}" ]; then
+    purl="${PLUR1BUS_PLUGIN_TEST_NODE_BASE%/}${purl#https://nodejs.org/dist}"
+  fi
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) cache_root="$HOME/Library/Caches" ;;
+    *) cache_root=${XDG_CACHE_HOME:-}; [ -n "$cache_root" ] || cache_root="$HOME/.cache" ;;
+  esac
+  cache="$cache_root/plur1bus/bootstrap-node-$NODE_PIN_VERSION"
+  mkdir -p "$cache" || return 1
+  archive="$cache/node-v$NODE_PIN_VERSION-$1.tar.gz"
+  # The bytes that are hashed are the bytes that are extracted: a private copy in the temp dir (no swap between
+  # the check and tar, T10 review 1).
+  copy="$2/node-v$NODE_PIN_VERSION-$1.tar.gz"
+  rm -f "$copy"
+  if [ -f "$archive" ]; then
+    # a copy that fails part-way is never trusted: it is removed, so only a hashed copy or a fresh download remains
+    if cp "$archive" "$copy" 2>/dev/null; then
+      got=$(sha256_tool "$copy") || { rm -f "$copy"; return 4; }
+      if [ "$got" != "$pwant" ]; then
+        say "the cached Node archive $archive does not match its pinned SHA-256; downloading it again"
+        rm -f "$archive" "$copy"
+      fi
+    else
+      rm -f "$copy"
+    fi
+  fi
+  if [ ! -f "$copy" ]; then
+    say "downloading the pinned Node $NODE_PIN_VERSION ($1) from $purl"
+    fetch "$purl" "$copy" || { rm -f "$copy"; return 1; }
+    got=$(sha256_tool "$copy") || { rm -f "$copy"; return 4; }
+    if [ "$got" != "$pwant" ]; then
+      rm -f "$copy"
+      say "checksum mismatch for $purl: expected $pwant, got $got (nothing run)"
+      return 2
+    fi
+    # the verified bytes go to the cache (atomically); the extraction below still uses the private copy
+    if ! { cp "$copy" "$archive.tmp.$$" && mv -f "$archive.tmp.$$" "$archive"; }; then rm -f "$archive.tmp.$$"; fi
+  fi
+  stage="$2/node-stage"
+  rm -rf "$stage"
+  mkdir -p "$stage" || return 1
+  tar -xzf "$copy" -C "$stage" || return 1
+  mv "$stage/node-v$NODE_PIN_VERSION-$1" "$2/node-v$NODE_PIN_VERSION-$1" || return 1
+  rm -rf "$stage" "$copy"
+  printf '%s\n' "$2/node-v$NODE_PIN_VERSION-$1/bin/node"
+}
+
 # feed_field <feed file> <dotted path>: a string field read with Node's JSON.parse; printable ASCII, no spaces.
 feed_field() {
   "$node" -e '
@@ -168,6 +321,19 @@ process.stdout.write(h.digest("hex") + "\n");
 main() {
   test_mode=0
   [ "${PLUR1BUS_PLUGIN_INSTALLER_TEST:-}" = 1 ] && test_mode=1
+
+  # --host is the installer's flag; the bootstrap reads it too (host detection, Node chain) and passes it on.
+  host=openclaw
+  prev=
+  for a in "$@"; do
+    case "$prev" in --host) host=$a ;; esac
+    case "$a" in --host=*) host=${a#--host=} ;; esac
+    prev=$a
+  done
+  case "$host" in
+    openclaw | hermes) ;;
+    *) fail 1 "unknown --host $host (openclaw|hermes)" ;;
+  esac
 
   channel=${PLUR1BUS_PLUGIN_CHANNEL:-stable}
   case "$channel" in
@@ -197,18 +363,14 @@ main() {
   target=$(detect_target)
   [ -n "$target" ] || fail 3 "unsupported-target: $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null); the plugin supports linux-x64, linux-arm64, darwin-arm64, win-x64 and win-arm64"
 
-  openclaw=$(command -v openclaw 2>/dev/null) || openclaw=
-  [ -n "$openclaw" ] || fail 3 "openclaw-not-found: no openclaw on PATH; install OpenClaw first (https://docs.openclaw.ai/install/installer)"
-
-  node=
-  path_node=$(command -v node 2>/dev/null) || path_node=
-  if [ -n "$path_node" ] && node_ok "$path_node"; then
-    node=$path_node
+  if [ "$host" = hermes ]; then
+    hermes=$(command -v hermes 2>/dev/null) || hermes=
+    [ -n "$hermes" ] || { [ -x "$HOME/.local/bin/hermes" ] && hermes="$HOME/.local/bin/hermes"; } || true
+    [ -n "$hermes" ] || fail 3 "hermes-not-found: no hermes on PATH or in ~/.local/bin; install Hermes first (https://hermes-agent.nousresearch.com)"
   else
-    priv=$(private_node "$openclaw") || priv=
-    if [ -n "$priv" ] && node_ok "$priv"; then node=$priv; fi
+    openclaw=$(command -v openclaw 2>/dev/null) || openclaw=
+    [ -n "$openclaw" ] || fail 3 "openclaw-not-found: no openclaw on PATH; install OpenClaw first (https://docs.openclaw.ai/install/installer)"
   fi
-  [ -n "$node" ] || fail 3 "node-not-found: need Node >=24.16.0 <25 || >=26.1.0 on PATH or OpenClaw's own Node (found: ${path_node:-none} on PATH)"
 
   old_umask=$(umask)
   umask 077
@@ -218,6 +380,29 @@ main() {
   # the handler then returns, so the installer's own status (1 rolled back, 4 rollback failed, ...) stays the exit code.
   child=
   trap 'if [ -z "$child" ]; then exit 130; fi' HUP INT TERM
+
+  node=
+  path_node=$(command -v node 2>/dev/null) || path_node=
+  if [ -n "$path_node" ] && node_ok "$path_node"; then
+    node=$path_node
+  elif [ "$host" = hermes ]; then
+    node=$(hermes_node) || node=
+    if [ -z "$node" ]; then
+      pn_code=0
+      node=$(pinned_node "$target" "$tmp") || pn_code=$?
+      case "$pn_code" in
+        0) ;;
+        2) fail 1 "the pinned Node archive does not match its SHA-256 (nothing run)" ;;
+        4) fail 3 "node-not-found: no sha256sum, shasum or openssl to check the pinned Node download" ;;
+        *) fail 1 "could not download or unpack the pinned Node $NODE_PIN_VERSION for $target" ;;
+      esac
+      node_ok "$node" || fail 1 "the pinned Node $node does not run"
+    fi
+  else
+    priv=$(private_node "$openclaw") || priv=
+    if [ -n "$priv" ] && node_ok "$priv"; then node=$priv; fi
+  fi
+  [ -n "$node" ] || fail 3 "node-not-found: need Node >=24.16.0 <25 || >=26.1.0 on PATH or OpenClaw's own Node (found: ${path_node:-none} on PATH)"
 
   feed="$tmp/$channel.json"
   fetch "$feed_url" "$feed" || fail 1 "could not download the plugin feed $feed_url"

@@ -1,0 +1,30 @@
+{
+  "schema": "plur1bus.hermes-selftest/1",
+  "ok": true,
+  "checks": [
+    {
+      "id": "binding",
+      "ok": true,
+      "detail": "agent hermes-work"
+    },
+    {
+      "id": "connect",
+      "ok": true,
+      "detail": "rpc 1.4.0"
+    },
+    {
+      "id": "core.status",
+      "ok": true,
+      "detail": "process ready"
+    },
+    {
+      "id": "agent.status",
+      "ok": true
+    },
+    {
+      "id": "memory.recall",
+      "ok": true,
+      "detail": "1 block(s)"
+    }
+  ]
+}

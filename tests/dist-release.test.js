@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { renderBootstraps, renderInstallerKeys } from "../scripts/dist/render-bootstraps.mjs";
+import { DEFAULT_NODE_PINS, renderBootstraps, renderInstallerKeys } from "../scripts/dist/render-bootstraps.mjs";
 import { generateTestKeyPair } from "./helpers/minisign-sign.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,7 +24,38 @@ describe("plugin release (HM1 Task 10)", () => {
     assert.equal(manifest.version, pkg.version);
     assert.equal(lock.version, pkg.version);
     assert.equal(lock.packages[""].version, pkg.version);
-    assert.equal(pkg.version, "7.17.0", "HM1 ships as 7.17.0 (HM1-R19)");
+    assert.equal(pkg.version, "7.18.0", "HM2 ships the Hermes installer as 7.18.0 (HM2-R22)");
+  });
+
+  it("the release workflow passes the hermes lock and node pins", () => {
+    const feedStep = text.slice(text.indexOf("- name: Build the unsigned feed"), text.indexOf("- name: Write SHA256SUMS"));
+    assert.match(feedStep, /args\+=\(--hermes-lock "\$lock" --hermes-notes-de "docs\/release-notes\/\$VERSION\.de\.md" --hermes-notes-en "docs\/release-notes\/\$VERSION\.en\.md"\)/);
+    assert.match(feedStep, /lock=scripts\/dist\/hermes-sidecar\.lock\.json/);
+    // I3(b): a placeholder lock never blocks a release, dry or real: no --hermes-lock, a warning in the log and the
+    // job summary (the builder itself still refuses a placeholder passed to it, F31)
+    const gate = /if node -e '[^']*placeholder === true \? 0 : 1\)' "\$lock"; then\n([\s\S]*?)\n\s*else\n([\s\S]*?)\n\s*fi/.exec(feedStep);
+    assert.ok(gate, "the placeholder gate");
+    assert.ok(!/DRY_RUN/.test(gate[0]), "the same in a dry and a real run");
+    assert.match(gate[1], /::warning title=Hermes host omitted::/);
+    assert.match(gate[1], />> "\$GITHUB_STEP_SUMMARY"/);
+    assert.ok(!gate[1].includes("--hermes-lock"));
+    assert.match(gate[2], /--hermes-lock "\$lock"/);
+    const renders = text.split("\n").filter((l) => /render-bootstraps\.mjs/.test(l));
+    assert.equal(renders.length, 2);
+    for (const l of renders) assert.match(l, /--node-pins scripts\/dist\/node-pins\.json/, l);
+  });
+
+  it("7.18.0 notes exist in de and en and the docs describe Hermes host mode", () => {
+    for (const lang of ["de", "en"]) assert.ok(existsSync(join(REPO, "docs", "release-notes", `7.18.0.${lang}.md`)), lang);
+    const dist = readFileSync(join(REPO, "docs", "distribution.md"), "utf8");
+    for (const s of ["## Hermes host mode (HM2)", "%LOCALAPPDATA%\\hermes", "provider-in-use", "purge-refused", "journal.ndjson", "Node 24.21.0", "--replace-provider", "--hermes-profile"]) {
+      assert.ok(dist.includes(s), `docs/distribution.md mentions ${s}`);
+    }
+    assert.ok(!dist.includes("host-not-yet-supported"), "the HM1 refusal is gone");
+    const readme = readFileSync(join(REPO, "README.md"), "utf8");
+    assert.ok(readme.includes("install-plugin.sh | sh -s -- --host hermes"));
+    assert.ok(readme.includes("-Host hermes"));
+    assert.match(readFileSync(join(REPO, "CHANGELOG.md"), "utf8"), /^## \[7\.18\.0\]/m);
   });
 
   it("plugin-release.yml parses and pins every action to a SHA", () => {
@@ -153,8 +184,8 @@ describe("plugin release (HM1 Task 10)", () => {
     const raw = readFileSync(join(REPO, "scripts", "dist", "installer", "main.mjs"), "utf8");
     const stable = generateTestKeyPair().publicKeyLine;
     const beta = generateTestKeyPair().publicKeyLine;
-    const release = renderBootstraps({ pubkeyStable: stable, pubkeyBeta: beta });
-    const test = renderBootstraps({ testKey: true });
+    const release = renderBootstraps({ pubkeyStable: stable, pubkeyBeta: beta, nodePins: DEFAULT_NODE_PINS });
+    const test = renderBootstraps({ testKey: true, nodePins: DEFAULT_NODE_PINS });
     for (const t of [release.sh, release.ps1, renderInstallerKeys(raw, { pubkeyStable: stable, pubkeyBeta: beta })]) {
       assert.ok(!t.includes(marker), "a release render carries no TEST ONLY marker");
       assert.ok(!t.includes("@@PLUR1BUS_PLUGIN_PUBKEY_"));

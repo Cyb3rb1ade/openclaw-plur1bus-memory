@@ -1,0 +1,3 @@
+$ hermes config get memory.provider
+scratch
+[exit 0]

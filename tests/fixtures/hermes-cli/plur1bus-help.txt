@@ -1,0 +1,13 @@
+$ hermes plur1bus --help
+usage: hermes plur1bus [-h] {status,selftest} ...
+
+Scratch provider for the HM2 spike: logs hook calls to $SCRATCH_LOG, no network.
+
+positional arguments:
+  {status,selftest}
+    status           Print scratch provider status
+    selftest         Run the scratch provider self-test
+
+options:
+  -h, --help         show this help message and exit
+[exit 0]

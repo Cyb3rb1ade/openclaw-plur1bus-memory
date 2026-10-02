@@ -4,7 +4,8 @@ name: plugin-dist
 # on the five release targets, run the selftest, and drive the installer end to end: fresh install, an upgrade that
 # keeps every stored row (D89, HM1-R13), a forced failing verify that rolls back (the driver asserts the store was
 # found untouched and not restored, HM1-R-F2), uninstall. Plus a non-blocking WSL leg (C8) and a nightly upgrade
-# from the newest GitHub Release (HM1-R13).
+# from the newest GitHub Release (HM1-R13). HM2 Task 11 adds the Hermes legs (hermes on three OSes, hermes-wsl) and
+# the node-pins check; see the comments at those jobs.
 #
 # Every OpenClaw here lives under $RUNNER_TEMP (OPENCLAW_HOME, OPENCLAW_STATE_DIR; HOME too on POSIX) and
 # tests/helpers/assert-disposable.mjs runs right after installing it (HM1-R11). No Gateway is installed or started.
@@ -32,6 +33,8 @@ on:
       - 'tests/helpers/store-digest.mjs'
       - 'tests/helpers/sign-feed-for-ci.mjs'
       - 'tests/helpers/ci-plugin-dist.mjs'
+      - 'tests/helpers/ci-hermes-dist.mjs'
+      - 'tests/helpers/check-node-pins.mjs'
   workflow_call:
     outputs:
       artifact:
@@ -87,7 +90,7 @@ jobs:
           git checkout -- package.json package-lock.json openclaw.plugin.json
 
           node scripts/dist/build-installer.mjs --out "$out/plur1bus-plugin-installer.mjs"
-          node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out"
+          node scripts/dist/render-bootstraps.mjs --test-key --node-pins scripts/dist/node-pins.json --out-dir "$out"
           node -e 'const [f,...v]=process.argv.slice(1); const k=["version","ciVersion","tgz","ciTgz","sha256","integrity"]; require("fs").writeFileSync(f, JSON.stringify(Object.fromEntries(k.map((x,i)=>[x,v[i]])),null,2)+"\n")' \
             "$out/pack.json" "$version" "$ci_version" "$tgz" "$ci_tgz" "$sha256" "$integrity"
           # smoke: both tarballs make a valid, signed feed (each install leg signs its own, with its own paths)
@@ -364,3 +367,217 @@ jobs:
       - name: ClawHub install record vs the GitHub Release tarball (fact k, informational)
         continue-on-error: true
         run: node tests/helpers/ci-plugin-dist.mjs clawhub --version "$RELEASE_VERSION" --compare-tgz "$RELEASE_TGZ"
+
+  # HM2 Task 11 (D87, HM2-R16/R17/R19): the pack's installer and bootstraps install the plur1bus provider and its
+  # pinned sidecar into a disposable Hermes on three OSes, min (743ee72 = 0.21.4) and latest (tested, f97608f =
+  # 0.21.5). Hermes comes from that commit's own installer (harness hermes-host.yml, fact sheet §1), under
+  # $RUNNER_TEMP: HERMES_HOME, PLUR1BUS_HOME, and HOME/XDG on POSIX. setup runs with --no-service
+  # (PLUR1BUS_PLUGIN_TEST_NO_SERVICE=1) and the flat-embedder seam (no model download, F21). The sidecar and provider
+  # artefacts are the harness release P4 named by scripts/dist/hermes-sidecar.lock.json: until it is released (and
+  # vars.HM2_SIDECAR_RELEASED is 'true') the lock is a placeholder and these legs cannot pass, hence continue-on-error.
+  hermes:
+    name: hermes (${{ matrix.runner }}, Hermes ${{ matrix.hermes }})
+    needs: pack
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ vars.HM2_SIDECAR_RELEASED != 'true' }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15, windows-2025]
+        hermes: [min, latest]
+        include:
+          - hermes: min
+            hermes-commit: 743ee72596e7a9f23bc7cd5c570a6ebd958043e4
+          - hermes: latest
+            hermes-commit: f97608f178d1ffeca59860195ab7da295f7c8e5f
+            previous-provider: builtin
+    env:
+      PLUR1BUS_PLUGIN_INSTALLER_TEST: '1'
+      PLUR1BUS_PLUGIN_TEST_NO_SERVICE: '1'
+      PLUR1BUS_ALLOW_TEST_INTERNALS: '1'
+      PLUR1BUS_TEST_INTERNALS: flat-embedder
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Enable git long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Download the pack artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/plugin-dist
+      - name: Disposable Hermes locations
+        run: |
+          {
+            echo "HERMES_HOME=$RUNNER_TEMP/hh"
+            echo "PLUR1BUS_HOME=$RUNNER_TEMP/p1b"
+            echo "HERMES_DIR=$RUNNER_TEMP/hermes-agent"
+            echo "FAKE_HOME=$RUNNER_TEMP/fakehome"
+            echo "HERMES_FEED_DIR=$RUNNER_TEMP/hermes-feed"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/hh" "$RUNNER_TEMP/fakehome"
+          # POSIX: every step that runs Hermes or the installer sources this (HOME and XDG_* disposable, as the harness
+          # hermes-host.yml); GitHub's Ubuntu images export XDG_CONFIG_HOME into the real profile otherwise.
+          f="$RUNNER_TEMP/fakehome"
+          printf 'export HOME="%s" XDG_CONFIG_HOME="%s/.config" XDG_DATA_HOME="%s/.local/share" XDG_STATE_HOME="%s/.local/state" XDG_CACHE_HOME="%s/.cache"\n' "$f" "$f" "$f" "$f" "$f" > "$RUNNER_TEMP/fake-env.sh"
+      # The Windows leg changes the user PATH (Hermes' install.ps1) and puts the sidecar under %LOCALAPPDATA%: only on
+      # an ephemeral GitHub-hosted runner.
+      - name: The Windows leg runs on GitHub-hosted runners only
+        if: runner.os == 'Windows' && runner.environment != 'github-hosted'
+        run: |
+          echo "::error::the Hermes leg on Windows changes the user PATH and %LOCALAPPDATA%; it runs only on an ephemeral GitHub-hosted runner"
+          exit 1
+      # That commit's own installer, from a shallow fetch of exactly that commit (no raw.githubusercontent download).
+      - name: Fetch the Hermes ${{ matrix.hermes }} installer
+        env:
+          COMMIT: ${{ matrix.hermes-commit }}
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/hermes-src"
+          git init -q "$src"
+          for i in 1 2 3 4 5; do
+            git -C "$src" fetch -q --depth 1 https://github.com/NousResearch/hermes-agent "$COMMIT" && break
+            [ "$i" = 5 ] && { echo "::error::could not fetch hermes-agent $COMMIT"; exit 1; }
+            sleep 10
+          done
+          git -C "$src" show "$COMMIT:scripts/install.sh" > "$RUNNER_TEMP/hermes-install.sh"
+          git -C "$src" show "$COMMIT:scripts/install.ps1" > "$RUNNER_TEMP/hermes-install.ps1"
+      - name: Install Hermes ${{ matrix.hermes }} (POSIX)
+        if: runner.os != 'Windows'
+        timeout-minutes: 20
+        env:
+          COMMIT: ${{ matrix.hermes-commit }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/fake-env.sh"
+          bash "$RUNNER_TEMP/hermes-install.sh" --branch main --commit "$COMMIT" --force-commit --dir "$HERMES_DIR" --hermes-home "$HERMES_HOME" \
+            --skip-setup --non-interactive --skip-browser --skip-computer-use --no-skills < /dev/null
+          echo "HERMES_BIN=$HERMES_DIR/venv/bin/hermes" >> "$GITHUB_ENV"
+          echo "$HERMES_DIR/venv/bin" >> "$GITHUB_PATH"
+      - name: Install Hermes ${{ matrix.hermes }} (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 30
+        env:
+          COMMIT: ${{ matrix.hermes-commit }}
+          # Harness 4eea755: install.ps1 clones under Git for Windows' system core.autocrlf=true and then fails to check
+          # out the pinned commit; a step-scoped global config with autocrlf off (never the real profile's) avoids it.
+          GIT_CONFIG_GLOBAL: ${{ runner.temp }}/hermes-gitconfig
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Content -LiteralPath $env:GIT_CONFIG_GLOBAL -Encoding ascii -Value "[core]`n`tautocrlf = false"
+          $script = Join-Path $env:RUNNER_TEMP 'hermes-install.ps1'
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Commit $env:COMMIT -ForceCommit -HermesHome $env:HERMES_HOME -InstallDir $env:HERMES_DIR -NonInteractive -SkipSetup -SkipComputerUse
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 exited $LASTEXITCODE" }
+          $cands = @("$env:HERMES_DIR\venv\Scripts\hermes.exe", "$env:HERMES_HOME\bin\hermes.exe", "$env:HERMES_HOME\bin\hermes.cmd")
+          $bin = $cands | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $bin) { throw "no hermes launcher found in: $($cands -join '; ')" }
+          "HERMES_BIN=$bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          (Split-Path -Parent $bin) | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: assert-disposable (first step after installing Hermes, HM1-R11)
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            node tests/helpers/assert-disposable.mjs --host hermes
+          else
+            . "$RUNNER_TEMP/fake-env.sh"
+            node tests/helpers/assert-disposable.mjs --host hermes --var HOME --var XDG_CONFIG_HOME --var XDG_DATA_HOME --var XDG_STATE_HOME --var XDG_CACHE_HOME
+          fi
+      - name: hermes --version
+        run: |
+          if [ "$RUNNER_OS" != Windows ]; then . "$RUNNER_TEMP/fake-env.sh"; fi
+          "$HERMES_BIN" --version
+      - name: Sign a TEST ONLY feed with hosts.hermes over the pack artefact
+        run: node tests/helpers/sign-feed-for-ci.mjs --artefacts "$RUNNER_TEMP/plugin-dist" --out-dir "$HERMES_FEED_DIR"
+      # install-plugin.sh on POSIX, install-plugin.ps1 -Host hermes under Windows PowerShell 5.1 on Windows.
+      # latest: memory.provider starts at a non-empty value ("builtin", Hermes' built-in store), so the uninstall must
+      # restore that value, not just "unset" (min starts unset: the 0.21.4 line-edit undo path)
+      - name: Bootstrap --host hermes (install, memory status, selftest, up-to-date re-run, uninstall)
+        env:
+          PREVIOUS_PROVIDER: ${{ matrix.previous-provider }}
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            node tests/helpers/ci-hermes-dist.mjs install --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$HERMES_FEED_DIR" --hermes-bin "$HERMES_BIN" --bootstrap ps1 ${PREVIOUS_PROVIDER:+--previous-provider "$PREVIOUS_PROVIDER"}
+          else
+            . "$RUNNER_TEMP/fake-env.sh"
+            node tests/helpers/ci-hermes-dist.mjs install --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$HERMES_FEED_DIR" --hermes-bin "$HERMES_BIN" --bootstrap sh ${PREVIOUS_PROVIDER:+--previous-provider "$PREVIOUS_PROVIDER"}
+          fi
+
+  # C8: non-blocking. Hermes (min) inside WSL Ubuntu-24.04, the plugin installed from Windows through
+  # install-plugin.ps1 -Host hermes -Target wsl:Ubuntu-24.04; the distro's own run verifies the feed again.
+  hermes-wsl:
+    name: hermes-wsl (windows-2025, Ubuntu-24.04, Hermes min)
+    needs: pack
+    runs-on: windows-2025
+    continue-on-error: true
+    timeout-minutes: 120
+    env:
+      PLUR1BUS_PLUGIN_INSTALLER_TEST: '1'
+      PLUR1BUS_PLUGIN_TEST_NO_SERVICE: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Enable git long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Download the pack artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.pack.outputs.artifact }}
+          path: ${{ runner.temp }}/plugin-dist
+      - name: The WSL leg runs on GitHub-hosted runners only
+        if: runner.environment != 'github-hosted'
+        run: |
+          echo "::error::the Hermes WSL leg installs a distro and runs as root in it; it runs only on an ephemeral GitHub-hosted runner"
+          exit 1
+      # Vampire/setup-wsl v7.0.0 (tag object 5fae231e, commit d1da7f2c), as the OpenClaw wsl leg.
+      - name: Set up WSL Ubuntu-24.04
+        uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v7.0.0
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: curl ca-certificates git
+      - name: Install Hermes min inside WSL (prefix and homes under /tmp/plur1bus-ci-hermes)
+        run: node tests/helpers/ci-hermes-dist.mjs wsl-setup --distro Ubuntu-24.04 --hermes-commit 743ee72596e7a9f23bc7cd5c570a6ebd958043e4
+      - name: Sign a TEST ONLY feed with hosts.hermes over the pack artefact
+        run: node tests/helpers/sign-feed-for-ci.mjs --artefacts "$RUNNER_TEMP/plugin-dist" --out-dir "$RUNNER_TEMP/hermes-feed"
+      - name: install-plugin.ps1 -Host hermes -Target wsl:Ubuntu-24.04 --non-interactive --json
+        run: node tests/helpers/ci-hermes-dist.mjs wsl-install --distro Ubuntu-24.04 --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$RUNNER_TEMP/hermes-feed"
+      - name: Selftest inside WSL
+        run: node tests/helpers/ci-hermes-dist.mjs wsl-selftest --distro Ubuntu-24.04
+
+  # HM2-R16 / F33: the pinned bootstrap Node is nodejs.org's own (SHASUMS256.txt of the pinned version) and the
+  # sidecar lock's Node version.
+  node-pins:
+    name: node-pins (nodejs.org SHASUMS256.txt)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Use Node.js 24.21.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Compare scripts/dist/node-pins.json with nodejs.org
+        run: |
+          set -euo pipefail
+          v=$(node -p "require('./scripts/dist/node-pins.json').version")
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 5 "https://nodejs.org/dist/v$v/SHASUMS256.txt" -o "$RUNNER_TEMP/SHASUMS256.txt"
+          node tests/helpers/check-node-pins.mjs --pins scripts/dist/node-pins.json --shasums "$RUNNER_TEMP/SHASUMS256.txt" --lock scripts/dist/hermes-sidecar.lock.json

@@ -1,0 +1,29 @@
+{
+  "schema": "plur1bus.hermes-status/1",
+  "hermesHome": "<hermes-home>",
+  "binding": {
+    "home": "<plur1bus-home>",
+    "agentId": "hermes-work",
+    "bin": "/usr/local/bin/plur1bus",
+    "capture": true,
+    "recallHardMs": 600,
+    "version": "0.1.0",
+    "installedBy": "plur1bus-plugin-installer"
+  },
+  "bindingError": null,
+  "core": {
+    "reachable": true,
+    "rpc": "1.4.0",
+    "contract": "1.4.1",
+    "instanceId": "inst-fixture",
+    "error": null
+  },
+  "journal": {
+    "path": "<hermes-home>/plur1bus/journal.ndjson",
+    "queued": 1,
+    "dropped": 0,
+    "rejected": 0,
+    "lost": 0
+  },
+  "lastError": "E_CORE_UNAVAILABLE"
+}

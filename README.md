@@ -1173,19 +1173,37 @@ one-liner finds the distro and hands over to the Linux installer inside it
 (`-Target wsl:<distro>` chooses one); you can also run the Linux one-liner
 inside the distro yourself.
 
+### Hermes (host mode)
+
+Since 7.18.0 the same one-liners install the PLUR1BUS memory provider into a
+Hermes agent, with a local PLUR1BUS sidecar that holds the store:
+
+```bash
+curl -fsSL https://plur1bus.app/install-plugin.sh | sh -s -- --host hermes
+```
+
+```powershell
+$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF))) -Host hermes
+```
+
+Another active memory provider is replaced only with `--replace-provider` (it
+is restored on rollback and uninstall); `--hermes-profile <name>` picks a
+Hermes profile. Needs Hermes 0.21.4 or newer. Details:
+[docs/distribution.md#hermes-host-mode-hm2](docs/distribution.md#hermes-host-mode-hm2).
+
 ### Manual installation
 
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.17.0
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.18.0
 ```
 
 The same release is on npmjs.org, once its first publish is done (see
 `docs/release-checklist.md`):
 
 ```bash
-openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.17.0 --pin
+openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.18.0 --pin
 ```
 
 Or install the immutable GitHub Release tarball. Download it, compare its
@@ -1193,7 +1211,7 @@ SHA-256 with the release's checksum, then:
 
 ```bash
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.17.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.0.tgz \
   --force --accept-capabilities
 ```
 
@@ -1206,7 +1224,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.17.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.0.tgz \
   --force --accept-capabilities
 ```
 

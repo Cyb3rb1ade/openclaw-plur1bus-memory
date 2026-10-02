@@ -1,0 +1,35 @@
+{
+  "schema": "plur1bus.hermes-sidecar-lock/1",
+  "placeholder": true,
+  "harnessTag": "v0.1.0",
+  "version": "0.1.0",
+  "nodeVersion": "24.21.0",
+  "provider": {
+    "url": "https://github.com/Cyb3rb1ade/PLUR1BUS-Harness/releases/download/v0.1.0/plur1bus-hermes-provider-0.1.0.tar.gz",
+    "sha256": "de62210a0f2c5ce04b088abad25b4a5aa0aacdfa17f496c7767352ff4ee11806"
+  },
+  "binary": {
+    "linux-x64": {
+      "url": "https://github.com/Cyb3rb1ade/PLUR1BUS-Harness/releases/download/v0.1.0/plur1bus-linux-x64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "linux-arm64": {
+      "url": "https://github.com/Cyb3rb1ade/PLUR1BUS-Harness/releases/download/v0.1.0/plur1bus-linux-arm64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "darwin-arm64": {
+      "url": "https://github.com/Cyb3rb1ade/PLUR1BUS-Harness/releases/download/v0.1.0/plur1bus-darwin-arm64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "win-x64": {
+      "url": "https://github.com/Cyb3rb1ade/PLUR1BUS-Harness/releases/download/v0.1.0/plur1bus-win-x64.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "win-arm64": {
+      "url": "https://github.com/Cyb3rb1ade/PLUR1BUS-Harness/releases/download/v0.1.0/plur1bus-win-arm64.exe",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "minHermesVersion": "0.21.4",
+  "testedHermesVersion": "0.21.5"
+}
