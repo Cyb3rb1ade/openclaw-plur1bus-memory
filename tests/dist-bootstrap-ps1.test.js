@@ -287,6 +287,7 @@ function makePsCase(o) {
     WSL_SHIM_SCENARIO: wslScenario,
     FAKE_INSTALLER_MARK: mark,
     ...(o.nodeBase ? { PLUR1BUS_PLUGIN_TEST_NODE_BASE: pathToFileURL(o.nodeBase).href } : {}),
+    ...(o.extraEnv ?? {}),
     ...(o.installerExit !== undefined ? { FAKE_INSTALLER_EXIT: String(o.installerExit) } : {}),
   };
   if (!testFlag) delete env.PLUR1BUS_PLUGIN_INSTALLER_TEST;
@@ -571,6 +572,17 @@ describe("install-plugin.ps1 -Host hermes", { skip: PS_SKIP }, () => {
         assert.equal(r.code, 1, r.out);
         assert.match(r.stderr, /checksum mismatch .*node-v24\.21\.0/);
         assert.equal(c.installer(), null);
+      });
+
+      it("HERMES_HOME is expanded as Hermes does (%VAR%, $VAR, ~) before Hermes' own Node is looked up (T10 review 3)", () => {
+        for (const [hh, dir] of [["%LOCALAPPDATA%\\hh1", "hh1"], ["${LOCALAPPDATA}\\hh2", "hh2"]]) {
+          const c = makePsCase({ shell, native: false, hermes: true, pathNode: "old", feedPatch: withHermes, extraEnv: { HERMES_HOME: hh } });
+          const node = join(c.localAppData, dir, "node", "node.exe");
+          linkOrCopy(process.execPath, node);
+          const r = c.run(["-Host", "hermes"]);
+          assert.equal(r.code, 0, `${hh}: ${r.out}`);
+          assert.equal(c.installer().execPath.toLowerCase(), node.toLowerCase(), hh);
+        }
       });
 
       it("the WSL probe looks for hermes with --host hermes and hands over hosts.hermes.latest", () => {

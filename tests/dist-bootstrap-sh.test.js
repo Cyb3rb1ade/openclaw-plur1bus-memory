@@ -476,3 +476,36 @@ describe("install-plugin.sh --host hermes", { skip: SKIP }, () => {
     assert.match(r.stderr, /unknown --host claude/);
   });
 });
+
+describe("install-plugin.sh --host hermes (T10 review 1, 3)", { skip: SKIP }, () => {
+  it("the Node archive is hashed and extracted as a private copy in the temp dir, never from the cache path", () => {
+    const c = makeHermesCase();
+    const s = renderWithPins(c.archiveSha);
+    const tarLog = join(c.root, "tar.log");
+    const realTar = which("tar");
+    writeFileSync(join(c.bin, "tar"), `#!/bin/sh\nprintf '%s\\n' "$*" >>"${tarLog}"\nexec "${realTar}" "$@"\n`, { mode: 0o755 });
+    for (const round of [1, 2]) {
+      const r = c.run(["--host", "hermes"], s);
+      assert.equal(r.code, 0, `${round}: ${r.out}`);
+    }
+    const calls = readFileSync(tarLog, "utf8").split("\n").filter(Boolean);
+    assert.equal(calls.length, 2, calls.join("\n"));
+    for (const call of calls) {
+      assert.ok(call.includes(c.tmpDir), `extracts from the private temp dir: ${call}`);
+      assert.ok(!call.includes(dirname(c.cachedArchive)), `never from the cache: ${call}`);
+    }
+  });
+
+  it("HERMES_HOME is expanded as Hermes does (~, $VAR, ${VAR}) before Hermes' own Node is looked up", () => {
+    for (const [hh, dir] of [["~/hh", "hh"], ["$HOME/hh2", "hh2"], ["${HOME}/hh3/profiles/work", "hh3"]]) {
+      const c = makeHermesCase();
+      const node = join(c.env.HOME, dir, "node", "bin", "node");
+      mkdirSync(dirname(node), { recursive: true });
+      writeFileSync(node, `#!/bin/sh\nprintf '%s\\n' expanded >>"${c.nodeLog}"\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+      c.env.HERMES_HOME = hh;
+      const r = c.run(["--host", "hermes"]);
+      assert.equal(r.code, 0, `${hh}: ${r.out}`);
+      assert.ok(c.nodeCalls().length && c.nodeCalls().every((l) => l === "expanded"), `${hh}: ${c.nodeCalls().join(",")}`);
+    }
+  });
+});

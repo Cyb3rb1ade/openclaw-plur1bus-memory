@@ -166,9 +166,55 @@ sha256_tool() {
   fi
 }
 
+# expand_path <p>: Python's os.path.expanduser(os.path.expandvars(p)), as Hermes reads HERMES_HOME (detect.mjs does
+# the same): $NAME and ${NAME} are replaced when set (an unknown one stays as written), then a leading ~ is HOME.
+expand_path() {
+  ep=$1
+  eout=
+  eval_val=
+  while :; do
+    case "$ep" in *'$'*) ;; *) break ;; esac
+    epre=${ep%%\$*}
+    erest=${ep#*\$}
+    case "$erest" in
+      '{'*'}'*)
+        ename=${erest#\{}
+        ename=${ename%%\}*}
+        eafter=${erest#*\}}
+        eraw="\${$ename}"
+        ;;
+      *)
+        ename=$(printf '%s' "$erest" | sed 's/^\([A-Za-z0-9_]*\).*/\1/')
+        eafter=${erest#"$ename"}
+        eraw="\$$ename"
+        ;;
+    esac
+    case "$ename" in
+      [A-Za-z_]*)
+        case "$ename" in *[!A-Za-z0-9_]*) eval_ok=0 ;; *) eval_ok=1 ;; esac
+        ;;
+      *) eval_ok=0 ;;
+    esac
+    if [ "$eval_ok" = 1 ] && eval "[ -n \"\${$ename+x}\" ]"; then
+      eval "eval_val=\${$ename}"
+      eout="$eout$epre$eval_val"
+    else
+      eout="$eout$epre$eraw"
+    fi
+    ep=$eafter
+  done
+  ep="$eout$ep"
+  case "$ep" in
+    "~") ep=$HOME ;;
+    \~/*) ep="$HOME/${ep#\~/}" ;;
+  esac
+  printf '%s\n' "$ep"
+}
+
 # hermes_root: Hermes' default root (a profile home <root>/profiles/<p> maps to <root>; an empty HERMES_HOME is unset).
 hermes_root() {
   r=${HERMES_HOME:-}
+  [ -n "$r" ] && r=$(expand_path "$r")
   [ -n "$r" ] || r="$HOME/.hermes"
   case "$r" in */profiles/*) r=${r%/profiles/*} ;; esac
   printf '%s\n' "$r"
@@ -198,9 +244,10 @@ hermes_node() {
 # before every extraction; extracted (tar -xzf into a staging dir, then renamed) under <dest dir>. Prints the node path.
 pinned_node() {
   pin=$(node_pin "$1") || return 3
-  set -- "$1" "$2" $pin
-  purl=$3
-  pwant=$4
+  # "<url> <sha256> <archive>": split without word splitting (shellcheck SC2086)
+  purl=${pin%% *}
+  pin_rest=${pin#* }
+  pwant=${pin_rest%% *}
   if [ "$test_mode" = 1 ] && [ -n "${PLUR1BUS_PLUGIN_TEST_NODE_BASE:-}" ]; then
     purl="${PLUR1BUS_PLUGIN_TEST_NODE_BASE%/}${purl#https://nodejs.org/dist}"
   fi
@@ -211,30 +258,35 @@ pinned_node() {
   cache="$cache_root/plur1bus/bootstrap-node-$NODE_PIN_VERSION"
   mkdir -p "$cache" || return 1
   archive="$cache/node-v$NODE_PIN_VERSION-$1.tar.gz"
-  if [ -f "$archive" ]; then
-    got=$(sha256_tool "$archive") || return 4
+  # The bytes that are hashed are the bytes that are extracted: a private copy in the temp dir (no swap between
+  # the check and tar, T10 review 1).
+  copy="$2/node-v$NODE_PIN_VERSION-$1.tar.gz"
+  rm -f "$copy"
+  if [ -f "$archive" ] && cp "$archive" "$copy" 2>/dev/null; then
+    got=$(sha256_tool "$copy") || return 4
     if [ "$got" != "$pwant" ]; then
       say "the cached Node archive $archive does not match its pinned SHA-256; downloading it again"
-      rm -f "$archive"
+      rm -f "$archive" "$copy"
     fi
   fi
-  if [ ! -f "$archive" ]; then
+  if [ ! -f "$copy" ]; then
     say "downloading the pinned Node $NODE_PIN_VERSION ($1) from $purl"
-    fetch "$purl" "$archive.tmp.$$" || { rm -f "$archive.tmp.$$"; return 1; }
-    got=$(sha256_tool "$archive.tmp.$$") || { rm -f "$archive.tmp.$$"; return 4; }
+    fetch "$purl" "$copy" || { rm -f "$copy"; return 1; }
+    got=$(sha256_tool "$copy") || { rm -f "$copy"; return 4; }
     if [ "$got" != "$pwant" ]; then
-      rm -f "$archive.tmp.$$"
+      rm -f "$copy"
       say "checksum mismatch for $purl: expected $pwant, got $got (nothing run)"
       return 2
     fi
-    mv -f "$archive.tmp.$$" "$archive" || return 1
+    # the verified bytes go to the cache (atomically); the extraction below still uses the private copy
+    if ! { cp "$copy" "$archive.tmp.$$" && mv -f "$archive.tmp.$$" "$archive"; }; then rm -f "$archive.tmp.$$"; fi
   fi
   stage="$2/node-stage"
   rm -rf "$stage"
   mkdir -p "$stage" || return 1
-  tar -xzf "$archive" -C "$stage" || return 1
+  tar -xzf "$copy" -C "$stage" || return 1
   mv "$stage/node-v$NODE_PIN_VERSION-$1" "$2/node-v$NODE_PIN_VERSION-$1" || return 1
-  rm -rf "$stage"
+  rm -rf "$stage" "$copy"
   printf '%s\n' "$2/node-v$NODE_PIN_VERSION-$1/bin/node"
 }
 

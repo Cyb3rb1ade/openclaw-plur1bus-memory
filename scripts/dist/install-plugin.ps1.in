@@ -199,6 +199,27 @@ function Find-Node([string]$openclawPath, [bool]$openclawNodes = $true) {
   return $null
 }
 
+# HERMES_HOME as Hermes reads it (Python ntpath.expandvars then expanduser; detect.mjs does the same): %NAME%, ${NAME}
+# and $NAME are replaced when set (an unknown one stays as written), then a leading ~ is USERPROFILE (HOME off Windows).
+function Expand-HermesPath([string]$p) {
+  $pattern = '%([^%]+)%|\$\{([^}]+)\}|\$([A-Za-z0-9_]+)'
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '/') { $pattern = '\$\{([^}]+)\}|\$([A-Za-z0-9_]+)()' }
+  $out = [regex]::Replace($p, $pattern, {
+      param($m)
+      $name = $null
+      foreach ($g in @(1, 2, 3)) { if ($m.Groups[$g].Success -and $m.Groups[$g].Value -ne '') { $name = $m.Groups[$g].Value; break } }
+      if ($null -eq $name) { return $m.Value }
+      $v = [Environment]::GetEnvironmentVariable($name)
+      if ($null -eq $v) { return $m.Value }
+      return $v
+    })
+  $userHome = $env:USERPROFILE
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '/' -or [string]::IsNullOrEmpty($userHome)) { $userHome = $env:HOME }
+  if ($out -eq '~') { return $userHome }
+  if ($out.StartsWith('~/') -or $out.StartsWith('~\')) { return (Join-Path $userHome $out.Substring(2)) }
+  return $out
+}
+
 # Hermes (HM2-R16): Hermes' own Node, then an existing PLUR1BUS sidecar's Node, each only when in range.
 function Find-HermesNode {
   $exe = 'node.exe'
@@ -206,7 +227,7 @@ function Find-HermesNode {
   $candidates = New-Object System.Collections.ArrayList
   $root = $null
   if (-not [string]::IsNullOrEmpty($env:HERMES_HOME)) {
-    $root = $env:HERMES_HOME
+    $root = Expand-HermesPath $env:HERMES_HOME
     if ($root -match '^(.*)[\\/]profiles[\\/][^\\/]+[\\/]?$') { $root = $Matches[1] }
   } elseif ($env:LOCALAPPDATA) {
     $root = Join-Path $env:LOCALAPPDATA 'hermes'
@@ -245,30 +266,35 @@ function Get-PinnedNode([string]$target, [string]$dest) {
   [void][System.IO.Directory]::CreateDirectory($cache)
   $name = "node-v$NodePinVersion-$target"
   $archive = Join-Path $cache "$name.zip"
+  # The bytes that are hashed are the bytes that are extracted: a private copy in <dest> (T10 review 1).
+  $copy = Join-Path $dest "$name.zip"
   if (Test-Path -LiteralPath $archive -PathType Leaf) {
-    if ((Get-Sha256 $archive) -ne $pin.Sha256) {
+    Copy-Item -LiteralPath $archive -Destination $copy -Force
+    if ((Get-Sha256 $copy) -ne $pin.Sha256) {
       Say "the cached Node archive $archive does not match its pinned SHA-256; downloading it again"
-      Remove-Item -LiteralPath $archive -Force
+      Remove-Item -LiteralPath $archive, $copy -Force -ErrorAction SilentlyContinue
     }
   }
-  if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+  if (-not (Test-Path -LiteralPath $copy -PathType Leaf)) {
     Say "downloading the pinned Node $NodePinVersion ($target) from $url"
-    $part = "$archive.tmp-$PID"
-    try { Get-Resource $url $part } catch { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue; Fail 1 "could not download the pinned Node ${url}: $($_.Exception.Message)" }
-    $got = Get-Sha256 $part
+    try { Get-Resource $url $copy } catch { Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue; Fail 1 "could not download the pinned Node ${url}: $($_.Exception.Message)" }
+    $got = Get-Sha256 $copy
     if ($got -ne $pin.Sha256) {
-      Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
       Fail 1 "checksum mismatch for ${url}: expected $($pin.Sha256), got $got (nothing run)"
     }
+    $part = "$archive.tmp-$PID"
+    Copy-Item -LiteralPath $copy -Destination $part -Force
     Move-Item -LiteralPath $part -Destination $archive -Force
   }
   $stage = Join-Path $dest 'node-stage'
   if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
   Add-Type -AssemblyName System.IO.Compression.FileSystem
-  [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $stage)
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($copy, $stage)
   $final = Join-Path $dest $name
   Move-Item -LiteralPath (Join-Path $stage $name) -Destination $final
   Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
   $exe = 'node.exe'
   if ([System.IO.Path]::DirectorySeparatorChar -eq '/') { $exe = 'bin/node' }
   return (Join-Path $final $exe)
