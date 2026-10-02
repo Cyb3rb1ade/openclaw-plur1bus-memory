@@ -181,6 +181,8 @@ describe("hermes installer: uninstall", () => {
 
   // F19 for the uninstall
   const KILL_POINTS = [
+    // between the value change and restoredFrom (final review Minor 6): --rollback still re-activates plur1bus
+    { point: "uninstall.provider-changed", step: "provider-value", undoable: true },
     { point: "uninstall.provider-value", step: "provider-value", undoable: true },
     { point: "uninstall.provider-moved", step: "provider", undoable: true },
     { point: "uninstall.binding", step: "binding", undoable: false },

@@ -228,25 +228,32 @@ export async function runHermesUninstall(ctx) {
   };
 
   // 1. memory.provider back first, while the directory still exists (R17a)
+  const rawPrev = typeof state?.previousProviderRaw === "string" ? state.previousProviderRaw.trim() : (previous ?? "");
+  const restoreCmd = rawPrev ? `hermes config set memory.provider ${rawPrev}` : "hermes config unset memory.provider";
   save("provider-value");
   if (!un.providerValueDone) {
     const cur = await readCurrent({ hermes, hermesHome, lineEdit });
     if (cur === null) {
       report.step("provider-value", "failed", "memory.provider cannot be read; nothing more was changed");
-      return finishFailed(report, hermesHome, s, [`check \`hermes config get memory.provider\`; if it is plur1bus: ${previous ? `hermes config set memory.provider ${previous}` : "hermes config unset memory.provider"}`, "then re-run with --uninstall"]);
+      return finishFailed(report, hermesHome, s, [`check \`hermes config get memory.provider\`; if it is plur1bus: ${restoreCmd}`, "then re-run with --uninstall"]);
     }
     if (cur === PROVIDER_NAME) {
       if (un.bindingText === undefined) un.bindingText = existsSync(bindingPath(hermesHome)) ? readFileSync(bindingPath(hermesHome), "utf8") : null;
+      // recorded before the value changes: a run killed between the change and restoredFrom is still re-activated
+      // by --rollback (final review Minor 6)
+      un.restoreStarted = true;
+      save("provider-value");
       let how;
       try {
         const r = await restoreProviderValue({ hermes, hermesHome, lineEdit, state, previous, now, report });
         how = r.how;
         un.valueBackup = r.backup;
+        killAt("uninstall.provider-changed");
         const again = await readCurrent({ hermes, hermesHome, lineEdit: lineEdit || Boolean(state?.configEdit?.undo) });
         if (again === null || again === PROVIDER_NAME) throw new Error(again === null ? "it cannot be read back" : "it still reads plur1bus");
       } catch (err) {
         report.step("provider-value", "failed", err?.message ?? String(err));
-        return finishFailed(report, hermesHome, s, [previous ? `hermes config set memory.provider ${previous}` : "hermes config unset memory.provider", "then re-run with --uninstall"]);
+        return finishFailed(report, hermesHome, s, [restoreCmd, "then re-run with --uninstall"]);
       }
       un.restoredFrom = PROVIDER_NAME;
       // verified: this run's own backup and the install's go (one backup only while a change is in flight)
@@ -425,11 +432,16 @@ async function rollbackUninstall(ctx) {
     renameWithRetry(un.removedDir, pdir);
     done.push("provider directory restored");
   }
-  if (un.restoredFrom === PROVIDER_NAME && existsSync(pdir)) {
+  if ((un.restoredFrom === PROVIDER_NAME || un.restoreStarted) && existsSync(pdir)) {
     try {
-      const bak = await setProvider({ hermes, hermesHome, lineEdit, value: PROVIDER_NAME, now });
-      if (bak) rmSync(bak, { force: true }); // verified below by the next run's reads; no backup piles up
-      done.push("memory.provider = plur1bus again");
+      // a run killed between the change and restoredFrom may or may not have changed the value: read it first
+      if ((await readCurrent({ hermes, hermesHome, lineEdit })) !== PROVIDER_NAME) {
+        const bak = await setProvider({ hermes, hermesHome, lineEdit, value: PROVIDER_NAME, now });
+        if (bak) rmSync(bak, { force: true }); // verified right below; no backup piles up
+        done.push("memory.provider = plur1bus again");
+      }
+      const again = await readCurrent({ hermes, hermesHome, lineEdit });
+      if (again !== PROVIDER_NAME) throw new Error(`memory.provider reads ${JSON.stringify(again)}`);
     } catch {
       manual.push("hermes config set memory.provider plur1bus");
     }
