@@ -17,6 +17,8 @@ import { assertDisposable } from "./helpers/assert-disposable.mjs";
 import { digestIds, storeDigest } from "./helpers/store-digest.mjs";
 import { assertStoreInsideStateDir, seedStore } from "./helpers/seed-store.mjs";
 import { signFeedForCi } from "./helpers/sign-feed-for-ci.mjs";
+import { bootstrapEnv, lastJson } from "./helpers/ci-hermes-dist.mjs";
+import { comparePins, parseShasums } from "./helpers/check-node-pins.mjs";
 import { validateFeed } from "../scripts/dist/build-plugin-feed.mjs";
 import { verifyMinisign } from "../scripts/dist/minisign.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -265,5 +267,101 @@ describe("plugin-dist workflow", () => {
     const assertIdx = steps.findIndex((n) => /assert-disposable/i.test(n));
     assert.ok(installIdx >= 0 && assertIdx > installIdx, steps.join(" | "));
     assert.ok(steps.slice(installIdx + 1, assertIdx).every((n) => /Install OpenClaw/.test(n)), "assert-disposable is the first step after the OpenClaw install");
+  });
+});
+
+describe("plugin-dist Hermes legs (HM2 Task 11)", () => {
+  const wf = parseYaml(readFileSync(WORKFLOW, "utf8"));
+  const text = readFileSync(WORKFLOW, "utf8");
+
+  it("plugin-dist.yml parses, pins every action by SHA, and every Hermes leg sets PLUR1BUS_PLUGIN_TEST_NO_SERVICE", () => {
+    for (const job of ["hermes", "hermes-wsl", "node-pins"]) assert.ok(wf.jobs[job], `job ${job}`);
+    for (const job of ["hermes", "hermes-wsl", "node-pins"]) {
+      for (const st of wf.jobs[job].steps) if (st.uses) assert.match(st.uses, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.\/-]+@[0-9a-f]{40}$/, `${job}: ${st.uses}`);
+    }
+    for (const job of ["hermes", "hermes-wsl"]) {
+      assert.equal(wf.jobs[job].env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE, "1", job);
+      assert.equal(wf.jobs[job].env.PLUR1BUS_PLUGIN_INSTALLER_TEST, "1", job);
+    }
+    // HM2-R19: required only once the sidecar release P4 exists; the WSL leg is non-blocking (C8)
+    assert.equal(wf.jobs.hermes["continue-on-error"], "${{ !vars.HM2_SIDECAR_RELEASED }}");
+    assert.equal(wf.jobs["hermes-wsl"]["continue-on-error"], true);
+    const m = wf.jobs.hermes.strategy;
+    assert.equal(m["fail-fast"], false);
+    assert.deepEqual(m.matrix.runner, ["ubuntu-24.04", "macos-15", "windows-2025"]);
+    assert.deepEqual(m.matrix.hermes, ["min", "latest"]);
+    assert.deepEqual(m.matrix.include.map((x) => [x.hermes, x["hermes-commit"]]), [["min", "743ee72596e7a9f23bc7cd5c570a6ebd958043e4"], ["latest", "f97608f178d1ffeca59860195ab7da295f7c8e5f"]]);
+    assert.equal(wf.jobs.hermes.env.PLUR1BUS_TEST_INTERNALS, "flat-embedder", "no model download (F21)");
+    assert.equal(wf.jobs["hermes-wsl"]["runs-on"], "windows-2025");
+    // assert-disposable --host hermes is the first step after installing Hermes
+    const names = wf.jobs.hermes.steps.map((s) => s.name ?? s.uses ?? "");
+    const lastInstall = names.map((n, i) => (/^Install Hermes/.test(n) ? i : -1)).filter((i) => i >= 0).pop();
+    assert.ok(/assert-disposable/.test(names[lastInstall + 1]), names.join(" | "));
+    assert.match(wf.jobs.hermes.steps[lastInstall + 1].run, /assert-disposable\.mjs --host hermes/);
+    // Windows: step-scoped GIT_CONFIG_GLOBAL with autocrlf off before Hermes' install.ps1 (harness 4eea755)
+    const winInstall = wf.jobs.hermes.steps.find((s) => s.name === "Install Hermes ${{ matrix.hermes }} (Windows)");
+    assert.match(winInstall.env.GIT_CONFIG_GLOBAL, /runner\.temp/);
+    assert.match(winInstall.run, /autocrlf = false/);
+    assert.ok(winInstall.run.indexOf("Set-Content") < winInstall.run.indexOf("hermes-install.ps1"));
+    // the bootstrap runs with --host hermes (sh) / -Host hermes (ps1) through the driver
+    assert.match(text, /ci-hermes-dist\.mjs install .*--bootstrap ps1/);
+    assert.match(text, /ci-hermes-dist\.mjs install .*--bootstrap sh/);
+    assert.match(text, /ci-hermes-dist\.mjs wsl-install --distro Ubuntu-24.04/);
+    assert.match(wf.jobs["node-pins"].steps.at(-1).run, /nodejs\.org\/dist\/v\$v\/SHASUMS256\.txt/);
+    assert.ok(!/secrets\./.test(text), "the workflow uses no secrets");
+  });
+
+  it("the CI feed carries hosts.hermes from the lock (a placeholder lock is accepted only here)", async () => {
+    const dir = makeTempDir("ci-feed-hermes-");
+    await packArtefact(dir);
+    const out = join(dir, "feed");
+    const r = await signFeedForCi({ artefacts: dir, outDir: out });
+    const feed = JSON.parse(readFileSync(r.feedFile, "utf8"));
+    const lock = JSON.parse(readFileSync(join(REPO, "scripts", "dist", "hermes-sidecar.lock.json"), "utf8"));
+    assert.equal(feed.hosts.hermes.latest, lock.version);
+    assert.deepEqual(feed.hosts.hermes.releases[0].provider, lock.provider);
+    assert.deepEqual(validateFeed(feed, { allowFile: true }), { ok: true, errors: [] });
+    assert.equal(r.hermes, lock.version);
+    // --no-hermes: as before
+    const none = await signFeedForCi({ artefacts: dir, outDir: join(dir, "feed2"), hermesLock: null });
+    assert.equal(JSON.parse(readFileSync(none.feedFile, "utf8")).hosts.hermes, undefined);
+  });
+
+  it("assert-disposable --host hermes checks HERMES_HOME and PLUR1BUS_HOME", () => {
+    const rt = makeTempDir("runner-temp-");
+    const ok = assertDisposable({ host: "hermes", env: { RUNNER_TEMP: rt, HERMES_HOME: join(rt, "hh"), PLUR1BUS_HOME: join(rt, "p1b") } });
+    assert.equal(ok.ok, true, ok.errors.join("; "));
+    const bad = assertDisposable({ host: "hermes", env: { RUNNER_TEMP: rt, HERMES_HOME: join(REPO, "hh"), PLUR1BUS_HOME: join(rt, "p1b") } });
+    assert.equal(bad.ok, false);
+    assert.match(bad.errors.join("\n"), /HERMES_HOME/);
+    assert.throws(() => assertDisposable({ host: "claude", env: {} }), /unknown host/);
+    const cli = spawnSync(process.execPath, [join(HELPERS, "assert-disposable.mjs"), "--host", "hermes"], { env: { ...process.env, RUNNER_TEMP: rt, HERMES_HOME: "/etc", PLUR1BUS_HOME: join(rt, "p1b") }, encoding: "utf8" });
+    assert.equal(cli.status, 1);
+    assert.match(cli.stderr, /Hermes is not disposable/);
+  });
+
+  it("the Hermes driver passes only the test seams and the CI-signed feed, and reads the last JSON document", () => {
+    const dir = makeTempDir("ci-hermes-env-");
+    writeFileSync(join(dir, "pubkey.txt"), "RWTEST ONLY\n");
+    const env = bootstrapEnv({ PATH: "/x" }, dir);
+    assert.equal(env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE, "1");
+    assert.equal(env.PLUR1BUS_PLUGIN_INSTALLER_TEST, "1");
+    assert.equal(env.PLUR1BUS_PLUGIN_FEED, pathToFileURL(join(dir, "stable.json")).href);
+    assert.equal(env.PLUR1BUS_PLUGIN_PUBKEY, "RWTEST ONLY");
+    assert.deepEqual(lastJson('noise\n{"ok":true}\n'), { ok: true });
+    assert.equal(lastJson('"plur1bus"\n'), "plur1bus");
+    assert.equal(lastJson("nothing"), undefined);
+  });
+
+  it("check-node-pins compares node-pins.json with SHASUMS256.txt and the lock's nodeVersion (F33)", () => {
+    const pins = JSON.parse(readFileSync(join(REPO, "scripts", "dist", "node-pins.json"), "utf8"));
+    const lock = JSON.parse(readFileSync(join(REPO, "scripts", "dist", "hermes-sidecar.lock.json"), "utf8"));
+    const sums = Object.entries(pins.targets).map(([t, p]) => `${p.sha256}  node-v${pins.version}-${t}.${p.archive}`).concat(["0".repeat(64) + "  node-v24.21.0.tar.gz"]).join("\n");
+    assert.equal(parseShasums(sums).size, 6);
+    assert.deepEqual(comparePins({ pins, shasums: sums, lock }), { ok: true, errors: [], checked: ["linux-x64", "linux-arm64", "darwin-arm64", "win-x64", "win-arm64"] });
+    const tampered = sums.replace(pins.targets["win-arm64"].sha256, "e".repeat(64));
+    assert.match(comparePins({ pins, shasums: tampered }).errors.join("\n"), /win-arm64: node-pins\.json says/);
+    assert.match(comparePins({ pins, shasums: sums, lock: { ...lock, nodeVersion: "24.22.0" } }).errors.join("\n"), /F33/);
+    assert.match(comparePins({ pins, shasums: "" }).errors.join("\n"), /not in SHASUMS256/);
   });
 });

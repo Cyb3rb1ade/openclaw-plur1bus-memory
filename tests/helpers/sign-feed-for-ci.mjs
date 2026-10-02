@@ -3,7 +3,13 @@
  * tests/helpers/sign-feed-for-ci.mjs — a TEST ONLY signed plugin feed over local files (HM1 Task 8).
  *
  * node tests/helpers/sign-feed-for-ci.mjs --artefacts <dir> --out-dir <dir> [--tgz <extra.tgz>]... [--channel stable]
- *   [--github-env <file>]
+ *   [--github-env <file>] [--hermes-lock <lock.json> | --no-hermes]
+ *
+ * HM2 Task 11: the feed also carries `hosts.hermes`, built from scripts/dist/hermes-sidecar.lock.json (or
+ * --hermes-lock) with build-plugin-feed.mjs exactly as the release does. Its provider and sidecar URLs stay the
+ * harness release's https URLs (the installer verifies them by SHA-256). A lock still marked `"placeholder": true`
+ * is accepted here only (TEST ONLY feed): until the harness release P4 fills it, the Hermes legs fail at the first
+ * download, which is why they are continue-on-error (HM2-R19).
  *
  * <artefacts> is the plugin-dist `pack` artefact: pack.json ({ version, ciVersion, tgz, ciTgz }), the tarballs it
  * names, plur1bus-plugin-installer.mjs, install-plugin.sh and install-plugin.ps1. Every tarball (the pack's two plus
@@ -20,8 +26,8 @@
 
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { buildFeed, compareVersions, readPackageJsonFromTgz, validateFeed, writeFileAtomic } from "../../scripts/dist/build-plugin-feed.mjs";
@@ -30,12 +36,14 @@ import { generateTestKeyPair } from "./minisign-sign.js";
 
 const PLACEHOLDER = "https://ci.invalid/TEST-ONLY/";
 const NOTES = { de: "TEST ONLY: CI-Feed des plugin-dist-Workflows.\n", en: "TEST ONLY: feed of the plugin-dist workflow.\n" };
+export const DEFAULT_HERMES_LOCK = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "dist", "hermes-sidecar.lock.json");
 
 /**
- * @param {{ artefacts: string, outDir: string, extraTgz?: string[], channel?: string }} o
+ * @param {{ artefacts: string, outDir: string, extraTgz?: string[], channel?: string, hermesLock?: string|null }} o
+ *   `hermesLock`: the lock for hosts.hermes (default scripts/dist/hermes-sidecar.lock.json); null = no hosts.hermes
  * @returns {Promise<{ feedFile: string, feedUrl: string, publicKey: string, versions: string[] }>}
  */
-export async function signFeedForCi({ artefacts, outDir, extraTgz = [], channel = "stable" }) {
+export async function signFeedForCi({ artefacts, outDir, extraTgz = [], channel = "stable", hermesLock = DEFAULT_HERMES_LOCK }) {
   const dir = resolve(artefacts);
   const pack = JSON.parse(readFileSync(join(dir, "pack.json"), "utf8"));
   const byVersion = new Map();
@@ -81,6 +89,13 @@ export async function signFeedForCi({ artefacts, outDir, extraTgz = [], channel 
         notesDe: join(work, "notes.de.md"),
         notesEn: join(work, "notes.en.md"),
         previous,
+        // hosts.hermes once, with the newest plugin release (later builds carry it over from --previous)
+        ...(hermesLock && i === tarballs.length - 1 ? {
+          hermesLock: resolve(hermesLock),
+          hermesNotesDe: join(work, "notes.de.md"),
+          hermesNotesEn: join(work, "notes.en.md"),
+          allowPlaceholderLock: JSON.parse(readFileSync(resolve(hermesLock), "utf8")).placeholder === true,
+        } : {}),
       });
       previous = join(work, `feed-${i}.json`);
       writeFileSync(previous, JSON.stringify(feed));
@@ -107,7 +122,7 @@ export async function signFeedForCi({ artefacts, outDir, extraTgz = [], channel 
     await writeFileAtomic(join(out, "pubkey.txt"), `${key.publicKeyLine}\n`);
     const check = verifyMinisign({ message: readFileSync(feedFile), signatureText: sig, publicKey: key.publicKeyLine });
     if (!check.ok) throw new Error(`self-check of the CI feed signature failed: ${check.reason}`);
-    return { feedFile, feedUrl: pathToFileURL(feedFile).href, publicKey: key.publicKeyLine, versions: feed.hosts.openclaw.releases.map((r) => r.version) };
+    return { feedFile, feedUrl: pathToFileURL(feedFile).href, publicKey: key.publicKeyLine, versions: feed.hosts.openclaw.releases.map((r) => r.version), hermes: feed.hosts.hermes?.latest ?? null };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
@@ -124,12 +139,14 @@ if (import.meta.filename && resolve(process.argv[1] ?? "") === import.meta.filen
         tgz: { type: "string", multiple: true },
         channel: { type: "string", default: "stable" },
         "github-env": { type: "string" },
+        "hermes-lock": { type: "string" },
+        "no-hermes": { type: "boolean", default: false },
       },
     });
     if (!values.artefacts || !values["out-dir"]) throw new Error("--artefacts and --out-dir are required");
-    const r = await signFeedForCi({ artefacts: values.artefacts, outDir: values["out-dir"], extraTgz: values.tgz ?? [], channel: values.channel });
+    const r = await signFeedForCi({ artefacts: values.artefacts, outDir: values["out-dir"], extraTgz: values.tgz ?? [], channel: values.channel, hermesLock: values["no-hermes"] ? null : (values["hermes-lock"] ?? DEFAULT_HERMES_LOCK) });
     if (values["github-env"]) appendFileSync(values["github-env"], `PLUR1BUS_PLUGIN_PUBKEY=${r.publicKey}\nPLUR1BUS_PLUGIN_FEED=${r.feedUrl}\n`);
-    process.stdout.write(`${JSON.stringify({ feedUrl: r.feedUrl, publicKey: r.publicKey, versions: r.versions })}\n`);
+    process.stdout.write(`${JSON.stringify({ feedUrl: r.feedUrl, publicKey: r.publicKey, versions: r.versions, hermes: r.hermes })}\n`);
   } catch (err) {
     process.stderr.write(`sign-feed-for-ci: ${err?.message ?? err}\n`);
     process.exitCode = 1;
