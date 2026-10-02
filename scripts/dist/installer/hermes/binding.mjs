@@ -15,10 +15,10 @@
  * shared O_EXCL lock file `hosts/.hermes-bindings.lock` (withRegistryLock).
  */
 
-import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, writeSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { closeSync, constants, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
-import { dirname, join, posix, resolve, win32 } from "node:path";
+import { basename, dirname, join, posix, resolve, win32 } from "node:path";
 
 import { sleepSync, writeFileAtomic } from "../fsutil.mjs";
 
@@ -211,31 +211,51 @@ export function checkBinding(plur1busHome, agentId, hermesHome, platform = proce
 }
 
 /**
- * The registry lock shared with the Python provider (hosts/hermes/plur1bus/binding.py `register_binding`):
- * `<plur1bus home>/hosts/.hermes-bindings.lock`, taken by creating it with O_EXCL (Node has no flock) and
- * removed on release; it holds `<pid> <hostname> <ms>`. A lock is stale when it is older than 60 s, or when it
- * names a process of this host that no longer runs (a killed run). Deadline 10 s, as the Python side.
+ * The registry lock shared with the Python provider (hosts/hermes/plur1bus/_filelock.py `ExclusiveLockFile`, used
+ * by binding.py `register_binding`); both sides implement exactly this protocol:
+ *   * path `<plur1bus home>/hosts/.hermes-bindings.lock`, created O_CREAT|O_EXCL, mode 0600; the content
+ *     `<pid> <hostname> <ms> <nonce>\n` (nonce: 128-bit hex) is written and the fd closed before the critical section;
+ *   * stale: mtime older than 60 s, or a pid of this host that no longer runs on a lock at least 1 s old;
+ *   * breaking a stale lock: rename it to `<lock>.break-<my nonce>`, re-stat and re-read the moved file; when dev/ino
+ *     and content are the ones judged stale, unlink it and retry the create; otherwise a live lock was moved: put it
+ *     back with link() (never overwrites; EEXIST means a new holder exists) and unlink the break file;
+ *   * release: rename to `<lock>.rel-<my nonce>`, unlink it only when it holds my token, else put it back as above;
+ *   * the holder re-reads the lock just before writing the registry and aborts (lock-lost) unless its token is there;
+ *   * Windows: EPERM/EACCES on create (a name pending deletion) is "busy", like EEXIST;
+ *   * `*.break-*` / `*.rel-*` leftovers older than 60 s are removed; 25 ms poll, 10 s deadline.
  */
 export const REGISTRY_LOCK_FILE = ".hermes-bindings.lock";
 const LOCK_STALE_MS = 60_000;
 const LOCK_DEADLINE_MS = 10_000;
 
-function lockIsStale(lock) {
-  let st;
-  try {
-    st = statSync(lock);
-  } catch {
-    return false; // gone meanwhile: the next O_EXCL try decides
+export class RegistryLockLost extends Error {
+  constructor(lock) {
+    super(`lock-lost: the bindings registry lock ${lock} is no longer ours; the registry was not written`);
+    this.code = "LOCK_LOST";
   }
+}
+
+const readText = (p) => {
+  try {
+    return readFileSync(p, "utf8");
+  } catch {
+    return null;
+  }
+};
+
+const statId = (p) => {
+  try {
+    const st = statSync(p, { bigint: true });
+    return { dev: st.dev, ino: st.ino, mtimeMs: Number(st.mtimeMs) };
+  } catch {
+    return null;
+  }
+};
+
+function judgedStale(text, st) {
   const age = Date.now() - st.mtimeMs;
   if (age > LOCK_STALE_MS) return true;
-  let text = "";
-  try {
-    text = readFileSync(lock, "utf8");
-  } catch {
-    return false;
-  }
-  const [pid, host] = text.trim().split(/\s+/);
+  const [pid, host] = String(text ?? "").trim().split(/\s+/);
   if (!/^\d+$/.test(pid ?? "") || host !== hostname() || age < 1000) return false;
   try {
     process.kill(Number(pid), 0);
@@ -245,32 +265,107 @@ function lockIsStale(lock) {
   }
 }
 
-export function withRegistryLock(plur1busHome, fn) {
+/** Put a moved live lock back without overwriting a newer one, then drop the moved name. */
+function putBack(moved, lock) {
+  try {
+    linkSync(moved, lock);
+  } catch {
+    // EEXIST: a new holder exists, so the moved one is not needed back
+  }
+  rmSync(moved, { force: true });
+}
+
+function sweepLockLeftovers(lock) {
+  const dir = dirname(lock);
+  const base = `${basename(lock)}.`;
+  let names = [];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    if (!n.startsWith(base) || !/^(break|rel)-[0-9a-f]+$/.test(n.slice(base.length))) continue;
+    const st = statId(join(dir, n));
+    if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) rmSync(join(dir, n), { force: true });
+  }
+}
+
+/**
+ * Run `fn({ assertHeld })` under the registry lock; `assertHeld()` throws RegistryLockLost unless the lock still holds
+ * this run's token (call it right before writing). An async `fn` holds the lock until its promise settles.
+ */
+export function withRegistryLock(plur1busHome, fn, { platform = process.platform } = {}) {
   const lock = join(plur1busHome, "hosts", REGISTRY_LOCK_FILE);
   mkdirSync(dirname(lock), { recursive: true });
+  sweepLockLeftovers(lock);
+  const nonce = randomBytes(16).toString("hex");
+  const token = `${process.pid} ${hostname()} ${Date.now()} ${nonce}\n`;
   const deadline = Date.now() + LOCK_DEADLINE_MS;
-  let fd;
   for (;;) {
+    let fd = null;
     try {
-      fd = openSync(lock, "wx", 0o600);
-      break;
+      fd = openSync(lock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
     } catch (err) {
-      if (err?.code !== "EEXIST") throw err;
-      if (lockIsStale(lock)) {
-        rmSync(lock, { force: true });
+      const busy = err?.code === "EEXIST" || (platform === "win32" && (err?.code === "EPERM" || err?.code === "EACCES"));
+      if (!busy) throw err;
+    }
+    if (fd !== null) {
+      try {
+        writeSync(fd, token);
+      } finally {
+        closeSync(fd);
+      }
+      break;
+    }
+    const st = statId(lock);
+    const text = st ? readText(lock) : null;
+    if (st && text !== null && judgedStale(text, st)) {
+      const moved = `${lock}.break-${nonce}`;
+      let renamed = true;
+      try {
+        renameSync(lock, moved);
+      } catch (err) {
+        renamed = false;
+        if (err?.code !== "ENOENT" && !(platform === "win32" && (err?.code === "EPERM" || err?.code === "EACCES"))) throw err;
+      }
+      if (renamed) {
+        const st2 = statId(moved);
+        if (st2 && st2.dev === st.dev && st2.ino === st.ino && readText(moved) === text) {
+          rmSync(moved, { force: true });
+          continue; // the stale lock is gone: retry the create at once
+        }
+        putBack(moved, lock); // a live lock taken after our check: return it
+      } else {
         continue;
       }
-      if (Date.now() > deadline) throw new Error(`the bindings registry is locked (${lock})`);
-      sleepSync(25);
     }
+    if (Date.now() > deadline) throw new Error(`the bindings registry is locked (${lock})`);
+    sleepSync(25);
   }
+  const assertHeld = () => {
+    if (readText(lock) !== token) throw new RegistryLockLost(lock);
+  };
+  const release = () => {
+    const moved = `${lock}.rel-${nonce}`;
+    try {
+      renameSync(lock, moved);
+    } catch {
+      return; // gone (broken as stale, or its directory removed): nothing of ours to release
+    }
+    if (readText(moved) === token) rmSync(moved, { force: true });
+    else putBack(moved, lock); // our lock was broken meanwhile: never release someone else's
+  };
+  let result;
   try {
-    writeSync(fd, `${process.pid} ${hostname()} ${Date.now()}\n`);
-    return fn();
-  } finally {
-    closeSync(fd);
-    rmSync(lock, { force: true });
+    result = fn({ assertHeld });
+  } catch (err) {
+    release();
+    throw err;
   }
+  if (result && typeof result.then === "function") return result.finally(release);
+  release();
+  return result;
 }
 
 function writeRegistry(plur1busHome, bindings) {
@@ -284,10 +379,11 @@ function writeRegistry(plur1busHome, bindings) {
  */
 export function registerBinding(plur1busHome, agentId, hermesHome, platform = process.platform) {
   const real = realish(resolve(hermesHome), platform);
-  return withRegistryLock(plur1busHome, () => {
+  return withRegistryLock(plur1busHome, ({ assertHeld }) => {
     const bindings = readRegistry(plur1busHome);
     const updated = registryAdd(bindings, agentId, real, platform);
     if (agentId in bindings) return { added: false, home: real };
+    assertHeld();
     writeRegistry(plur1busHome, updated);
     return { added: true, home: real };
   });
@@ -295,12 +391,16 @@ export function registerBinding(plur1busHome, agentId, hermesHome, platform = pr
 
 /** Remove agentId from the registry when it is bound to hermesHome (rollback of registerBinding). */
 export function unregisterBinding(plur1busHome, agentId, hermesHome, platform = process.platform) {
+  return withRegistryLock(plur1busHome, ({ assertHeld }) => unregisterLocked(plur1busHome, agentId, hermesHome, platform, assertHeld));
+}
+
+/** unregisterBinding for a caller that already holds the registry lock. */
+export function unregisterLocked(plur1busHome, agentId, hermesHome, platform, assertHeld) {
   const real = realish(resolve(hermesHome), platform);
-  return withRegistryLock(plur1busHome, () => {
-    const bindings = readRegistry(plur1busHome);
-    if (!(agentId in bindings) || !samePath(bindings[agentId], real, platform)) return false;
-    delete bindings[agentId];
-    writeRegistry(plur1busHome, bindings);
-    return true;
-  });
+  const bindings = readRegistry(plur1busHome);
+  if (!(agentId in bindings) || !samePath(bindings[agentId], real, platform)) return false;
+  delete bindings[agentId];
+  assertHeld();
+  writeRegistry(plur1busHome, bindings);
+  return true;
 }
