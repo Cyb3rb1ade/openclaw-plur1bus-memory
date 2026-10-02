@@ -228,7 +228,7 @@ node --test tests/*.test.js
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
 - Installers, bootstraps and the install feed live in
-  Cyb3rb1ade/PLUR1BUS-Host-Addons. This repo keeps what they depend on: the
+  [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons). This repo keeps what they depend on: the
   `openclaw plur1bus selftest` CLI (`docs/selftest.md`), the store snapshot
   (`lib/snapshot/store-snapshot.js`, `scripts/snapshot-store.mjs`,
   `snapshotsDir`) and the modules the add-on vendors; keep their tests

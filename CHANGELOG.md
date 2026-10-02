@@ -46,7 +46,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Geändert
 
-- Installer and feed tooling moved to PLUR1BUS-Host-Addons.
+- Installer, Bootstraps und Install-Feed liegen jetzt in [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons).
+- Hinweis: Das nächste Plugin-Release braucht eine freie Version (v7.18.5–v7.18.7 sind auf feat/health-watch vergeben). Es ist das erste, das selftest, Store-Snapshot und snapshotsDir enthält, und damit die Plugin-Version für das erste Host-Addons-Release.
 - `index.js` ist auf die Konstruktion und die Registrierungsaufrufe reduziert;
   Recall, Capture, Kommandos und Tools liegen unter `engine/`, jede
   `api.on`/`api.register*`-Stelle unter `adapter/openclaw/`. **Kein

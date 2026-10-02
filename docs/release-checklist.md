@@ -78,7 +78,7 @@
 
 ## Installers and feed
 
-Installers, bootstraps and the install feed live in Cyb3rb1ade/PLUR1BUS-Host-Addons.
+Installers, bootstraps and the install feed live in [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons).
 
 ## Compatibility and Rollback
 

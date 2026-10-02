@@ -1133,7 +1133,7 @@ silicon, and Windows x64 and arm64.
 
 ### Installers
 
-Installers, bootstraps and the install feed live in Cyb3rb1ade/PLUR1BUS-Host-Addons.
+Installers, bootstraps and the install feed live in [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons).
 The plugin itself ships the `openclaw plur1bus selftest` command they use to
 verify an install, see [docs/selftest.md](docs/selftest.md).
 
