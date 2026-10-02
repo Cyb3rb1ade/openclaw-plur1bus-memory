@@ -56,8 +56,6 @@
     "repair-dreaming-cron": "node scripts/repair-dreaming-cron.mjs",
     "reindex-promotions": "node scripts/embed-promoted-memories.mjs --dry-run",
     "setup-feature-crons": "node scripts/setup-feature-crons.mjs",
-    "build:installer": "node scripts/dist/build-installer.mjs",
-    "build:bootstraps": "node scripts/dist/render-bootstraps.mjs",
     "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },
   "engines": {
@@ -82,9 +80,7 @@
   },
   "devDependencies": {
     "c8": "^11.0.0",
-    "esbuild": "0.28.2",
-    "openclaw": "2026.8.2",
-    "yaml": "2.9.0"
+    "openclaw": "2026.8.2"
   },
   "overrides": {
     "@huggingface/transformers": {

@@ -1,3 +1,0 @@
-$ hermes config set memory.provider scratch
-✓ Set memory.provider = scratch in <hermes-home>/config.yaml
-[exit 0]

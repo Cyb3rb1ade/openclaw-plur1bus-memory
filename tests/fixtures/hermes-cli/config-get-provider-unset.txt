@@ -1,3 +1,0 @@
-$ hermes config get memory.provider
-
-[exit 0]
