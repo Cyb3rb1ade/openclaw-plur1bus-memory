@@ -1142,14 +1142,14 @@ verify an install, see [docs/selftest.md](docs/selftest.md).
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.19.0
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.18.4
 ```
 
 The same release is on npmjs.org, once its first publish is done (see
 `docs/release-checklist.md`):
 
 ```bash
-openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.19.0 --pin
+openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.18.4 --pin
 ```
 
 Or install the immutable GitHub Release tarball. Download it, compare its
@@ -1157,7 +1157,7 @@ SHA-256 with the release's checksum, then:
 
 ```bash
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.19.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.4.tgz \
   --force --accept-capabilities
 ```
 
@@ -1170,7 +1170,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.19.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.4.tgz \
   --force --accept-capabilities
 ```
 

@@ -31,6 +31,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **`scripts/lint-engine-imports.mjs`, `scripts/lint-no-api-outside-adapter.mjs`,
   `scripts/typecheck.mjs`** — alle drei in `npm run lint` verdrahtet.
 - **`tests/helpers/runtime-sources.js`** (`readRuntimeSources()`).
+- **`openclaw plur1bus selftest`** (`--json`, `--download-models`, `--remote`,
+  `--keep`): prüft native Addons, Modell und einen Wegwerf-Store ohne Gateway
+  (`docs/selftest.md`). Die Add-on-Installer rufen es als Verify-Schritt auf.
+- **Store-Snapshots in Node** (`lib/snapshot/store-snapshot.js`,
+  `scripts/snapshot-store.mjs`): Verzeichnis-Snapshots mit SHA-256-Manifest,
+  konsistent gegen laufende Kompaktierung, die neuesten fünf bleiben erhalten;
+  optionales `snapshotsDir` für alle Funktionen.
 - **`docs/engine-api.md`** und die Spalte *Harness behaviour* in
   `docs/compatibility-openclaw.md`.
 - Optionaler, testinterner Kontext-Schlüssel `recallTimingSink` (additiv, in
@@ -39,6 +46,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Geändert
 
+- Installer and feed tooling moved to PLUR1BUS-Host-Addons.
 - `index.js` ist auf die Konstruktion und die Registrierungsaufrufe reduziert;
   Recall, Capture, Kommandos und Tools liegen unter `engine/`, jede
   `api.on`/`api.register*`-Stelle unter `adapter/openclaw/`. **Kein
@@ -790,97 +798,6 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   (7 Tage) und Obergrenze (512 je Agent) ab; ein nie wiedergegebener bleibt
   mit seinen Zeilen als einzige Kopie stehen. Eine Capture, die mit nur
   teilweise gespeicherten Zeilen zurückkehrt, verhält sich unverändert.
-
-## [7.19.0] — in Vorbereitung (HM1: Distribution für OpenClaw, HM2: Hermes-Hostmodus)
-
-### Hinzugefügt
-
-- **`--host hermes`** für den Installer und beide Bootstraps (`-Host hermes`
-  in der `.ps1`): installiert den PLUR1BUS-Memory-Provider nach
-  `$HERMES_HOME/plugins/plur1bus/` und einen lokalen PLUR1BUS-Sidecar
-  (`plur1bus setup --profile host`), dessen Binary der signierte Feed
-  (`hosts.hermes`) per URL und SHA-256 festlegt. Erkennung von Hermes, Version,
-  Python und Home (Windows: `%LOCALAPPDATA%\hermes`), gesammelte
-  Kompatibilitätsbefunde (Exit 3), Agent pro Hermes-Home, Bindungsregister mit
-  einer mit dem Python-Provider geteilten Sperre, `memory.provider` erst nach
-  dem Provider-Verzeichnis (bei 0.21.4 und unbekannten Versionen per
-  Zeilen-Edit mit Backup), Verifikation über `hermes memory status` und
-  `hermes plur1bus selftest`, Rollback in umgekehrter Reihenfolge und
-  Wiederaufnahme unterbrochener Läufe.
-- **Hermes-Update** mit Release-Notes, Now/Later/Skip, Speicher-Snapshot,
-  byteweiser Sicherung von `manifest.json`/`config.json` und Binary-Rollback;
-  **Deinstallation**, die `memory.provider` exakt wiederherstellt, und **Purge**,
-  der verweigert, solange ein anderes Hermes-Home den Sidecar nutzt. Eine
-  Installation über einen älteren gemeinsamen Host-Sidecar läuft wie dieses
-  Update (Stopp, Sicherung, Snapshot, Binary, Setup) und wird ebenso
-  zurückgerollt; ein Sidecar wird nur wiederverwendet, wenn auch
-  `plur1bus --version` mindestens die Release-Version meldet.
-- **Node-Kette der Bootstraps** für Hermes: PATH, Hermes' eigenes Node, das
-  Node eines Sidecars, sonst ein festgelegtes, hash-geprüftes portables
-  Node 24.21.0 (`scripts/dist/node-pins.json`; der Renderer verlangt
-  `--node-pins`).
-- **plugin-dist.yml**: Hermes-Beine auf drei Betriebssystemen (min/latest), ein
-  WSL-Bein und ein Abgleich der Node-Pins mit nodejs.org; bis zum
-  Harness-Release P4 nicht blockierend.
-- `lib/snapshot/store-snapshot.js`: optionales `snapshotsDir` für alle
-  Funktionen.
-- **Release-Linie v7.17.0..v7.18.4 enthalten:** Sprach-Persona/Light mit
-  `/modus`, Health-Überwachung im Dashboard (`healthWatch`), optionales
-  `runtime.detachPostTurnWork` (Standard aus), Skill-Miner-Clustering- und
-  Critical-Chunk-Fix; Einzelheiten in den Abschnitten 7.17.0 bis 7.18.4.
-
-- **Ein-Zeilen-Installer** `install-plugin.sh` (Linux, macOS) und
-  `install-plugin.ps1` (Windows nativ, Beta; WSL2 über Delegation an das
-  Linux-Skript). Die Bootstraps verifizieren den signierten Plugin-Feed
-  (minisign) **vor** jeder URL und jedem Hash darin, prüfen den gebündelten
-  Node-Installer per SHA-256 und starten ihn als Kindprozess. Fünf Ziele:
-  `linux-x64`, `linux-arm64`, `darwin-arm64`, `win-x64`, `win-arm64`.
-- **Node-Installer** (`plur1bus-plugin-installer.mjs`): Installation über
-  `openclaw plugins install` (ClawHub mit ClawPack-Digest, sonst der über den
-  Feed per SHA-256 verifizierte GitHub-Release-Tarball; `--source npm`,
-  `--offline <tgz>`), Kompatibilitätsprüfung mit gesammelten Befunden (Exit 3),
-  lizenzabhängige Modellwahl (`--accept-nc-licence`), Verifikation und
-  automatischer Rollback. `--update` mit Release-Notes (de/en), Store-Snapshot
-  und Rollback samt Wiederaufnahme unterbrochener Läufe, `--uninstall
-  [--purge]`, `--adopt-legacy` für rsync-Deployments (mit Schutz vor
-  `protect-plur1bus-deploy.sh`), `--dry-run`, `--json`. Exit-Codes 0–4.
-  Details: `docs/distribution.md`.
-- **`openclaw plur1bus selftest`** (`--json`, `--download-models`, `--remote`,
-  `--keep`): prüft native Addons, Modell und einen Wegwerf-Store ohne Gateway.
-- **Store-Snapshots in Node** (`lib/snapshot/store-snapshot.js`,
-  `scripts/snapshot-store.mjs`): Verzeichnis-Snapshots mit SHA-256-Manifest,
-  konsistent gegen laufende Kompaktierung, die neuesten fünf bleiben erhalten.
-- **Signierter Plugin-Feed** `plur1bus.plugin-feed/1`
-  (`scripts/dist/build-plugin-feed.mjs`, offline vom Owner signiert).
-- **`plugin-dist.yml`**: Installations- und Upgrade-Matrix auf den fünf Zielen
-  mit echtem OpenClaw (min und latest). Die Vollsuite auf Windows und macOS
-  läuft in `ci.yml` (`test-cross`).
-
-### Geändert
-
-- Der Feed erlaubt `hosts.hermes` (Schema).
-- `plugin-release.yml`: Solange `scripts/dist/hermes-sidecar.lock.json` ein
-  Platzhalter ist, baut auch ein echter Lauf den Feed ohne neues Hermes-Release
-  und warnt in Log und Job-Zusammenfassung; reine OpenClaw-Releases werden nie
-  blockiert. `build-plugin-feed.mjs` übernimmt ein Hermes-Release, das schon
-  mit denselben Hashes im vorigen Feed steht, unverändert und verweigert nur
-  andere Hashes für dieselbe Version.
-
-- README „Installation“: Node-Bereich `>=24.16.0 <25 || >=26.1.0`, OpenClaw
-  `2026.8.1` oder neuer, die Ein-Zeilen-Installer, der ClawHub-Befehl ohne das
-  von OpenClaw 2026.9.5 nicht definierte `--acknowledge-clawhub-risk`.
-- Der Installer setzt `hooks.allowConversationAccess` bei Neuinstallation und
-  Übernahme (ohne den Schalter arbeiten Capture und Recall nicht) und ändert
-  ihn bei Updates nie.
-
-### English
-
-- One-line installers for OpenClaw (`install-plugin.sh`, `install-plugin.ps1`)
-  with a signed feed verified before anything in it is trusted; install, update
-  (snapshot, automatic rollback, resume), uninstall/purge and adoption of rsync
-  deploys; `openclaw plur1bus selftest`; Node store snapshots; the
-  `plugin-dist.yml` five-target matrix; README install fixes. See
-  `docs/distribution.md`.
 
 ## [7.18.4] — 2026-10-02
 
