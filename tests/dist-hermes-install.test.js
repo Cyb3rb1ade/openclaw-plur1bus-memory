@@ -420,6 +420,25 @@ describe("hermes installer: install", () => {
     });
   }
 
+  it("an install rollback killed while it undoes a shared sidecar's update resumes as the rollback (re-review M6)", { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+    const ctx = await olderSharedSidecar({ selftestFail: true });
+    const { sb, work } = ctx;
+    const k = runChild(sb, ["--hermes-profile", "work"], { killAt: "update.rollback-binary" });
+    assert.notEqual(k.status, 0, `not killed\n${k.stdout}${k.stderr}`);
+    assert.equal(readHermesState(work).inProgress.step, "rollback", "the rollback is recorded before it starts");
+    // the next plain run finishes the undo; it does not re-apply the sidecar update
+    const n = sb.plur1busCalls().length;
+    const r = await run(sb, ["--hermes-profile", "work", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.match(r.out, /interrupted install at step rollback; rolling it back/);
+    assert.equal(JSON.parse(r.stdout).steps.find((x) => x.id === "rollback").status, "ok", r.out);
+    const p = sb.plur1busCalls().slice(n).filter((a) => a[0] !== "--version").map((a) => a.slice(3).join(" "));
+    assert.ok(!p.includes("agent create hermes-work"), `nothing is installed again:\n${p.join("\n")}`);
+    assert.ok(p.includes("daemon start"), "the daemon runs again, as before the install");
+    assertSidecarAsBefore(ctx);
+    assert.equal(existsSync(join(work, ".plur1bus-installer.json")), false, "the state goes with the finished rollback");
+  });
+
   it("a sidecar is reused only when its binary reports at least the release's version, not just its manifest (I1)", async () => {
     const sb = createHermesSandbox();
     sb.seedHostSidecar({ version: "0.2.0", useClass: "commercial" }); // the manifest says 0.2.0, the binary is 0.1.0

@@ -184,7 +184,8 @@ export async function runHermesInstall(ctx) {
     }
     removeStaging(hermesHome);
     if (state.bin) removeStaleBinTemps(state.bin);
-    if (flags.rollback || interrupted.step === "rollback-failed") {
+    // a run killed during its rollback resumes as a rollback, never as the install (re-review M6, as rollbackUpdate)
+    if (flags.rollback || interrupted.step === "rollback-failed" || interrupted.step === "rollback") {
       report.step("resume", "info", `interrupted install at step ${interrupted.step}; rolling it back${flags.rollback ? "" : " (re-run the installer afterwards to install again)"}`);
       return rollback({ ...ctx, hermes, hermesHome, s: state, reason: flags.rollback ? "rollback requested" : "finishing a failed rollback" });
     }
@@ -589,6 +590,10 @@ export async function rollback(ctx) {
   const raw = typeof s.previousProviderRaw === "string" ? s.previousProviderRaw.trim() : (prev ?? "");
   const prevName = raw ? raw : "unset (Hermes' built-in memory)";
   const restoreCmd = raw ? `hermes config set memory.provider ${raw}` : "hermes config unset memory.provider";
+  // re-review M6: recorded first, so a run killed during the rollback (e.g. while it undoes a shared sidecar's update)
+  // finishes the undo on the next run instead of re-applying the install
+  const rbVersion = ctx.release?.version ?? s.inProgress?.version ?? null;
+  writeHermesState(hermesHome, { ...s, inProgress: { op: "install", step: "rollback", version: rbVersion } });
 
   // the current value: Hermes' CLI, else (line-edit path) the line itself; null = unknown
   const readCurrent = async () => {
@@ -753,7 +758,7 @@ export async function rollback(ctx) {
 
   report.set("rollback", { reason: ctx.reason, done });
   if (manual.length) {
-    writeHermesState(hermesHome, { ...s, inProgress: { op: "install", step: "rollback-failed", version: s.inProgress?.version ?? null } });
+    writeHermesState(hermesHome, { ...s, inProgress: { op: "install", step: "rollback-failed", version: rbVersion } });
     report.step("rollback", "failed", `manual steps needed: ${manual.join("; ")}`);
     report.set("manualSteps", manual);
     report.note("Rollback failed. Do these steps yourself:");
