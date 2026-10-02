@@ -255,7 +255,7 @@ node --test tests/*.test.js
 - `tests/dist-hermes-lock-interop.test.js` runs Node and Python (>= 3.11)
   holders on one bindings-registry lock; it skips without Python unless
   `PLUR1BUS_REQUIRE_LOCK_INTEROP=1` (set in CI's `test` and `test-cross`).
-- Current baseline (Linux, Node 24.21.0, 7.18.0): 6,156 tests in 1,078 suites,
+- Current baseline (Linux, Node 24.21.0, 7.18.0): 6,159 tests in 1,078 suites,
   8 skipped (platform-only and opt-in cases). Two tests depend on the machine: the
   `dist-ci-helpers` dry run needs 1.5 GiB free disk (the installer's own
   `insufficient-disk` check), and the Local Inference adm-zip check needs this
