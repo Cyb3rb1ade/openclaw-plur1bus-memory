@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -102,6 +102,62 @@ describe("withRegistryLock", () => {
         assert.equal(phase, "start");
         assert.equal(lines[i + 1], `end-${id}`, `Prozess ${id} wurde von einem anderen unterbrochen`);
       }
+    });
+  });
+
+  describe("Windows delete-pending (EPERM beim wx-Open)", () => {
+    function flakyOpen(failures, code) {
+      let calls = 0;
+      const open = (path, flags) => {
+        calls += 1;
+        if (calls <= failures) {
+          throw Object.assign(new Error(`${code}: operation not permitted, open '${path}'`), { code });
+        }
+        return openSync(path, flags);
+      };
+      return { open, calls: () => calls };
+    }
+
+    for (const code of ["EPERM", "EACCES", "EBUSY"]) {
+      it(`wiederholt ${code} unter win32, bis der Lock frei ist`, (t) => {
+        const lockPath = join(tempDir(t), "registry.lock");
+        const flaky = flakyOpen(3, code);
+
+        const result = withRegistryLock(lockPath, () => "erworben", {
+          platform: "win32", openSync: flaky.open, retryMs: 1, timeoutMs: 2000,
+        });
+
+        assert.equal(result, "erworben");
+        assert.equal(flaky.calls(), 4);
+        assert.equal(existsSync(lockPath), false);
+      });
+    }
+
+    it("reapt bei EPERM unter win32 nicht (Datei kann mitten im Löschen sein)", (t) => {
+      const lockPath = join(tempDir(t), "registry.lock");
+      writeFileSync(lockPath, "fremd");
+      const ancient = new Date(Date.now() - 60_000);
+      utimesSync(lockPath, ancient, ancient);
+      const flaky = flakyOpen(Infinity, "EPERM");
+
+      assert.throws(
+        () => withRegistryLock(lockPath, () => "nie", {
+          platform: "win32", openSync: flaky.open, staleMs: 1000, retryMs: 1, timeoutMs: 50,
+        }),
+        /lock busy/,
+      );
+      assert.equal(existsSync(lockPath), true, "veralteter Lock darf bei EPERM nicht gelöscht werden");
+    });
+
+    it("wirft EPERM außerhalb von win32 unverändert", (t) => {
+      const lockPath = join(tempDir(t), "registry.lock");
+      const flaky = flakyOpen(1, "EPERM");
+
+      assert.throws(
+        () => withRegistryLock(lockPath, () => "nie", { platform: "linux", openSync: flaky.open }),
+        { code: "EPERM" },
+      );
+      assert.equal(flaky.calls(), 1);
     });
   });
 });
