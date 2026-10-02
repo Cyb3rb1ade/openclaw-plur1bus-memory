@@ -18,17 +18,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parsePublicKey } from "../scripts/dist/minisign.mjs";
 import { createInstallerSandbox, makeTestFeed } from "./helpers/installer-sandbox.js";
+import { makeHermesFeed } from "./helpers/hermes-sandbox.js";
 import { generateTestKeyPair } from "./helpers/minisign-sign.js";
+import { makeZip } from "./helpers/zip.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RENDER = join(ROOT, "scripts", "dist", "render-bootstraps.mjs");
+const NODE_PINS = join(ROOT, "scripts", "dist", "node-pins.json");
 const MINISIGN = join(ROOT, "scripts", "dist", "minisign.mjs");
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
-function render(args) {
+function render(args, { pins = true } = {}) {
   const out = makeTempDir("plur1bus-render-");
-  const r = spawnSync(process.execPath, [RENDER, "--out-dir", out, ...args], { encoding: "utf8" });
+  const r = spawnSync(process.execPath, [RENDER, "--out-dir", out, ...(pins ? ["--node-pins", NODE_PINS] : []), ...args], { encoding: "utf8" });
   return { ...r, out, files: existsSync(out) ? readdirSync(out).sort() : [] };
 }
 
@@ -84,6 +87,31 @@ describe("render-bootstraps.mjs", () => {
     assert.match(get, /elseif \(\$final\.Scheme -ne 'https'\) \{\s+Remove-Item -LiteralPath \$file[^\n]*\n\s+Fail 1 "refusing a redirect to a non-https URL/);
     assert.match(ps1, /ResponseUri/);
     assert.match(ps1, /RequestMessage\.RequestUri/);
+  });
+
+  it("refuses to render without node pins, and with pins that are not nodejs.org's (HM2-R16)", () => {
+    const r = render(["--test-key"], { pins: false });
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /--node-pins <json> is required/);
+    assert.deepEqual(r.files, []);
+    const pins = JSON.parse(readFileSync(NODE_PINS, "utf8"));
+    pins.targets["win-x64"].url = "https://example.invalid/node.zip";
+    const dir = makeTempDir("plur1bus-render-pins-");
+    writeFileSync(join(dir, "pins.json"), JSON.stringify(pins));
+    const bad = render(["--test-key", "--node-pins", join(dir, "pins.json")], { pins: false });
+    assert.equal(bad.status, 1);
+    assert.match(bad.stderr, /win-x64 url/);
+    // the pins are rendered into both bootstraps
+    const ok = render(["--test-key"]);
+    assert.equal(ok.status, 0, ok.stderr);
+    const real = JSON.parse(readFileSync(NODE_PINS, "utf8"));
+    const sh = readFileSync(join(ok.out, "install-plugin.sh"), "utf8");
+    const ps1 = readFileSync(join(ok.out, "install-plugin.ps1"), "utf8");
+    assert.match(sh, /^NODE_PIN_VERSION='24\.21\.0'$/m);
+    for (const t of ["linux-x64", "linux-arm64", "darwin-arm64"]) assert.ok(sh.includes(`${t}) echo '${real.targets[t].url} ${real.targets[t].sha256} tar.gz' ;;`), t);
+    assert.match(ps1, /^\$NodePinVersion = '24\.21\.0'$/m);
+    for (const t of ["win-x64", "win-arm64"]) assert.ok(ps1.includes(`'${t}' = @{ Url = '${real.targets[t].url}'; Sha256 = '${real.targets[t].sha256}'; Archive = 'zip' }`), t);
+    assert.doesNotMatch(sh + ps1, /@@NODE_PINS@@/);
   });
 
   it("--test-key renders a TEST ONLY build without keys", () => {
@@ -142,7 +170,11 @@ if (args[0] === "-d") {
   const d = sc.distros.find((x) => x.name === args[1]);
   const rest = args.slice(2);
   if (!d) { process.stderr.write("There is no distribution with the supplied name.\\n"); process.exit(1); }
-  if (rest[0] === "-e" && rest[1] === "sh" && rest[2] === "-lc") { if (d.openclaw) { process.stdout.write("/home/u/.local/bin/openclaw\\n"); process.exit(0); } process.exit(1); }
+  if (rest[0] === "-e" && rest[1] === "sh" && rest[2] === "-lc") {
+    const want = String(rest[3]).trim().split(/\\s+/).pop();
+    if (d[want]) { process.stdout.write("/home/u/.local/bin/" + want + "\\n"); process.exit(0); }
+    process.exit(1);
+  }
   if (rest[0] === "-e" && rest[1] === "wslpath") { process.stdout.write("/mnt/" + rest[3][0].toLowerCase() + rest[3].slice(2).replaceAll("\\\\", "/") + "\\n"); process.exit(0); }
   if (rest[0] === "-e" && rest[1] === "sh" && rest[2] === "-s") {
     const chunks = [];
@@ -205,6 +237,10 @@ function makePsCase(o) {
   const privateNodePath = join(sb.env.LOCALAPPDATA, "OpenClaw", "deps", "portable-node", "node.exe");
   if (privateNode === "good") linkOrCopy(process.execPath, privateNodePath);
   if (native) writeFileSync(join(bin, "openclaw.cmd"), `@"${process.execPath}" "${join(sb.binDir, "openclaw-shim.mjs")}" %*\r\n`);
+  // --host hermes (Task 10): a hermes.cmd launcher, Hermes' own Node, a file:// "nodejs.org/dist" for the pinned Node
+  if (o.hermes) writeFileSync(join(bin, "hermes.cmd"), "@echo Hermes Agent v0.21.5 (2026.9.24) TEST ONLY\r\n");
+  const hermesNodePath = join(sb.env.LOCALAPPDATA, "hermes", "node", "node.exe");
+  if (o.hermesNode === "good") linkOrCopy(process.execPath, hermesNodePath);
 
   const wslLog = join(root, "wsl.log");
   const stdinFile = join(root, "wsl-stdin.bin");
@@ -250,6 +286,7 @@ function makePsCase(o) {
     PLUR1BUS_PLUGIN_WSL_EXE: wslExe,
     WSL_SHIM_SCENARIO: wslScenario,
     FAKE_INSTALLER_MARK: mark,
+    ...(o.nodeBase ? { PLUR1BUS_PLUGIN_TEST_NODE_BASE: pathToFileURL(o.nodeBase).href } : {}),
     ...(o.installerExit !== undefined ? { FAKE_INSTALLER_EXIT: String(o.installerExit) } : {}),
   };
   if (!testFlag) delete env.PLUR1BUS_PLUGIN_INSTALLER_TEST;
@@ -261,9 +298,11 @@ function makePsCase(o) {
     shBytes: readFileSync(shPath),
     goodNode: join(goodNodeDir, "node.exe"),
     privateNodePath,
-    run(args = [], { raw = false } = {}) {
+    hermesNodePath,
+    localAppData: sb.env.LOCALAPPDATA,
+    run(args = [], { raw = false, script = ps1Script } = {}) {
       const started = Date.now();
-      const r = spawnSync(o.shell.exe, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps1Script, ...args], {
+      const r = spawnSync(o.shell.exe, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, ...args], {
         env,
         encoding: raw ? "buffer" : "utf8",
         stdio: ["pipe", "pipe", "pipe"],
@@ -444,6 +483,107 @@ describe("install-plugin.ps1", { skip: PS_SKIP }, () => {
         const r = c.run(["--state-dir", dir, "--json"]);
         assert.equal(r.code, 0, r.out);
         assert.deepEqual(c.installer().argv.slice(2), ["--state-dir", dir, "--json"]);
+      });
+    });
+  }
+});
+
+// ── --host hermes (HM2 Task 10, HM2-R16; Windows only) ───────────────────────
+const WIN_TARGET = (process.env.PROCESSOR_ARCHITEW6432 || process.env.PROCESSOR_ARCHITECTURE) === "ARM64" ? "win-arm64" : "win-x64";
+let pinnedZip = null;
+/** The pinned Node "archive": node-v24.21.0-<target>/node.exe = this Node, store-only zip under <dir>/v24.21.0/. */
+function pinnedNodeBase() {
+  if (!pinnedZip) {
+    const base = makeTempDir("plur1bus-nodejs-dist-");
+    mkdirSync(join(base, "v24.21.0"), { recursive: true });
+    const name = `node-v24.21.0-${WIN_TARGET}`;
+    const file = join(base, "v24.21.0", `${name}.zip`);
+    writeFileSync(file, makeZip([{ name: `${name}/` }, { name: `${name}/node.exe`, data: readFileSync(process.execPath) }]));
+    pinnedZip = { base, file, sha: sha256(readFileSync(file)) };
+  }
+  return pinnedZip;
+}
+function renderPs1WithPins(sha) {
+  const pins = JSON.parse(readFileSync(NODE_PINS, "utf8"));
+  pins.targets[WIN_TARGET].sha256 = sha;
+  const dir = makeTempDir("plur1bus-render-pins-");
+  writeFileSync(join(dir, "pins.json"), JSON.stringify(pins));
+  const r = spawnSync(process.execPath, [RENDER, "--test-key", "--node-pins", join(dir, "pins.json"), "--out-dir", dir], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  return join(dir, "install-plugin.ps1");
+}
+const withHermes = (f) => {
+  const h = makeHermesFeed({ provider: { url: "https://example.invalid/TEST-ONLY/p.tgz", sha256: "a".repeat(64) }, binary: { url: "https://example.invalid/TEST-ONLY/b", sha256: "b".repeat(64) }, version: "0.3.0" });
+  f.hosts.hermes = h.hosts.hermes;
+};
+
+describe("install-plugin.ps1 -Host hermes", { skip: PS_SKIP }, () => {
+  before(() => {
+    if (!ps1Script) {
+      const r = render(["--test-key"]);
+      assert.equal(r.status, 0, r.stderr);
+      ps1Script = join(r.out, "install-plugin.ps1");
+    }
+  });
+  for (const shell of SHELLS) {
+    describe(shell.name, () => {
+      it("--host hermes without hermes exits 3 hermes-not-found", () => {
+        const c = makePsCase({ shell, native: false, pathNode: "old" });
+        for (const args of [["-Host", "hermes"], ["--host", "hermes"]]) {
+          const r = c.run(args);
+          assert.equal(r.code, 3, r.out);
+          assert.match(r.stderr, /hermes-not-found/);
+        }
+        assert.equal(c.installer(), null);
+      });
+
+      it("uses Hermes' own Node when in range; -Host is passed on as --host", () => {
+        const c = makePsCase({ shell, native: false, hermes: true, pathNode: "old", hermesNode: "good", feedPatch: withHermes });
+        const r = c.run(["-Host", "hermes", "--json"]);
+        assert.equal(r.code, 0, r.out);
+        assert.deepEqual(c.installer().argv.slice(2), ["--host", "hermes", "--json"]);
+        assert.equal(c.installer().execPath.toLowerCase(), c.hermesNodePath.toLowerCase());
+      });
+
+      it("falls back to the pinned Node download and verifies its sha256; the archive is re-hashed before reuse", () => {
+        const z = pinnedNodeBase();
+        const script = renderPs1WithPins(z.sha);
+        const c = makePsCase({ shell, native: false, hermes: true, pathNode: "old", nodeBase: z.base, feedPatch: withHermes });
+        const r = c.run(["--host", "hermes"], { script });
+        assert.equal(r.code, 0, r.out);
+        assert.ok(c.installer(), r.out);
+        assert.match(c.installer().execPath, /node-v24\.21\.0-win-(x64|arm64)[\\/]node\.exe$/i);
+        const cached = join(c.localAppData, "plur1bus", "cache", "bootstrap-node-24.21.0", `node-v24.21.0-${WIN_TARGET}.zip`);
+        assert.equal(sha256(readFileSync(cached)), z.sha);
+        assert.deepEqual(readdirSync(c.tmp), [], "the extracted Node lived in the private temp dir");
+        // tampered cache → fetched again
+        writeFileSync(cached, Buffer.concat([readFileSync(cached), Buffer.from("x")]));
+        const r2 = c.run(["--host", "hermes"], { script });
+        assert.equal(r2.code, 0, r2.out);
+        assert.match(r2.stderr, /does not match its pinned SHA-256; downloading it again/);
+        assert.equal(sha256(readFileSync(cached)), z.sha);
+      });
+
+      it("a Node archive hash mismatch exits 1 and runs nothing", () => {
+        const z = pinnedNodeBase();
+        const c = makePsCase({ shell, native: false, hermes: true, pathNode: "old", nodeBase: z.base, feedPatch: withHermes });
+        const r = c.run(["--host", "hermes"], { script: renderPs1WithPins("f".repeat(64)) });
+        assert.equal(r.code, 1, r.out);
+        assert.match(r.stderr, /checksum mismatch .*node-v24\.21\.0/);
+        assert.equal(c.installer(), null);
+      });
+
+      it("the WSL probe looks for hermes with --host hermes and hands over hosts.hermes.latest", () => {
+        const c = makePsCase({ shell, native: false, hermesNode: "good", pathNode: "old", feedPatch: withHermes, distros: [{ name: UBUNTU, running: true, openclaw: true, hermes: true }] });
+        const r = c.run(["-Host", "hermes"]);
+        assert.equal(r.code, 0, r.out);
+        const probes = c.wslCalls().filter((e) => e.argv.includes("-lc"));
+        assert.ok(probes.length && probes.every((e) => e.argv[e.argv.length - 1] === "command -v hermes"), JSON.stringify(probes));
+        const sh = c.wslCalls().find((e) => e.argv.includes("-s"));
+        assert.deepEqual(sh.argv, ["-d", UBUNTU, "-e", "sh", "-s", "--", "--version", "0.3.0", "--host", "hermes"]);
+        // a distro with OpenClaw only is no Hermes candidate
+        const none = makePsCase({ shell, native: false, hermesNode: "good", pathNode: "old", feedPatch: withHermes, distros: [{ name: UBUNTU, running: true, openclaw: true }] });
+        assert.equal(none.run(["-Host", "hermes"]).code, 3);
       });
     });
   }

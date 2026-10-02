@@ -1,10 +1,18 @@
-# PLUR1BUS memory plugin bootstrap for OpenClaw on Windows (D87, spec A.3, HM1-R3). Windows PowerShell 5.1 or PowerShell 7.
+# PLUR1BUS memory plugin bootstrap for OpenClaw and Hermes on Windows (D87, spec A.3, HM1-R3, HM2-R16). Windows PowerShell 5.1 or PowerShell 7.
 # @@RENDER_NOTE@@
 #
-#   $s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF))) [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
+#   $s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF))) [-Host openclaw|hermes] [-Target native|wsl:<distro>] [-ProbeWsl] [installer flags]
 #
 # (text-safe: under pwsh 7 .Content is byte[] when the host does not serve text/*, so it is decoded as UTF-8 first)
 #
+# -Host hermes (or the installer's own --host hermes) installs into Hermes instead of OpenClaw: it looks for
+# hermes.exe / hermes.cmd / hermes, probes the WSL distros for `hermes`, reads hosts.hermes.latest, forwards --host hermes
+# into the distro, and takes Node from the chain of HM2-R16: node.exe on PATH, Hermes' own Node
+# (%LOCALAPPDATA%\hermes\node\node.exe, <root>\tools\node-*\node.exe), an existing sidecar's
+# <plur1bus home>\runtime\node-v*\node.exe, else the pinned portable Node below, downloaded into
+# %LOCALAPPDATA%\plur1bus\cache\bootstrap-node-<v>\, its SHA-256 checked before every extraction (a cached archive is
+# re-hashed on every reuse), extracted with System.IO.Compression.ZipFile into the private temp dir. Any Node in the
+# installer's engines range counts (>=24.16.0 <25 || >=26.1.0).
 # Looks for OpenClaw natively (openclaw.cmd / openclaw on PATH) and in the WSL distros (`wsl.exe -l -q`, running
 # ones from `wsl.exe -l -q --running`; a running distro is probed with `wsl.exe -d <d> -e sh -lc 'command -v openclaw'`, a
 # stopped one only with -ProbeWsl or an interactive yes, HM1-R1/C12). Several candidates and no -Target: an
@@ -21,14 +29,16 @@
 # https only, redirects included: a download that ends on a non-https URL fails (exit 1).
 #
 # Exit codes: 0 ok, 1 failed (nothing changed; bad signature or checksum), 2 needs a choice, 3 incompatible host
-# (openclaw-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from the installer).
+# (openclaw-not-found, hermes-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from
+# the installer).
 #
 # Environment:
 #   PLUR1BUS_PLUGIN_CHANNEL   release channel, ^[a-z0-9-]+$ (default: stable)
 #   PLUR1BUS_PLUGIN_FEED      feed URL; `{channel}` is replaced (default: https://updates.plur1bus.app/plugin/{channel}.json).
 #                             https:// only.
 # Test seams (only with PLUR1BUS_PLUGIN_INSTALLER_TEST=1): file:// feeds and downloads, PLUR1BUS_PLUGIN_PUBKEY (a
-# TEST ONLY minisign public key used instead of the channel keys below) and PLUR1BUS_PLUGIN_WSL_EXE (a wsl.exe shim).
+# TEST ONLY minisign public key used instead of the channel keys below), PLUR1BUS_PLUGIN_WSL_EXE (a wsl.exe shim) and
+# PLUR1BUS_PLUGIN_TEST_NODE_BASE (a file:// directory replacing https://nodejs.org/dist for the pinned Node).
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
@@ -36,6 +46,8 @@ $PubkeyStable = '@@PUBKEY_STABLE@@'
 $PubkeyBeta = '@@PUBKEY_BETA@@'
 # scripts/dist/minisign.mjs, verbatim, as base64 (this file stays ASCII-only).
 $MinisignJsBase64 = '@@MINISIGN_JS@@'
+# The pinned portable Node (HM2-R16; scripts/dist/node-pins.json, the harness's own Node pin).
+@@NODE_PINS@@
 
 $BootstrapArgs = @($args)
 $script:TestMode = ($env:PLUR1BUS_PLUGIN_INSTALLER_TEST -eq '1')
@@ -162,7 +174,7 @@ function Test-NodeOk([string]$node) {
 # it), then install.ps1's portable Node (%LOCALAPPDATA%\OpenClaw\deps\portable-node, fact sheet; Task 8 CI verifies).
 # A node.cmd/.bat on PATH is only probed for its version (for the message): it is never run with the installer's
 # arguments, because cmd.exe re-parses them. (Off Windows, pwsh finds the plain `node` executable.)
-function Find-Node([string]$openclawPath) {
+function Find-Node([string]$openclawPath, [bool]$openclawNodes = $true) {
   $script:PathNodeNote = 'none'
   $name = 'node.exe'
   if ([System.IO.Path]::DirectorySeparatorChar -eq '/') { $name = 'node' }
@@ -180,11 +192,86 @@ function Find-Node([string]$openclawPath) {
   }
   $candidates = New-Object System.Collections.ArrayList
   if ($openclawPath) { [void]$candidates.Add((Join-Path (Split-Path -Parent $openclawPath) 'node.exe')) }
-  if ($env:LOCALAPPDATA) { [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'OpenClaw\deps\portable-node\node.exe')) }
+  if ($openclawNodes -and $env:LOCALAPPDATA) { [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'OpenClaw\deps\portable-node\node.exe')) }
   foreach ($n in $candidates) {
     if (Test-NodeOk $n) { return $n }
   }
   return $null
+}
+
+# Hermes (HM2-R16): Hermes' own Node, then an existing PLUR1BUS sidecar's Node, each only when in range.
+function Find-HermesNode {
+  $exe = 'node.exe'
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '/') { $exe = 'node' }
+  $candidates = New-Object System.Collections.ArrayList
+  $root = $null
+  if (-not [string]::IsNullOrEmpty($env:HERMES_HOME)) {
+    $root = $env:HERMES_HOME
+    if ($root -match '^(.*)[\\/]profiles[\\/][^\\/]+[\\/]?$') { $root = $Matches[1] }
+  } elseif ($env:LOCALAPPDATA) {
+    $root = Join-Path $env:LOCALAPPDATA 'hermes'
+  }
+  $roots = @($root)
+  if ($env:LOCALAPPDATA) { $roots += (Join-Path $env:LOCALAPPDATA 'hermes') }
+  foreach ($r in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+    [void]$candidates.Add((Join-Path (Join-Path $r 'node') $exe))
+    if (Test-Path -LiteralPath (Join-Path $r 'tools')) {
+      foreach ($d in @(Get-ChildItem -LiteralPath (Join-Path $r 'tools') -Directory -Filter 'node-*' -ErrorAction SilentlyContinue)) { [void]$candidates.Add((Join-Path $d.FullName $exe)) }
+    }
+  }
+  $home1 = $env:PLUR1BUS_HOME
+  if ([string]::IsNullOrEmpty($home1) -and $env:LOCALAPPDATA) { $home1 = Join-Path $env:LOCALAPPDATA 'PLUR1BUS' }
+  if ($home1 -and (Test-Path -LiteralPath (Join-Path $home1 'runtime'))) {
+    foreach ($d in @(Get-ChildItem -LiteralPath (Join-Path $home1 'runtime') -Directory -Filter 'node*' -ErrorAction SilentlyContinue)) { [void]$candidates.Add((Join-Path $d.FullName $exe)) }
+  }
+  foreach ($n in $candidates) {
+    if (Test-NodeOk $n) { return $n }
+  }
+  return $null
+}
+
+# The pinned portable Node for <target>: the archive is cached under %LOCALAPPDATA%\plur1bus\cache, re-hashed on every
+# reuse (fetched again on a mismatch), SHA-256-checked before extraction, and extracted into <dest>. Returns node.exe.
+function Get-PinnedNode([string]$target, [string]$dest) {
+  $pin = $NodePins[$target]
+  if ($null -eq $pin) { Fail 3 "node-not-found: no pinned Node for $target" }
+  $url = $pin.Url
+  if ($script:TestMode -and -not [string]::IsNullOrEmpty($env:PLUR1BUS_PLUGIN_TEST_NODE_BASE)) {
+    $url = $env:PLUR1BUS_PLUGIN_TEST_NODE_BASE.TrimEnd('/') + $url.Substring('https://nodejs.org/dist'.Length)
+  }
+  $cacheRoot = $env:LOCALAPPDATA
+  if ([string]::IsNullOrEmpty($cacheRoot)) { $cacheRoot = [System.IO.Path]::GetTempPath() }
+  $cache = Join-Path (Join-Path (Join-Path $cacheRoot 'plur1bus') 'cache') "bootstrap-node-$NodePinVersion"
+  [void][System.IO.Directory]::CreateDirectory($cache)
+  $name = "node-v$NodePinVersion-$target"
+  $archive = Join-Path $cache "$name.zip"
+  if (Test-Path -LiteralPath $archive -PathType Leaf) {
+    if ((Get-Sha256 $archive) -ne $pin.Sha256) {
+      Say "the cached Node archive $archive does not match its pinned SHA-256; downloading it again"
+      Remove-Item -LiteralPath $archive -Force
+    }
+  }
+  if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+    Say "downloading the pinned Node $NodePinVersion ($target) from $url"
+    $part = "$archive.tmp-$PID"
+    try { Get-Resource $url $part } catch { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue; Fail 1 "could not download the pinned Node ${url}: $($_.Exception.Message)" }
+    $got = Get-Sha256 $part
+    if ($got -ne $pin.Sha256) {
+      Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+      Fail 1 "checksum mismatch for ${url}: expected $($pin.Sha256), got $got (nothing run)"
+    }
+    Move-Item -LiteralPath $part -Destination $archive -Force
+  }
+  $stage = Join-Path $dest 'node-stage'
+  if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $stage)
+  $final = Join-Path $dest $name
+  Move-Item -LiteralPath (Join-Path $stage $name) -Destination $final
+  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  $exe = 'node.exe'
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '/') { $exe = 'bin/node' }
+  return (Join-Path $final $exe)
 }
 
 function Get-WslExe {
@@ -221,7 +308,7 @@ function Get-WslDistros([string]$wsl) {
 }
 
 function Test-WslOpenclaw([string]$wsl, [string]$distro) {
-  try { $r = Invoke-Capture $wsl @('-d', $distro, '-e', 'sh', '-lc', 'command -v openclaw') } catch { return $false }
+  try { $r = Invoke-Capture $wsl @('-d', $distro, '-e', 'sh', '-lc', "command -v $script:HostName") } catch { return $false }
   return ($r.Code -eq 0 -and ((ConvertFrom-NativeLines $r.Lines) -join '').Trim().Length -gt 0)
 }
 
@@ -333,6 +420,8 @@ try {
   # Bootstrap switches are taken out; everything else goes to the installer unchanged.
   $target = $null
   $probeWsl = $false
+  $hostArg = $null
+  $script:HostName = 'openclaw'
   $rest = New-Object System.Collections.ArrayList
   for ($i = 0; $i -lt $BootstrapArgs.Count; $i++) {
     $a = [string]$BootstrapArgs[$i]
@@ -351,10 +440,33 @@ try {
       $target = $a.Substring(8)
     } elseif ($a -eq '-ProbeWsl') {
       $probeWsl = $true
+    } elseif ($a -eq '-Host' -or $a -eq '-Host:') {
+      if ($i + 1 -ge $BootstrapArgs.Count) { Fail 1 '-Host needs openclaw or hermes' }
+      $i++
+      $hostArg = [string]$BootstrapArgs[$i]
+    } elseif ($a -like '-Host:*') {
+      $hostArg = $a.Substring(6)
     } else {
       [void]$rest.Add($a)
     }
   }
+  # the installer's own --host counts too; -Host is mapped to --host for the installer (F16)
+  $restHost = $null
+  for ($i = 0; $i -lt $rest.Count; $i++) {
+    $a = [string]$rest[$i]
+    if ($a -ceq '--host' -and $i + 1 -lt $rest.Count) { $restHost = [string]$rest[$i + 1] }
+    elseif ($a -clike '--host=*') { $restHost = $a.Substring(7) }
+  }
+  if ($null -ne $hostArg) {
+    if ($null -ne $restHost -and $restHost -cne $hostArg) { Fail 1 "-Host $hostArg and --host $restHost disagree" }
+    if ($null -eq $restHost) { $rest.Insert(0, $hostArg); $rest.Insert(0, '--host') }
+    $script:HostName = $hostArg
+  } elseif ($null -ne $restHost) {
+    $script:HostName = $restHost
+  }
+  if ($script:HostName -cne 'openclaw' -and $script:HostName -cne 'hermes') { Fail 1 "unknown host $($script:HostName) (openclaw|hermes)" }
+  $hostLabel = 'OpenClaw'
+  if ($script:HostName -eq 'hermes') { $hostLabel = 'Hermes' }
   $wslDistro = $null
   if ($null -ne $target -and $target -ne 'native') {
     if ($target -match '^wsl:(.+)$') { $wslDistro = $Matches[1] } else { Fail 1 "invalid -Target ${target}: expected native or wsl:<distro>" }
@@ -381,12 +493,22 @@ try {
   # Candidates: native OpenClaw and WSL distros with OpenClaw.
   $env:WSL_UTF8 = '1'
   $nativeOc = $null
-  $c = Get-Command openclaw.cmd, openclaw -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($script:HostName -eq 'hermes') {
+    $c = Get-Command hermes.exe, hermes.cmd, hermes -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  } else {
+    $c = Get-Command openclaw.cmd, openclaw -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  }
   if ($c) { $nativeOc = $c.Path }
+  $notFound = 'openclaw-not-found: no openclaw.cmd or openclaw on PATH'
+  $install = 'install OpenClaw first (https://docs.openclaw.ai/install/installer)'
+  if ($script:HostName -eq 'hermes') {
+    $notFound = 'hermes-not-found: no hermes.exe, hermes.cmd or hermes on PATH'
+    $install = 'install Hermes first (https://hermes-agent.nousresearch.com)'
+  }
   $wsl = Get-WslExe
   $mode = $null
   if ($target -eq 'native') {
-    if (-not $nativeOc) { Fail 3 'openclaw-not-found: no openclaw.cmd or openclaw on PATH' }
+    if (-not $nativeOc) { Fail 3 $notFound }
     $mode = 'native'
   } elseif ($wslDistro) {
     if (-not $wsl) { Fail 3 "wsl-not-found: -Target $target needs wsl.exe" }
@@ -401,7 +523,7 @@ try {
       $stopped = @($distros | Where-Object { -not $_.Running } | ForEach-Object { $_.Name })
       $probeStopped = $probeWsl
       if (-not $probeWsl -and $stopped.Count -gt 0 -and (Test-Interactive)) {
-        $ans = Read-Host "install-plugin: also look for OpenClaw in the stopped WSL distros $($stopped -join ', ')? This starts them. [y/N]"
+        $ans = Read-Host "install-plugin: also look for $hostLabel in the stopped WSL distros $($stopped -join ', ')? This starts them. [y/N]"
         $probeStopped = ($ans -match '^(y|yes|j|ja)$')
       }
       foreach ($d in $distros) {
@@ -411,11 +533,11 @@ try {
         Say "not probed (stopped WSL distros; -ProbeWsl starts and probes them): $($stopped -join ', ')"
       }
     }
-    if ($candidates.Count -eq 0) { Fail 3 'openclaw-not-found: no openclaw.cmd or openclaw on PATH and none in a probed WSL distro; install OpenClaw first (https://docs.openclaw.ai/install/installer)' }
+    if ($candidates.Count -eq 0) { Fail 3 "$notFound and none in a probed WSL distro; $install" }
     $choice = $candidates[0]
     if ($candidates.Count -gt 1) {
       if (-not (Test-Interactive)) {
-        Fail 2 "several OpenClaw installations found: $($candidates -join ', '); choose one with -Target native or -Target wsl:<distro>"
+        Fail 2 "several $hostLabel installations found: $($candidates -join ', '); choose one with -Target native or -Target wsl:<distro>"
       }
       for ($i = 0; $i -lt $candidates.Count; $i++) { [Console]::Error.WriteLine("  [$($i + 1)] $($candidates[$i])") }
       $ans = Read-Host "install-plugin: install into which one? [1-$($candidates.Count)]"
@@ -433,17 +555,30 @@ try {
     $hostTarget = Get-Target
     if ($null -eq $hostTarget) { Fail 3 "unsupported-target: windows/$($env:PROCESSOR_ARCHITECTURE); the plugin supports win-x64 and win-arm64 (and linux-x64, linux-arm64, darwin-arm64)" }
   }
-  $node = Find-Node $nativeOc
+  # Private temp dir: the pinned Node (Hermes), the feed, its signature, the verifier, then the installer or bootstrap.sh.
+  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('plur1bus-plugin-' + [Guid]::NewGuid().ToString('N'))
+  [void][System.IO.Directory]::CreateDirectory($tmp)
+
+  if ($script:HostName -eq 'hermes') {
+    # HM2-R16: PATH, Hermes' own Node, a sidecar's Node, else the pinned portable Node (also for a WSL hand-over,
+    # whose feed check runs here)
+    $node = Find-Node $null $false
+    if (-not $node) { $node = Find-HermesNode }
+    if (-not $node) {
+      $pinTarget = Get-Target
+      if ($null -eq $pinTarget) { Fail 3 "unsupported-target: windows/$($env:PROCESSOR_ARCHITECTURE); no pinned Node for it" }
+      $node = Get-PinnedNode $pinTarget $tmp
+      if (-not (Test-NodeOk $node)) { Fail 1 "the pinned Node $node does not run" }
+    }
+  } else {
+    $node = Find-Node $nativeOc
+  }
   if (-not $node) {
     if ($mode -eq 'wsl') {
       Fail 3 "node-not-found: checking the feed signature for WSL needs Node >=24.16.0 <25 || >=26.1.0 on Windows; or run install-plugin.sh inside the distro (wsl -d $wslDistro)"
     }
     Fail 3 "node-not-found: need node.exe >=24.16.0 <25 || >=26.1.0 on PATH or the Node OpenClaw installed (on PATH: $($script:PathNodeNote))"
   }
-
-  # Private temp dir: the feed, its signature, the verifier, then the installer or bootstrap.sh.
-  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('plur1bus-plugin-' + [Guid]::NewGuid().ToString('N'))
-  [void][System.IO.Directory]::CreateDirectory($tmp)
   $feedFile = Join-Path $tmp "$channel.json"
   $sigFile = "$feedFile.minisig"
   try { Get-Resource $feedUrl $feedFile } catch { Fail 1 "could not read the plugin feed ${feedUrl}: $($_.Exception.Message)" }
@@ -458,9 +593,9 @@ try {
 
   $fieldsFile = Join-Path $tmp 'fields.cjs'
   [System.IO.File]::WriteAllText($fieldsFile, $FieldsJs)
-  $r = Invoke-Capture $node @($fieldsFile, $feedFile, 'schema', 'channel', 'installer.url', 'installer.sha256', 'hosts.openclaw.latest', 'bootstrap.sh.url', 'bootstrap.sh.sha256')
+  $r = Invoke-Capture $node @($fieldsFile, $feedFile, 'schema', 'channel', 'installer.url', 'installer.sha256', "hosts.$($script:HostName).latest", 'bootstrap.sh.url', 'bootstrap.sh.sha256')
   $fld = @(ConvertFrom-NativeLines $r.Lines | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
-  if ($r.Code -ne 0 -or $fld.Count -ne 7) { Fail 1 'the plugin feed is invalid' }
+  if ($r.Code -ne 0 -or $fld.Count -ne 7) { Fail 1 "the plugin feed is invalid (or carries no $($script:HostName) release)" }
   if ($fld[0] -cne 'plur1bus.plugin-feed/1') { Fail 1 "unknown feed schema $($fld[0])" }
   if ($fld[1] -cne $channel) { Fail 1 "the feed at $feedUrl is for channel $($fld[1]), not $channel" }
 
@@ -519,7 +654,7 @@ try {
     }
     $env:WSLENV = $wslEnv -join ':'
 
-    Say "handing over to WSL distro $wslDistro (plugin $version)"
+    Say "handing over to WSL distro $wslDistro ($($script:HostName) release $version)"
     $argv = @('-d', $wslDistro, '-e', 'sh', '-s', '--', '--version', $version) + [string[]]$outArgs.ToArray()
     $exitCode = Invoke-WithStdin $wsl $argv ([System.IO.File]::ReadAllBytes($shFile))
   }

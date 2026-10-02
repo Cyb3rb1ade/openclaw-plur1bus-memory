@@ -201,11 +201,11 @@ jobs:
           bundle="$out/plur1bus-plugin-installer.mjs"
           # The bundle gets the same keys as the bootstraps, before the feed hashes it and before SHA256SUMS.
           if [ -n "$PUBKEY_STABLE" ] && [ -n "$PUBKEY_BETA" ]; then
-            node scripts/dist/render-bootstraps.mjs --pubkey-stable "$PUBKEY_STABLE" --pubkey-beta "$PUBKEY_BETA" --out-dir "$out" --installer "$bundle"
+            node scripts/dist/render-bootstraps.mjs --pubkey-stable "$PUBKEY_STABLE" --pubkey-beta "$PUBKEY_BETA" --node-pins scripts/dist/node-pins.json --out-dir "$out" --installer "$bundle"
             echo "keys=release" >> "$RUNNER_TEMP/keys.env"
           elif [ "$DRY_RUN" = true ]; then
             echo "::warning::PLUR1BUS_RELEASE_PUBKEY_STABLE / _BETA are not set (P4): rendering TEST ONLY bootstraps and installer bundle that verify no real feed. A real run would fail."
-            node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out" --installer "$bundle"
+            node scripts/dist/render-bootstraps.mjs --test-key --node-pins scripts/dist/node-pins.json --out-dir "$out" --installer "$bundle"
             echo "keys=test" >> "$RUNNER_TEMP/keys.env"
           else
             echo "::error::PLUR1BUS_RELEASE_PUBKEY_STABLE and PLUR1BUS_RELEASE_PUBKEY_BETA repository variables are required for a real release"

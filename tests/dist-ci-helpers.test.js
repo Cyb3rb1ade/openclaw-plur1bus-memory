@@ -22,7 +22,7 @@ import { verifyMinisign } from "../scripts/dist/minisign.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
 import { createInstallerSandbox } from "./helpers/installer-sandbox.js";
 import { buildInstaller } from "../scripts/dist/build-installer.mjs";
-import { renderBootstraps } from "../scripts/dist/render-bootstraps.mjs";
+import { DEFAULT_NODE_PINS, renderBootstraps } from "../scripts/dist/render-bootstraps.mjs";
 
 /** The bootstrap's node_ok gate: package.json engines ">=24.16.0 <25 || >=26.1.0". */
 function nodeMeetsEngines() {
@@ -55,7 +55,7 @@ async function packArtefact(dir, { version = "7.16.11", real = false } = {}) {
   const tgz = packTiny(dir, version);
   if (real) {
     await buildInstaller({ out: join(dir, "plur1bus-plugin-installer.mjs") });
-    const { sh, ps1 } = renderBootstraps({ testKey: true });
+    const { sh, ps1 } = renderBootstraps({ testKey: true, nodePins: DEFAULT_NODE_PINS });
     writeFileSync(join(dir, "install-plugin.sh"), sh, { mode: 0o755 });
     writeFileSync(join(dir, "install-plugin.ps1"), ps1);
   } else {

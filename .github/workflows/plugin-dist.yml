@@ -87,7 +87,7 @@ jobs:
           git checkout -- package.json package-lock.json openclaw.plugin.json
 
           node scripts/dist/build-installer.mjs --out "$out/plur1bus-plugin-installer.mjs"
-          node scripts/dist/render-bootstraps.mjs --test-key --out-dir "$out"
+          node scripts/dist/render-bootstraps.mjs --test-key --node-pins scripts/dist/node-pins.json --out-dir "$out"
           node -e 'const [f,...v]=process.argv.slice(1); const k=["version","ciVersion","tgz","ciTgz","sha256","integrity"]; require("fs").writeFileSync(f, JSON.stringify(Object.fromEntries(k.map((x,i)=>[x,v[i]])),null,2)+"\n")' \
             "$out/pack.json" "$version" "$ci_version" "$tgz" "$ci_tgz" "$sha256" "$integrity"
           # smoke: both tarballs make a valid, signed feed (each install leg signs its own, with its own paths)

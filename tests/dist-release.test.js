@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { renderBootstraps, renderInstallerKeys } from "../scripts/dist/render-bootstraps.mjs";
+import { DEFAULT_NODE_PINS, renderBootstraps, renderInstallerKeys } from "../scripts/dist/render-bootstraps.mjs";
 import { generateTestKeyPair } from "./helpers/minisign-sign.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -153,8 +153,8 @@ describe("plugin release (HM1 Task 10)", () => {
     const raw = readFileSync(join(REPO, "scripts", "dist", "installer", "main.mjs"), "utf8");
     const stable = generateTestKeyPair().publicKeyLine;
     const beta = generateTestKeyPair().publicKeyLine;
-    const release = renderBootstraps({ pubkeyStable: stable, pubkeyBeta: beta });
-    const test = renderBootstraps({ testKey: true });
+    const release = renderBootstraps({ pubkeyStable: stable, pubkeyBeta: beta, nodePins: DEFAULT_NODE_PINS });
+    const test = renderBootstraps({ testKey: true, nodePins: DEFAULT_NODE_PINS });
     for (const t of [release.sh, release.ps1, renderInstallerKeys(raw, { pubkeyStable: stable, pubkeyBeta: beta })]) {
       assert.ok(!t.includes(marker), "a release render carries no TEST ONLY marker");
       assert.ok(!t.includes("@@PLUR1BUS_PLUGIN_PUBKEY_"));
