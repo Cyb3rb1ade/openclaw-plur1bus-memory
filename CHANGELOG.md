@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.7] — 2026-10-02
+
+### Behoben
+
+- **Endlosschleife aus Plugin-Neuladen und LLM-Timeouts unter OpenClaw 2026.9.7.** Der erste `runtime.llm`-Aufruf je Agent und Modell lässt den Host einen Laufzeitstand bauen, der alle Plugins neu lädt und den Gateway 40–70 s blockiert. Gab der Aufrufer vorher auf (Skill-Miner nach 30 s), warf der Host den fertigen Bau weg, und der nächste Aufruf baute erneut: Am 02.10.2026 folgten so für Bernhardine 4 und für Heisenberg 5 Neuladungen samt Stillstand aufeinander, jeweils mit Timeout (openclaw/openclaw#163029). Für einen Schlüssel ohne jüngsten Erfolg bekommt der Host-Aufruf jetzt ein eigenes Abbruchsignal (180 s). Der Aufrufer hört weiterhin nach seinem Timeout auf zu warten, der Host baut aber fertig und behält den Stand für die nächsten Aufrufe. Läuft ein warmer Schlüssel in den Timeout, gilt er wieder als kalt.
+
 ## [7.18.6] — 2026-10-02
 
 ### Geändert
