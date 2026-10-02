@@ -6,7 +6,7 @@
  * (ruling F12). Commands (harness crates/plur1bus/src/cli.rs):
  *   setup --profile host --non-interactive --use-class <c> [--accept-nc-licence] [--no-service]   → setup/1
  *   agent list → agent.list/1 { agents: [{ agentId }] };  agent create <id> → agent.create/1
- *   config get <key> → config.get/1 { key, value };  daemon stop;  service uninstall
+ *   config get <key> → config.get/1 { key, value };  daemon stop|start;  service uninstall
  *   memory list --agent <id> --since <t> → memory.list/1 (for ruling F4's purge count, Task 9)
  * The host setup may leave no config.json (Task 4 carry): `config get` failing is "unknown", not an error.
  */
@@ -76,6 +76,9 @@ export function createPlur1busCli({ bin, home, env, run = defaultRun, platform =
     },
     async daemonStop() {
       return call(["daemon", "stop"]);
+    },
+    async daemonStart() {
+      return call(["daemon", "start"]);
     },
     async serviceUninstall() {
       return call(["service", "uninstall"]);

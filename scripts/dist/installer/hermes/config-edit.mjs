@@ -103,7 +103,8 @@ export function locateProvider(text) {
  * @returns {{ ok: true, text: string, undo: { kind: "replaced", originalLine: string } | { kind: "inserted" } | { kind: "appended" } } | { ok: false, reason: string }}
  */
 export function planProviderEdit(text, value) {
-  if (!PLAIN.test(value) || value === "") return { ok: false, reason: `refusing to write provider value ${JSON.stringify(value)}` };
+  if (!PLAIN.test(value)) return { ok: false, reason: `refusing to write provider value ${JSON.stringify(value)}` };
+  const written = value === "" ? '""' : value; // "" = Hermes' built-in store (uninstall back to no provider)
   const loc = locateProvider(text);
   if (!loc.ok) return loc;
   const sp = splitLines(text);
@@ -112,7 +113,7 @@ export function planProviderEdit(text, value) {
     const originalLine = lines[loc.providerIndex];
     const m = PROVIDER_LINE.exec(originalLine);
     const { comment } = parseValue(m[2]);
-    lines[loc.providerIndex] = `${m[1]}provider: ${value}${comment ? ` ${comment}` : ""}`;
+    lines[loc.providerIndex] = `${m[1]}provider: ${written}${comment ? ` ${comment}` : ""}`;
     return { ok: true, text: joinLines(sp), undo: { kind: "replaced", originalLine } };
   }
   if (loc.memoryIndex !== null) {
@@ -121,13 +122,13 @@ export function planProviderEdit(text, value) {
     const wasLast = eols[mi] === ""; // `memory:` ends a file without a final newline
     const newEol = wasLast ? "" : eols[mi];
     if (wasLast) eols[mi] = sp.eol;
-    lines.splice(mi + 1, 0, `${loc.childIndent}provider: ${value}`);
+    lines.splice(mi + 1, 0, `${loc.childIndent}provider: ${written}`);
     eols.splice(mi + 1, 0, newEol);
     return { ok: true, text: joinLines(sp), undo: { kind: "inserted" } };
   }
   const { eol } = sp;
   const body = text === "" || text === sp.bom || text.endsWith("\n") ? text : `${text}${eol}`;
-  return { ok: true, text: `${body}memory:${eol}  provider: ${value}${eol}`, undo: { kind: "appended" } };
+  return { ok: true, text: `${body}memory:${eol}  provider: ${written}${eol}`, undo: { kind: "appended" } };
 }
 
 /** Undo planProviderEdit on the current text (pure); the provider line must still be the one we wrote. */

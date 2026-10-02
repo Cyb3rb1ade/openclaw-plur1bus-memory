@@ -620,7 +620,8 @@ describe("hermes installer: install", () => {
 
   it("the installer never reads .env, and config.yaml only for the 0.21.4 line edit (F30)", async () => {
     // static: no module names .env; only config-edit.mjs names config.yaml; file reads only where allowed
-    const allowedReaders = new Set(["state.mjs", "binding.mjs", "provider.mjs", "config-edit.mjs", "detect.mjs", "sidecar.mjs"]);
+    // update.mjs reads its own home backup and the binding text, uninstall.mjs the binding text and the journal's line count
+    const allowedReaders = new Set(["state.mjs", "binding.mjs", "provider.mjs", "config-edit.mjs", "detect.mjs", "sidecar.mjs", "update.mjs", "uninstall.mjs"]);
     for (const name of readdirSync(HERMES_MODULES)) {
       const code = readFileSync(join(HERMES_MODULES, name), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
       assert.ok(!/["'`/\\]\.env\b/.test(code), `${name} names .env`);
@@ -747,7 +748,9 @@ describe("hermes installer: install", () => {
     assert.ok(JSON.parse(r.stdout).steps.some((s) => s.status === "planned" && s.id === "activate"));
     assertNothingInstalled(sb, before);
     assert.equal((await run(sb, ["--source", "npm"])).code, EXIT.FAILED);
-    assert.equal((await run(sb, ["--uninstall"])).code, EXIT.FAILED);
+    const un = await run(sb, ["--uninstall"]); // Task 9: nothing installed is nothing to do
+    assert.equal(un.code, EXIT.OK, un.out);
+    assert.match(un.out, /not installed/);
     assert.equal((await run(sb, ["--hermes-profile", "a", "--hermes-home", sb.hermesHome])).code, EXIT.FAILED);
   });
 });

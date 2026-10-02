@@ -18,7 +18,8 @@
  * kills the installer after the change, as do "setup" and "agent create" in the plur1bus shim; honoured only
  * with PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT=1), configGetExit (every `config get memory.provider` fails),
  * providerUnavailable, selftestFail, setupExit, setupWritesNoConfig, sidecarVersion, agentCreateExit,
- * configSetExit, configSetFailFor (fails `config set memory.provider <that value>` only). Nothing here touches a real Hermes, a real PLUR1BUS home or a service manager.
+ * configSetExit, configSetFailFor (fails `config set memory.provider <that value>` only), setupMigratesStoreFrom /
+ * setupFailFor (the setup of that binary version writes into the store / fails; Task 9). Nothing here touches a real Hermes, a real PLUR1BUS home or a service manager.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -27,6 +28,8 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { defaultRun } from "../../scripts/dist/installer/openclaw-cli.mjs";
+import { extractTarGz } from "../../scripts/dist/installer/untar.mjs";
+import { makeTarGz } from "./ustar.js";
 import { makeTempDir } from "./temp-dir.js";
 import { makeTestFeed, SANDBOX_ARCH } from "./installer-sandbox.js";
 import { addWindowsEnv, assertShimOnPath, resolveOnPath, sink, writeLauncher } from "./sandbox-common.js";
@@ -181,7 +184,9 @@ function killIfAsked(step) {
     process.exit(137);
   }
 }
-if (args[0] === "--version") { process.stdout.write("plur1bus " + (scenario.sidecarVersion ?? "0.1.0") + "\n"); process.exit(0); }
+// the "binary" this call came through (a release artefact's launcher sets it; Task 9 update tests)
+const binaryVersion = process.env.PLUR1BUS_SHIM_BINARY_VERSION || scenario.sidecarVersion || "0.1.0";
+if (args[0] === "--version") { process.stdout.write("plur1bus " + binaryVersion + "\n"); process.exit(0); }
 if (args[0] !== "--home" || args[2] !== "--json") fail("E_TEST", "shim: expected --home <dir> --json first", 2);
 const home = args[1];
 const rest = args.slice(3);
@@ -199,8 +204,14 @@ if (rest[0] === "setup") {
   if (scenario.setupExit) fail("E_TEST", "TEST ONLY setup failure", scenario.setupExit);
   const useClass = rest[rest.indexOf("--use-class") + 1];
   mkdirSync(join(home, "run"), { recursive: true });
-  writeFileSync(manifestFile, JSON.stringify({ schemaVersion: 1, profile: "host", channel: "stable", binary: { version: scenario.sidecarVersion ?? "0.1.0", sha256: null }, modules: [], skills: [] }, null, 2));
-  if (!scenario.setupWritesNoConfig) writeConfig({ ...(readConfig() ?? {}), embedding: { useClass }, agents: readConfig()?.agents ?? {} });
+  writeFileSync(manifestFile, JSON.stringify({ schemaVersion: 1, profile: "host", channel: "stable", binary: { version: binaryVersion, sha256: null }, modules: [], skills: [], setupBy: binaryVersion }, null, 2));
+  if (!scenario.setupWritesNoConfig) writeConfig({ ...(readConfig() ?? {}), embedding: { useClass }, agents: readConfig()?.agents ?? {}, setupBy: binaryVersion });
+  // a newer binary's setup that migrates the store (Task 9: the rollback restores it)
+  if (scenario.setupMigratesStoreFrom && binaryVersion === scenario.setupMigratesStoreFrom) {
+    mkdirSync(join(home, "state", "lancedb"), { recursive: true });
+    writeFileSync(join(home, "state", "lancedb", "migrated-by-" + binaryVersion + ".txt"), "TEST ONLY migration\n");
+  }
+  if (scenario.setupFailFor && binaryVersion === scenario.setupFailFor) fail("E_TEST", "TEST ONLY setup failure of " + binaryVersion, 1);
   killIfAsked("setup");
   out({ schema: "setup/1", home, target: "test", steps: [{ id: "modules.bundled", status: "skipped", reason: "profile-host" }], manifest: manifestFile, check: { ok: true } });
   process.exit(0);
@@ -228,9 +239,25 @@ if (rest[0] === "config" && rest[1] === "get") {
   process.exit(0);
 }
 if (rest[0] === "daemon" && rest[1] === "stop") { out({ schema: "daemon.stop/1", stopped: true }); process.exit(0); }
+if (rest[0] === "daemon" && rest[1] === "start") { out({ schema: "daemon.start/1", started: true }); process.exit(0); }
 if (rest[0] === "service" && rest[1] === "uninstall") { out({ schema: "service.uninstall/1", removed: true }); process.exit(0); }
 fail("E_TEST", "shim: unknown command " + JSON.stringify(rest), 2);
 `;
+
+/** The real provider tarball with its MANIFEST.json naming `version` (every file and hash unchanged). */
+async function providerTarballFor(version, dir) {
+  const work = join(makeTempDir("hermes-provider-"), "x");
+  const { files, dirs } = await extractTarGz({ file: PROVIDER_TARBALL, dest: work });
+  const entries = [...dirs.sort().map((d) => ({ name: `${d}/`, type: "5", mode: 0o755 }))];
+  for (const f of files.sort()) {
+    let data = readFileSync(join(work, ...f.split("/")));
+    if (f === "plur1bus/MANIFEST.json") data = Buffer.from(JSON.stringify({ ...JSON.parse(data.toString("utf8")), version }, null, 2) + "\n");
+    entries.push({ name: f, data });
+  }
+  const out = join(dir, `plur1bus-hermes-provider-${version}.tar.gz`);
+  writeFileSync(out, makeTarGz(entries));
+  return out;
+}
 
 export const sha256File = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
 
@@ -324,7 +351,11 @@ export function createHermesSandbox(opts = {}) {
   const plur1busHome = process.platform === "win32" ? join(env.LOCALAPPDATA, "PLUR1BUS") : join(home, ".plur1bus");
   const sidecarBin = process.platform === "win32" ? join(env.LOCALAPPDATA, "PLUR1BUS", "bin", "plur1bus.exe") : join(home, ".local", "bin", "plur1bus");
   /** On Windows a script cannot be plur1bus.exe: hand the call to the shim through Node. */
-  const run = (file, args, o) => (process.platform === "win32" && /plur1bus\.exe$/i.test(file) ? defaultRun(process.execPath, [plur1busShim, ...args], o) : defaultRun(file, args, o));
+  const run = (file, args, o) => {
+    if (process.platform !== "win32" || !/plur1bus\.exe$/i.test(file)) return defaultRun(file, args, o);
+    const v = /PLUR1BUS_SHIM_BINARY_VERSION=(\S+)/.exec(readFileSync(file, "utf8"))?.[1];
+    return defaultRun(process.execPath, [plur1busShim, ...args], v ? { ...o, env: { ...o.env, PLUR1BUS_SHIM_BINARY_VERSION: v } } : o);
+  };
 
   return {
     root, home, binDir, hermesRoot, hermesHome, plur1busHome, sidecarBin, feed, feedFile, env, run, tarball, binArtefact, plur1busShim,
@@ -340,6 +371,26 @@ export function createHermesSandbox(opts = {}) {
     setScenario(patch) {
       const cur = JSON.parse(readFileSync(scenarioPath, "utf8"));
       writeFileSync(scenarioPath, JSON.stringify({ ...cur, ...patch }, null, 2));
+    },
+    /**
+     * Prepend a newer Hermes release to the feed (Task 9): a provider tarball whose MANIFEST.json names `version`
+     * and a sidecar "binary" whose launcher reports `sidecarVersion`.
+     */
+    async addRelease({ version, sidecarVersion = version, notes = { de: `TEST ONLY ${version} DE`, en: `TEST ONLY ${version} EN` }, security = false }) {
+      const t = await providerTarballFor(version, art);
+      const b = join(art, `plur1bus-sidecar-${sidecarVersion}`);
+      writeFileSync(b, `#!/bin/sh\n# TEST ONLY sidecar ${sidecarVersion}\nPLUR1BUS_SHIM_BINARY_VERSION=${sidecarVersion} exec "${process.execPath}" "${plur1busShim}" "$@"\n`, { mode: 0o755 });
+      const f = JSON.parse(readFileSync(feedFile, "utf8"));
+      const rel = structuredClone(f.hosts.hermes.releases[0]);
+      rel.version = version;
+      rel.provider = { url: pathToFileURL(t).href, sha256: sha256File(t) };
+      rel.sidecar = { version: sidecarVersion, binary: Object.fromEntries(TARGETS.map((x) => [x, { url: pathToFileURL(b).href, sha256: sha256File(b) }])) };
+      rel.notes = notes;
+      rel.security = security;
+      f.hosts.hermes.releases.unshift(rel);
+      f.hosts.hermes.latest = version;
+      writeFileSync(feedFile, JSON.stringify(f, null, 2));
+      return { tarball: t, binArtefact: b, feed: f };
     },
     writeFeed(f) {
       writeFileSync(feedFile, JSON.stringify(f, null, 2));

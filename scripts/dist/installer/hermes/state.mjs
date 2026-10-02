@@ -10,7 +10,8 @@
  *   first attempt: a rollback then never unbinds it), bindingPrev (the previous binding text),
  *   configEdit ({ method: "cli" } or { method: "line", undo, backup }), useClass, licence,
  *   the progress marks sidecarInstalled, setupRan, providerInstalled, pluginsDirCreated, bindingWritten,
- *   inProgress?: { op: "install", step, version }.
+ *   inProgress?: { op: "install"|"update"|"uninstall", step, version }; `update` / `uninstall` hold those runs' progress
+ *   (Task 9: hermes/update.mjs, hermes/uninstall.mjs).
  * Resume rule (F19): a run that finds `inProgress` finishes the install: it carries the recorded pre-install
  * values (previousProvider, sidecarFresh, …) and re-runs the steps, each of which checks and skips what is
  * already done (sidecar version, agent, registry entry, provider MANIFEST); any failure rolls back with the
@@ -30,6 +31,8 @@ export const HERMES_STATE_FILE = ".plur1bus-installer.json";
 const FIELDS = [
   "installedVersion", "previousProvider", "plur1busHome", "bin", "agentId", "sidecarFresh", "binFresh", "previousBin",
   "providerPrev", "agentCreated", "registryAdded", "bindingPrev", "configEdit", "useClass", "licence", "inProgress",
+  // Task 9: an update's or uninstall's own progress (op "update" | "uninstall")
+  "update", "uninstall",
   // progress marks, set before each change (a killed run's rollback undoes exactly what they name)
   "sidecarInstalled", "setupRan", "providerInstalled", "providerPreexisted", "pluginsDirCreated", "bindingWritten", "registryPending", "registryPreexisted",
 ];

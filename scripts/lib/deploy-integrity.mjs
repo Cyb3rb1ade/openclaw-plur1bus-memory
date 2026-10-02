@@ -348,6 +348,9 @@ export const DEPLOY_FILES = [
   "scripts/dist/installer/hermes/provider.mjs",
   "scripts/dist/installer/hermes/sidecar.mjs",
   "scripts/dist/installer/hermes/state.mjs",
+  "scripts/dist/installer/hermes/context.mjs", // HM2 Task 9
+  "scripts/dist/installer/hermes/update.mjs",
+  "scripts/dist/installer/hermes/uninstall.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",

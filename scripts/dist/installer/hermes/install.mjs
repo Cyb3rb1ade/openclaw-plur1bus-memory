@@ -60,6 +60,11 @@ const HM4 = "Hermes on an existing full harness arrives with HM4";
 
 const ZERO_SHA256 = /^0{64}$/;
 
+/** HM2-R24/R24a: only a parsed Hermes version >= 0.21.5 may use `hermes config set`; else the backed-up line edit. */
+export function usesLineEdit(version) {
+  return version === null || version === undefined || compareVersions(version, CONFIG_SET_SAFE_FROM) < 0;
+}
+
 /** True when the provider or any sidecar binary of `release` carries an all-zero SHA-256 (ruling F31). */
 export function hasPlaceholderHash(release) {
   const bins = Object.values(release?.sidecar?.binary ?? {});
@@ -158,6 +163,14 @@ export async function runHermesInstall(ctx) {
   }
   const interrupted = state?.inProgress ?? null;
   if (flags.rollback && !interrupted) throw new Stop(EXIT.FAILED, "rollback", "nothing to roll back: no interrupted installer run was found; nothing was changed");
+  // an interrupted update or uninstall is finished (or rolled back) by its own module (Task 9)
+  if (interrupted && interrupted.op === "update" && typeof ctx.runHermesUpdate === "function") {
+    return ctx.runHermesUpdate({ ...ctx, det, hermes, hermesHome, state, binding: readBinding(hermesHome), resume: true });
+  }
+  if (interrupted && interrupted.op === "uninstall") {
+    if (flags.rollback && typeof ctx.runHermesUninstall === "function") return ctx.runHermesUninstall({ ...ctx, det, hermes, hermesHome, state, resume: true });
+    throw new Stop(EXIT.NEEDS_CHOICE, "resume", `an interrupted uninstall (step ${interrupted.step}) is in ${hermesHome}: re-run with --uninstall${interrupted.purge ? " --purge" : ""} to finish it, or with --rollback to undo it; nothing was changed`);
+  }
   if (interrupted) {
     report.set("interrupted", { op: interrupted.op, step: interrupted.step });
     if (flags["dry-run"]) {
@@ -221,7 +234,7 @@ export async function runHermesInstall(ctx) {
     else findings.push({ id: "bindings-registry-invalid", fatal: true, detail: err.message });
   }
   // HM2-R24a: only a parsed version >= 0.21.5 may use `hermes config set`; an unknown one (vgit.<sha>) gets the line edit
-  const lineEdit = det.version === null || compareVersions(det.version, CONFIG_SET_SAFE_FROM) < 0;
+  const lineEdit = usesLineEdit(det.version);
   if (lineEdit && isDir(hermesHome)) {
     const c = checkConfigEditable(hermesHome);
     if (!c.ok) findings.push({ id: "hermes-config-uneditable", fatal: true, detail: `Hermes ${det.version ?? "(unknown version)"}'s \`config set\` may strip its config file, and the installer cannot edit memory.provider there safely: ${c.reason}; update Hermes (≥ ${CONFIG_SET_SAFE_FROM}) or fix the file, then re-run` });

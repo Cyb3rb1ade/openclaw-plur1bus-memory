@@ -22,7 +22,8 @@
  * openclaw.json or prints a config value outside the allow-list.
  *
  * `--host hermes` (HM2 Task 8) loads `hosts.hermes` from the same signed feed (ruling F16:
- * `loadFeed(host)`) and hands over to ./hermes/install.mjs.
+ * `loadFeed(host)`) and hands over to ./hermes/install.mjs; `--update` to ./hermes/update.mjs and `--uninstall
+ * [--purge]` (no feed needed) to ./hermes/uninstall.mjs (Task 9).
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, statfsSync, writeFileSync } from "node:fs";
@@ -46,6 +47,8 @@ import { fetchBytes, runUpdate } from "./update.mjs";
 import { runUninstall } from "./uninstall.mjs";
 import { runAdoptLegacy } from "./legacy.mjs";
 import { runHermesInstall } from "./hermes/install.mjs";
+import { runHermesUninstall } from "./hermes/uninstall.mjs";
+import { runHermesUpdate } from "./hermes/update.mjs";
 import { READONLY_REMEDY, INVALID_CONFIG_REMEDY } from "./compat.mjs";
 
 export const DEFAULT_FEED_URL = "https://updates.plur1bus.app/plugin/stable.json";
@@ -91,7 +94,8 @@ Hermes (--host hermes):
   --hermes-profile <name>    install into this Hermes profile (<root>/profiles/<name>)
   --hermes-home <dir>        install into this Hermes home (overrides HERMES_HOME and detection)
   --replace-provider         replace another active memory provider (restored on rollback and uninstall)
-  --accept-nc-licence, --non-interactive, --rollback, --dry-run and --json apply as above
+  --update [--yes], --uninstall [--purge [--yes-delete-memories]], --accept-nc-licence,
+  --non-interactive, --rollback, --dry-run and --json apply as above
 
 Exit codes: 0 ok, 1 failed (rolled back or nothing changed), 2 needs a choice,
 3 incompatible host or environment, 4 verification failed and rollback failed.
@@ -292,11 +296,15 @@ async function install(ctx) {
   const testMode = env.PLUR1BUS_PLUGIN_INSTALLER_TEST === "1";
 
   if (values.host === "hermes") {
-    if (mode !== "install") throw new Stop(EXIT.FAILED, "args", `--${mode} is not supported for --host hermes yet; nothing was changed`);
+    if (mode === "adopt-legacy") throw new Stop(EXIT.FAILED, "args", "--adopt-legacy does not apply to --host hermes; nothing was changed");
+    const hctx = { ...ctx, flags: values, testMode, lang, runHermesUpdate, runHermesUninstall };
+    // the uninstall needs no feed (it removes what the state and binding record)
+    if (mode === "uninstall") return runHermesUninstall(hctx);
     const { feed, release } = await loadFeed({ values, env, testMode, fetchImpl, host: "hermes" });
     report.set("pluginVersion", release.version);
     report.step("feed", "ok", `${feed.channel} feed, Hermes provider ${release.version}${values["feed-file"] ? " (verified by the bootstrap)" : " (signature verified)"}`);
-    return runHermesInstall({ ...ctx, flags: values, feed, release, testMode, lang });
+    if (mode === "update") return runHermesUpdate({ ...hctx, feed, release });
+    return runHermesInstall({ ...hctx, feed, release });
   }
 
   const childEnv = { ...env };
