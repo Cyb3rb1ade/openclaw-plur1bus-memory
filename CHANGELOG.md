@@ -791,7 +791,7 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   mit seinen Zeilen als einzige Kopie stehen. Eine Capture, die mit nur
   teilweise gespeicherten Zeilen zurückkehrt, verhält sich unverändert.
 
-## [7.18.0] — in Vorbereitung (HM2: Hermes-Hostmodus)
+## [7.19.0] — in Vorbereitung (HM2: Hermes-Hostmodus)
 
 ### Hinzugefügt
 

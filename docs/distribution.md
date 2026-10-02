@@ -44,7 +44,7 @@ refusal says so and asks for the native arm64 Node.
 | `win-x64`, `win-arm64` | native, **beta** | `install-plugin.ps1` |
 | Windows with WSL2 | Linux inside the distro | `install-plugin.ps1 -Target wsl:<distro>` delegates to `install-plugin.sh` in that distro |
 
-Hosts: OpenClaw (default) and, since 7.18.0, Hermes with `--host hermes`
+Hosts: OpenClaw (default) and, since 7.19.0, Hermes with `--host hermes`
 ([Hermes host mode](#hermes-host-mode-hm2)).
 
 Windows native support prints "Windows native support is in beta" while the
