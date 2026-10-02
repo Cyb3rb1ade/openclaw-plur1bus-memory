@@ -791,7 +791,7 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   mit seinen Zeilen als einzige Kopie stehen. Eine Capture, die mit nur
   teilweise gespeicherten Zeilen zurückkehrt, verhält sich unverändert.
 
-## [7.19.0] — in Vorbereitung (HM2: Hermes-Hostmodus)
+## [7.19.0] — in Vorbereitung (HM1: Distribution für OpenClaw, HM2: Hermes-Hostmodus)
 
 ### Hinzugefügt
 
@@ -825,21 +825,6 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
 - `lib/snapshot/store-snapshot.js`: optionales `snapshotsDir` für alle
   Funktionen.
 
-### Geändert
-
-- Der Feed erlaubt `hosts.hermes` (Schema); gespeicherte Installer-Bundles
-  von 7.17.x lehnen einen Feed mit diesem Schlüssel ab.
-- `plugin-release.yml`: Solange `scripts/dist/hermes-sidecar.lock.json` ein
-  Platzhalter ist, baut auch ein echter Lauf den Feed ohne neues Hermes-Release
-  und warnt in Log und Job-Zusammenfassung; reine OpenClaw-Releases werden nie
-  blockiert. `build-plugin-feed.mjs` übernimmt ein Hermes-Release, das schon
-  mit denselben Hashes im vorigen Feed steht, unverändert und verweigert nur
-  andere Hashes für dieselbe Version.
-
-## [7.17.0] — in Vorbereitung (HM1: Distribution für OpenClaw)
-
-### Hinzugefügt
-
 - **Ein-Zeilen-Installer** `install-plugin.sh` (Linux, macOS) und
   `install-plugin.ps1` (Windows nativ, Beta; WSL2 über Delegation an das
   Linux-Skript). Die Bootstraps verifizieren den signierten Plugin-Feed
@@ -868,6 +853,14 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   läuft in `ci.yml` (`test-cross`).
 
 ### Geändert
+
+- Der Feed erlaubt `hosts.hermes` (Schema).
+- `plugin-release.yml`: Solange `scripts/dist/hermes-sidecar.lock.json` ein
+  Platzhalter ist, baut auch ein echter Lauf den Feed ohne neues Hermes-Release
+  und warnt in Log und Job-Zusammenfassung; reine OpenClaw-Releases werden nie
+  blockiert. `build-plugin-feed.mjs` übernimmt ein Hermes-Release, das schon
+  mit denselben Hashes im vorigen Feed steht, unverändert und verweigert nur
+  andere Hashes für dieselbe Version.
 
 - README „Installation“: Node-Bereich `>=24.16.0 <25 || >=26.1.0`, OpenClaw
   `2026.8.1` oder neuer, die Ein-Zeilen-Installer, der ClawHub-Befehl ohne das
