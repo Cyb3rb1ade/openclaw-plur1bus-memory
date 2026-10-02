@@ -33,7 +33,7 @@ import { EXIT, Stop } from "../report.mjs";
 import { sha256Hex } from "../untar.mjs";
 import { fetchBytes } from "../update.mjs";
 import { selftestForcedToFail } from "../verify.mjs";
-import { bindingPath, makeBinding, writeBinding } from "./binding.mjs";
+import { bindingPath, makeBinding, otherBoundHomes, writeBinding } from "./binding.mjs";
 import { hermesContext } from "./context.mjs";
 import { createPlur1busCli, USE_CLASSES } from "./plur1bus-cli.mjs";
 import {
@@ -102,7 +102,7 @@ async function snapshotStore({ report, home, label, now }) {
 }
 
 /** HM1-R-F2: restore only when the live store differs from the snapshot; the replaced store is kept and named. */
-async function restoreStore({ report, home, snapshotId, manual }) {
+async function restoreStore({ report, home, snapshotId, manual, affected = [] }) {
   if (!snapshotId) return;
   const opts = { stateDir: home, baseDbPath: storePath(home), snapshotsDir: snapshotsDirOf(home), id: snapshotId };
   try {
@@ -119,7 +119,7 @@ async function restoreStore({ report, home, snapshotId, manual }) {
     report.step("restore", "ok", `store restored from ${snapshotId}${r.preRestorePath ? `; the replaced store is kept at ${r.preRestorePath}` : ""}`);
     if (r.preRestorePath) {
       report.set("preRestorePath", r.preRestorePath);
-      report.note(`The store as it was before the rollback (with anything written after the snapshot) is kept at ${r.preRestorePath}. Nothing deletes it except \`--uninstall --purge\`; remove it yourself once you no longer need it.`);
+      report.note(`The store as it was before the rollback (with anything written after the snapshot${affected.length ? `, including what ${affected.map((o) => `${o.agentId} (${o.home})`).join(", ")} captured meanwhile` : ""}) is kept at ${r.preRestorePath}. Nothing deletes it except \`--uninstall --purge\`; remove it yourself once you no longer need it.`);
     }
   } catch (err) {
     manual.push(`restore the store at ${storePath(home)} from ${join(snapshotsDirOf(home), snapshotId)}${err?.preRestorePath ? ` (the replaced store is at ${err.preRestorePath})` : ""}`);
@@ -164,7 +164,7 @@ export async function runHermesUpdate(ctx) {
     removeStaging(hermesHome);
     removeStaleBinTemps(bin);
     const s = { ...state, update: { ...state.update } };
-    if (flags.rollback || interrupted.step === "rollback-failed") {
+    if (flags.rollback || interrupted.step === "rollback-failed" || interrupted.step === "rollback") {
       report.step("resume", "info", `interrupted update at step ${interrupted.step}; rolling it back`);
       return rollbackUpdate({ ...ctx, hermes, hermesHome, s, home, bin, reason: flags.rollback ? "rollback requested" : "finishing a failed rollback" });
     }
@@ -226,6 +226,20 @@ export async function runHermesUpdate(ctx) {
     return report.finish(EXIT.OK);
   }
 
+  // a sidecar update stops and changes the core every bound Hermes home uses (T9 review 7)
+  let others = [];
+  if (sidecarUpdate) {
+    try {
+      others = otherBoundHomes(home, hermesHome, platform);
+    } catch {
+      others = [];
+    }
+    if (others.length) {
+      report.note(`The sidecar update also affects the other Hermes homes bound to ${home}: ${others.map((o) => `${o.agentId} (${o.home})`).join(", ")}. Their providers keep working against the new sidecar; run --update in each to update their providers too.`);
+      report.set("affectedHomes", others);
+    }
+  }
+
   // ── Now / Later / Skip ───────────────────────────────────────────────────
   if (!flags.yes) {
     if (!ctx.isTTY || flags["non-interactive"]) {
@@ -247,12 +261,12 @@ export async function runHermesUpdate(ctx) {
   const got = existsSync(bin) ? await p1().configGet("embedding.useClass") : { set: false };
   if (got.set && USE_CLASSES.includes(got.value)) useClass = got.value;
   else if (USE_CLASSES.includes(state.useClass)) useClass = state.useClass;
-  else useClass = "general";
+  // else unknown: no --use-class at all, so setup keeps whatever it recorded (F3), never an explicit "general"
   const acceptNc = Boolean(state.licence?.acceptNonCommercialLicense);
 
   const s = {
     ...stripProgress(state),
-    update: { fromVersion: installed, toVersion: release.version, sidecarUpdate, useClass, acceptNc },
+    update: { fromVersion: installed, toVersion: release.version, sidecarUpdate, useClass, acceptNc, affectedHomes: others },
   };
   return applyUpdate({ ...ctx, det, hermes, hermesHome, home, bin, agentId, p1, release, s, resuming: false, now, target });
 }
@@ -286,7 +300,17 @@ async function applyUpdate(ctx) {
     if (u.sidecarUpdate) {
       // ── stop the sidecar ─────────────────────────────────────────────────
       save("stop");
-      if (existsSync(bin)) await p1().daemonStop();
+      if (existsSync(bin) && !u.daemonStopped) {
+        // what ran before: the rollback restarts only that (T9 review 6)
+        const svc = await p1().serviceStatus();
+        const ds = await p1().daemonStop();
+        u.serviceRegistered = svc.registered === true;
+        u.wasRunning = ds.ok ? ds.doc?.wasRunning !== false : true;
+        if (!ds.ok) {
+          report.step("stop", "failed", `plur1bus daemon stop failed (${ds.detail})`);
+          return rb("stop");
+        }
+      }
       u.daemonStopped = true;
       save("stop");
       killAt("update.daemon-stopped");
@@ -348,7 +372,7 @@ async function applyUpdate(ctx) {
         report.step("setup", "failed", st.ok ? `no host manifest in ${home} after setup` : `plur1bus setup --profile host failed (${st.detail})`);
         return rb("setup");
       }
-      report.step("setup", "ok", `plur1bus setup --profile host in ${home} (use class ${u.useClass}, kept)`);
+      report.step("setup", "ok", `plur1bus setup --profile host in ${home} (${u.useClass ? `use class ${u.useClass}, kept` : "the recorded use class kept by setup"})`);
     }
 
     // ── provider directory ─────────────────────────────────────────────────
@@ -424,6 +448,11 @@ export async function rollbackUpdate(ctx) {
   const manual = [];
   const done = [];
   const p1 = (b = bin) => createPlur1busCli({ bin: b, home, env, run, platform });
+  // a killed rollback resumes as a rollback, never as the update (T9 review 4)
+  writeHermesState(hermesHome, { ...s, inProgress: { op: "update", step: "rollback", version: u.toVersion ?? null } });
+  const killAt = (point) => {
+    if (testMode && env.PLUR1BUS_PLUGIN_TEST_KILL_AT === point) process.kill(process.pid, "SIGKILL");
+  };
   removeStaging(hermesHome);
   removeStaleBinTemps(bin);
 
@@ -438,11 +467,12 @@ export async function rollbackUpdate(ctx) {
         manual.push(u.previousBin ? `rename ${u.previousBin} to ${bin}` : `remove ${bin}`);
       }
     }
+    killAt("update.rollback-binary");
     if (u.setupRan && manual.length === 0 && existsSync(bin)) {
       const noService = testMode && env.PLUR1BUS_PLUGIN_TEST_NO_SERVICE === "1";
-      const st = await p1().setup({ useClass: u.useClass ?? "general", acceptNc: Boolean(u.acceptNc), noService });
+      const st = await p1().setup({ useClass: u.useClass ?? null, acceptNc: Boolean(u.acceptNc), noService });
       if (st.ok) done.push("setup re-run with the previous binary");
-      else manual.push(`plur1bus --home "${home}" setup --profile host --non-interactive --use-class ${u.useClass ?? "general"} (failed: ${st.detail})`);
+      else manual.push(`plur1bus --home "${home}" setup --profile host --non-interactive${u.useClass ? ` --use-class ${u.useClass}` : ""} (failed: ${st.detail})`);
       await p1().daemonStop();
     }
     // 2. manifest.json and config.json byte for byte
@@ -455,11 +485,15 @@ export async function rollbackUpdate(ctx) {
       }
     }
     // 3. the store, only when it changed (HM1-R-F2)
-    await restoreStore({ report, home, snapshotId: u.snapshotId ?? null, manual });
-    // 4. the sidecar runs again
-    if (existsSync(bin)) {
+    await restoreStore({ report, home, snapshotId: u.snapshotId ?? null, manual, affected: u.affectedHomes ?? [] });
+    // 4. the sidecar runs again, only when it ran before the update (`daemon start` goes through the registered
+    // service when there is one)
+    if (existsSync(bin) && u.wasRunning !== false) {
       const ds = await p1().daemonStart();
-      if (!ds.ok) manual.push(`plur1bus --home "${home}" daemon start`);
+      if (ds.ok) done.push(u.serviceRegistered ? "sidecar started through its service" : "sidecar daemon started");
+      else manual.push(`plur1bus --home "${home}" daemon start`);
+    } else if (u.wasRunning === false) {
+      done.push("the sidecar stays stopped, as it was before the update");
     }
   }
 

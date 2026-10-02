@@ -23,7 +23,7 @@ const strays = (sb) => [...walkTree(sb.home), ...walkTree(sb.root)].filter((p) =
 const providerVersion = (sb) => JSON.parse(readFileSync(join(sb.hermesHome, "plugins", "plur1bus", "MANIFEST.json"), "utf8")).version;
 const bindingVersion = (sb) => JSON.parse(readFileSync(join(sb.hermesHome, "plur1bus.json"), "utf8")).version;
 const storeDir = (sb) => join(sb.plur1busHome, "state", "lancedb");
-const mutatingPlur1bus = (sb, from = 0) => sb.plur1busCalls().slice(from).map((a) => a.slice(3).join(" ")).filter((c) => !/^(agent list|config get)/.test(c));
+const mutatingPlur1bus = (sb, from = 0) => sb.plur1busCalls().slice(from).map((a) => a.slice(3).join(" ")).filter((c) => !/^(agent list|config get|service status)/.test(c));
 
 function runChild(sb, argv, { killAt } = {}) {
   const code = `import { runInstaller } from ${JSON.stringify(MAIN)};\nprocess.exitCode = await runInstaller(process.argv.slice(1));\n`;
@@ -248,5 +248,78 @@ describe("hermes installer: update", () => {
     const r = await run(sb, ["--uninstall"]);
     assert.equal(r.code, EXIT.NEEDS_CHOICE, r.out);
     assert.match(r.out, /interrupted update/);
+  });
+});
+
+describe("hermes installer: update (T9 review)", () => {
+  it("a rollback killed midway resumes as a rollback, not as the update (review 4)", { skip: POSIX_KILL }, async () => {
+    for (const next of [[], ["--rollback"]]) {
+      const sb = await installed();
+      await sb.addRelease({ version: "0.2.0" });
+      const before = snapshotOf(sb);
+      sb.setScenario({ selftestFail: true, setupMigratesStoreFrom: "0.2.0" });
+      const k = runChild(sb, ["--update", "--yes"], { killAt: "update.rollback-binary" });
+      assert.notEqual(k.status, 0, k.stdout + k.stderr);
+      assert.equal(readHermesState(sb.hermesHome).inProgress.step, "rollback");
+      sb.setScenario({ selftestFail: false });
+      const r = await run(sb, next);
+      assert.equal(r.code, EXIT.FAILED, r.out);
+      assert.match(r.out, /interrupted update at step rollback; rolling it back/);
+      assert.ok(!r.out.includes("finishing it"), "not re-applied as the update");
+      assertRolledBack(sb, before);
+      assert.equal(providerVersion(sb), "0.1.0");
+    }
+  });
+
+  it("an unknown use class passes no --use-class at all (review 5, F3)", async () => {
+    const sb = await installed();
+    const cfg = join(sb.plur1busHome, "config.json");
+    const c = JSON.parse(readFileSync(cfg, "utf8"));
+    delete c.embedding;
+    writeFileSync(cfg, JSON.stringify(c, null, 2));
+    const sf = join(sb.hermesHome, ".plur1bus-installer.json");
+    const st = JSON.parse(readFileSync(sf, "utf8"));
+    delete st.useClass;
+    writeFileSync(sf, JSON.stringify(st));
+    await sb.addRelease({ version: "0.2.0" });
+    const n = sb.plur1busCalls().length;
+    assert.equal((await run(sb, ["--update", "--yes"])).code, EXIT.OK);
+    assert.deepEqual(mutatingPlur1bus(sb, n).filter((x) => x.startsWith("setup")), ["setup --profile host --non-interactive --no-service"]);
+  });
+
+  it("rollback restarts the sidecar only when it ran before, through its service when registered (review 6)", async () => {
+    const stopped = await installed();
+    await stopped.addRelease({ version: "0.2.0" });
+    stopped.setScenario({ selftestFail: true, daemonRunning: false });
+    const n = stopped.plur1busCalls().length;
+    const r = await run(stopped, ["--update", "--yes"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.ok(!mutatingPlur1bus(stopped, n).includes("daemon start"), "not started: it was not running before");
+    assert.match(r.out, /stays stopped, as it was before the update/);
+    const svc = await installed();
+    await svc.addRelease({ version: "0.2.0" });
+    svc.setScenario({ selftestFail: true, serviceRegistered: true });
+    const m = svc.plur1busCalls().length;
+    const r2 = await run(svc, ["--update", "--yes"]);
+    assert.equal(r2.code, EXIT.FAILED, r2.out);
+    assert.ok(mutatingPlur1bus(svc, m).includes("daemon start"));
+    assert.match(r2.out, /started through its service/);
+  });
+
+  it("the other bound Hermes homes are named before the question and in the .pre-restore note (review 7)", async () => {
+    const sb = await installed();
+    const work = join(sb.hermesRoot, "profiles", "work");
+    mkdirSync(work, { recursive: true });
+    writeFileSync(join(work, "config.yaml"), "memory:\n  memory_enabled: true\n");
+    assert.equal((await run(sb, ["--hermes-profile", "work"])).code, EXIT.OK);
+    await sb.addRelease({ version: "0.2.0" });
+    const stderr = sink();
+    let seen = "";
+    await run(sb, ["--update"], { isTTY: true, stderr, prompt: async () => ((seen = stderr.text), "s") });
+    assert.match(seen, /also affects the other Hermes homes bound to .*hermes-work/);
+    sb.setScenario({ selftestFail: true, setupMigratesStoreFrom: "0.2.0" });
+    const r = await run(sb, ["--update", "--yes"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.match(r.out, /including what hermes-work .* captured meanwhile\) is kept at/);
   });
 });
