@@ -1,5 +1,5 @@
 /**
- * scripts/dist/installer/main.mjs — PLUR1BUS plugin installer for OpenClaw (D87, spec A.3).
+ * scripts/dist/installer/main.mjs — PLUR1BUS plugin installer for OpenClaw and, with `--host hermes`, Hermes (D87, D88, spec A.3).
  *
  * Order: feed (signature verified unless the bootstrap already did) → detect →
  * compatibility (every fatal finding printed together, exit 3) → existing

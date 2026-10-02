@@ -281,8 +281,9 @@ detached minisign signature at `{channel}.json.minisig`. It holds the installer
 bundle and both bootstraps (URL and SHA-256), and per OpenClaw release: version,
 `clawhub` and optional `npm` locator, the tarball (URL, SHA-256, npm sha512
 integrity), the optional `clawpackDigest`, `openclaw.compat`, `engines.node`, a
-`security` flag and release notes in German and English. `hosts.hermes` is
-reserved and refused.
+`security` flag and release notes in German and English. `hosts.hermes`
+carries the Hermes host-mode releases (see
+[Hermes releases in the feed](#hermes-releases-in-the-feed)).
 
 **Who signs.** The owner, **offline**, with the channel's secret key
 (`minisign -S -s <channel>.key -m <channel>.json`), the same key and procedure
@@ -554,8 +555,9 @@ core on this machine. Sources: `scripts/dist/installer/hermes/*.mjs`.
 
 The same five targets as above (`unsupported-target` otherwise, exit 3).
 Native Windows prints "Hermes host mode on native Windows is in beta." while the
-feed carries `hosts.hermes.windowsNativeBeta: true`. Checked before any change,
-every fatal finding reported together (exit 3):
+feed carries `hosts.hermes.windowsNativeBeta: true`. A missing `hermes` launcher
+stops at once (`hermes-not-found`, exit 3). The other findings are checked before
+any change and every fatal one is reported together (exit 3):
 
 | Finding | When |
 |---|---|
@@ -610,12 +612,19 @@ inside the chosen one, as for OpenClaw.
    CC BY-NC 4.0 model licence), or `--accept-nc-licence`; non-interactive →
    `general` without acceptance. An existing sidecar keeps its recorded use
    class (`--accept-nc-licence` is then reported as not applied).
-8. **Downloads** the provider tarball and the sidecar binary for the target and
-   checks both against the feed before changing anything.
+8. **Downloads** the provider tarball and checks it against the feed before
+   changing anything. The sidecar binary is downloaded and checked against the
+   feed in the next step, before it replaces anything (not at all when the
+   sidecar is reused).
 9. **Sidecar binary**: `~/.local/bin/plur1bus` (Windows
    `%LOCALAPPDATA%\PLUR1BUS\bin\plur1bus.exe`), the harness's own places. A host
-   sidecar at least as new is reused; an older one is replaced (the previous
-   binary is kept until the install finished).
+   sidecar is reused only when its `manifest.json` **and** the binary's own
+   `plur1bus --version` are at least the release's version. An existing host
+   sidecar that is older (or whose binary reports an older or no version) is
+   updated the way `--update` does it: `daemon stop`, `manifest.json` and
+   `config.json` saved, a store snapshot, the new binary (the previous one kept
+   until the install finished), then `setup` (step 10). Other Hermes homes bound
+   to it are named first.
 10. `plur1bus --home <home> setup --profile host --non-interactive --use-class <c>`.
 11. `plur1bus agent create <id>` and the bindings registry entry. Agent ids:
     `hermes-default` for the default home, `hermes-<profile>` for
@@ -633,10 +642,15 @@ inside the chosen one, as for OpenClaw.
 15. **Verify**: `hermes memory status` names plur1bus and `hermes plur1bus
     selftest --json` is ok (read-only).
 
-Any failure rolls back in reverse: `memory.provider` first (never removing a
-directory it still names), then the provider directory, binding, registry
-entry, and a sidecar this run created (service, binary, home; kept when another
-Hermes home is bound to it by then). Exit 1, or 4 with the manual steps.
+Any failure rolls back in reverse: `memory.provider` first, to exactly the
+previous value (`builtin`, `none` or no key at all; never removing a directory
+it still names), then the provider directory, binding and registry entry. A
+sidecar this run created goes next: its daemon and service stop, then its home
+and then its binary are removed (all kept when another Hermes home is bound to
+it by then). An existing sidecar this run updated gets the `--update` rollback
+(below): the previous binary and its `setup`, `manifest.json` and `config.json`
+byte for byte, the store only if it changed, the daemon started only if it ran.
+Exit 1, or 4 with the manual steps.
 
 ### Hermes flags
 
@@ -714,6 +728,26 @@ registry lock); two confirmations or `--yes-delete-memories` (non-interactive
 without it: exit 2, nothing changed). Then `daemon stop`, `service uninstall`,
 and the sidecar home (store, snapshots, `.pre-restore-*`), the binary and the
 journal are deleted. A refusal at the last check keeps the home and exits 1.
+
+### Hermes releases in the feed
+
+The release workflow adds a `hosts.hermes` release from
+`scripts/dist/hermes-sidecar.lock.json` (the harness release's provider tarball,
+five sidecar binaries with SHA-256 and its Node pin), with the plugin release's
+German and English notes.
+
+- When the previous feed already holds the lock's version with the same
+  provider and binary hashes (a later plugin release over an unchanged lock),
+  its `hosts.hermes` is carried over unchanged.
+- The same version with any other hash is refused: a published release's
+  artefacts never change.
+- While the lock is a placeholder (`"placeholder": true`, before the harness
+  release fills it in), the release still runs. The feed then adds no Hermes
+  release (`hosts.hermes` stays as in the previous feed, none before the first
+  one), and the run warns in its log and in the job summary. OpenClaw-only
+  releases are never blocked by the Hermes lock.
+- `build-plugin-feed.mjs` itself refuses a placeholder lock or an all-zero
+  hash passed to it with `--hermes-lock`.
 
 ### The sidecar and its home
 

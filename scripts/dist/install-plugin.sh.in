@@ -14,7 +14,8 @@
 # and verifies the signature with the inlined minisign verifier BEFORE trusting any URL or hash in it. Only then it
 # downloads the bundled Node installer named by the feed, checks its SHA-256 and runs
 # `node <installer> --feed-file <verified feed> [installer flags]`; the installer's exit code is this script's.
-# Never uses sudo; writes nothing but its temp dir (removed on exit).
+# Never uses sudo; writes nothing but its temp dir (removed on exit) and, for `--host hermes` without a usable Node, the
+# pinned Node archive cache in <user cache>/plur1bus ($XDG_CACHE_HOME or ~/.cache; macOS ~/Library/Caches).
 #
 # Exit codes: 0 ok, 1 failed (nothing changed; bad signature or checksum), 2 needs a choice, 3 incompatible host
 # (openclaw-not-found, hermes-not-found, node-not-found, unsupported-target), 4 verification and rollback failed (from

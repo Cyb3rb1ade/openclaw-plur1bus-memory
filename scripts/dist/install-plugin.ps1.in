@@ -25,7 +25,8 @@
 #               `wsl.exe -d <d> -e sh -s -- --version <resolved> [installer flags]` (an `--offline <path>` is
 #               translated with `wslpath -a`); the distro's own run verifies the feed again (spec A.3 step 1).
 # The installer's (or the distro's) exit code is this script's. Needs no administrator rights; writes nothing but its
-# temp dir (removed on exit). The script is unsigned (Authenticode pending, as the harness install.ps1). Downloads are
+# temp dir (removed on exit) and, for `-Host hermes` without a usable Node, the pinned Node archive cache under
+# %LOCALAPPDATA%\plur1bus\cache. The script is unsigned (Authenticode pending, as the harness install.ps1). Downloads are
 # https only, redirects included: a download that ends on a non-https URL fails (exit 1).
 #
 # Exit codes: 0 ok, 1 failed (nothing changed; bad signature or checksum), 2 needs a choice, 3 incompatible host

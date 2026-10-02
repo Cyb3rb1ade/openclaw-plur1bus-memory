@@ -799,7 +799,11 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
 - **Hermes-Update** mit Release-Notes, Now/Later/Skip, Speicher-Snapshot,
   byteweiser Sicherung von `manifest.json`/`config.json` und Binary-Rollback;
   **Deinstallation**, die `memory.provider` exakt wiederherstellt, und **Purge**,
-  der verweigert, solange ein anderes Hermes-Home den Sidecar nutzt.
+  der verweigert, solange ein anderes Hermes-Home den Sidecar nutzt. Eine
+  Installation über einen älteren gemeinsamen Host-Sidecar läuft wie dieses
+  Update (Stopp, Sicherung, Snapshot, Binary, Setup) und wird ebenso
+  zurückgerollt; ein Sidecar wird nur wiederverwendet, wenn auch
+  `plur1bus --version` mindestens die Release-Version meldet.
 - **Node-Kette der Bootstraps** für Hermes: PATH, Hermes' eigenes Node, das
   Node eines Sidecars, sonst ein festgelegtes, hash-geprüftes portables
   Node 24.21.0 (`scripts/dist/node-pins.json`; der Renderer verlangt
@@ -814,6 +818,12 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
 
 - Der Feed erlaubt `hosts.hermes` (Schema); gespeicherte Installer-Bundles
   von 7.17.x lehnen einen Feed mit diesem Schlüssel ab.
+- `plugin-release.yml`: Solange `scripts/dist/hermes-sidecar.lock.json` ein
+  Platzhalter ist, baut auch ein echter Lauf den Feed ohne neues Hermes-Release
+  und warnt in Log und Job-Zusammenfassung; reine OpenClaw-Releases werden nie
+  blockiert. `build-plugin-feed.mjs` übernimmt ein Hermes-Release, das schon
+  mit denselben Hashes im vorigen Feed steht, unverändert und verweigert nur
+  andere Hashes für dieselbe Version.
 
 ## [7.17.0] — in Vorbereitung (HM1: Distribution für OpenClaw)
 

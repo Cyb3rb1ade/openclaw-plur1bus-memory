@@ -252,7 +252,11 @@ node --test tests/*.test.js
   which throws if `PATH` resolves a non-shim). Real OpenClaw and Hermes run only
   in CI on disposable runners (`tests/helpers/assert-disposable.mjs`,
   `--host hermes` for Hermes).
-- Current baseline: 3,609 tests (3,608 passing, 0 failing, 1 skipped), 630 suites.
+- Current baseline (Linux, Node 24.21.0, 7.18.0): 6,151 tests in 1,077 suites,
+  7 skipped (platform-only and opt-in cases). Two tests depend on the machine: the
+  `dist-ci-helpers` dry run needs 1.5 GiB free disk (the installer's own
+  `insufficient-disk` check), and the Local Inference adm-zip check needs this
+  checkout's own `node_modules`.
 
 ## Dependency Audit
 
