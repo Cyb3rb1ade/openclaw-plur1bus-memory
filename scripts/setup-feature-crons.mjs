@@ -51,7 +51,8 @@ import {
 export const NATIVE_PROBE_TIMEOUT_MS = 120_000;
 // 7.18.8: read-only CLI calls. Under OpenClaw 2026.9.7 `agents list` takes
 // 11–13 s on an idle gateway and longer right after a start; the old 15 s made
-// the bootstrap give up with planCreateCount=11. Writes (cron add/edit) keep
+// the bootstrap give up with planCreateCount=11. 7.18.10: config.get too, it
+// ran past 30 s right after a start (reason=config-load-failed). Writes (cron add/edit) keep
 // their short budget.
 export const READ_TIMEOUT_MS = 60_000;
 
@@ -303,7 +304,7 @@ function isPlainObject(value) {
 export function loadFeatureCronConfig(openclawImpl = openclaw) {
   let result;
   try {
-    result = openclawImpl(["gateway", "call", "config.get", "--json"], 30000);
+    result = openclawImpl(["gateway", "call", "config.get", "--json"], READ_TIMEOUT_MS);
   } catch (_error) {
     return { ok: false, error: { code: "config-call-failed" } };
   }

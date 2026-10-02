@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.10] — 2026-10-02
+
+### Geändert
+
+- **`config.get` der Cron-Einrichtung wartet 60 s statt 30 s.** Die neue Diagnose aus 7.18.8 zeigte direkt nach dem Start von 7.18.9 `pending reason=config-load-failed`: Unter OpenClaw 2026.9.7 braucht der Aufruf im Leerlauf 4 s, kurz nach einem Gateway-Start über 30 s. Der Bootstrap änderte dann nichts und lief beim nächsten Start erneut an.
+
 ## [7.18.9] — 2026-10-02
 
 ### Behoben
