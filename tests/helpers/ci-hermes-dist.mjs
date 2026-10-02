@@ -5,7 +5,7 @@
  * to run anywhere else (assert-disposable --host hermes). Every bootstrap run sets PLUR1BUS_PLUGIN_INSTALLER_TEST=1 and
  * PLUR1BUS_PLUGIN_TEST_NO_SERVICE=1, so `plur1bus setup` runs with --no-service and no service manager is touched.
  *
- *   install --artefacts <pack dir> --feed-dir <dir> --hermes-bin <path> [--bootstrap sh|ps1]
+ *   install --artefacts <pack dir> --feed-dir <dir> --hermes-bin <path> [--bootstrap sh|ps1] [--previous-provider <v>]
  *       memory.provider before → bootstrap `--host hermes --non-interactive --json` → exit 0, ok
  *       → `hermes memory status` names plur1bus → `hermes plur1bus selftest --json` → ok
  *       → the bootstrap again → `up-to-date` → `--uninstall --json` → exit 0, memory.provider back to the value before,
@@ -65,6 +65,11 @@ function run(file, args, { env = process.env, input, timeoutMs = 1_800_000 } = {
   return { code: r.status, stdout: r.stdout ?? "", stderr: `${r.stderr ?? ""}${r.error ? `\n[spawn: ${r.error.message}]` : ""}` };
 }
 
+/** A re-run's document: ok, and the update step (install.mjs F17 hand-over / update.mjs) says up-to-date. */
+export function isUpToDate(doc) {
+  return doc?.ok === true && Array.isArray(doc.steps) && doc.steps.some((s) => s.id === "update" && s.status === "ok" && /^up-to-date/.test(String(s.detail ?? "")));
+}
+
 /** The environment every bootstrap run gets (test seams only; the feed is the CI-signed file:// one). */
 export function bootstrapEnv(base, feedDir) {
   return {
@@ -95,13 +100,19 @@ function bootstrap(kind, artefacts, args, env) {
   return run("sh", [join(artefacts, "install-plugin.sh"), "--host", "hermes", ...args], { env, input: "" });
 }
 
-async function cmdInstall({ artefacts, "feed-dir": feedDirArg, "hermes-bin": hermesBin, bootstrap: kind }) {
+async function cmdInstall({ artefacts, "feed-dir": feedDirArg, "hermes-bin": hermesBin, bootstrap: kind, "previous-provider": previousProvider }) {
   if (!artefacts || !feedDirArg || !hermesBin) throw new Failed("install needs --artefacts, --feed-dir and --hermes-bin");
   const dis = assertDisposable({ host: "hermes", vars: WIN ? [] : ["HOME"] });
   check(dis.ok, `Hermes is disposable here (${dis.errors.join("; ") || JSON.stringify(dis.checked)})`);
   const dir = resolve(artefacts);
   const env = bootstrapEnv(process.env, resolve(feedDirArg));
+  if (previousProvider) {
+    // a non-empty value before the install (T11 review 4): Hermes' own CLI sets it, the uninstall must restore it
+    const set = hermesCall(hermesBin, ["config", "set", "memory.provider", previousProvider], env);
+    check(set.code === 0, `hermes config set memory.provider ${previousProvider} before the install`);
+  }
   const before = providerValue(hermesBin, env);
+  if (previousProvider) check(before === previousProvider, `memory.provider reads ${JSON.stringify(before)}, set to ${JSON.stringify(previousProvider)}`);
   check(before !== null, `hermes config get memory.provider reads ${JSON.stringify(before)} before the install`);
 
   const first = bootstrap(kind, dir, ["--non-interactive", "--json"], env);
@@ -120,14 +131,16 @@ async function cmdInstall({ artefacts, "feed-dir": feedDirArg, "hermes-bin": her
   fact("hermes.selftest", { exit: st.code, ok: self?.ok ?? null, checks: self?.checks ?? null });
   if (self?.ok !== true) say(tail(st.stderr, 40));
   check(st.code === 0 && self?.ok === true, "hermes plur1bus selftest --json → ok");
+  // a running core with a bound agent has its store (T11 review 2): the uninstall check below is never vacuous
+  const home = process.env.PLUR1BUS_HOME;
+  const store = join(home, "state", "lancedb");
+  check(existsSync(store), `the sidecar store ${store} exists after the selftest`);
 
   const again = bootstrap(kind, dir, ["--non-interactive", "--json"], env);
   const doc2 = lastJson(again.stdout);
   fact("hermes.reinstall", { exit: again.code, mode: doc2?.mode ?? null, steps: doc2?.steps?.map((s) => `${s.id}:${s.status}`) ?? null });
-  check(again.code === 0 && /up-to-date/.test(`${again.stdout}\n${again.stderr}`), "the bootstrap again → up-to-date");
+  check(isUpToDate(doc2) && again.code === 0, "the bootstrap again → ok, the update step reports up-to-date");
 
-  const home = process.env.PLUR1BUS_HOME;
-  const storeBefore = existsSync(join(home, "state", "lancedb"));
   const un = bootstrap(kind, dir, ["--uninstall", "--non-interactive", "--json"], env);
   const doc3 = lastJson(un.stdout);
   fact("hermes.uninstall", { exit: un.code, journal: doc3?.journal ?? null, steps: doc3?.steps?.map((s) => `${s.id}:${s.status}`) ?? null });
@@ -136,8 +149,8 @@ async function cmdInstall({ artefacts, "feed-dir": feedDirArg, "hermes-bin": her
   const after = providerValue(hermesBin, env);
   check(after === before, `memory.provider is back to ${JSON.stringify(before)} (reads ${JSON.stringify(after)})`);
   check(existsSync(join(home, "manifest.json")), `the PLUR1BUS home ${home} is kept`);
-  if (storeBefore) check(existsSync(join(home, "state", "lancedb")), "the store is kept");
-  summary(`memory.provider ${JSON.stringify(before)} → plur1bus → ${JSON.stringify(after)}; store ${storeBefore ? "kept" : "(none created)"}\n`);
+  check(existsSync(store), "the store is kept");
+  summary(`memory.provider ${JSON.stringify(before)} → plur1bus → ${JSON.stringify(after)}; store kept\n`);
 }
 
 function wslEnv(extra = {}) {
@@ -206,6 +219,7 @@ const OPTIONS = {
   bootstrap: { type: "string", default: WIN ? "ps1" : "sh" },
   distro: { type: "string", default: "Ubuntu-24.04" },
   "hermes-commit": { type: "string" },
+  "previous-provider": { type: "string" },
 };
 
 export async function main(argv) {

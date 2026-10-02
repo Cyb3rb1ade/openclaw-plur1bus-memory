@@ -17,7 +17,7 @@ import { assertDisposable } from "./helpers/assert-disposable.mjs";
 import { digestIds, storeDigest } from "./helpers/store-digest.mjs";
 import { assertStoreInsideStateDir, seedStore } from "./helpers/seed-store.mjs";
 import { signFeedForCi } from "./helpers/sign-feed-for-ci.mjs";
-import { bootstrapEnv, lastJson } from "./helpers/ci-hermes-dist.mjs";
+import { bootstrapEnv, isUpToDate, lastJson } from "./helpers/ci-hermes-dist.mjs";
 import { comparePins, parseShasums } from "./helpers/check-node-pins.mjs";
 import { validateFeed } from "../scripts/dist/build-plugin-feed.mjs";
 import { verifyMinisign } from "../scripts/dist/minisign.mjs";
@@ -284,13 +284,21 @@ describe("plugin-dist Hermes legs (HM2 Task 11)", () => {
       assert.equal(wf.jobs[job].env.PLUR1BUS_PLUGIN_INSTALLER_TEST, "1", job);
     }
     // HM2-R19: required only once the sidecar release P4 exists; the WSL leg is non-blocking (C8)
-    assert.equal(wf.jobs.hermes["continue-on-error"], "${{ !vars.HM2_SIDECAR_RELEASED }}");
+    assert.equal(wf.jobs.hermes["continue-on-error"], "${{ vars.HM2_SIDECAR_RELEASED != 'true' }}", "\"false\" counts as not released");
     assert.equal(wf.jobs["hermes-wsl"]["continue-on-error"], true);
     const m = wf.jobs.hermes.strategy;
     assert.equal(m["fail-fast"], false);
     assert.deepEqual(m.matrix.runner, ["ubuntu-24.04", "macos-15", "windows-2025"]);
     assert.deepEqual(m.matrix.hermes, ["min", "latest"]);
-    assert.deepEqual(m.matrix.include.map((x) => [x.hermes, x["hermes-commit"]]), [["min", "743ee72596e7a9f23bc7cd5c570a6ebd958043e4"], ["latest", "f97608f178d1ffeca59860195ab7da295f7c8e5f"]]);
+    assert.deepEqual(m.matrix.include.map((x) => [x.hermes, x["hermes-commit"], x["previous-provider"] ?? null]), [["min", "743ee72596e7a9f23bc7cd5c570a6ebd958043e4", null], ["latest", "f97608f178d1ffeca59860195ab7da295f7c8e5f", "builtin"]]);
+    // both Hermes jobs refuse to run outside an ephemeral GitHub-hosted runner where they touch the profile
+    assert.ok(wf.jobs["hermes-wsl"].steps.some((s) => s.if === "runner.environment != 'github-hosted'"), "hermes-wsl guard");
+    assert.ok(wf.jobs.hermes.steps.some((s) => /runner\.environment != 'github-hosted'/.test(s.if ?? "")), "hermes guard");
+    // POSIX: HOME and XDG_* are disposable for every step that runs Hermes or the installer
+    for (const name of ["Install Hermes ${{ matrix.hermes }} (POSIX)", "hermes --version", "Bootstrap --host hermes (install, memory status, selftest, up-to-date re-run, uninstall)"]) {
+      assert.match(wf.jobs.hermes.steps.find((s) => s.name === name).run, /\. "\$RUNNER_TEMP\/fake-env\.sh"/, name);
+    }
+    assert.match(wf.jobs.hermes.steps.find((s) => /assert-disposable/.test(s.name ?? "")).run, /--var XDG_CONFIG_HOME --var XDG_DATA_HOME --var XDG_STATE_HOME --var XDG_CACHE_HOME/);
     assert.equal(wf.jobs.hermes.env.PLUR1BUS_TEST_INTERNALS, "flat-embedder", "no model download (F21)");
     assert.equal(wf.jobs["hermes-wsl"]["runs-on"], "windows-2025");
     // assert-disposable --host hermes is the first step after installing Hermes
@@ -351,6 +359,10 @@ describe("plugin-dist Hermes legs (HM2 Task 11)", () => {
     assert.deepEqual(lastJson('noise\n{"ok":true}\n'), { ok: true });
     assert.equal(lastJson('"plur1bus"\n'), "plur1bus");
     assert.equal(lastJson("nothing"), undefined);
+    // the re-run must be ok and its update step must say up-to-date (not just mention it somewhere)
+    assert.equal(isUpToDate({ ok: true, steps: [{ id: "update", status: "ok", detail: "up-to-date: plur1bus 0.1.0 (sidecar 0.1.0)" }] }), true);
+    assert.equal(isUpToDate({ ok: false, steps: [{ id: "update", status: "ok", detail: "up-to-date: x" }] }), false);
+    assert.equal(isUpToDate({ ok: true, steps: [{ id: "setup", status: "ok", detail: "up-to-date" }, { id: "update", status: "ok", detail: "updated to 0.2.0" }] }), false);
   });
 
   it("check-node-pins compares node-pins.json with SHASUMS256.txt and the lock's nodeVersion (F33)", () => {

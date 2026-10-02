@@ -374,12 +374,12 @@ jobs:
   # $RUNNER_TEMP: HERMES_HOME, PLUR1BUS_HOME, and HOME/XDG on POSIX. setup runs with --no-service
   # (PLUR1BUS_PLUGIN_TEST_NO_SERVICE=1) and the flat-embedder seam (no model download, F21). The sidecar and provider
   # artefacts are the harness release P4 named by scripts/dist/hermes-sidecar.lock.json: until it is released (and
-  # vars.HM2_SIDECAR_RELEASED is set) the lock is a placeholder and these legs cannot pass, hence continue-on-error.
+  # vars.HM2_SIDECAR_RELEASED is 'true') the lock is a placeholder and these legs cannot pass, hence continue-on-error.
   hermes:
     name: hermes (${{ matrix.runner }}, Hermes ${{ matrix.hermes }})
     needs: pack
     runs-on: ${{ matrix.runner }}
-    continue-on-error: ${{ !vars.HM2_SIDECAR_RELEASED }}
+    continue-on-error: ${{ vars.HM2_SIDECAR_RELEASED != 'true' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -391,6 +391,7 @@ jobs:
             hermes-commit: 743ee72596e7a9f23bc7cd5c570a6ebd958043e4
           - hermes: latest
             hermes-commit: f97608f178d1ffeca59860195ab7da295f7c8e5f
+            previous-provider: builtin
     env:
       PLUR1BUS_PLUGIN_INSTALLER_TEST: '1'
       PLUR1BUS_PLUGIN_TEST_NO_SERVICE: '1'
@@ -425,6 +426,10 @@ jobs:
             echo "HERMES_FEED_DIR=$RUNNER_TEMP/hermes-feed"
           } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/hh" "$RUNNER_TEMP/fakehome"
+          # POSIX: every step that runs Hermes or the installer sources this (HOME and XDG_* disposable, as the harness
+          # hermes-host.yml); GitHub's Ubuntu images export XDG_CONFIG_HOME into the real profile otherwise.
+          f="$RUNNER_TEMP/fakehome"
+          printf 'export HOME="%s" XDG_CONFIG_HOME="%s/.config" XDG_DATA_HOME="%s/.local/share" XDG_STATE_HOME="%s/.local/state" XDG_CACHE_HOME="%s/.cache"\n' "$f" "$f" "$f" "$f" "$f" > "$RUNNER_TEMP/fake-env.sh"
       # The Windows leg changes the user PATH (Hermes' install.ps1) and puts the sidecar under %LOCALAPPDATA%: only on
       # an ephemeral GitHub-hosted runner.
       - name: The Windows leg runs on GitHub-hosted runners only
@@ -454,7 +459,7 @@ jobs:
           COMMIT: ${{ matrix.hermes-commit }}
         run: |
           set -euo pipefail
-          export HOME="$FAKE_HOME" XDG_CONFIG_HOME="$FAKE_HOME/.config" XDG_DATA_HOME="$FAKE_HOME/.local/share" XDG_STATE_HOME="$FAKE_HOME/.local/state" XDG_CACHE_HOME="$FAKE_HOME/.cache"
+          . "$RUNNER_TEMP/fake-env.sh"
           bash "$RUNNER_TEMP/hermes-install.sh" --branch main --commit "$COMMIT" --force-commit --dir "$HERMES_DIR" --hermes-home "$HERMES_HOME" \
             --skip-setup --non-interactive --skip-browser --skip-computer-use --no-skills < /dev/null
           echo "HERMES_BIN=$HERMES_DIR/venv/bin/hermes" >> "$GITHUB_ENV"
@@ -484,19 +489,27 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then
             node tests/helpers/assert-disposable.mjs --host hermes
           else
-            HOME="$FAKE_HOME" node tests/helpers/assert-disposable.mjs --host hermes --var HOME
+            . "$RUNNER_TEMP/fake-env.sh"
+            node tests/helpers/assert-disposable.mjs --host hermes --var HOME --var XDG_CONFIG_HOME --var XDG_DATA_HOME --var XDG_STATE_HOME --var XDG_CACHE_HOME
           fi
       - name: hermes --version
-        run: '"$HERMES_BIN" --version'
+        run: |
+          if [ "$RUNNER_OS" != Windows ]; then . "$RUNNER_TEMP/fake-env.sh"; fi
+          "$HERMES_BIN" --version
       - name: Sign a TEST ONLY feed with hosts.hermes over the pack artefact
         run: node tests/helpers/sign-feed-for-ci.mjs --artefacts "$RUNNER_TEMP/plugin-dist" --out-dir "$HERMES_FEED_DIR"
       # install-plugin.sh on POSIX, install-plugin.ps1 -Host hermes under Windows PowerShell 5.1 on Windows.
+      # latest: memory.provider starts at a non-empty value ("builtin", Hermes' built-in store), so the uninstall must
+      # restore that value, not just "unset" (min starts unset: the 0.21.4 line-edit undo path)
       - name: Bootstrap --host hermes (install, memory status, selftest, up-to-date re-run, uninstall)
+        env:
+          PREVIOUS_PROVIDER: ${{ matrix.previous-provider }}
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
-            node tests/helpers/ci-hermes-dist.mjs install --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$HERMES_FEED_DIR" --hermes-bin "$HERMES_BIN" --bootstrap ps1
+            node tests/helpers/ci-hermes-dist.mjs install --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$HERMES_FEED_DIR" --hermes-bin "$HERMES_BIN" --bootstrap ps1 ${PREVIOUS_PROVIDER:+--previous-provider "$PREVIOUS_PROVIDER"}
           else
-            HOME="$FAKE_HOME" node tests/helpers/ci-hermes-dist.mjs install --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$HERMES_FEED_DIR" --hermes-bin "$HERMES_BIN" --bootstrap sh
+            . "$RUNNER_TEMP/fake-env.sh"
+            node tests/helpers/ci-hermes-dist.mjs install --artefacts "$RUNNER_TEMP/plugin-dist" --feed-dir "$HERMES_FEED_DIR" --hermes-bin "$HERMES_BIN" --bootstrap sh ${PREVIOUS_PROVIDER:+--previous-provider "$PREVIOUS_PROVIDER"}
           fi
 
   # C8: non-blocking. Hermes (min) inside WSL Ubuntu-24.04, the plugin installed from Windows through
@@ -528,6 +541,11 @@ jobs:
         with:
           name: ${{ needs.pack.outputs.artifact }}
           path: ${{ runner.temp }}/plugin-dist
+      - name: The WSL leg runs on GitHub-hosted runners only
+        if: runner.environment != 'github-hosted'
+        run: |
+          echo "::error::the Hermes WSL leg installs a distro and runs as root in it; it runs only on an ephemeral GitHub-hosted runner"
+          exit 1
       # Vampire/setup-wsl v7.0.0 (tag object 5fae231e, commit d1da7f2c), as the OpenClaw wsl leg.
       - name: Set up WSL Ubuntu-24.04
         uses: Vampire/setup-wsl@d1da7f2c0322a5ee4f24975344f67fc0f5baf364 # v7.0.0
