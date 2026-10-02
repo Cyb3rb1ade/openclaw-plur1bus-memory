@@ -811,7 +811,8 @@ test("7.16.10 Critical Push sends one Telegram button message per card to the cr
     bindings: [{ agentId, match: { channel: "telegram", accountId: "bot-a" } }],
   };
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
-  assert.equal(interactive.length, 1, "the click handler is registered, so buttons are ready");
+  // Since 7.17.0 the Discord voice switch registers its own handler (plurv).
+  assert.equal(interactive.filter((r) => r.namespace === "plurc").length, 1, "the click handler is registered, so buttons are ready");
 
   const result = await findCommand(api).handler({
     args: "internal classify-recent",

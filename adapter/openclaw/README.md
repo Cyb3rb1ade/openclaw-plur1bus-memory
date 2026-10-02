@@ -26,6 +26,7 @@ write "the host's `registerTool`" instead.
 | `register-prompt-supplements.js` | the static system-prompt supplement and the Neo corpus supplement |
 | `register-gateway.js` | a lone `gateway_start` (Neo warm-up) plus two `gateway_start`/`gateway_stop` pairs (Obsidian bridge, Neo service), the shutdown owner and the four after-lifecycle service registrations |
 | `register-cron.js` | the unsafe direct feature-cron guard and the deferred feature-cron bootstrap |
+| `register-voice-mode.js` | Persona/Light for Discord voice rooms (7.17.x): the light-voice check `register-recall-hook.js` and `register-maintenance-hook.js` run before asking the engine, `before_model_resolve` (per-run Haiku), and `/modus` on `before_dispatch` plus the Discord `plurv` interactive handler (registered from `register-commands.js`, after the critical-push hooks) |
 | `join-recall.js` | `prependContextFromRecall` — the host's join-and-cap step over `RecallResult` (`lib/inject-budget.js`'s `applyGlobalInjectBudget`), producing the `{ prependContext }` shape `before_prompt_build` expects |
 | `turn-principal.js` | resolves a `Principal`/`AgentContext` from an OpenClaw hook's own arguments, for the recall/capture/command paths that need one |
 | `host-probes.js` | OpenClaw-specific capability probing (`typeof api.X === "function"` checks) used while building `host.capabilities` during registration |

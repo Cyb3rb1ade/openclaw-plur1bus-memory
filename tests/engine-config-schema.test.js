@@ -66,7 +66,7 @@ const SENSITIVE = [
 describe("engine-config.schema.json", () => {
   it("the schema carries every manifest key with type, description, readAt and x-tier", () => {
     const keys = engineConfigKeys();
-    assert.equal(keys.length, 55);
+    assert.equal(keys.length, 56);
     assert.deepEqual(keys.map((k) => k.key), Object.keys(manifest.configSchema.properties));
     for (const k of keys) {
       assert.equal(typeof k.description, "string", k.key);

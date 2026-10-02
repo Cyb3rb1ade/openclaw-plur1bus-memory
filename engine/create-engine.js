@@ -79,6 +79,8 @@ import { TimeoutError } from "../lib/with-timeout.js";
 import { safeDebug, safeWarn } from "../lib/safe-logging.js";
 import { LLM_ROUTE_KINDS, isLlmRouteAvailable, resolveFeatureLlmRoute } from "../lib/llm-router.js";
 import { LLM_RESULT_CACHE_PURPOSES, createLlmResultCache, withLlmCallContext, withLlmResultCacheContext } from "../lib/llm-result-cache.js";
+import { createLlmFailureRecorder } from "../lib/health-watch.js";
+import { createPostTurnDetacher } from "../lib/post-turn-detach.js";
 import { inferEmotionalValenceAsync, setEmotionConfig } from "../lib/emotion.js";
 import { createEmotionalStatePool } from "../lib/emotional-state.js";
 import { applyDynamicsDefaults } from "../lib/memory-dynamics.js";
@@ -213,6 +215,13 @@ export function createEngine(host, config, testOptions = {}) {
   });
   const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
   cfg = providerMigration.config;
+  // 7.18.0: Fehlgeschlagene LLM-Aufrufe der letzten 24 h fuer die Health-Ansicht
+  // (in-process Zaehler; das Dashboard des Adapters liest den Schnappschuss).
+  const llmFailureRecorder = createLlmFailureRecorder();
+  // 7.18.3: Captured here, at construction and outside any turn. Post-turn
+  // work enqueued from capture runs in this context when the switch is on
+  // (openclaw/openclaw#162941).
+  const detachPostTurnWork = createPostTurnDetacher({ enabled: cfg.runtime?.detachPostTurnWork === true });
   const llmResultCache = createLlmResultCache({
     enabled: cfg.runtime?.llmResultCacheEnabled !== false,
     ttlMs: cfg.runtime?.llmResultCacheTtlMs,
@@ -268,6 +277,7 @@ export function createEngine(host, config, testOptions = {}) {
       diagnosticsPath: cfg.llmRouter?.errorDiagnostics === true
         ? join(baseDbPath, "llm-router-errors.log")
         : "",
+      failureRecorder: llmFailureRecorder,
     });
     return isLlmRouteAvailable(route) ? route : null;
   };
@@ -3066,6 +3076,7 @@ export function createEngine(host, config, testOptions = {}) {
     dashboardSkillAction,
     dedupEnabled,
     dedupJaccard,
+    detachPostTurnWork,
     detectReactionsCapabilityCached,
     dimensions,
     dreamEchoLlmCfg,
@@ -3093,6 +3104,7 @@ export function createEngine(host, config, testOptions = {}) {
     host,
     hostRoutingLoader,
     jobs,
+    llmFailureRecorder,
     llmResultCache,
     markNeoRecallInjection,
     maxPromptMemories,
@@ -3307,6 +3319,7 @@ export function createEngine(host, config, testOptions = {}) {
     "classifyEmotionForStore",
     "classifyHostIncognitoSession",
     "conversationInsightsLlmCfg",
+    "detachPostTurnWork",
     "dreamEchoLlmCfg",
     "dreamNarrativeCfg",
     "dreamNarrativeLlmCfg",

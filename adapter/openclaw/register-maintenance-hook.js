@@ -14,9 +14,16 @@ import { prependContextFromRecall } from "./join-recall.js";
 /**
  * @param {object} ctx Registration context: the engine context plus `api`.
  * @param {object} ctx.api OpenClaw plugin API (`api.on`).
+ * @param {Function} [ctx.lightVoicePromptContext] register-voice-mode.js: a light
+ *   Discord voice turn gets only the voice guidance (7.17.0).
  * @returns {void}
  */
 export function registerMaintenanceHook(ctx) {
-  const maintain = createMinimalMaintenance(ctx);
-  ctx.api.on("before_prompt_build", async (event, hookCtx) => prependContextFromRecall(await maintain(event, hookCtx)));
+  const { lightVoicePromptContext = null, ...engineCtx } = ctx;
+  const maintain = createMinimalMaintenance(engineCtx);
+  ctx.api.on("before_prompt_build", async (event, hookCtx) => {
+    const light = lightVoicePromptContext ? lightVoicePromptContext(event, hookCtx) : null;
+    if (light) return light;
+    return prependContextFromRecall(await maintain(event, hookCtx));
+  });
 }

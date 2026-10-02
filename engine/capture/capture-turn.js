@@ -121,6 +121,8 @@ export function createTurnCapture(ctx) {
     classifyEmotionForStore,
     classifyHostIncognitoSession,
     conversationInsightsLlmCfg,
+    // 7.18.3: identity unless runtime.detachPostTurnWork (lib/post-turn-detach.js).
+    detachPostTurnWork = (task) => task,
     dreamEchoLlmCfg,
     dreamNarrativeCfg,
     dreamNarrativeLlmCfg,
@@ -251,7 +253,7 @@ export function createTurnCapture(ctx) {
     if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
     // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
-    return runtimeScheduler.enqueueCapture(agentId, { background, ...(opts.signal ? { signal: opts.signal } : {}) }, async (signal) => {
+    return runtimeScheduler.enqueueCapture(agentId, { background, ...(opts.signal ? { signal: opts.signal } : {}) }, detachPostTurnWork(async (signal) => {
       const captureStartedAt = Date.now();
       const throwIfCaptureAborted = () => {
         if (!signal?.aborted) return;
@@ -1226,6 +1228,6 @@ export function createTurnCapture(ctx) {
           }
         }
       }
-    }); // runtimeScheduler.enqueueCapture
+    })); // runtimeScheduler.enqueueCapture (detachPostTurnWork)
   };
 }

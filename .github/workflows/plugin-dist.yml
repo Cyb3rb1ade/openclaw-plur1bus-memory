@@ -292,7 +292,9 @@ jobs:
       - name: Selftest inside WSL
         run: node tests/helpers/ci-plugin-dist.mjs wsl-selftest --distro Ubuntu-24.04
 
-  # HM1-R13: nightly upgrade from the newest GitHub Release .tgz; non-blocking until 7.17.0 is released.
+  # HM1-R13: nightly upgrade from the newest GitHub Release .tgz; non-blocking until 7.19.0, the first release with the
+  # installer, is released. 7.17.0 is the released voice line: it has no installer and no `plur1bus selftest`, so
+  # until then the newest release is installed raw (see --from raw / --skip-forced-failure below).
   upgrade-from-release:
     name: upgrade-from-release (nightly)
     needs: pack

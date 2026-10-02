@@ -51,6 +51,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `makeReactionsCapabilityChecker`, `resolveNeoHooksConfig`) bleiben davon
   ausgenommen, da sie ihren eigenen `api`-Parameter tragen statt `host` aus
   einem Closure zu lesen.
+- **Release-Linie 7.17.0–7.18.4 übernommen** (Persona/Light für
+  Discord-Sprachräume, Health-Überwachung im Dashboard, Feature-Cron-Probe,
+  Skill-Miner-Clustering, `runtime.detachPostTurnWork`, Critical-Teilstücke;
+  Einträge unten). In der neuen Struktur: `/modus`, die `plurv`-Knöpfe, der
+  Light-Zweig vor Recall/Wartung und `before_model_resolve` in
+  `adapter/openclaw/register-voice-mode.js`; der Gateway-Log-Watch im
+  Dashboard-Block von `adapter/openclaw/register-commands.js`; der
+  LLM-Fehlerzähler und der Post-Turn-Detacher werden in
+  `engine/create-engine.js` gebaut (`EngineInternals.llmFailureRecorder`,
+  `detachPostTurnWork` im Capture-Kontext); `healthWatch` und
+  `runtime.detachPostTurnWork` stehen im Engine-Config-Schema.
 
 ### Behoben
 
@@ -780,7 +791,7 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   mit seinen Zeilen als einzige Kopie stehen. Eine Capture, die mit nur
   teilweise gespeicherten Zeilen zurückkehrt, verhält sich unverändert.
 
-## [7.18.0] — in Vorbereitung (HM2: Hermes-Hostmodus)
+## [7.19.0] — in Vorbereitung (HM1: Distribution für OpenClaw, HM2: Hermes-Hostmodus)
 
 ### Hinzugefügt
 
@@ -813,21 +824,10 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   Harness-Release P4 nicht blockierend.
 - `lib/snapshot/store-snapshot.js`: optionales `snapshotsDir` für alle
   Funktionen.
-
-### Geändert
-
-- Der Feed erlaubt `hosts.hermes` (Schema); gespeicherte Installer-Bundles
-  von 7.17.x lehnen einen Feed mit diesem Schlüssel ab.
-- `plugin-release.yml`: Solange `scripts/dist/hermes-sidecar.lock.json` ein
-  Platzhalter ist, baut auch ein echter Lauf den Feed ohne neues Hermes-Release
-  und warnt in Log und Job-Zusammenfassung; reine OpenClaw-Releases werden nie
-  blockiert. `build-plugin-feed.mjs` übernimmt ein Hermes-Release, das schon
-  mit denselben Hashes im vorigen Feed steht, unverändert und verweigert nur
-  andere Hashes für dieselbe Version.
-
-## [7.17.0] — in Vorbereitung (HM1: Distribution für OpenClaw)
-
-### Hinzugefügt
+- **Release-Linie v7.17.0..v7.18.4 enthalten:** Sprach-Persona/Light mit
+  `/modus`, Health-Überwachung im Dashboard (`healthWatch`), optionales
+  `runtime.detachPostTurnWork` (Standard aus), Skill-Miner-Clustering- und
+  Critical-Chunk-Fix; Einzelheiten in den Abschnitten 7.17.0 bis 7.18.4.
 
 - **Ein-Zeilen-Installer** `install-plugin.sh` (Linux, macOS) und
   `install-plugin.ps1` (Windows nativ, Beta; WSL2 über Delegation an das
@@ -858,6 +858,14 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
 
 ### Geändert
 
+- Der Feed erlaubt `hosts.hermes` (Schema).
+- `plugin-release.yml`: Solange `scripts/dist/hermes-sidecar.lock.json` ein
+  Platzhalter ist, baut auch ein echter Lauf den Feed ohne neues Hermes-Release
+  und warnt in Log und Job-Zusammenfassung; reine OpenClaw-Releases werden nie
+  blockiert. `build-plugin-feed.mjs` übernimmt ein Hermes-Release, das schon
+  mit denselben Hashes im vorigen Feed steht, unverändert und verweigert nur
+  andere Hashes für dieselbe Version.
+
 - README „Installation“: Node-Bereich `>=24.16.0 <25 || >=26.1.0`, OpenClaw
   `2026.8.1` oder neuer, die Ein-Zeilen-Installer, der ClawHub-Befehl ohne das
   von OpenClaw 2026.9.5 nicht definierte `--acknowledge-clawhub-risk`.
@@ -873,6 +881,68 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   deploys; `openclaw plur1bus selftest`; Node store snapshots; the
   `plugin-dist.yml` five-target matrix; README install fixes. See
   `docs/distribution.md`.
+
+## [7.18.4] — 2026-10-02
+
+### Behoben
+
+- **Doppelte Critical-Pushes für lange Nachrichten.** Die Aufteilung (`keepWhole`) speichert eine lange Nachricht als Ganzes und zusätzlich als Teile. Der Critical-Cron hat beide einzeln klassifiziert: Dieselbe Aussage kam als zwei Pushes mit zwei Referenzen (Bernd, 01.10.2026), verbrauchte den Tagesdeckel doppelt und kostete je Teil einen Modellaufruf. Teile, deren Ganzes im selben Turn unter den Kandidaten liegt (gleiche `sourceTurnId`, mindestens die Hälfte der Teiltexte darin enthalten, Satzzeichen ignoriert), werden jetzt ohne Modellaufruf als `fakt` getypt und nie gepusht. Auf den echten Daten der letzten sieben Tage greift das bei 322 von 326 Gruppen, ohne ein Ganzes zu treffen. Ohne Ganzes (Modus „geteilt“) bleibt alles wie bisher. Bereits gepushte Duplikate werden nicht rückwirkend bereinigt.
+
+## [7.18.3] — 2026-10-01
+
+### Hinzugefügt
+
+- **Schalter `runtime.detachPostTurnWork` (Standard aus).** Unter OpenClaw 2026.9.7 scheitern die LLM-Aufrufe der Nachbearbeitung nach einem Turn (Episoden, Gesprächserkenntnisse, Traumerzählung) mit `LLM_COMPLETION_NOT_AUTHORIZED: agent tool caller authority is no longer active`: Die Arbeit erbt die Identität des schon beendeten Turns (openclaw/openclaw#162941). Eingeschaltet läuft die eingereihte Capture-Arbeit in einem `AsyncLocalStorage`-Snapshot, der bei der Plugin-Registrierung genommen wird, also außerhalb jedes Turns. Weil ein Snapshot alle Host-Kontexte dieses Moments wiederherstellt, bleibt der Schalter aus, bis er live beobachtet ist.
+- Fehlerkategorie `authority-expired` im LLM-Router und in der Karte „LLM failures (24 h)“ (statt `other`).
+
+## [7.18.2] — 2026-10-01
+
+### Behoben
+
+- **Skill-Miner blockierte den Gateway minutenlang.** Das Clustering der Evidenz (`aggregateEvidence`) verglich jedes Paar von Erinnerungen, baute dabei je Paar zwei neue Mengen und prüfte beide Besitzertupel neu. Am 01.10.2026 stand der Gateway dadurch 121 s (Bernd, 2496 Erinnerungen) und 168 s (Bernhardine, 2662) still — dieselbe Stau-Klasse, die am Vortag die Agent-DB-Blockade auslöste. Jetzt werden Besitzertupel und Schlüsselwortzählungen einmal je Erinnerung vorberechnet, Kandidaten kommen aus einem invertierten Schlüsselwortindex desselben Besitzers, und Schnitt und Vereinigung werden über die Postings aufsummiert. Das Ergebnis ist identisch (geprüft gegen die alte Paarschleife auf Zufallsdaten und auf den echten Daten aller drei Agenten); auf Bernhardines 3732 Erinnerungen sinkt die Laufzeit von 82,7 s auf 1,8 s.
+
+## [7.18.1] — 2026-10-01
+
+### Behoben
+
+- **Feature-Crons wurden unter OpenClaw 2026.9.7 bei jedem Gateway-Start abgeschaltet.** Der Bootstrap prüft, ob OpenClaw native Command-Crons kann, und ruft dafür `openclaw plur1bus-feature-cron --help` auf. Unter 9.7 dauert das 38–42 s statt 11,6 s; das Limit von 30 s lief ab, und `afterthought` sowie `classify-recent` (Critical Push) wurden mit `[plur1bus:host-dispatch-unavailable]` deaktiviert. Das Limit liegt jetzt bei 120 s (`NATIVE_PROBE_TIMEOUT_MS`); der nächste Bootstrap holt die Jobs selbst zurück.
+
+## [7.18.0] — 2026-10-01
+
+### Hinzugefügt
+
+- **Health-Überwachung im Dashboard.** Unter „Memory Health“ stehen zwei neue Karten mit eigenem Status:
+  - **LLM failures (24 h):** fehlgeschlagene Hintergrund-LLM-Aufrufe des Plugins, gezählt im Prozess, nach Feature, Agent und Fehlerkategorie. „Degraded“, sobald ein Feature dreimal auf dieselbe Art scheitert; Timeouts unter Last zählen nicht. Anlass: Bernhardines `dream-narrative` scheiterte tagelang mit `transport-failed`, ohne dass es jemand sah.
+  - **Gateway signals (24 h):** vier Signale aus dem OpenClaw-Gateway-Log — Agent-DB-Cleanup-Fehler („failed“, wenn jünger als 15 min: dann scheitert jeder Agent bis zum Neustart), hängende Ingress-Annahme, Turns ohne Antwort-Payload (`cause=completed`) und kritischer Speicherdruck.
+- Neuer Config-Block `healthWatch` (`gatewayLog`, `gatewayLogDir`). Ohne Angabe liest das Plugin das Verzeichnis von `logging.file`, sonst `/tmp/openclaw`.
+
+### Sicherheit
+
+- Ins Dashboard gelangen nur Zähler, Kategorien und Zeitpunkte — kein Log-Text, keine Fehlermeldung, kein Pfad. Gelesen wird nur das Ende der Logs von heute und gestern (max. 8 MiB je Datei), höchstens einmal pro Minute und nur beim Öffnen des Dashboards, über `resolveInside`.
+
+## [7.17.1] — 2026-09-26
+
+### Geändert
+
+- **Umschalten per `/modus` statt `/voice`.** Auf Discord gehört `/voice` dem
+  eingebauten OpenClaw-Slash-Befehl, der Text erreichte PLUR1BUS nie und die
+  Knöpfe kamen nicht. `/modus`, `/modus light`, `/modus full` und
+  `/modus status` schalten jetzt um.
+
+## [7.17.0] — 2026-09-26
+
+### Hinzugefügt
+
+- **Persona und Light in Discord-Sprachräumen.** `/voice light` und `/voice full`
+  im Discord-Text schalten je Agent um, `/voice` allein schickt eine Nachricht
+  mit den Knöpfen „Persona“ und „Light“. Light gilt nur für Sprachzüge
+  (`messageProvider: "discord-voice"`): kein Auto-Recall und keine
+  Zusatzblöcke, pro Lauf `anthropic/claude-haiku-4-5` über
+  `before_model_resolve`, Thinking der Sprachraum-Sitzungen aus. Das Speichern
+  ins Gedächtnis läuft weiter, `memory_recall` bleibt nutzbar. Nur der Besitzer
+  aus `commands.ownerAllowFrom` darf umschalten. In Sprachraum-Sitzungen bleibt
+  `reasoningLevel` aus, damit keine Denk-Texte gesprochen werden. Das Modell der
+  Sitzung wird nie gepatcht.
 
 ## [7.16.11] — 2026-09-26
 

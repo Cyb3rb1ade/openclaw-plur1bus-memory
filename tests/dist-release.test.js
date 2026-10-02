@@ -24,7 +24,7 @@ describe("plugin release (HM1 Task 10)", () => {
     assert.equal(manifest.version, pkg.version);
     assert.equal(lock.version, pkg.version);
     assert.equal(lock.packages[""].version, pkg.version);
-    assert.equal(pkg.version, "7.18.0", "HM2 ships the Hermes installer as 7.18.0 (HM2-R22)");
+    assert.equal(pkg.version, "7.19.0", "HM2 ships the Hermes installer as 7.19.0 (HM2-R22; 7.18.x is the health-watch line)");
   });
 
   it("the release workflow passes the hermes lock and node pins", () => {
@@ -45,8 +45,8 @@ describe("plugin release (HM1 Task 10)", () => {
     for (const l of renders) assert.match(l, /--node-pins scripts\/dist\/node-pins\.json/, l);
   });
 
-  it("7.18.0 notes exist in de and en and the docs describe Hermes host mode", () => {
-    for (const lang of ["de", "en"]) assert.ok(existsSync(join(REPO, "docs", "release-notes", `7.18.0.${lang}.md`)), lang);
+  it("7.19.0 notes exist in de and en and the docs describe Hermes host mode", () => {
+    for (const lang of ["de", "en"]) assert.ok(existsSync(join(REPO, "docs", "release-notes", `7.19.0.${lang}.md`)), lang);
     const dist = readFileSync(join(REPO, "docs", "distribution.md"), "utf8");
     for (const s of ["## Hermes host mode (HM2)", "%LOCALAPPDATA%\\hermes", "provider-in-use", "purge-refused", "journal.ndjson", "Node 24.21.0", "--replace-provider", "--hermes-profile"]) {
       assert.ok(dist.includes(s), `docs/distribution.md mentions ${s}`);
@@ -55,7 +55,7 @@ describe("plugin release (HM1 Task 10)", () => {
     const readme = readFileSync(join(REPO, "README.md"), "utf8");
     assert.ok(readme.includes("install-plugin.sh | sh -s -- --host hermes"));
     assert.ok(readme.includes("-Host hermes"));
-    assert.match(readFileSync(join(REPO, "CHANGELOG.md"), "utf8"), /^## \[7\.18\.0\]/m);
+    assert.match(readFileSync(join(REPO, "CHANGELOG.md"), "utf8"), /^## \[7\.19\.0\]/m);
   });
 
   it("plugin-release.yml parses and pins every action to a SHA", () => {

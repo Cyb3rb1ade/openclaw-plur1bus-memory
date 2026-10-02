@@ -1175,7 +1175,7 @@ inside the distro yourself.
 
 ### Hermes (host mode)
 
-Since 7.18.0 the same one-liners install the PLUR1BUS memory provider into a
+Since 7.19.0 the same one-liners install the PLUR1BUS memory provider into a
 Hermes agent, with a local PLUR1BUS sidecar that holds the store:
 
 ```bash
@@ -1196,14 +1196,14 @@ Hermes profile. Needs Hermes 0.21.4 or newer. Details:
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.18.0
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.19.0
 ```
 
 The same release is on npmjs.org, once its first publish is done (see
 `docs/release-checklist.md`):
 
 ```bash
-openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.18.0 --pin
+openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.19.0 --pin
 ```
 
 Or install the immutable GitHub Release tarball. Download it, compare its
@@ -1211,7 +1211,7 @@ SHA-256 with the release's checksum, then:
 
 ```bash
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.19.0.tgz \
   --force --accept-capabilities
 ```
 
@@ -1224,7 +1224,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.19.0.tgz \
   --force --accept-capabilities
 ```
 
