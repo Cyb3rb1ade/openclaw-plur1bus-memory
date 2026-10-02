@@ -864,6 +864,11 @@
           "embeddingCacheMaxBytes": {
             "type": "number"
           },
+          "detachPostTurnWork": {
+            "type": "boolean",
+            "default": false,
+            "description": "7.18.3 workaround for openclaw/openclaw#162941: run post-turn capture work (episodes, insights, light dream) outside the finished turn's caller identity, so its LLM calls are not refused with LLM_COMPLETION_NOT_AUTHORIZED. Off by default; turn on and observe."
+          },
           "llmResultCacheEnabled": {
             "type": "boolean",
             "default": true
@@ -3024,6 +3029,23 @@
           }
         },
         "description": "Emotion engine: tier routing, the keyword and LLM tiers (with an optional feature-local model route), mood influence, intensity half-life and temperaments."
+      },
+      "healthWatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Dashboard health watch (7.18.0): LLM failures and gateway log signals of the last 24 hours.",
+        "properties": {
+          "gatewayLog": {
+            "type": "boolean",
+            "default": true,
+            "description": "Read the OpenClaw gateway log for lost-reply and wedge signals (tail of today and yesterday, at most once a minute)."
+          },
+          "gatewayLogDir": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Directory with OpenClaw's rolling openclaw-YYYY-MM-DD.log files. Defaults to the directory of logging.file, else /tmp/openclaw."
+          }
+        }
       },
       "memoryDynamics": {
         "type": "object",

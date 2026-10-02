@@ -98,6 +98,7 @@ const ADAPTER_PATHS = Object.freeze({
   recallHook: "adapter/openclaw/register-recall-hook.js",
   tools: "adapter/openclaw/register-tools.js",
   turnRoute: "adapter/openclaw/register-turn-route.js",
+  voiceMode: "adapter/openclaw/register-voice-mode.js",
   turnPrincipal: "adapter/openclaw/turn-principal.js",
   hostProbes: "adapter/openclaw/host-probes.js",
   plugin: "adapter/openclaw/plugin.js",

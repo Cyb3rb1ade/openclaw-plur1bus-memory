@@ -78,7 +78,7 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       assert.ok(!text.includes(word), `configSchema must not contain ${word}`);
     }
     for (const key of ENGINE_ONLY_ROOT_KEYS) assert.ok(!Object.hasOwn(manifest.configSchema, key), key);
-    assert.equal(Object.keys(manifest.configSchema.properties).length, 55);
+    assert.equal(Object.keys(manifest.configSchema.properties).length, 56);
   });
 
   it("secretInputs follow the $ref secretInput nodes, not every x-sensitive path", () => {
@@ -149,13 +149,19 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     const before = JSON.parse(git.stdout);
     const after = readManifest();
     // Allow-list of schema additions since 72b6697f (E5-R25): exactly
-    // runtime.lancedbCompaction (E5 Task 6). Anything else must still match.
+    // runtime.lancedbCompaction (E5 Task 6), and from the merged health-watch
+    // release line healthWatch (7.18.0) and runtime.detachPostTurnWork
+    // (7.18.3). Anything else must still match.
     const afterSchema = structuredClone(after.configSchema);
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "lancedbCompaction"));
     delete afterSchema.properties.runtime.properties.lancedbCompaction;
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "detachPostTurnWork"));
+    delete afterSchema.properties.runtime.properties.detachPostTurnWork;
+    assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
+    delete afterSchema.properties.healthWatch;
 
     assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
-    assert.deepStrictEqual(Object.keys(after.configSchema.properties), Object.keys(before.configSchema.properties));
+    assert.deepStrictEqual(Object.keys(afterSchema.properties), Object.keys(before.configSchema.properties));
 
     assert.deepStrictEqual(Object.keys(after), Object.keys(before));
     // Allow-list of uiHints additions since 72b6697f (E5-R24 owner ruling):

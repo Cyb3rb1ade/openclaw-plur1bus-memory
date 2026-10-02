@@ -20,12 +20,19 @@ import { prependContextFromRecall } from "./join-recall.js";
 import { createTurnPrincipalResolver } from "./turn-principal.js";
 
 /**
- * @param {Record<string, any>} ctx Registration context: the engine context plus `api`.
+ * @param {Record<string, any>} ctx Registration context: the engine context plus `api`,
+ *   and optionally `lightVoicePromptContext` (register-voice-mode.js): a light
+ *   Discord voice turn gets only the voice guidance, without recall (7.17.0).
  * @returns {void}
  */
 export function registerRecallHook(ctx) {
-  const recall = createPromptContextAssembler({ ...ctx, resolveTurnPrincipal: createTurnPrincipalResolver(ctx) });
-  ctx.api.on("before_prompt_build", async (event, hookCtx) => prependContextFromRecall(
-    await recall(event, hookCtx, { signal: AbortSignal.timeout(ctx.runtimeScheduler.config.recallTimeoutMs + 250) }),
-  ), { timeoutMs: ctx.runtimeScheduler.config.recallTimeoutMs + 5_000 });
+  const { lightVoicePromptContext = null, ...engineCtx } = ctx;
+  const recall = createPromptContextAssembler({ ...engineCtx, resolveTurnPrincipal: createTurnPrincipalResolver(engineCtx) });
+  ctx.api.on("before_prompt_build", async (event, hookCtx) => {
+    const light = lightVoicePromptContext ? lightVoicePromptContext(event, hookCtx) : null;
+    if (light) return light;
+    return prependContextFromRecall(
+      await recall(event, hookCtx, { signal: AbortSignal.timeout(ctx.runtimeScheduler.config.recallTimeoutMs + 250) }),
+    );
+  }, { timeoutMs: ctx.runtimeScheduler.config.recallTimeoutMs + 5_000 });
 }

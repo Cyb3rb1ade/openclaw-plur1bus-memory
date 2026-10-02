@@ -57,7 +57,9 @@ import { renderStatus } from "../../lib/telegram-commands/status.js";
 import { resolve } from "node:path";
 import { markProposalStatus, patchProposal } from "../../lib/jobs/skill-miner/proposal-writer.js";
 import { listNeoWorkspaceKeys } from "../../lib/neo-arch.js";
-import { safeWarn } from "../../lib/safe-logging.js";
+import { safeDebug, safeWarn } from "../../lib/safe-logging.js";
+import { createGatewayLogWatch, resolveGatewayLogFiles, scanGatewayLog } from "../../lib/health-watch.js";
+import { registerVoiceModeSwitch } from "./register-voice-mode.js";
 import { applyEpistemicStatusToLanceDb } from "../../engine/store/memory-db.js";
 import { principalFromMemoryContext } from "../../engine/identity/principal.js";
 import { isMemoryOpError } from "../../engine/memory-ops/errors.js";
@@ -96,6 +98,7 @@ export function registerChatCommands(ctx) {
     engineMemory,
     host,
     hostRoutingLoader,
+    llmFailureRecorder,
     llmResultCache,
     makeQuerySummarizer,
     memoryDbAdapter,
@@ -581,6 +584,20 @@ export function registerChatCommands(ctx) {
     };
   })();
   if (typeof api.registerGatewayMethod === "function") {
+    // 7.18.0: Gateway-Log-Signale (verlorene Antworten, Agent-DB-Blockade,
+    // Ingress-Stau, Speicherdruck). Nur beim Oeffnen des Dashboards, max.
+    // einmal pro Minute, nur das Ende von heute/gestern.
+    const gatewayLogWatch = createGatewayLogWatch({
+      scan: () => {
+        const nowMs = Date.now();
+        const { dir, files } = resolveGatewayLogFiles({
+          gatewayLogDir: cfg.healthWatch?.gatewayLogDir,
+          loggingFile: api.config?.logging?.file,
+          nowMs,
+        });
+        return scanGatewayLog({ dir, files, nowMs, logger: host.logger });
+      },
+    });
     registerControlUiRuntime({
       api,
       write: controlUiWriteSurface,
@@ -679,6 +696,15 @@ export function registerChatCommands(ctx) {
           // The gc job runs from the main agent and reports on every agent.
           gcReport: readGcReport(resolveAgentWorkspaceDir(api.config, "main")),
           pressure: checkRuntimePressure(cfg.runtime || {}),
+          healthWatch: {
+            llmFailures: llmFailureRecorder?.snapshot() ?? null,
+            logScan: cfg.healthWatch?.gatewayLog === false
+              ? null
+              : await gatewayLogWatch.snapshot().catch((err) => {
+                  safeDebug(host.logger, "health-watch", err, { component: "gateway-log" });
+                  return null;
+                }),
+          },
           // Saved-vs-running marker: the file may be ahead of this plugin instance.
           fileConfig: readPluginConfigFile({ env: process.env }),
           env: process.env,
@@ -1227,6 +1253,10 @@ export function registerChatCommands(ctx) {
       }
     }
   }
+
+  // 7.17.0/7.17.1: /modus und die plurv-Knöpfe schalten Persona/Light der
+  // Discord-Sprachräume, nur für den Besitzer (register-voice-mode.js).
+  registerVoiceModeSwitch({ api, host, baseDbPath });
 
   /** Share a private memory into the bound workspace or user pool. */
   const runShareCommand = async (commandCtx) => {

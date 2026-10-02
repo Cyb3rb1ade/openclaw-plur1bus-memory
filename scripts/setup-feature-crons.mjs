@@ -44,8 +44,11 @@ import {
  * with large agent stores that took 11.6 s (measured 04.09.2026). The former
  * 5 s budget timed out every run, so setup always took the fail-closed
  * branch and safety-disabled the direct-feature jobs instead of planning.
+ * Under OpenClaw 2026.9.7 the same probe takes 38–42 s (measured 01.10.2026),
+ * so 30 s disabled afterthought/classify-recent on every gateway start. The
+ * probe runs in the deferred bootstrap, off any request path.
  */
-export const NATIVE_PROBE_TIMEOUT_MS = 30_000;
+export const NATIVE_PROBE_TIMEOUT_MS = 120_000;
 
 /**
  * Probe the two documented CLI surfaces required by native feature crons.

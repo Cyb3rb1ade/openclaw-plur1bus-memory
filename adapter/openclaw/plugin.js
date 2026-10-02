@@ -39,6 +39,7 @@ import { agentContextFromCommand } from "./turn-principal.js";
 import { registerCaptureHook } from "./register-capture-hook.js";
 import { registerChatCommands, registerSkillProposalListener } from "./register-commands.js";
 import { registerPromptSupplements } from "./register-prompt-supplements.js";
+import { createLightVoicePromptContext, registerVoiceModelOverride } from "./register-voice-mode.js";
 import { registerMemoryTools, registerMemoryCapability } from "./register-tools.js";
 import { registerDeferredFeatureCronBootstrap, registerUnsafeDirectCronGuard } from "./register-cron.js";
 import { registerGatewayShutdownServices, registerNeoServiceLifecycle, registerNeoWorkerWarmUp, registerObsidianBridgeLifecycle } from "./register-gateway.js";
@@ -196,6 +197,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     emotionalPool,
     gcEnabled,
     getMemoryTurnRoutes,
+    llmFailureRecorder,
     getNeoStore,
     hostRoutingLoader,
     llmResultCache,
@@ -391,6 +393,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
         engineMemory: engine.memory,
         host,
         hostRoutingLoader,
+        llmFailureRecorder,
         llmResultCache,
         makeQuerySummarizer,
         memoryDbAdapter,
@@ -575,6 +578,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     registerRecallHook({
       api,
       ...internals.recallContext,
+      lightVoicePromptContext: createLightVoicePromptContext({ baseDbPath, automaticWorkspacePolicyDecision, policyNeedsWorkspaceDir: true }),
     });
   } else if (neoEnabled || schicht15Enabled || gcEnabled) {
     // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.
@@ -583,6 +587,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       host,
       automaticWorkspacePolicyDecision,
       buildMaintenanceNudges,
+      lightVoicePromptContext: createLightVoicePromptContext({ baseDbPath, automaticWorkspacePolicyDecision }),
       gcEnabled,
       getNeoStore,
       neoEnabled,
@@ -593,6 +598,9 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       temporalContextEnabled,
     });
   }
+
+  // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku (register-voice-mode.js).
+  registerVoiceModelOverride({ api, host, baseDbPath });
 
   // Manual tools remain available regardless of autoCapture/autoRecall:
   // memory_store, memory_recall, memory_forget and knowledge_update are not
