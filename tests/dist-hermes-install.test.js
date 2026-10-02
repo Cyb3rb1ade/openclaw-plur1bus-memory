@@ -1169,7 +1169,7 @@ describe("hermes installer: shared rules", () => {
     }
     // every fixture file is listed (a new copy needs a record)
     const listed = new Set(Object.keys(src.files));
-    for (const d of ["hermes-cli", join("hermes", "provider-json")]) {
+    for (const d of ["hermes-cli", join("hermes", "provider-json"), join("hermes", "python")]) {
       for (const n of readdirSync(join(FIX, d))) assert.ok(listed.has(relative(FIX, join(FIX, d, n)).split("\\").join("/")), `${d}/${n} is not in SOURCES.json`);
     }
   });
