@@ -5,6 +5,13 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.8] — 2026-10-02
+
+### Geändert
+
+- **Feature-Cron-Bootstrap sagt, was offen ist.** Nach jedem Gateway-Start meldete das Log `planCreateCount=1`, ohne den Job zu nennen. Bleibt etwas offen, folgt jetzt eine Zeile `plur1bus-feature-crons: pending …` mit den geplanten und geänderten Jobs, den gescheiterten Aufrufen oder dem Abbruchgrund (nur Jobnamen, keine Inhalte).
+- **Lesende CLI-Aufrufe der Cron-Einrichtung warten 60 s statt 15 s** (`agents list`, `cron list`). Unter OpenClaw 2026.9.7 braucht `agents list` schon im Leerlauf 11–13 s, direkt nach einem Start länger. Der Bootstrap gab dann mit `planCreateCount=11` auf. Schreibende Aufrufe (`cron add`/`edit`) behalten ihr kurzes Budget.
+
 ## [7.18.7] — 2026-10-02
 
 ### Behoben

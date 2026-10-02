@@ -49,7 +49,7 @@ import {
 } from "./lib/memory-merge-safety.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
-import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
+import { describeFeatureCronBootstrapResult, shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { registerFeatureCronNativeDispatch, listPluginPublicArtifacts, loadOpenClawPluginSdkRuntime } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
@@ -3635,6 +3635,10 @@ async function runDeferredFeatureCronBootstrap(api, {
       api.logger?.info?.(
         `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
       );
+      if (lastPlanCreateCount > 0) {
+        const detail = describeFeatureCronBootstrapResult(parsedResult);
+        if (detail) api.logger?.info?.(`plur1bus-feature-crons: pending ${detail}`);
+      }
     } else {
       api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap attempt failed");
     }

@@ -49,6 +49,11 @@ import {
  * probe runs in the deferred bootstrap, off any request path.
  */
 export const NATIVE_PROBE_TIMEOUT_MS = 120_000;
+// 7.18.8: read-only CLI calls. Under OpenClaw 2026.9.7 `agents list` takes
+// 11–13 s on an idle gateway and longer right after a start; the old 15 s made
+// the bootstrap give up with planCreateCount=11. Writes (cron add/edit) keep
+// their short budget.
+export const READ_TIMEOUT_MS = 60_000;
 
 /**
  * Probe the two documented CLI surfaces required by native feature crons.
@@ -328,7 +333,7 @@ export function loadFeatureCronConfig(openclawImpl = openclaw) {
  * @returns {Array<{id: string, isDefault: boolean}> | null}
  */
 function discoverAgents(openclawImpl = openclaw) {
-  const r = openclawImpl(["agents", "list", "--json"], 15000);
+  const r = openclawImpl(["agents", "list", "--json"], READ_TIMEOUT_MS);
   if (!r.ok) return null;
   let parsed;
   try {
@@ -416,7 +421,7 @@ export async function runSetupFeatureCrons(options = {}) {
     }
 
     if (!nativeDispatchReady) {
-      const list = openclawImpl(["cron", "list", "--json", "--all"], 15000);
+      const list = openclawImpl(["cron", "list", "--json", "--all"], READ_TIMEOUT_MS);
       let existingJobs = null;
       if (list.ok) {
         try {
@@ -551,7 +556,7 @@ export async function runSetupFeatureCrons(options = {}) {
     // --all ist Pflicht: ohne das Flag blendet die CLI disabled Jobs aus —
     // genau der delivery-sichere disabled-Default würde sonst bei jedem
     // Lauf erneut angelegt und stapelt Duplikate.
-    const list = openclawImpl(["cron", "list", "--json", "--all"], 15000);
+    const list = openclawImpl(["cron", "list", "--json", "--all"], READ_TIMEOUT_MS);
     if (!list.ok) {
       if (opts.json) {
         writeOutput(
