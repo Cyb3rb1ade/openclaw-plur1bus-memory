@@ -1131,79 +1131,25 @@ OpenClaw refuses the package instead of deploying it:
 Supported targets: Linux x64 and arm64 (glibc 2.27 or newer), macOS on Apple
 silicon, and Windows x64 and arm64.
 
-### One-line installer (recommended)
+### Installers
 
-The installer verifies the signed release feed before it trusts anything in
-it, installs through OpenClaw's own `plugins install`, checks the result with
-`openclaw plur1bus selftest`, and rolls back on failure. It needs no `sudo`
-and no administrator rights.
-
-Linux and macOS:
-
-```bash
-curl -fsSL https://plur1bus.app/install-plugin.sh | sh
-```
-
-Windows PowerShell (5.1 or 7):
-
-```powershell
-$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF)))
-```
-
-(`.Content` is a byte array under PowerShell 7 when the host does not serve the
-script as `text/*`; the form above decodes it as UTF-8 and drops a BOM, so it
-works on both PowerShell versions whatever the content type.)
-
-Options go after the one-liner: `sh -s -- --accept-nc-licence` on Linux and
-macOS, `... --accept-nc-licence` after the closing parenthesis on Windows.
-`--accept-nc-licence` accepts the CC BY-NC 4.0 licence of the recommended local
-embedding model (Jina v5 Text Nano, non-commercial use only) without a
-question; without it a non-interactive run uses the MIT-licensed E5-small
-model, and an interactive run asks. The same is available as
-`PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1`.
-
-The same scripts update (`--update`, with a store snapshot first and automatic
-rollback), uninstall (`--uninstall`, `--purge` also deletes the memories after
-two confirmations) and adopt a plugin that was deployed by
-`install-memory-system.sh` (`--adopt-legacy`). Every flag, exit code and the
-details are in [docs/distribution.md](docs/distribution.md).
-
-Windows native support is in beta. If OpenClaw runs inside WSL2, the Windows
-one-liner finds the distro and hands over to the Linux installer inside it
-(`-Target wsl:<distro>` chooses one); you can also run the Linux one-liner
-inside the distro yourself.
-
-### Hermes (host mode)
-
-Since 7.19.0 the same one-liners install the PLUR1BUS memory provider into a
-Hermes agent, with a local PLUR1BUS sidecar that holds the store:
-
-```bash
-curl -fsSL https://plur1bus.app/install-plugin.sh | sh -s -- --host hermes
-```
-
-```powershell
-$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF))) -Host hermes
-```
-
-Another active memory provider is replaced only with `--replace-provider` (it
-is restored on rollback and uninstall); `--hermes-profile <name>` picks a
-Hermes profile. Needs Hermes 0.21.4 or newer. Details:
-[docs/distribution.md#hermes-host-mode-hm2](docs/distribution.md#hermes-host-mode-hm2).
+Installers, bootstraps and the install feed live in [PLUR1BUS-Host-Addons](https://github.com/Cyb3rb1ade/PLUR1BUS-Host-Addons).
+The plugin itself ships the `openclaw plur1bus selftest` command they use to
+verify an install, see [docs/selftest.md](docs/selftest.md).
 
 ### Manual installation
 
 Install the published release through OpenClaw's package installer:
 
 ```bash
-openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.19.0
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.18.4
 ```
 
 The same release is on npmjs.org, once its first publish is done (see
 `docs/release-checklist.md`):
 
 ```bash
-openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.19.0 --pin
+openclaw plugins install npm:@cyb3rb1ade/plur1bus-memory@7.18.4 --pin
 ```
 
 Or install the immutable GitHub Release tarball. Download it, compare its
@@ -1211,7 +1157,7 @@ SHA-256 with the release's checksum, then:
 
 ```bash
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.19.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.4.tgz \
   --force --accept-capabilities
 ```
 
@@ -1224,7 +1170,7 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.19.0.tgz \
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.18.4.tgz \
   --force --accept-capabilities
 ```
 
@@ -1235,8 +1181,7 @@ not be relabelled.
 A manual install does not write any configuration: set
 `plugins.slots.memory` to `memory-lancedb-namespaced`, enable
 `plugins.entries["memory-lancedb-namespaced"].hooks.allowConversationAccess`
-(capture and recall do not work without it) and add the config block below. The
-one-line installer does these steps for you.
+(capture and recall do not work without it) and add the config block below.
 
 Restart the gateway after installing, so the new plugin version is loaded.
 

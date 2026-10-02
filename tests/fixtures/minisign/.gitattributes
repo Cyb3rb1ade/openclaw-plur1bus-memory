@@ -1,2 +1,0 @@
-# Signed bytes must stay byte-exact on every OS (no CRLF conversion on Windows checkouts).
-* -text

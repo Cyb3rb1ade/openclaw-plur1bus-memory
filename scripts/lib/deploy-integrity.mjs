@@ -320,40 +320,6 @@ export const DEPLOY_FILES = [
   "scripts/run-feature-cron.mjs",
   "scripts/lib/openclaw-cli.mjs",
   "scripts/lib/find-deploy-dir.mjs",
-  // ── plugin distribution: feed verifier and builder (HM1) ──────────────────
-  "scripts/dist/minisign.mjs",
-  "scripts/dist/build-plugin-feed.mjs",
-  "scripts/dist/render-bootstraps.mjs", // renders install-plugin.sh/.ps1 (HM1 Task 7)
-  // ── plugin distribution: Node installer sources and bundler (HM1 Task 5) ──
-  "scripts/dist/build-installer.mjs",
-  "scripts/dist/installer/main.mjs",
-  "scripts/dist/installer/detect.mjs",
-  "scripts/dist/installer/compat.mjs",
-  "scripts/dist/installer/openclaw-cli.mjs",
-  "scripts/dist/installer/licence.mjs",
-  "scripts/dist/installer/verify.mjs",
-  "scripts/dist/installer/state.mjs",
-  "scripts/dist/installer/report.mjs",
-  // ── plugin distribution: update, uninstall/purge, legacy adoption (HM1 Task 6) ──
-  "scripts/dist/installer/update.mjs",
-  "scripts/dist/installer/uninstall.mjs",
-  "scripts/dist/installer/artefacts.mjs", // kept verified tarballs for rollback and --offline (HM1 Task 8, T8-b)
-  "scripts/dist/installer/legacy.mjs",
-  "scripts/dist/installer/fsutil.mjs",
-  // ── plugin distribution: Hermes host mode (HM2 Task 8) ─────────────────────
-  "scripts/dist/installer/untar.mjs",
-  "scripts/dist/installer/hermes/binding.mjs",
-  "scripts/dist/installer/hermes/config-edit.mjs",
-  "scripts/dist/installer/hermes/detect.mjs",
-  "scripts/dist/installer/hermes/hermes-cli.mjs",
-  "scripts/dist/installer/hermes/install.mjs",
-  "scripts/dist/installer/hermes/plur1bus-cli.mjs",
-  "scripts/dist/installer/hermes/provider.mjs",
-  "scripts/dist/installer/hermes/sidecar.mjs",
-  "scripts/dist/installer/hermes/state.mjs",
-  "scripts/dist/installer/hermes/context.mjs", // HM2 Task 9
-  "scripts/dist/installer/hermes/update.mjs",
-  "scripts/dist/installer/hermes/uninstall.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
