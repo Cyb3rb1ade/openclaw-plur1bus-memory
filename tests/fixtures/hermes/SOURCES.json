@@ -1,7 +1,7 @@
 {
   "schema": "plur1bus.harness-fixture-sources/1",
   "description": "Byte copies of harness fixtures (PLUR1BUS-Harness, ruling F11/F12): the shared binding and Hermes-home vectors, the Task 5 provider JSON documents and the Task 1 Hermes CLI captures. tests/dist-hermes-install.test.js checks every file against the sha256 here, and against the harness file itself when PLUR1BUS_HARNESS_DIR points at a harness checkout; the harness release job byte-compares the vector files the other way. The provider tarball is the real output of `node scripts/build-hermes-provider.mjs` and is checked by its MANIFEST.json, not by this hash (T7 review).",
-  "harnessCommit": "c0140f8",
+  "harnessCommit": "bae9d2b",
   "files": {
     "hermes/binding-vectors.json": {
       "harnessPath": "hosts/hermes/tests/fixtures/binding-vectors.json",
