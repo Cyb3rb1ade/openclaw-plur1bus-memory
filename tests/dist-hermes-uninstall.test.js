@@ -320,3 +320,21 @@ describe("hermes installer: uninstall (T9 re-review)", () => {
     assertUninstalled(sb);
   });
 });
+
+describe("hermes installer: uninstall (T10 review 2)", () => {
+  it("a resumed purge of an intact home re-checks the shared-home guard and refuses once another home is bound", async () => {
+    const sb = await installed();
+    const r = await run(sb, ["--uninstall", "--purge", "--yes-delete-memories"], { env: { ...sb.env, PLUR1BUS_PLUGIN_TEST_FAIL_AT: "purge.rm" } });
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.equal(readHermesState(sb.hermesHome).uninstall.homeRemoveStarted, true);
+    // another profile binds to the still intact home before the re-run
+    const work = join(sb.hermesRoot, "profiles", "work");
+    mkdirSync(work, { recursive: true });
+    writeFileSync(join(work, "config.yaml"), TEMPLATE_CONFIG);
+    assert.equal((await run(sb, ["--hermes-profile", "work"])).code, EXIT.OK);
+    const again = await run(sb, ["--uninstall", "--purge", "--yes-delete-memories"]);
+    assert.equal(again.code, EXIT.NEEDS_CHOICE, again.out);
+    assert.match(again.out, /other Hermes homes are bound to it: hermes-work/);
+    assert.equal(existsSync(join(sb.plur1busHome, "manifest.json")), true, "the shared home is kept");
+  });
+});

@@ -172,7 +172,9 @@ export async function runHermesUninstall(ctx) {
 
   let p1 = null;
   // a purge whose home removal already started (decided under the lock) only finishes it
-  const removing = Boolean(interrupted && s.uninstall?.homeRemoveStarted);
+  // only a home that is already partly deleted (its manifest gone) skips the guard; an intact one is checked again,
+  // since another Hermes home may have bound to it since the interrupted run (T10 review 2)
+  const removing = Boolean(interrupted && s.uninstall?.homeRemoveStarted && home && !existsSync(join(home, "manifest.json")));
   if (purge && removing) {
     p1 = createPlur1busCli({ bin, home, env, run, platform });
     report.note(`--purge finishes deleting ${home}, which an earlier run had started to delete.`);
@@ -305,7 +307,7 @@ export async function runHermesUninstall(ctx) {
     save("purge");
     killAt("uninstall.purge");
     // the sidecar stops first, outside the lock (both can outlast the lock's 60 s staleness); the stop must succeed
-    if (existsSync(bin) && !un.homeRemoveStarted) {
+    if (existsSync(bin) && !removing) {
       const ds = await p1.daemonStop();
       if (!ds.ok) {
         report.step("purge", "failed", `plur1bus daemon stop failed (${ds.detail}); the sidecar home ${home} is kept`);
@@ -326,8 +328,8 @@ export async function runHermesUninstall(ctx) {
       rmSync(home, { recursive: true, force: true });
     };
     try {
-      if (un.homeRemoveStarted) {
-        removeHome(); // decided under the lock by the earlier run
+      if (removing) {
+        removeHome(); // partly deleted already: decided under the lock by the earlier run, nothing left to check
       } else {
         await withRegistryLock(home, async ({ assertHeld }) => {
           const list = existsSync(bin) ? await p1.agentList() : { ok: false, ids: [] };
