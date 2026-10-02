@@ -16,7 +16,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, constants, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, join, posix, resolve, win32 } from "node:path";
 
@@ -398,6 +398,20 @@ function sweepLockLeftovers(lock, platform) {
   }
 }
 
+/**
+ * TEST ONLY (both PLUR1BUS_PLUGIN_INSTALLER_TEST=1 and PLUR1BUS_LOCK_TEST_PAUSE_DIR=<dir> set): the first time this
+ * process judges a lock stale it writes <dir>/judged and waits (at most 20 s) for <dir>/go before breaking it, so a
+ * test can let another process break that lock and take its own in between: the double-break race made
+ * deterministic (tests/dist-hermes-install.test.js). Without both variables it does nothing.
+ */
+function testPauseAfterJudge() {
+  const dir = process.env.PLUR1BUS_LOCK_TEST_PAUSE_DIR;
+  if (process.env.PLUR1BUS_PLUGIN_INSTALLER_TEST !== "1" || !dir || existsSync(join(dir, "judged"))) return;
+  writeFileSync(join(dir, "judged"), "1");
+  const deadline = Date.now() + 20_000;
+  while (!existsSync(join(dir, "go")) && Date.now() < deadline) sleepSync(5);
+}
+
 /** Release our hold (Python `_release`); never throws. */
 function releaseLock(lock, nonce, platform) {
   const moved = `${lock}.rel-${nonce}`;
@@ -455,7 +469,10 @@ export function withRegistryLock(plur1busHome, fn, { platform = process.platform
     }
     const st = statId(lock);
     const text = st ? readText(lock) : null;
-    if (st && text !== null && judgedStale(text, st) && breakStale(lock, st, text, platform)) continue; // retry the create at once
+    if (st && text !== null && judgedStale(text, st)) {
+      testPauseAfterJudge();
+      if (breakStale(lock, st, text, platform)) continue; // retry the create at once
+    }
     if (Date.now() >= deadline) throw new RegistryLockTimeout(lock);
     sleepSync(LOCK_POLL_MS);
   }

@@ -6,10 +6,10 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, openSync, renameSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, openSync, renameSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, posix, relative, win32 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { defaultHermesRoot, findHermesBin, resolveHermesHome, parseHermesVersion } from "../scripts/dist/installer/hermes/detect.mjs";
@@ -20,6 +20,7 @@ import { plur1busHome, sidecarBinPath } from "../scripts/dist/installer/hermes/s
 import { pep440Satisfies } from "../scripts/dist/installer/hermes/install.mjs";
 import { readHermesState } from "../scripts/dist/installer/hermes/state.mjs";
 import { createHermesSandbox, runHermesInstaller, sha256File, TEMPLATE_CONFIG } from "./helpers/hermes-sandbox.js";
+import { checkEvents } from "./helpers/lock-events.mjs";
 import { SANDBOX_ARCH, treeDigest, walkTree } from "./helpers/installer-sandbox.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -1147,24 +1148,111 @@ describe("hermes installer: shared rules", () => {
     }
   });
 
-  it("the registry lock under contention: holders that die holding it never let two processes in at once", { timeout: 120_000 }, async () => {
+  it("the registry lock under contention: holders that die holding it never let two writers in at once (FR-L1)", { timeout: 120_000 }, async (t) => {
     const ph = makeTempDir("hermes-lock-race-");
     mkdirSync(join(ph, "hosts"), { recursive: true });
     const worker = join(HERE, "helpers", "registry-lock-worker.mjs");
     const until = Date.now() + 8_000;
     const one = (id) => new Promise((resolveRun) => {
+      let n = 0;
       const loop = () => {
         if (Date.now() >= until) return resolveRun();
-        const c = spawn(process.execPath, [worker, ph, String(id), "5", String(until)], { stdio: "ignore" });
+        const c = spawn(process.execPath, [worker, ph, `w${id}-${++n}`, "5", String(until)], { stdio: ["ignore", "ignore", "inherit"] });
         c.on("exit", loop); // a worker that died holding the lock is replaced
       };
       loop();
     });
     await Promise.all([1, 2, 3, 4, 5, 6].map(one));
-    const lines = (f) => (existsSync(join(ph, f)) ? readFileSync(join(ph, f), "utf8").split("\n").filter(Boolean).length : 0);
-    assert.equal(lines("doubles.log"), 0, "two holders were inside at once");
-    assert.ok(lines("deaths.log") >= 3, `holders died holding the lock (${lines("deaths.log")})`);
-    assert.ok(lines("entries.log") >= 20, `the lock was taken (${lines("entries.log")})`);
+    const read = (f) => (existsSync(join(ph, f)) ? readFileSync(join(ph, f), "utf8").split("\n").filter(Boolean) : []);
+    const { violations, overlaps, counts } = checkEvents(read("events.log"));
+    const refused = overlaps.filter((o) => o.refused);
+    t.diagnostic(`entries ${counts.E}, writes ${counts.W}, refused (L) ${counts.L}, deaths ${counts.D}; overlaps ${overlaps.length}, of them the FR-L1 case (the displaced holder's assertHeld refused) ${refused.length}`);
+    for (const o of overlaps) t.diagnostic(`overlap at line ${o.line}: ${o.newcomer} entered while ${o.inside.join(", ")} ${o.inside.length === 1 ? "was" : "were"} inside${o.refused ? "; refused, nothing written (FR-L1)" : ""}`);
+    // only a real violation fails: two holders whose writes both passed assertHeld while their sections overlapped,
+    // a displaced holder that wrote or left without refusing, or a section that did not end exactly once
+    assert.deepEqual(violations, []);
+    assert.equal(read("entries.log").length, counts.W, "every guarded write is logged once");
+    assert.ok(counts.D >= 3, `holders died holding the lock (${counts.D})`);
+    assert.ok(read("entries.log").length >= 20, `the lock was taken (${read("entries.log").length})`);
+  });
+
+  it("the put-back window (FR-L1): a displaced holder's assertHeld refuses while the newcomer writes", async () => {
+    // deterministic: a waiter moved our live lock aside, a third process created a fresh lock and is inside writing,
+    // the waiter's put-back then fails (EEXIST) and drops our lock; our assertHeld must refuse
+    const ph = makeTempDir("hermes-lock-window-");
+    const lock = join(ph, "hosts", REGISTRY_LOCK_FILE);
+    const events = join(ph, "events.log");
+    const log = (kind, id) => writeFileSync(events, `${kind} ${id} 1 ${Date.now()}\n`, { flag: "a" });
+    const release = join(ph, "release");
+    const third = `import { appendFileSync, existsSync } from "node:fs";
+import { withRegistryLock } from ${JSON.stringify(pathToFileURL(join(HERMES_MODULES, "binding.mjs")).href)};
+const log = (k) => appendFileSync(${JSON.stringify(events)}, k + " third 1 " + Date.now() + "\\n");
+withRegistryLock(${JSON.stringify(ph)}, ({ assertHeld }) => {
+  log("E");
+  assertHeld();
+  log("W");
+  while (!existsSync(${JSON.stringify(release)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  log("X");
+});`;
+    let thirdExit;
+    await withRegistryLock(ph, async ({ assertHeld }) => {
+      log("E", "holder");
+      const moved = `${lock}.break-${"e".repeat(32)}`;
+      renameSync(lock, moved); // the waiter's move
+      const c = spawn(process.execPath, ["--input-type=module", "-e", third], { stdio: ["ignore", "ignore", "inherit"] });
+      thirdExit = new Promise((r) => c.on("exit", r));
+      for (let i = 0; i < 400 && !readFileSync(events, "utf8").includes("W third"); i++) await new Promise((r) => setTimeout(r, 25));
+      assert.ok(readFileSync(events, "utf8").includes("W third"), "the third process is inside and wrote");
+      assert.throws(() => linkSync(moved, lock), (e) => e.code === "EEXIST", "the put-back finds the newcomer's lock");
+      rmSync(moved);
+      let refused = false;
+      try {
+        assertHeld();
+      } catch (err) {
+        refused = err instanceof RegistryLockLost;
+      }
+      log(refused ? "L" : "W", "holder");
+      log("X", "holder");
+      writeFileSync(release, "");
+      await thirdExit;
+    });
+    const lines = readFileSync(events, "utf8").split("\n").filter(Boolean);
+    const { violations, overlaps } = checkEvents(lines);
+    assert.deepEqual(violations, [], lines.join("\n"));
+    assert.equal(overlaps.length, 1);
+    assert.equal(overlaps[0].refused, true, "the displaced holder refused its write");
+  });
+
+  it("a breaker whose stale judgement is overtaken puts the live lock back, never removes it (T8 double-break)", async () => {
+    // deterministic: B judges a dead lock stale and pauses (test seam); we break the same lock and hold our own;
+    // B's break must see another inode and content, put our lock back and keep waiting
+    const ph = makeTempDir("hermes-lock-double-");
+    const sig = makeTempDir("hermes-lock-double-sig-");
+    const lock = join(ph, "hosts", REGISTRY_LOCK_FILE);
+    mkdirSync(join(ph, "hosts"), { recursive: true });
+    writeFileSync(lock, `999999 ${hostname()} 0 ${"d".repeat(32)}\n`);
+    utimesSync(lock, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    const entered = join(ph, "b-entered");
+    const b = `import { writeFileSync } from "node:fs";
+import { withRegistryLock } from ${JSON.stringify(pathToFileURL(join(HERMES_MODULES, "binding.mjs")).href)};
+withRegistryLock(${JSON.stringify(ph)}, () => writeFileSync(${JSON.stringify(entered)}, "1"));`;
+    const c = spawn(process.execPath, ["--input-type=module", "-e", b], { stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, PLUR1BUS_PLUGIN_INSTALLER_TEST: "1", PLUR1BUS_LOCK_TEST_PAUSE_DIR: sig } });
+    const bExit = new Promise((r) => c.on("exit", r));
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 400 && !existsSync(join(sig, "judged")); i++) await sleep(25);
+    assert.ok(existsSync(join(sig, "judged")), "B judged the dead lock stale");
+    await withRegistryLock(ph, async ({ assertHeld }) => {
+      const mine = readFileSync(lock, "utf8");
+      writeFileSync(join(sig, "go"), "");
+      await sleep(400); // B breaks with its stale judgement now
+      assert.equal(readFileSync(lock, "utf8"), mine, "our live lock is in place (B put it back)");
+      assert.equal(existsSync(entered), false, "B is not inside while we hold the lock");
+      assert.doesNotThrow(() => assertHeld());
+    });
+    assert.equal(await bExit, 0, "B took the lock after our release");
+    assert.equal(existsSync(entered), true);
+    assert.equal(existsSync(lock), false);
+    assert.deepEqual(readdirSync(join(ph, "hosts")).filter((n) => /\.(rel|break)-/.test(n)), []);
   });
 
   it("with a custom HERMES_HOME the Windows launcher search also looks in %LOCALAPPDATA%\\hermes\\bin", () => {

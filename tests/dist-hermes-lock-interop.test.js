@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
 import { RegistryLockLost, withRegistryLock } from "../scripts/dist/installer/hermes/binding.mjs";
+import { checkEvents, takeovers } from "./helpers/lock-events.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -66,60 +67,6 @@ function tarMember(file, name) {
     off += 512 + Math.ceil(size / 512) * 512;
   }
   return null;
-}
-
-/** Check the event log; returns { violations, overlaps, counts }. */
-export function checkEvents(lines) {
-  const violations = [];
-  const overlaps = [];
-  const inside = new Map(); // key -> { lost, wrote, mustLose }
-  const ended = new Set();
-  const counts = { E: 0, W: 0, L: 0, X: 0, D: 0 };
-  for (const [i, line] of lines.entries()) {
-    const [kind, id, seq] = line.split(" ");
-    const key = `${id}#${seq}`;
-    counts[kind] = (counts[kind] ?? 0) + 1;
-    if (kind === "E") {
-      if (inside.has(key) || ended.has(key)) violations.push(`line ${i + 1}: ${key} entered twice`);
-      if (inside.size) {
-        overlaps.push({ line: i + 1, newcomer: key, inside: [...inside.keys()] });
-        for (const s of inside.values()) s.mustLose = true;
-      }
-      inside.set(key, { lost: false, wrote: false, mustLose: false });
-      continue;
-    }
-    const s = inside.get(key);
-    if (!s) {
-      violations.push(`line ${i + 1}: ${kind} for ${key}, which is not inside`);
-      continue;
-    }
-    if (kind === "L") s.lost = true;
-    else if (kind === "W") {
-      if (s.mustLose) violations.push(`line ${i + 1}: ${key} wrote although a newcomer entered after it (its verify should have refused)`);
-      for (const [k, o] of inside) if (k !== key && o.wrote) violations.push(`line ${i + 1}: ${key} wrote while ${k}, which also wrote, was inside (double entry in the guarded section)`);
-      s.wrote = true;
-    } else if (kind === "X" || kind === "D") {
-      if (s.mustLose && !s.lost) violations.push(`line ${i + 1}: ${key} was displaced (someone entered after it) but its verify did not refuse`);
-      inside.delete(key);
-      ended.add(key);
-    } else violations.push(`line ${i + 1}: unknown event ${JSON.stringify(line)}`);
-  }
-  for (const k of inside.keys()) violations.push(`${k} never left (no X or D)`);
-  return { violations, overlaps, counts };
-}
-
-/** Takeovers of a dead holder's lock: for each D, the language of the next E (`js->py` = a py holder after a dead js one). */
-export function takeovers(lines) {
-  const out = { "js->py": 0, "py->js": 0, "js->js": 0, "py->py": 0 };
-  for (const [i, line] of lines.entries()) {
-    if (!line.startsWith("D ")) continue;
-    const next = lines.slice(i + 1).find((l) => l.startsWith("E "));
-    if (!next) continue;
-    const from = line.split(" ")[1].slice(0, 2);
-    const to = next.split(" ")[1].slice(0, 2);
-    out[`${from}->${to}`]++;
-  }
-  return out;
 }
 
 describe("hermes registry lock: Node and Python on one lock", () => {

@@ -243,7 +243,9 @@ node --test tests/*.test.js
   `PLUR1BUS_SELFTEST_FORCE_FAIL`; for `--host hermes` also
   `PLUR1BUS_PLUGIN_TEST_NO_SERVICE=1` (setup with `--no-service`),
   `PLUR1BUS_PLUGIN_TEST_KILL_AT=<point>` (kills the installer at a named step),
-  `PLUR1BUS_PLUGIN_TEST_FAIL_AT=purge.rm` (fails the purge's home deletion) and,
+  `PLUR1BUS_PLUGIN_TEST_FAIL_AT=purge.rm` (fails the purge's home deletion),
+  `PLUR1BUS_LOCK_TEST_PAUSE_DIR=<dir>` (the registry lock pauses once after
+  judging a lock stale, for the deterministic double-break test) and,
   in the bootstraps, `PLUR1BUS_PLUGIN_TEST_NODE_BASE` (a `file://` directory
   instead of nodejs.org for the pinned Node). Installer tests never touch a real
   OpenClaw or Hermes: they use `openclaw`, `node` and `wsl.exe` shims through
@@ -255,7 +257,7 @@ node --test tests/*.test.js
 - `tests/dist-hermes-lock-interop.test.js` runs Node and Python (>= 3.11)
   holders on one bindings-registry lock; it skips without Python unless
   `PLUR1BUS_REQUIRE_LOCK_INTEROP=1` (set in CI's `test` and `test-cross`).
-- Current baseline (Linux, Node 24.21.0, 7.18.0): 6,159 tests in 1,078 suites,
+- Current baseline (Linux, Node 24.21.0, 7.18.0): 6,161 tests in 1,078 suites,
   8 skipped (platform-only and opt-in cases). Two tests depend on the machine: the
   `dist-ci-helpers` dry run needs 1.5 GiB free disk (the installer's own
   `insufficient-disk` check), and the Local Inference adm-zip check needs this
