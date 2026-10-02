@@ -6,7 +6,8 @@
  * and Task 9's update and uninstall can undo exactly that and nothing else:
  *   installedVersion, previousProvider (memory.provider before the first install; null = built-in),
  *   plur1busHome, bin, agentId, sidecarFresh (this run created the PLUR1BUS home), binFresh,
- *   previousBin, providerPrev, agentCreated, registryAdded, bindingPrev (the previous binding text),
+ *   previousBin, providerPrev, agentCreated, registryAdded, registryPreexisted (this home was registered before the
+ *   first attempt: a rollback then never unbinds it), bindingPrev (the previous binding text),
  *   configEdit ({ method: "cli" } or { method: "line", undo, backup }), useClass, licence,
  *   the progress marks sidecarInstalled, setupRan, providerInstalled, pluginsDirCreated, bindingWritten,
  *   inProgress?: { op: "install", step, version }.
@@ -30,7 +31,7 @@ const FIELDS = [
   "installedVersion", "previousProvider", "plur1busHome", "bin", "agentId", "sidecarFresh", "binFresh", "previousBin",
   "providerPrev", "agentCreated", "registryAdded", "bindingPrev", "configEdit", "useClass", "licence", "inProgress",
   // progress marks, set before each change (a killed run's rollback undoes exactly what they name)
-  "sidecarInstalled", "setupRan", "providerInstalled", "providerPreexisted", "pluginsDirCreated", "bindingWritten", "registryPending",
+  "sidecarInstalled", "setupRan", "providerInstalled", "providerPreexisted", "pluginsDirCreated", "bindingWritten", "registryPending", "registryPreexisted",
 ];
 
 export function hermesStatePath(hermesHome) {

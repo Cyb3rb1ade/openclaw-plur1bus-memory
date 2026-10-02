@@ -39,7 +39,7 @@ import { fetchBytes } from "../update.mjs";
 import { sha256Hex } from "../untar.mjs";
 import { selftestForcedToFail } from "../verify.mjs";
 import {
-  agentIdFor, BindingConflict, bindingPath, checkBinding, INSTALLED_BY, makeBinding, otherBoundHomes, readBinding, registerBinding, removeBinding, unregisterBinding, writeBinding,
+  agentIdFor, BindingConflict, bindingPath, checkBinding, INSTALLED_BY, makeBinding, otherBoundHomes, readBinding, registerBinding, removeBinding, unregisterLocked, withRegistryLock, writeBinding,
 } from "./binding.mjs";
 import { checkConfigEditable, readProviderLine, setProviderLine, undoProviderLine } from "./config-edit.mjs";
 import { detectHermes } from "./detect.mjs";
@@ -213,8 +213,9 @@ export async function runHermesInstall(ctx) {
   }
   const homeExisted = existsSync(home);
   const reuseSidecar = Boolean(hostSidecar?.binaryVersion && existsSync(bin) && compareVersions(hostSidecar.binaryVersion, release.sidecar.version) >= 0);
+  let registeredBefore = false;
   try {
-    checkBinding(home, agentId, hermesHome, platform);
+    registeredBefore = checkBinding(home, agentId, hermesHome, platform);
   } catch (err) {
     if (err instanceof BindingConflict) findings.push({ id: "agent-id-conflict", fatal: true, detail: `${err.message}: both fold to ${agentId}; use another profile name` });
     else findings.push({ id: "bindings-registry-invalid", fatal: true, detail: err.message });
@@ -327,7 +328,7 @@ export async function runHermesInstall(ctx) {
     // s: everything the rollback needs; persisted before each change
     const s = resuming
       ? { ...state, useClass, licence, previousProvider }
-      : { previousProvider, plur1busHome: home, bin, agentId, sidecarFresh: !homeExisted, useClass, licence };
+      : { previousProvider, plur1busHome: home, bin, agentId, sidecarFresh: !homeExisted, registryPreexisted: registeredBefore, useClass, licence };
     const save = (step) => writeHermesState(hermesHome, { ...s, inProgress: { op: "install", step, version: release.version } });
     // TEST ONLY: PLUR1BUS_PLUGIN_TEST_KILL_AT=<point> kills the installer there, as a killed process (F19 tests)
     const killAt = (point) => {
@@ -399,13 +400,11 @@ export async function runHermesInstall(ctx) {
       save("agent");
     }
     try {
-      if (!s.registryAdded) {
-        s.registryPending = true; // set before the write: a kill right after it still unregisters on rollback
-        save("agent");
-      }
+      // registryPreexisted (recorded below, from compat, before the first attempt changed anything) decides what a
+      // rollback unbinds: only an entry this run added
       const reg = registerBinding(home, agentId, hermesHome, platform);
+      killAt("agent.registered");
       if (reg.added) s.registryAdded = true;
-      else if (!s.registryAdded) delete s.registryPending; // the pair was there before this run
       save("agent");
     } catch (err) {
       report.step("agent", "failed", err?.message ?? String(err));
@@ -500,7 +499,7 @@ export async function runHermesInstall(ctx) {
     dropPreviousProvider(s.providerPrev);
     const final = {
       installedVersion: release.version, previousProvider: s.previousProvider ?? null, plur1busHome: home, bin, agentId,
-      sidecarFresh: s.sidecarFresh, agentCreated: s.agentCreated, registryAdded: s.registryAdded, useClass, licence,
+      sidecarFresh: s.sidecarFresh, agentCreated: s.agentCreated, registryAdded: s.registryAdded, registryPreexisted: s.registryPreexisted, useClass, licence,
       configEdit: s.configEdit ? { method: s.configEdit.method, ...(s.configEdit.backup ? { backup: s.configEdit.backup } : {}) } : undefined,
     };
     writeHermesState(hermesHome, final);
@@ -603,47 +602,57 @@ export async function rollback(ctx) {
     }
   }
 
-  // 4. the PLUR1BUS home: is anyone else bound to it by now? (a stale sidecarFresh must not delete their store)
+  // 4-6. under the registry lock (so no other install can bind between the check and the removal): is anyone else
+  // bound to the PLUR1BUS home by now (a stale sidecarFresh must not delete their store)? Unbind this home only when
+  // this run added the entry (registryPreexisted false); remove a home this run created only when nobody else uses it.
   let others = [];
   let othersUnknown = false;
+  let keepSidecar = !s.sidecarFresh;
+  const ownEntry = s.registryPreexisted === false || (s.registryPreexisted === undefined && (s.registryAdded || s.registryPending));
   if (s.plur1busHome && existsSync(s.plur1busHome)) {
+    const regFile = join(s.plur1busHome, "hosts", "hermes-bindings.json");
     try {
-      others = otherBoundHomes(s.plur1busHome, hermesHome, platform);
-    } catch (err) {
-      othersUnknown = true;
-      void err;
-    }
-  }
-  const keepSidecar = !s.sidecarFresh || others.length > 0 || othersUnknown;
-
-  // 5. this home's registry entry
-  if ((s.registryAdded || s.registryPending) && s.plur1busHome && existsSync(s.plur1busHome) && keepSidecar) {
-    try {
-      if (unregisterBinding(s.plur1busHome, s.agentId, hermesHome, platform)) done.push("registry entry removed");
+      await withRegistryLock(s.plur1busHome, async ({ assertHeld }) => {
+        try {
+          others = otherBoundHomes(s.plur1busHome, hermesHome, platform);
+        } catch {
+          othersUnknown = true;
+        }
+        keepSidecar = !s.sidecarFresh || others.length > 0 || othersUnknown;
+        if (keepSidecar) {
+          if (ownEntry && !othersUnknown) {
+            try {
+              if (unregisterLocked(s.plur1busHome, s.agentId, hermesHome, platform, assertHeld)) done.push("registry entry removed");
+            } catch {
+              manual.push(`remove ${s.agentId} from ${regFile}`);
+            }
+          }
+          return;
+        }
+        // nobody else is bound: the sidecar this run created goes (service, then the home)
+        if (s.bin && existsSync(s.bin)) {
+          const p1 = createPlur1busCli({ bin: s.bin, home: s.plur1busHome, env, run, platform });
+          await p1.daemonStop();
+          const su = await p1.serviceUninstall();
+          if (!su.ok) manual.push(`plur1bus --home "${s.plur1busHome}" service uninstall`);
+        }
+        try {
+          assertHeld();
+          rmSync(s.plur1busHome, { recursive: true, force: true });
+          done.push(`sidecar home ${s.plur1busHome} removed`);
+        } catch {
+          manual.push(`remove ${s.plur1busHome}`);
+        }
+      });
     } catch {
-      manual.push(`remove ${s.agentId} from ${join(s.plur1busHome, "hosts", "hermes-bindings.json")}`);
+      keepSidecar = true;
+      othersUnknown = true; // the lock was not ours in time: nothing of the home is touched
+      manual.push(`the bindings registry ${regFile} is locked or lost; re-run with --rollback`);
     }
   }
-
-  // 6. a sidecar this run created: service, binary, home — only while nobody else uses it
   if (s.sidecarFresh && keepSidecar) {
-    if (othersUnknown) manual.push(`check ${join(s.plur1busHome, "hosts", "hermes-bindings.json")} (unreadable); remove ${s.plur1busHome} and ${s.bin} only if no other Hermes home uses them`);
+    if (othersUnknown) manual.push(`check ${join(s.plur1busHome, "hosts", "hermes-bindings.json")}; remove ${s.plur1busHome} and ${s.bin} only if no other Hermes home uses them`);
     else if (others.length) report.note(`Note: the PLUR1BUS sidecar ${s.plur1busHome} this run created is kept: ${others.map((o) => `${o.agentId} (${o.home})`).join(", ")} ${others.length === 1 ? "is" : "are"} bound to it now.`);
-  } else if (s.sidecarFresh) {
-    if (s.plur1busHome && s.bin && existsSync(s.bin) && existsSync(s.plur1busHome)) {
-      const p1 = createPlur1busCli({ bin: s.bin, home: s.plur1busHome, env, run, platform });
-      await p1.daemonStop();
-      const su = await p1.serviceUninstall();
-      if (!su.ok) manual.push(`plur1bus --home "${s.plur1busHome}" service uninstall`);
-    }
-    if (s.plur1busHome && existsSync(s.plur1busHome)) {
-      try {
-        rmSync(s.plur1busHome, { recursive: true, force: true });
-        done.push(`sidecar home ${s.plur1busHome} removed`);
-      } catch {
-        manual.push(`remove ${s.plur1busHome}`);
-      }
-    }
   }
   if (s.sidecarInstalled && s.bin && !(s.sidecarFresh && keepSidecar && (others.length || othersUnknown))) {
     try {

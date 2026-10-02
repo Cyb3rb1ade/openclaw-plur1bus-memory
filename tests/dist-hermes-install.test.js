@@ -4,16 +4,16 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, openSync, renameSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT } from "../scripts/dist/installer/report.mjs";
 import { findHermesBin, resolveHermesHome, parseHermesVersion } from "../scripts/dist/installer/hermes/detect.mjs";
-import { classifyHome, foldCase, foldProfile, otherBoundHomes, REGISTRY_LOCK_FILE, samePath, withRegistryLock, readBinding, readRegistry, registerBinding, registryAdd, BindingConflict } from "../scripts/dist/installer/hermes/binding.mjs";
+import { classifyHome, foldCase, foldProfile, otherBoundHomes, REGISTRY_LOCK_FILE, RegistryLockLost, samePath, unregisterLocked, withRegistryLock, readBinding, readRegistry, registerBinding, registryAdd, BindingConflict } from "../scripts/dist/installer/hermes/binding.mjs";
 import { ALLOWED_HERMES_CONFIG_KEYS, createHermesCli, parseMemoryStatus, readSelftestDoc } from "../scripts/dist/installer/hermes/hermes-cli.mjs";
 import { checkConfigEditable, planProviderEdit, planProviderUndo, readProviderLine, setProviderLine, undoProviderLine } from "../scripts/dist/installer/hermes/config-edit.mjs";
 import { plur1busHome, sidecarBinPath } from "../scripts/dist/installer/hermes/sidecar.mjs";
@@ -354,6 +354,26 @@ describe("hermes installer: install", () => {
       assert.deepEqual(strays(sb), []);
     });
   }
+
+  it("rollback unbinds only an entry this run added (registryPreexisted), also after a resume", { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
+    const reg = (sb) => JSON.parse(readFileSync(join(sb.plur1busHome, "hosts", "hermes-bindings.json"), "utf8")).bindings;
+    // registered before (e.g. by `hermes plur1bus bind`): a failed install keeps it
+    const pre = createHermesSandbox({ scenario: { selftestFail: true } });
+    pre.seedHostSidecar({ version: "0.1.0", agents: { "hermes-default": {} } });
+    registerBinding(pre.plur1busHome, "hermes-default", pre.hermesHome);
+    assert.equal((await run(pre, [])).code, EXIT.FAILED);
+    assert.deepEqual(Object.keys(reg(pre)), ["hermes-default"], "an entry this run did not add stays");
+    // killed after the write, before it was recorded: the resumed run fails and its rollback still removes it
+    const sb = createHermesSandbox();
+    sb.seedHostSidecar({ version: "0.1.0" });
+    const k = runChild(sb, [], { killAt: "agent.registered" });
+    assert.notEqual(k.status, 0);
+    assert.deepEqual(Object.keys(reg(sb)), ["hermes-default"]);
+    assert.equal(readHermesState(sb.hermesHome).registryPreexisted, false);
+    sb.setScenario({ selftestFail: true });
+    assert.equal((await run(sb, [])).code, EXIT.FAILED);
+    assert.deepEqual(reg(sb), {}, "this run's own entry is removed");
+  });
 
   it("a stale sidecarFresh rollback keeps a PLUR1BUS home another Hermes home is bound to by now (F4 class)", { skip: process.platform === "win32" && "POSIX kill of the installer process" }, async () => {
     const sb = createHermesSandbox({ scenario: { killOn: "setup" } });
@@ -874,6 +894,70 @@ describe("hermes installer: shared rules", () => {
     writeFileSync(lock, "");
     utimesSync(lock, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
     assert.equal(withRegistryLock(ph, () => "ran"), "ran");
+  });
+
+  it("the registry lock: a stolen lock is never released, a lost lock aborts the write, leftovers are swept", () => {
+    const ph = makeTempDir("hermes-lock-");
+    const lock = join(ph, "hosts", REGISTRY_LOCK_FILE);
+    const home = makeTempDir("hermes-home-");
+    registerBinding(ph, "hermes-default", home);
+    const regBefore = readFileSync(join(ph, "hosts", "hermes-bindings.json"), "utf8");
+    // token format: <pid> <hostname> <ms> <nonce, 128-bit hex>
+    withRegistryLock(ph, () => {
+      assert.match(readFileSync(lock, "utf8"), new RegExp(`^${process.pid} \\S+ \\d+ [0-9a-f]{32}\\n$`));
+    });
+    const FOREIGN = `1 ${hostname()} ${Date.now()} ${"ab".repeat(16)}\n`;
+    const steal = () => {
+      // our lock was broken as stale meanwhile and another holder took it
+      writeFileSync(`${lock}.other`, FOREIGN);
+      renameSync(`${lock}.other`, lock);
+    };
+    // stolen-lock release: the other holder's lock stays
+    withRegistryLock(ph, () => steal());
+    assert.equal(readFileSync(lock, "utf8"), FOREIGN, "the other holder's lock is put back, not released");
+    assert.deepEqual(readdirSync(join(ph, "hosts")).filter((n) => /\.(rel|break)-/.test(n)), []);
+    rmSync(lock);
+    // lost before the write: abort, the registry is not written
+    withRegistryLock(ph, ({ assertHeld }) => {
+      steal();
+      assert.throws(() => unregisterLocked(ph, "hermes-default", home, process.platform, assertHeld), (e) => e instanceof RegistryLockLost && e.code === "LOCK_LOST");
+    });
+    assert.equal(readFileSync(join(ph, "hosts", "hermes-bindings.json"), "utf8"), regBefore, "never written");
+    rmSync(lock);
+    // break/rel leftovers older than 60 s go, fresh ones stay
+    const oldLeft = `${lock}.break-${"0".repeat(32)}`;
+    const newLeft = `${lock}.rel-${"1".repeat(32)}`;
+    writeFileSync(oldLeft, "x");
+    writeFileSync(newLeft, "x");
+    utimesSync(oldLeft, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    withRegistryLock(ph, () => {});
+    assert.equal(existsSync(oldLeft), false);
+    assert.equal(existsSync(newLeft), true);
+    // an async critical section holds the lock until it settles
+    return withRegistryLock(ph, async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(existsSync(lock), true);
+    }).then(() => assert.equal(existsSync(lock), false));
+  });
+
+  it("the registry lock under contention: holders that die holding it never let two processes in at once", { timeout: 120_000 }, async () => {
+    const ph = makeTempDir("hermes-lock-race-");
+    mkdirSync(join(ph, "hosts"), { recursive: true });
+    const worker = join(HERE, "helpers", "registry-lock-worker.mjs");
+    const until = Date.now() + 8_000;
+    const one = (id) => new Promise((resolveRun) => {
+      const loop = () => {
+        if (Date.now() >= until) return resolveRun();
+        const c = spawn(process.execPath, [worker, ph, String(id), "5", String(until)], { stdio: "ignore" });
+        c.on("exit", loop); // a worker that died holding the lock is replaced
+      };
+      loop();
+    });
+    await Promise.all([1, 2, 3, 4, 5, 6].map(one));
+    const lines = (f) => (existsSync(join(ph, f)) ? readFileSync(join(ph, f), "utf8").split("\n").filter(Boolean).length : 0);
+    assert.equal(lines("doubles.log"), 0, "two holders were inside at once");
+    assert.ok(lines("deaths.log") >= 3, `holders died holding the lock (${lines("deaths.log")})`);
+    assert.ok(lines("entries.log") >= 20, `the lock was taken (${lines("entries.log")})`);
   });
 
   it("with a custom HERMES_HOME the Windows launcher search also looks in %LOCALAPPDATA%\\hermes\\bin", () => {
