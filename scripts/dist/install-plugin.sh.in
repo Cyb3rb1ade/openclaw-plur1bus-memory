@@ -262,11 +262,16 @@ pinned_node() {
   # the check and tar, T10 review 1).
   copy="$2/node-v$NODE_PIN_VERSION-$1.tar.gz"
   rm -f "$copy"
-  if [ -f "$archive" ] && cp "$archive" "$copy" 2>/dev/null; then
-    got=$(sha256_tool "$copy") || return 4
-    if [ "$got" != "$pwant" ]; then
-      say "the cached Node archive $archive does not match its pinned SHA-256; downloading it again"
-      rm -f "$archive" "$copy"
+  if [ -f "$archive" ]; then
+    # a copy that fails part-way is never trusted: it is removed, so only a hashed copy or a fresh download remains
+    if cp "$archive" "$copy" 2>/dev/null; then
+      got=$(sha256_tool "$copy") || { rm -f "$copy"; return 4; }
+      if [ "$got" != "$pwant" ]; then
+        say "the cached Node archive $archive does not match its pinned SHA-256; downloading it again"
+        rm -f "$archive" "$copy"
+      fi
+    else
+      rm -f "$copy"
     fi
   fi
   if [ ! -f "$copy" ]; then
