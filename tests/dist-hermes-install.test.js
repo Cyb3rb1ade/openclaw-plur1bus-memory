@@ -12,7 +12,7 @@ import { dirname, join, posix, relative, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXIT } from "../scripts/dist/installer/report.mjs";
-import { findHermesBin, resolveHermesHome, parseHermesVersion } from "../scripts/dist/installer/hermes/detect.mjs";
+import { defaultHermesRoot, findHermesBin, resolveHermesHome, parseHermesVersion } from "../scripts/dist/installer/hermes/detect.mjs";
 import { classifyHome, foldCase, foldProfile, otherBoundHomes, REGISTRY_LOCK_FILE, RegistryLockLost, samePath, unregisterLocked, withRegistryLock, readBinding, readRegistry, registerBinding, registryAdd, BindingConflict } from "../scripts/dist/installer/hermes/binding.mjs";
 import { ALLOWED_HERMES_CONFIG_KEYS, createHermesCli, parseMemoryStatus, readSelftestDoc } from "../scripts/dist/installer/hermes/hermes-cli.mjs";
 import { checkConfigEditable, planProviderEdit, planProviderUndo, readProviderLine, setProviderLine, undoProviderLine } from "../scripts/dist/installer/hermes/config-edit.mjs";
@@ -756,6 +756,15 @@ describe("hermes installer: install", () => {
 });
 
 describe("hermes installer: shared rules", () => {
+  it("the sandbox's Hermes home is where detect looks by default on this OS (%LOCALAPPDATA%\\hermes on Windows)", () => {
+    const sb = createHermesSandbox();
+    assert.equal(defaultHermesRoot({ env: sb.env, platform: process.platform, homedir: sb.home }), sb.hermesRoot);
+    assert.equal(resolveHermesHome({ env: sb.env, platform: process.platform, homedir: sb.home }).home, sb.hermesHome);
+    // Hermes' own rule (hermes_constants.py at 743ee72): win32 → LOCALAPPDATA\hermes, else ~/.hermes
+    assert.equal(defaultHermesRoot({ env: { LOCALAPPDATA: "D:\\L", USERPROFILE: "C:\\u" }, platform: "win32", homedir: "C:\\u" }), "D:\\L\\hermes");
+    assert.equal(defaultHermesRoot({ env: { HOME: "/home/u" }, platform: "linux", homedir: "/x" }), "/home/u/.hermes");
+  });
+
   it("hermes home resolution follows the harness table", () => {
     const { cases } = JSON.parse(readFileSync(join(FIX, "hermes", "hermes-home-vectors.json"), "utf8"));
     assert.ok(cases.length >= 11);

@@ -63,7 +63,7 @@ const FIXTURES = __FIXTURES__;
 const JSON_FIXTURES = __JSON_FIXTURES__;
 const args = process.argv.slice(2);
 const scenario = JSON.parse(readFileSync(join(SANDBOX, "scenario.json"), "utf8"));
-const home = process.env.HERMES_HOME || join(process.env.HOME || process.env.USERPROFILE, ".hermes");
+const home = process.env.HERMES_HOME || (process.platform === "win32" ? join(process.env.LOCALAPPDATA, "hermes") : join(process.env.HOME || process.env.USERPROFILE, ".hermes"));
 // providerDir: whether plugins/plur1bus existed when Hermes was called (HM2-R17a order checks)
 appendFileSync(join(SANDBOX, "argv.log"), JSON.stringify({ bin: "hermes", argv: args, hermesHome: process.env.HERMES_HOME ?? null, providerDir: existsSync(join(home, "plugins", "plur1bus")) }) + "\n");
 const cfgFile = join(home, "config.yaml");
@@ -303,7 +303,9 @@ export function createHermesSandbox(opts = {}) {
   const binDir = join(root, "bin");
   const art = join(root, "artefacts");
   for (const d of [home, binDir, art, join(home, ".config"), join(home, ".local", "share")]) mkdirSync(d, { recursive: true });
-  const hermesRoot = join(home, ".hermes");
+  // Hermes' own default home: ~/.hermes on POSIX, %LOCALAPPDATA%\hermes on native Windows (hermes_constants.py
+  // get_default_hermes_root at 743ee72; fact sheet §j). LOCALAPPDATA below is <home>/AppData/Local, inside the sandbox.
+  const hermesRoot = process.platform === "win32" ? join(home, "AppData", "Local", "hermes") : join(home, ".hermes");
   const hermesHome = opts.hermesHome ?? hermesRoot;
   if (!opts.noHermesHome) {
     mkdirSync(hermesHome, { recursive: true });
