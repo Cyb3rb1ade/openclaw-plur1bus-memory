@@ -6,7 +6,8 @@
  * (ruling F12). Commands (harness crates/plur1bus/src/cli.rs):
  *   setup --profile host --non-interactive --use-class <c> [--accept-nc-licence] [--no-service]   → setup/1
  *   agent list → agent.list/1 { agents: [{ agentId }] };  agent create <id> → agent.create/1
- *   config get <key> → config.get/1 { key, value };  daemon stop|start;  service uninstall
+ *   config get <key> → config.get/1 { key, value };  daemon stop (→ { stopped, wasRunning }) | start;
+ *   service status (→ { registered, running }) | uninstall
  *   memory list --agent <id> --since <t> → memory.list/1 (for ruling F4's purge count, Task 9)
  * The host setup may leave no config.json (Task 4 carry): `config get` failing is "unknown", not an error.
  */
@@ -52,9 +53,11 @@ export function createPlur1busCli({ bin, home, env, run = defaultRun, platform =
     bin,
     home,
     /** Setup downloads Node and the core payload: a long deadline. */
+    /** `useClass` null = no `--use-class` at all: setup keeps the recorded class (F3, Task 4). */
     async setup({ useClass, acceptNc = false, noService = false }) {
-      if (!USE_CLASSES.includes(useClass)) throw new Error(`unknown use class ${JSON.stringify(useClass)}`);
-      const args = ["setup", "--profile", "host", "--non-interactive", "--use-class", useClass];
+      if (useClass !== null && useClass !== undefined && !USE_CLASSES.includes(useClass)) throw new Error(`unknown use class ${JSON.stringify(useClass)}`);
+      const args = ["setup", "--profile", "host", "--non-interactive"];
+      if (useClass) args.push("--use-class", useClass);
       if (acceptNc) args.push("--accept-nc-licence");
       if (noService) args.push("--no-service");
       return call(args, 30 * 60_000);
@@ -79,6 +82,11 @@ export function createPlur1busCli({ bin, home, env, run = defaultRun, platform =
     },
     async daemonStart() {
       return call(["daemon", "start"]);
+    },
+    /** `service status` → { registered, running } (null when unknown). */
+    async serviceStatus() {
+      const r = await call(["service", "status"]);
+      return { ...r, registered: r.ok && typeof r.doc?.registered === "boolean" ? r.doc.registered : null, running: r.ok && typeof r.doc?.running === "boolean" ? r.doc.running : null };
     },
     async serviceUninstall() {
       return call(["service", "uninstall"]);

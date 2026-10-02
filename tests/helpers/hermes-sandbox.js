@@ -19,7 +19,8 @@
  * with PLUR1BUS_SANDBOX_ALLOW_KILL_PARENT=1), configGetExit (every `config get memory.provider` fails),
  * providerUnavailable, selftestFail, setupExit, setupWritesNoConfig, sidecarVersion, agentCreateExit,
  * configSetExit, configSetFailFor (fails `config set memory.provider <that value>` only), setupMigratesStoreFrom /
- * setupFailFor (the setup of that binary version writes into the store / fails; Task 9). Nothing here touches a real Hermes, a real PLUR1BUS home or a service manager.
+ * setupFailFor (the setup of that binary version writes into the store / fails; Task 9), daemonRunning (false: the
+ * daemon was not running, `daemon stop` reports wasRunning false), serviceRegistered, daemonStopExit. Nothing here touches a real Hermes, a real PLUR1BUS home or a service manager.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -238,7 +239,12 @@ if (rest[0] === "config" && rest[1] === "get") {
   out({ schema: "config.get/1", key: rest[2], value: value ?? null, restart: "none", tier: "basic" });
   process.exit(0);
 }
-if (rest[0] === "daemon" && rest[1] === "stop") { out({ schema: "daemon.stop/1", stopped: true }); process.exit(0); }
+if (rest[0] === "daemon" && rest[1] === "stop") {
+  if (scenario.daemonStopExit) fail("E_TEST", "TEST ONLY daemon stop failure", scenario.daemonStopExit);
+  out({ schema: "daemon.stop/1", stopped: true, wasRunning: scenario.daemonRunning !== false });
+  process.exit(0);
+}
+if (rest[0] === "service" && rest[1] === "status") { out({ schema: "service.status/1", registered: scenario.serviceRegistered === true, running: scenario.serviceRegistered === true && scenario.daemonRunning !== false }); process.exit(0); }
 if (rest[0] === "daemon" && rest[1] === "start") { out({ schema: "daemon.start/1", started: true }); process.exit(0); }
 if (rest[0] === "service" && rest[1] === "uninstall") { out({ schema: "service.uninstall/1", removed: true }); process.exit(0); }
 fail("E_TEST", "shim: unknown command " + JSON.stringify(rest), 2);

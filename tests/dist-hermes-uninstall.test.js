@@ -6,7 +6,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -185,6 +185,7 @@ describe("hermes installer: uninstall", () => {
     { point: "uninstall.provider-moved", step: "provider", undoable: true },
     { point: "uninstall.binding", step: "binding", undoable: false },
     { point: "uninstall.purge", step: "purge", undoable: false, purge: true },
+    { point: "uninstall.purge-stopped", step: "purge", undoable: false, purge: true },
   ];
   async function killedUninstall({ point, purge }) {
     const sb = await installed({ configYaml: HONCHO }, ["--replace-provider"]);
@@ -224,4 +225,78 @@ describe("hermes installer: uninstall", () => {
       assert.deepEqual(strays(sb), []);
     });
   }
+});
+
+describe("hermes installer: uninstall (T9 review)", () => {
+  it("on 0.21.4 the uninstall undoes the install's line edit exactly and leaves no backup (review 1, 8)", async () => {
+    // the template without a memory.provider key: byte-identical afterwards
+    const a = createHermesSandbox({ scenario: { hermesVersion: "0.21.4" } });
+    const before = readFileSync(join(a.hermesHome, "config.yaml"), "utf8");
+    assert.equal((await run(a, [])).code, EXIT.OK);
+    const r = await run(a, ["--uninstall"]);
+    assert.equal(r.code, EXIT.OK, r.out);
+    assert.equal(readFileSync(join(a.hermesHome, "config.yaml"), "utf8"), before, "byte for byte");
+    assert.deepEqual(readdirSync(a.hermesHome).filter((n) => n.includes("plur1bus-bak")), [], "no backup is left");
+    // no config.yaml before the install: none after the uninstall
+    const b = createHermesSandbox({ scenario: { hermesVersion: "0.21.4" }, configYaml: null });
+    assert.equal((await run(b, [])).code, EXIT.OK);
+    assert.equal(existsSync(join(b.hermesHome, "config.yaml")), true);
+    assert.equal((await run(b, ["--uninstall"])).code, EXIT.OK);
+    assert.equal(existsSync(join(b.hermesHome, "config.yaml")), false);
+    // an original quoted value with a comment comes back as it was
+    const quoted = TEMPLATE_CONFIG.replace("memory:\n", "memory:\n  provider: \"none\" # keep\n");
+    const c = createHermesSandbox({ scenario: { hermesVersion: "0.21.4" }, configYaml: quoted });
+    assert.equal((await run(c, ["--replace-provider"])).code, EXIT.OK);
+    assert.equal((await run(c, ["--uninstall"])).code, EXIT.OK);
+    assert.equal(readFileSync(join(c.hermesHome, "config.yaml"), "utf8"), quoted);
+    // without a recorded undo: the raw previous value, and it says so
+    const d = createHermesSandbox({ scenario: { hermesVersion: "0.21.4" } });
+    assert.equal((await run(d, [])).code, EXIT.OK);
+    const sf = join(d.hermesHome, ".plur1bus-installer.json");
+    const st = JSON.parse(readFileSync(sf, "utf8"));
+    delete st.configEdit.undo;
+    writeFileSync(sf, JSON.stringify(st));
+    const rd = await run(d, ["--uninstall"]);
+    assert.equal(rd.code, EXIT.OK, rd.out);
+    assert.match(rd.out, /recorded no undo/);
+    assert.match(readFileSync(join(d.hermesHome, "config.yaml"), "utf8"), /^ {2}provider: ""$/m);
+    assert.deepEqual(readdirSync(d.hermesHome).filter((n) => n.includes("plur1bus-bak")), []);
+  });
+
+  it("a plugins/plur1bus the installer does not own is refused; a plur1bus provider MANIFEST counts as ours (review 9)", async () => {
+    const sb = createHermesSandbox();
+    mkdirSync(join(sb.hermesHome, "plugins", "plur1bus"), { recursive: true });
+    writeFileSync(join(sb.hermesHome, "plugins", "plur1bus", "__init__.py"), "# TEST ONLY: someone else's\n");
+    const before = treeDigest(sb.hermesHome);
+    const r = await run(sb, ["--uninstall"]);
+    assert.equal(r.code, EXIT.NEEDS_CHOICE, r.out);
+    assert.match(r.out, /was not installed by this installer/);
+    assert.equal(treeDigest(sb.hermesHome), before);
+    // an installed provider whose state and binding are gone is still recognised by its MANIFEST.json
+    const m = await installed();
+    for (const f of [".plur1bus-installer.json", "plur1bus.json"]) rmSync(join(m.hermesHome, f));
+    const r2 = await run(m, ["--uninstall"]);
+    assert.equal(r2.code, EXIT.OK, r2.out);
+    assert.equal(existsSync(join(m.hermesHome, "plugins", "plur1bus")), false);
+  });
+
+  it("purge stops the sidecar before the lock and keeps the home when the stop fails (review 2)", async () => {
+    const sb = await installed();
+    sb.setScenario({ daemonStopExit: 1 });
+    const r = await run(sb, ["--uninstall", "--purge", "--yes-delete-memories", "--json"]);
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    assert.equal(existsSync(join(sb.plur1busHome, "manifest.json")), true, "the home is kept");
+    const doc = JSON.parse(r.stdout);
+    assert.ok(doc.manualSteps.some((m) => /daemon stop/.test(m)));
+    assert.ok(!doc.manualSteps.some((m) => /^remove .*\.plur1bus/.test(m)), "never asks to delete the home");
+    // the stop and the service removal come before the lock is taken (no lock file is held across them)
+    const ok = await installed();
+    const calls = [];
+    const runSpy = (file, args, o) => {
+      if (/plur1bus/.test(file)) calls.push({ args: args.slice(3).join(" "), lock: existsSync(join(ok.plur1busHome, "hosts", ".hermes-bindings.lock")) });
+      return ok.run(file, args, o);
+    };
+    assert.equal((await run(ok, ["--uninstall", "--purge", "--yes-delete-memories"], { run: runSpy })).code, EXIT.OK);
+    for (const c of calls.filter((x) => /^(daemon stop|service uninstall)/.test(x.args))) assert.equal(c.lock, false, c.args);
+  });
 });

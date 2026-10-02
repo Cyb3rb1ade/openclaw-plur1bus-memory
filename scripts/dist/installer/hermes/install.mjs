@@ -340,8 +340,8 @@ export async function runHermesInstall(ctx) {
 
     // s: everything the rollback needs; persisted before each change
     const s = resuming
-      ? { ...state, useClass, licence, previousProvider }
-      : { previousProvider, plur1busHome: home, bin, agentId, sidecarFresh: !homeExisted, registryPreexisted: registeredBefore, useClass, licence };
+      ? { ...state, useClass, licence, previousProvider, previousProviderRaw: previousProvider === state.previousProvider && Object.hasOwn(state, "previousProviderRaw") ? state.previousProviderRaw : prev.value === PROVIDER_NAME ? null : prev.value }
+      : { previousProvider, previousProviderRaw: prev.value, plur1busHome: home, bin, agentId, sidecarFresh: !homeExisted, registryPreexisted: registeredBefore, useClass, licence };
     const save = (step) => writeHermesState(hermesHome, { ...s, inProgress: { op: "install", step, version: release.version } });
     // TEST ONLY: PLUR1BUS_PLUGIN_TEST_KILL_AT=<point> kills the installer there, as a killed process (F19 tests)
     const killAt = (point) => {
@@ -513,7 +513,9 @@ export async function runHermesInstall(ctx) {
     const final = {
       installedVersion: release.version, previousProvider: s.previousProvider ?? null, plur1busHome: home, bin, agentId,
       sidecarFresh: s.sidecarFresh, agentCreated: s.agentCreated, registryAdded: s.registryAdded, registryPreexisted: s.registryPreexisted, useClass, licence,
-      configEdit: s.configEdit ? { method: s.configEdit.method, ...(s.configEdit.backup ? { backup: s.configEdit.backup } : {}) } : undefined,
+      // the full undo record (kind, originalLine, created) stays: the uninstall restores exactly what was there (T9 review 1)
+      configEdit: s.configEdit ? { method: s.configEdit.method, ...(s.configEdit.backup ? { backup: s.configEdit.backup } : {}), ...(s.configEdit.undo ? { undo: s.configEdit.undo } : {}) } : undefined,
+      previousProviderRaw: s.previousProviderRaw ?? null,
     };
     writeHermesState(hermesHome, final);
     report.note(`Installed the plur1bus memory provider ${release.version} into Hermes (${hermesHome}); agent ${agentId}, sidecar ${home}.`);

@@ -1,21 +1,28 @@
 /**
  * scripts/dist/installer/hermes/uninstall.mjs — `install-plugin --host hermes --uninstall [--purge]` (HM2 Task 9, D89).
  *
- * Every check and confirmation comes before the first change. Then, in HM2-R17a order: memory.provider back to the
- * value before the install (`hermes config set|unset` from a parsed 0.21.5, else the backed-up line edit,
- * HM2-R24/R24a; a value that cannot be read stops the uninstall before any change; a provider the user switched to
- * since is left alone) → the provider directory renamed to `plugins/.plur1bus-removed-<ts>`, then deleted → the
- * binding removed → this home's registry entry removed (under the registry lock). The agent, the store and the
- * sidecar stay. The capture journal `$HERMES_HOME/plur1bus/journal.ndjson` stays and its path and entry count are
- * printed (F28).
+ * Every check and confirmation comes before the first change. A `plugins/plur1bus` the installer does not own (no
+ * installer state or binding, and no plur1bus provider MANIFEST.json) is refused (exit 2). Then, in HM2-R17a order:
+ * memory.provider back to exactly what was there before the install — the install's recorded line-edit undo
+ * (`planProviderUndo`: an inserted or appended line removed, the original line restored, a config.yaml the install
+ * created removed) while the line still reads `plur1bus`; else `hermes config set <raw previous>|unset` from a parsed
+ * 0.21.5; else a line edit to the raw previous value (said so in the output). A value that cannot be read stops the
+ * uninstall before any change; a provider the user switched to since is left alone. Backups: one only while the
+ * change is in flight; the install's `config.yaml.plur1bus-bak-*` and the uninstall's own go once it is verified.
+ * → the provider directory renamed to `plugins/.plur1bus-removed-<ts>`, then deleted → the binding removed → this
+ * home's registry entry removed (under the registry lock). The agent, the store and the sidecar stay. The capture
+ * journal `$HERMES_HOME/plur1bus/journal.ndjson` stays and its path and entry count are printed (F28).
  *
  * `--purge` additionally deletes the sidecar — only when `<home>/manifest.json` says `profile: "host"`, every agent
  * of `agent list` starts with `hermes-`, and no other Hermes home is bound in `hosts/hermes-bindings.json` (F4;
  * checked before the confirmations and again under the registry lock right before the deletion) — after two
- * interactive confirmations or `--yes-delete-memories` (non-interactive without it → exit 2, nothing changed):
- * `daemon stop`, `service uninstall`, the binary (and a kept `.prev-*`) and the home, with its snapshots and any
- * `.pre-restore-*` store copy, and the journal directory `$HERMES_HOME/plur1bus/`. A purge the guard refuses changes
- * nothing (exit 2, the reason named; a plain `--uninstall` keeps the home).
+ * interactive confirmations or `--yes-delete-memories` (non-interactive without it → exit 2, nothing changed). After the
+ * uninstall steps: `daemon stop` (must succeed) and `service uninstall` outside the lock (they can outlast its
+ * 60 s staleness), then under the lock the guard again, `assertHeld`, and the home with its snapshots and any
+ * `.pre-restore-*` store copy is deleted; then the binary (and a kept `.prev-*`) and the journal directory
+ * `$HERMES_HOME/plur1bus/`. A purge the early guard refuses changes nothing (exit 2, the reason named). A late
+ * refusal (another home bound meanwhile, or the lock lost) leaves the provider uninstalled, keeps the home, says how
+ * to start the sidecar again, and exits 1; it never asks you to delete the home.
  *
  * An interrupted uninstall is finished by the next `--uninstall` run; `--rollback` undoes it while the provider
  * directory still sits at its `.plur1bus-removed-<ts>` name (after that, only finishing is possible). A purge is never
@@ -27,12 +34,12 @@ import { dirname, join } from "node:path";
 
 import { renameWithRetry, rmTree, writeFileAtomic } from "../fsutil.mjs";
 import { EXIT, Stop } from "../report.mjs";
-import { bindingPath, otherBoundHomes, registerBinding, removeBinding, unregisterLocked, withRegistryLock } from "./binding.mjs";
-import { readProviderLine, setProviderLine } from "./config-edit.mjs";
+import { bindingPath, INSTALLED_BY, otherBoundHomes, registerBinding, removeBinding, unregisterLocked, withRegistryLock } from "./binding.mjs";
+import { readProviderLine, setProviderLine, undoProviderLine } from "./config-edit.mjs";
 import { hermesContext } from "./context.mjs";
 import { usesLineEdit } from "./install.mjs";
 import { createPlur1busCli } from "./plur1bus-cli.mjs";
-import { pluginsDir, providerDir, PROVIDER_NAME, removeStaging } from "./provider.mjs";
+import { pluginsDir, PROVIDER_MANIFEST_SCHEMA, providerDir, PROVIDER_NAME, removeStaging } from "./provider.mjs";
 import { readSidecar, sidecarBinPath } from "./sidecar.mjs";
 import { hermesStatePath, writeHermesState } from "./state.mjs";
 
@@ -75,12 +82,36 @@ export function purgeGuard({ home, hermesHome, agents, platform }) {
 
 async function setProvider({ hermes, hermesHome, lineEdit, value, now }) {
   if (lineEdit) {
-    setProviderLine({ hermesHome, value: value ?? "", now });
-  } else if (value) {
-    await hermes.configSet("memory.provider", value);
-  } else {
-    await hermes.configUnset("memory.provider");
+    return setProviderLine({ hermesHome, value: value ?? "", now }).backup;
   }
+  if (value) await hermes.configSet("memory.provider", value);
+  else await hermes.configUnset("memory.provider");
+  return null;
+}
+
+/**
+ * memory.provider back to what it was before the install (T9 review 1). Returns { how, backup } where `backup` is a
+ * line-edit backup this call made (removed by the caller once the value is verified).
+ */
+async function restoreProviderValue({ hermes, hermesHome, lineEdit, state, previous, now, report }) {
+  const undo = state?.configEdit?.method === "line" ? state.configEdit.undo : null;
+  if (state?.configEdit?.method === "line" && !undo) report.note("Note: the install recorded no undo for its memory.provider line; it is set to the previous value instead.");
+  if (undo) {
+    try {
+      undoProviderLine({ hermesHome, undo, value: PROVIDER_NAME });
+      return { how: `the install's line edit undone (${undo.kind}${undo.created ? ", the config file it created removed" : ""})`, backup: null };
+    } catch (err) {
+      report.note(`Note: the memory.provider line is not the one the install wrote any more (${err?.message ?? err}); it is set to the previous value instead.`);
+    }
+  }
+  const raw = typeof state?.previousProviderRaw === "string" ? state.previousProviderRaw : (previous ?? "");
+  if (!lineEdit) {
+    if (raw.trim() === "") await hermes.configUnset("memory.provider");
+    else await hermes.configSet("memory.provider", raw.trim());
+    return { how: raw.trim() === "" ? "hermes config unset" : `hermes config set ${raw.trim()}`, backup: null };
+  }
+  const backup = setProvider({ hermes, hermesHome, lineEdit: true, value: raw.trim(), now });
+  return { how: `line edit to ${raw.trim() === "" ? '""' : raw.trim()}`, backup: await backup };
 }
 
 async function readCurrent({ hermes, hermesHome, lineEdit }) {
@@ -123,7 +154,12 @@ export async function runHermesUninstall(ctx) {
   if (interrupted && interrupted.purge && !purge) {
     throw new Stop(EXIT.NEEDS_CHOICE, "resume", "an interrupted --uninstall --purge is in progress: re-run with --uninstall --purge to finish it (the purge asks for its confirmation again); nothing was changed");
   }
-  const installed = Boolean(binding && !binding.invalid) || existsSync(providerDir(hermesHome)) || Boolean(state);
+  const ours = Boolean(state) || Boolean(binding && !binding.invalid && binding.installedBy === INSTALLED_BY);
+  const dirExists = existsSync(providerDir(hermesHome));
+  if (!ours && !interrupted && dirExists && !providerManifestIsOurs(hermesHome)) {
+    throw new Stop(EXIT.NEEDS_CHOICE, "provider", `${providerDir(hermesHome)} was not installed by this installer (no installer state, no binding, no plur1bus provider MANIFEST.json); it is left alone — remove it yourself if you no longer need it; nothing was changed`);
+  }
+  const installed = ours || dirExists || Boolean(binding && !binding.invalid);
   if (!installed && !interrupted && !purge) {
     report.step("uninstall", "ok", `plur1bus is not installed in ${hermesHome}; nothing to do`);
     return report.finish(EXIT.OK);
@@ -187,16 +223,21 @@ export async function runHermesUninstall(ctx) {
     }
     if (cur === PROVIDER_NAME) {
       if (un.bindingText === undefined) un.bindingText = existsSync(bindingPath(hermesHome)) ? readFileSync(bindingPath(hermesHome), "utf8") : null;
+      let how;
       try {
-        await setProvider({ hermes, hermesHome, lineEdit, value: previous, now });
-        const again = await readCurrent({ hermes, hermesHome, lineEdit });
+        const r = await restoreProviderValue({ hermes, hermesHome, lineEdit, state, previous, now, report });
+        how = r.how;
+        un.valueBackup = r.backup;
+        const again = await readCurrent({ hermes, hermesHome, lineEdit: lineEdit || Boolean(state?.configEdit?.undo) });
         if (again === null || again === PROVIDER_NAME) throw new Error(again === null ? "it cannot be read back" : "it still reads plur1bus");
       } catch (err) {
         report.step("provider-value", "failed", err?.message ?? String(err));
         return finishFailed(report, hermesHome, s, [previous ? `hermes config set memory.provider ${previous}` : "hermes config unset memory.provider", "then re-run with --uninstall"]);
       }
       un.restoredFrom = PROVIDER_NAME;
-      report.step("provider-value", "ok", `memory.provider = ${previous ?? "built-in"}${lineEdit ? " (line edit)" : ""}`);
+      // verified: this run's own backup and the install's go (one backup only while a change is in flight)
+      for (const b of [un.valueBackup, state?.configEdit?.backup]) if (b) rmSync(b, { force: true });
+      report.step("provider-value", "ok", `memory.provider = ${previous ?? "built-in"} (${how})`);
     } else {
       report.step("provider-value", "skipped", `memory.provider is ${cur || "built-in"}, not plur1bus; left as it is`);
     }
@@ -251,6 +292,20 @@ export async function runHermesUninstall(ctx) {
   if (purge) {
     save("purge");
     killAt("uninstall.purge");
+    // the sidecar stops first, outside the lock (both can outlast the lock's 60 s staleness); the stop must succeed
+    if (existsSync(bin)) {
+      const ds = await p1.daemonStop();
+      if (!ds.ok) {
+        report.step("purge", "failed", `plur1bus daemon stop failed (${ds.detail}); the sidecar home ${home} is kept`);
+        return finishFailed(report, hermesHome, s, [`plur1bus --home "${home}" daemon stop`, "then re-run with --uninstall --purge"], "purge");
+      }
+      const su = await p1.serviceUninstall();
+      if (!su.ok) {
+        report.step("purge", "failed", `plur1bus service uninstall failed (${su.detail}); the sidecar home ${home} is kept`);
+        return finishFailed(report, hermesHome, s, [`plur1bus --home "${home}" service uninstall`, "then re-run with --uninstall --purge"], "purge");
+      }
+    }
+    killAt("uninstall.purge-stopped");
     let refused = null;
     try {
       await withRegistryLock(home, async ({ assertHeld }) => {
@@ -260,20 +315,16 @@ export async function runHermesUninstall(ctx) {
           refused = guard.reasons;
           return;
         }
-        if (existsSync(bin)) {
-          await p1.daemonStop();
-          const su = await p1.serviceUninstall();
-          if (!su.ok) manual.push(`plur1bus --home "${home}" service uninstall`);
-        }
         assertHeld();
         rmSync(home, { recursive: true, force: true });
       });
     } catch (err) {
-      manual.push(`remove ${home} (${err?.message ?? err})`);
+      refused = [`the bindings registry lock was not ours (${err?.message ?? err})`];
     }
     if (refused) {
       report.step("purge", "refused", `the sidecar home is kept: ${refused.join("; ")}`);
       report.note(`The purge was refused at the last check: ${refused.join("; ")}. The provider is uninstalled; the sidecar home ${home} is kept.`);
+      report.note(`The sidecar was stopped and its service removed for the purge; start it again for the homes that use it: plur1bus --home "${home}" service install && plur1bus --home "${home}" daemon start`);
       rmSync(hermesStatePath(hermesHome), { force: true });
       return report.finish(EXIT.FAILED);
     }
@@ -297,6 +348,15 @@ export async function runHermesUninstall(ctx) {
   rmSync(hermesStatePath(hermesHome), { force: true });
   report.note(`Uninstalled the plur1bus memory provider from Hermes (${hermesHome}).`);
   return report.finish(EXIT.OK);
+}
+
+/** A provider directory whose MANIFEST.json is a plur1bus provider build (ruling: never delete a directory we do not own). */
+function providerManifestIsOurs(hermesHome) {
+  try {
+    return JSON.parse(readFileSync(join(providerDir(hermesHome), "MANIFEST.json"), "utf8"))?.schema === PROVIDER_MANIFEST_SCHEMA;
+  } catch {
+    return false;
+  }
 }
 
 /** `<bin>.prev-<ts>` copies an update kept. */
@@ -337,7 +397,8 @@ async function rollbackUninstall(ctx) {
   }
   if (un.restoredFrom === PROVIDER_NAME && existsSync(pdir)) {
     try {
-      await setProvider({ hermes, hermesHome, lineEdit, value: PROVIDER_NAME, now });
+      const bak = await setProvider({ hermes, hermesHome, lineEdit, value: PROVIDER_NAME, now });
+      if (bak) rmSync(bak, { force: true }); // verified below by the next run's reads; no backup piles up
       done.push("memory.provider = plur1bus again");
     } catch {
       manual.push("hermes config set memory.provider plur1bus");
