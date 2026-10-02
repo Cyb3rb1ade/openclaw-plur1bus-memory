@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.9] — 2026-10-02
+
+### Behoben
+
+- **`planCreateCount=1` nach jedem Gateway-Start war ein Lesefehler.** `setup-feature-crons.mjs --json` beendete sich mit `process.exit()`, direkt nachdem es rund 170 KB JSON geschrieben hatte. Über die Pipe des Bootstraps kamen davon nur 64 KiB an. Der Bootstrap konnte das abgeschnittene JSON nicht lesen und wertete das pauschal als einen offenen Job. Das Skript setzt jetzt `process.exitCode` und lässt die Ausgabe vollständig ab. Es fehlte nie ein Cron.
+
 ## [7.18.8] — 2026-10-02
 
 ### Geändert
