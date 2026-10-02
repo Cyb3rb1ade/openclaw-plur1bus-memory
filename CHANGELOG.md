@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.6] — 2026-10-02
+
+### Geändert
+
+- **`runtime.traceRegistrations` hält 200 statt 60 Stack-Frames fest.** Der erste live eingefangene Stack brach in `prepared-model-runtime` ab, vor dem Aufrufer, der entscheidet, ob ein Turn oder ein Plugin-LLM-Aufruf die Neuladung auslöst.
+
 ## [7.18.5] — 2026-10-02
 
 ### Hinzugefügt
