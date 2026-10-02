@@ -228,6 +228,13 @@ export const REGISTRY_LOCK_FILE = ".hermes-bindings.lock";
 const LOCK_STALE_MS = 60_000;
 const LOCK_DEADLINE_MS = 10_000;
 
+export class RegistryLockTimeout extends Error {
+  constructor(lock) {
+    super(`the bindings registry is locked (${lock})`);
+    this.code = "LOCK_TIMEOUT";
+  }
+}
+
 export class RegistryLockLost extends Error {
   constructor(lock) {
     super(`lock-lost: the bindings registry lock ${lock} is no longer ours; the registry was not written`);
@@ -340,7 +347,7 @@ export function withRegistryLock(plur1busHome, fn, { platform = process.platform
         continue;
       }
     }
-    if (Date.now() > deadline) throw new Error(`the bindings registry is locked (${lock})`);
+    if (Date.now() > deadline) throw new RegistryLockTimeout(lock);
     sleepSync(25);
   }
   const assertHeld = () => {

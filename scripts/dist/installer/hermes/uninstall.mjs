@@ -34,7 +34,7 @@ import { dirname, join } from "node:path";
 
 import { renameWithRetry, rmTree, writeFileAtomic } from "../fsutil.mjs";
 import { EXIT, Stop } from "../report.mjs";
-import { bindingPath, INSTALLED_BY, otherBoundHomes, registerBinding, removeBinding, unregisterLocked, withRegistryLock } from "./binding.mjs";
+import { bindingPath, INSTALLED_BY, otherBoundHomes, RegistryLockLost, RegistryLockTimeout, registerBinding, removeBinding, unregisterLocked, withRegistryLock } from "./binding.mjs";
 import { readProviderLine, setProviderLine, undoProviderLine } from "./config-edit.mjs";
 import { hermesContext } from "./context.mjs";
 import { usesLineEdit } from "./install.mjs";
@@ -171,7 +171,19 @@ export async function runHermesUninstall(ctx) {
   const previous = s.uninstall?.previousProvider !== undefined ? s.uninstall.previousProvider : (state?.previousProvider ?? null);
 
   let p1 = null;
-  if (purge) {
+  // a purge whose home removal already started (decided under the lock) only finishes it
+  const removing = Boolean(interrupted && s.uninstall?.homeRemoveStarted);
+  if (purge && removing) {
+    p1 = createPlur1busCli({ bin, home, env, run, platform });
+    report.note(`--purge finishes deleting ${home}, which an earlier run had started to delete.`);
+    if (!flags["yes-delete-memories"]) {
+      if (!ctx.isTTY || flags["non-interactive"]) throw new Stop(EXIT.NEEDS_CHOICE, "purge", "--purge deletes your memories and needs two confirmations; there is no TTY to ask, so pass --yes-delete-memories to confirm; nothing was changed");
+      const first = String((await ctx.prompt(`Type "delete" to finish deleting ${home}: `)) ?? "").trim();
+      if (first !== "delete") throw new Stop(EXIT.FAILED, "purge", "not confirmed; nothing was changed");
+      const second = String((await ctx.prompt("Really finish the deletion? This cannot be undone. [y/N]: ")) ?? "").trim().toLowerCase();
+      if (second !== "y" && second !== "yes") throw new Stop(EXIT.FAILED, "purge", "not confirmed; nothing was changed");
+    }
+  } else if (purge) {
     if (!home || !existsSync(home)) throw new Stop(EXIT.NEEDS_CHOICE, "purge", "purge-refused: no PLUR1BUS sidecar home is recorded or present; nothing was changed");
     p1 = createPlur1busCli({ bin, home, env, run, platform });
     const list = existsSync(bin) ? await p1.agentList() : { ok: false, ids: [] };
@@ -293,7 +305,7 @@ export async function runHermesUninstall(ctx) {
     save("purge");
     killAt("uninstall.purge");
     // the sidecar stops first, outside the lock (both can outlast the lock's 60 s staleness); the stop must succeed
-    if (existsSync(bin)) {
+    if (existsSync(bin) && !un.homeRemoveStarted) {
       const ds = await p1.daemonStop();
       if (!ds.ok) {
         report.step("purge", "failed", `plur1bus daemon stop failed (${ds.detail}); the sidecar home ${home} is kept`);
@@ -307,19 +319,35 @@ export async function runHermesUninstall(ctx) {
     }
     killAt("uninstall.purge-stopped");
     let refused = null;
+    const removeHome = () => {
+      un.homeRemoveStarted = true;
+      save("purge");
+      if (testMode && env.PLUR1BUS_PLUGIN_TEST_FAIL_AT === "purge.rm") throw Object.assign(new Error(`TEST ONLY: EBUSY: resource busy or locked, rmdir '${home}'`), { code: "EBUSY" });
+      rmSync(home, { recursive: true, force: true });
+    };
     try {
-      await withRegistryLock(home, async ({ assertHeld }) => {
-        const list = existsSync(bin) ? await p1.agentList() : { ok: false, ids: [] };
-        const guard = purgeGuard({ home, hermesHome, agents: list.ok ? list.ids : null, platform });
-        if (!guard.ok) {
-          refused = guard.reasons;
-          return;
-        }
-        assertHeld();
-        rmSync(home, { recursive: true, force: true });
-      });
+      if (un.homeRemoveStarted) {
+        removeHome(); // decided under the lock by the earlier run
+      } else {
+        await withRegistryLock(home, async ({ assertHeld }) => {
+          const list = existsSync(bin) ? await p1.agentList() : { ok: false, ids: [] };
+          const guard = purgeGuard({ home, hermesHome, agents: list.ok ? list.ids : null, platform });
+          if (!guard.ok) {
+            refused = guard.reasons;
+            return;
+          }
+          assertHeld();
+          removeHome();
+        });
+      }
     } catch (err) {
-      refused = [`the bindings registry lock was not ours (${err?.message ?? err})`];
+      if (err instanceof RegistryLockLost || err instanceof RegistryLockTimeout) {
+        refused = [`the bindings registry lock was not ours (${err.message})`];
+      } else {
+        // a failed deletion (e.g. EBUSY): the purge is unfinished, the state stays at purge for the next run
+        report.step("purge", "failed", `deleting ${home} failed: ${err?.message ?? err}`);
+        return finishFailed(report, hermesHome, s, [`remove ${home} (${err?.code ?? "error"}: ${err?.message ?? err})`, "then re-run with --uninstall --purge to finish"], "purge");
+      }
     }
     if (refused) {
       report.step("purge", "refused", `the sidecar home is kept: ${refused.join("; ")}`);

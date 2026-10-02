@@ -300,3 +300,23 @@ describe("hermes installer: uninstall (T9 review)", () => {
     for (const c of calls.filter((x) => /^(daemon stop|service uninstall)/.test(x.args))) assert.equal(c.lock, false, c.args);
   });
 });
+
+describe("hermes installer: uninstall (T9 re-review)", () => {
+  it("a failed home deletion is a failed purge: manual step, state stays at purge, the next run finishes it", async () => {
+    const sb = await installed();
+    const r = await run(sb, ["--uninstall", "--purge", "--yes-delete-memories", "--json"], { env: { ...sb.env, PLUR1BUS_PLUGIN_TEST_FAIL_AT: "purge.rm" } });
+    assert.equal(r.code, EXIT.FAILED, r.out);
+    const doc = JSON.parse(r.stdout);
+    assert.equal(doc.steps.find((x) => x.id === "purge").status, "failed");
+    assert.ok(doc.manualSteps.some((m) => m.startsWith(`remove ${sb.plur1busHome} (EBUSY`)), JSON.stringify(doc.manualSteps));
+    const st = readHermesState(sb.hermesHome);
+    assert.equal(st.inProgress.step, "purge");
+    assert.equal(st.uninstall.homeRemoveStarted, true);
+    // the next run finishes the deletion it had decided under the lock
+    const again = await run(sb, ["--uninstall", "--purge", "--yes-delete-memories"]);
+    assert.equal(again.code, EXIT.OK, again.out);
+    assert.equal(existsSync(sb.plur1busHome), false);
+    assert.equal(existsSync(sb.sidecarBin), false);
+    assertUninstalled(sb);
+  });
+});
