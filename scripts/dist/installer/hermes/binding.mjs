@@ -212,7 +212,7 @@ export function checkBinding(plur1busHome, agentId, hermesHome, platform = proce
 
 /**
  * The registry lock shared with the Python provider (hosts/hermes/plur1bus/_filelock.py `ExclusiveLockFile`, used
- * by binding.py `register_binding`; harness cab7783); both sides implement exactly this protocol:
+ * by binding.py `register_binding`; harness cab7783, c0e2575); both sides implement exactly this protocol:
  *   * path `<plur1bus home>/hosts/.hermes-bindings.lock` (`hosts/` created 0700), created O_CREAT|O_EXCL, mode 0600;
  *     the content `<pid> <hostname> <ms> <nonce>\n` (nonce: 128-bit hex) is written and the fd closed before the
  *     critical section; Windows: EPERM/EACCES on create (a name pending deletion) is "busy", like EEXIST;

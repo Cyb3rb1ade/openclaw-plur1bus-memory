@@ -115,8 +115,10 @@ class ExclusiveLockFile:
       ``FileExistsError``;
     * a lock is stale when its mtime is older than ``STALE_S`` (60 s), or when it names a pid of this host that
       no longer runs and it is at least 1 s old (POSIX: ``kill(pid, 0)`` -> ``ESRCH``; Windows: ``OpenProcess``
-      fails with ``ERROR_INVALID_PARAMETER`` or ``GetExitCodeProcess`` is not ``STILL_ACTIVE``, as libuv's
-      ``process.kill(pid, 0)``; a pid above 2**31-1 is never judged dead, as Node rejects it). Breaking it: ``rename`` it to ``<lock>.break-<nonce>``,
+      fails with ``ERROR_INVALID_PARAMETER`` or ``GetExitCodeProcess`` is not ``STILL_ACTIVE``; equivalent, not
+      identical, to libuv's ``process.kill(pid, 0)``: where they differ (libuv's wider access rights, pid 0, exit
+      code 259) one side judges alive, which only delays a break to the 60 s rule; a pid above 2**31-1 is never
+      judged dead, as Node rejects it). Breaking it: ``rename`` it to ``<lock>.break-<nonce>``,
       re-read the moved file and compare dev/inode and content with what was judged stale; equal -> unlink and
       retry O_EXCL; different (someone else broke it and a fresh lock took its place) -> put it back with
       ``os.link`` (never overwrites; ``EEXIST`` = just drop the break file);
@@ -241,11 +243,13 @@ class ExclusiveLockFile:
             if not self._settle(nonce, max(0.0, deadline - time.monotonic())) or time.monotonic() >= deadline:
                 return
         text = self._read_text(rel)
-        parts = (text or "").split()
-        if len(parts) >= 4 and parts[3] == nonce:
-            self._unlink(rel)
-        elif text is not None:
-            self._restore(rel)
+        try:
+            if self._holds(text, nonce):
+                self._unlink(rel)
+            elif text is not None:
+                self._restore(rel)  # our lock was broken meanwhile: never release someone else's
+        except OSError:
+            pass  # left to the sweep (as binding.mjs releaseLock): release never raises out of hold()
 
     @staticmethod
     def _holds(text: str | None, nonce: str) -> bool:
@@ -342,7 +346,7 @@ _PID_MAX = 2**31 - 1  # Node's process.kill rejects larger pids (not ESRCH), so 
 
 
 def _pid_dead(pid: int) -> bool:
-    """True only when ``pid`` certainly does not run on this host (the semantics of libuv's ``kill(pid, 0)``
+    """True only when ``pid`` certainly does not run on this host (equivalent to libuv's ``kill(pid, 0)``
     returning ``ESRCH``); any doubt -> False."""
     if pid > _PID_MAX:
         return False
