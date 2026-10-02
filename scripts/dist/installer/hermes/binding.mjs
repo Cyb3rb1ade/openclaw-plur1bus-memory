@@ -212,21 +212,34 @@ export function checkBinding(plur1busHome, agentId, hermesHome, platform = proce
 
 /**
  * The registry lock shared with the Python provider (hosts/hermes/plur1bus/_filelock.py `ExclusiveLockFile`, used
- * by binding.py `register_binding`); both sides implement exactly this protocol:
- *   * path `<plur1bus home>/hosts/.hermes-bindings.lock`, created O_CREAT|O_EXCL, mode 0600; the content
- *     `<pid> <hostname> <ms> <nonce>\n` (nonce: 128-bit hex) is written and the fd closed before the critical section;
- *   * stale: mtime older than 60 s, or a pid of this host that no longer runs on a lock at least 1 s old;
- *   * breaking a stale lock: rename it to `<lock>.break-<my nonce>`, re-stat and re-read the moved file; when dev/ino
- *     and content are the ones judged stale, unlink it and retry the create; otherwise a live lock was moved: put it
- *     back with link() (never overwrites; EEXIST means a new holder exists) and unlink the break file;
- *   * release: rename to `<lock>.rel-<my nonce>`, unlink it only when it holds my token, else put it back as above;
- *   * the holder re-reads the lock just before writing the registry and aborts (lock-lost) unless its token is there;
- *   * Windows: EPERM/EACCES on create (a name pending deletion) is "busy", like EEXIST;
- *   * `*.break-*` / `*.rel-*` leftovers older than 60 s are removed; 25 ms poll, 10 s deadline.
+ * by binding.py `register_binding`; harness cab7783); both sides implement exactly this protocol:
+ *   * path `<plur1bus home>/hosts/.hermes-bindings.lock` (`hosts/` created 0700), created O_CREAT|O_EXCL, mode 0600;
+ *     the content `<pid> <hostname> <ms> <nonce>\n` (nonce: 128-bit hex) is written and the fd closed before the
+ *     critical section; Windows: EPERM/EACCES on create (a name pending deletion) is "busy", like EEXIST;
+ *   * stale: mtime older than 60 s, or a pid of this host that no longer runs on a lock at least 1 s old
+ *     (`process.kill(pid, 0)` → ESRCH; libuv probes Windows processes the way Python's OpenProcess check does);
+ *   * breaking a stale lock, at most one rename per poll round: rename it to `<lock>.break-<random>`, re-stat and
+ *     re-read the moved file; when dev/ino and content are the ones judged stale, unlink it and retry the create at
+ *     once; otherwise a live lock was moved: put it back with link() (never overwrites; EEXIST means a new holder
+ *     exists) and unlink the break file. A break that removed nothing (rename failed, the file vanished, or it was
+ *     put back) sleeps 25 ms and checks the deadline: no spinning;
+ *   * release: rename to `<lock>.rel-<my nonce>`; on Windows EPERM/EACCES/EBUSY (a reader without
+ *     FILE_SHARE_DELETE) is retried, backoff 10 ms doubling to 100 ms, for at most 2 s, then the lock is left to the
+ *     stale rules. Only ENOENT means gone; then, when a `<lock>.break-*` / `.rel-*` file holds my nonce (a waiter
+ *     moved my live lock aside and is putting it back), wait for the put-back (poll 5 ms, the same 2 s) and release
+ *     it, so no live-pid lock with an abandoned nonce stays behind. The moved file is unlinked only when it holds my
+ *     nonce, else put back as above (a stolen lock is never deleted; an unreadable one is left to the sweep);
+ *   * the holder calls assertHeld() just before writing the registry: lock-lost unless its nonce is in the lock,
+ *     waiting out a pending put-back the same way;
+ *   * moved files are unlinked with a 0.5 s Windows sharing retry, else left to the sweep; `*.break-*` / `*.rel-*`
+ *     leftovers older than 60 s are removed; 25 ms poll, 10 s deadline.
  */
 export const REGISTRY_LOCK_FILE = ".hermes-bindings.lock";
 const LOCK_STALE_MS = 60_000;
 const LOCK_DEADLINE_MS = 10_000;
+const LOCK_POLL_MS = 25;
+const RELEASE_RETRY_MS = 2_000;
+const SETTLE_POLL_MS = 5;
 
 export class RegistryLockTimeout extends Error {
   constructor(lock) {
@@ -259,6 +272,32 @@ const statId = (p) => {
   }
 };
 
+/** The lock text holds `nonce` as its fourth field (Python `_holds`). */
+const holds = (text, nonce) => String(text ?? "").trim().split(/\s+/)[3] === nonce;
+
+const SHARING_CODES = ["EPERM", "EACCES", "EBUSY"];
+
+/**
+ * Run `op` (a rename or unlink): true when it succeeded, false when the source is gone (ENOENT). On win32 a sharing
+ * error (EPERM/EACCES/EBUSY) is retried for `budgetMs` (backoff 10 ms doubling to 100 ms) and then re-thrown; every
+ * other error propagates (Python `_retry_sharing`).
+ */
+function retrySharing(op, budgetMs, platform) {
+  const deadline = Date.now() + budgetMs;
+  let delay = 10;
+  for (;;) {
+    try {
+      op();
+      return true;
+    } catch (err) {
+      if (err?.code === "ENOENT") return false;
+      if (platform !== "win32" || !SHARING_CODES.includes(err?.code) || Date.now() >= deadline) throw err;
+      sleepSync(delay);
+      delay = Math.min(delay * 2, 100);
+    }
+  }
+}
+
 function judgedStale(text, st) {
   const age = Date.now() - st.mtimeMs;
   if (age > LOCK_STALE_MS) return true;
@@ -268,21 +307,76 @@ function judgedStale(text, st) {
     process.kill(Number(pid), 0);
     return false;
   } catch (err) {
-    return err?.code === "ESRCH";
+    return err?.code === "ESRCH"; // EPERM (another user's process) and an out-of-range pid count as alive
+  }
+}
+
+/** Remove a moved-aside file; a Windows sharing error is retried for 0.5 s and then left to the sweep. */
+function unlinkMoved(p, platform) {
+  try {
+    retrySharing(() => rmSync(p), 500, platform);
+  } catch (err) {
+    if (platform !== "win32") throw err;
   }
 }
 
 /** Put a moved live lock back without overwriting a newer one, then drop the moved name. */
-function putBack(moved, lock) {
+function putBack(moved, lock, platform) {
   try {
     linkSync(moved, lock);
   } catch {
     // EEXIST: a new holder exists, so the moved one is not needed back
   }
-  rmSync(moved, { force: true });
+  unlinkMoved(moved, platform);
 }
 
-function sweepLockLeftovers(lock) {
+/** A `<lock>.break-*` / `<lock>.rel-*` file holds `nonce`: our live lock was moved aside and is being put back. */
+function movedAside(lock, nonce) {
+  const dir = dirname(lock);
+  const base = basename(lock);
+  let names = [];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return names.some((n) => (n.startsWith(`${base}.break-`) || n.startsWith(`${base}.rel-`)) && holds(readText(join(dir, n)), nonce));
+}
+
+/**
+ * True when the lock holds `nonce`. When it does not but a moved-aside file does, wait up to `budgetMs` (poll 5 ms)
+ * for the put-back; the put-back links before it unlinks, so once no moved file holds the nonce one more read of the
+ * lock decides (Python `_settle`).
+ */
+function settle(lock, nonce, budgetMs) {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    if (holds(readText(lock), nonce)) return true;
+    if (!movedAside(lock, nonce)) return holds(readText(lock), nonce);
+    if (Date.now() >= deadline) return false;
+    sleepSync(SETTLE_POLL_MS);
+  }
+}
+
+/** Move the lock judged stale aside and remove it; true only when that stale file was removed (Python `_break`). */
+function breakStale(lock, st, text, platform) {
+  const moved = `${lock}.break-${randomBytes(16).toString("hex")}`;
+  try {
+    renameSync(lock, moved);
+  } catch {
+    return false; // gone, or (Windows) busy: the wait loop sleeps and the next round decides
+  }
+  const st2 = statId(moved);
+  if (!st2) return false; // swept meanwhile; it was old
+  if (st2.dev === st.dev && st2.ino === st.ino && readText(moved) === text) {
+    unlinkMoved(moved, platform);
+    return true;
+  }
+  putBack(moved, lock, platform); // a live lock taken after our check: return it
+  return false;
+}
+
+function sweepLockLeftovers(lock, platform) {
   const dir = dirname(lock);
   const base = `${basename(lock)}.`;
   let names = [];
@@ -294,18 +388,49 @@ function sweepLockLeftovers(lock) {
   for (const n of names) {
     if (!n.startsWith(base) || !/^(break|rel)-[0-9a-f]+$/.test(n.slice(base.length))) continue;
     const st = statId(join(dir, n));
-    if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) rmSync(join(dir, n), { force: true });
+    if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+      try {
+        unlinkMoved(join(dir, n), platform);
+      } catch {
+        // gone meanwhile
+      }
+    }
+  }
+}
+
+/** Release our hold (Python `_release`); never throws. */
+function releaseLock(lock, nonce, platform) {
+  const moved = `${lock}.rel-${nonce}`;
+  const deadline = Date.now() + RELEASE_RETRY_MS;
+  for (;;) {
+    let renamed;
+    try {
+      renamed = retrySharing(() => renameSync(lock, moved), Math.max(0, deadline - Date.now()), platform);
+    } catch {
+      return; // still busy after the retries, or e.g. a read-only directory: the stale rules apply to it
+    }
+    if (renamed) break;
+    // gone: either our lock was broken (nothing of ours to remove), or a waiter moved it aside and is putting it
+    // back; then wait for the put-back and release it, so it is not left behind
+    if (!settle(lock, nonce, Math.max(0, deadline - Date.now())) || Date.now() >= deadline) return;
+  }
+  const text = readText(moved);
+  try {
+    if (holds(text, nonce)) unlinkMoved(moved, platform);
+    else if (text !== null) putBack(moved, lock, platform); // our lock was broken meanwhile: never release someone else's
+  } catch {
+    // left to the sweep
   }
 }
 
 /**
  * Run `fn({ assertHeld })` under the registry lock; `assertHeld()` throws RegistryLockLost unless the lock still holds
- * this run's token (call it right before writing). An async `fn` holds the lock until its promise settles.
+ * this run's nonce (call it right before writing). An async `fn` holds the lock until its promise settles.
  */
 export function withRegistryLock(plur1busHome, fn, { platform = process.platform } = {}) {
   const lock = join(plur1busHome, "hosts", REGISTRY_LOCK_FILE);
-  mkdirSync(dirname(lock), { recursive: true });
-  sweepLockLeftovers(lock);
+  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
+  sweepLockLeftovers(lock, platform);
   const nonce = randomBytes(16).toString("hex");
   const token = `${process.pid} ${hostname()} ${Date.now()} ${nonce}\n`;
   const deadline = Date.now() + LOCK_DEADLINE_MS;
@@ -320,49 +445,24 @@ export function withRegistryLock(plur1busHome, fn, { platform = process.platform
     if (fd !== null) {
       try {
         writeSync(fd, token);
-      } finally {
+      } catch (err) {
         closeSync(fd);
+        releaseLock(lock, nonce, platform);
+        throw err;
       }
+      closeSync(fd);
       break;
     }
     const st = statId(lock);
     const text = st ? readText(lock) : null;
-    if (st && text !== null && judgedStale(text, st)) {
-      const moved = `${lock}.break-${nonce}`;
-      let renamed = true;
-      try {
-        renameSync(lock, moved);
-      } catch (err) {
-        renamed = false;
-        if (err?.code !== "ENOENT" && !(platform === "win32" && (err?.code === "EPERM" || err?.code === "EACCES"))) throw err;
-      }
-      if (renamed) {
-        const st2 = statId(moved);
-        if (st2 && st2.dev === st.dev && st2.ino === st.ino && readText(moved) === text) {
-          rmSync(moved, { force: true });
-          continue; // the stale lock is gone: retry the create at once
-        }
-        putBack(moved, lock); // a live lock taken after our check: return it
-      } else {
-        continue;
-      }
-    }
-    if (Date.now() > deadline) throw new RegistryLockTimeout(lock);
-    sleepSync(25);
+    if (st && text !== null && judgedStale(text, st) && breakStale(lock, st, text, platform)) continue; // retry the create at once
+    if (Date.now() >= deadline) throw new RegistryLockTimeout(lock);
+    sleepSync(LOCK_POLL_MS);
   }
   const assertHeld = () => {
-    if (readText(lock) !== token) throw new RegistryLockLost(lock);
+    if (!settle(lock, nonce, RELEASE_RETRY_MS)) throw new RegistryLockLost(lock);
   };
-  const release = () => {
-    const moved = `${lock}.rel-${nonce}`;
-    try {
-      renameSync(lock, moved);
-    } catch {
-      return; // gone (broken as stale, or its directory removed): nothing of ours to release
-    }
-    if (readText(moved) === token) rmSync(moved, { force: true });
-    else putBack(moved, lock); // our lock was broken meanwhile: never release someone else's
-  };
+  const release = () => releaseLock(lock, nonce, platform);
   let result;
   try {
     result = fn({ assertHeld });

@@ -1090,6 +1090,44 @@ describe("hermes installer: shared rules", () => {
     }).then(() => assert.equal(existsSync(lock), false));
   });
 
+  it("the registry lock waits out a pending put-back of its live lock in assertHeld and release (harness cab7783)", { skip: process.platform === "win32" && "a POSIX rename/link timing check; Windows runs the interop test" }, () => {
+    const ph = makeTempDir("hermes-lock-putback-");
+    const lock = join(ph, "hosts", REGISTRY_LOCK_FILE);
+    // a waiter that judged a dead predecessor stale moved our fresh live lock aside and puts it back after 150 ms
+    const moveAsideAndPutBack = () => {
+      const moved = `${lock}.break-${"c".repeat(32)}`;
+      renameSync(lock, moved);
+      spawn(process.execPath, ["-e", `const fs=require("fs");setTimeout(()=>{try{fs.linkSync(${JSON.stringify(moved)},${JSON.stringify(lock)})}catch{}fs.rmSync(${JSON.stringify(moved)},{force:true})},150)`], { stdio: "ignore" });
+      return Date.now();
+    };
+    // assertHeld waits for the put-back instead of reporting lock-lost
+    withRegistryLock(ph, ({ assertHeld }) => {
+      const t = moveAsideAndPutBack();
+      assertHeld();
+      assert.ok(Date.now() - t >= 100, "it waited for the put-back");
+    });
+    assert.equal(existsSync(lock), false, "released after the put-back");
+    // release: its rename finds the lock gone, waits for the put-back and then releases it (no abandoned live-pid lock)
+    let t0 = 0;
+    withRegistryLock(ph, () => {
+      t0 = moveAsideAndPutBack();
+    });
+    assert.ok(Date.now() - t0 >= 100, "the release waited for the put-back");
+    assert.equal(existsSync(lock), false, "the put-back lock was released, not left behind");
+    assert.deepEqual(readdirSync(join(ph, "hosts")).filter((n) => /\.(rel|break)-/.test(n)), []);
+    // a lock moved aside with nobody putting it back: assertHeld reports lock-lost once no moved file holds the nonce
+    withRegistryLock(ph, ({ assertHeld }) => {
+      rmSync(lock);
+      assert.throws(() => assertHeld(), RegistryLockLost);
+    });
+    // hosts/ is created owner-only, as the provider does (0o700)
+    if (process.platform !== "win32") {
+      const fresh = makeTempDir("hermes-lock-mode-");
+      withRegistryLock(fresh, () => {});
+      assert.equal(statSync(join(fresh, "hosts")).mode & 0o777, 0o700);
+    }
+  });
+
   it("the registry lock under contention: holders that die holding it never let two processes in at once", { timeout: 120_000 }, async () => {
     const ph = makeTempDir("hermes-lock-race-");
     mkdirSync(join(ph, "hosts"), { recursive: true });
