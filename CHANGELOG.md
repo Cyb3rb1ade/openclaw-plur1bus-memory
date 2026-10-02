@@ -780,6 +780,41 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   mit seinen Zeilen als einzige Kopie stehen. Eine Capture, die mit nur
   teilweise gespeicherten Zeilen zurückkehrt, verhält sich unverändert.
 
+## [7.18.0] — in Vorbereitung (HM2: Hermes-Hostmodus)
+
+### Hinzugefügt
+
+- **`--host hermes`** für den Installer und beide Bootstraps (`-Host hermes`
+  in der `.ps1`): installiert den PLUR1BUS-Memory-Provider nach
+  `$HERMES_HOME/plugins/plur1bus/` und einen lokalen PLUR1BUS-Sidecar
+  (`plur1bus setup --profile host`), dessen Binary der signierte Feed
+  (`hosts.hermes`) per URL und SHA-256 festlegt. Erkennung von Hermes, Version,
+  Python und Home (Windows: `%LOCALAPPDATA%\hermes`), gesammelte
+  Kompatibilitätsbefunde (Exit 3), Agent pro Hermes-Home, Bindungsregister mit
+  einer mit dem Python-Provider geteilten Sperre, `memory.provider` erst nach
+  dem Provider-Verzeichnis (bei 0.21.4 und unbekannten Versionen per
+  Zeilen-Edit mit Backup), Verifikation über `hermes memory status` und
+  `hermes plur1bus selftest`, Rollback in umgekehrter Reihenfolge und
+  Wiederaufnahme unterbrochener Läufe.
+- **Hermes-Update** mit Release-Notes, Now/Later/Skip, Speicher-Snapshot,
+  byteweiser Sicherung von `manifest.json`/`config.json` und Binary-Rollback;
+  **Deinstallation**, die `memory.provider` exakt wiederherstellt, und **Purge**,
+  der verweigert, solange ein anderes Hermes-Home den Sidecar nutzt.
+- **Node-Kette der Bootstraps** für Hermes: PATH, Hermes' eigenes Node, das
+  Node eines Sidecars, sonst ein festgelegtes, hash-geprüftes portables
+  Node 24.21.0 (`scripts/dist/node-pins.json`; der Renderer verlangt
+  `--node-pins`).
+- **plugin-dist.yml**: Hermes-Beine auf drei Betriebssystemen (min/latest), ein
+  WSL-Bein und ein Abgleich der Node-Pins mit nodejs.org; bis zum
+  Harness-Release P4 nicht blockierend.
+- `lib/snapshot/store-snapshot.js`: optionales `snapshotsDir` für alle
+  Funktionen.
+
+### Geändert
+
+- Der Feed erlaubt `hosts.hermes` (Schema); gespeicherte Installer-Bundles
+  von 7.17.x lehnen einen Feed mit diesem Schlüssel ab.
+
 ## [7.17.0] — in Vorbereitung (HM1: Distribution für OpenClaw)
 
 ### Hinzugefügt

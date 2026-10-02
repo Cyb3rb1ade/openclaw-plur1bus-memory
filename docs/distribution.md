@@ -1,7 +1,8 @@
-# Distribution and installation (HM1)
+# Distribution and installation (HM1, HM2)
 
 How the PLUR1BUS memory plugin (`@cyb3rb1ade/plur1bus-memory`, plugin id
-`memory-lancedb-namespaced`) reaches an OpenClaw host: the one-line installers,
+`memory-lancedb-namespaced`) reaches an OpenClaw host, and the PLUR1BUS memory
+provider a Hermes host ([Hermes host mode](#hermes-host-mode-hm2)): the one-line installers,
 what they do, every flag and exit code, the signed feed, update, rollback,
 uninstall, adoption of an rsync deploy, the licence gate and the selftest.
 Every command and flag below matches the installer's `--help`
@@ -27,6 +28,7 @@ The OpenClaw behaviour the installer relies on is recorded in
 11. [The licence gate](#the-licence-gate)
 12. [The selftest](#the-selftest)
 13. [Privacy: what is read, written and snapshotted](#privacy-what-is-read-written-and-snapshotted)
+14. [Hermes host mode (HM2)](#hermes-host-mode-hm2)
 
 ## Targets
 
@@ -42,8 +44,8 @@ refusal says so and asks for the native arm64 Node.
 | `win-x64`, `win-arm64` | native, **beta** | `install-plugin.ps1` |
 | Windows with WSL2 | Linux inside the distro | `install-plugin.ps1 -Target wsl:<distro>` delegates to `install-plugin.sh` in that distro |
 
-Host: OpenClaw only. `--host hermes` exits 3 `host-not-yet-supported`
-(Hermes host mode arrives with HM2); nothing is changed.
+Hosts: OpenClaw (default) and, since 7.18.0, Hermes with `--host hermes`
+([Hermes host mode](#hermes-host-mode-hm2)).
 
 Windows native support prints "Windows native support is in beta" while the
 signed feed carries `hosts.openclaw.windowsNativeBeta: true`. The owner clears
@@ -211,7 +213,7 @@ Gateway, OpenClaw applies the install live.
 
 | Flag | Meaning |
 |---|---|
-| `--host openclaw\|hermes` | Host to install into. Default `openclaw`; `hermes` exits 3. |
+| `--host openclaw\|hermes` | Host to install into. Default `openclaw`; `hermes`: see [Hermes host mode](#hermes-host-mode-hm2). |
 | `--version <v>` | Plugin version. Default: the feed's `latest`. |
 | `--source clawhub\|npm` | Install source, see step 2. |
 | `--offline <tgz>` | Install a local tarball after its SHA-256 matched the feed. |
@@ -246,7 +248,7 @@ Identical for the bootstraps and the installer.
 | 0 | Done (or a dry run that found nothing wrong). |
 | 1 | Failed and rolled back, or nothing changed. |
 | 2 | A choice is needed: several WSL candidates, a legacy deploy, an interrupted run that this mode may not continue, or a prompt without a terminal. |
-| 3 | Incompatible host or environment (the findings above, `openclaw-not-found`, `node-not-found`, `unsupported-target`, `legacy-deploy-guard`, `unsafe-purge-path`, `clawpack-digest-missing`, `host-not-yet-supported`). Nothing was changed. |
+| 3 | Incompatible host or environment (the findings above, `openclaw-not-found`, `node-not-found`, `unsupported-target`, `legacy-deploy-guard`, `unsafe-purge-path`, `clawpack-digest-missing`; for Hermes see [Hermes host mode](#hermes-host-mode-hm2)). Nothing was changed. |
 | 4 | Verification failed **and** the rollback failed, or the Gateway blocked a needed store restore (the store had changed) without a terminal to ask. The report prints the manual steps. |
 
 ## Environment variables
@@ -539,3 +541,198 @@ selftest fails the install verify and triggers the rollback.
 - Tests never touch a real OpenClaw: they run against `openclaw`, `node` and
   `wsl.exe` shims in a temp home, and real OpenClaw runs only in CI on
   disposable runners.
+
+## Hermes host mode (HM2)
+
+`--host hermes` installs the PLUR1BUS memory provider into a Hermes agent
+(`$HERMES_HOME/plugins/plur1bus/`) together with a local PLUR1BUS sidecar (the
+harness binary, set up with `plur1bus setup --profile host`). The provider holds
+no engine, store or model: Hermes recalls and captures through the sidecar's
+core on this machine. Sources: `scripts/dist/installer/hermes/*.mjs`.
+
+### Hermes targets and requirements
+
+The same five targets as above (`unsupported-target` otherwise, exit 3).
+Native Windows prints "Hermes host mode on native Windows is in beta." while the
+feed carries `hosts.hermes.windowsNativeBeta: true`. Checked before any change,
+every fatal finding reported together (exit 3):
+
+| Finding | When |
+|---|---|
+| `hermes-not-found` | no `hermes` launcher (PATH, then `~/.local/bin`; on Windows `hermes.exe`/`hermes.cmd`, `<home>\bin`, `<root>\bin`, `%LOCALAPPDATA%\hermes\bin`) |
+| `hermes-home-missing` | the Hermes home does not exist yet (run Hermes once) |
+| `hermes-too-old` | the parsed Hermes version is below the release's `minHermesVersion` (0.21.4) |
+| `python-unsupported` | Hermes' Python is outside the feed's floor (`>=3.11`) or Hermes' own `requires-python` |
+| `insufficient-disk` | less than 1 GiB free under the PLUR1BUS home |
+| `harness-present` | a full PLUR1BUS harness is installed (Hermes on a full harness arrives with HM4) |
+| `sidecar-manifest-invalid` | an existing PLUR1BUS home has an unreadable `manifest.json` (`1staid repair` first) |
+| `agent-id-conflict` | another Hermes home already holds this home's agent id |
+| `bindings-registry-invalid` | `<plur1bus home>/hosts/hermes-bindings.json` cannot be read |
+| `hermes-config-uneditable` | the line edit (below) cannot change `config.yaml` safely |
+| `hermes-config-unreadable` | `hermes config get memory.provider` fails |
+
+Warnings, not fatal: `hermes-version-unknown` (a `vgit.<sha>` build),
+`hermes-newer-than-tested`, `python-unknown`.
+
+The Hermes home: `--hermes-home <dir>`, else `HERMES_HOME` (expanded as Hermes
+does: `~`, `$VAR`, `${VAR}`, on Windows `%VAR%`), else the default: `~/.hermes`
+on Linux and macOS, **`%LOCALAPPDATA%\hermes`** on native Windows.
+`--hermes-profile <name>` selects `<root>/profiles/<name>`.
+
+### One-liners
+
+```bash
+curl -fsSL https://plur1bus.app/install-plugin.sh | sh -s -- --host hermes
+```
+
+```powershell
+$s = (Invoke-WebRequest -UseBasicParsing https://plur1bus.app/install-plugin.ps1).Content; if ($s -is [byte[]]) { $s = [Text.Encoding]::UTF8.GetString($s) }; & ([scriptblock]::Create($s.TrimStart([char]0xFEFF))) -Host hermes
+```
+
+`-Host hermes` is passed to the installer as `--host hermes`. With WSL the `.ps1`
+probes the distros for `hermes` and hands over to `install-plugin.sh --host hermes`
+inside the chosen one, as for OpenClaw.
+
+### What `--host hermes` does
+
+1. **Feed**: verifies the signed feed and reads `hosts.hermes` (the release's
+   provider tarball and five pinned sidecar binaries with SHA-256). A feed
+   without it exits 3; a release with an all-zero hash exits 1.
+2. **Detect** Hermes, its version (`hermes --version`), Python and home.
+3. An **interrupted run** is finished (each step checks and skips what is done)
+   or, with `--rollback`, undone.
+4. **Compatibility** (table above).
+5. An **existing plur1bus install** in this home becomes the update (below).
+6. **Another memory provider**: `memory.provider` names another provider →
+   only with `--replace-provider` or an interactive yes; otherwise exit 2
+   `provider-in-use` and nothing changes.
+7. **Licence**: the use-class question (personal non-commercial use, then the
+   CC BY-NC 4.0 model licence), or `--accept-nc-licence`; non-interactive →
+   `general` without acceptance. An existing sidecar keeps its recorded use
+   class (`--accept-nc-licence` is then reported as not applied).
+8. **Downloads** the provider tarball and the sidecar binary for the target and
+   checks both against the feed before changing anything.
+9. **Sidecar binary**: `~/.local/bin/plur1bus` (Windows
+   `%LOCALAPPDATA%\PLUR1BUS\bin\plur1bus.exe`), the harness's own places. A host
+   sidecar at least as new is reused; an older one is replaced (the previous
+   binary is kept until the install finished).
+10. `plur1bus --home <home> setup --profile host --non-interactive --use-class <c>`.
+11. `plur1bus agent create <id>` and the bindings registry entry. Agent ids:
+    `hermes-default` for the default home, `hermes-<profile>` for
+    `<root>/profiles/<profile>` (lower-cased, other characters `-`; `Work` and
+    `work` collide and are refused), `hermes-home-<hash8>` for any other home.
+12. **Provider directory**: the tarball is extracted strictly (no links,
+    absolute paths, `..` or duplicates) into a staging dir, checked against its
+    `MANIFEST.json`, and renamed to `plugins/plur1bus` (an existing directory is
+    moved aside and restored on failure).
+13. **Binding file** `$HERMES_HOME/plur1bus.json` (0600).
+14. **`memory.provider = plur1bus`**, after the directory exists: `hermes config
+    set` only for a parsed Hermes 0.21.5 or newer; on 0.21.4 and unknown versions
+    a one-line edit of `config.yaml` with a backup (0.21.4's `config set` strips
+    every comment from `config.yaml`).
+15. **Verify**: `hermes memory status` names plur1bus and `hermes plur1bus
+    selftest --json` is ok (read-only).
+
+Any failure rolls back in reverse: `memory.provider` first (never removing a
+directory it still names), then the provider directory, binding, registry
+entry, and a sidecar this run created (service, binary, home; kept when another
+Hermes home is bound to it by then). Exit 1, or 4 with the manual steps.
+
+### Hermes flags
+
+| Flag | Effect |
+|---|---|
+| `--host hermes` (`-Host hermes`) | install into Hermes |
+| `--hermes-profile <name>` | the Hermes profile `<root>/profiles/<name>` |
+| `--hermes-home <dir>` | this Hermes home (overrides `HERMES_HOME`; exclusive with `--hermes-profile`) |
+| `--replace-provider` | replace another active memory provider (restored on rollback and uninstall) |
+| `--update [--yes]` | update (below) |
+| `--uninstall [--purge [--yes-delete-memories]]` | uninstall, optionally purge |
+| `--rollback` | undo an interrupted install, update or uninstall |
+| `--accept-nc-licence`, `--non-interactive`, `--dry-run`, `--json`, `--lang` | as for OpenClaw |
+
+OpenClaw-only flags (`--source`, `--offline`, `--state-dir`, `--profile`,
+`--download-models`, `--adopt-legacy`) are refused with `--host hermes`, and the
+Hermes flags with OpenClaw (exit 1).
+
+Exit codes are the installer's: `0` ok, `1` failed (rolled back or nothing
+changed), `2` needs a choice (`provider-in-use`, `purge-refused`, an update
+without a TTY or `--yes`, an interrupted run another mode does not continue),
+`3` incompatible (findings above), `4` rollback failed (manual steps printed).
+
+### The bootstrap's Node chain
+
+The bootstrap verifies the feed with Node before it trusts anything, so it
+needs a Node within `>=24.16.0 <25 || >=26.1.0` (Hermes' own Node 26 counts). A
+Hermes machine may have none, so `--host hermes` looks in this order:
+
+1. `node` on PATH;
+2. Hermes' own Node (`<root>/node/bin/node`, `<root>/tools/node-*/bin/node`;
+   Windows `%LOCALAPPDATA%\hermes\node\node.exe`, `<root>\tools\node-*`);
+3. an existing sidecar's Node (`<plur1bus home>/runtime/node-v*/…`);
+4. the **pinned portable Node 24.21.0** (the harness's own pin;
+   `scripts/dist/node-pins.json`, from nodejs.org's `SHASUMS256.txt`): the
+   archive is cached under `<user cache>/plur1bus/bootstrap-node-24.21.0/`
+   (`%LOCALAPPDATA%\plur1bus\cache\…` on Windows), copied into the private temp
+   dir, SHA-256-checked there and only then extracted; a cached archive that does
+   not match is fetched again, a download that does not match exits 1 and runs
+   nothing. The extracted Node lives only in the temp dir.
+
+### Update, rollback, uninstall and purge (Hermes)
+
+**Update** (`--update`, or an install over an older install): release notes
+first, then Now / Later / Skip (`--yes` = Now; no TTY → exit 2). A sidecar
+update also affects every other Hermes home bound to the same sidecar; they
+are listed before the question.
+
+- Provider only (the sidecar is current): the new provider directory is
+  staged and swapped; the previous one is kept until verify passed.
+- Sidecar update: `daemon stop` (what ran before is recorded) → the home's
+  `manifest.json` and `config.json` saved byte for byte → a store snapshot under
+  `<home>/backups/host-update` (`pre-<version>`) → the new binary (previous kept)
+  → `setup --profile host` with the recorded use class → provider → binding →
+  verify.
+- Rollback: the previous binary, `setup` with it, `manifest.json` and
+  `config.json` restored byte for byte, the store restored **only if it changed**
+  (the replaced store is kept as `.pre-restore-*` and named; nothing deletes it
+  except a purge), the sidecar started again only if it ran before, the previous
+  provider directory and binding. A rollback killed midway resumes as a
+  rollback.
+
+**Uninstall** (`--uninstall`): `memory.provider` back to exactly what it was
+(the install's line edit undone, a `config.yaml` the install created removed;
+or `hermes config set|unset` on 0.21.5+), then the provider directory (only one
+this installer owns), the binding and the registry entry. The agent, the store
+and the sidecar are kept. The capture journal is kept and its path and entry
+count are printed. A `memory.provider` that cannot be read stops before any
+change.
+
+**Purge** (`--uninstall --purge`): only when the sidecar home is a host
+profile, every agent in it is a Hermes one (`hermes-*`) and **no other Hermes
+home is bound to it** (checked before the confirmations and again under the
+registry lock); two confirmations or `--yes-delete-memories` (non-interactive
+without it: exit 2, nothing changed). Then `daemon stop`, `service uninstall`,
+and the sidecar home (store, snapshots, `.pre-restore-*`), the binary and the
+journal are deleted. A refusal at the last check keeps the home and exits 1.
+
+### The sidecar and its home
+
+The PLUR1BUS home is `PLUR1BUS_HOME` (an empty value counts as unset), else
+`~/.plur1bus`, on Windows `%LOCALAPPDATA%\PLUR1BUS`. One sidecar serves every
+Hermes home bound to it (`<home>/hosts/hermes-bindings.json`, one agent per
+Hermes home). It runs as a user service set up by `plur1bus setup`; no
+administrator rights.
+
+### Privacy (Hermes)
+
+- The installer changes in Hermes only `plugins/plur1bus/`, `plur1bus.json`,
+  its state file `.plur1bus-installer.json` and the one `memory.provider` value.
+  It never reads `.env` or any other value of `config.yaml`.
+- The provider talks only to the local core (socket or named pipe; the token in
+  `<home>/run/core.token` is read at connect time and never logged or stored).
+  It sends the prompt text for recall and each completed turn (user and
+  assistant messages) for capture, with the Hermes platform and user id as the
+  caller (`accountId hermes:<platform>`).
+- Turns that cannot be delivered (core stopped) wait in
+  `$HERMES_HOME/plur1bus/journal.ndjson` (mode 0600, at most 1 000 entries and
+  4 MiB) and are replayed in order. Uninstall keeps it; purge deletes it.

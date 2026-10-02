@@ -227,22 +227,31 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
-- Plugin distribution (HM1, `docs/distribution.md`): `tests/dist-*.test.js`
+- Plugin distribution (HM1/HM2, `docs/distribution.md`): `tests/dist-*.test.js`
   (bootstraps, feed, minisign, installer bundle and modes, gateway status, CI
-  helpers), `tests/protect-plur1bus-deploy.test.js`, the selftest and snapshot
-  suites. `.github/workflows/plugin-dist.yml` installs the packed plugin into
-  disposable OpenClaw instances on five targets, upgrades, forces a rollback
-  and uninstalls; the full suite on Windows and macOS runs in `ci.yml` (`test-cross`).
-- The installer's test seams (`PLUR1BUS_PLUGIN_INSTALLER_TEST=1` with
-  `PLUR1BUS_PLUGIN_FEED` `file://`, `PLUR1BUS_PLUGIN_PUBKEY`,
+  helpers; Hermes host mode: `dist-hermes-{install,update,uninstall,feed,untar}`,
+  `dist-node-pins`), `tests/protect-plur1bus-deploy.test.js`, the selftest and
+  snapshot suites. `.github/workflows/plugin-dist.yml` installs the packed plugin
+  into disposable OpenClaw instances on five targets, upgrades, forces a rollback
+  and uninstalls; its `hermes` and `hermes-wsl` legs do the same against
+  disposable Hermes instances (non-blocking until `vars.HM2_SIDECAR_RELEASED` is
+  `true`), and `node-pins` compares `scripts/dist/node-pins.json` with nodejs.org.
+  The full suite on Windows and macOS runs in `ci.yml` (`test-cross`).
+- The installer's test seams exist for tests only: `PLUR1BUS_PLUGIN_INSTALLER_TEST=1`
+  with `PLUR1BUS_PLUGIN_FEED` `file://`, `PLUR1BUS_PLUGIN_PUBKEY`,
   `PLUR1BUS_PLUGIN_WSL_EXE`, `PLUR1BUS_PLUGIN_TEST_FREE_BYTES`,
-  `PLUR1BUS_SELFTEST_FORCE_FAIL`, and for `--host hermes` `PLUR1BUS_PLUGIN_TEST_NO_SERVICE`
-  `PLUR1BUS_PLUGIN_TEST_KILL_AT=<point>`, which kills the installer at a named step, and
-  `PLUR1BUS_PLUGIN_TEST_FAIL_AT=purge.rm`, which fails the purge's home deletion) exist for tests only. Installer tests never
-  touch a real OpenClaw: they use `openclaw`, `node` and `wsl.exe` shims in a
-  temp home through `tests/helpers/installer-sandbox.js`, which throws if the
-  `openclaw` on `PATH` is not its own shim. Real OpenClaw runs only in CI on
-  disposable runners (`tests/helpers/assert-disposable.mjs`).
+  `PLUR1BUS_SELFTEST_FORCE_FAIL`; for `--host hermes` also
+  `PLUR1BUS_PLUGIN_TEST_NO_SERVICE=1` (setup with `--no-service`),
+  `PLUR1BUS_PLUGIN_TEST_KILL_AT=<point>` (kills the installer at a named step),
+  `PLUR1BUS_PLUGIN_TEST_FAIL_AT=purge.rm` (fails the purge's home deletion) and,
+  in the bootstraps, `PLUR1BUS_PLUGIN_TEST_NODE_BASE` (a `file://` directory
+  instead of nodejs.org for the pinned Node). Installer tests never touch a real
+  OpenClaw or Hermes: they use `openclaw`, `node` and `wsl.exe` shims through
+  `tests/helpers/installer-sandbox.js`, and `hermes` and `plur1bus` shims through
+  `tests/helpers/hermes-sandbox.js` (both on `tests/helpers/sandbox-common.js`,
+  which throws if `PATH` resolves a non-shim). Real OpenClaw and Hermes run only
+  in CI on disposable runners (`tests/helpers/assert-disposable.mjs`,
+  `--host hermes` for Hermes).
 - Current baseline: 3,609 tests (3,608 passing, 0 failing, 1 skipped), 630 suites.
 
 ## Dependency Audit

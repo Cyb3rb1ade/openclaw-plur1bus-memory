@@ -270,6 +270,15 @@ jobs:
           if [ -n "$CLAWPACK_DIGEST" ]; then args+=(--clawpack-digest "$CLAWPACK_DIGEST"); fi
           # HM1-R14/O1: the npm locator is in the feed only once the owner enabled the npm publish.
           if [ "$NPM" != yes ]; then args+=(--no-npm); fi
+          # HM2 Task 12 (F31, F32): hosts.hermes from the sidecar lock, with the release's own notes. A placeholder lock
+          # (no harness release P4 yet) is refused by the builder in a real run; a dry run builds without hosts.hermes
+          # and says so.
+          lock=scripts/dist/hermes-sidecar.lock.json
+          if node -e 'process.exit(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).placeholder === true ? 0 : 1)' "$lock" && [ "$DRY_RUN" = true ]; then
+            echo "::warning::$lock is a placeholder (harness release P4 not filled in): this dry-run feed carries no hosts.hermes; a real release refuses it"
+          else
+            args+=(--hermes-lock "$lock" --hermes-notes-de "docs/release-notes/$VERSION.de.md" --hermes-notes-en "docs/release-notes/$VERSION.en.md")
+          fi
           node scripts/dist/build-plugin-feed.mjs "${args[@]}"
           # The published name; the feed keeps the plain name too (npm-publish reads it, the owner signs its bytes).
           cp "$out/plugin-$CHANNEL.json" "$out/plugin-$CHANNEL.unsigned.json"
