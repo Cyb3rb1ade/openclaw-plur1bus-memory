@@ -824,6 +824,10 @@ Kein Contract-Wechsel (Typen bleiben bei 1.9.0).
   Harness-Release P4 nicht blockierend.
 - `lib/snapshot/store-snapshot.js`: optionales `snapshotsDir` für alle
   Funktionen.
+- **Release-Linie v7.17.0..v7.18.4 enthalten:** Sprach-Persona/Light mit
+  `/modus`, Health-Überwachung im Dashboard (`healthWatch`), optionales
+  `runtime.detachPostTurnWork` (Standard aus), Skill-Miner-Clustering- und
+  Critical-Chunk-Fix; Einzelheiten in den Abschnitten 7.17.0 bis 7.18.4.
 
 - **Ein-Zeilen-Installer** `install-plugin.sh` (Linux, macOS) und
   `install-plugin.ps1` (Windows nativ, Beta; WSL2 über Delegation an das

@@ -698,7 +698,7 @@
         "detachPostTurnWork": {
           "type": "boolean",
           "default": false,
-          "description": "7.18.3 workaround for openclaw/openclaw#162941: run post-turn capture work (episodes, insights, light dream) outside the finished turn's caller identity, so its LLM calls are not refused with LLM_COMPLETION_NOT_AUTHORIZED. Off by default; turn on and observe."
+          "description": "Run post-turn capture work (episodes, insights, light dream) outside the finished turn's caller identity, so its LLM calls are not refused as unauthorized by hosts that revoke that identity when the turn ends (OpenClaw: LLM_COMPLETION_NOT_AUTHORIZED). Off by default; turn on and observe."
         },
         "llmResultCacheEnabled": {
           "type": "boolean",
@@ -2946,17 +2946,17 @@
     "healthWatch": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Dashboard health watch (7.18.0): LLM failures and gateway log signals of the last 24 hours.",
+      "description": "Dashboard health watch: LLM failures and host gateway log signals of the last 24 hours.",
       "properties": {
         "gatewayLog": {
           "type": "boolean",
           "default": true,
-          "description": "Read the OpenClaw gateway log for lost-reply and wedge signals (tail of today and yesterday, at most once a minute)."
+          "description": "Read the host's gateway log for lost-reply and wedge signals (tail of today and yesterday, at most once a minute; OpenClaw: openclaw-YYYY-MM-DD.log)."
         },
         "gatewayLogDir": {
           "type": "string",
           "maxLength": 512,
-          "description": "Directory with OpenClaw's rolling openclaw-YYYY-MM-DD.log files. Defaults to the directory of logging.file, else /tmp/openclaw."
+          "description": "Directory with the host's rolling gateway log files (OpenClaw: openclaw-YYYY-MM-DD.log). Defaults to the directory of the host's logging.file setting, else /tmp/openclaw."
         }
       },
       "readAt": "construction",
