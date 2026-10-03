@@ -101,8 +101,8 @@ PLUR1BUS package reports 7.18.4. Existing model configuration was preserved.
 Live Desktop inspection found an additional host integration defect: a backend
 launched for mtplx (where PLUR1BUS is disabled) serves Coder requests, but its
 startup API mount does not include PLUR1BUS. A missing API route is therefore
-not evidence that Coder disabled its provider. The Desktop now retains diagnostic
-navigation on missing routes while refusing memory requests until a profile-bound
+not evidence that Coder disabled its provider. The Desktop retains a diagnostic
+command on missing routes while refusing memory navigation and requests until a profile-bound
 capability handshake explicitly confirms activation. This does not repair the
 underlying host routing by itself; profile-isolated plugin API routing and live
 acceptance remain release gates.

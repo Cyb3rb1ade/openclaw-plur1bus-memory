@@ -187,21 +187,29 @@ installation enabled selects it. Apple Silicon, Windows, Linux and desktop-only
 installs never install that wheel. It is covered by the bundle checksum manifest.
 The native database wheel alone does not certify Intel compatibility of the
 rest of the ML stack. Do not downgrade PyTorch to bypass a failed preflight.
-Reviewed Windows ARM storage bundles list **both** LanceDB 0.34.0 and PyArrow
-25.0.1 under `nativeWheels`, with separate ABI-matched pairs for classic CPython
-3.13 (standard GIL) and current Hermes PM's selected CPython 3.14. Incompatible
-interpreters are refused during the read-only plan. Windows x64 and desktop-only
-installs never select ARM wheels.
+The classic Windows ARM pair (LanceDB 0.34.0 and PyArrow 25.0.1 for standard-GIL
+CPython 3.13) is recorded in `distribution.json` under
+`nativeDependencies["win32/ARM64"]` and appears in the installer plan as
+`nativeWheels`. The separate CPython 3.14 Hermes PM pair is recorded under
+`pmNativeDependencies["win32/ARM64/cp314"]`, shipped as plugin-local source
+wheels for PM, and appears in the plan as `pmNativeWheels`—it is **not** listed
+in `nativeWheels`. Incompatible interpreters are refused during the read-only
+plan. Windows x64 and desktop-only installs never select ARM wheels.
 The builder requires an explicitly approved SHA-256 for each wheel, exact pinned
-wheel metadata, and ARM64 PE headers for every bundled native binary. This is a
+wheel metadata, and ARM64 PE headers for every bundled native binary.
 The Windows ARM CPython 3.14 native-storage validation completed in CI run
 `37129076589`; that is storage evidence, not provider-inference or PM-admission
 evidence. The declared dependency set uses the regular PyPI stable-ABI
 tokenizers wheel for the Jina Nano/BGE ONNX paths; no custom tokenizer fork is
-needed. Durable admission of the CPython 3.14 pair by Hermes PM into its
-selected environment generation is still pending acceptance. Check the
-release-specific acceptance report before claiming a completed PM install, and
-do not bypass a refusal with `--python`.
+needed. Treat PM installation as accepted only for an exact release whose
+release-linked acceptance receipts show successful official PM admission into
+the selected CPython 3.14 environment and the installed-runtime smoke. Check
+`hermes-pm-acceptance.json` together with `source-pinned-provenance.json` and
+`native-executable-plan.json` in that release's acceptance artifact; the
+package/source revisions and planned PM wheel pair must match that release.
+Storage-only evidence, or a missing/non-passing receipt, is not a PM pass. See
+the [release acceptance record](ACCEPTANCE.md). Do not bypass a refusal with
+`--python`.
 The installer does not silently replace Hermes's x64 Python with ARM. Python
 3.14 uses NumPy 2.4.3; older supported Python versions retain the prior platform
 pins (NumPy 2.3.0 on classic Windows ARM and 2.2.0 on other targets). Windows

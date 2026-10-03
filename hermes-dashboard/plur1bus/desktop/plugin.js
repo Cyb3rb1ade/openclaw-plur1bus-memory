@@ -742,13 +742,17 @@ export function createNavigationVisibility(probe, current, show) {
     async refresh() {
       if (disposed) return;
       const identity = current(), turn = ++sequence;
-      if (owner !== identity) { owner = identity; show(known.get(identity) !== false); }
+      // Unknown is not an activation grant: never surface memory navigation
+      // until this exact connection/profile has verified `enabled: true`.
+      // A cached true is retained only for that same identity during a
+      // transient probe failure; profile changes immediately fail closed.
+      if (owner !== identity) { owner = identity; show(known.get(identity) === true); }
       let enabled;
       try { enabled = await probe(); } catch { enabled = null; }
       if (disposed || turn !== sequence || current() !== identity) return;
       if (typeof enabled === 'boolean') known.set(identity, enabled);
       // A temporary connection failure must not erase a verified menu entry.
-      show(known.get(identity) !== false);
+      show(known.get(identity) === true);
     },
     dispose() { disposed = true; sequence++; show(false); },
   };

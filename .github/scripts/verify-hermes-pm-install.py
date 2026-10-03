@@ -92,6 +92,18 @@ def isolated_environment(home: Path, qa_root: Path) -> dict[str, str]:
     environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     environment["HERMES_HOME"] = str(home)
     environment["UV_CACHE_DIR"] = str(qa_root / "uv-cache")
+    # Windows Python/Hermes resolve Path.home() eagerly even when HERMES_HOME
+    # is set. Supply a disposable profile tree rather than forwarding the
+    # runner's real USERPROFILE/APPDATA paths into the official PM process.
+    profile = qa_root / "runner-profile"
+    drive = profile.drive
+    environment.update({
+        "USERPROFILE": str(profile),
+        "HOMEDRIVE": drive,
+        "HOMEPATH": str(profile)[len(drive):],
+        "APPDATA": str(profile / "AppData" / "Roaming"),
+        "LOCALAPPDATA": str(profile / "AppData" / "Local"),
+    })
     environment["PYTHONNOUSERSITE"] = "1"
     environment.pop("PYTHONPATH", None)
     environment.pop("PYTHONHOME", None)
@@ -199,6 +211,13 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
             raise ValueError("bundled native wheel is missing or redirected")
 
     env = isolated_environment(home, root)
+    # Materialize every profile/cache location inside the unique temporary
+    # root before Hermes imports code that may eagerly inspect these paths.
+    for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR"):
+        path = Path(env[name])
+        if not _inside(path, root):
+            raise ValueError("isolated Hermes profile path escaped the QA root")
+        path.mkdir(parents=True, exist_ok=True)
     checkout = run_checked(["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
                            cwd=source, env=env, label="Hermes source revision check")
     revision = checkout.stdout.strip()
@@ -214,19 +233,26 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
     run_checked([sys.executable, "-m", "pm.cli", "install"], cwd=source, env=env,
                 label="official Hermes PM bootstrap and initial install")
 
+    second_profile = home / "profiles" / "qa-second"
+    second_profile.mkdir(parents=True, exist_ok=False)
+    (second_profile / "config.yaml").write_text(
+        "memory:\n  provider: builtin\nplugins:\n  enabled: []\n  disabled: []\n",
+        encoding="utf-8")
+
+    profile_args = ["--profile", "default", "--profile", "qa-second"]
     plan_result = run_checked([sys.executable, str(bundle / "installer.py"), "--bundle", str(bundle),
-                               "--home", str(home), "--profile", "default", "--activate"],
+                               "--home", str(home), *profile_args, "--activate"],
                               cwd=root, env=env, label="PLUR1BUS installer plan")
     plan = json.loads(plan_result.stdout)
-    if not plan.get("pmManaged") or plan.get("profiles") != ["default"] or not plan.get("activate"):
-        raise ValueError("installer did not select the fresh default profile through Hermes PM")
+    if not plan.get("pmManaged") or plan.get("profiles") != ["default", "qa-second"] or not plan.get("activate"):
+        raise ValueError("installer did not select both fresh profiles through Hermes PM")
     if set(plan.get("pmNativeWheels", [])) != EXPECTED_PM_WHEELS:
         raise ValueError("installer plan did not select both bundled CPython 3.14 native wheels")
     confirmation = plan.get("confirmation")
     if not isinstance(confirmation, str) or not re.fullmatch(r"[a-f0-9]{64}", confirmation):
         raise ValueError("installer plan did not produce a valid confirmation")
     run_checked([sys.executable, str(bundle / "installer.py"), "--bundle", str(bundle),
-                 "--home", str(home), "--profile", "default", "--activate", "--apply",
+                 "--home", str(home), *profile_args, "--activate", "--apply",
                  "--confirm", confirmation, "--runtimes-stopped"], cwd=root, env=env,
                 label="confirmed PLUR1BUS install and Hermes PM admission")
 
@@ -291,6 +317,7 @@ print(json.dumps(str(resolved[0])))
     return {"officialPmBootstrap": True, "hermesSourceRevision": revision,
             "pmFacts": str(facts_path), "selectedPython": info,
             "selectedEnvironment": str(selected), "nativePair": sorted(declared),
+            "installedProfiles": plan["profiles"],
             "dependencyCheck": check_method, "runtimeSmoke": result}
 
 

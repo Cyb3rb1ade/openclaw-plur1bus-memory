@@ -105,9 +105,9 @@ assert.match(plugin.namespace.compatibilityActivationMessage(inactive), /Sidebar
 assert.match(plugin.namespace.compatibilityActivationMessage({ status: 'verified', enabled: null }), /nicht bestätigt/);
 
 // A shared backend may not have mounted the PLUR1BUS router at startup. Its
-// 404 is not proof that this selected profile disabled the provider: retain a
-// previously verified nav item, and never continue from the failed handshake
-// to a data endpoint.
+// 404 is not proof that this selected profile disabled the provider, but an
+// unknown profile must not receive memory navigation. A prior verified true
+// may be retained only for the same identity during this transient failure.
 let missingApiCalls = [];
 const missingBackendApi = async request => {
   missingApiCalls.push(request.path);
@@ -133,11 +133,18 @@ let currentNavProbe = true, missingNavStates = [];
 const missingNavVisibility = plugin.namespace.createNavigationVisibility(
   async () => currentNavProbe, () => 'local:alpha', value => missingNavStates.push(value));
 await missingNavVisibility.refresh();
+assert.equal(missingNavStates.at(-1), true, 'verified active profile exposes memory navigation');
 currentNavProbe = missingBackend.enabled;
 await missingNavVisibility.refresh();
-assert.equal(missingNavStates.at(-1), true, 'startup/route 404 preserves known-active navigation');
-assert.ok(missingNavStates.every(value => value), 'an unknown probe never hides the known-active item');
+assert.equal(missingNavStates.at(-1), true, '404 preserves only this identity\'s previously verified active navigation');
 missingNavVisibility.dispose();
+
+let unknownNavStates = [];
+const unknownNavVisibility = plugin.namespace.createNavigationVisibility(
+  async () => null, () => 'local:new-profile', value => unknownNavStates.push(value));
+await unknownNavVisibility.refresh();
+assert.equal(unknownNavStates.at(-1), false, 'brand-new unknown profile hides memory navigation');
+unknownNavVisibility.dispose();
 
 // Even a direct/stale page mount cannot read data once the selected profile's
 // authenticated capability response explicitly says its provider is off.
@@ -343,7 +350,7 @@ assert.equal(visibilityStates.at(-1), true);
 const staleProbe = visibility.refresh(); const staleReply = navPending.shift();
 navOwner = 'local:disabled';
 const disabledProbe = visibility.refresh();
-assert.equal(visibilityStates.at(-1), true, 'unknown profile retains entry while its own backend is checked');
+assert.equal(visibilityStates.at(-1), false, 'profile switch cannot borrow another profile\'s verified navigation');
 navPending.shift()(false); await disabledProbe;
 staleReply(true); await staleProbe;
 assert.equal(visibilityStates.at(-1), false, 'late enabled result cannot resurrect a disabled profile menu');
@@ -386,6 +393,20 @@ await new Promise(resolve => setTimeout(resolve, 0));
 assert.ok(inactiveBatches.flat().some(c => c.data.id === 'plur1bus.host-check'));
 assert.ok(!inactiveBatches.flat().some(c => c.area === 'sidebar.nav' || c.area === 'statusBar.left'), 'disabled profile removes its memory navigation');
 inactiveDisposers.forEach(dispose => dispose());
+
+// Unknown activation (including an unmounted shared-backend route) fails
+// closed for memory navigation but keeps the compatibility command available.
+const unknownDisposers = [], unknownBatches = [];
+globalThis.window.hermesDesktop.api = async () => { throw Object.assign(new Error('HTTP 404 Not Found'), { status: 404 }); };
+plugin.namespace.default.register({ onDispose: fn => unknownDisposers.push(fn),
+  registerMany: batch => { unknownBatches.push(batch); return () => {}; } });
+await new Promise(resolve => setTimeout(resolve, 0));
+const unknownContributions = unknownBatches.flat();
+assert.ok(unknownContributions.some(c => c.data.id === 'plur1bus.host-check'),
+  'diagnostic palette command remains discoverable when activation is unknown');
+assert.ok(!unknownContributions.some(c => c.area === 'sidebar.nav' || c.area === 'statusBar.left'),
+  'unknown activation does not expose memory navigation');
+unknownDisposers.forEach(dispose => dispose());
 
 // Older hosts can omit the sidebar area entirely; status/palette still load.
 const legacyNames = Object.keys(values).filter(name => !['SIDEBAR_NAV_AREA', 'ROUTES_AREA'].includes(name));

@@ -115,12 +115,14 @@ bridge. The backend must confirm profile-binding protocol v1 before any data
 request; the expected profile is an assertion, never a selector for an
 arbitrary home.
 
-Navigation is removed only after a successful, profile-bound capability
-response explicitly reports `memoryProviderEnabled: false`. An unavailable
-route (including HTTP 404, which can occur when a shared backend did not mount
-the plugin router at startup) means activation is unknown, not disabled: retain
-the diagnostic/navigation entry, show a compatibility warning, and keep all
-profile data and actions fail-closed until the handshake succeeds. Connection
-or profile changes recheck the active identity and discard late results; a
+Memory navigation requires a successful, profile-bound capability response
+reporting `memoryProviderEnabled: true`. An unavailable route (including HTTP
+404 when a shared backend did not mount the plugin router) is unknown, not an
+activation grant. The independent **PLUR1BUS: Desktop-Kompatibilität prüfen**
+command remains discoverable even when memory navigation is hidden. Only a
+previously confirmed active entry for that exact connection/profile may survive
+a transient probe failure; memory data and actions remain fail-closed until
+their handshake succeeds. Connection or profile changes recheck the active
+identity, never borrow another profile's activation and discard late results; a
 15-second check reconciles externally changed activation without probing
 inactive profiles.

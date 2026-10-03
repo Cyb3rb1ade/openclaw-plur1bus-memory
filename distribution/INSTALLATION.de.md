@@ -48,7 +48,7 @@ Release ausdrücklich als optional gekennzeichneten Build-Artefakten.
 | --- | --- | --- |
 | macOS Apple Silicon | `plur1bus-VERSION-macos-arm64.pkg` oder entsprechendes ZIP/TAR | Native ARM64-Hermes-Umgebung |
 | Windows x64 | `plur1bus-VERSION-windows-x64-setup-unsigned.exe` oder entsprechendes ZIP | Native x64-Hermes-Umgebung; passende Microsoft-C++-Runtime für native Bibliotheken |
-| Windows ARM64 | `plur1bus-VERSION-windows-arm64-setup-unsigned.exe` oder entsprechendes ZIP | ARM-Speicher-Wheel-Paar für klassisches CPython 3.13 oder Hermes-PM-Python 3.14; PM-Aufnahme des 3.14-Paars noch nicht als bestanden bestätigt |
+| Windows ARM64 | `plur1bus-VERSION-windows-arm64-setup-unsigned.exe` oder entsprechendes ZIP | ARM-Speicher-Wheel-Paar für klassisches CPython 3.13 oder Hermes-PM-Python 3.14; passende releasegebundene PM-Abnahmebelege prüfen |
 | Linux x64 / ARM64 | `plur1bus-VERSION.tar.gz` oder ZIP, darin `install.sh` | Native Hermes-Umgebung derselben Architektur |
 | WSL2 | Linux-Archiv und `install.sh` **innerhalb der Distribution** | Hermes samt Python innerhalb WSL; keine Windows-Python-Pfade verwenden |
 
@@ -184,14 +184,25 @@ von aktuellem Hermes PM ausgewählte Laufzeit. Niemals Wheels zwischen diesen
 ABIs austauschen. Das Paket installiert weder Hermes noch ersetzt es ein
 vorhandenes x64-Python automatisch.
 
-Für das CPython-3.13-Paar sind native LanceDB-/PyArrow-Speicherartefakte geprüft.
-Für CPython 3.14 sind die ARM-Speicherartefakte und das passende Dependency-Set
-vorbereitet; die dauerhafte Aufnahme durch Hermes PM in eine neue ausgewählte
-3.14-Umgebung ist jedoch noch **nicht als bestanden bestätigt**. Ein CI-Wheel-
-oder Storage-Test ist kein Beleg für erfolgreiche PM-Aufnahme. Vor einer
-produktiven PM-Installation den aktuellen Release-/Abnahmebericht prüfen und
-keinen Fehler mit einem anderen Interpreter oder `--python` umgehen. Der Plan
-muss den tatsächlich ausgewählten Interpreter samt Architektur zeigen.
+Das CPython-3.13-Paar für klassisches Hermes steht im Bundle-Manifest unter
+`nativeDependencies["win32/ARM64"]` und im Installationsplan unter
+`nativeWheels`. Das separate CPython-3.14-Paar für Hermes PM steht unter
+`pmNativeDependencies["win32/ARM64/cp314"]`, wird als Plugin-Quelle für PM
+mitgeliefert und erscheint im Plan unter `pmNativeWheels`—nicht unter
+`nativeWheels`. Der Plan muss den tatsächlich ausgewählten Interpreter samt
+Architektur und das passende Wheel-Paar zeigen.
+
+Hermes-PM-Installation gilt nur für eine konkrete Release-Version als
+abgenommen, wenn deren releasegebundene Acceptance-Belege die erfolgreiche
+PM-Aufnahme in die ausgewählte CPython-3.14-Umgebung und den installierten
+Runtime-Smoke nachweisen. Dazu `hermes-pm-acceptance.json` gemeinsam mit
+`source-pinned-provenance.json` und `native-executable-plan.json` aus dem
+Abnahme-Artefakt dieser Release prüfen; Paket-/Quellrevision und PM-Wheel-Paar
+müssen dazu passen. Der Storage-Lauf `37129076589` belegt nur native
+Speicherfunktion, keine PM-Aufnahme. Fehlen passende, erfolgreiche Belege,
+PM-Unterstützung für diese Release nicht als bestanden behandeln. Siehe den
+[Release-Abnahmenachweis](ACCEPTANCE.md). Eine Interpreter- oder
+`--python`-Ausweichlösung umgeht keine Ablehnung.
 
 Python 3.14 verwendet NumPy 2.4.3. Tokenizers kommt als reguläres PyPI-Wheel mit
 CPython-3.10+-Stable-ABI; ein kundenspezifischer Tokenizers-Fork ist nicht nötig.
