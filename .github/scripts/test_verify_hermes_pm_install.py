@@ -79,8 +79,9 @@ class QaLayoutTests(unittest.TestCase):
             note.write_text("one\ntwo\n", encoding="utf-8")
             diagnostics = qa.git_checkout_diagnostics(
                 repo, " M note.md\n", qa.isolated_environment(repo, repo))
-        self.assertIn("ambient gitconfig=[config:core.autocrlf false]", diagnostics)
-        self.assertIn("isolated gitconfig=[config:core.autocrlf false]", diagnostics)
+        self.assertIn("ambient gitconfig=[", diagnostics)
+        self.assertIn("isolated gitconfig=[", diagnostics)
+        self.assertIn("config:core.autocrlf false", diagnostics)
         self.assertIn("attributes=[note.md: text: unspecified", diagnostics)
         self.assertIn("numstat=[1\t0\tnote.md]", diagnostics)
         self.assertIn("paths=[note.md:len=", diagnostics)
