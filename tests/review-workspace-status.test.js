@@ -23,6 +23,7 @@ function touch(dir, rel, iso) {
 
 function workspace() {
   const dir = makeTempDir("plur1bus-review-ws-");
+  mkdirSync(join(dir, ".adaptive-learning"), { recursive: true });
   touch(dir, "memory/2026-10-01.md", "2026-10-01T21:46:00.000Z");
   touch(dir, "memory/2026-10-02.md", "2026-10-02T21:46:34.000Z");
   touch(dir, "memory/2026-10-02-2247.md", "2026-10-02T20:47:00.000Z");
@@ -31,6 +32,10 @@ function workspace() {
   touch(dir, "memory/dream-diary/rem/2026-W38-abc-rem-dream.md", "2026-09-20T23:16:00.000Z");
   touch(dir, "DREAMS.md", "2026-09-27T23:17:27.000Z");
   touch(dir, "memory/KNOWLEDGE.md", "2026-09-26T23:31:44.000Z");
+  writeFileSync(join(dir, ".adaptive-learning", "knowledge-pending.json"), JSON.stringify({ pending: [
+    { sourceAgent: "main", memoryId: "a", queuedAt: "2026-08-15T11:56:18.186Z" },
+    { sourceAgent: "main", memoryId: "b", queuedAt: "2026-10-03T00:44:33.645Z" },
+  ] }));
   return dir;
 }
 
@@ -45,12 +50,22 @@ describe("collectReviewWorkspaceStatus", () => {
     assert.equal(status.dreamDiary.ageDays, 5);
     assert.equal(status.knowledge.ageDays, 6);
     assert.equal(status.memoryFile, undefined, "a missing MEMORY.md is left out");
+    assert.deepStrictEqual({ withRem: status.dreamDiary.withRem, ok: status.dreamDiary.ok }, { withRem: true, ok: true });
+    assert.deepStrictEqual({ pending: status.knowledge.pending, since: status.knowledge.pendingSince.toISOString(), ok: status.knowledge.ok }, { pending: 2, since: "2026-08-15T11:56:18.186Z", ok: true });
   });
 
   it("flags a missing daily note and an overdue REM report", () => {
     const status = collectReviewWorkspaceStatus(workspace(), { now: new Date("2026-10-07T16:00:00.000Z"), timeZone: "Europe/Berlin" });
     assert.deepStrictEqual({ ageDays: status.dailyNote.ageDays, ok: status.dailyNote.ok }, { ageDays: 5, ok: false });
     assert.equal(status.remDream.ok, false);
+    assert.equal(status.knowledge.ok, false, "pending memories and no merge for over a week");
+  });
+
+  it("flags a REM run whose diary entry is missing", () => {
+    const dir = workspace();
+    touch(dir, "DREAMS.md", "2026-09-20T23:16:00.000Z");
+    const status = collectReviewWorkspaceStatus(dir, { now: NOW, timeZone: "Europe/Berlin" });
+    assert.equal(status.dreamDiary.ok, false);
   });
 
   it("returns null for workspaces without any of these files or without a path", () => {
@@ -66,7 +81,7 @@ describe("evening review shows the workspace write status", () => {
   it("renders German and English lines in the configured time zone", () => {
     const workspaceStatus = collectReviewWorkspaceStatus(workspace(), { now: NOW, timeZone: "Europe/Berlin" });
     const de = eveningReviewSummary(summary, { timeZone: "Europe/Berlin", workspaceStatus });
-    assert.match(de, /📂 Geschrieben:\n✅ Tagesnotiz: Fr\., 2\. Okt\., 23:46\n💭 Light-Traum: Sa\., 3\. Okt\., 02:44\n✅ REM-Traum 2026-W39: Mo\., 28\. Sept\., 01:17 \(vor 5 Tagen\)\n📖 Traumtagebuch: .*\(vor 5 Tagen\)\n📚 KNOWLEDGE\.md: .*\(vor 6 Tagen\)/);
+    assert.match(de, /📂 Geschrieben:\n✅ Tagesnotiz: Fr\., 2\. Okt\., 23:46\n💭 Light-Traum: Sa\., 3\. Okt\., 02:44\n✅ REM-Traum 2026-W39: Mo\., 28\. Sept\., 01:17 \(vor 5 Tagen\)\n✅ Traumtagebuch \(mit REM\): .*\(vor 5 Tagen\)\n✅ KNOWLEDGE\.md: .*\(vor 6 Tagen\) · 2 offen seit 15\. Aug\./);
     const en = eveningReviewSummary(summary, { lang: "en", timeZone: "Europe/Berlin", workspaceStatus });
     assert.match(en, /📂 Written:\n✅ Daily note: Fri, Oct 2, 11:46 PM/);
     assert.match(en, /✅ REM dream 2026-W39: .*\(5 days ago\)/);
@@ -78,6 +93,7 @@ describe("evening review shows the workspace write status", () => {
     const de = eveningReviewSummary({ ...summary, createdAt: "2026-10-07T16:00:00.000Z" }, { timeZone: "Europe/Berlin", workspaceStatus });
     assert.match(de, /⚠️ Tagesnotiz: zuletzt Fr\., 2\. Okt\., 23:46 — seit 5 Tagen keine neue/);
     assert.match(de, /⚠️ REM-Traum 2026-W39: .* — überfällig/);
+    assert.match(de, /⚠️ KNOWLEDGE\.md: .* · 2 offen seit 15\. Aug\. — über eine Woche nicht eingearbeitet/);
   });
 
   it("omits the block without workspace data", () => {

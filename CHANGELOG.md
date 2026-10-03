@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.13] — 2026-10-03
+
+### Geändert
+
+- **„📂 Geschrieben“ kennt die Wochenrhythmen.** Das Traumtagebuch bekommt seinen automatischen Eintrag mit dem wöchentlichen REM-Traum; die Zeile ist ✅, solange DREAMS.md zum letzten REM-Bericht geschrieben wurde, und warnt, wenn dieser Eintrag fehlt. KNOWLEDGE.md zeigt jetzt, wie viele Erinnerungen auf die Einarbeitung warten und seit wann (`.adaptive-learning/knowledge-pending.json`, nur Anzahl und Zeitpunkte). Eine Warnung gibt es erst, wenn etwas offen ist und die Datei über eine Woche nicht geschrieben wurde.
+
 ## [7.18.12] — 2026-10-03
 
 ### Hinzugefügt
