@@ -578,7 +578,7 @@ class InstallerTests(unittest.TestCase):
         def pm_python(_python, code, data=None, timeout=None):
             if "sys.version_info" in code:
                 return json.dumps({"version": [3, 14, 0], "venv": True, "prefix": str(selected),
-                                   "platform": sys.platform, "architecture": "ARM64",
+                                   "platform": sys.platform, "architecture": "AMD64",
                                    "implementation": "cpython", "freeThreaded": False})
             if "importlib.metadata.version('torch')" in code:
                 return "null"
@@ -601,6 +601,35 @@ class InstallerTests(unittest.TestCase):
         with patch.object(installer, "run_python", side_effect=pm_python):
             with self.assertRaisesRegex(ValueError, "cannot override Hermes PM"):
                 installer.plan_install(self.bundle, self.home, python=sys.executable)
+
+    def test_pm_managed_windows_arm64_is_refused_before_writes(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        selected = self.home / "installs" / key / "environments" / "generation-313"
+        python = self.pm_python_path(selected)
+        python.parent.mkdir(parents=True)
+        python.write_text("placeholder")
+        python.chmod(0o755)
+        (selected / "pyvenv.cfg").write_text("version = 3.13.0\n")
+        facts = self.home / "installs" / key / "facts.json"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+        original_config = (self.home / "config.yaml").read_bytes()
+
+        def windows_arm_info(_python, code, data=None, timeout=None):
+            if "sys.version_info" in code:
+                return json.dumps({"version": [3, 13, 0], "venv": True, "prefix": str(selected),
+                                   "platform": "win32", "architecture": "ARM64",
+                                   "implementation": "cpython", "freeThreaded": False})
+            return self.real_python(_python, code, data, timeout=timeout)
+
+        with patch.object(installer.sys, "platform", "win32"), \
+             patch.object(installer, "run_python", side_effect=windows_arm_info):
+            with self.assertRaisesRegex(ValueError, "cannot yet include.*Windows ARM"):
+                installer.plan_install(self.bundle, self.home, activate=True)
+        self.assertEqual((self.home / "config.yaml").read_bytes(), original_config)
+        self.assertFalse((self.home / "plugins").exists())
 
     def test_pm_apply_admits_selection_without_direct_pip(self):
         project = self.home / "hermes-agent"
@@ -636,7 +665,7 @@ class InstallerTests(unittest.TestCase):
         def pm_python(_python, code, data=None, timeout=None):
             if "sys.version_info" in code:
                 return json.dumps({"version": [3, 14, 0], "venv": True, "prefix": str(selected),
-                                   "platform": sys.platform, "architecture": "ARM64",
+                                   "platform": sys.platform, "architecture": "AMD64",
                                    "implementation": "cpython", "freeThreaded": False})
             if "importlib.metadata.version('torch')" in code:
                 return "null"
