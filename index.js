@@ -4853,6 +4853,10 @@ const plugin = {
       // The narrative also goes into the agent's DREAMS.md, which is what the
       // host's Dreams page shows. Off only on explicit request.
       diary: dreamNarrativeRawCfg.diary !== false,
+      // 7.18.15: Light-Traeume aus dem Chat mit einem identifizierten Nutzer
+      // tragen den Bereich "user" und bleiben sonst aus DREAMS.md heraus.
+      // Nur fuer Agenten mit genau einem Besitzer einschalten.
+      diaryFromUserChats: dreamNarrativeRawCfg.diaryFromUserChats === true,
       timezone: typeof cfg.timezone === "string" && cfg.timezone.trim() ? cfg.timezone.trim() : null,
     };
     const resolveTemperamentName = (forAgentId) =>

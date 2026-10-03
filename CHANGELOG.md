@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.15] — 2026-10-03
+
+### Hinzugefügt
+
+- **`dreaming.narrative.diaryFromUserChats` (Standard `false`).** Light-Träume aus dem Chat mit einem identifizierten Nutzer laufen im Bereich `user`; `diaryScopeAllowed` lässt ins Traumtagebuch nur den privaten Bereich des Agenten, deshalb kam aus echten Chats nie ein Light-Eintrag in `DREAMS.md`. Eingeschaltet schreiben auch diese Erzählungen ins Tagebuch. Nur für Agenten mit genau einem Besitzer gedacht: `DREAMS.md` liegt im Workspace des Agenten, und jeder mit Zugriff darauf liest die Erzählung.
+
 ## [7.18.14] — 2026-10-03
 
 ### Behoben

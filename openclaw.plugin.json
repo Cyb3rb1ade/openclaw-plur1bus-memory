@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.18.14",
+  "version": "7.18.15",
   "kind": "memory",
   "cliCommands": [
     {
@@ -494,6 +494,11 @@
                 "type": "boolean",
                 "default": true,
                 "description": "Also append each dream narrative to the agent's DREAMS.md, the file OpenClaw's Dreams page shows."
+              },
+              "diaryFromUserChats": {
+                "type": "boolean",
+                "default": false,
+                "description": "7.18.15: also append light dreams from a chat with an identified user (scope \"user\") to DREAMS.md. Off by default because the diary is the agent's file; only turn on for agents with a single owner."
               }
             }
           }
