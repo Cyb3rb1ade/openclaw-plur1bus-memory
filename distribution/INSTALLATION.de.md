@@ -48,7 +48,7 @@ Release ausdrücklich als optional gekennzeichneten Build-Artefakten.
 | --- | --- | --- |
 | macOS Apple Silicon | `plur1bus-VERSION-macos-arm64.pkg` oder entsprechendes ZIP/TAR | Native ARM64-Hermes-Umgebung |
 | Windows x64 | `plur1bus-VERSION-windows-x64-setup-unsigned.exe` oder entsprechendes ZIP | Native x64-Hermes-Umgebung; passende Microsoft-C++-Runtime für native Bibliotheken |
-| Windows ARM64 | `plur1bus-VERSION-windows-arm64-setup-unsigned.exe` oder entsprechendes ZIP | Vorbereitete native CPython-3.13-Hermes-Umgebung, Standard-GIL; ARM-LanceDB **und** ARM-PyArrow im Paket |
+| Windows ARM64 | `plur1bus-VERSION-windows-arm64-setup-unsigned.exe` oder entsprechendes ZIP | ARM-Speicher-Wheel-Paar für klassisches CPython 3.13 oder Hermes-PM-Python 3.14; PM-Aufnahme des 3.14-Paars noch nicht als bestanden bestätigt |
 | Linux x64 / ARM64 | `plur1bus-VERSION.tar.gz` oder ZIP, darin `install.sh` | Native Hermes-Umgebung derselben Architektur |
 | WSL2 | Linux-Archiv und `install.sh` **innerhalb der Distribution** | Hermes samt Python innerhalb WSL; keine Windows-Python-Pfade verwenden |
 
@@ -71,12 +71,16 @@ beachten; gegebenenfalls auf signierte Pakete warten.
 2. Tatsächliches Hermes-Home und dessen virtuelles Python-Environment bestimmen.
    Übliche Homes: macOS/Linux/WSL `~/.hermes`, Windows `%LOCALAPPDATA%\hermes`.
    Eigene Installationspfade und `HERMES_HOME` können davon abweichen.
-   Bei aktuellen Hermes-Versionen ist die von PM ausgewählte Umgebung maßgeblich,
-   nicht ein eventuell noch vorhandenes älteres `hermes-agent/venv`.
+   Bei aktuellen Hermes-Versionen ist die von PM ausgewählte Python-3.14-Umgebung
+   maßgeblich, nicht ein eventuell noch vorhandenes älteres `hermes-agent/venv`.
    PLUR1BUS deklariert seine Python-Pakete im Plugin-Verzeichnis, damit Hermes
-   sie bei späteren Umgebungswechseln erneut berücksichtigt. Python 3.14 nutzt
-   passende native ONNX- und Transformer-Abhängigkeiten; vorhandene Provider-/Modellkonfiguration wird
-   nicht stillschweigend auf einen anderen Provider umgestellt.
+   sie bei späteren PM-Umgebungsgenerationen erneut berücksichtigt. Python 3.14
+   nutzt NumPy 2.4.3 sowie passende native ONNX-/Tokenizers-Abhängigkeiten;
+   Jina-Nano-ONNX und BGE-ONNX können ohne kundenspezifischen Tokenizers-Fork
+   betrieben werden. Auf Plattformen mit unterstütztem Transformer-Stack bleibt
+   auch dieser als separater Provider verfügbar. Vorhandene Provider- und
+   Modellkonfiguration wird nicht stillschweigend auf einen anderen Provider
+   umgestellt.
 3. Bestehende Konfiguration, Memory-Daten und Python-Environment sichern.
    Der Installer sichert geänderte Plugin-/Konfigurationsdateien, aber erstellt
    **kein vollständiges Backup der Python-Abhängigkeiten**.
@@ -173,26 +177,27 @@ Reparatur den Plan neu erstellen und die vollständige Installation erneut prüf
 
 ## Windows ARM64
 
-Das native ARM64-Paket verwenden, nicht die x64-Ausgabe unter Emulation.
-Aktuell benötigt der native Weg eine **bereits eingerichtete Hermes-Umgebung
-mit CPython 3.13 ARM64 und Standard-GIL**. Der Installer erzeugt dieses Environment
-nicht und ersetzt kein vorhandenes x64-Python automatisch.
+Das native ARM64-Paket verwenden, nicht die x64-Ausgabe unter Emulation. Es gibt
+getrennte, ABI-passende Speicher-Wheel-Paare: **CPython 3.13 ARM64 mit
+Standard-GIL** für klassische Hermes-venvs und **CPython 3.14 ARM64** für die
+von aktuellem Hermes PM ausgewählte Laufzeit. Niemals Wheels zwischen diesen
+ABIs austauschen. Das Paket installiert weder Hermes noch ersetzt es ein
+vorhandenes x64-Python automatisch.
 
-Die neue, von Hermes PM verwaltete Windows-ARM-Umgebung wird noch nicht
-unterstützt: Das mitgelieferte PyArrow-Wheel ist an CPython 3.13 gebunden,
-und diese Fremd-Wheels sind nicht in Hermes' PM-Abhängigkeitsgraph eingebunden.
-Der Installer verweigert diesen Fall vor Änderungen. `--python` ist kein
-Umgehungsweg für PM. Der oben beschriebene native CPython-3.13-Weg gilt nur
-für eine klassische, nicht von PM verwaltete Hermes-Umgebung.
+Für das CPython-3.13-Paar sind native LanceDB-/PyArrow-Speicherartefakte geprüft.
+Für CPython 3.14 sind die ARM-Speicherartefakte und das passende Dependency-Set
+vorbereitet; die dauerhafte Aufnahme durch Hermes PM in eine neue ausgewählte
+3.14-Umgebung ist jedoch noch **nicht als bestanden bestätigt**. Ein CI-Wheel-
+oder Storage-Test ist kein Beleg für erfolgreiche PM-Aufnahme. Vor einer
+produktiven PM-Installation den aktuellen Release-/Abnahmebericht prüfen und
+keinen Fehler mit einem anderen Interpreter oder `--python` umgehen. Der Plan
+muss den tatsächlich ausgewählten Interpreter samt Architektur zeigen.
 
-Im Assistenten den tatsächlichen ARM64-Interpreter explizit angeben, beispielsweise
-`C:\Users\NAME\AppData\Local\hermes\hermes-agent\venv-arm64\Scripts\python.exe`.
-Im Plan müssen Architektur und Interpreter stimmen; unter `nativeWheels` müssen
-die beiden geprüften ARM-Pakete für **LanceDB 0.34.0** und **PyArrow 25.0.1** stehen.
-Ein unqualifiziertes portables Archiv ohne diese Wheels ist dafür kein Ersatz.
-
-Für lokale Inferenz ONNX oder alternativ einen unterstützten Remote-Provider
-einrichten. Eine passende Torch-Installation wird hier nicht automatisch erzeugt.
+Python 3.14 verwendet NumPy 2.4.3. Tokenizers kommt als reguläres PyPI-Wheel mit
+CPython-3.10+-Stable-ABI; ein kundenspezifischer Tokenizers-Fork ist nicht nötig.
+Lokale Jina-Nano- und BGE-Rerank-Inferenz läuft über ONNX, nicht über Torch.
+Für Windows ARM64 wird keine automatische Torch-Installation versprochen;
+konfiguriere ONNX oder einen unterstützten Remote-Provider.
 Ein optionaler separater ARM-Desktop-Launcher ist im
 [technischen Installer-Handbuch](README.md#additional-native-windows-arm-desktop-launcher)
 beschrieben. Auch dieser setzt einen bereits vorhandenen ARM64-Hermes-Desktop
@@ -249,8 +254,25 @@ meldet den Backup-/Receipt-Pfad. Danach Hermes selbst neu starten.
   ist die Navigation über Sidebar, Statusleiste oder Befehlspalette erreichbar.
 - Bei fehlender Oberfläche **PLUR1BUS: Desktop-Kompatibilität prüfen** aufrufen.
   Ein inkompatibles Hermes-Binary bekommt durch Paketinstallation nicht
-  automatisch eine neue Sidebar-API; das technische Handbuch beschreibt den
-  separat bestätigten Host-Build. Keine fremden Patches blind einspielen.
+  automatisch eine neue Sidebar-API. Der Host-Helper ist eine getrennte,
+  manuell geprüfte Build-Vorbereitung; er ersetzt oder startet die installierte
+  App nicht automatisch. Für aktuelles Hermes ist der Standardmodus mit den
+  älteren Host-Patches nicht passend. `--modern-profile-api` wählt ausdrücklich
+  nur den geprüften lokalen Profil-API-Patch für einen isolierten Build aus.
+  Dieser behebt nicht sämtliche Remote-Profil-API-Einschränkungen von Hermes.
+  Details und Grenzen stehen im [technischen Installer-Handbuch](README.md).
+  Nach Prüfung der Quelle kann der Helper aus dem entpackten Paket zunächst
+  nur einen Plan anzeigen:
+
+  ```sh
+  python helpers/plur1bus-desktop-host.py --source /absoluter/hermes-agent-checkout \
+    --output-root /absoluter/build-ordner --modern-profile-api
+  ```
+
+  Für den Build dieselben Argumente mit `--apply --confirm HASH_AUS_DEM_PLAN`
+  wiederholen. Der Build bleibt isoliert und muss separat geprüft werden;
+  es gibt keine automatische Patch-Auswahl, Installation oder Ersetzung der
+  signierten Hermes-App.
 - Mit einer harmlosen Test-Erinnerung tatsächlich **Speichern und Abrufen**
   prüfen. Ein erfolgreiches Speichern/Queueing allein belegt noch keinen Capture.
 - Embedding-/Reranking-Provider werden durch das Paket nicht automatisch

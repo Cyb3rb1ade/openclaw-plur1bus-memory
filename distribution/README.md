@@ -44,12 +44,18 @@ for implemented native variants and remaining parity/acceptance boundaries.
 | macOS, Apple Silicon | Portable `.tar.gz` / `.zip`, `install.sh`; new `.pkg` installs `/Applications/PLUR1BUS einrichten.app` (macOS 13+) |
 | Linux / WSL2, x86-64 or ARM64 | Portable `.tar.gz`, run `install.sh` **inside Linux/WSL** |
 | Native Windows x86-64 | Portable `.zip` + `install.ps1`, or the Windows-built console setup `.exe` |
-| Native Windows ARM64 | ARM-qualified `.zip` / console setup `.exe`; pre-existing native CPython 3.13 Hermes venv and bundled ARM storage wheels required |
+| Native Windows ARM64 | ARM-qualified `.zip` / console setup `.exe`; ABI-matched storage wheels for classic CPython 3.13 or Hermes-PM Python 3.14 |
 | Windows Desktop, backend in WSL/remote | Desktop-only installation in Windows; separate backend installation inside WSL/remote |
 
 Portable means Python source, not architecture-independent native dependencies.
 The Hermes venv must have Python >=3.11 and compatible LanceDB, NumPy, PyTorch,
-sentence-transformers and optional ONNX wheels for its OS/architecture. Native
+sentence-transformers and optional ONNX wheels for its OS/architecture. For
+current Hermes PM installations, use the PM-selected Python 3.14 environment;
+an older `hermes-agent/venv` may no longer be the active runtime. PLUR1BUS ships
+plugin dependency declarations so PM can reconsider requirements when it
+creates a new environment generation. Python 3.14 uses NumPy 2.4.3 and native
+ONNX/tokenizers dependencies; Jina Nano and BGE ONNX inference use the regular
+PyPI CPython 3.10+ stable-ABI tokenizers wheel, not a custom fork. Native
 Windows ARM64 builds are included in CI, but a build alone does not certify the
 complete installed application or provision a native Hermes environment.
 Termux and other unlisted platforms are not certified. Failed dependency
@@ -134,7 +140,9 @@ repeat the **same arguments** with:
 This is an optional, separate launcher for an already prepared native ARM64
 Hermes tree; it never replaces the normal Hermes shortcut. It requires an
 existing standard-GIL CPython 3.13 ARM64 virtual environment and an existing
-ARM64 Desktop executable. It does not download Python, create a venv, modify
+ARM64 Desktop executable. This launcher remains the classic-venv path; it does
+not certify or perform Hermes PM admission of the CPython 3.14 storage pair. It
+does not download Python, create a venv, modify
 the registry, or change PATH/global environment. Review the plan binding all
 four absolute paths, then repeat the same command with its confirmation:
 
@@ -180,21 +188,28 @@ installs never install that wheel. It is covered by the bundle checksum manifest
 The native database wheel alone does not certify Intel compatibility of the
 rest of the ML stack. Do not downgrade PyTorch to bypass a failed preflight.
 Reviewed Windows ARM storage bundles list **both** LanceDB 0.34.0 and PyArrow
-25.0.1 under `nativeWheels`. The current Arrow artifact requires native CPython
-3.13 with the standard GIL ABI; incompatible interpreters are refused during the
-read-only plan. Windows x64 and desktop-only installs never select ARM wheels.
+25.0.1 under `nativeWheels`, with separate ABI-matched pairs for classic CPython
+3.13 (standard GIL) and current Hermes PM's selected CPython 3.14. Incompatible
+interpreters are refused during the read-only plan. Windows x64 and desktop-only
+installs never select ARM wheels.
 The builder requires an explicitly approved SHA-256 for each wheel, exact pinned
 wheel metadata, and ARM64 PE headers for every bundled native binary. This is a
-storage packaging capability, **not yet a complete ARM edition**: native ML
-dependency/provider provisioning and full installed-application acceptance must
-also pass. The installer does not silently replace Hermes's x64 Python with ARM.
-The Python package uses NumPy 2.3.0 on native Windows ARM and retains 2.2.0 on
-other platforms. Windows ARM and Intel macOS do not implicitly install the
-PyTorch-based transformer extra; configure the explicit local ONNX provider or a
-supported remote provider there. Existing transformer packages/configurations
-are not removed or rewritten. `local-transformers` remains an explicit extra
-for operators who provision a compatible native stack; no old torch version is
-selected as a compatibility workaround.
+The Windows ARM CPython 3.14 native-storage validation completed in CI run
+`37129076589`; that is storage evidence, not provider-inference or PM-admission
+evidence. The declared dependency set uses the regular PyPI stable-ABI
+tokenizers wheel for the Jina Nano/BGE ONNX paths; no custom tokenizer fork is
+needed. Durable admission of the CPython 3.14 pair by Hermes PM into its
+selected environment generation is still pending acceptance. Check the
+release-specific acceptance report before claiming a completed PM install, and
+do not bypass a refusal with `--python`.
+The installer does not silently replace Hermes's x64 Python with ARM. Python
+3.14 uses NumPy 2.4.3; older supported Python versions retain the prior platform
+pins (NumPy 2.3.0 on classic Windows ARM and 2.2.0 on other targets). Windows
+ARM and Intel macOS do not implicitly install the PyTorch-based transformer
+extra; configure local ONNX or a supported remote provider there. Existing
+transformer packages/configurations are not removed or rewritten.
+`local-transformers` remains an explicit extra for operators who provision a
+compatible native stack; no old torch version is selected as a workaround.
 `--no-deps` is for an already provisioned, compatible venv; wheels are still
 installed and checked. New pip conflicts abort before plugin-file changes.
 Pre-existing conflict lines are recorded, not presented as a healthy environment.
@@ -294,11 +309,25 @@ ensure no installer is running before manually removing that empty lock director
 The PLUR1BUS Desktop startup check is read-only. It verifies routing/profile
 identity and reports missing capabilities; it cannot retrofit a sidebar API
 into an incompatible Hermes binary. `helpers/plur1bus-desktop-host.py` and the
-adjacent patch directory can prepare a **separate** compatible host build from
-a trusted clean Hermes source checkout (Python >=3.12 and its Node/npm toolchain
-required). Run with `--source /absolute/source` to review a plan first. The
-helper never replaces your app or auto-publishes; read the provider README for
-the complete host-build procedure. No binary host patch runs at every startup.
+adjacent patch directory can prepare a **separate** host build from a trusted
+clean Hermes source checkout (Python >=3.12 and its Node/npm toolchain required).
+For current Hermes, the default mode selects legacy host patches and is not
+compatible; do not assume the default build plan will fix a current installation.
+Explicitly pass `--modern-profile-api` to review the isolated local-profile API
+patch instead:
+
+```sh
+python helpers/plur1bus-desktop-host.py --source /absolute/hermes-agent-checkout \
+  --output-root /absolute/output-root --modern-profile-api
+```
+
+Review the plan and patch state first. Building requires repeating the same
+arguments with `--apply --confirm HASH_FROM_PLAN`; it builds an isolated copy,
+does not patch, replace, or start the installed/signed app, and does not perform
+automatic compatibility magic at startup. The modern patch addresses local
+profile-scoped plugin API routing; Hermes' upstream remote-profile API remains
+limited. Read the provider README for the full procedure and current acceptance
+boundaries. No binary host patch runs at every startup.
 
 Hourly/daily maintenance is available through `plur1bus-hermes-jobs` on each
 platform. `plur1bus-hermes-jobs-install` now previews native **per-user** schedules:

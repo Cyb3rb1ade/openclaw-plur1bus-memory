@@ -1,0 +1,3 @@
+# Unified patches encode an empty context line as a single space. Keep that
+# required patch syntax rather than treating it as source trailing whitespace.
+hermes-dashboard/patches/*.patch whitespace=-blank-at-eol

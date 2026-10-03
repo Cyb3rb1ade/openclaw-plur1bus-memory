@@ -58,6 +58,11 @@ class Upstream761InventoryTests(unittest.TestCase):
         changed_715.update({"distribution/installer.py", "distribution/build.py",
                             "distribution/tests/test_installer.py",
                             "plur1bus-hermes/src/plur1bus_hermes/skill_workshop.py"})
+        # Reviewed 3.14 PM wheel validation and explicit legacy/modern NumPy
+        # fixtures. These regression suites intentionally extend the old tests;
+        # unrelated retained files still require their original Git blob.
+        changed_715.update({"distribution/tests/test_native_wheels.py",
+                            "distribution/tests/test_platform_dependencies.py"})
         for path in paths:
             if Path(path).name in metadata or path in changed_769 or path in changed_715:
                 continue
