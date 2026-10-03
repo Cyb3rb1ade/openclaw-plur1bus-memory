@@ -126,8 +126,11 @@ def run_checked(command: list[str], *, cwd: Path, env: dict[str, str], label: st
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"{label} timed out after {timeout} seconds") from error
     if result.returncode:
-        stdout_detail = _sanitized_tail(result.stdout, max_lines=20, max_line_chars=500)
-        stderr_detail = _sanitized_tail(result.stderr, max_lines=12, max_line_chars=500)
+        # Native compiler failures often print the actionable cause before the
+        # final wrapper command. Keep a bounded but useful tail from both
+        # channels; this helper runs with a secret-free QA environment.
+        stdout_detail = _sanitized_tail(result.stdout, max_lines=40, max_line_chars=600)
+        stderr_detail = _sanitized_tail(result.stderr, max_lines=80, max_line_chars=600)
         channels = []
         if stdout_detail:
             channels.append(f"stdout: {stdout_detail}")
