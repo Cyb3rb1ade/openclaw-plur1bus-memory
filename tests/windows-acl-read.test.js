@@ -51,6 +51,20 @@ describe("readDirectoryAcl fast path fallback", () => {
     );
   });
 
+  it("keeps the 30 s product cap on the PowerShell fallback", () => {
+    let timeout;
+    readDirectoryAcl(target, {
+      execFile: (file, args, options) => {
+        if (String(file).toLowerCase().includes("powershell")) {
+          timeout = options.timeout;
+          return JSON_ACL;
+        }
+        throw Object.assign(new Error("fast path missing"), { status: 1 });
+      },
+    });
+    assert.ok(timeout > 0 && timeout <= 30_000);
+  });
+
   it("does not use PowerShell when WMI output is well-formed but unknown", () => {
     const files = [];
     assert.throws(
@@ -85,13 +99,14 @@ describe("readDirectoryAcl fast path matches PowerShell", {
   }
 
   function powershellAcl(dir) {
-    let psCalls = 0;
     return readDirectoryAcl(dir, {
+      // Product cap stays 30 s. Forcing 5.1 on windows-11-arm needs more:
+      // probe 37123429626, cold first 32 s.
+      timeoutMs: 60_000,
       execFile: (file, args, options) => {
         if (!String(file).toLowerCase().includes("powershell")) {
           throw Object.assign(new Error("forced powershell path"), { status: 1 });
         }
-        psCalls += 1;
         return execFileSync(file, args, options);
       },
     });
