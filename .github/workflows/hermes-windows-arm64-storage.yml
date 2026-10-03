@@ -201,6 +201,11 @@ jobs:
           New-Item -ItemType Directory -Path $source | Out-Null
           git -C $source init --quiet
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # The helper intentionally replaces USERPROFILE. Pin checkout line
+          # ending behavior locally so its later clean-tree guard does not
+          # inherit a different runner-global Git config context.
+          git -C $source config --local core.autocrlf false
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git -C $source remote add origin https://github.com/NousResearch/hermes-agent.git
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git -C $source fetch --quiet --depth 1 origin $env:PLUR1BUS_HERMES_SOURCE_REVISION
