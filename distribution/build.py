@@ -55,19 +55,22 @@ def copy(source, target):
     shutil.copy2(source, target)
 
 
-def directory_project(package, module):
+def directory_project(package, module, pm_arm_sources=False):
     """Declare the flat plugin as a real package for Hermes-managed generations."""
     document = tomllib.loads((REPO / package / "pyproject.toml").read_text())
     project = dict(document["project"])
     project.pop("readme", None)
     if package == "plur1bus-hermes":
         # Python 3.14 does not support the legacy implicit Transformer stack.
-        # ONNX is explicit and has native wheels for this current Hermes runtime.
+        # Keep ONNX/tokenizer dependencies explicit on every supported platform.
         project["dependencies"] = list(project.get("dependencies", [])) + [
             "onnxruntime>=1.20,<2; python_version >= '3.14'",
             "tokenizers>=0.21,<1; python_version >= '3.14'",
             "certifi>=2024.8.30; python_version >= '3.14'",
         ]
+        if pm_arm_sources:
+            project["dependencies"].append(
+                "pyarrow==25.0.1; sys_platform == 'win32' and platform_machine == 'ARM64' and python_version >= '3.14' and python_version < '3.15'")
     lines = ["[build-system]", 'requires = ["setuptools>=75", "wheel"]',
              'build-backend = "setuptools.build_meta"', "", "[project]"]
     for key in ("name", "version", "description", "requires-python", "dependencies"):
@@ -76,6 +79,12 @@ def directory_project(package, module):
     lines.extend(["", "[tool.setuptools]", "packages = " + json.dumps([module]),
                   "package-dir = {" + json.dumps(module) + ' = "."}', "",
                   "[tool.setuptools.package-data]", module + ' = ["plugin.yaml"]', ""])
+    if package == "plur1bus-hermes" and pm_arm_sources:
+        # uv (used by Hermes PM) consumes these only on the exact current
+        # Windows ARM target. Keep wheel sources inside the copied plugin tree.
+        lines.extend(["[tool.uv.sources]",
+                      'lancedb = { path = "vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl", marker = "sys_platform == \'win32\' and platform_machine == \'ARM64\' and python_version >= \'3.14\' and python_version < \'3.15\'" }',
+                      'pyarrow = { path = "vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl", marker = "sys_platform == \'win32\' and platform_machine == \'ARM64\' and python_version >= \'3.14\' and python_version < \'3.15\'" }', ""])
     return "\n".join(lines).encode("utf-8")
 
 
@@ -149,9 +158,53 @@ def validate_windows_arm_wheel(path, expected_sha256, package):
     return path
 
 
+def validate_pm_windows_arm_wheel(path, expected_sha256, package):
+    """Validate the explicitly supplied CPython 3.14 PM wheel candidate."""
+    if package == "lancedb":
+        return validate_windows_arm_wheel(path, expected_sha256, package)
+    if package != "pyarrow":
+        raise ValueError("unsupported PM ARM native dependency")
+    path = Path(path)
+    expected = "pyarrow-25.0.1-cp314-cp314-win_arm64.whl"
+    if path.name != expected:
+        raise ValueError("expected the CPython 3.14 Windows ARM64 PyArrow wheel")
+    # Reuse the strict archive/hash/PE validation with the candidate's exact tag.
+    if (path.is_symlink() or not path.is_file() or path.stat().st_size > 512 * 1024 * 1024
+        or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256 or "")
+        or hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256):
+        raise ValueError("expected a hash-approved CPython 3.14 Windows ARM64 PyArrow wheel")
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        prefix = "pyarrow-25.0.1.dist-info/"
+        if len(names) != len(set(names)) or any(archive.getinfo(prefix + n).file_size > 100_000 for n in ("METADATA", "WHEEL")):
+            raise ValueError("invalid PM native wheel archive")
+        metadata = BytesParser().parsebytes(archive.read(prefix + "METADATA"))
+        tags = BytesParser().parsebytes(archive.read(prefix + "WHEEL")).get_all("Tag")
+        if metadata.get("Name") != "pyarrow" or metadata.get("Version") != "25.0.1" or tags != ["cp314-cp314-win_arm64"]:
+            raise ValueError("PM native wheel metadata/architecture mismatch")
+        binaries = [name for name in names if name.lower().endswith((".pyd", ".dll", ".exe"))]
+        if not any(name.lower().endswith(".pyd") for name in binaries):
+            raise ValueError("native ARM64 extension missing")
+        for name in binaries:
+            with archive.open(name) as stream:
+                header = stream.read(64)
+                if len(header) != 64 or header[:2] != b"MZ":
+                    raise ValueError("invalid ARM64 PE header")
+                offset = struct.unpack_from("<I", header, 0x3c)[0]
+                if offset < 64 or offset > min(1024 * 1024, archive.getinfo(name).file_size - 6):
+                    raise ValueError("invalid ARM64 PE offset")
+                stream.seek(offset)
+                pe = stream.read(6)
+                if len(pe) != 6 or pe[:4] != b"PE\0\0" or struct.unpack_from("<H", pe, 4)[0] != 0xaa64:
+                    raise ValueError("native binary is not Windows ARM64")
+    return path
+
+
 def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha256=None,
           arm_lancedb_wheel=None, arm_lancedb_sha256=None, arm_pyarrow_wheel=None, arm_pyarrow_sha256=None,
-          mac_app_sign_identity=None, mac_installer_sign_identity=None):
+          mac_app_sign_identity=None, mac_installer_sign_identity=None,
+          pm_arm_lancedb_wheel=None, pm_arm_lancedb_sha256=None,
+          pm_arm_pyarrow_wheel=None, pm_arm_pyarrow_sha256=None):
     if (mac_app_sign_identity or mac_installer_sign_identity) and not mac_pkg:
         raise ValueError("macOS signing identities require --mac-pkg")
     if bool(mac_app_sign_identity) != bool(mac_installer_sign_identity):
@@ -173,6 +226,13 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
     if all(arm_inputs):
         arm_vendors = [(validate_windows_arm_wheel(arm_lancedb_wheel, arm_lancedb_sha256, "lancedb"), arm_lancedb_sha256),
                        (validate_windows_arm_wheel(arm_pyarrow_wheel, arm_pyarrow_sha256, "pyarrow"), arm_pyarrow_sha256)]
+    pm_arm_inputs = [pm_arm_lancedb_wheel, pm_arm_lancedb_sha256, pm_arm_pyarrow_wheel, pm_arm_pyarrow_sha256]
+    if any(pm_arm_inputs) and not all(pm_arm_inputs):
+        raise ValueError("both PM ARM wheel paths and approved SHA-256 values are required")
+    pm_arm_vendors = []
+    if all(pm_arm_inputs):
+        pm_arm_vendors = [(validate_pm_windows_arm_wheel(pm_arm_lancedb_wheel, pm_arm_lancedb_sha256, "lancedb"), pm_arm_lancedb_sha256),
+                          (validate_pm_windows_arm_wheel(pm_arm_pyarrow_wheel, pm_arm_pyarrow_sha256, "pyarrow"), pm_arm_pyarrow_sha256)]
     output = Path(output).absolute()
     if output.exists() and any(output.iterdir()):
         raise ValueError("use a new empty output directory; existing releases are never overwritten")
@@ -194,7 +254,8 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
         source_root = package + "/src/" + module + "/"
         for relative in tracked(source_root):
             copy(REPO / relative, bundle / "payload" / destination / relative[len(source_root):])
-        (bundle / "payload" / destination / "pyproject.toml").write_bytes(directory_project(package, module))
+        (bundle / "payload" / destination / "pyproject.toml").write_bytes(directory_project(
+            package, module, pm_arm_sources=(package == "plur1bus-hermes" and bool(pm_arm_vendors))))
         wheel_source = work / package
         for relative in tracked(package + "/"):
             if "/tests/" not in relative:
@@ -229,6 +290,15 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
             if hashlib.sha256((bundle / relative).read_bytes()).hexdigest() != approved_hash:
                 raise ValueError("native wheel changed while packaging")
             native_dependencies["win32/ARM64"].append(relative)
+    pm_native_dependencies = {}
+    if pm_arm_vendors:
+        pm_native_dependencies["win32/ARM64/cp314"] = []
+        for candidate, approved_hash in pm_arm_vendors:
+            relative = "payload/plugins/plur1bus/vendor/windows-arm64/" + candidate.name
+            copy(candidate, bundle / relative)
+            if hashlib.sha256((bundle / relative).read_bytes()).hexdigest() != approved_hash:
+                raise ValueError("PM native wheel changed while packaging")
+            pm_native_dependencies["win32/ARM64/cp314"].append(relative)
     if windows_exe:
         if sys.platform != "win32":
             raise ValueError("Windows executable must be built and tested on Windows")
@@ -248,7 +318,8 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
                 "pythonVersion": tomllib.loads((REPO / "plur1bus-hermes/pyproject.toml").read_text())["project"]["version"],
                 "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
                 "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)), "files": files,
-                "nativeDependencies": native_dependencies}
+                "nativeDependencies": native_dependencies,
+                "pmNativeDependencies": pm_native_dependencies}
     (bundle / "distribution.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     # Deliberately no OpenClaw JS package/postinstall, provider credentials or models.
     shutil.make_archive(str(output / release_stem), "zip", work, name)
@@ -284,7 +355,13 @@ if __name__ == "__main__":
     parser.add_argument("--arm-lancedb-sha256", help="approved LanceDB wheel SHA-256")
     parser.add_argument("--arm-pyarrow-wheel", help="native-tested PyArrow 25.0.1 CPython 3.13 Windows ARM64 wheel")
     parser.add_argument("--arm-pyarrow-sha256", help="approved PyArrow wheel SHA-256")
+    parser.add_argument("--pm-arm-lancedb-wheel", help="explicitly approved CPython 3.14 Hermes PM ARM64 LanceDB candidate")
+    parser.add_argument("--pm-arm-lancedb-sha256", help="approved PM LanceDB wheel SHA-256")
+    parser.add_argument("--pm-arm-pyarrow-wheel", help="explicitly approved CPython 3.14 Hermes PM ARM64 PyArrow candidate")
+    parser.add_argument("--pm-arm-pyarrow-sha256", help="approved PM PyArrow wheel SHA-256")
     args = parser.parse_args()
     build(args.output, args.mac_pkg, args.windows_exe, args.intel_lancedb_wheel, args.intel_lancedb_sha256,
           args.arm_lancedb_wheel, args.arm_lancedb_sha256, args.arm_pyarrow_wheel, args.arm_pyarrow_sha256,
-          args.mac_app_sign_identity, args.mac_installer_sign_identity)
+          args.mac_app_sign_identity, args.mac_installer_sign_identity,
+          args.pm_arm_lancedb_wheel, args.pm_arm_lancedb_sha256,
+          args.pm_arm_pyarrow_wheel, args.pm_arm_pyarrow_sha256)

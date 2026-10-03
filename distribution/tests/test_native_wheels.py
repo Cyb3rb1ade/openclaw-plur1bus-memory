@@ -49,6 +49,26 @@ def test_arm_wheel_requires_approved_hash_metadata_and_native_pe(tmp_path):
         builder.validate_windows_arm_wheel(path, sha, "pyarrow")
 
 
+def test_pm_pyarrow_wheel_requires_cp314_tag_and_arm_pe(tmp_path):
+    path = tmp_path / "pyarrow-25.0.1-cp314-cp314-win_arm64.whl"
+    binary = bytearray(128)
+    binary[:2] = b"MZ"
+    import struct
+    struct.pack_into("<I", binary, 0x3c, 64)
+    binary[64:68] = b"PE\0\0"
+    struct.pack_into("<H", binary, 68, 0xaa64)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("pyarrow-25.0.1.dist-info/METADATA", "Name: pyarrow\nVersion: 25.0.1\n")
+        archive.writestr("pyarrow-25.0.1.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: cp314-cp314-win_arm64\n")
+        archive.writestr("pyarrow/lib.pyd", binary)
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert builder.validate_pm_windows_arm_wheel(path, sha, "pyarrow") == path
+    with pytest.raises(ValueError, match="hash-approved"):
+        builder.validate_pm_windows_arm_wheel(path, "0" * 64, "pyarrow")
+    with pytest.raises(ValueError, match="CPython 3.14"):
+        builder.validate_pm_windows_arm_wheel(tmp_path / "pyarrow-25.0.1-cp313-cp313-win_arm64.whl", sha, "pyarrow")
+
+
 def test_partial_arm_bundle_refused_before_output_creation(tmp_path):
     output = tmp_path / "new-bundle"
     with pytest.raises(ValueError, match="both ARM"):
@@ -196,3 +216,41 @@ class ArmNativeInstallerTests(fixtures.InstallerTests):
             self.set_native(values)
             with pytest.raises(ValueError, match="native dependency"):
                 self.plan()
+
+    def test_pm_source_pair_is_separate_and_bound_to_contained_payload(self):
+        marker = "sys_platform == 'win32' and platform_machine == 'ARM64' and python_version >= '3.14' and python_version < '3.15'"
+        pm_paths = [
+            "payload/plugins/plur1bus/vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl",
+            "payload/plugins/plur1bus/vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl",
+        ]
+        self.files.update({
+            pm_paths[0]: b"candidate lance",
+            pm_paths[1]: b"candidate arrow",
+            "payload/plugins/plur1bus/pyproject.toml": (
+                "[project]\nname='plur1bus-hermes'\nversion='7.18.4'\ndependencies="
+                + json.dumps(["pyarrow==25.0.1; " + marker]) + "\n\n[tool.uv.sources]\n"
+                "lancedb={path='vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl', marker=\"" + marker + "\"}\n"
+                "pyarrow={path='vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl', marker=\"" + marker + "\"}\n"
+            ).encode(),
+        })
+        self.write_bundle()
+        path = self.bundle / "distribution.json"
+        manifest = json.loads(path.read_text())
+        manifest["pmNativeDependencies"] = {"win32/ARM64/cp314": pm_paths}
+        path.write_text(json.dumps(manifest))
+        assert installer.pm_arm_native_wheels(self.bundle, installer.verify_bundle(self.bundle)) == pm_paths
+        manifest["pmNativeDependencies"]["win32/ARM64/cp314"] = [pm_paths[0], "../../outside.whl"]
+        path.write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="PM Windows ARM"):
+            installer.pm_arm_native_wheels(self.bundle, installer.verify_bundle(self.bundle))
+
+    def test_pm_arm_target_accepts_only_gil_cpython_314(self):
+        good = {"platform": "win32", "architecture": "ARM64", "version": [3, 14, 0],
+                "implementation": "cpython", "freeThreaded": False}
+        assert installer.pm_native_target_supported(good)
+        for key, value in (("version", [3, 13, 15]), ("version", [3, 14, 0, "rc1"]),
+                           ("implementation", "pypy"), ("freeThreaded", True),
+                           ("architecture", "AARCH64"), ("architecture", "arm64")):
+            candidate = dict(good)
+            candidate[key] = value
+            assert not installer.pm_native_target_supported(candidate)

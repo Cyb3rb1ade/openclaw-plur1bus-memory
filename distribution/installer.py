@@ -347,9 +347,55 @@ def cpu_torch_decision(info, installed, dependencies):
 
 
 def pm_native_target_supported(info):
-    """Current PM payload metadata does not support bundled Windows ARM wheels."""
-    return not (info.get("platform") == "win32"
-                and str(info.get("architecture", "")).upper() in {"ARM64", "AARCH64"})
+    """Allow only the explicitly supported standard-ABI PM ARM interpreter."""
+    if info.get("platform") != "win32":
+        return True
+    architecture = info.get("architecture")
+    if architecture != "ARM64":
+        return str(architecture).upper() not in {"ARM64", "AARCH64"}
+    version = info.get("version")
+    return (isinstance(version, list) and len(version) == 3
+            and all(isinstance(item, int) and not isinstance(item, bool) for item in version)
+            and version[:2] == [3, 14]
+            and info.get("implementation") == "cpython" and info.get("freeThreaded") is False)
+
+
+def pm_arm_native_wheels(bundle, manifest):
+    """Validate the contained CPython 3.14 PM source-wheel declaration."""
+    relative = [
+        "payload/plugins/plur1bus/vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl",
+        "payload/plugins/plur1bus/vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl",
+    ]
+    mapping = manifest.get("pmNativeDependencies", {})
+    if not isinstance(mapping, dict) or set(mapping) - {"win32/ARM64/cp314"}:
+        raise ValueError("invalid PM native dependency mapping")
+    if not mapping:
+        return []
+    if mapping.get("win32/ARM64/cp314") != relative or not all(item in manifest["files"] for item in relative):
+        raise ValueError("invalid PM Windows ARM native dependency pair")
+    project_path = resolve_inside(bundle, "payload/plugins/plur1bus/pyproject.toml")
+    try:
+        project = tomllib.loads(project_path.read_text(encoding="utf-8"))
+        sources = project["tool"]["uv"]["sources"]
+        deps = project["project"]["dependencies"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError("invalid PM native source declaration") from error
+    marker = "sys_platform == 'win32' and platform_machine == 'ARM64' and python_version >= '3.14' and python_version < '3.15'"
+    expected_sources = {
+        "lancedb": {"path": "vendor/windows-arm64/" + Path(relative[0]).name, "marker": marker},
+        "pyarrow": {"path": "vendor/windows-arm64/" + Path(relative[1]).name, "marker": marker},
+    }
+    if any(sources.get(name) != value for name, value in expected_sources.items()):
+        raise ValueError("PM native sources must be exact, marker-scoped local plugin wheels")
+    if not any(isinstance(dep, str) and dep.startswith("pyarrow==25.0.1;") and marker in dep for dep in deps):
+        raise ValueError("PM native PyArrow dependency marker is missing")
+    # Confirm the source paths resolve beneath the copied plugin, not elsewhere.
+    plugin_root = resolve_inside(bundle, "payload/plugins/plur1bus")
+    for source in expected_sources.values():
+        source_path = resolve_inside(plugin_root, source["path"])
+        if source_path.is_symlink() or not source_path.is_file():
+            raise ValueError("PM native wheel source is not a contained regular file")
+    return relative
 
 
 def verify_cpu_torch(python, expected_version, require_cpu=True):
@@ -667,7 +713,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
         if info["version"] < [3, 11, 0] or not info["venv"] or info["platform"] != sys.platform:
             raise ValueError("same-platform Python >=3.11 in a Hermes virtual environment required; global or Windows/WSL-crossed pip refused")
         if pm_managed and not pm_native_target_supported(info):
-            raise ValueError("Hermes PM admission cannot yet include the bundled Windows ARM native wheels; no files or dependencies were changed")
+            raise ValueError("bundled Hermes PM Windows ARM storage requires standard-ABI CPython 3.14; no files or dependencies were changed")
         if pm_managed and activate and not dependencies:
             raise ValueError("Hermes PM admission resolves the complete plugin dependency graph; --no-deps cannot activate a PM-managed profile")
     selected = targets(home, profiles, desktop_only)
@@ -699,10 +745,20 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
         elif (not isinstance(wheel, str) or wheel not in manifest["files"]
             or not re.fullmatch(r"vendor/macos-x86_64/lancedb-0\.34\.0-cp3\d+-abi3-macosx_\d+_\d+_x86_64\.whl", wheel)):
             raise ValueError("invalid bundled native dependency")
+    pm_native = pm_arm_native_wheels(bundle, manifest)
     native_wheels = []
+    pm_native_wheels = []
     if not desktop_only and dependencies:
-        target = info["platform"] + "/" + str(info.get("architecture", ""))
-        if target in native:
+        architecture = str(info.get("architecture", ""))
+        if info["platform"] == "win32" and architecture.upper() in {"ARM64", "AARCH64"}:
+            architecture = "ARM64"
+        target = info["platform"] + "/" + architecture
+        is_pm_arm = (pm_managed and target == "win32/ARM64")
+        if is_pm_arm:
+            if info["version"][:2] != [3, 14] or not pm_native:
+                raise ValueError("this Hermes PM Windows ARM target has no approved CPython 3.14 source-wheel pair")
+            pm_native_wheels = list(pm_native)
+        elif target in native:
             if target == "win32/ARM64":
                 if (info["version"][:2] != [3, 13] or info.get("implementation") != "cpython"
                     or info.get("freeThreaded") is not False):
@@ -757,7 +813,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
               "profileStatus": profile_status, "warnings": warnings,
               "sharedDesktop": shared_desktop,
               "configs": configs, "receipts": receipts, "destinations": destinations, "wheels": wheels,
-              "nativeWheels": native_wheels, "torch": torch,
+              "nativeWheels": native_wheels, "pmNativeWheels": pm_native_wheels, "torch": torch,
               "effects": ("Stage plugin files and use Hermes PM to atomically admit the dependency selection when activated; no direct pip writes to a PM-owned generation."
                          if pm_managed else "Install Python wheels into the selected legacy Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile configuration/backend writes. File rollback does not roll back pip dependencies.")}
     if not desktop_only:

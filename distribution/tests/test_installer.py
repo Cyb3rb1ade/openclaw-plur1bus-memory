@@ -626,7 +626,7 @@ class InstallerTests(unittest.TestCase):
 
         with patch.object(installer.sys, "platform", "win32"), \
              patch.object(installer, "run_python", side_effect=windows_arm_info):
-            with self.assertRaisesRegex(ValueError, "cannot yet include.*Windows ARM"):
+            with self.assertRaisesRegex(ValueError, "requires standard-ABI CPython 3.14"):
                 installer.plan_install(self.bundle, self.home, activate=True)
         self.assertEqual((self.home / "config.yaml").read_bytes(), original_config)
         self.assertFalse((self.home / "plugins").exists())
