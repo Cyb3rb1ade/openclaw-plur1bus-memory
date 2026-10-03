@@ -113,3 +113,23 @@ job uses Python 3.13, not the current Hermes PM Python 3.14 environment. The
 separate Python-3.14 native-wheel run `37129076589` must complete storage and PM
 acceptance before that newer Windows ARM path can be advertised. Later source
 changes require renewed source-bound verification and artifact generation.
+
+### Verified local host-routing correction
+
+The host candidate `adee8637d522c862513b77a58b34a6fd4e3d1ccd` fixes both
+legacy connection resolution and registry-pinned API dispatch. All 129 focused
+Desktop tests and its full typecheck passed. Its Apple Silicon application was
+Developer-ID signed, notarized (submission
+`763be025-d40b-4685-8441-2fca7fe07eb6`) and stapled. Gatekeeper accepts the
+installed candidate. Previous applications remain in the local backup.
+
+Live Desktop acceptance now shows PLUR1BUS for Coder, Bernhardine, Heisenberg,
+RapidMLX and Bernd, with the correct active-profile heading and 7.18.4 version
+after each backend finishes loading. Switching to intentionally disabled mtplx
+hides PLUR1BUS; its configuration was not changed. The upstream host correction
+is submitted as NousResearch/hermes-agent PR #132265, not yet merged. Remote
+profile routing is outside the demonstrated local-host fix.
+
+The native Windows ARM Python-3.14 storage run `37129076589` completed
+successfully. Official Hermes PM admission remains a separate pending gate;
+native storage success alone does not prove package-manager installation.
