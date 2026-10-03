@@ -171,7 +171,7 @@ jobs:
           "PLUR1BUS_PM_BUNDLE=$bundle" >> $env:GITHUB_ENV
 
       - name: Test Hermes PM acceptance safety contracts
-        run: python -m unittest discover -s .github/scripts -p 'test_verify_hermes_pm_install.py'
+        run: python .github/scripts/test_verify_hermes_pm_install.py
 
       - name: Create fresh official Hermes source checkout under isolated QA home
         run: |
