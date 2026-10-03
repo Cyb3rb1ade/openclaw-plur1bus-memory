@@ -34,6 +34,108 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.4] — 2026-10-02
+
+### Behoben
+
+- **Doppelte Critical-Pushes für lange Nachrichten.** Die Aufteilung (`keepWhole`) speichert eine lange Nachricht als Ganzes und zusätzlich als Teile. Der Critical-Cron hat beide einzeln klassifiziert: Dieselbe Aussage kam als zwei Pushes mit zwei Referenzen (Bernd, 01.10.2026), verbrauchte den Tagesdeckel doppelt und kostete je Teil einen Modellaufruf. Teile, deren Ganzes im selben Turn unter den Kandidaten liegt (gleiche `sourceTurnId`, mindestens die Hälfte der Teiltexte darin enthalten, Satzzeichen ignoriert), werden jetzt ohne Modellaufruf als `fakt` getypt und nie gepusht. Auf den echten Daten der letzten sieben Tage greift das bei 322 von 326 Gruppen, ohne ein Ganzes zu treffen. Ohne Ganzes (Modus „geteilt“) bleibt alles wie bisher. Bereits gepushte Duplikate werden nicht rückwirkend bereinigt.
+
+## [7.18.3] — 2026-10-01
+
+### Hinzugefügt
+
+- **Schalter `runtime.detachPostTurnWork` (Standard aus).** Unter OpenClaw 2026.9.7 scheitern die LLM-Aufrufe der Nachbearbeitung nach einem Turn (Episoden, Gesprächserkenntnisse, Traumerzählung) mit `LLM_COMPLETION_NOT_AUTHORIZED: agent tool caller authority is no longer active`: Die Arbeit erbt die Identität des schon beendeten Turns (openclaw/openclaw#162941). Eingeschaltet läuft die eingereihte Capture-Arbeit in einem `AsyncLocalStorage`-Snapshot, der bei der Plugin-Registrierung genommen wird, also außerhalb jedes Turns. Weil ein Snapshot alle Host-Kontexte dieses Moments wiederherstellt, bleibt der Schalter aus, bis er live beobachtet ist.
+- Fehlerkategorie `authority-expired` im LLM-Router und in der Karte „LLM failures (24 h)“ (statt `other`).
+
+## [7.18.2] — 2026-10-01
+
+### Behoben
+
+- **Skill-Miner blockierte den Gateway minutenlang.** Das Clustering der Evidenz (`aggregateEvidence`) verglich jedes Paar von Erinnerungen, baute dabei je Paar zwei neue Mengen und prüfte beide Besitzertupel neu. Am 01.10.2026 stand der Gateway dadurch 121 s (Bernd, 2496 Erinnerungen) und 168 s (Bernhardine, 2662) still — dieselbe Stau-Klasse, die am Vortag die Agent-DB-Blockade auslöste. Jetzt werden Besitzertupel und Schlüsselwortzählungen einmal je Erinnerung vorberechnet, Kandidaten kommen aus einem invertierten Schlüsselwortindex desselben Besitzers, und Schnitt und Vereinigung werden über die Postings aufsummiert. Das Ergebnis ist identisch (geprüft gegen die alte Paarschleife auf Zufallsdaten und auf den echten Daten aller drei Agenten); auf Bernhardines 3732 Erinnerungen sinkt die Laufzeit von 82,7 s auf 1,8 s.
+
+## [7.18.1] — 2026-10-01
+
+### Behoben
+
+- **Feature-Crons wurden unter OpenClaw 2026.9.7 bei jedem Gateway-Start abgeschaltet.** Der Bootstrap prüft, ob OpenClaw native Command-Crons kann, und ruft dafür `openclaw plur1bus-feature-cron --help` auf. Unter 9.7 dauert das 38–42 s statt 11,6 s; das Limit von 30 s lief ab, und `afterthought` sowie `classify-recent` (Critical Push) wurden mit `[plur1bus:host-dispatch-unavailable]` deaktiviert. Das Limit liegt jetzt bei 120 s (`NATIVE_PROBE_TIMEOUT_MS`); der nächste Bootstrap holt die Jobs selbst zurück.
+
+## [7.18.0] — 2026-10-01
+
+### Hinzugefügt
+
+- **Health-Überwachung im Dashboard.** Unter „Memory Health“ stehen zwei neue Karten mit eigenem Status:
+  - **LLM failures (24 h):** fehlgeschlagene Hintergrund-LLM-Aufrufe des Plugins, gezählt im Prozess, nach Feature, Agent und Fehlerkategorie. „Degraded“, sobald ein Feature dreimal auf dieselbe Art scheitert; Timeouts unter Last zählen nicht. Anlass: Bernhardines `dream-narrative` scheiterte tagelang mit `transport-failed`, ohne dass es jemand sah.
+  - **Gateway signals (24 h):** vier Signale aus dem OpenClaw-Gateway-Log — Agent-DB-Cleanup-Fehler („failed“, wenn jünger als 15 min: dann scheitert jeder Agent bis zum Neustart), hängende Ingress-Annahme, Turns ohne Antwort-Payload (`cause=completed`) und kritischer Speicherdruck.
+- Neuer Config-Block `healthWatch` (`gatewayLog`, `gatewayLogDir`). Ohne Angabe liest das Plugin das Verzeichnis von `logging.file`, sonst `/tmp/openclaw`.
+
+### Sicherheit
+
+- Ins Dashboard gelangen nur Zähler, Kategorien und Zeitpunkte — kein Log-Text, keine Fehlermeldung, kein Pfad. Gelesen wird nur das Ende der Logs von heute und gestern (max. 8 MiB je Datei), höchstens einmal pro Minute und nur beim Öffnen des Dashboards, über `resolveInside`.
+
+## [7.17.1] — 2026-09-26
+
+### Geändert
+
+- **Umschalten per `/modus` statt `/voice`.** Auf Discord gehört `/voice` dem
+  eingebauten OpenClaw-Slash-Befehl, der Text erreichte PLUR1BUS nie und die
+  Knöpfe kamen nicht. `/modus`, `/modus light`, `/modus full` und
+  `/modus status` schalten jetzt um.
+
+## [7.17.0] — 2026-09-26
+
+### Hinzugefügt
+
+- **Persona und Light in Discord-Sprachräumen.** `/voice light` und `/voice full`
+  im Discord-Text schalten je Agent um, `/voice` allein schickt eine Nachricht
+  mit den Knöpfen „Persona“ und „Light“. Light gilt nur für Sprachzüge
+  (`messageProvider: "discord-voice"`): kein Auto-Recall und keine
+  Zusatzblöcke, pro Lauf `anthropic/claude-haiku-4-5` über
+  `before_model_resolve`, Thinking der Sprachraum-Sitzungen aus. Das Speichern
+  ins Gedächtnis läuft weiter, `memory_recall` bleibt nutzbar. Nur der Besitzer
+  aus `commands.ownerAllowFrom` darf umschalten. In Sprachraum-Sitzungen bleibt
+  `reasoningLevel` aus, damit keine Denk-Texte gesprochen werden. Das Modell der
+  Sitzung wird nie gepatcht.
+
+## [7.16.11] — 2026-09-26
+
+### Geändert
+
+- **Vergessen durch das Modell sperrt nicht mehr dauerhaft.** Das Werkzeug
+  `memory_forget` archiviert die Karte, setzt sie auf `deleted` und schreibt
+  die Audit-Zeile wie bisher, legt aber keinen Fingerabdruck mehr im
+  Tombstone-Register an. Bisher sperrte ein Vergessen durch das Modell
+  denselben Inhalt dauerhaft gegen erneutes Speichern; ein Missverständnis
+  oder eine eingeschleuste Anweisung in einer gelesenen Seite konnte so etwas
+  Unwiderrufliches auslösen. Die dauerhafte Sperre bleibt dem Menschen
+  vorbehalten (`/forget`, `lib/telegram-commands/memory-edit.js`, unverändert).
+  Bestehende Einträge im Register bleiben gültig.
+
+## [7.16.10] — 2026-09-26
+
+### Hinzugefügt
+
+- **Critical Push mit Knöpfen.** Jede als wichtig erkannte Erinnerung kommt als
+  eigene Telegram-Nachricht mit „✅ Annehmen“ und „❌ Ablehnen“. Ein Tipp führt
+  denselben autorisierten Befehl aus wie `/plur1bus critical accept|reject` und
+  schreibt das Ergebnis unter die Karte, die Knöpfe verschwinden. Der Host
+  prüft den Absender gegen die Telegram-Allowlist; der Handler nimmt nur Klicks
+  aus Direktchats, über den Bot des Agenten, dem die Karte gehört, und aus dem
+  Chat, in den dessen Push geht. Versand über den Telegram-Outbound-Adapter des
+  Hosts an dasselbe Ziel, das der Cron-Plan ableitet
+  (`lib/critical-button-delivery.js`); scheitert der Versand, gehen die übrigen
+  Karten wie bisher als Text über die Cron-Zustellung. Abschaltbar mit
+  `criticalPush.buttons: false`. „Alle annehmen/ablehnen“ bleibt per Befehl
+  oder zitierter Antwort.
+
+### Geändert
+
+- **Unbestätigte Criticals verfallen zur normalen Erinnerung.** Der nächtliche
+  Job `auto-accept-stale` akzeptierte Karten nach 24 Stunden automatisch als
+  Critical, sodass eine Fehlklassifikation ohne Antwort dauerhaft
+  hervorgehoben blieb. Jetzt setzt er sie wie ein Ablehnen auf eine normale
+  Notiz (`confirmed=1`, `type="note"`); gelöscht wird nichts. Job- und
+  Cron-Name bleiben für bestehende Installationen gleich.
+
 ## [7.16.9] — 2026-09-25
 
 ### Behoben

@@ -633,7 +633,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       "--tz",
       "Europe/Berlin",
       "--description",
-      "Auto-accept critical cards that stayed unconfirmed.",
+      "Let critical cards nobody confirmed within 24 h lapse to plain notes.",
       "--agent",
       "main",
       "--no-deliver",

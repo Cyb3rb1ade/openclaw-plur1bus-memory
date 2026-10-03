@@ -98,6 +98,13 @@ import {
 import { registerReembeddingRuntime } from "./lib/setup/reembedding-plugin-runtime.js";
 import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
 import {
+  createGatewayLogWatch,
+  createLlmFailureRecorder,
+  resolveGatewayLogFiles,
+  scanGatewayLog,
+} from "./lib/health-watch.js";
+import { createPostTurnDetacher } from "./lib/post-turn-detach.js";
+import {
   createControlPlaneHealthInspector,
   createControlPlaneHealthScan,
 } from "./lib/control-plane-health.js";
@@ -203,8 +210,25 @@ import {
 import {
   formatAfterthoughtCronReply,
   formatClassifierCronReply,
+  classifierPartialFailureWarning,
 } from "./lib/internal-cron-reply.js";
-import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
+import { expireStaleCriticals as runExpireStaleCriticals } from "./lib/jobs/auto-accept-stale-criticals.js";
+import { isLightVoiceTurn, LIGHT_MODEL, LIGHT_VOICE_GUIDANCE, readVoiceMode } from "./lib/voice-mode.js";
+import {
+  applyVoiceMode,
+  buildVoiceModeMessage,
+  isOwnerSender,
+  parseVoiceButtonPayload,
+  parseVoiceCommand,
+  VOICE_BUTTON_NAMESPACE,
+} from "./lib/voice-mode-switch.js";
+import {
+  CRITICAL_BUTTON_NAMESPACE,
+  criticalDecisionLine,
+  parseCriticalButtonPayload,
+} from "./lib/critical-buttons.js";
+import { deliverCriticalButtonPush } from "./lib/critical-button-delivery.js";
+import { boundTelegramAccountId } from "./lib/setup/feature-cron-plan.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
   checkWikiAuth,
@@ -4583,6 +4607,12 @@ const plugin = {
     });
     const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
     cfg = providerMigration.config;
+    // 7.18.0: Fehlgeschlagene LLM-Aufrufe der letzten 24 h fuer die Health-Ansicht.
+    const llmFailureRecorder = createLlmFailureRecorder();
+    // 7.18.3: Captured here, at registration and outside any turn. Post-turn
+    // work enqueued from agent_end runs in this context when the switch is on
+    // (openclaw/openclaw#162941).
+    const detachPostTurnWork = createPostTurnDetacher({ enabled: cfg.runtime?.detachPostTurnWork === true });
     const llmResultCache = createLlmResultCache({
       enabled: cfg.runtime?.llmResultCacheEnabled !== false,
       ttlMs: cfg.runtime?.llmResultCacheTtlMs,
@@ -4638,6 +4668,7 @@ const plugin = {
         diagnosticsPath: cfg.llmRouter?.errorDiagnostics === true
           ? join(baseDbPath, "llm-router-errors.log")
           : "",
+        failureRecorder: llmFailureRecorder,
       });
       return isLlmRouteAvailable(route) ? route : null;
     };
@@ -5011,6 +5042,9 @@ const plugin = {
     // auf dem Verhalten von vor diesem Branch.
     const memoryDynamicsCfg = cfg.memoryDynamics || {};
     const flashbulbEncodingEnabled = memoryDynamicsCfg.flashbulbEncoding === true;
+    // 7.16.10: Der Critical Push kommt nur dann mit Telegram-Knöpfen, wenn der
+    // Klick-Handler beim Host registriert ist; sonst bleibt es beim Text.
+    const criticalButtonState = { ready: false };
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
@@ -6400,8 +6434,17 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       actor = "memory_forget",
       actorType = "tool",
       reason = "memory_forget tool",
+      blockRecapture = false,
     }) {
       const memoryId = String(card?.id || "");
+      // 7.16.10+: Vergessen durch das Modell blendet die Karte aus (Status
+      // deleted, Archiv, Audit), schreibt aber keinen Fingerabdruck ins
+      // Tombstone-Register. Der Fingerabdruck sperrt denselben Inhalt dauerhaft
+      // gegen erneutes Speichern; diese Sperre bleibt einer Entscheidung des
+      // Menschen vorbehalten (/forget, lib/telegram-commands/memory-edit.js).
+      // Ein Missverständnis oder eine eingeschleuste Anweisung soll nichts
+      // Unwiderrufliches auslösen.
+      const registryDir = blockRecapture ? baseDbPath : null;
       const tombstone = buildTombstone({
         card,
         agentId,
@@ -6419,7 +6462,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         // In-Memory-Commit-Flag erst NACH erfolgreicher Persistierung setzen,
         // damit ein fehlgeschlagener Append keinen falschen "committed"-Zustand
         // vortäuscht und ein erneuter Forget nachtragen kann.
-        if (baseDbPath && !already) {
+        if (registryDir && !already) {
           appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "committed" });
         }
         const auditOk = appendDestructiveOpLog(workspaceDir, {
@@ -6439,7 +6482,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         return auditOk;
       };
       const failTombstone = (errorClass) => {
-        if (baseDbPath) {
+        if (registryDir) {
           appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "failed" });
         }
         appendDestructiveOpLog(workspaceDir, {
@@ -6458,7 +6501,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       };
 
       // Phase 1: attempted (vor der Mutation).
-      if (baseDbPath) {
+      if (registryDir) {
         appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "attempted" });
       }
       let result;
@@ -6494,7 +6537,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         throw err;
       }
       if (result?.notFound) {
-        if (baseDbPath) {
+        if (registryDir) {
           appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "failed" });
         }
         return { ok: false, notFound: true };
@@ -6503,8 +6546,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         // Crash-Recovery: Zeile bereits deleted — fehlenden committed Tombstone
         // und Audit nachtragen. Fehlschlag des Backfills ist ein Fehler (fail-closed),
         // kein stilles ok:true.
-        if (baseDbPath) {
-          const backfill = backfillCommittedTombstone(baseDbPath, card, {
+        if (!registryDir) {
+          // Ohne Register nur das Audit nachtragen (fail-closed).
+          if (!commitTombstone(true)) {
+            throw new Error("tombstone audit write failed");
+          }
+        } else {
+          const backfill = backfillCommittedTombstone(registryDir, card, {
             agentId,
             actor,
             actorType,
@@ -7709,12 +7757,43 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   hideTypes: cpCfg.hideTypes,
                 });
                 api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
+                // 7.16.10: eine Telegram-Nachricht je Karte mit Annehmen/
+                // Ablehnen. Nicht gesendete Karten gehen wie bisher als Text
+                // über die Cron-Zustellung raus.
+                const pushedCount = Array.isArray(result?.pushMessages) ? result.pushMessages.length : 0;
+                if (cronInternal && pushedCount > 0 && cpCfg.buttons !== false && criticalButtonState.ready) {
+                  const cronDelivery = typeof commandCtx?.resolveCronDelivery === "function"
+                    ? await commandCtx.resolveCronDelivery()
+                    : null;
+                  const delivery = await deliverCriticalButtonPush({
+                    agentId: internalAgent,
+                    result,
+                    config: api.config,
+                    delivery: cronDelivery
+                      ? { ...cronDelivery, accountId: cronDelivery.accountId || boundTelegramAccountId(internalAgent, api.config) }
+                      : null,
+                    loadAdapter: (channel) => api.runtime?.channel?.outbound?.loadAdapter?.(channel),
+                    warning: classifierPartialFailureWarning(result),
+                    logger: api.logger,
+                  });
+                  api.logger?.info?.(`plur1bus critical[${internalAgent}]: button push sent=${delivery.sent}${delivery.reason ? ` fallback=${delivery.reason}` : ""}`);
+                  if (delivery.sent > 0) {
+                    if (delivery.unsentTexts.length === 0) return { text: "NO_REPLY" };
+                    return formatClassifierCronReply({
+                      ...result,
+                      pushMessages: delivery.unsentTexts.map((text) => ({ text })),
+                    });
+                  }
+                }
                 return cronInternal
                   ? formatClassifierCronReply(result)
                   : formatJsonCommandResult({ job: "classify-recent", ...result });
               }
               if (subKey === "auto-accept-stale") {
-                const result = await runAutoAcceptStale(memoryDbAdapter, internalAgent, { logger: api.logger, hours: 24 });
+                // Seit 7.16.10 verfallen unbestätigte Criticals zur normalen
+                // Notiz statt automatisch als Critical akzeptiert zu werden.
+                // Name und Cron bleiben für bestehende Installationen gleich.
+                const result = await runExpireStaleCriticals(memoryDbAdapter, internalAgent, { logger: api.logger, hours: 24 });
                 api.logger?.info?.(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
               }
@@ -9510,6 +9589,20 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           };
         })();
         if (typeof api.registerGatewayMethod === "function") {
+          // 7.18.0: Gateway-Log-Signale (verlorene Antworten, Agent-DB-Blockade,
+          // Ingress-Stau, Speicherdruck). Nur beim Oeffnen des Dashboards, max.
+          // einmal pro Minute, nur das Ende von heute/gestern.
+          const gatewayLogWatch = createGatewayLogWatch({
+            scan: () => {
+              const nowMs = Date.now();
+              const { dir, files } = resolveGatewayLogFiles({
+                gatewayLogDir: cfg.healthWatch?.gatewayLogDir,
+                loggingFile: api.config?.logging?.file,
+                nowMs,
+              });
+              return scanGatewayLog({ dir, files, nowMs, logger: api.logger });
+            },
+          });
           registerControlUiRuntime({
             api,
             write: controlUiWriteSurface,
@@ -9608,6 +9701,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 // The gc job runs from the main agent and reports on every agent.
                 gcReport: readGcReport(resolveAgentWorkspaceDir(api.config, "main")),
                 pressure: checkRuntimePressure(cfg.runtime || {}),
+                healthWatch: {
+                  llmFailures: llmFailureRecorder.snapshot(),
+                  logScan: cfg.healthWatch?.gatewayLog === false
+                    ? null
+                    : await gatewayLogWatch.snapshot().catch((err) => {
+                        safeDebug(api.logger, "health-watch", err, { component: "gateway-log" });
+                        return null;
+                      }),
+                },
                 // Saved-vs-running marker: the file may be ahead of this plugin instance.
                 fileConfig: readPluginConfigFile({ env: process.env }),
                 env: process.env,
@@ -10070,12 +10172,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             if (subKey === "accept") {
               const result = await memoryDbAdapter.markCriticalAccepted(agentId, fullId);
               if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
-              return { text: t("critical.accepted", { lang, tone }) };
+              return { text: t("critical.accepted", { lang, tone }), outcome: "accepted" };
             }
             if (subKey === "reject") {
               const result = await memoryDbAdapter.markCriticalRejected(agentId, fullId);
               if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
-              return { text: t("critical.rejected", { lang, tone }) };
+              return { text: t("critical.rejected", { lang, tone }), outcome: "rejected" };
             }
             // edit → in den vorhandenen sicheren Korrekturablauf führen.
             const card = (pending || []).find((c) => c.id === fullId);
@@ -10138,11 +10240,157 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               return undefined;
             }
           };
+          // 7.16.10: Klick auf „Annehmen“/„Ablehnen“ unter einer Push-Karte.
+          // Derselbe autorisierte Critical-Befehl wie beim Tippen oder
+          // Zitieren erledigt die Arbeit; der Host prüft den Absender vorher
+          // gegen die Telegram-Allowlist.
+          if (cfg.criticalPush?.buttons !== false && typeof api.registerInteractiveHandler === "function") {
+            const handleCriticalButton = async (ctx) => {
+              const decision = parseCriticalButtonPayload(ctx?.callback?.payload);
+              if (!decision) return { handled: false };
+              const refuse = () => ({ handled: true });
+              if (ctx.isGroup || ctx.auth?.isAuthorizedSender !== true) return refuse();
+              const senderId = String(ctx.senderId ?? "");
+              const conversationId = String(ctx.conversationId ?? ctx.callback?.chatId ?? "");
+              if (!senderId || !conversationId) return refuse();
+              // Die Karte gehört dem Agenten aus den Callback-Daten; ein Klick
+              // zählt nur über dessen eigenen Telegram-Bot und im Direktchat
+              // mit dem Absender selbst.
+              if (conversationId !== senderId) return refuse();
+              if (boundTelegramAccountId(decision.agentId, api.config) !== ctx.accountId) return refuse();
+              const target = `telegram:${conversationId}`;
+              let outcome = "failed";
+              try {
+                const result = await runCriticalCommand({
+                  args: `critical ${decision.action} ${decision.ref}`,
+                  agentId: decision.agentId,
+                  sessionKey: `agent:${decision.agentId}:telegram:${ctx.accountId}:direct:${conversationId}`,
+                  channel: "telegram",
+                  accountId: ctx.accountId,
+                  senderId,
+                  from: target,
+                  to: target,
+                  config: api.config,
+                  getCurrentConversationBinding: () => null,
+                  message: { from: { id: senderId }, chat: { id: conversationId, type: "private" } },
+                });
+                if (result?.outcome === "accepted" || result?.outcome === "rejected") outcome = result.outcome;
+                api.logger?.info?.(`plur1bus critical[${decision.agentId}]: button ${decision.action} ${decision.ref} -> ${outcome}`);
+              } catch (error) {
+                api.logger?.warn?.(`memory-lancedb-namespaced: critical button failed: ${error?.message || error}`);
+              }
+              const line = criticalDecisionLine(decision.ref, outcome);
+              try {
+                const base = typeof ctx.callback?.messageText === "string" ? ctx.callback.messageText : "";
+                if (base) await ctx.respond.editMessage({ text: `${base}\n\n${line}` });
+                else {
+                  await ctx.respond.clearButtons();
+                  await ctx.respond.reply({ text: line });
+                }
+              } catch (error) {
+                api.logger?.warn?.(`memory-lancedb-namespaced: critical button message update failed: ${error?.message || error}`);
+              }
+              return { handled: true };
+            };
+            try {
+              api.registerInteractiveHandler({
+                channel: "telegram",
+                namespace: CRITICAL_BUTTON_NAMESPACE,
+                handler: handleCriticalButton,
+              });
+              criticalButtonState.ready = true;
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: could not register critical buttons: ${error?.message || error}`);
+            }
+          }
           for (const hookName of ["before_dispatch", "before_agent_reply"]) {
             try {
               api.on(hookName, answerQuotedCriticalReply);
             } catch (error) {
               api.logger?.warn?.(`memory-lancedb-namespaced: could not listen on ${hookName}: ${error?.message || error}`);
+            }
+          }
+        }
+
+        // 7.17.0: /modus [light|full|status] in Discord und Knöpfe
+        // plurv:<modus>:<agent>. Die Hook-Antwort kann nur Text tragen, deshalb
+        // geht die Knopfnachricht selbst über den Discord-Adapter raus.
+        if (typeof api.on === "function") {
+          const patchVoiceSession = (params) => {
+            const patch = runtimeIfUsable(api)?.agent?.session?.patchSessionEntry;
+            if (typeof patch !== "function") throw new Error("session patch unavailable");
+            return patch({ ...params, preserveActivity: true });
+          };
+          const sendVoiceModeMessage = async ({ agentId, mode, to, accountId }) => {
+            const adapter = await api.runtime?.channel?.outbound?.loadAdapter?.("discord");
+            if (typeof adapter?.sendPayload !== "function") throw new Error("discord outbound adapter unavailable");
+            const message = buildVoiceModeMessage(agentId, mode);
+            await adapter.sendPayload({
+              cfg: api.config,
+              to,
+              ...(accountId ? { accountId } : {}),
+              text: message.text,
+              payload: { text: message.text, interactive: message.interactive },
+            });
+          };
+          const answerVoiceCommand = async (event, context) => {
+            const command = parseVoiceCommand(typeof event?.body === "string" ? event.body : event?.content);
+            if (!command) return undefined;
+            try {
+              const channel = String(context?.channelId || event?.channel || "");
+              if (channel !== "discord") {
+                return { handled: true, text: "Persona/Light gilt nur für Discord-Sprachräume." };
+              }
+              const senderId = String(context?.senderId ?? event?.senderId ?? "");
+              if (!isOwnerSender(senderId, api.config)) {
+                return { handled: true, text: "Nur der Besitzer darf den Sprachmodus umschalten." };
+              }
+              const sessionKey = String(context?.sessionKey || event?.sessionKey || "");
+              const agentId = /^agent:([^:]+):/.exec(sessionKey)?.[1] || "main";
+              let mode = readVoiceMode(baseDbPath, agentId);
+              if (command.action === "light" || command.action === "persona") {
+                const out = await applyVoiceMode({ baseDbPath, agentId, mode: command.action, config: api.config, patchSessionEntry: patchVoiceSession, by: `discord:${senderId}` });
+                mode = out.mode;
+                api.logger?.info?.(`plur1bus voice[${agentId}]: mode=${mode} patched=${out.patched} failed=${out.failed}`);
+              }
+              const to = String(context?.conversationId || "");
+              if (!to) return { handled: true, text: buildVoiceModeMessage(agentId, mode).text };
+              await sendVoiceModeMessage({ agentId, mode, to, accountId: context?.accountId });
+              return { handled: true };
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: /modus failed: ${error?.message || error}`);
+              return { handled: true, text: "Sprachmodus konnte nicht umgeschaltet werden, Details im Log." };
+            }
+          };
+          try {
+            api.on("before_dispatch", answerVoiceCommand);
+          } catch (error) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: could not listen for /modus: ${error?.message || error}`);
+          }
+          if (typeof api.registerInteractiveHandler === "function") {
+            try {
+              api.registerInteractiveHandler({
+                channel: "discord",
+                namespace: VOICE_BUTTON_NAMESPACE,
+                handler: async (ctx) => {
+                  const decision = parseVoiceButtonPayload(ctx?.interaction?.payload);
+                  if (!decision) return { handled: false };
+                  if (ctx?.auth?.isAuthorizedSender !== true || !isOwnerSender(ctx?.senderId, api.config)) return { handled: true };
+                  try {
+                    const out = await applyVoiceMode({ baseDbPath, agentId: decision.agentId, mode: decision.mode, config: api.config, patchSessionEntry: patchVoiceSession, by: `discord:${ctx.senderId}` });
+                    api.logger?.info?.(`plur1bus voice[${decision.agentId}]: button mode=${out.mode} patched=${out.patched} failed=${out.failed}`);
+                    await ctx.respond.clearComponents({ text: buildVoiceModeMessage(decision.agentId, out.mode).text });
+                    if (ctx.conversationId) {
+                      await sendVoiceModeMessage({ agentId: decision.agentId, mode: out.mode, to: ctx.conversationId, accountId: ctx.accountId });
+                    }
+                  } catch (error) {
+                    api.logger?.warn?.(`memory-lancedb-namespaced: voice button failed: ${error?.message || error}`);
+                  }
+                  return { handled: true };
+                },
+              });
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: could not register voice buttons: ${error?.message || error}`);
             }
           }
         }
@@ -10445,7 +10693,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
-        return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+        return runtimeScheduler.enqueueCapture(agentId, { background }, detachPostTurnWork(async (signal) => {
           const captureStartedAt = Date.now();
           const throwIfCaptureAborted = () => {
             if (!signal?.aborted) return;
@@ -11336,7 +11584,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               }
             }
           }
-        }); // runtimeScheduler.enqueueCapture
+        })); // runtimeScheduler.enqueueCapture (detachPostTurnWork)
       }, { timeoutMs: 60_000 });
     }
 
@@ -12327,6 +12575,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         const background = isBackgroundTurn(event, ctx);
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
         if (ctx?.workspaceDir && !automaticWorkspacePolicyDecision(event, ctx).allowed) return undefined;
+        // 7.17.0: Light in Discord-Sprachräumen — kein Recall, keine
+        // Zusatzblöcke, nur die kurze Sprach-Anweisung. Capture bleibt.
+        if (isLightVoiceTurn(ctx, baseDbPath)) return { prependContext: LIGHT_VOICE_GUIDANCE };
         const agentIdForCache = ctx?.agentId || "default";
         const sessionKeyForCache = ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
         const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
@@ -13399,6 +13650,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       api.on("before_prompt_build", async (_event, ctx) => {
         const agentId = ctx?.agentId;
         if (!automaticWorkspacePolicyDecision(_event, ctx).allowed) return undefined;
+        if (isLightVoiceTurn(ctx, baseDbPath)) return { prependContext: LIGHT_VOICE_GUIDANCE };
         if (neoEnabled) {
           try {
             const neoStore = getNeoStore(ctx, _event);
@@ -13486,6 +13738,19 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
         if (nudge || conflictNudge || startNoticeContext || timeContext || temporalContinuityContext || reminderNudge) {
           return { prependContext: [startNoticeContext, nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
+        }
+      });
+    }
+
+    // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku. Nie per
+    // sessions.patch mit model — das schriebe die Agent-Konfiguration um.
+    if (typeof api.on === "function") {
+      api.on("before_model_resolve", async (_event, ctx) => {
+        try {
+          return isLightVoiceTurn(ctx, baseDbPath) ? { ...LIGHT_MODEL } : undefined;
+        } catch (error) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: voice light model override failed: ${error?.message || error}`);
+          return undefined;
         }
       });
     }

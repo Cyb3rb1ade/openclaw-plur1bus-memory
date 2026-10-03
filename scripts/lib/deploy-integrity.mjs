@@ -49,6 +49,8 @@ export const DEPLOY_FILES = [
   "lib/control-plane-storage.js",
   "lib/knowledge-update-budget.js",
   "lib/control-plane-projection.js",
+  "lib/health-watch.js",
+  "lib/post-turn-detach.js",
   "lib/memory-maintenance-gate.js",
   "lib/workspace-policy.js",
   "lib/workspace-policy-guard.js",
@@ -257,6 +259,12 @@ export const DEPLOY_FILES = [
   "lib/critical-push-classifier.js",
   "lib/critical-push-state.js",
   "lib/critical-review.js",
+  // 7.16.10: Critical Push mit Telegram-Knöpfen (Text/Callback-Daten und Versand).
+  "lib/critical-buttons.js",
+  "lib/critical-button-delivery.js",
+  // 7.17.0: Persona/Light für Discord-Sprachräume.
+  "lib/voice-mode.js",
+  "lib/voice-mode-switch.js",
   "lib/tombstone.js",
   "lib/registry-lock.js",
   "lib/fetch-with-timeout.js",

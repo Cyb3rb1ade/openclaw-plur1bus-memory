@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
-import { tombstoneRegistryDir } from "../lib/tombstone.js";
+import { readTombstoneRegistry, tombstoneRegistryDir } from "../lib/tombstone.js";
+import { forgetCard } from "../lib/telegram-commands/memory-edit.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const VECTOR_DIM = 384;
@@ -99,7 +100,9 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
     assert.notEqual(tombstoneRegistryDir(baseDbPath), join(tmpdir(), "_tombstones"));
   });
 
-  it("identischer Store im selben Scope nach Forget wird blockiert", async () => {
+  it("Vergessen durch das Modell blendet aus, sperrt den Inhalt aber nicht dauerhaft", async () => {
+    // Seit 7.16.10: die dauerhafte Sperre (Fingerabdruck im Register) bleibt
+    // dem Menschen vorbehalten (/forget → forgetCard, Gegenprobe unten).
     const agentId = "e2e-agent-a";
     const workspaceDir = makeTempDir("plur1bus-e2e-ws-");
     const text = `E2E forgotten target ${randomUUID()}`;
@@ -110,9 +113,31 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
 
     await forgetById(agentId, workspaceDir, memoryId);
     assert.equal((await readMemory(agentId, memoryId)).status, "deleted");
+    const registry = readTombstoneRegistry(baseDbPath, agentId);
+    assert.equal(registry.tombstones.length, 0, "no fingerprint for a model-initiated forget");
 
     const reStore = await store(agentId, workspaceDir, text);
-    assert.equal(reStore.details.action, "tombstone_blocked", "identischer Store muss blockiert werden");
+    assert.equal(reStore.details.action, "stored", "the same text may be stored again");
+    rmSync(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("Gegenprobe: /forget (forgetCard) schreibt die Sperre, danach wird derselbe Inhalt blockiert", async () => {
+    const agentId = "e2e-agent-human";
+    const workspaceDir = makeTempDir("plur1bus-e2e-human-");
+    const text = `E2E human forget ${randomUUID()}`;
+    const stored = await store(agentId, workspaceDir, text);
+    const memoryId = stored.details.id;
+    const card = await readMemory(agentId, memoryId);
+    const cardDb = {
+      async getCard() { return card; },
+      async tombstoneCard() { return { ok: true, id: memoryId }; },
+    };
+    const res = await forgetCard(cardDb, agentId, memoryId, { archiveDir: workspaceDir, workspaceDir, baseDbPath, actor: "owner" });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    const committed = readTombstoneRegistry(baseDbPath, agentId).tombstones.filter((t) => t.status === "committed");
+    assert.equal(committed.length, 1);
+    const reStore = await store(agentId, workspaceDir, text);
+    assert.equal(reStore.details.action, "tombstone_blocked");
     rmSync(workspaceDir, { recursive: true, force: true });
   });
 

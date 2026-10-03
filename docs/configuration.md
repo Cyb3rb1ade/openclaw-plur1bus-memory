@@ -425,6 +425,40 @@ Adapters, die Zeile zeigt „compacting…" und danach das Ergebnis. Angenommen
 werden nur Partitionen, die der Health-Scan selbst gelistet hat. Der naechste
 Health-Scan zeigt den neuen Speicherstand.
 
+## Health-Überwachung im Dashboard (7.18.0)
+
+Unter **Memory Health** zeigt der Reiter zwei Karten, die der LanceDB-Scan nicht sieht:
+
+- **LLM failures (24 h)** — fehlgeschlagene Hintergrund-LLM-Aufrufe des Plugins im Gateway-Prozess seit dem letzten Gateway-Start bzw. Plugin-Reload (höchstens 24 h; Feature-Crons, die als eigener Prozess laufen, zählen nicht), je Feature, Agent und Fehlerkategorie (`unavailable`, `denied`, `auth`, `timeout` …). Status `degraded`, sobald ein Feature dreimal auf dieselbe Art scheitert; `timeout` und `aborted` zählen dafür nicht, weil sie unter Last normal sind. Den Originaltext eines Fehlers zeigt die Karte nie; dafür gibt es `llmRouter.errorDiagnostics`.
+- **Gateway signals (24 h)** — gezählt aus dem OpenClaw-Gateway-Log:
+
+| Signal | Bedeutung | Status |
+|---|---|---|
+| Agent database cleanup failed | Eine Agent-DB-Ressource ließ sich nicht schließen; danach scheitert jeder Turn aller Agenten bis zum Neustart (openclaw#157325). | `failed`, wenn jünger als 15 min, sonst `degraded` |
+| Channel ingress adoption stalled | Eine eingehende Nachricht hing 300 s in der Annahme (openclaw#142116). | `degraded` |
+| Turn completed without a reply payload | Ein Turn endete ohne zustellbare Antwort (`cause=completed`); die `skipped:*`-Ursachen zählen nicht. | `degraded` |
+| Gateway memory pressure critical | OpenClaws eigene Speicherdiagnose meldet `level=critical` wegen der absoluten RSS-Schwelle (`reason=rss_threshold`). `reason=rss_growth` zählt nicht: Das feuert nach jedem Neustart beim Aufwärmen. | `degraded` |
+
+```json
+{
+  "healthWatch": {
+    "gatewayLog": true,
+    "gatewayLogDir": "/tmp/openclaw"
+  }
+}
+```
+
+- `gatewayLog` (Standard `true`): `false` schaltet das Lesen des Gateway-Logs ab; die Karte zeigt dann `unavailable`.
+- `gatewayLogDir`: Verzeichnis mit OpenClaws rollierenden `openclaw-YYYY-MM-DD.log`. Ohne Angabe das Verzeichnis von `logging.file`, sonst `/tmp/openclaw`. Ist `logging.file` eine feste Datei ohne Datum, wird genau diese gelesen.
+
+Gelesen wird nur das Ende der Logs von heute und gestern (höchstens 8 MiB je Datei; mehrere Zeilen desselben Signals in derselben Sekunde zählen als ein Ereignis), höchstens einmal pro Minute und nur, wenn jemand den Reiter öffnet — kein Timer. Ins Dashboard gelangen nur Zähler, Kategorien und Zeitpunkte, nie eine Logzeile oder ein Pfad.
+
+## Nachbearbeitung vom Turn abkoppeln (7.18.3)
+
+`runtime.detachPostTurnWork` (Standard `false`) ist ein Workaround für openclaw/openclaw#162941. OpenClaw reicht die Identität eines Turns per `AsyncLocalStorage` an alle asynchronen Folgeaufrufe weiter. Die Nachbearbeitung, die PLUR1BUS nach `agent_end` einreiht (Capture, Episoden, Gesprächserkenntnisse, Light Dream), läuft erst nach dem Turn — dessen Identität ist dann widerrufen, und Plugin-LLM-Aufrufe scheitern mit `LLM_COMPLETION_NOT_AUTHORIZED` (im Dashboard: Ursache „turn authority already expired“).
+
+Mit `true` läuft diese Arbeit in einem Snapshot, der bei der Plugin-Registrierung genommen wird. Ein Snapshot stellt alle Host-Kontexte jenes Moments wieder her, nicht nur die Turn-Identität; deshalb ist der Schalter standardmäßig aus und sollte nach dem Einschalten ein paar Turns lang beobachtet werden. Wirkt nach einem Gateway-Neustart.
+
 ## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
 
 Der Skill Miner läuft wöchentlich je Agent, bündelt belastbare Erinnerungen
@@ -454,7 +488,7 @@ Konfidenz, Nutzen und der Anleitung, der der Agent folgen würde. Mit
 
 Der Miner läuft **jede Nacht um 05:00** (je Agent +15 min), also nach dem
 Speicher-Management: Konsolidierung 04:00–04:30, Persona-Evolution
-04:15–04:25, GC 04:45, auto-accept-stale 04:50–04:54. Er bewertet damit genau
+04:15–04:25, GC 04:45, auto-accept-stale (Verfall unbestätigter Criticals) 04:50–04:54. Er bewertet damit genau
 die Erinnerungen, die diese Jobs zuvor angefasst haben.
 
 Bis 7.12.49 lief er wöchentlich. Weil jeder Lauf bei `maxPerRun` gedeckelt ist
@@ -746,6 +780,29 @@ Modell-Einstellungen.
 in der Push-Karte ausgeblendet wird; `zugang_passwort` ist immer ausgeblendet.
 Seit 7.12.2 zeigt der Push fuer alle anderen Typen die bereinigte Vorschau, weil
 er nur in den Direktchat des Besitzers geht und dessen eigene Aussage zitiert.
+
+Seit 7.16.10 kommt jede Karte als eigene Telegram-Nachricht mit den Knöpfen
+„✅ Annehmen“ und „❌ Ablehnen“ (`criticalPush.buttons`, Standard `true`). Ein
+Tipp führt denselben autorisierten Befehl aus wie `/plur1bus critical accept`
+bzw. `reject` und schreibt das Ergebnis unter die Karte. Der Host prüft den
+Absender vorher gegen die Telegram-Allowlist, und ein Klick zählt nur über den
+Bot des Agenten, dem die Karte gehört. Ohne Telegram-Ziel, ohne Outbound-Adapter
+oder mit `buttons: false` bleibt es bei der Textnachricht mit Befehlen. Alle auf
+einmal geht weiter per `/plur1bus critical accept all` oder zitierter Antwort.
+
+**Discord-Sprachräume: Persona/Light (seit 7.17.0).** Der Modus steht je Agent in
+`<baseDbPath>/.plur1bus-voice-mode/<agent>.json` (Standard `persona`). `/modus`,
+`/modus light`, `/modus full` und `/modus status` im Discord-Text (seit 7.17.1;
+`/voice` gehört dem OpenClaw-Slash-Befehl) schalten um oder
+zeigen den Stand mit Knöpfen. Umschalten setzt über den Host `thinkingLevel` der
+Sitzungen `agent:<agent>:discord:channel:<id>` für jeden Raum aus
+`channels.discord.voice.allowedChannels`; das Modell der Sitzung wird nie
+gepatcht, Light wechselt es pro Lauf über `before_model_resolve`.
+
+Unbestätigte Karten verfallen seit 7.16.10 nach 24 Stunden zur normalen
+Erinnerung (Job `auto-accept-stale`, Name aus Kompatibilitätsgründen
+beibehalten). Vorher wurden sie automatisch als Critical akzeptiert, sodass
+eine Fehlklassifikation ohne Antwort dauerhaft hervorgehoben blieb.
 
 `schicht15.maxPromotionsPerRun` begrenzt die KNOWLEDGE.md-Uebernahmen je
 24-Stunden-Fenster (0 = unbegrenzt). Bis 7.12.2 wurde die lebenslange Zahl

@@ -163,7 +163,10 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     });
     await handler({ params: { agentId: "agent-a", feature: "gc-run" }, respond: capture.respond });
     assert.equal(seen.length, 1);
-    assert.deepStrictEqual(seen[0], {
+    const { resolveCronDelivery, ...plain } = seen[0];
+    assert.equal(typeof resolveCronDelivery, "function");
+    assert.equal(await resolveCronDelivery(), null, "no cron service in this context");
+    assert.deepStrictEqual(plain, {
       args: "internal gc-run",
       agentId: "agent-a",
       channel: "cron",
@@ -173,6 +176,29 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
       config: { lab: true },
     });
     assert.deepStrictEqual(capture.calls, [[true, { reply: { text: "done" } }]]);
+  });
+
+  it("hands the command the delivery target of its own cron job", async () => {
+    const seen = [];
+    const handler = createFeatureCronGatewayHandler({
+      runFeatureCommand: async (ctx) => { seen.push(ctx); return { text: "NO_REPLY" }; },
+      config: {},
+    });
+    const context = {
+      cron: {
+        list: async (opts) => {
+          assert.deepStrictEqual(opts, { includeDisabled: false });
+          return [{
+            agentId: "main",
+            enabled: true,
+            payload: { kind: "command", argv: ["/usr/bin/node", "/opt/x/scripts/run-feature-cron.mjs", "--agent", "main", "--feature", "classify-recent"] },
+            delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+          }];
+        },
+      },
+    };
+    await handler({ params: { agentId: "main", feature: "classify-recent" }, respond: responseCapture().respond, context });
+    assert.deepStrictEqual(await seen[0].resolveCronDelivery(), { channel: "telegram", to: "55736530" });
   });
 
   // Ohne workspaceDir uebersprang afterthought sich bei jedem Cron-Lauf still
