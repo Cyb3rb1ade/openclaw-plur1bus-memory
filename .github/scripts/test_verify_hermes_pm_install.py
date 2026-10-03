@@ -145,6 +145,7 @@ class QaLayoutTests(unittest.TestCase):
         environment_upper = {key.upper(): value for key, value in environment.items()}
         self.assertEqual(environment["HERMES_HOME"], str(home))
         self.assertEqual(environment["UV_CACHE_DIR"], str(root / "uv-cache"))
+        self.assertEqual(environment["CARGO_TARGET_DIR"], str(root / "cargo-target"))
         profile = root / "runner-profile"
         self.assertEqual(environment["USERPROFILE"], str(profile))
         self.assertEqual(environment["HOMEDRIVE"], profile.drive)
@@ -155,7 +156,7 @@ class QaLayoutTests(unittest.TestCase):
         self.assertEqual(environment["GITHUB_ACTIONS"], "true")
         self.assertEqual(environment_upper["PROGRAMFILES(X86)"], r"C:\Program Files (x86)")
         self.assertEqual(environment_upper["SYSTEMDRIVE"], "C:")
-        for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+        for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR", "CARGO_TARGET_DIR"):
             self.assertTrue(qa._inside(Path(environment[name]), root))
         self.assertNotIn("OPENAI_API_KEY", environment)
         self.assertNotIn("ANTHROPIC_API_KEY", environment)

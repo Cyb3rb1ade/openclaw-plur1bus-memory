@@ -95,6 +95,9 @@ def isolated_environment(home: Path, qa_root: Path) -> dict[str, str]:
     environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     environment["HERMES_HOME"] = str(home)
     environment["UV_CACHE_DIR"] = str(qa_root / "uv-cache")
+    # Cargo's default target directory is nested under uv's sdist source tree;
+    # MSVC link.exe rejects those long output paths on Windows ARM64.
+    environment["CARGO_TARGET_DIR"] = str(qa_root / "cargo-target")
     # Windows Python/Hermes resolve Path.home() eagerly even when HERMES_HOME
     # is set. Use a disposable QA-local profile, never the runner's profile.
     profile = qa_root / "runner-profile"
@@ -339,7 +342,7 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
             raise ValueError("bundled native wheel is missing or redirected")
 
     env = isolated_environment(home, root)
-    for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR"):
+    for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR", "CARGO_TARGET_DIR"):
         path = Path(env[name])
         if not _inside(path, root):
             raise ValueError("isolated Hermes profile path escaped the QA root")
