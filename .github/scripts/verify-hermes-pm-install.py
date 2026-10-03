@@ -46,8 +46,8 @@ def validate_qa_layout(qa_root: Path, source: Path, bundle: Path) -> tuple[Path,
     temp_root = Path(tempfile.gettempdir()).resolve()
     if not _inside(root, temp_root) or root == temp_root:
         raise ValueError("--qa-root must be a unique directory beneath the system temp directory")
-    if root == Path.home().resolve() or _inside(root, Path.home().resolve()):
-        raise ValueError("--qa-root cannot be inside the current user home")
+    if root == Path.home().resolve():
+        raise ValueError("--qa-root cannot be the current user home")
 
     expected_source = root / "home" / "hermes-agent"
     if source.is_symlink() or not source.is_dir() or source.resolve(strict=True) != expected_source.resolve():
@@ -108,8 +108,39 @@ def run_checked(command: list[str], *, cwd: Path, env: dict[str, str], label: st
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"{label} timed out after {timeout} seconds") from error
     if result.returncode:
-        raise RuntimeError(f"{label} failed with exit code {result.returncode}; raw process output suppressed")
+        detail = _sanitized_tail(result.stderr or result.stdout)
+        suffix = f"; sanitized output tail: {detail}" if detail else "; process output was empty"
+        raise RuntimeError(f"{label} failed with exit code {result.returncode}{suffix}")
     return result
+
+
+def _sanitized_tail(output: str, *, max_lines: int = 8, max_line_chars: int = 220) -> str:
+    """Keep brief failure clues while removing URL queries and credential-like values."""
+    from urllib.parse import urlsplit, urlunsplit
+
+    rows = []
+    credential = re.compile(r"(?i)\b(token|password|secret|api[_-]?key)\b([=:]\s*)\S+")
+    url = re.compile(r"https?://[^\s\"'<>]+")
+    for line in (output or "").splitlines()[-max_lines:]:
+        value = line.strip()
+        if not value:
+            continue
+
+        def strip_url(match):
+            raw = match.group(0)
+            try:
+                parsed = urlsplit(raw)
+                host = parsed.hostname or ""
+                if parsed.port:
+                    host += f":{parsed.port}"
+                return urlunsplit((parsed.scheme, host, parsed.path, "<redacted>" if parsed.query else "", ""))
+            except ValueError:
+                return "<redacted-url>"
+
+        value = url.sub(strip_url, value)
+        value = credential.sub(r"\1\2<redacted>", value)
+        rows.append(value[:max_line_chars])
+    return " | ".join(rows)
 
 
 def module_smoke_code(data_root: Path) -> str:
