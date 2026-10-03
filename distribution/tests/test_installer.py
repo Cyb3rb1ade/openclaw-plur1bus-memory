@@ -444,6 +444,263 @@ class InstallerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 installer.plan_install(self.bundle, self.home, python=sys.executable)
 
+    def test_default_interpreter_uses_committed_hermes_pm_generation(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        selected = self.home / "installs" / key / "environments" / "generation-314"
+        (selected / "bin").mkdir(parents=True)
+        (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
+        python = selected / "bin/python"
+        python.write_text("#!/bin/sh\n")
+        python.chmod(0o755)
+        facts = self.home / "installs" / key / "facts.json"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+        stale = project / "venv/bin/python"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("#!/bin/sh\n")
+        self.assertEqual(installer.interpreter(self.home), python)
+        self.assertEqual(installer.pm_selected_environment(self.home), selected)
+
+    def test_pm_interpreter_accepts_trusted_managed_runtime_symlink_without_resolving_invocation_path(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        selected = self.home / "installs" / key / "environments" / "generation-314" / "venv"
+        (selected / "bin").mkdir(parents=True)
+        (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
+        runtime = self.home / "tools/python-3.14/bin/python3"
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text("#!/bin/sh\n")
+        runtime.chmod(0o755)
+        python = selected / "bin/python"
+        try:
+            python.symlink_to(runtime)
+        except OSError:
+            self.skipTest("OS denied creating the PM venv executable symlink")
+        facts = self.home / "installs" / key / "facts.json"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+
+        self.assertTrue(python.is_symlink())
+        self.assertEqual(installer.interpreter(self.home), python)
+        self.assertNotEqual(installer.interpreter(self.home), python.resolve())
+
+    def test_pm_interpreter_rejects_executable_symlink_outside_trusted_runtime_roots(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        selected = self.home / "installs" / key / "environments" / "generation-314"
+        (selected / "bin").mkdir(parents=True)
+        (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
+        outside = self.root / "outside-python"
+        outside.write_text("#!/bin/sh\n")
+        outside.chmod(0o755)
+        python = selected / "bin/python"
+        try:
+            python.symlink_to(outside)
+        except OSError:
+            self.skipTest("OS denied creating the PM venv executable symlink")
+        facts = self.home / "installs" / key / "facts.json"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+
+        with self.assertRaisesRegex(ValueError, "trusted runtime roots"):
+            installer.interpreter(self.home)
+
+    def test_pm_selection_refuses_escape_or_missing_generation(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        state = self.home / "installs" / key
+        state.mkdir(parents=True)
+        facts = state / "facts.json"
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(self.root / "outside")}}}))
+        with self.assertRaisesRegex(ValueError, "outside its managed"):
+            installer.pm_selected_environment(self.home)
+        selected = state / "environments" / "missing"
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+        with self.assertRaisesRegex(ValueError, "selected environment is missing"):
+            installer.pm_selected_environment(self.home)
+
+    def test_pm_plan_uses_managed_generation_without_requiring_pip(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        selected = self.home / "installs" / key / "environments" / "generation-314"
+        (selected / "bin").mkdir(parents=True)
+        (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
+        python = selected / "bin/python"
+        python.write_text("#!/bin/sh\n")
+        python.chmod(0o755)
+        facts = self.home / "installs" / key / "facts.json"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+        self.files["payload/plugins/plur1bus/plugin.yaml"] = b"name: plur1bus\nversion: 7.18.4\n"
+        self.write_bundle()
+
+        def pm_python(_python, code, data=None, timeout=None):
+            if "sys.version_info" in code:
+                return json.dumps({"version": [3, 14, 0], "venv": True, "prefix": str(selected),
+                                   "platform": sys.platform, "architecture": "ARM64",
+                                   "implementation": "cpython", "freeThreaded": False})
+            if "importlib.metadata.version('torch')" in code:
+                return "null"
+            if "packages = sorted" in code:
+                return json.dumps({"fingerprint": "f" * 64, "pipAvailable": False,
+                                   "ensurepipAvailable": False})
+            if "yaml.safe_load" in code:
+                text = data.decode() if isinstance(data, bytes) else data
+                if text.lstrip().startswith("{"):
+                    return json.dumps(json.loads(text))
+                return json.dumps({"name": "plur1bus", "version": "7.18.4"})
+            return self.real_python(_python, code, data, timeout=timeout)
+
+        with patch.object(installer, "run_python", side_effect=pm_python):
+            plan = installer.plan_install(self.bundle, self.home)
+        self.assertTrue(plan["pmManaged"])
+        self.assertEqual(plan["python"], str(python))
+        self.assertEqual(plan["torch"]["action"], "pm-managed")
+        self.assertFalse(plan["bootstrapPip"])
+        with patch.object(installer, "run_python", side_effect=pm_python):
+            with self.assertRaisesRegex(ValueError, "cannot override Hermes PM"):
+                installer.plan_install(self.bundle, self.home, python=sys.executable)
+
+    def test_pm_apply_admits_selection_without_direct_pip(self):
+        project = self.home / "hermes-agent"
+        project.mkdir()
+        key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
+        selected = self.home / "installs" / key / "environments" / "generation-314"
+        (selected / "bin").mkdir(parents=True)
+        (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
+        python = selected / "bin/python"
+        python.write_text("#!/bin/sh\n")
+        python.chmod(0o755)
+        facts = self.home / "installs" / key / "facts.json"
+        facts.parent.mkdir(parents=True, exist_ok=True)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
+        old_plur1bus = self.home / "plugins/plur1bus"
+        old_plur1bus.mkdir(parents=True)
+        (old_plur1bus / "__init__.py").write_text("OLD_PROVIDER = True\n")
+        (old_plur1bus / "plugin.yaml").write_text('{"name":"plur1bus","version":"7.12.0"}\n')
+        (old_plur1bus / "pyproject.toml").write_text('[project]\nname="old-plur1bus-hermes"\nversion="7.12.0"\n')
+        old_controls = self.home / "plugins/plur1bus-controls"
+        old_controls.mkdir(parents=True)
+        (old_controls / "__init__.py").write_text("OLD_CONTROLS = True\n")
+        (old_controls / "plugin.yaml").write_text('{"name":"plur1bus-controls","version":"7.12.0"}\n')
+        (old_controls / "pyproject.toml").write_text('[project]\nname="old-plur1bus-controls"\nversion="7.12.0"\n')
+        self.files.update({
+            "payload/plugins/plur1bus/plugin.yaml": b'{"name":"plur1bus","version":"7.18.4"}\n',
+            "payload/plugins/plur1bus/pyproject.toml": b'[project]\nname="plur1bus-hermes"\nversion="7.18.4"\n',
+            "payload/plugins/plur1bus-controls/plugin.yaml": b'{"name":"plur1bus-controls","version":"7.18.4"}\n',
+            "payload/plugins/plur1bus-controls/pyproject.toml": b'[project]\nname="plur1bus-controls"\nversion="7.18.4"\n',
+        })
+        self.write_bundle("7.18.4-hermes.0")
+
+        def pm_python(_python, code, data=None, timeout=None):
+            if "sys.version_info" in code:
+                return json.dumps({"version": [3, 14, 0], "venv": True, "prefix": str(selected),
+                                   "platform": sys.platform, "architecture": "ARM64",
+                                   "implementation": "cpython", "freeThreaded": False})
+            if "importlib.metadata.version('torch')" in code:
+                return "null"
+            if "packages = sorted" in code:
+                return json.dumps({"fingerprint": "f" * 64, "pipAvailable": False,
+                                   "ensurepipAvailable": False})
+            if code.startswith("import plur1bus_"):
+                return ""
+            return self.real_python(_python, code, data, timeout=timeout)
+
+        def read_json_or_yaml(_python, path):
+            raw = path.read_text(encoding="utf-8")
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                if "name: plur1bus-controls" in raw:
+                    return {"name": "plur1bus-controls", "version": "7.18.4"}
+                return {"name": "plur1bus", "version": "7.18.4"}
+
+        admissions = []
+        fail_rollback_admission = False
+
+        def admit(home, profile_home, enabled, disabled, expected_config):
+            admissions.append((profile_home, enabled, disabled))
+            if fail_rollback_admission and len(admissions) > 1:
+                raise RuntimeError("private PM diagnostic must not enter journal")
+            project_name = installer.tomllib.loads(
+                (profile_home / "plugins/plur1bus/pyproject.toml").read_text()
+            )["project"]["name"]
+            if len(admissions) == 1:
+                self.assertIn("-profile-", project_name)
+            else:
+                self.assertEqual(project_name, "old-plur1bus-hermes")
+                self.assertIn("OLD_PROVIDER", (profile_home / "plugins/plur1bus/__init__.py").read_text())
+            current = profile_home / "config.yaml"
+            self.assertEqual(installer.digest(current.read_bytes()), expected_config)
+            config = json.loads(current.read_text())
+            config.setdefault("plugins", {})["enabled"] = enabled
+            config["plugins"]["disabled"] = disabled
+            current.write_text(json.dumps(config))
+
+        patches = (
+            patch.object(installer, "run_python", side_effect=pm_python),
+            patch.object(installer, "read_config", side_effect=read_json_or_yaml),
+            patch.object(installer, "config_bytes", side_effect=lambda _python, config: json.dumps(config).encode()),
+            patch.object(installer, "run_pm_selection", side_effect=admit),
+            patch.object(installer.subprocess, "run", side_effect=self.fake_run),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            plan = installer.plan_install(self.bundle, self.home, profiles=["default"], activate=True)
+            transaction = installer.apply_install(plan, plan["confirmation"], True)
+            installed_project_name = installer.tomllib.loads(
+                (self.home / "plugins/plur1bus/pyproject.toml").read_text()
+            )["project"]["name"]
+            config_after_install = json.loads((self.home / "config.yaml").read_text())
+            self.assertEqual(config_after_install["memory"]["provider"], "plur1bus")
+            self.assertTrue(installer.activation_status(config_after_install)["active"])
+            self.assertFalse((transaction / "pip.log").exists())
+            review = installer.rollback(self.home, transaction.name)
+            rollback_result = installer.rollback(self.home, transaction.name, review["confirmation"], True)
+
+        self.assertEqual(len(admissions), 2)
+        self.assertEqual(admissions[0][0], self.home)
+        self.assertIn("profile-", installed_project_name)
+        self.assertTrue(rollback_result["restored"])
+        self.assertIn("original-generation-identity-unverified", rollback_result["pmGenerationRecovery"])
+        self.assertEqual(len(admissions), 2)
+        self.assertEqual((self.home / "plugins/plur1bus/pyproject.toml").read_text(),
+                         '[project]\nname="old-plur1bus-hermes"\nversion="7.12.0"\n')
+        self.assertEqual((self.home / "config.yaml").read_text(), json.dumps(self.config))
+        journal = json.loads((transaction / "journal.json").read_text())
+        self.assertEqual(journal["status"], "files-restored-pm-selection-admitted")
+
+        fail_rollback_admission = True
+        admissions.clear()
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            retry_plan = installer.plan_install(self.bundle, self.home, profiles=["default"], activate=True)
+            retry_transaction = installer.apply_install(retry_plan, retry_plan["confirmation"], True)
+            retry_review = installer.rollback(self.home, retry_transaction.name)
+            failed_rollback = installer.rollback(self.home, retry_transaction.name,
+                                                 retry_review["confirmation"], True)
+        self.assertTrue(failed_rollback["repairRequired"])
+        retry_journal = json.loads((retry_transaction / "journal.json").read_text())
+        self.assertEqual(retry_journal["status"], "files-restored-pm-repair-required")
+        self.assertNotIn("private PM diagnostic", json.dumps(retry_journal))
+
+    def test_pm_project_names_are_profile_unique_and_keep_module_layout(self):
+        template = (b'[project]\nname = "plur1bus-hermes"\nversion = "7.18.4"\n'
+                    b'[tool.setuptools]\npackage-dir = {"plur1bus_hermes" = "."}\n')
+        first = installer.pm_member_project_bytes(template, "plur1bus", self.home)
+        second_home = self.home / "profiles/alpha"
+        second_home.mkdir(parents=True, exist_ok=True)
+        second = installer.pm_member_project_bytes(template, "plur1bus", second_home)
+        first_project = installer.tomllib.loads(first.decode())["project"]
+        second_project = installer.tomllib.loads(second.decode())["project"]
+        self.assertNotEqual(first_project["name"], second_project["name"])
+        self.assertEqual(first_project["version"], second_project["version"])
+        self.assertIn(b'"plur1bus_hermes" = "."', first)
+
     def test_symlink_destination_is_refused(self):
         outside = self.root / "outside"
         outside.mkdir()

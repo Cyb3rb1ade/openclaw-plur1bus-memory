@@ -179,6 +179,20 @@ class CriticalWorkflowTests(unittest.TestCase):
                 "00000000-0000-4000-8000-000000000003",
             ])
 
+    def test_stale_critical_expires_to_note_and_audits_rejection(self):
+        memory_id = "53628ada-8595-43dc-92da-216fe2c69836"
+        temporary, domain, table = self._domain_with_cards([{"id": memory_id}])
+        with temporary:
+            domain._append_jsonl(domain.state_dir / "critical-push.jsonl", {
+                "id": memory_id, "status": "pending_review", "createdAt": "2020-01-01T00:00:00+00:00",
+            })
+            result = domain.auto_accept_stale_criticals(max_age_ms=1)
+            self.assertEqual(result, {"expired": [memory_id], "count": 1})
+            self.assertEqual(table.updates[0][1], {"confirmed": 1, "type": "note"})
+            self.assertEqual(domain.critical_items(), [])
+            audit = domain._read_jsonl(domain.state_dir / "destructive-operations.jsonl")
+            self.assertTrue(any(entry.get("operation") == "critical-review" and entry.get("action") == "reject" for entry in audit))
+
     def test_cursor_is_deterministic_and_owner_bound(self):
         temporary, domain, _table = self._domain_with_cards([
             {"id": "00000000-0000-4000-8000-000000000001"},

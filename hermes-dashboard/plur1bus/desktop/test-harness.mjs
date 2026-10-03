@@ -20,7 +20,7 @@ const react = new vm.SyntheticModule(['default'], function () {
 });
 // Execute the actual distributed ESM, with only its documented host imports injected.
 const source = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition };');
+const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch };');
 await plugin.link(name => {
   if (name === 'react') return react;
   if (name === '@hermes/plugin-sdk') return sdk;
@@ -37,14 +37,15 @@ function elements(tree, type) {
   if (!Array.isArray(tree)) return [];
   return [...(tree[0] === type ? [tree] : []), ...tree.slice(2).flatMap(child => elements(child, type))];
 }
-const toggle = elements(featureTree, 'input')[0];
+const toggle = elements(featureTree, 'input').find(input => input[1].role === 'switch');
 assert.equal(toggle[1].role, 'switch');
 assert.equal(toggle[1]['aria-describedby'], 'pb-help-autoCapture');
+assert.equal(elements(featureTree, 'input')[0][1].type, 'search', 'settings can be searched by label, description, or identifier');
 hookValues = [{ settings: [{ id: 'recall.candidateTopK', value: 40, minimum: 5, maximum: 100,
   label: 'Suchkandidaten', description: 'Kandidaten vor dem Ranking', group: 'Gedächtnisfunktionen' }] }];
 hookCursor = 0;
 const numericTree = plugin.namespace.FeatureSettings({ rest: async () => ({}) });
-const slider = elements(numericTree, 'input')[0];
+const slider = elements(numericTree, 'input').find(input => input[1].type === 'range');
 assert.equal(slider[1].type, 'range');
 assert.equal(slider[1].min, 5);
 assert.equal(slider[1].max, 100);
@@ -65,6 +66,14 @@ assert.equal(primaryAgentRows(counts)[0].cards, 0, 'a measured zero is preserved
 assert.equal(primaryAgentRows({ ...counts, cards: { byPrimaryAgent: [{ id: 'alpha', cards: null }] } })[0].cards, null);
 assert.equal(primaryAgentRows({ ...counts, scopeType: 'chat' }).length, 0, 'shared rows are not private agent cards');
 assert.equal(primaryAgentRows({ ...counts, cards: undefined }).length, 0, 'legacy status does not invent counts');
+const healthUnknown = plugin.namespace.HealthWatch({ status: {} });
+assert.match(plainText(healthUnknown), /Status unbekannt/);
+const healthFailure = plugin.namespace.HealthWatch({ status: { health: { status: 'degraded', windowHours: 24,
+  llm: { state: 'degraded', failures: [
+    { feature: 'capture', hint: 'authority-expired', errorClass: 'PermissionError', count: 3, lastAt: 1791030000 },
+  ] } } } });
+assert.match(plainText(healthFailure), /3 fehlgeschlagene Aufrufe/);
+assert.match(plainText(healthFailure), /Profilberechtigung war während des Aufrufs nicht mehr aktiv/);
 const { createScopedReader } = plugin.namespace;
 const { createScopedRequest } = plugin.namespace;
 const { createProfileTransport } = plugin.namespace;
@@ -79,17 +88,21 @@ const compatibilityBridge = { api: async req => {
 } };
 const compatibility = await checkDesktopCompatibility(compatibleHost, compatibilityBridge, () => '["local","alpha"]');
 assert.equal(compatibility.status, 'verified');
+assert.equal((await checkDesktopCompatibility({ profileRoutes: compatibleHost.profileRoutes }, compatibilityBridge,
+  () => '["local","alpha"]')).status, 'verified', 'route binding does not require openWorkspace');
 assert.equal(compatibility.sidebar, 'unknown', 'profile handshake does not prove host sidebar patch');
-assert.equal(compatibilityCalls.length, 1);
+assert.equal(compatibilityCalls.length, 2);
 assert.ok(compatibilityCalls[0].path.endsWith('/desktop/capabilities'));
 assert.equal(compatibilityCalls[0].method, undefined, 'startup check is read-only');
 assert.equal((await checkDesktopCompatibility({}, compatibilityBridge, () => '["local","alpha"]')).status, 'unsupported');
-assert.equal(compatibilityCalls.length, 1, 'missing host API must not dispatch');
+assert.equal(compatibilityCalls.length, 2, 'missing host API must not dispatch');
 const mismatch = await checkDesktopCompatibility(compatibleHost, { api: async () => ({ profile: 'beta', profileBinding: 1 }) }, () => '["local","alpha"]');
 assert.equal(mismatch.status, 'blocked');
 assert.equal(mismatch.enabled, null);
 const inactive = await checkDesktopCompatibility(compatibleHost, { api: async () => ({ profile: 'alpha', profileBinding: 1, memoryProviderEnabled: false }) }, () => '["local","alpha"]');
 assert.equal(inactive.enabled, false);
+assert.match(plugin.namespace.compatibilityActivationMessage(inactive), /Sidebar- und Statusleisten-Eintrag ausgeblendet/);
+assert.match(plugin.namespace.compatibilityActivationMessage({ status: 'verified', enabled: null }), /nicht bestätigt/);
 assert.equal(retrievalDefaults('local-onnx', 'embedding').licenseAccepted, false);
 assert.equal(retrievalDefaults('local-onnx', 'embedding').dimensions, 768);
 assert.deepEqual(retrievalDefaults('disabled', 'reranker'), { provider: 'disabled' });
@@ -102,6 +115,8 @@ assert.equal(retrievalDefaults('openai-compatible', 'embedding').apiKey, undefin
 let selected = 'local:bernhardine', wire = [], resolveWire;
 const pinned = createProfileTransport(async request => {
   wire.push(request);
+  assert.deepEqual(Object.keys(request).sort(), ['body', 'connectionId', 'method', 'path', 'profile', 'timeoutMs'].sort(),
+    'manual transport uses HermesApiRequest fields, with no URL or credentials in renderer payload');
   assert.equal(request.connectionId, 'local');
   assert.equal(request.profile, 'bernhardine');
   assert.equal(new URL(request.path, 'http://test').searchParams.get('expectedProfile'),
@@ -292,12 +307,13 @@ const deactivated = visibility.refresh(); navPending.shift()(false); await deact
 assert.equal(visibilityStates.at(-1), false, 'authoritative disable removes navigation');
 visibility.dispose();
 
-let contributions, opened = [], closed = 0;
+let contributions, opened = [], navigated = [], closed = 0;
 const registeredBatches = [];
 const disposers = [];
 globalThis.window = { location: { hash: '#/' }, addEventListener() {}, removeEventListener() {},
   hermesDesktop: { api: async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: true }) } };
 values.host.profileRoutes = async () => [{ connectionId: state.connection, profile: state.profile, targetProfile: state.profile }];
+values.host.navigate = path => navigated.push(path);
 values.host.openWorkspace = (id, options) => { opened.push({ id, options }); return () => { closed++; }; };
 plugin.namespace.default.register({ rest() {}, onDispose(fn) { disposers.push(fn); }, registerMany(value) { registeredBatches.push(value); contributions = value; return () => {}; } });
 await new Promise(resolve => setTimeout(resolve, 0));
@@ -306,13 +322,14 @@ assert.ok(registeredBatches.flat().some(c => c.area === 'routes' && c.data.path 
 const button = contributions.find(c => c.area === 'statusBar.left').data;
 assert.equal(button.label, 'PLUR1BUS');
 button.onSelect();
+assert.deepEqual(navigated, ['/plur1bus'], 'current SDK navigation opens the registered page');
 const sidebar = contributions.find(c => c.area === 'sidebar.nav').data;
 assert.equal(sidebar.label, 'PLUR1BUS');
 assert.equal(sidebar.path, '/plur1bus', 'modern sidebar uses its registered route');
 assert.equal(contributions.find(c => c.area === 'palette').data.id, 'plur1bus.open');
 contributions.find(c => c.area === 'palette').data.run();
-assert.deepEqual(opened.map(c => c.id), ['plur1bus', 'plur1bus'], 'status and palette share the same workspace');
-assert.equal(opened[0].options.title, 'PLUR1BUS');
+assert.deepEqual(navigated, ['/plur1bus', '/plur1bus'], 'status and palette navigate to the same registered page');
+assert.deepEqual(opened, [], 'current SDK page does not need legacy workspace support');
 disposers.forEach(dispose => dispose());
 const inactiveDisposers = [], inactiveBatches = [];
 globalThis.window.hermesDesktop.api = async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: false });
@@ -339,6 +356,8 @@ await new Promise(resolve => setTimeout(resolve, 0));
 assert.ok(legacyBatches.flat().some(c => c.area === 'statusBar.left'));
 assert.ok(legacyBatches.flat().some(c => c.data.id === 'plur1bus.open'));
 assert.ok(!legacyBatches.flat().some(c => c.area === 'sidebar.nav' || !c.area));
+legacyBatches.flat().find(c => c.area === 'statusBar.left').data.onSelect();
+assert.equal(opened.at(-1).id, 'plur1bus', 'legacy host falls back to openWorkspace');
 legacyDisposers.forEach(dispose => dispose());
 delete globalThis.window;
 assert.equal(closed, 1, 'hot unload closes the owned workspace');

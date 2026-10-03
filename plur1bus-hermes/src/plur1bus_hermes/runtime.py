@@ -1897,12 +1897,31 @@ class Plur1busRuntime:
                 text=original, source_message_role=role,
                 cutoff_failed=not self._epistemic_cutoff["ok"],
             )
+            source_turn_id = turn_record_id(
+                capture_id, self.agent_id, self.scope_key, session_id, role
+            )
+            critical_group_context = [
+                {
+                    "id": row["id"],
+                    "content": row["content"],
+                    "sourceTurnId": source_turn_id,
+                    "chunkGroupId": row["chunkGroupId"],
+                    "sourceRole": role,
+                    "status": "active",
+                    "agentId": self.agent_id,
+                    "scopeKey": self.scope_key,
+                    "scopeType": self.scope_binding.scope_type,
+                    "aclBindings": self.scope_binding.as_dict(),
+                }
+                for row in rows
+            ] if len(rows) > 1 else None
             for row in rows:
                 kwargs = {"record_id": row["id"] or None,
                           "chunk_group_id": row["chunkGroupId"],
-                          "source_turn_id": turn_record_id(capture_id, self.agent_id,
-                              self.scope_key, session_id, role),
+                          "source_turn_id": source_turn_id,
                           "force_untrusted": parent_trust != "observed"}
+                if critical_group_context is not None:
+                    kwargs["critical_group_context"] = critical_group_context
                 if role == "user":
                     kwargs.update(importance=importance, valid_from=valid_from,
                                   valid_until=valid_until, expires_at=expires_at, ttl=ttl,
@@ -1915,7 +1934,8 @@ class Plur1busRuntime:
                   valid_until: Any = None, expires_at: Any = None, ttl: Any = None,
                   record_id: str | None = None, merged_from: list[str] | None = None,
                   chunk_group_id: str = "", source_turn_id: str = "",
-                  force_untrusted: bool = False, ttl_reference: str | None = None) -> str | None:
+                  force_untrusted: bool = False, ttl_reference: str | None = None,
+                  critical_group_context: list[dict[str, Any]] | None = None) -> str | None:
         if record_id is not None:
             record_id = safe_memory_id(record_id)
         content = content.strip()
@@ -2034,9 +2054,10 @@ class Plur1busRuntime:
             table.add([record])
         if table is not None:
             if importance is None:
-                self._domain.on_memory(record, table)
+                self._domain.on_memory(record, table, critical_group_context=critical_group_context)
             else:
-                self._domain.on_memory(record, table, importance=importance)
+                self._domain.on_memory(record, table, importance=importance,
+                                       critical_group_context=critical_group_context)
             # Confirm the exact card persisted under the same ownership and
             # temporal metadata before reporting success to /correct.
             search = getattr(table, "search", None)

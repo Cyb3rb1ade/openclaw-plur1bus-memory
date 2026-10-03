@@ -1,0 +1,91 @@
+# Hermes 7.18.4 delta review
+
+Upstream: `9cc5f833b188d8299000faeb94bd0b2015e6217b` (v7.18.4), merged without dropping the previous Hermes payload. Comparison from v7.16.9: 46 paths, 18 commits.
+
+## Native and host boundaries
+
+- Critical proposals expire after 24h through the scoped, audited reject path, never auto-accept. Same-turn whole/chunk coverage suppresses redundant Critical proposals without deleting memories.
+- Skill Workshop evidence lookup is indexed once. The upstream clustering algorithm remains byte-exact in the bundled JS; Hermes has no equivalent all-pairs clustering path to replace.
+- Actual native LLM failures feed bounded process-local, owner-scoped 24h health counters. Three equal feature/category failures degrade health; load timeouts and aborted work do not. Authority expiry is classified without exposing exception text. OpenClaw gateway log signals are explicitly unsupported in Hermes, not guessed.
+- Discord Persona/Light requires OpenClaw voice context, prompt/model hooks and session patching; no verified equivalent exists in Hermes. Bundled upstream code retained; native persona projection is preserved and is not claimed as Discord voice support.
+- Model-driven memory_forget is not exposed by the Hermes provider. Human controls retain archive/tombstone/audit guarantees; removing those would weaken authorization and resurrect deleted records.
+- OpenClaw cron timeout/reply/bot-binding changes are retained in JS, not mapped onto nonexistent Hermes cron bindings. Native scoped Critical controls remain intact.
+- Optional post-turn detachment stays disabled; it is not a Hermes authority workaround.
+- Installer and client compatibility are reviewed separately against current Hermes. Managed Python generation selection must replace legacy venv assumptions. Existing provider/model selections, embeddings, dimensions, memories and profile ownership must survive installation.
+- Native desktop and web UI preserve provider changes, reranker settings, dimension migration, confirmation guards, help and configuration version footer. Profile-bound requests must fail closed on connection/profile changes.
+- Current-Hermes directory loading reuses the installed canonical package with a version guard, keeping Controls/provider/dashboard service and health registries identical. A digest-only identity signature invalidates cached agents after alias/writer remapping. The initial home follows Hermes' active home context rather than assuming `~/.hermes`.
+- Python 3.14 uses NumPy 2.4.3 (matching current Hermes), Sentence Transformers 6.1.0 and native ONNX support; older supported Python versions retain their existing dependency bounds. Actual cached Nano/BGE inference was separately exercised without changing productive config or memory.
+
+## Complete upstream inventory
+
+- `AGENTS.md`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `CHANGELOG.md`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `README.md`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `docs/configuration.md`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `docs/superpowers/plans/2026-09-26-discord-voice-persona-light.md`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `docs/superpowers/specs/2026-09-26-discord-voice-persona-light-design.md`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `index.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/control-plane-projection.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/critical-button-delivery.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/critical-buttons.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/db-adapter.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/health-watch.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/i18n-dictionary.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/internal-cron-reply.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/jobs/auto-accept-stale-criticals.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/jobs/critical-classifier.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/jobs/skill-miner/evidence-aggregator.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/llm-router.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/post-turn-detach.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/setup/control-ui-plugin-runtime.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/setup/feature-cron-plan.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/setup/feature-cron-plugin-runtime.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/voice-mode-switch.js`: upstream source retained exactly (release-version expectation excepted).
+- `lib/voice-mode.js`: upstream source retained exactly (release-version expectation excepted).
+- `openclaw.plugin.json`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `package-lock.json`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `package.json`: retained documentation or version metadata; Hermes metadata adapted where required.
+- `scripts/lib/deploy-integrity.mjs`: upstream source retained exactly (release-version expectation excepted).
+- `scripts/setup-feature-crons.mjs`: upstream source retained exactly (release-version expectation excepted).
+- `test/memory-edit.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/critical-button-delivery.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/critical-buttons.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/critical-classifier-chunk-dedup.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/critical-review-command.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/critical-stale-expire.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/feature-cron-bootstrap.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/feature-cron-native-dispatch.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/feature-cron-plugin-runtime.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/health-watch.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/post-turn-detach.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/release-750-compat.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/skill-miner-aggregate-performance.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/tombstone-e2e.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/voice-light-hooks.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/voice-mode-switch.test.js`: upstream source retained exactly (release-version expectation excepted).
+- `tests/voice-mode.test.js`: upstream source retained exactly (release-version expectation excepted).
+
+## Commits reviewed
+
+- `9cc5f833` 7.18.4: Teilstücke nicht zusätzlich als Critical pushen
+- `3a9a9adb` 7.18.3: Nachbearbeitung optional vom beendeten Turn abkoppeln
+- `b68126a0` 7.18.2: Skill-Miner-Clustering ohne Paarschleife
+- `b2d1d79b` 7.18.1: Feature-Cron-Probe unter OpenClaw 9.7 nicht mehr zu knapp
+- `b8d51ae4` 7.18.0: Health-Überwachung im Dashboard
+- `22b43049` 7.17.1: Umschalten per /modus, /voice gehört OpenClaw
+- `28c8d980` 7.17.0: Persona/Light für Discord-Sprachräume
+- `b9ea61b3` test: Critical-Tests neben dem /voice-Hook präzisieren
+- `0cd0ba6a` feat(voice): /voice und Knöpfe schalten Persona/Light, nur für den Besitzer
+- `49c3b94b` feat(voice): Light lässt Recall weg und nimmt pro Lauf Haiku
+- `b14438a7` feat(voice): Modus-Speicher Persona/Light und Erkennung von Discord-Sprachzügen
+- `0fa4b6cc` docs: Umsetzungsplan Discord-Sprachräume Persona/Light
+- `e2f2e9e6` docs: Discord-Design an die geprüften Host-Fakten anpassen
+- `7758dd01` docs: Serververwaltung ins Discord-Design aufnehmen
+- `17afd20c` docs: Design für Discord-Sprachräume mit Persona/Light
+- `55a4f9b0` 7.16.11: Vergessen durch das Modell sperrt nicht mehr dauerhaft
+- `cf4bc88e` 7.16.10: Knopf-Push an das Ziel des eigenen Crons, Bot aus den Bindings
+- `804235dd` 7.16.10: Critical Push mit Knöpfen, unbestätigte Criticals verfallen
+
+## Evidence boundary
+
+Focused tests are not platform acceptance, local activation or publication. Final release receipts must identify the exact source commit and separately record each platform, signing/notarization, local UI acceptance and remote assets.

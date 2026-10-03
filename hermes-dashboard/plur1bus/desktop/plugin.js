@@ -27,7 +27,6 @@ export async function checkDesktopCompatibility(runtime, bridge, current) {
   const identity = current();
   const [connection, profile] = JSON.parse(identity);
   const missing = [];
-  if (typeof runtime.openWorkspace !== 'function') missing.push('Workspace-API');
   if (typeof runtime.profileRoutes !== 'function') missing.push('Profilrouting-API');
   if (typeof bridge?.api !== 'function') missing.push('Electron-API');
   const base = { identity, sidebar: 'unknown', profileBinding: false, enabled: null };
@@ -38,12 +37,23 @@ export async function checkDesktopCompatibility(runtime, bridge, current) {
     const caps = await rest('/desktop/capabilities');
     if (current() !== identity) return { ...base, status: 'stale' };
     return { ...base, profileBinding: true, enabled: typeof caps.memoryProviderEnabled === 'boolean' ? caps.memoryProviderEnabled : null,
-      status: 'verified', message: 'Workspace und Profilverbindung geprüft. Die Sidebar-Erweiterung ist über die Host-API nicht nachweisbar; Statusleiste und Befehlspalette benötigen sie nicht.' };
+      status: 'verified', message: 'Profilverbindung geprüft. Datenzugriff bleibt an das aktuell ausgewählte Profil gebunden.' };
   } catch (error) {
     return { ...base, status: current() !== identity ? 'stale' : 'blocked',
       enabled: error?.plur1busDisabled ? false : null,
       message: error?.plur1busReason || 'Profilverbindung nicht bestätigt. Datenzugriff bleibt gesperrt.' };
   }
+}
+
+/** Explain whether activation makes profile navigation visible.
+ * @param {object|null} report Read-only compatibility result.
+ * @returns {string} Actionable message for the selected profile.
+ */
+export function compatibilityActivationMessage(report) {
+  if (!report || report.status !== 'verified') return 'Aktivierungsstatus unbekannt. Profilverbindung zuerst prüfen.';
+  if (report.enabled === false) return 'PLUR1BUS ist für dieses Profil nicht als aktiver Memory-Provider eingerichtet. Deshalb sind Sidebar- und Statusleisten-Eintrag ausgeblendet. Im Hermes-Profil memory.provider=plur1bus und memory.memory_enabled=true setzen, das Backend neu starten und erneut prüfen.';
+  if (report.enabled === true) return 'PLUR1BUS ist in diesem Profil aktiv. Der Navigationseintrag sollte sichtbar sein.';
+  return 'Profilverbindung ist geprüft, der PLUR1BUS-Aktivierungsstatus ist vom Backend aber nicht bestätigt.';
 }
 
 function HostCompatibility() {
@@ -62,11 +72,44 @@ function HostCompatibility() {
   }, [profile, connection]);
   return h('section', null, h('h2', null, 'Hermes-Kompatibilität'),
     h('p', { role: 'status' }, report?.message || 'Host-Funktionen und Profilzuordnung werden schreibgeschützt geprüft…'),
+    h('p', { role: 'status', className: report?.enabled === false ? 'pb-error' : undefined }, compatibilityActivationMessage(report)),
     h('p', null, 'Fehlt der linke Knopf: PLUR1BUS über die untere Statusleiste oder Befehlspalette öffnen. Bei nicht bestätigter Profilverbindung bleiben Daten und Aktionen gesperrt.'),
     h('details', null, h('summary', null, 'Quellinstallation automatisch vorbereiten'),
       h('p', null, 'Im PLUR1BUS-Paket ausführen (Python ≥ 3.12). Zuerst den ausgegebenen Plan prüfen; nur dessen exakter Bestätigungscode erlaubt den Neubau einer separaten Kopie.'),
       h('pre', null, 'python3 scripts/hermes-desktop-host.py --source /absoluter/pfad/hermes-agent\npython3 scripts/hermes-desktop-host.py --source /absoluter/pfad/hermes-agent --apply --confirm BESTAETIGUNGSCODE'),
       h('p', null, 'Alternativ nach Installation: <Hermes-Home>/bin/plur1bus-desktop-host.py. Kein Patchen bei jedem Start. Bestehende App, Profile und Memory bleiben unverändert.')));
+}
+
+/** Explain scoped native LLM failure counters without implying missing data is healthy.
+ * @param {object} status Profile-bound status response.
+ * @returns {React.ReactNode} A readable health summary for the selected profile.
+ */
+function HealthWatch({ status }) {
+  const health = status?.health;
+  const llm = health?.llm;
+  const rows = llm?.failures;
+  const hintLabels = {
+    'authority-expired': 'Profilberechtigung war während des Aufrufs nicht mehr aktiv',
+    timeout: 'Zeitüberschreitung', unavailable: 'Modell oder Anbieter nicht erreichbar',
+    rate_limited: 'Anbieter hat die Anfrage begrenzt', unknown: 'Ursache nicht klassifiziert',
+  };
+  const stateLabel = { ready: 'Einzelne Fehler erfasst', degraded: 'Wiederholte Fehler erkannt', unavailable: 'Status nicht verfügbar' };
+  return h('section', { className: 'pb-health-watch' }, h('h2', null, 'LLM-Aufrufe'),
+    rows == null ? h('p', { role: 'status' }, 'Status unbekannt. Dieses Backend liefert noch keine Health-Watch-Daten.') :
+      !Array.isArray(rows) ? h('p', { role: 'status' }, 'Status unbekannt. Fehlerdaten sind ungültig.') : rows.length === 0
+        ? h('p', { role: 'status' }, `${stateLabel[llm.state] || 'Status nicht verfügbar'} · keine Fehler in den letzten ${health?.windowHours || 24} Stunden.`)
+        : h(React.Fragment, null,
+          h('p', { role: 'status', className: llm.state === 'degraded' ? 'pb-error' : undefined },
+            `${stateLabel[llm.state] || 'Fehler erfasst'} · interne Modellaufrufe dieses Profils in den letzten ${health?.windowHours || 24} Stunden.`),
+          h('ul', { className: 'pb-health-list' }, ...rows.map((row, index) => {
+            const when = Number.isFinite(row?.lastAt) && row.lastAt > 0
+              ? new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(row.lastAt * 1000))
+              : 'Zeitpunkt nicht verfügbar';
+            return h('li', { key: `${row?.feature || 'llm'}-${row?.hint || 'unknown'}-${index}` },
+              h('strong', null, `${Number.isSafeInteger(row?.count) && row.count >= 0 ? row.count : '–'} fehlgeschlagene Aufrufe`),
+              h('p', null, hintLabels[row?.hint] || 'Modellaufruf fehlgeschlagen'),
+              h('small', null, `${row?.feature || 'LLM-Funktion'} · ${row?.errorClass || 'Fehlerklasse unbekannt'} · zuletzt ${when}`));
+          }))));
 }
 
 /** Read only the active backend; discard late responses.
@@ -370,8 +413,8 @@ const css = `
 .plur1bus-desktop{padding:24px;max-width:1200px;width:100%;height:100%;overflow:auto;margin:0 auto;color:var(--foreground);font:inherit}
 .plur1bus-desktop header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}
 .plur1bus-desktop h1{font-size:24px;font-weight:650}.plur1bus-desktop h2{font-size:16px;font-weight:600;margin-bottom:12px}
-.plur1bus-desktop p{margin:8px 0;line-height:1.5}.plur1bus-desktop .pb-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
-.plur1bus-desktop section{border:1px solid var(--border,#555);border-radius:10px;padding:18px;margin-bottom:16px}
+.plur1bus-desktop p{margin:8px 0;line-height:1.5}.plur1bus-desktop .pb-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:28px}
+.plur1bus-desktop section{padding:0;margin:28px 0}
 .plur1bus-desktop dt{font-size:12px;opacity:.65;margin-top:12px}.plur1bus-desktop dd{overflow-wrap:anywhere;margin:3px 0 0}
 .plur1bus-desktop button{border:1px solid var(--border,#777);border-radius:6px;padding:7px 12px;background:var(--muted,transparent);cursor:pointer}
 .plur1bus-desktop button:disabled{opacity:.5;cursor:wait}.plur1bus-desktop li{padding:10px 0;border-top:1px solid var(--border,#555)}
@@ -394,6 +437,12 @@ const css = `
 .plur1bus-desktop .pb-setting-row:first-of-type{border-top:0}.plur1bus-desktop .pb-setting-row label{font-weight:550;font-size:14px}
 .plur1bus-desktop .pb-setting-help{color:var(--pb-soft);font-size:12px;line-height:1.6;max-width:64ch;margin:5px 0 0}
 .plur1bus-desktop .pb-setting-control{justify-self:end;width:100%;font-size:13px}
+.plur1bus-desktop .pb-settings-search{display:block;max-width:420px;margin:20px 0 8px;font-size:13px;font-weight:550}
+.plur1bus-desktop .pb-settings-search input{width:100%;margin-top:7px;font-weight:400}
+.plur1bus-desktop .pb-health-watch{border-top:1px solid var(--pb-line);padding-top:18px}
+.plur1bus-desktop .pb-health-list{list-style:none;padding:0;margin:12px 0}
+.plur1bus-desktop .pb-health-list li{border-top:1px solid var(--pb-line);padding:12px 0}
+.plur1bus-desktop .pb-health-list small{margin-top:4px}
 .plur1bus-desktop .pb-toggle{display:flex;justify-content:flex-end;align-items:center;gap:10px;font-size:12px;color:var(--pb-soft)}
 .plur1bus-desktop .pb-toggle input{appearance:none;width:36px;height:21px;padding:2px;border-radius:20px;background:var(--muted,#34343d);cursor:pointer;flex-shrink:0}
 .plur1bus-desktop .pb-toggle input:before{content:'';display:block;width:15px;height:15px;border-radius:50%;background:var(--pb-soft)}
@@ -425,6 +474,7 @@ function FeatureSettings({ rest }) {
   const request = useRequests(rest);
   const [settings, setSettings] = React.useState(null), [review, setReview] = React.useState(null);
   const [busy, setBusy] = React.useState(false), [notice, setNotice] = React.useState('');
+  const [search, setSearch] = React.useState('');
   React.useEffect(() => { setSettings(null); setReview(null); setNotice(''); void load(); }, [rest]);
   async function load() {
     setBusy(true); setReview(null);
@@ -455,25 +505,35 @@ function FeatureSettings({ rest }) {
       'Gespeichert. Hermes-Gateway zum Aktivieren neu starten. Laufender Zustand noch nicht bestätigt.');
     if (!result.error) await load();
   }
+  const normalizedSearch = search.trim().toLocaleLowerCase('de');
+  const visibleSettings = (settings?.settings || []).filter(setting =>
+    !normalizedSearch || [setting.label, setting.id, setting.description, setting.group]
+      .some(value => String(value || '').toLocaleLowerCase('de').includes(normalizedSearch)));
+  const visibleGroups = [...new Set(visibleSettings.map(setting => setting.group || 'Features'))];
   return h('section', { className: 'pb-settings' }, h('h2', null, 'So arbeitet dein Gedächtnis'),
     h('p', { className: 'pb-intro' }, 'Diese Einstellungen gelten nur für das aktive Profil. Änderungen werden zuerst zur Prüfung angezeigt und erst nach deiner Bestätigung gespeichert. Zum Aktivieren ist ein Gateway-Neustart nötig.'),
     h('button', { disabled: busy, onClick: () => { void load(); } }, busy ? 'Lädt…' : 'Werte neu laden'),
+    h('label', { className: 'pb-settings-search' }, 'Einstellungen suchen',
+      h('input', { type: 'search', value: search, placeholder: 'Name, Beschreibung oder Einstellungs-ID',
+        onChange: event => setSearch(event.target.value), 'aria-label': 'Einstellungen suchen' })),
     notice ? h('p', { role: 'status' }, notice) : null,
-    ...[...new Set((settings?.settings || []).map(setting => setting.group || 'Features'))].map(group =>
+    ...visibleGroups.map(group =>
       h('details', { key: group, className: 'pb-setting-group', open: group === 'Speicherung' }, h('summary', null, group),
-      ...(settings?.settings || []).filter(setting => (setting.group || 'Features') === group).map(setting => h('div', { key: setting.id, className: 'pb-setting-row' },
+      ...visibleSettings.filter(setting => (setting.group || 'Features') === group).map(setting => h('div', { key: setting.id, className: 'pb-setting-row' },
       h('div', null, h('label', { htmlFor: `pb-${setting.id}` }, setting.label || setting.id),
         h('p', { id: `pb-help-${setting.id}`, className: 'pb-setting-help' }, setting.description || 'Einstellung des aktiven Profils.')),
       typeof setting.value === 'boolean' ? h('div', { className: 'pb-toggle' }, setting.value ? 'An' : 'Aus',
         h('input', { id: `pb-${setting.id}`, type: 'checkbox', role: 'switch', checked: setting.value, disabled: busy,
           'aria-describedby': `pb-help-${setting.id}`, onChange: event => { void preview(setting.id, event.target.checked); } })) :
-      Number.isInteger(setting.minimum) ? h('div', null, h('output', { htmlFor: `pb-${setting.id}` }, String(setting.value)), h('input', { id: `pb-${setting.id}`, className: 'pb-setting-control', type: 'range',
+      Number.isInteger(setting.minimum) ? h('div', null, h('output', { htmlFor: `pb-${setting.id}` },
+        `${new Intl.NumberFormat('de-DE').format(setting.value)}${setting.unit ? ` ${setting.unit}` : ''}`), h('input', { id: `pb-${setting.id}`, className: 'pb-setting-control', type: 'range',
         min: setting.minimum, max: setting.maximum, step: 1, value: setting.value, disabled: busy,
         'aria-valuetext': String(setting.value), 'aria-describedby': `pb-help-${setting.id}`,
         onChange: event => { void preview(setting.id, Number(event.target.value)); } })) :
       h('select', { id: `pb-${setting.id}`, className: 'pb-setting-control', 'aria-describedby': `pb-help-${setting.id}`, disabled: busy, value: String(setting.choices.indexOf(setting.value)),
         onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
       setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))))))),
+    settings && visibleSettings.length === 0 ? h('p', { role: 'status' }, normalizedSearch ? 'Keine passenden Einstellungen gefunden.' : 'Keine Einstellungen verfügbar.') : null,
     review ? h('div', { className: 'pb-review', role: 'region', 'aria-label': 'Änderung prüfen' },
       h('h3', null, 'Änderung prüfen'), h('p', null, `${settings?.settings.find(item => item.id === review.identifier)?.label || review.identifier}: ${review.value === true ? 'Aktivieren' : review.value === false ? 'Deaktivieren' : String(review.value)}`),
       h('p', { className: 'pb-intro' }, 'Gilt für dieses Profil. Deine gespeicherten Erinnerungen werden durch diesen Einstellungswechsel nicht migriert. Nach dem Speichern ist ein Gateway-Neustart erforderlich.'),
@@ -652,7 +712,8 @@ function Partition({ rest, profile }) {
         h('section', null, h('h2', null, 'Embeddings'), h('dl', null,
           field('Provider', embedding.provider), field('Modell', embedding.model), field('Dimensionen', embedding.dimensions))),
         h('section', null, h('h2', null, 'Reranking'), h('dl', null,
-          field('Provider', reranker.provider), field('Modell', reranker.model))))) : null,
+          field('Provider', reranker.provider), field('Modell', reranker.model)))),
+      h(HealthWatch, { status: s })) : null,
     s && panel === 'models' ? h(React.Fragment, null,
       h('p', { className: 'pb-intro' }, `Embeddings: ${embedding.model || 'Nicht konfiguriert'} (${embedding.dimensions || '—'} Dimensionen). Reranking: ${reranker.model || 'Nicht konfiguriert'}.`),
       h(RetrievalSettings, { rest })) : null,
@@ -706,9 +767,12 @@ export default {
       return h(Partition, { key: identity, rest, profile });
     }
     let closeWorkspace = null;
-    const supported = typeof host.openWorkspace === 'function';
+    const routeNavigation = Boolean(ROUTES_AREA && typeof host.navigate === 'function');
+    const workspaceNavigation = typeof host.openWorkspace === 'function';
+    const supported = routeNavigation || workspaceNavigation;
     const open = () => {
-      if (!supported) return;
+      if (routeNavigation) { host.navigate('/plur1bus'); return; }
+      if (!workspaceNavigation) return;
       closeWorkspace = host.openWorkspace('plur1bus', { title: 'PLUR1BUS', render: () => h(Page),
         onClose: () => { closeWorkspace = null; } });
     };
@@ -718,9 +782,12 @@ export default {
     let closeHelp = null;
     const removeHelp = ctx.registerMany([{ id: 'host-check', area: PALETTE_AREA,
       data: { id: 'plur1bus.host-check', label: 'PLUR1BUS: Desktop-Kompatibilität prüfen', run: () => {
-        if (supported) closeHelp = host.openWorkspace('plur1bus-host-check', {
+        if (workspaceNavigation) closeHelp = host.openWorkspace('plur1bus-host-check', {
           title: 'PLUR1BUS-Kompatibilität', render: () => h(HostCompatibility, { key: scopeKey() }) });
-        else host.notify?.({ kind: 'error', message: 'Hermes Workspace-API fehlt. Hermes aktualisieren oder scripts/hermes-desktop-host.py aus dem PLUR1BUS-Paket verwenden.' });
+        else if (routeNavigation) {
+          host.navigate('/plur1bus');
+          host.notify?.({ kind: 'info', message: 'Die Kompatibilitätsprüfung findest du im Bereich Diagnose.' });
+        } else host.notify?.({ kind: 'error', message: 'Hermes-Navigation ist nicht verfügbar. PLUR1BUS lässt sich über den Status- oder Befehlspaletten-Eintrag öffnen, sobald die Host-Navigation verfügbar ist.' });
       } } }]);
     ctx.onDispose(() => { removeHelp(); closeHelp?.(); });
     // Current Hermes sidebar navigation requires an actual route and path.
@@ -749,7 +816,7 @@ export default {
           ...(ROUTES_AREA ? { path: '/plur1bus' } : { onSelect: open }) } }] : []),
       { id: 'open-button', area: STATUSBAR_AREAS.left, order: 55,
         data: { id: 'plur1bus-open', variant: 'action', label: 'PLUR1BUS', disabled: !supported, onSelect: open,
-          title: supported ? 'PLUR1BUS als Workspace öffnen' : 'Hermes Desktop mit openWorkspace-Unterstützung erforderlich' } },
+          title: supported ? 'PLUR1BUS öffnen' : 'Hermes Desktop mit Navigation oder Workspace-Unterstützung erforderlich' } },
       { id: 'open', area: PALETTE_AREA, data: { id: 'plur1bus.open', label: 'PLUR1BUS öffnen',
         keywords: ['memory', 'embeddings', 'reranker', 'plur1bus'], run: open } },
       ]);

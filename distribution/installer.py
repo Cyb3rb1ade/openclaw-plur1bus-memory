@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 
 # When imported by the distribution unit tests this file is not the process
 # entrypoint, so retain the sibling-module lookup used by the frozen/script form.
@@ -128,6 +129,120 @@ print(json.dumps({'fingerprint': hashlib.sha256(json.dumps(packages).encode()).h
     return json.loads(run_python(python, code))
 
 
+def run_pm_selection(home, profile_home, enabled, disabled, expected_config):
+    """Ask Hermes PM to publish one profile selection and its dependency generation."""
+    project = home / "hermes-agent"
+    python = interpreter(home)
+    selection = {"home": str(profile_home.resolve()), "enabled": sorted(enabled),
+                 "disabled": sorted(disabled), "extra_dirs": [], "expected_config": expected_config}
+    code = (
+        "import json,sys; from pathlib import Path; "
+        "project=Path(sys.argv[1]).resolve(); sys.path.insert(0,str(project)); "
+        "from pm.client import sync_venv; from pm.plugin_inputs import Selection; "
+        "sync_venv(explicit=True, plugins=Selection(json.load(sys.stdin)), project_root=project)"
+    )
+    environment = dict(os.environ)
+    environment["HERMES_HOME"] = str(home)
+    try:
+        result = subprocess.run([str(python), "-I", "-X", "utf8", "-c", code, str(project)],
+                                input=json.dumps(selection), capture_output=True, text=True,
+                                encoding="utf-8", env=environment, timeout=1800)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("Hermes PM admission timed out; inspect Hermes PM state before retrying") from error
+    if result.returncode:
+        raise ValueError("Hermes PM refused the plugin selection; config and dependency selection were not admitted")
+
+
+def _desired_plugin_selection(config):
+    """Return current allow/deny lists with the two PLUR1BUS plugins enabled."""
+    plugins = config.get("plugins", {})
+    if not isinstance(plugins, dict):
+        raise ValueError("invalid Hermes plugin configuration")
+    enabled, disabled = plugins.get("enabled", []), plugins.get("disabled", [])
+    if (not isinstance(enabled, list) or not isinstance(disabled, list)
+            or not all(isinstance(value, str) for value in enabled + disabled)):
+        raise ValueError("invalid Hermes plugin allow/deny lists")
+    selected = {"plur1bus", "plur1bus-controls"}
+    return sorted(set(enabled) | selected), sorted(set(disabled) - selected)
+
+
+def pm_member_project_bytes(data, plugin_name, profile_home):
+    """Give same-code profile members distinct uv names while retaining import aliases."""
+    try:
+        document = tomllib.loads(data.decode("utf-8"))
+        original = document["project"]["name"]
+    except (UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
+        raise ValueError("invalid bundled Hermes PM plugin project metadata") from error
+    if not isinstance(original, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", original):
+        raise ValueError("invalid bundled Hermes PM project name")
+    identity = hashlib.sha256(str(profile_home.resolve()).encode("utf-8")).hexdigest()[:16]
+    normalized = re.sub(r"[^A-Za-z0-9-]+", "-", plugin_name).strip("-").lower()
+    unique_name = f"{normalized}-profile-{identity}"
+    text = data.decode("utf-8")
+    heading = re.search(r"(?m)^\[project\]\s*$", text)
+    if heading is None:
+        raise ValueError("Hermes PM plugin pyproject has no [project] table")
+    next_table = re.search(r"(?m)^\[", text[heading.end():])
+    stop = heading.end() + next_table.start() if next_table else len(text)
+    section = text[heading.end():stop]
+    updated, count = re.subn(r'(?m)^name\s*=\s*["\'][^"\']+["\']\s*$',
+                             'name = "' + unique_name + '"', section)
+    if count != 1:
+        raise ValueError("Hermes PM plugin project name could not be uniquely rewritten")
+    return (text[:heading.end()] + updated + text[stop:]).encode("utf-8")
+
+
+def check_unselected_pm_profiles(home, selected_names, python, bundle, manifest, expected_plugin_version):
+    """Refuse mixed or duplicate active members in Hermes PM's all-profile workspace."""
+    for name, target in targets(home, ["all"]).items():
+        if name in selected_names:
+            continue
+        config_path = resolve_inside(target, "config.yaml")
+        config = read_config(python, config_path)
+        if not isinstance(config, dict):
+            raise ValueError("invalid Hermes profile configuration")
+        plugins = config.get("plugins", {})
+        if not isinstance(plugins, dict):
+            raise ValueError("invalid Hermes plugin configuration")
+        enabled, disabled = plugins.get("enabled", []), set(plugins.get("disabled", []))
+        if not isinstance(enabled, list) or not all(isinstance(value, str) for value in enabled):
+            raise ValueError("invalid Hermes plugin allow/deny lists")
+        if "plur1bus" not in enabled or {"plur1bus", "plur1bus-controls"} & disabled:
+            continue
+        plugin_manifest = resolve_inside(target, "plugins/plur1bus/plugin.yaml")
+        if not plugin_manifest.is_file():
+            raise ValueError("an unselected active Hermes profile has no verifiable PLUR1BUS version; select all profiles")
+        installed = read_config(python, plugin_manifest)
+        if not isinstance(installed, dict) or installed.get("version") != expected_plugin_version:
+            raise ValueError("an unselected active Hermes profile has different PLUR1BUS code; select all profiles")
+        prefixes = ("payload/plugins/plur1bus/", "payload/plugins/plur1bus-controls/")
+        for source_name, expected_hash in manifest["files"].items():
+            if not source_name.startswith(prefixes):
+                continue
+            relative = source_name[8:]
+            if not relative.endswith(".py") and relative not in {
+                "plugins/plur1bus/plugin.yaml", "plugins/plur1bus-controls/plugin.yaml"
+            }:
+                continue
+            current = resolve_inside(target, relative)
+            if not current.is_file() or digest(current.read_bytes()) != expected_hash:
+                raise ValueError("an unselected active Hermes profile has different PLUR1BUS code; select all profiles")
+        for plugin_name in ("plur1bus", "plur1bus-controls"):
+            project_file = resolve_inside(target, f"plugins/{plugin_name}/pyproject.toml")
+            bundled_project = resolve_inside(bundle, f"payload/plugins/{plugin_name}/pyproject.toml")
+            if not project_file.is_file() or not bundled_project.is_file():
+                raise ValueError("an unselected active Hermes profile has unverifiable PM project metadata; select all profiles")
+            try:
+                expected_name = tomllib.loads(pm_member_project_bytes(
+                    bundled_project.read_bytes(), plugin_name, target
+                ).decode("utf-8"))["project"]["name"]
+                actual_name = tomllib.loads(project_file.read_text(encoding="utf-8"))["project"]["name"]
+            except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
+                raise ValueError("an unselected active Hermes profile has invalid PM project metadata; select all profiles") from error
+            if actual_name != expected_name:
+                raise ValueError("an unselected active Hermes profile has a non-unique PM project name; select all profiles")
+
+
 def torch_version(python):
     """Read installed Torch metadata without importing its native extension."""
     value = run_python(python, """
@@ -155,6 +270,12 @@ def cpu_torch_decision(info, installed, dependencies):
     if dependencies and eligible:
         return {"action": "install-cpu", "version": None, "index": CPU_TORCH_INDEX}
     return {"action": "resolver-default", "version": None, "index": None}
+
+
+def pm_native_target_supported(info):
+    """Current PM payload metadata does not support bundled Windows ARM wheels."""
+    return not (info.get("platform") == "win32"
+                and str(info.get("architecture", "")).upper() in {"ARM64", "AARCH64"})
 
 
 def verify_cpu_torch(python, expected_version, require_cpu=True):
@@ -231,12 +352,67 @@ def targets(home, profiles, desktop_only=False):
 def interpreter(home, override=None):
     if override:
         return Path(override).expanduser().absolute()
+    selected = pm_selected_environment(home)
+    if selected is not None:
+        candidate = selected / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        executable_dir = candidate.parent
+        if redirected(executable_dir) or not executable_dir.is_dir() or not candidate.is_file():
+            raise ValueError("Hermes PM selected Python is missing; repair it with Hermes PM")
+        # Standard venvs may symlink bin/python to Hermes' managed base runtime.
+        # Keep invoking the lexical venv path so CPython discovers this venv's
+        # pyvenv.cfg; resolve only for validating the final executable target.
+        resolved_candidate = candidate.resolve()
+        managed_tools = home / "tools"
+        trusted_roots = [selected.resolve()]
+        if managed_tools.is_dir() and not redirected(managed_tools):
+            trusted_roots.append(managed_tools.resolve())
+        if not resolved_candidate.is_file() or not any(
+                resolved_candidate == root or root in resolved_candidate.parents for root in trusted_roots):
+            raise ValueError("Hermes PM selected Python target is outside its trusted runtime roots")
+        if os.name != "nt" and not os.access(resolved_candidate, os.X_OK):
+            raise ValueError("Hermes PM selected Python is not executable; repair it with Hermes PM")
+        return candidate
     for relative in ("hermes-agent/venv/Scripts/python.exe", "hermes-agent/venv/bin/python",
                      "hermes-agent/.venv/Scripts/python.exe", "hermes-agent/.venv/bin/python"):
         candidate = home / relative
         if candidate.is_file():
             return candidate
     raise ValueError("Hermes Python not found; pass --python pointing to the Hermes virtual environment")
+
+
+def pm_selected_environment(home):
+    """Read Hermes PM's committed generation without booting its mutating launcher."""
+    project = home / "hermes-agent"
+    if project.is_dir() and not redirected(project):
+        # Match pm.environments.install_key/runtime_facts_path. The in-tree venv
+        # predates PM and can have the wrong ABI after a managed Python upgrade.
+        # Do not run Hermes' launch bootstrap: it may synchronize dependencies.
+        project = project.resolve()
+        key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:16]
+        state_root = home / "installs" / key
+        facts_path = resolve_inside(home, f"installs/{key}/facts.json")
+        if facts_path.exists():
+            try:
+                facts = json.loads(facts_path.read_text(encoding="utf-8-sig"))
+                environment = facts["packages"]["venv"]["environment"]
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                raise ValueError("Hermes PM dependency selection is invalid; repair it with Hermes PM") from error
+            if not isinstance(environment, str) or not Path(environment).is_absolute():
+                raise ValueError("Hermes PM dependency selection is invalid; repair it with Hermes PM")
+            selected = Path(environment)
+            generations = state_root / "environments"
+            try:
+                relative = selected.relative_to(generations.absolute())
+            except ValueError as error:
+                raise ValueError("Hermes PM dependency selection is outside its managed environment store") from error
+            selected = resolve_inside(generations, relative.as_posix())
+            if not selected.resolve().is_relative_to(generations.resolve()):
+                raise ValueError("Hermes PM dependency selection is outside its managed environment store")
+            selected = selected.resolve()
+            if not (selected / "pyvenv.cfg").is_file():
+                raise ValueError("Hermes PM selected environment is missing; repair it with Hermes PM")
+            return selected
+    return None
 
 
 def managed(relative):
@@ -402,11 +578,24 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     if desktop_only and activate:
         raise ValueError("desktop-only cannot activate a backend provider")
     info = None
+    pm_managed = False
     if not desktop_only:
-        python = interpreter(home, python)
+        selected_pm_environment = pm_selected_environment(home)
+        pm_managed = selected_pm_environment is not None
+        if pm_managed:
+            selected_python = interpreter(home)
+            if python is not None and Path(python).expanduser().absolute() != selected_python:
+                raise ValueError("explicit --python cannot override Hermes PM's selected generation")
+            python = selected_python
+        else:
+            python = interpreter(home, python)
         info = json.loads(run_python(python, "import json,sys,platform,sysconfig; print(json.dumps({'version':list(sys.version_info[:3]),'venv':sys.prefix!=sys.base_prefix,'prefix':sys.prefix,'platform':sys.platform,'architecture':platform.machine(),'implementation':sys.implementation.name,'freeThreaded':bool(sysconfig.get_config_var('Py_GIL_DISABLED'))}))"))
         if info["version"] < [3, 11, 0] or not info["venv"] or info["platform"] != sys.platform:
             raise ValueError("same-platform Python >=3.11 in a Hermes virtual environment required; global or Windows/WSL-crossed pip refused")
+        if pm_managed and not pm_native_target_supported(info):
+            raise ValueError("Hermes PM admission cannot yet include the bundled Windows ARM native wheels; no files or dependencies were changed")
+        if pm_managed and activate and not dependencies:
+            raise ValueError("Hermes PM admission resolves the complete plugin dependency graph; --no-deps cannot activate a PM-managed profile")
     selected = targets(home, profiles, desktop_only)
     destinations, configs, receipts = {}, {}, {}
     profile_status, warnings = {}, []
@@ -447,6 +636,8 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
                 native_wheels = list(native[target])
             else:
                 native_wheels = [native[target]]
+    if pm_managed and native_wheels:
+        raise ValueError("this bundled native wheel has no Hermes PM dependency declaration; no environment was changed")
     for name, target in selected.items():
         config_path = resolve_inside(target, "config.yaml")
         configs[name] = digest(config_path.read_bytes()) if config_path.exists() else None
@@ -472,25 +663,42 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             if dest.exists() and not dest.is_file():
                 raise ValueError("file destination is not a regular file")
             destinations[name + "/" + relative] = digest(dest.read_bytes()) if dest.exists() else None
-    torch = None if desktop_only else cpu_torch_decision(info, torch_version(python), dependencies)
+    if pm_managed:
+        bundled_manifest = resolve_inside(bundle, "payload/plugins/plur1bus/plugin.yaml")
+        if not bundled_manifest.is_file():
+            raise ValueError("Hermes PM installation requires the plugin manifest in the verified payload")
+        bundled_plugin = read_config(python, bundled_manifest)
+        plugin_version = bundled_plugin.get("version") if isinstance(bundled_plugin, dict) else None
+        if not isinstance(plugin_version, str):
+            raise ValueError("Hermes PM plugin version is missing from the verified payload")
+        check_unselected_pm_profiles(home, set(selected), python, bundle, manifest, plugin_version)
+    torch = None if desktop_only else (
+        {"action": "pm-managed", "version": torch_version(python), "index": None}
+        if pm_managed else cpu_torch_decision(info, torch_version(python), dependencies)
+    )
     result = {"schema": 1, "version": manifest["version"], "bundle": str(bundle), "home": str(home),
               "manifest": digest((bundle / MANIFEST).read_bytes()), "python": str(python) if not desktop_only else None, "pythonInfo": info,
-              "desktopOnly": desktop_only,
+              "desktopOnly": desktop_only, "pmManaged": pm_managed,
               "profiles": list(selected), "activate": activate, "dependencies": dependencies,
               "profileStatus": profile_status, "warnings": warnings,
               "sharedDesktop": shared_desktop,
               "configs": configs, "receipts": receipts, "destinations": destinations, "wheels": wheels,
               "nativeWheels": native_wheels, "torch": torch,
-              "effects": "Install Python wheels into selected Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile configuration/backend writes. File rollback does not roll back pip dependencies."}
+              "effects": ("Stage plugin files and use Hermes PM to atomically admit the dependency selection when activated; no direct pip writes to a PM-owned generation."
+                         if pm_managed else "Install Python wheels into the selected legacy Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile configuration/backend writes. File rollback does not roll back pip dependencies.")}
     if not desktop_only:
         environment = environment_state(python)
-        if not environment["pipAvailable"] and not environment["ensurepipAvailable"]:
+        if not pm_managed and not environment["pipAvailable"] and not environment["ensurepipAvailable"]:
             raise ValueError("Hermes venv has neither pip nor ensurepip; provision pip with its environment manager first")
         result["environmentFingerprint"] = environment["fingerprint"]
-        result["bootstrapPip"] = not environment["pipAvailable"]
+        result["bootstrapPip"] = not pm_managed and not environment["pipAvailable"]
         if result["bootstrapPip"]:
             result["effects"] += " Confirmed apply first bootstraps pip in this venv using Python's bundled ensurepip."
-        if torch["action"] == "install-cpu":
+        if torch["action"] == "pm-managed":
+            if not activate and dependencies:
+                result["warnings"].append("Python dependencies remain deferred until Hermes PM admits the plugins.")
+            result["effects"] += " Hermes PM owns the dependency graph and publishes a replacement generation; restart Hermes after admission."
+        elif torch["action"] == "install-cpu":
             result["effects"] += " Confirmed apply installs Torch from PyTorch's official CPU index before resolving PLUR1BUS dependencies; the resolver is constrained to that CPU version."
         elif torch["action"] == "preserve":
             result["effects"] += " Existing Torch is preserved and constrained against replacement during dependency resolution."
@@ -509,7 +717,8 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
 def apply_install(plan, confirmation, stopped=False):
     if not stopped:
         raise ValueError("stop affected Hermes runtimes and pass --runtimes-stopped")
-    fresh = plan_install(plan["bundle"], plan["home"], plan["profiles"], plan["python"], plan["activate"], plan["dependencies"], plan["desktopOnly"])
+    python_arg = None if plan.get("pmManaged") else plan["python"]
+    fresh = plan_install(plan["bundle"], plan["home"], plan["profiles"], python_arg, plan["activate"], plan["dependencies"], plan["desktopOnly"])
     if fresh != plan or confirmation != plan["confirmation"]:
         raise ValueError("stale plan or invalid confirmation; no writes performed")
     home, bundle = root_path(plan["home"]), root_path(plan["bundle"])
@@ -517,10 +726,11 @@ def apply_install(plan, confirmation, stopped=False):
     lock.mkdir()  # Refuse concurrent installation; never steal an existing lock.
     transaction = None
     journal = {"schema": 1, "status": "preparing", "home": str(home), "files": {}, "version": plan["version"],
-               "pipChanged": False, "torch": None if plan["torch"] is None else dict(plan["torch"])}
+               "pipChanged": False, "pmSelections": [],
+               "torch": None if plan["torch"] is None else dict(plan["torch"])}
     try:
         # Recheck under the lock, including every target and configuration digest.
-        if plan_install(bundle, home, plan["profiles"], plan["python"], plan["activate"], plan["dependencies"], plan["desktopOnly"]) != plan:
+        if plan_install(bundle, home, plan["profiles"], python_arg, plan["activate"], plan["dependencies"], plan["desktopOnly"]) != plan:
             raise ValueError("installation changed while acquiring lock")
         backups = resolve_inside(home, "plur1bus-install-backups")
         backups.mkdir(exist_ok=True)
@@ -531,6 +741,7 @@ def apply_install(plan, confirmation, stopped=False):
         selected = targets(home, plan["profiles"], plan["desktopOnly"])
         manifest = verify_bundle(bundle)
         incoming = shared_desktop_updates(bundle, home, selected, manifest, plan["desktopOnly"])
+        pm_requests = {}
         for name, target in selected.items():
             prefix = "" if name == "default" else "profiles/" + name + "/"
             receipt_files = {}
@@ -545,22 +756,43 @@ def apply_install(plan, confirmation, stopped=False):
                     relative = key[8:]
                     if plan["desktopOnly"] and not relative.startswith("desktop-plugins/plur1bus/"):
                         continue
-                    incoming[prefix + relative] = resolve_inside(bundle, key).read_bytes()
-                    receipt_files[relative] = sha
+                    data = resolve_inside(bundle, key).read_bytes()
+                    if plan["pmManaged"] and relative.endswith("/pyproject.toml"):
+                        plugin_root = relative.rsplit("/pyproject.toml", 1)[0]
+                        if plugin_root in {"plugins/plur1bus", "plugins/plur1bus-controls"}:
+                            data = pm_member_project_bytes(data, Path(plugin_root).name, target)
+                    incoming[prefix + relative] = data
+                    receipt_files[relative] = digest(data)
             if plan["activate"]:
                 config = read_config(plan["python"], target / "config.yaml")
-                memory = config.setdefault("memory", {})
-                plugins = config.setdefault("plugins", {})
-                if not isinstance(memory, dict) or not isinstance(plugins, dict):
-                    raise ValueError("invalid memory/plugins configuration")
-                enabled, disabled = plugins.get("enabled", []), plugins.get("disabled", [])
-                if not isinstance(enabled, list) or not isinstance(disabled, list) or not all(isinstance(v, str) for v in enabled + disabled):
-                    raise ValueError("invalid plugin allow/deny lists")
-                memory["provider"] = "plur1bus"
-                memory["memory_enabled"] = True
-                plugins["enabled"] = sorted(set(enabled) | {"plur1bus", "plur1bus-controls"})
-                plugins["disabled"] = [v for v in disabled if v not in {"plur1bus", "plur1bus-controls"}]
-                incoming[prefix + "config.yaml"] = config_bytes(plan["python"], config)
+                if plan["pmManaged"]:
+                    memory = config.get("memory", {})
+                    if not isinstance(memory, dict):
+                        raise ValueError("invalid Hermes memory configuration")
+                    enabled, disabled = _desired_plugin_selection(config)
+                    before_config = resolve_inside(target, "config.yaml").read_bytes()
+                    pm_requests[name] = {"target": target, "enabled": enabled, "disabled": disabled,
+                                         "beforeConfig": before_config, "prefix": prefix}
+                    plugins = config.get("plugins", {})
+                    journal["pmSelections"].append({
+                        "profile": name,
+                        "beforeEnabled": sorted(set(plugins.get("enabled", []))),
+                        "beforeDisabled": sorted(set(plugins.get("disabled", []))),
+                        "applied": False,
+                    })
+                else:
+                    memory = config.setdefault("memory", {})
+                    plugins = config.setdefault("plugins", {})
+                    if not isinstance(memory, dict) or not isinstance(plugins, dict):
+                        raise ValueError("invalid memory/plugins configuration")
+                    enabled, disabled = plugins.get("enabled", []), plugins.get("disabled", [])
+                    if not isinstance(enabled, list) or not isinstance(disabled, list) or not all(isinstance(v, str) for v in enabled + disabled):
+                        raise ValueError("invalid plugin allow/deny lists")
+                    memory["provider"] = "plur1bus"
+                    memory["memory_enabled"] = True
+                    plugins["enabled"] = sorted(set(enabled) | {"plur1bus", "plur1bus-controls"})
+                    plugins["disabled"] = [v for v in disabled if v not in {"plur1bus", "plur1bus-controls"}]
+                    incoming[prefix + "config.yaml"] = config_bytes(plan["python"], config)
             incoming[prefix + receipt_name] = json.dumps({"schema": 1, "version": plan["version"], "files": receipt_files}, indent=2).encode()
         for relative, data in incoming.items():
             destination = resolve_inside(home, relative)
@@ -572,10 +804,15 @@ def apply_install(plan, confirmation, stopped=False):
                 # Restoring a host marker also restores the source timestamp it
                 # refers to, so rollback cannot trigger a destructive recopy.
                 journal["files"][relative]["beforeMtimeNs"] = destination.stat().st_mtime_ns
+        for request in pm_requests.values():
+            relative = request["prefix"] + "config.yaml"
+            old = request["beforeConfig"]
+            atomic_write(resolve_inside(transaction, "before/" + relative), old)
+            journal["files"][relative] = {"before": digest(old), "after": None}
         record()
-        # Pip changes are intentionally separate from the file transaction and
-        # recorded honestly; restoring files cannot undo an environment resolver.
-        if not plan["desktopOnly"]:
+        # Legacy installs use pip separately. PM-managed profiles are admitted
+        # after the plugin files are staged, through PM's generation publisher.
+        if not plan["desktopOnly"] and not plan["pmManaged"]:
             if plan["bootstrapPip"]:
                 journal.update(status="bootstrapping-pip", pipChanged=True)
                 record()
@@ -657,13 +894,45 @@ def apply_install(plan, confirmation, stopped=False):
                     os.replace(destination, retired)
             else:
                 atomic_write(destination, data)
+        for name, request in pm_requests.items():
+            before = request["beforeConfig"]
+            run_pm_selection(home, request["target"], request["enabled"], request["disabled"], digest(before))
+            config_path = resolve_inside(request["target"], "config.yaml")
+            config_after_selection = config_path.read_bytes()
+            selection_record = next(row for row in journal["pmSelections"] if row["profile"] == name)
+            selection_record["applied"] = True
+            relative = request["prefix"] + "config.yaml"
+            journal["files"][relative]["after"] = digest(config_after_selection)
+            record()
+            selected_python = interpreter(home)
+            config = read_config(selected_python, config_path)
+            memory = config.setdefault("memory", {})
+            if not isinstance(memory, dict):
+                raise ValueError("invalid Hermes memory configuration")
+            memory["provider"] = "plur1bus"
+            memory["memory_enabled"] = True
+            atomic_write(config_path, config_bytes(selected_python, config))
+            journal["files"][relative]["after"] = digest(config_path.read_bytes())
+            record()
+        if pm_requests:
+            selected_python = interpreter(home)
+            managed_roots = [resolve_inside(home, "plugins/plur1bus").resolve(),
+                             resolve_inside(home, "plugins/plur1bus-controls").resolve()]
+            run_python(selected_python,
+                       "import plur1bus_hermes,plur1bus_controls,sys; from pathlib import Path; "
+                       "assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == " + repr(manifest["pythonVersion"]) + "; "
+                       "roots = (Path(sys.prefix).resolve(), " + ",".join("Path(" + repr(str(root)) + ").resolve()" for root in managed_roots) + "); "
+                       "assert all(any(Path(module.__file__).resolve() == root or root in Path(module.__file__).resolve().parents "
+                       "for root in roots) for module in (plur1bus_hermes, plur1bus_controls)), "
+                       "'plugin import escaped the selected Hermes environment or managed plugin roots'")
         for relative, state in journal["files"].items():
             destination = resolve_inside(home, relative)
             if (digest(destination.read_bytes()) if destination.exists() else None) != state["after"]:
                 raise ValueError("installed-file verification failed")
         if plan["activate"]:
+            verification_python = interpreter(home) if plan["pmManaged"] else plan["python"]
             for target in targets(home, plan["profiles"]).values():
-                if not activation_status(read_config(plan["python"], resolve_inside(target, "config.yaml")))["active"]:
+                if not activation_status(read_config(verification_python, resolve_inside(target, "config.yaml")))["active"]:
                     raise ValueError("installed profile activation verification failed")
         journal["status"] = "installed-restart-required"
         record()
@@ -673,7 +942,7 @@ def apply_install(plan, confirmation, stopped=False):
         if transaction is not None:
             journal["status"] = "failed-review-required"
             atomic_write(transaction / "journal.json", json.dumps(journal, indent=2).encode())
-            print("Installation stopped. Inspect backup/journal; Python dependency changes may require separate recovery: " + str(transaction), file=sys.stderr)
+            print("Installation stopped. Inspect backup/journal and Hermes PM state before retrying: " + str(transaction), file=sys.stderr)
         raise
     finally:
         lock.rmdir()
@@ -703,7 +972,8 @@ def rollback(home, transaction, confirmation=None, stopped=False):
         current[relative] = sha
     token = digest(raw + json.dumps(current, sort_keys=True).encode())
     if confirmation is None:
-        return {"confirmation": token, "files": len(current), "pipRollback": False}
+        return {"confirmation": token, "files": len(current), "pipRollback": False,
+                "pmSelectionRollback": bool(journal.get("pmSelections"))}
     if not stopped or confirmation != token:
         raise ValueError("stop runtimes and confirm the exact rollback plan")
     lock = resolve_inside(home, ".plur1bus-install-lock")
@@ -711,7 +981,13 @@ def rollback(home, transaction, confirmation=None, stopped=False):
     try:
         if rollback(home, transaction)["confirmation"] != token:
             raise ValueError("stale rollback")
-        for relative, item in journal["files"].items():
+        selections = journal.get("pmSelections", [])
+        if not isinstance(selections, list):
+            raise ValueError("invalid PM selection journal")
+        journal["status"] = "rollback-started"
+        atomic_write(backup / "journal.json", json.dumps(journal, indent=2).encode())
+
+        def restore_file(relative, item):
             destination = resolve_inside(home, relative)
             if item["before"] is not None:
                 atomic_write(destination, resolve_inside(backup, "before/" + relative).read_bytes())
@@ -722,11 +998,87 @@ def rollback(home, transaction, confirmation=None, stopped=False):
                 removed = resolve_inside(backup, "removed/" + relative)
                 removed.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(destination, removed)
-        journal["status"] = "files-restored-python-unchanged"
-        atomic_write(backup / "journal.json", json.dumps(journal, indent=2).encode())
+
+        config_paths = {("" if row.get("profile") == "default" else "profiles/" + str(row.get("profile")) + "/") + "config.yaml"
+                        for row in selections if isinstance(row, dict)}
+        try:
+            # Restore every package/project file before PM scans the workspace.
+            # Otherwise PM would resolve dependencies against the new declarations
+            # and the restored source could then fail its version/import guard.
+            for relative, item in journal["files"].items():
+                if relative not in config_paths:
+                    restore_file(relative, item)
+            journal["status"] = "rollback-files-restored-awaiting-pm"
+            atomic_write(backup / "journal.json", json.dumps(journal, indent=2).encode())
+
+            pm_failures = []
+            pm_admission_attempted = False
+            for selection in reversed(selections):
+                if not isinstance(selection, dict) or not isinstance(selection.get("profile"), str):
+                    raise ValueError("invalid PM selection journal")
+                profile = selection["profile"]
+                if profile != "default" and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", profile):
+                    raise ValueError("invalid PM selection journal")
+                enabled, disabled = selection.get("beforeEnabled"), selection.get("beforeDisabled")
+                if (not isinstance(enabled, list) or not isinstance(disabled, list)
+                        or not all(isinstance(value, str) for value in enabled + disabled)):
+                    raise ValueError("invalid PM selection journal")
+                profile_home = home if profile == "default" else resolve_inside(home, "profiles/" + profile)
+                config_path = resolve_inside(profile_home, "config.yaml")
+                current_config = config_path.read_bytes()
+                before_hash = journal["files"].get(
+                    ("" if profile == "default" else "profiles/" + profile + "/") + "config.yaml", {}
+                ).get("before")
+                if digest(current_config) != before_hash:
+                    pm_admission_attempted = True
+                    try:
+                        run_pm_selection(home, profile_home, enabled, disabled, digest(current_config))
+                    except Exception as error:
+                        # Do not persist arbitrary PM diagnostics (which may
+                        # contain paths, URLs, or environment details).
+                        pm_failures.append({"profile": profile, "errorType": type(error).__name__})
+                    else:
+                        journal["status"] = "rollback-pm-profile-admitted"
+                        journal["lastPmProfile"] = profile
+                        atomic_write(backup / "journal.json", json.dumps(journal, indent=2).encode())
+
+            # Restore original config bytes last, after PM has seen old package
+            # declarations. PM may publish a compatible regenerated graph; it
+            # cannot guarantee byte-for-byte restoration of its prior generation.
+            for relative in config_paths:
+                if relative in journal["files"]:
+                    restore_file(relative, journal["files"][relative])
+            for relative, item in journal["files"].items():
+                if relative not in config_paths and item["before"] is None:
+                    # Newly-added files are removed earlier into the recoverable
+                    # backup tree; this second pass is intentionally idempotent.
+                    restore_file(relative, item)
+
+            if pm_failures:
+                journal["status"] = "files-restored-pm-repair-required"
+                journal["pmRollbackFailures"] = pm_failures
+                journal["pmGenerationRecovery"] = "repair-required"
+            elif pm_admission_attempted:
+                journal["status"] = "files-restored-pm-selection-admitted"
+                journal["pmGenerationRecovery"] = "admitted-compatible-graph; original-generation-identity-unverified"
+            elif selections:
+                journal["status"] = "files-restored-pm-selection-unchanged"
+                journal["pmGenerationRecovery"] = "not-modified"
+            else:
+                journal["status"] = "files-restored-python-unchanged"
+            atomic_write(backup / "journal.json", json.dumps(journal, indent=2).encode())
+        except BaseException as error:
+            journal["status"] = "rollback-failed-review-required"
+            journal["rollbackErrorType"] = type(error).__name__
+            atomic_write(backup / "journal.json", json.dumps(journal, indent=2).encode())
+            raise
     finally:
         lock.rmdir()
-    return {"restored": True, "pipRollback": False}
+    result = {"restored": True, "pipRollback": False}
+    if selections:
+        result["pmGenerationRecovery"] = journal.get("pmGenerationRecovery", "unknown")
+        result["repairRequired"] = bool(journal.get("pmRollbackFailures"))
+    return result
 
 
 def retrieval_command(args):

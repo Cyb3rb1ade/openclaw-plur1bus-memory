@@ -7,8 +7,8 @@ Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
 `Install PLUR1BUS.command` in
 `/Applications/PLUR1BUS Installer`.
 
-Stand **18. September 2026**: Diese Anleitung beschreibt den
-Hermes-Installer **7.16.9-hermes.0**. Maßgeblich für die Verfügbarkeit sind
+Stand **3. Oktober 2026**: Diese Anleitung beschreibt den
+Hermes-Installer **7.18.4-hermes.0**. Maßgeblich für die Verfügbarkeit sind
 die veröffentlichten Assets samt Prüfberichten unter dem passenden Release-Tag.
 Portable Archive und Python-Wheels sind die
 plattformübergreifenden Referenzartefakte. Native Installer sind separat nach
@@ -71,6 +71,12 @@ beachten; gegebenenfalls auf signierte Pakete warten.
 2. Tatsächliches Hermes-Home und dessen virtuelles Python-Environment bestimmen.
    Übliche Homes: macOS/Linux/WSL `~/.hermes`, Windows `%LOCALAPPDATA%\hermes`.
    Eigene Installationspfade und `HERMES_HOME` können davon abweichen.
+   Bei aktuellen Hermes-Versionen ist die von PM ausgewählte Umgebung maßgeblich,
+   nicht ein eventuell noch vorhandenes älteres `hermes-agent/venv`.
+   PLUR1BUS deklariert seine Python-Pakete im Plugin-Verzeichnis, damit Hermes
+   sie bei späteren Umgebungswechseln erneut berücksichtigt. Python 3.14 nutzt
+   passende native ONNX- und Transformer-Abhängigkeiten; vorhandene Provider-/Modellkonfiguration wird
+   nicht stillschweigend auf einen anderen Provider umgestellt.
 3. Bestehende Konfiguration, Memory-Daten und Python-Environment sichern.
    Der Installer sichert geänderte Plugin-/Konfigurationsdateien, aber erstellt
    **kein vollständiges Backup der Python-Abhängigkeiten**.
@@ -171,6 +177,13 @@ Das native ARM64-Paket verwenden, nicht die x64-Ausgabe unter Emulation.
 Aktuell benötigt der native Weg eine **bereits eingerichtete Hermes-Umgebung
 mit CPython 3.13 ARM64 und Standard-GIL**. Der Installer erzeugt dieses Environment
 nicht und ersetzt kein vorhandenes x64-Python automatisch.
+
+Die neue, von Hermes PM verwaltete Windows-ARM-Umgebung wird noch nicht
+unterstützt: Das mitgelieferte PyArrow-Wheel ist an CPython 3.13 gebunden,
+und diese Fremd-Wheels sind nicht in Hermes' PM-Abhängigkeitsgraph eingebunden.
+Der Installer verweigert diesen Fall vor Änderungen. `--python` ist kein
+Umgehungsweg für PM. Der oben beschriebene native CPython-3.13-Weg gilt nur
+für eine klassische, nicht von PM verwaltete Hermes-Umgebung.
 
 Im Assistenten den tatsächlichen ARM64-Interpreter explizit angeben, beispielsweise
 `C:\Users\NAME\AppData\Local\hermes\hermes-agent\venv-arm64\Scripts\python.exe`.

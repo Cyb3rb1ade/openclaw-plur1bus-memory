@@ -88,7 +88,11 @@ class Plur1busMemoryProvider(MemoryProvider):
         # disk instead of inheriting the previously served profile's values.
         self._supplied_config = dict(config or {})
         self.config = dict(self._supplied_config)
-        self._hermes_home = Path.home() / ".hermes"
+        try:
+            from hermes_constants import get_hermes_home
+            self._hermes_home = Path(get_hermes_home()).expanduser()
+        except ImportError:  # Package inspection before Hermes is installed.
+            self._hermes_home = Path.home() / ".hermes"
         self._session_id = ""
         self._closed = False
         self._capture_queue: Queue[dict[str, Any]] = Queue(maxsize=1024)
@@ -111,6 +115,56 @@ class Plur1busMemoryProvider(MemoryProvider):
     def name(self) -> str:
         """Return the stable provider identifier selected by ``memory.provider``."""
         return "plur1bus"
+
+    def identity_signature(self) -> dict[str, str]:
+        """Fingerprint PLUR1BUS agent routing so Hermes rebuilds frozen providers after remapping."""
+        identity_keys = ("agentId", "agentAliases")
+        documents: list[tuple[str, Any]] = []
+
+        def identity(path: Path, label: str) -> None:
+            try:
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(self._hermes_home.resolve())
+                if not resolved.is_file() or resolved.stat().st_size > 256 * 1024:
+                    documents.append((label, "unavailable"))
+                    return
+                value = json.loads(resolved.read_text(encoding="utf-8"))
+                if not isinstance(value, Mapping):
+                    documents.append((label, "invalid"))
+                    return
+                selected = {key: value[key] for key in identity_keys if key in value}
+                profiles = value.get("profileSettings")
+                if isinstance(profiles, Mapping):
+                    selected["profileSettings"] = {
+                        str(name): {key: config[key] for key in identity_keys if key in config}
+                        for name, config in profiles.items()
+                        if isinstance(name, str) and isinstance(config, Mapping)
+                        and any(key in config for key in identity_keys)
+                    }
+                documents.append((label, selected))
+            except FileNotFoundError:
+                documents.append((label, {}))
+            except (OSError, ValueError, TypeError):
+                documents.append((label, "unavailable"))
+
+        root = self._hermes_home / "plugins" / "plur1bus" / "config.json"
+        identity(root, "root")
+        profiles_dir = self._hermes_home / "profiles"
+        try:
+            profile_paths = sorted(
+                (child for child in profiles_dir.iterdir()
+                 if child.is_dir() and _PROFILE_NAME.fullmatch(child.name)),
+                key=lambda child: child.name,
+            )[:256]
+        except OSError:
+            profile_paths = []
+        for profile in profile_paths:
+            identity(profile / "plugins" / "plur1bus" / "config.json", profile.name)
+
+        # Return only a digest: routing names are internal identity data and the
+        # surrounding config may also contain credentials or retrieval endpoints.
+        canonical = json.dumps(documents, sort_keys=True, separators=(",", ":"), default=str)
+        return {"plur1bus_identity_v1": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
 
     def is_available(self) -> bool:
         """Check local configuration only; availability must never make network calls."""

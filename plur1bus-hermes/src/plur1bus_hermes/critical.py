@@ -143,6 +143,40 @@ def is_dream_card(record: dict[str, Any]) -> bool:
     return record.get("origin") == "dream" or record.get("memoryClass") == "dream"
 
 
+def _normalized_content(record: dict[str, Any]) -> str:
+    """Normalize content like the upstream whole/chunk coverage check."""
+    text = str(record.get("content") or record.get("text") or "").lower()
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]|_", " ", text, flags=re.UNICODE)).strip()
+
+
+def find_covered_chunk_ids(records: list[dict[str, Any]]) -> set[str]:
+    """Return chunk IDs covered by a whole memory from the same source turn."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    wholes: dict[str, list[str]] = {}
+    for record in records:
+        turn = record.get("sourceTurnId")
+        if not isinstance(turn, str) or not turn:
+            continue
+        group_id = record.get("chunkGroupId")
+        if group_id:
+            groups.setdefault(str(group_id), []).append(record)
+        else:
+            wholes.setdefault(turn, []).append(_normalized_content(record))
+    covered: set[str] = set()
+    for parts in groups.values():
+        turn = parts[0].get("sourceTurnId")
+        if any(part.get("sourceTurnId") != turn for part in parts):
+            continue
+        texts = [_normalized_content(part) for part in parts]
+        texts = [text for text in texts if text]
+        if not texts:
+            continue
+        if any(sum(text in whole for text in texts) * 2 >= len(texts)
+               for whole in wholes.get(turn, [])):
+            covered.update(str(part.get("id") or "") for part in parts if part.get("id"))
+    return covered
+
+
 def classify_critical(
     text: str,
     metadata: dict[str, Any],

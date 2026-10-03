@@ -19,6 +19,7 @@ from typing import Any
 from .namespaces import resolve_namespace_routes, scope_where_clause
 from .validation import safe_agent_id, safe_status
 from .writer_lock import writer_lock, WriterLockTimeout
+from .health_watch import owner_key, snapshot as llm_failure_snapshot
 
 
 _PUBLIC_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -182,6 +183,22 @@ def read_operator_status(
         "storage": {"status": "unavailable", "cards": None},
         "cards": {"byPrimaryAgent": []},
         "configured": False,
+    }
+    binding = getattr(runtime, "scope_binding", None)
+    scope_key = getattr(binding, "scope_key", None)
+    failures = llm_failure_snapshot(owner_key(agent_id, scope_key))
+    llm_state = "degraded" if any(
+        row["count"] >= 3 and row["hint"] not in {"timeout", "aborted", "host-timeout", "host-aborted"}
+        for row in failures
+    ) else "ready"
+    # Hermes has no verified equivalent of OpenClaw's gateway log signal map.
+    # Keep it unavailable until native signals are explicitly mapped and tested.
+    projection["health"] = {
+        "status": "degraded" if llm_state == "degraded" else "unavailable",
+        "windowHours": 24,
+        "llm": {"state": llm_state, "failures": failures},
+        "gateway": {"state": "unavailable", "readable": False,
+                    "attempted": False, "code": "hermes_signal_mapping_unsupported"},
     }
     try:
         table = _open_exact_table(runtime, connect)

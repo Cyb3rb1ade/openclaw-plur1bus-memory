@@ -6,6 +6,24 @@
   const json = function (path, options) { return SDK.fetchJSON(base + path, options || {}); };
   const field = function (label, value) { return React.createElement("div", { className: "pb-field", key: label }, React.createElement("dt", null, label), React.createElement("dd", null, value == null || value === "" ? "Not available" : String(value))); };
 
+  function HealthPanel({ health }) {
+    const llm = health?.llm, failures = llm?.failures;
+    const title = { ready: "No repeated failures detected", degraded: "Repeated failures detected", unavailable: "Status unavailable" };
+    if (!Array.isArray(failures)) return React.createElement("section", { className: "pb-health" },
+      React.createElement("h2", null, "LLM calls"), React.createElement("p", { role: "status" },
+        "Status unknown. This backend does not provide health watch data."));
+    return React.createElement("section", { className: "pb-health" },
+      React.createElement("h2", null, "LLM calls"),
+      failures.length ? React.createElement(React.Fragment, null,
+        React.createElement("p", { role: "status", className: llm.state === "degraded" ? "pb-warning" : "" },
+          (title[llm.state] || "Failures recorded") + " · internal model calls in the last " + (health?.windowHours || 24) + " hours."),
+        React.createElement("ul", null, failures.map((row, index) => React.createElement("li", { key: row.feature + row.hint + index },
+          React.createElement("strong", null, (Number.isSafeInteger(row.count) ? row.count : "—") + " failed calls"),
+          React.createElement("p", null, row.hint === "authority-expired" ? "Profile authority ended during the request." : "The model call failed."),
+          React.createElement("small", null, row.feature + " · " + (row.errorClass || "Error class unknown")))))) :
+        React.createElement("p", { role: "status" }, (title[llm.state] || "No failures reported") + " · no failures in the last " + (health?.windowHours || 24) + " hours."));
+  }
+
   function ObsidianPanel() {
     const r = React.useState(null), review = r[0], setReview = r[1];
     const b = React.useState(false), busy = b[0], setBusy = b[1];
@@ -38,7 +56,7 @@
   }
 
   function SettingsPanel() {
-    const [data, setData] = React.useState(null), [review, setReview] = React.useState(null);
+    const [data, setData] = React.useState(null), [review, setReview] = React.useState(null), [search, setSearch] = React.useState("");
     const [notice, setNotice] = React.useState(""), [busy, setBusy] = React.useState(false);
     async function load() {
       try { setData(await json("/settings")); }
@@ -68,17 +86,25 @@
       } catch (_error) { setNotice("Save rejected. Review the setting again."); }
       finally { setReview(null); setBusy(false); }
     }
+    const matchesSetting = setting => {
+      const query = search.trim().toLocaleLowerCase();
+      return !query || [setting.label, setting.id, setting.description, setting.group]
+        .some(value => String(value || "").toLocaleLowerCase().includes(query));
+    };
     return React.createElement("section", { className: "pb-workshop" },
       React.createElement("h2", null, "Features, storage mode & task models"),
       React.createElement("p", null, "Saved settings for the active profile — not a live gateway status. Empty model selection inherits the default."),
+      React.createElement("label", { className: "pb-search" }, "Search settings",
+        React.createElement("input", { type: "search", value: search, placeholder: "Name, description, or setting ID",
+          onChange: event => setSearch(event.target.value), "aria-label": "Search settings" })),
       notice ? React.createElement("p", { role: "status" }, notice) : null,
-      data ? React.createElement("div", null, [...new Set(data.settings.map(setting => setting.group || "Features"))].map(group =>
+      data ? React.createElement("div", null, [...new Set(data.settings.filter(matchesSetting).map(setting => setting.group || "Features"))].map(group =>
         React.createElement("details", { key: group, className: "pb-setting-group", open: group === "Speicherung" }, React.createElement("summary", null, group),
-        data.settings.filter(setting => (setting.group || "Features") === group).map(setting => React.createElement("div", { key: setting.id, className: "pb-setting-row" },
+        data.settings.filter(setting => (setting.group || "Features") === group && matchesSetting(setting)).map(setting => React.createElement("div", { key: setting.id, className: "pb-setting-row" },
         React.createElement("div", null, React.createElement("label", { htmlFor: "pb-" + setting.id }, setting.label || setting.id),
           React.createElement("p", { id: "pb-help-" + setting.id, className: "pb-setting-help" }, setting.description || "Setting for the active profile.")),
         Number.isInteger(setting.minimum) ? React.createElement("div", null,
-          React.createElement("output", { htmlFor: "pb-" + setting.id }, String(setting.value)),
+          React.createElement("output", { htmlFor: "pb-" + setting.id }, new Intl.NumberFormat().format(setting.value) + (setting.unit ? " " + setting.unit : "")),
           React.createElement("input", { id: "pb-" + setting.id, type: "range", min: setting.minimum, max: setting.maximum,
             step: 1, value: setting.value, disabled: busy, "aria-describedby": "pb-help-" + setting.id,
             onChange: event => preview(setting.id, Number(event.target.value)) })) :
@@ -86,6 +112,7 @@
           onChange: event => preview(setting.id, setting.choices[Number(event.target.value)]) },
         setting.choices.map((value, index) => React.createElement("option", { key: index, value: String(index) },
           value === "" ? "Inherit default" : value === true ? "Enabled" : value === false ? "Disabled" : setting.choiceLabels?.[value] || String(value))))))))) : null,
+      data && !data.settings.some(matchesSetting) ? React.createElement("p", { role: "status" }, "No matching settings.") : null,
       review ? React.createElement("div", { className: "pb-review" },
         React.createElement("p", null, "Agent " + review.agentId + ": " + review.identifier + " → " + String(review.value)),
         React.createElement("p", null, "Requires a gateway restart. No memory records will be migrated or deleted."),
@@ -133,6 +160,7 @@
       React.createElement("div", { className: "pb-signal " + (configured ? "is-ready" : "is-degraded") }, React.createElement("span", { "aria-hidden": "true" }), configured ? "Memory partition configured" : "Memory partition needs attention"),
       notice ? React.createElement(Panel, { className: "pb-error" }, React.createElement(Content, null, notice)) : null,
       !loading && data ? React.createElement("div", { className: "pb-grid" }, React.createElement(Panel, null, React.createElement(Content, null, React.createElement("h2", null, "Active partition"), React.createElement("dl", null, field("Agent", data.agentId), field("Scope", data.scopeType), field("Cards", storage.cards)))), React.createElement(Panel, null, React.createElement(Content, null, React.createElement("h2", null, "Retrieval"), React.createElement("dl", null, field("Embedding provider", embedding.provider), field("Model", embedding.model), field("Dimensions", embedding.dimensions), field("Credentials", embedding.credentials))))) : null,
+      data ? React.createElement(HealthPanel, { health: data.health }) : null,
       data ? React.createElement(Panel, null, React.createElement(Content, null,
         React.createElement("h2", null, "Cards by primary agent · active profile"),
         React.createElement("p", null, "Private cards in this profile. Other profiles and subagents are not scanned."),

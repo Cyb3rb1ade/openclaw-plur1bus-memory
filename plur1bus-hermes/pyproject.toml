@@ -4,23 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plur1bus-hermes"
-version = "7.16.9"
+version = "7.18.4"
 description = "Hermes Python runtime implementation of the PLUR1BUS memory provider and migration tooling."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "lancedb==0.34.0",
-  "numpy==2.2.0; sys_platform != 'win32' or platform_machine != 'ARM64'",
-  "numpy==2.3.0; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "numpy==2.2.0; python_version < '3.14' and (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "numpy==2.3.0; python_version < '3.14' and sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "numpy==2.4.3; python_version >= '3.14'",
   "PyYAML>=6,<7",
   # These native targets use explicit ONNX providers, not an implicit old torch
   # downgrade or x64 emulation. Existing transformer installations are retained.
-  "sentence-transformers>=3.0,<4; (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+  "sentence-transformers>=3.0,<4; python_version < '3.14' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+  # Current Hermes uses Python 3.14; preserve selected Transformer providers
+  # with a compatible stack rather than silently substituting their models.
+  "sentence-transformers==6.1.0; python_version >= '3.14' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
 ]
 
 [project.optional-dependencies]
 local-onnx = ["onnxruntime>=1.20,<2", "tokenizers>=0.21,<1", "certifi>=2024.8.30"]
-local-transformers = ["sentence-transformers>=3.0,<4"]
+local-transformers = ["sentence-transformers>=3.0,<4; python_version < '3.14'", "sentence-transformers==6.1.0; python_version >= '3.14'"]
 
 [project.scripts]
 plur1bus-hermes = "plur1bus_hermes.cli:main"

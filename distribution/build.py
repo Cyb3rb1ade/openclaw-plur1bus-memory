@@ -55,6 +55,30 @@ def copy(source, target):
     shutil.copy2(source, target)
 
 
+def directory_project(package, module):
+    """Declare the flat plugin as a real package for Hermes-managed generations."""
+    document = tomllib.loads((REPO / package / "pyproject.toml").read_text())
+    project = dict(document["project"])
+    project.pop("readme", None)
+    if package == "plur1bus-hermes":
+        # Python 3.14 does not support the legacy implicit Transformer stack.
+        # ONNX is explicit and has native wheels for this current Hermes runtime.
+        project["dependencies"] = list(project.get("dependencies", [])) + [
+            "onnxruntime>=1.20,<2; python_version >= '3.14'",
+            "tokenizers>=0.21,<1; python_version >= '3.14'",
+            "certifi>=2024.8.30; python_version >= '3.14'",
+        ]
+    lines = ["[build-system]", 'requires = ["setuptools>=75", "wheel"]',
+             'build-backend = "setuptools.build_meta"', "", "[project]"]
+    for key in ("name", "version", "description", "requires-python", "dependencies"):
+        if key in project:
+            lines.append(key + " = " + json.dumps(project[key], ensure_ascii=False))
+    lines.extend(["", "[tool.setuptools]", "packages = " + json.dumps([module]),
+                  "package-dir = {" + json.dumps(module) + ' = "."}', "",
+                  "[tool.setuptools.package-data]", module + ' = ["plugin.yaml"]', ""])
+    return "\n".join(lines).encode("utf-8")
+
+
 def validate_intel_wheel(path, expected_sha256):
     """Accept only an explicitly hash-approved LanceDB Intel ABI3 wheel."""
     path = Path(path)
@@ -170,6 +194,7 @@ def build(output, mac_pkg=False, windows_exe=False, intel_wheel=None, intel_sha2
         source_root = package + "/src/" + module + "/"
         for relative in tracked(source_root):
             copy(REPO / relative, bundle / "payload" / destination / relative[len(source_root):])
+        (bundle / "payload" / destination / "pyproject.toml").write_bytes(directory_project(package, module))
         wheel_source = work / package
         for relative in tracked(package + "/"):
             if "/tests/" not in relative:

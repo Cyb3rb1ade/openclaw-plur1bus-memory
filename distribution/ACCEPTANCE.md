@@ -1,5 +1,12 @@
 # Distribution acceptance history
 
+## 7.18.4-hermes.0 — candidate evidence boundary
+
+Source includes upstream `9cc5f833b188d8299000faeb94bd0b2015e6217b`.
+See `docs/audits/hermes-7.18.4-delta-review.md`. The earlier receipts below
+are historical, not validation of this candidate. Fresh platform tests,
+macOS signing/notarization, local integration and publication are separate gates.
+
 ## 7.16.9-hermes.0 — release evidence boundary
 
 Source includes upstream `f23867a1de5cd5a8b94370b5172d497fad4f2427` and the native

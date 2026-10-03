@@ -25,7 +25,7 @@ from .cognition import (
 )
 from .cognitive_prompt import fresh_dream_echo, style_directive
 from .code_index import query_code_index, rebuild_code_index
-from .critical import CRITICAL_TYPES, NON_CRITICAL_TYPE, classify_critical, is_confirmed, is_dream_card
+from .critical import CRITICAL_TYPES, NON_CRITICAL_TYPE, classify_critical, find_covered_chunk_ids, is_confirmed, is_dream_card
 from .critical_review import (
     assign_short_refs,
     decode_critical_cursor,
@@ -1113,6 +1113,7 @@ class Plur1busDomain:
         table: Any,
         *,
         importance: float | None = None,
+        critical_group_context: list[dict[str, Any]] | None = None,
         acl_bindings: Any = None,
         scope_key: str | None = None,
         aclBindings: Any = None,
@@ -1147,30 +1148,73 @@ class Plur1busDomain:
         self._write_obsidian_note(record)
         self._build_graph_edges(record, table)
         metadata = self._metadata_for(record, importance=importance)
-        self._classify_materialized_memory(record, metadata, selector)
+        self._classify_materialized_memory(
+            record, metadata, selector,
+            critical_group_context=critical_group_context,
+        )
 
     def _classify_materialized_memory(self, record: dict[str, Any], metadata: dict[str, Any],
-                                     selector: _ScopeSelector) -> None:
+                                     selector: _ScopeSelector, *,
+                                     critical_group_context: list[dict[str, Any]] | None = None) -> None:
         """Classify an inserted memory at most once, including explicit repair."""
         if is_dream_card(record) or is_dream_card(metadata):
             return
         state_dir = self._scope_state_dir(selector)
         source_role = str(record.get("sourceRole") or "")
+        classifications = self._read_jsonl(
+            state_dir / "critical-classification.jsonl"
+        )
+        if any(str(item.get("id") or "") == str(record["id"]) for item in classifications):
+            return
         # A delayed writer must not create a review proposal for a record that
         # is no longer recall-eligible.
         if str(record.get("status") or "active") != "active":
             return
+        chunk_group = str(record.get("chunkGroupId") or "")
+        source_turn = str(record.get("sourceTurnId") or "")
         critical = classify_critical(
             str(record.get("content") or ""),
             metadata,
             source_role=source_role,
             status=str(record.get("status") or "active"),
         )
-        classifications = self._read_jsonl(
-            state_dir / "critical-classification.jsonl"
-        )
-        if any(str(item.get("id") or "") == str(record["id"]) for item in classifications):
-            return
+        if chunk_group and source_turn and critical_group_context is not None:
+            same_scope = []
+            if isinstance(critical_group_context, list):
+                # Capture passes the complete planned role/group before its
+                # sequential inserts begin. Validate provenance and scope;
+                # without a plan, fail open rather than infer completeness
+                # from the currently persisted prefix.
+                same_scope = [row for row in critical_group_context
+                              if isinstance(row, dict)
+                              and _row_matches_scope(row, selector)
+                              and str(row.get("status") or "active") == "active"
+                              and not is_dream_card(row)
+                              and str(row.get("sourceTurnId") or "") == source_turn
+                              and str(row.get("sourceRole") or "") == source_role]
+                plan_has_current = any(
+                    str(row.get("id") or "") == str(record.get("id") or "")
+                    and str(row.get("chunkGroupId") or "") == chunk_group
+                    for row in same_scope
+                )
+                if not plan_has_current:
+                    same_scope = []
+            if str(record.get("id") or "") in find_covered_chunk_ids(same_scope):
+                critical.update({
+                    "eligible": False,
+                    "reason": "covered_chunk",
+                    "requiresReview": False,
+                })
+                self._append_jsonl(state_dir / "critical-classification.jsonl", {
+                    "id": record["id"],
+                    "agentId": self.agent_id,
+                    "scopeKey": selector.scope_key,
+                    "aclBindings": selector.acl_bindings,
+                    **critical,
+                    "classificationStatus": "skipped",
+                    "classifiedAt": _utcnow(),
+                })
+                return
         today = _utcnow()[:10]
         max_per_day = max(
             0,
@@ -4024,18 +4068,18 @@ class Plur1busDomain:
 
     def auto_accept_stale_criticals(
         self,
-        max_age_ms: int = 604_800_000,
+        max_age_ms: int = 86_400_000,
         *,
         acl_bindings: Any = None,
         scope_key: str | None = None,
         aclBindings: Any = None,
         scopeKey: str | None = None,
     ) -> dict[str, Any]:
-        """Accept critical proposals left pending beyond the configured age."""
+        """Expire old, unreviewed proposals to ordinary notes after 24 hours."""
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         cutoff = _now_ms() - max(0, int(max_age_ms))
-        accepted = []
+        expired = []
         stale = self.critical_review_page(
             older_than_ms=cutoff,
             acl_bindings=acl_bindings,
@@ -4044,13 +4088,13 @@ class Plur1busDomain:
         for item in stale:
             result = self.review_critical(
                 str(item["id"]),
-                "accept",
+                "reject",
                 acl_bindings=acl_bindings,
                 scope_key=scope_key,
             )
             if result["updated"]:
-                accepted.append(str(item["id"]))
-        return {"accepted": accepted, "count": len(accepted)}
+                expired.append(str(item["id"]))
+        return {"expired": expired, "count": len(expired)}
 
     def update_reminder(
         self,

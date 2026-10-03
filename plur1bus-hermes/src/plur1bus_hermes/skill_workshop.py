@@ -455,11 +455,14 @@ class SkillWorkshop:
         if mode == "on":
             threshold = _confidence(config.get("minConfidence"))
             threshold = .6 if threshold is None else max(.6, threshold)
+            evidence_by_id = {str(row.get("id")): row for row in records}
             for item in created:
+                evidence_ids = {entry["id"] for entry in item["evidence"]}
+                evidence_rows = [evidence_by_id.get(identifier) for identifier in evidence_ids]
                 if (not report["autoApplySupported"] or len(item["evidence"]) < 3
                         or item.get("confidence") is None or item["confidence"] < threshold
-                        or any(str(row.get("epistemicStatus") or "") not in {"observed", "corroborated", "trusted"}
-                               for row in records if str(row.get("id")) in {entry["id"] for entry in item["evidence"]})):
+                        or any(row is None or str(row.get("epistemicStatus") or "") not in {"observed", "corroborated", "trusted"}
+                               for row in evidence_rows)):
                     report["autoApplySkipped"] += 1
                     continue
                 try:

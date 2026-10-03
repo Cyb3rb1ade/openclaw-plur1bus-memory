@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 from .llm_diagnostics import LlmErrorReporter
 from .feature_models import configured_routes, resolve_feature_route
+from .health_watch import owner_key, record_failure
 
 
 # Native names keep their validation/logging semantics; only the cache key is
@@ -57,6 +58,7 @@ class InternalLlmBackend:
         self.opener = opener
         self.cache = cache
         self._errors = LlmErrorReporter(config, agent_id, data_dir=data_dir, scope_key=scope_key)
+        self._health_owner = owner_key(agent_id, scope_key)
 
     def available(self) -> bool:
         return bool(self.config.get("model") or configured_routes(self._routing_config))
@@ -71,6 +73,8 @@ class InternalLlmBackend:
             return self._complete_json(purpose, system, user)
         except Exception as error:
             fields = self._errors.report(error, purpose)
+            record_failure(self._health_owner, agent_id=self.agent_id, feature=purpose,
+                           hint=fields.get("errorHint"), error_class=fields.get("errorClass"), error=error)
             # Neither callers nor traceback logging receive upstream text,
             # endpoint URLs, arbitrary exception class names or chained errors.
             error_type = InvalidLlmResponse if isinstance(error, InvalidLlmResponse) else RuntimeError
