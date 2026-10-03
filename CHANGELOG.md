@@ -46,6 +46,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Geändert
 
+- **Windows-ACL-Lesen:** `readDirectoryAcl` startet auch PowerShell 5.1 über
+  `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`. Der
+  Vergleichstest prüft einen reinen Vererbungseintrag (`IO`).
 - **Windows-ACL-Lesen:** `readDirectoryAcl` liest Owner und ACEs zuerst über
   `cscript` (WMI) und `whoami` (~0,4 s kalt auf windows-11-arm). PowerShell 5.1
   bleibt Fallback. Die 30-s-Grenze gilt unverändert für den ganzen Lesevorgang.
