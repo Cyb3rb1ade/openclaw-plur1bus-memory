@@ -194,6 +194,7 @@ export const DEPLOY_FILES = [
   "lib/mood-style-directive.js",
   "lib/review-narrative-lead.js",
   "lib/review-workspace-status.js",
+  "lib/post-turn-queue.js",
   "lib/open-threads.js",
   "lib/contradiction-disclosure.js",
   "lib/recall-confidence-framing.js",

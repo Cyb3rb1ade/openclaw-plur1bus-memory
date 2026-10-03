@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.18.13",
+  "version": "7.18.14",
   "kind": "memory",
   "cliCommands": [
     {
@@ -813,6 +813,11 @@
             "type": "boolean",
             "default": false,
             "description": "7.18.5 diagnostic for openclaw/openclaw#163029: log the call stack of every plugin registration (warn level), to show where OpenClaw's mid-turn plugin reloads come from. Off by default."
+          },
+          "deferPostTurnLlm": {
+            "type": "boolean",
+            "default": true,
+            "description": "7.18.14: queue post-turn light dreams and episode extraction for the post-turn-refine cron instead of running them in agent_end, where OpenClaw 2026.9.7 refuses their LLM calls (openclaw/openclaw#162941). false runs them inline as before."
           },
           "detachPostTurnWork": {
             "type": "boolean",

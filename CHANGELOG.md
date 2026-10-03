@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.14] — 2026-10-03
+
+### Behoben
+
+- **Light-Träume und Episoden laufen wieder mit LLM.** Unter OpenClaw 2026.9.7 lehnt der Host jeden Plugin-LLM-Aufruf aus `agent_end` mit `LLM_COMPLETION_NOT_AUTHORIZED: agent tool caller authority is no longer active` ab, weil die Nacharbeit die Identität des schon beendeten Turns erbt (openclaw/openclaw#162941, upstream offen). Betroffen waren Gesprächserkenntnisse, Traumerzählung, Traum-Echo, Persona-Stimme und Episoden-Extraktion: Light-Träume kamen ohne Erzählung und nie ins Traumtagebuch, Episoden ohne LLM-Anreicherung. `agent_end` reiht diese Arbeit jetzt nur noch ein (`<baseDbPath>/.post-turn-queue/<agent>/`, eine Datei je Turn-Stapel, Modus 0600, nach der Verarbeitung gelöscht), der neue native Feature-Cron `post-turn-refine` arbeitet sie alle 20 Minuten ab, FIFO je Agent hinter einem Job-Lock. Scheitert ein Eintrag, hält die Schlange an (Episoden bauen aufeinander auf); nach drei Versuchen wird er mit Warnung verworfen. Fällt das Einreihen aus, läuft die Arbeit wie bisher direkt im Hook.
+
+### Hinzugefügt
+
+- `runtime.deferPostTurnLlm` (Standard `true`). `false` führt Light-Traum und Episoden wie vor 7.18.14 direkt in `agent_end` aus; dann entsteht auch kein `post-turn-refine`-Cron.
+
 ## [7.18.13] — 2026-10-03
 
 ### Geändert
