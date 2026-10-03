@@ -29,11 +29,12 @@ class HostPreparationTests(unittest.TestCase):
         (self.source / "apps/desktop/package.json").write_text(json.dumps({"scripts": {"pack": "npm run build && npm run builder -- --dir --publish never"}}))
         (self.source / "package-lock.json").write_text("{}")
         (self.source / "package.json").write_text(json.dumps({"engines": {"node": ">=0.0.0", "npm": ">=0.0.0"}}))
-        for name in ("owner.txt", "sidebar.txt"):
+        for name in ("owner.txt", "sidebar.txt", "modern.txt"):
             (self.source / name).write_text("old\n")
         self.git("add", ".")
         self.git("commit", "-qm", "base")
-        for name, patch_name in zip(("owner.txt", "sidebar.txt"), host.PATCHES):
+        for name, patch_name in zip(("owner.txt", "sidebar.txt", "modern.txt"),
+                                    (*host.PATCHES, host.MODERN_PROFILE_API_PATCH)):
             (self.source / name).write_text("new\n")
             (self.patches / patch_name).write_text(self.git("diff", "--", name))
             (self.source / name).write_text("old\n")
@@ -54,6 +55,35 @@ class HostPreparationTests(unittest.TestCase):
 
     def review(self):
         return host.review(self.source, self.output, self.patches)
+
+    def test_modern_profile_api_mode_selects_only_its_patch_and_builds_that_plan(self):
+        legacy = self.review()
+        modern = host.review(self.source, self.output, self.patches, modern_profile_api=True)
+        self.assertEqual(legacy["preparationMode"], "legacy-host-patches")
+        self.assertEqual(legacy["patchSet"], list(host.PATCHES))
+        self.assertEqual(modern["preparationMode"], "modern-profile-api")
+        self.assertEqual(modern["patchSet"], [host.MODERN_PROFILE_API_PATCH])
+        self.assertEqual([item["name"] for item in modern["patches"]], [host.MODERN_PROFILE_API_PATCH])
+        self.assertNotEqual(legacy["confirmation"], modern["confirmation"],
+                            "the selected patch mode is part of the exact confirmation")
+
+        real_run = subprocess.run
+        def fake_build(command, **kwargs):
+            if Path(command[0]).name not in {"npm", "npm.cmd"}:
+                return real_run(command, **kwargs)
+            target = kwargs["cwd"]
+            self.assertEqual((target / "modern.txt").read_text(), "new\n")
+            self.assertEqual((target / "owner.txt").read_text(), "old\n")
+            self.assertEqual((target / "sidebar.txt").read_text(), "old\n")
+            release = target / "apps/desktop/release"
+            release.mkdir(exist_ok=True)
+            (release / "Hermes-test").write_text("fixture")
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(host.subprocess, "run", side_effect=fake_build):
+            stage = host.build(modern, modern["confirmation"], self.patches)
+        self.assertEqual(json.loads((stage / "plan.json").read_text())["preparationMode"], "modern-profile-api")
+        self.assertEqual(self.git("status", "--porcelain"), "")
 
     def test_check_is_read_only_and_missing_confirmation_never_writes(self):
         plan = self.review()

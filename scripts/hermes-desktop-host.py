@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 
 PATCHES = ("hermes-desktop-live-profile.patch", "hermes-desktop-sidebar-action.patch")
+MODERN_PROFILE_API_PATCH = "hermes-desktop-profile-api-isolation.patch"
 COMMANDS = (("npm", "ci"), ("npm", "run", "pack", "--workspace=apps/desktop"))
 
 
@@ -81,7 +82,7 @@ def satisfies(version, requirement):
     return False
 
 
-def review(source, output, patches=None):
+def review(source, output, patches=None, modern_profile_api=False):
     """Read-only source compatibility and revision-bound execution plan."""
     source, output = directory(source), directory(output)
     if output == source or output.is_relative_to(source):
@@ -107,8 +108,10 @@ def review(source, output, patches=None):
     if not resolve_inside(source, "package-lock.json").is_file():
         raise ValueError("locked npm source installation required")
     patch_dir = patches or patch_root()
+    mode = "modern-profile-api" if modern_profile_api else "legacy-host-patches"
+    selected_patches = (MODERN_PROFILE_API_PATCH,) if modern_profile_api else PATCHES
     states = []
-    for name in PATCHES:
+    for name in selected_patches:
         patch = resolve_inside(patch_dir, name)
         content = patch.read_bytes()
         # Even check-mode must not follow a target symlink outside the checkout.
@@ -122,11 +125,14 @@ def review(source, output, patches=None):
         state = "present" if applicable(True) else "applicable" if applicable() else "incompatible"
         states.append({"name": name, "sha256": hashlib.sha256(content).hexdigest(), "state": state})
     plan = {"schema": 1, "source": str(source), "head": head, "outputRoot": str(output), "toolchain": toolchain,
+            "preparationMode": mode, "patchSet": list(selected_patches),
             "signing": "disabled-local-build",
             "platform": sys.platform, "dirty": dirty, "patches": states,
             "commands": [[toolchain["npm"]["binary"], *command[1:]] for command in COMMANDS]
                         if toolchain["npm"]["binary"] else [list(command) for command in COMMANDS],
-            "effects": "Snapshot tracked source, apply patches to copy, download locked npm dependencies and execute trusted Hermes build scripts. No publish, app replacement, profile or memory changes."}
+            "effects": ("Snapshot tracked source, apply the selected host patch set to a copy, download locked npm dependencies and execute trusted Hermes build scripts. "
+                        "No publish, app replacement, profile or memory changes. Modern profile API mode applies only the profile-API isolation patch; "
+                        "the default legacy mode applies the two legacy host patches.")}
     plan["supported"] = not dirty and all(item["state"] != "incompatible" for item in states) and all(item["supported"] for item in toolchain.values())
     plan["confirmation"] = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     return plan
@@ -134,7 +140,10 @@ def review(source, output, patches=None):
 
 def build(plan, confirmation, patches=None):
     """Execute only the reviewed plan into a new directory, retaining failure evidence."""
-    fresh = review(plan["source"], plan["outputRoot"], patches)
+    if plan.get("preparationMode") not in {"modern-profile-api", "legacy-host-patches"}:
+        raise ValueError("unsupported host preparation mode; no writes performed")
+    modern_profile_api = plan["preparationMode"] == "modern-profile-api"
+    fresh = review(plan["source"], plan["outputRoot"], patches, modern_profile_api=modern_profile_api)
     if not fresh["supported"] or fresh != plan or confirmation != fresh["confirmation"]:
         raise ValueError("unsupported or stale plan / missing exact confirmation; no writes performed")
     source, output = directory(plan["source"]), directory(plan["outputRoot"])
@@ -195,13 +204,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="explicit Hermes Git checkout root")
     parser.add_argument("--output-root", help="outside source; default: sibling <source>-plur1bus-builds")
+    parser.add_argument("--modern-profile-api", action="store_true",
+                        help="select only the current Hermes local profile-API isolation patch; default uses both legacy host patches")
     parser.add_argument("--apply", action="store_true", help="build an isolated copy after confirmation")
     parser.add_argument("--confirm", default="", help="exact confirmation hash from the read-only plan")
     args = parser.parse_args()
     try:
         source = directory(args.source)
         output = args.output_root or str(source.parent / (source.name + "-plur1bus-builds"))
-        plan = review(source, output)
+        plan = review(source, output, modern_profile_api=args.modern_profile_api)
         print(json.dumps(plan, indent=2), flush=True)
         if args.apply:
             build(plan, args.confirm)
