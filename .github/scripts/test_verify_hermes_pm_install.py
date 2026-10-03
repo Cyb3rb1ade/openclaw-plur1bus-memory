@@ -102,16 +102,20 @@ class QaLayoutTests(unittest.TestCase):
         _, root, _, _ = self.make_layout()
         home = root / "home"
         machine_paths = {
-            "ProgramFiles": r"C:\Program Files",
-            "ProgramFiles(x86)": r"C:\Program Files (x86)",
-            "ProgramW6432": r"C:\Program Files",
-            "CommonProgramFiles": r"C:\Program Files\Common Files",
-            "CommonProgramFiles(x86)": r"C:\Program Files (x86)\Common Files",
-            "ProgramData": r"C:\ProgramData",
-            "SystemDrive": "C:",
+            "PROGRAMFILES": r"C:\Program Files",
+            "PROGRAMFILES(X86)": r"C:\Program Files (x86)",
+            "PROGRAMW6432": r"C:\Program Files",
+            "COMMONPROGRAMFILES": r"C:\Program Files\Common Files",
+            "COMMONPROGRAMFILES(X86)": r"C:\Program Files (x86)\Common Files",
+            "PROGRAMDATA": r"C:\ProgramData",
+            "SYSTEMDRIVE": "C:",
         }
         with mock.patch.dict(qa.os.environ, machine_paths):
             environment = qa.isolated_environment(home, root)
+        # Windows exposes environment keys case-insensitively and Python may
+        # normalize their spelling to uppercase. Verify the whitelist by key,
+        # not by the host's presentation casing.
+        environment_upper = {key.upper(): value for key, value in environment.items()}
         self.assertEqual(environment["HERMES_HOME"], str(home))
         self.assertEqual(environment["UV_CACHE_DIR"], str(root / "uv-cache"))
         profile = root / "runner-profile"
@@ -122,8 +126,8 @@ class QaLayoutTests(unittest.TestCase):
         self.assertEqual(environment["LOCALAPPDATA"], str(profile / "AppData" / "Local"))
         self.assertEqual(environment["CI"], "true")
         self.assertEqual(environment["GITHUB_ACTIONS"], "true")
-        self.assertEqual(environment["ProgramFiles(x86)"], r"C:\Program Files (x86)")
-        self.assertEqual(environment["SystemDrive"], "C:")
+        self.assertEqual(environment_upper["PROGRAMFILES(X86)"], r"C:\Program Files (x86)")
+        self.assertEqual(environment_upper["SYSTEMDRIVE"], "C:")
         for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
             self.assertTrue(qa._inside(Path(environment[name]), root))
         self.assertNotIn("OPENAI_API_KEY", environment)

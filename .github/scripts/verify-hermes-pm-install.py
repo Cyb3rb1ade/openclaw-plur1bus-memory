@@ -208,9 +208,15 @@ def windows_arm64_build_tools_probe(source: Path, env: dict[str, str]) -> dict:
 $programFilesX86 = ${env:ProgramFiles(x86)}
 $vswhere = if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe' } else { $null }
 $arm64VisualStudio = $null
+$visualStudioInstance = $null
 if ($vswhere -and (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-  $arm64VisualStudio = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath | Select-Object -First 1)
+  $vsJson = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -format json -utf8 | Out-String)
   if ($LASTEXITCODE -ne 0) { throw 'vswhere ARM64 component query failed' }
+  $vsInstances = @($vsJson | ConvertFrom-Json)
+  if ($vsInstances.Count -gt 0) {
+    $visualStudioInstance = $vsInstances[0]
+    $arm64VisualStudio = $visualStudioInstance.installationPath
+  }
 }
 $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
 $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
@@ -221,7 +227,7 @@ if ($arm64VisualStudio) {
                         (Join-Path $arm64VisualStudio 'VC\Tools\Llvm\bin\clang.exe'))
 }
 $clangPath = if ($clang) { $clang.Source } else { $clangCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1 }
-[ordered]@{ programFiles = $env:ProgramFiles; programFilesX86 = $programFilesX86; systemDrive = $env:SystemDrive; vswhereExists = [bool]($vswhere -and (Test-Path -LiteralPath $vswhere -PathType Leaf)); arm64VisualStudio = $arm64VisualStudio; cl = $(if ($cl) { $cl.Source } else { $null }); clang = $clangPath } | ConvertTo-Json -Compress
+[ordered]@{ programFiles = $env:ProgramFiles; programFilesX86 = $programFilesX86; systemDrive = $env:SystemDrive; vswhereExists = [bool]($vswhere -and (Test-Path -LiteralPath $vswhere -PathType Leaf)); arm64VisualStudio = $arm64VisualStudio; visualStudioProductId = $(if ($visualStudioInstance) { $visualStudioInstance.productId } else { $null }); visualStudioInstallationVersion = $(if ($visualStudioInstance) { $visualStudioInstance.installationVersion } else { $null }); visualStudioDisplayName = $(if ($visualStudioInstance) { $visualStudioInstance.displayName } else { $null }); cl = $(if ($cl) { $cl.Source } else { $null }); clang = $clangPath } | ConvertTo-Json -Compress
 '''
     shell = shutil.which("powershell", path=env.get("PATH")) or shutil.which("pwsh", path=env.get("PATH"))
     if shell is None:
