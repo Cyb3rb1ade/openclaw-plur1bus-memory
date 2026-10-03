@@ -8,6 +8,13 @@ import sys
 import tempfile
 
 
+def cpython_wheel_tag(version_info=sys.version_info):
+    """Return the exact GIL CPython wheel tag supported by this candidate workflow."""
+    if len(version_info) < 2 or version_info[0] != 3 or version_info[1] not in (13, 14):
+        raise RuntimeError('Native storage candidates require CPython 3.13 or 3.14')
+    return f'cp3{version_info[1]}'
+
+
 def pe_machine(path):
     """Return a PE file's machine field, rejecting truncated or non-PE files."""
     with Path(path).open('rb') as stream:
@@ -27,6 +34,7 @@ def pe_machine(path):
 def main():
     if sys.platform != 'win32' or platform.machine().upper() != 'ARM64':
         raise RuntimeError('Native Windows ARM64 Python required')
+    python_tag = cpython_wheel_tag()
     import lancedb
     import lancedb._lancedb as native
     import pyarrow as pa
@@ -37,6 +45,10 @@ def main():
 
     assert importlib.metadata.version('lancedb') == '0.34.0'
     assert importlib.metadata.version('pyarrow') == '25.0.1'
+    lancedb_wheel = importlib.metadata.distribution('lancedb').read_text('WHEEL') or ''
+    pyarrow_wheel = importlib.metadata.distribution('pyarrow').read_text('WHEEL') or ''
+    assert 'Tag: cp39-abi3-win_arm64' in lancedb_wheel
+    assert f'Tag: {python_tag}-{python_tag}-win_arm64' in pyarrow_wheel
     native_files = [Path(sys.executable), Path(native.__file__)]
     native_files.extend(Path(pa.__file__).parent.glob('*.pyd'))
     native_files.extend(Path(pa.__file__).parent.glob('*.dll'))
@@ -61,7 +73,8 @@ def main():
         assert ds.dataset(parquet).to_table().num_rows == 2
         assert pc.sum(pq.read_table(parquet)['number']).as_py() == 3
     print(json.dumps({'nativeStorageSmoke': True, 'machine': platform.machine(),
-                      'python': platform.python_version(), 'lancedb': '0.34.0',
+                      'python': platform.python_version(), 'pythonWheelTag': python_tag,
+                      'lancedb': '0.34.0',
                       'pyarrow': '25.0.1', 'nativeBinaryCount': len(native_files)}))
 
 

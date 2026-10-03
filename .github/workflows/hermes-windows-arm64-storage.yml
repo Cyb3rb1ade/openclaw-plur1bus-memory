@@ -2,6 +2,12 @@ name: Native Windows ARM64 storage candidates
 
 on:
   workflow_dispatch:
+    inputs:
+      python-version:
+        description: Native CPython target for the ARM storage candidates
+        type: choice
+        options: ['3.13.15', '3.14.6']
+        default: '3.14.6'
   push:
     branches: ['codex/hermes-distribution-*']
     paths:
@@ -22,6 +28,9 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 180
     env:
+      PYTHON_VERSION: ${{ inputs['python-version'] || '3.13.15' }}
+      PYTHON_TAG: ${{ startsWith(inputs['python-version'] || '3.13.15', '3.14') && 'cp314' || 'cp313' }}
+      ARTIFACT_SUFFIX: ${{ startsWith(inputs['python-version'] || '3.13.15', '3.14') && '-cp314' || '' }}
       CMAKE_BUILD_PARALLEL_LEVEL: '2'
       PYARROW_BUNDLE_ARROW_CPP: 'ON'
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYARROW: '25.0.1'
@@ -40,7 +49,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.13.15'
+          python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
       - name: Build native Arrow C++ for local storage
         run: |
@@ -65,12 +74,14 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m pip wheel --no-deps --no-build-isolation arrow/python --wheel-dir wheels
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $qaWheel = Get-ChildItem wheels/pyarrow-25.0.1-${{ env.PYTHON_TAG }}-${{ env.PYTHON_TAG }}-win_arm64.whl
+          if (-not $qaWheel) { throw 'PyArrow wheel tag does not match selected CPython target' }
           python -m pip freeze > wheels/BUILD_DEPENDENCIES.txt
           git -C arrow rev-parse HEAD > wheels/UPSTREAM_COMMIT.txt
           Get-ChildItem wheels/*.whl | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLowerInvariant())  $($_.Name)" } > wheels/SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: pyarrow-25.0.1-windows-arm64-candidate
+          name: pyarrow-25.0.1${{ env.ARTIFACT_SUFFIX }}-windows-arm64-candidate
           path: wheels/*
           if-no-files-found: error
           retention-days: 30
@@ -78,6 +89,9 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 180
     env:
+      PYTHON_VERSION: ${{ inputs['python-version'] || '3.13.15' }}
+      PYTHON_TAG: ${{ startsWith(inputs['python-version'] || '3.13.15', '3.14') && 'cp314' || 'cp313' }}
+      ARTIFACT_SUFFIX: ${{ startsWith(inputs['python-version'] || '3.13.15', '3.14') && '-cp314' || '' }}
       CARGO_BUILD_JOBS: '2'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -93,7 +107,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.13.15'
+          python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
       - name: Native compiler and pinned protoc
         run: |
@@ -133,7 +147,7 @@ jobs:
           Get-ChildItem lance/target/wheels/*.whl | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLowerInvariant())  $($_.Name)" } > lance/target/wheels/SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: lancedb-0.34.0-windows-arm64-candidate
+          name: lancedb-0.34.0${{ env.ARTIFACT_SUFFIX }}-windows-arm64-candidate
           path: lance/target/wheels/*
           if-no-files-found: error
           retention-days: 30
@@ -141,6 +155,10 @@ jobs:
     needs: [arrow, lance]
     runs-on: windows-11-arm
     timeout-minutes: 30
+    env:
+      PYTHON_VERSION: ${{ inputs['python-version'] || '3.13.15' }}
+      PYTHON_TAG: ${{ startsWith(inputs['python-version'] || '3.13.15', '3.14') && 'cp314' || 'cp313' }}
+      ARTIFACT_SUFFIX: ${{ startsWith(inputs['python-version'] || '3.13.15', '3.14') && '-cp314' || '' }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -148,11 +166,11 @@ jobs:
           sparse-checkout: .github
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.13.15'
+          python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          pattern: '*-windows-arm64-candidate'
+          pattern: '*${{ env.ARTIFACT_SUFFIX }}-windows-arm64-candidate'
           path: candidate-wheels
       - name: Install actual wheels and exercise native storage
         run: |
@@ -167,6 +185,7 @@ jobs:
           }
           $qaWheels = @(Get-ChildItem candidate-wheels -Recurse -Filter *.whl | ForEach-Object { $_.FullName })
           if ($qaWheels.Count -ne 2 -or ($qaWheels | Where-Object { $_ -notmatch 'win_arm64\.whl$' })) { throw 'Expected exactly two native ARM wheels' }
+          if (($qaWheels | Where-Object { $_ -match "pyarrow-25\.0\.1-${{ env.PYTHON_TAG }}-${{ env.PYTHON_TAG }}-win_arm64\.whl$" }).Count -ne 1) { throw 'Expected PyArrow wheel tag does not match selected CPython target' }
           python -m pip install @qaWheels
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m pip check
@@ -175,6 +194,6 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-arm64-installed-storage-verification
+          name: windows-arm64-installed-storage-verification${{ env.ARTIFACT_SUFFIX }}
           path: native-storage-verification.json
           if-no-files-found: error

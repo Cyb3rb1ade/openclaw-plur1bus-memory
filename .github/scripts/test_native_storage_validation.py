@@ -5,7 +5,9 @@ import struct
 import tempfile
 import unittest
 
-pe_machine = runpy.run_path(str(Path(__file__).with_name('verify-windows-arm64-storage.py')))['pe_machine']
+_storage = runpy.run_path(str(Path(__file__).with_name('verify-windows-arm64-storage.py')))
+pe_machine = _storage['pe_machine']
+cpython_wheel_tag = _storage['cpython_wheel_tag']
 
 
 class NativeMachineGuardTests(unittest.TestCase):
@@ -41,6 +43,13 @@ class NativeMachineGuardTests(unittest.TestCase):
         for data in (signature, pointer):
             with self.assertRaises(ValueError):
                 self.probe(data)
+
+    def test_candidate_python_tags_cover_legacy_and_current_pm(self):
+        self.assertEqual(cpython_wheel_tag((3, 13, 15)), 'cp313')
+        self.assertEqual(cpython_wheel_tag((3, 14, 6)), 'cp314')
+        for version in ((3, 12, 10), (3, 15, 0), (2, 7, 18)):
+            with self.subTest(version=version), self.assertRaises(RuntimeError):
+                cpython_wheel_tag(version)
 
 
 if __name__ == '__main__':
