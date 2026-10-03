@@ -1,180 +1,256 @@
-name: Native Windows ARM64 storage candidates
+name: Hermes PM Windows ARM64 package acceptance
 
 on:
   workflow_dispatch:
   push:
-    branches: ['codex/hermes-distribution-*']
+    branches: ['codex/hermes-7184-arm-pm', 'codex/hermes-distribution-*']
     paths:
       - '.github/workflows/hermes-windows-arm64-storage.yml'
-      - '.github/scripts/init-native-windows-arm64.ps1'
+      - '.github/scripts/verify-hermes-pm-install.py'
+      - '.github/scripts/test_verify_hermes_pm_install.py'
       - '.github/scripts/verify-windows-arm64-storage.py'
-      - '.github/scripts/test_native_storage_validation.py'
+      - 'distribution/**'
+      - 'plur1bus-hermes/**'
+      - 'plur1bus-controls/**'
 
 permissions:
   contents: read
+  actions: read
 
 defaults:
   run:
     shell: pwsh
 
 jobs:
-  arrow:
+  official-pm-acceptance:
     runs-on: windows-11-arm
     timeout-minutes: 180
     env:
-      CMAKE_BUILD_PARALLEL_LEVEL: '2'
-      PYARROW_BUNDLE_ARROW_CPP: 'ON'
-      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYARROW: '25.0.1'
-      CMAKE_GENERATOR: Ninja
+      PYTHONUTF8: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PLUR1BUS_CLASSIC_NATIVE_RUN: '34060568686'
+      PLUR1BUS_PM_NATIVE_RUN: '37129076589'
+      PLUR1BUS_PACKAGE_SOURCE_REVISION_EXPECTED: '5e2115e2e64994c2cebea846b57e0c5831f6349d'
+      PLUR1BUS_HERMES_SOURCE_REVISION: 'b2860025adc1478eca63a0b2a82440798eadbfd1'
+      PLUR1BUS_CLASSIC_LANCEDB_SHA256: 'ef9924e292e2a2815a4b6ff92d0d8a1bce0a4d4193eb254556c6a32d61a2d0d2'
+      PLUR1BUS_CLASSIC_PYARROW_SHA256: '44188cd110e818101d5d2ca170929546d18c660e3e931b4f4e0d894de7745173'
+      PLUR1BUS_PM_LANCEDB_SHA256: 'a0399bbb26dc2a8fdf4730accaa76c01969f7a205cdaa3b77f36cc34dd815386'
+      PLUR1BUS_PM_PYARROW_SHA256: 'e341fd7ebb9d98a231bba0a06bd8ed29e01afacfa1e530fd8948b4f6e5e4e794'
+
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Enable long Windows paths
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           path: port
+          ref: 5e2115e2e64994c2cebea846b57e0c5831f6349d
+          fetch-depth: 0
           persist-credentials: false
-          sparse-checkout: .github
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          repository: apache/arrow
-          ref: a2f2388e17fb2e1de5757d41b6bbe019a7604937
-          path: arrow
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.13.15'
+          python-version: '3.14.6'
           architecture: arm64
-      - name: Build native Arrow C++ for local storage
+
+      - name: Confirm native CPython target
         run: |
-          python port/.github/scripts/test_native_storage_validation.py
+          python -c "import platform,sys; assert sys.version_info[:3] == (3,14,6); assert sys.implementation.name == 'cpython'; assert platform.machine().upper() == 'ARM64'; print(sys.version); print(platform.machine())"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & ./port/.github/scripts/init-native-windows-arm64.ps1
-          python -c "import platform; assert platform.machine().upper() == 'ARM64'"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cmake --version
-          ninja --version
-          $env:ARROW_HOME = Join-Path $env:GITHUB_WORKSPACE 'arrow-install'
-          "ARROW_HOME=$env:ARROW_HOME" >> $env:GITHUB_ENV
-          cmake -S arrow/cpp -B arrow-build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=$env:ARROW_HOME" -DCMAKE_UNITY_BUILD=ON -DARROW_BUILD_SHARED=ON -DARROW_BUILD_STATIC=OFF -DARROW_DEPENDENCY_SOURCE=BUNDLED -DARROW_SIMD_LEVEL=NONE -DARROW_COMPUTE=ON -DARROW_ACERO=ON -DARROW_CSV=ON -DARROW_JSON=ON -DARROW_DATASET=ON -DARROW_FILESYSTEM=ON -DARROW_PARQUET=ON -DARROW_WITH_SNAPPY=ON -DARROW_WITH_ZLIB=ON -DARROW_WITH_ZSTD=ON -DARROW_WITH_LZ4=ON -DARROW_BUILD_TESTS=OFF
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cmake --build arrow-build --target install
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Build self-contained PyArrow wheel
-        run: |
-          & ./port/.github/scripts/init-native-windows-arm64.ps1
-          $env:CMAKE_PREFIX_PATH = $env:ARROW_HOME
-          python -m pip install -r arrow/python/requirements-build.txt wheel
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python -m pip wheel --no-deps --no-build-isolation arrow/python --wheel-dir wheels
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python -m pip freeze > wheels/BUILD_DEPENDENCIES.txt
-          git -C arrow rev-parse HEAD > wheels/UPSTREAM_COMMIT.txt
-          Get-ChildItem wheels/*.whl | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLowerInvariant())  $($_.Name)" } > wheels/SHA256SUMS
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+
+      - name: Download approved classic Python 3.13 native pair
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          repository: Cyb3rb1ade/openclaw-plur1bus-memory
+          run-id: '34060568686'
+          name: lancedb-0.34.0-windows-arm64-candidate
+          path: ${{ runner.temp }}/plur1bus-pm-native/classic-lancedb
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          repository: Cyb3rb1ade/openclaw-plur1bus-memory
+          run-id: '34060568686'
           name: pyarrow-25.0.1-windows-arm64-candidate
-          path: wheels/*
-          if-no-files-found: error
-          retention-days: 30
-  lance:
-    runs-on: windows-11-arm
-    timeout-minutes: 180
-    env:
-      CARGO_BUILD_JOBS: '2'
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+          path: ${{ runner.temp }}/plur1bus-pm-native/classic-pyarrow
+          github-token: ${{ github.token }}
+
+      - name: Download approved CPython 3.14 PM storage pair
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          path: port
-          persist-credentials: false
-          sparse-checkout: .github
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+          repository: Cyb3rb1ade/openclaw-plur1bus-memory
+          run-id: '37129076589'
+          name: lancedb-0.34.0-cp314-windows-arm64-candidate
+          path: ${{ runner.temp }}/plur1bus-pm-native/pm-lancedb
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          repository: lancedb/lancedb
-          ref: 1545bd4b4fc3344420d1a65506d54b85f57edc54
-          path: lance
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.13.15'
-          architecture: arm64
-      - name: Native compiler and pinned protoc
+          repository: Cyb3rb1ade/openclaw-plur1bus-memory
+          run-id: '37129076589'
+          name: pyarrow-25.0.1-cp314-windows-arm64-candidate
+          path: ${{ runner.temp }}/plur1bus-pm-native/pm-pyarrow
+          github-token: ${{ github.token }}
+
+      - name: Verify all artifact hashes and pinned upstream sources
         run: |
-          & ./port/.github/scripts/init-native-windows-arm64.ps1
-          python -c "import platform; assert platform.machine().upper() == 'ARM64'"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          rustup toolchain install 1.95.0-aarch64-pc-windows-msvc --profile minimal
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Invoke-WebRequest https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-win64.zip -OutFile protoc.zip
-          if ((Get-FileHash protoc.zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '71852a30cf62975358edfcbbff93086e8857a079c8e4d6904881aa968d65c7f9') { throw 'Protoc checksum mismatch' }
-          Expand-Archive protoc.zip protoc
-          "PROTOC=$(Join-Path $env:GITHUB_WORKSPACE 'protoc/bin/protoc.exe')" >> $env:GITHUB_ENV
-          python -m pip install maturin==1.12.4
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Build pinned LanceDB with locked third-party dependencies
+          $checks = @(
+            @{ Directory = "$env:RUNNER_TEMP/plur1bus-pm-native/classic-lancedb"; Wheel = 'lancedb-0.34.0-cp39-abi3-win_arm64.whl'; Hash = $env:PLUR1BUS_CLASSIC_LANCEDB_SHA256; Source = '1545bd4b4fc3344420d1a65506d54b85f57edc54' },
+            @{ Directory = "$env:RUNNER_TEMP/plur1bus-pm-native/classic-pyarrow"; Wheel = 'pyarrow-25.0.1-cp313-cp313-win_arm64.whl'; Hash = $env:PLUR1BUS_CLASSIC_PYARROW_SHA256; Source = 'beccec0d0c451b7aa3e4530416ac431b3c035c69' },
+            @{ Directory = "$env:RUNNER_TEMP/plur1bus-pm-native/pm-lancedb"; Wheel = 'lancedb-0.34.0-cp39-abi3-win_arm64.whl'; Hash = $env:PLUR1BUS_PM_LANCEDB_SHA256; Source = '1545bd4b4fc3344420d1a65506d54b85f57edc54' },
+            @{ Directory = "$env:RUNNER_TEMP/plur1bus-pm-native/pm-pyarrow"; Wheel = 'pyarrow-25.0.1-cp314-cp314-win_arm64.whl'; Hash = $env:PLUR1BUS_PM_PYARROW_SHA256; Source = 'beccec0d0c451b7aa3e4530416ac431b3c035c69' }
+          )
+          foreach ($item in $checks) {
+            $wheelPath = Join-Path $item.Directory $item.Wheel
+            $sourcePath = Join-Path $item.Directory 'UPSTREAM_COMMIT.txt'
+            $sumsPath = Join-Path $item.Directory 'SHA256SUMS'
+            if (-not (Test-Path -LiteralPath $wheelPath -PathType Leaf) -or -not (Test-Path -LiteralPath $sourcePath -PathType Leaf) -or -not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) { throw 'Approved native artifact is incomplete' }
+            if ((Get-Content -LiteralPath $sourcePath -Raw).Trim() -cne $item.Source) { throw 'Native artifact source revision is not pinned' }
+            $expectedLine = "$($item.Hash)  $($item.Wheel)"
+            if ((Get-Content -LiteralPath $sumsPath) -cnotcontains $expectedLine) { throw 'Native artifact checksum manifest is not approved' }
+            if ((Get-FileHash -LiteralPath $wheelPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $item.Hash) { throw 'Downloaded native wheel hash mismatch' }
+          }
+          $env:PLUR1BUS_CLASSIC_LANCEDB_WHEEL = "$env:RUNNER_TEMP/plur1bus-pm-native/classic-lancedb/lancedb-0.34.0-cp39-abi3-win_arm64.whl"
+          $env:PLUR1BUS_CLASSIC_PYARROW_WHEEL = "$env:RUNNER_TEMP/plur1bus-pm-native/classic-pyarrow/pyarrow-25.0.1-cp313-cp313-win_arm64.whl"
+          $env:PLUR1BUS_PM_LANCEDB_WHEEL = "$env:RUNNER_TEMP/plur1bus-pm-native/pm-lancedb/lancedb-0.34.0-cp39-abi3-win_arm64.whl"
+          $env:PLUR1BUS_PM_PYARROW_WHEEL = "$env:RUNNER_TEMP/plur1bus-pm-native/pm-pyarrow/pyarrow-25.0.1-cp314-cp314-win_arm64.whl"
+          @"
+          PLUR1BUS_CLASSIC_LANCEDB_WHEEL=$env:PLUR1BUS_CLASSIC_LANCEDB_WHEEL
+          PLUR1BUS_CLASSIC_PYARROW_WHEEL=$env:PLUR1BUS_CLASSIC_PYARROW_WHEEL
+          PLUR1BUS_PM_LANCEDB_WHEEL=$env:PLUR1BUS_PM_LANCEDB_WHEEL
+          PLUR1BUS_PM_PYARROW_WHEEL=$env:PLUR1BUS_PM_PYARROW_WHEEL
+          "@ | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install package builder and test tools
+        run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2'
+
+      - name: Test installer, native wheel, and generated PM project contracts
         run: |
-          & ./port/.github/scripts/init-native-windows-arm64.ps1
-          $env:RUSTUP_TOOLCHAIN = '1.95.0-aarch64-pc-windows-msvc'
+          python -m pytest -q port/distribution/tests/test_installer.py port/distribution/tests/test_native_wheels.py port/distribution/tests/test_directory_project.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Require a clean, pinned package source tree
+        run: |
+          $sourceCommit = (git -C port rev-parse --verify HEAD).Trim()
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($sourceCommit -cne $env:PLUR1BUS_PACKAGE_SOURCE_REVISION_EXPECTED) { throw 'Build checkout is not the pinned final candidate revision' }
+          $sourceChanges = @(git -C port status --porcelain)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($sourceChanges.Count -ne 0) { throw 'PLUR1BUS package source checkout must be clean before building' }
+          "PLUR1BUS_PACKAGE_SOURCE_REVISION=$sourceCommit" >> $env:GITHUB_ENV
+
+      - name: Build Windows ARM64 packages with both native pairs
+        run: |
+          $artifactRoot = Join-Path $env:RUNNER_TEMP 'plur1bus-pm-package-artifacts'
+          New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+          $bundlePathFile = Join-Path $env:RUNNER_TEMP 'plur1bus-pm-expanded-bundle-path.txt'
+          $env:PLUR1BUS_PM_ARTIFACT_ROOT = $artifactRoot
+          $env:PLUR1BUS_PM_BUNDLE_PATH_FILE = $bundlePathFile
           @'
+          import os, sys
           from pathlib import Path
-          path = Path('lance/Cargo.lock')
-          old = 'name = "lancedb-python"\nversion = "0.34.0-beta.6"'
-          new = 'name = "lancedb-python"\nversion = "0.34.0"'
-          content = path.read_text()
-          assert content.count(old) == 1
-          path.write_text(content.replace(old, new))
+          sys.path.insert(0, "port/distribution")
+          from build import build
+          bundle = build(
+              output=os.environ["PLUR1BUS_PM_ARTIFACT_ROOT"], windows_exe=True,
+              arm_lancedb_wheel=os.environ["PLUR1BUS_CLASSIC_LANCEDB_WHEEL"],
+              arm_lancedb_sha256=os.environ["PLUR1BUS_CLASSIC_LANCEDB_SHA256"],
+              arm_pyarrow_wheel=os.environ["PLUR1BUS_CLASSIC_PYARROW_WHEEL"],
+              arm_pyarrow_sha256=os.environ["PLUR1BUS_CLASSIC_PYARROW_SHA256"],
+              pm_arm_lancedb_wheel=os.environ["PLUR1BUS_PM_LANCEDB_WHEEL"],
+              pm_arm_lancedb_sha256=os.environ["PLUR1BUS_PM_LANCEDB_SHA256"],
+              pm_arm_pyarrow_wheel=os.environ["PLUR1BUS_PM_PYARROW_WHEEL"],
+              pm_arm_pyarrow_sha256=os.environ["PLUR1BUS_PM_PYARROW_SHA256"],
+          )
+          Path(os.environ["PLUR1BUS_PM_BUNDLE_PATH_FILE"]).write_text(str(bundle.resolve()), encoding="utf-8")
           '@ | python -
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Push-Location lance/python
-          maturin build --locked --release --target aarch64-pc-windows-msvc
+          $bundle = (Get-Content -LiteralPath $bundlePathFile -Raw).Trim()
+          if (-not (Test-Path -LiteralPath $bundle -PathType Container)) { throw 'Expanded package bundle was not produced' }
+          "PLUR1BUS_PM_ARTIFACT_ROOT=$artifactRoot" >> $env:GITHUB_ENV
+          "PLUR1BUS_PM_BUNDLE=$bundle" >> $env:GITHUB_ENV
+
+      - name: Test Hermes PM acceptance safety contracts
+        run: python -m unittest discover -s port/.github/scripts -p 'test_verify_hermes_pm_install.py'
+
+      - name: Create fresh official Hermes source checkout under isolated QA home
+        run: |
+          $pythonTemp = (python -c "import tempfile; print(tempfile.gettempdir())").Trim()
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          Pop-Location
-          git -C lance rev-parse HEAD > lance/target/wheels/UPSTREAM_COMMIT.txt
-          git -C lance diff -- Cargo.lock > lance/target/wheels/SOURCE_METADATA.patch
-          Copy-Item lance/Cargo.lock lance/target/wheels/Cargo.lock
-          rustc -vV > lance/target/wheels/RUST_VERSION.txt
-          Get-ChildItem lance/target/wheels/*.whl | ForEach-Object { "$((Get-FileHash -Algorithm SHA256 $_).Hash.ToLowerInvariant())  $($_.Name)" } > lance/target/wheels/SHA256SUMS
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+          $qaRoot = Join-Path $pythonTemp ("plur1bus-hermes-pm-qa-" + [guid]::NewGuid().ToString('N'))
+          $qaHome = Join-Path $qaRoot 'home'
+          $source = Join-Path $qaHome 'hermes-agent'
+          New-Item -ItemType Directory -Path $qaHome -Force | Out-Null
+          New-Item -ItemType Directory -Path $source | Out-Null
+          git -C $source init --quiet
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C $source remote add origin https://github.com/NousResearch/hermes-agent.git
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C $source fetch --quiet --depth 1 origin $env:PLUR1BUS_HERMES_SOURCE_REVISION
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C $source checkout --quiet --detach $env:PLUR1BUS_HERMES_SOURCE_REVISION
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((git -C $source rev-parse HEAD).Trim() -cne $env:PLUR1BUS_HERMES_SOURCE_REVISION) { throw 'Hermes source did not resolve to the pinned revision' }
+          $sourceChanges = @(git -C $source status --porcelain)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($sourceChanges.Count -ne 0) { throw 'Hermes source checkout is not clean' }
+          "PLUR1BUS_PM_QA_ROOT=$qaRoot" >> $env:GITHUB_ENV
+          "PLUR1BUS_PM_HERMES_SOURCE=$source" >> $env:GITHUB_ENV
+
+      - name: Run official Hermes PM install and native package acceptance
+        run: |
+          $receipt = Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'hermes-pm-acceptance.json'
+          python port/.github/scripts/verify-hermes-pm-install.py --hermes-source $env:PLUR1BUS_PM_HERMES_SOURCE --bundle $env:PLUR1BUS_PM_BUNDLE --qa-root $env:PLUR1BUS_PM_QA_ROOT | Tee-Object -FilePath $receipt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Verify the native setup executable and default PM interpreter plan
+        run: |
+          $bundleManifest = Get-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_BUNDLE 'distribution.json') -Raw | ConvertFrom-Json
+          $exeName = "plur1bus-$($bundleManifest.version)-windows-arm64-setup-unsigned.exe"
+          $exe = Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT $exeName
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Native setup executable is missing' }
+          & $exe --help | Out-Null
+          if ($LASTEXITCODE) { throw 'Native setup executable --help smoke failed' }
+          $planText = (& $exe --home (Join-Path $env:PLUR1BUS_PM_QA_ROOT 'home') --profile default --activate | Out-String)
+          if ($LASTEXITCODE) { throw 'Native setup executable could not plan against the Hermes PM-managed home' }
+          $plan = $planText | ConvertFrom-Json
+          $expectedPmWheels = @(
+            'payload/plugins/plur1bus/vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl',
+            'payload/plugins/plur1bus/vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl'
+          )
+          if ($plan.pmManaged -ne $true -or $plan.pythonInfo.version[0] -ne 3 -or $plan.pythonInfo.version[1] -ne 14 -or $plan.pythonInfo.architecture -cne 'ARM64' -or $plan.pythonInfo.implementation -cne 'cpython' -or $plan.pythonInfo.freeThreaded -ne $false) { throw 'Native executable did not select the expected standard CPython 3.14 ARM64 PM interpreter' }
+          $actualPmWheels = (@($plan.pmNativeWheels) | Sort-Object) -join "`n"
+          $expectedPmWheelsText = ($expectedPmWheels | Sort-Object) -join "`n"
+          if ($actualPmWheels -cne $expectedPmWheelsText) { throw 'Native executable plan did not select the complete PM storage pair' }
+          [ordered]@{ pmManaged = $plan.pmManaged; pythonVersion = $plan.pythonInfo.version; architecture = $plan.pythonInfo.architecture; implementation = $plan.pythonInfo.implementation; freeThreaded = $plan.pythonInfo.freeThreaded; pmNativeWheels = $plan.pmNativeWheels } |
+            ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'native-executable-plan.json') -Encoding utf8
+
+      - name: Write package and source pin provenance
+        run: |
+          $manifest = Get-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_BUNDLE 'distribution.json') -Raw | ConvertFrom-Json
+          if ($manifest.dirty -ne $false -or $manifest.sourceCommit -cne $env:PLUR1BUS_PACKAGE_SOURCE_REVISION) { throw 'Package manifest does not bind to the clean checked-out source revision' }
+          $legacyPair = @($manifest.nativeDependencies.'win32/ARM64')
+          if ($legacyPair.Count -ne 2 -or $legacyPair -notcontains 'vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl' -or $legacyPair -notcontains 'vendor/windows-arm64/pyarrow-25.0.1-cp313-cp313-win_arm64.whl') { throw 'Package manifest does not contain the approved legacy CPython 3.13 pair' }
+          $pmPair = @($manifest.pmNativeDependencies.'win32/ARM64/cp314')
+          if ($pmPair.Count -ne 2 -or $pmPair -notcontains 'payload/plugins/plur1bus/vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl' -or $pmPair -notcontains 'payload/plugins/plur1bus/vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl') { throw 'Package manifest does not contain the approved Hermes PM CPython 3.14 pair' }
+          $provenance = [ordered]@{
+            packageSource = @{ repository = 'Cyb3rb1ade/openclaw-plur1bus-memory'; revision = $env:PLUR1BUS_PACKAGE_SOURCE_REVISION; dirty = $manifest.dirty }
+            hermes = @{ repository = 'NousResearch/hermes-agent'; revision = $env:PLUR1BUS_HERMES_SOURCE_REVISION }
+            nativeArtifacts = @(
+              @{ runId = $env:PLUR1BUS_CLASSIC_NATIVE_RUN; artifact = 'lancedb-0.34.0-windows-arm64-candidate'; source = '1545bd4b4fc3344420d1a65506d54b85f57edc54'; wheel = 'lancedb-0.34.0-cp39-abi3-win_arm64.whl'; sha256 = $env:PLUR1BUS_CLASSIC_LANCEDB_SHA256 },
+              @{ runId = $env:PLUR1BUS_CLASSIC_NATIVE_RUN; artifact = 'pyarrow-25.0.1-windows-arm64-candidate'; source = 'beccec0d0c451b7aa3e4530416ac431b3c035c69'; wheel = 'pyarrow-25.0.1-cp313-cp313-win_arm64.whl'; sha256 = $env:PLUR1BUS_CLASSIC_PYARROW_SHA256 },
+              @{ runId = $env:PLUR1BUS_PM_NATIVE_RUN; artifact = 'lancedb-0.34.0-cp314-windows-arm64-candidate'; source = '1545bd4b4fc3344420d1a65506d54b85f57edc54'; wheel = 'lancedb-0.34.0-cp39-abi3-win_arm64.whl'; sha256 = $env:PLUR1BUS_PM_LANCEDB_SHA256 },
+              @{ runId = $env:PLUR1BUS_PM_NATIVE_RUN; artifact = 'pyarrow-25.0.1-cp314-windows-arm64-candidate'; source = 'beccec0d0c451b7aa3e4530416ac431b3c035c69'; wheel = 'pyarrow-25.0.1-cp314-cp314-win_arm64.whl'; sha256 = $env:PLUR1BUS_PM_PYARROW_SHA256 }
+            )
+            windowsArmCi = @{ runner = 'windows-11-arm'; python = '3.14.6'; nativeExecutionVerified = $true }
+            packageChecksums = Get-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'SHA256SUMS')
+            acceptanceReceipt = 'hermes-pm-acceptance.json'
+          }
+          $provenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'source-pinned-provenance.json') -Encoding utf8
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: lancedb-0.34.0-windows-arm64-candidate
-          path: lance/target/wheels/*
+          name: plur1bus-hermes-windows-arm64-pm-acceptance
+          path: ${{ runner.temp }}/plur1bus-pm-package-artifacts/*
           if-no-files-found: error
           retention-days: 30
-  installed-storage:
-    needs: [arrow, lance]
-    runs-on: windows-11-arm
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
-          sparse-checkout: .github
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.13.15'
-          architecture: arm64
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          pattern: '*-windows-arm64-candidate'
-          path: candidate-wheels
-      - name: Install actual wheels and exercise native storage
-        run: |
-          Get-ChildItem candidate-wheels -Recurse -Filter SHA256SUMS | ForEach-Object {
-            $qaDirectory = $_.DirectoryName
-            Get-Content $_.FullName | ForEach-Object {
-              if ($_ -notmatch '^([a-f0-9]{64})  ([a-zA-Z0-9_.-]+\.whl)$') { throw 'Invalid wheel checksum manifest' }
-              $qaExpected = $matches[1]
-              $qaWheel = Join-Path $qaDirectory $matches[2]
-              if ((Get-FileHash $qaWheel -Algorithm SHA256).Hash.ToLowerInvariant() -ne $qaExpected) { throw 'Downloaded wheel checksum mismatch' }
-            }
-          }
-          $qaWheels = @(Get-ChildItem candidate-wheels -Recurse -Filter *.whl | ForEach-Object { $_.FullName })
-          if ($qaWheels.Count -ne 2 -or ($qaWheels | Where-Object { $_ -notmatch 'win_arm64\.whl$' })) { throw 'Expected exactly two native ARM wheels' }
-          python -m pip install @qaWheels
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python -m pip check
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python .github/scripts/verify-windows-arm64-storage.py | Tee-Object -FilePath native-storage-verification.json
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: windows-arm64-installed-storage-verification
-          path: native-storage-verification.json
-          if-no-files-found: error
