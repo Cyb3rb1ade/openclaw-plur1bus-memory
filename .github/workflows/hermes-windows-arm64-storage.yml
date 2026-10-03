@@ -170,8 +170,25 @@ jobs:
           "PLUR1BUS_PM_ARTIFACT_ROOT=$artifactRoot" >> $env:GITHUB_ENV
           "PLUR1BUS_PM_BUNDLE=$bundle" >> $env:GITHUB_ENV
 
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: acceptance-harness
+          ref: 0b3a0d9961a120752d3ef857029554a7e2f7998e
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and record isolated diagnostic harness revision
+        run: |
+          $harnessCommit = (git -C acceptance-harness rev-parse --verify HEAD).Trim()
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($harnessCommit -cne '0b3a0d9961a120752d3ef857029554a7e2f7998e') { throw 'Acceptance harness is not the pinned diagnostic revision' }
+          $harnessChanges = @(git -C acceptance-harness status --porcelain)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($harnessChanges.Count -ne 0) { throw 'Acceptance harness checkout must be clean' }
+          "PLUR1BUS_ACCEPTANCE_HARNESS_REVISION=$harnessCommit" >> $env:GITHUB_ENV
+
       - name: Test Hermes PM acceptance safety contracts
-        run: python .github/scripts/test_verify_hermes_pm_install.py
+        run: python acceptance-harness/.github/scripts/test_verify_hermes_pm_install.py
 
       - name: Create fresh official Hermes source checkout under isolated QA home
         run: |
@@ -200,7 +217,7 @@ jobs:
       - name: Run official Hermes PM install and native package acceptance
         run: |
           $receipt = Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'hermes-pm-acceptance.json'
-          python .github/scripts/verify-hermes-pm-install.py --hermes-source $env:PLUR1BUS_PM_HERMES_SOURCE --bundle $env:PLUR1BUS_PM_BUNDLE --qa-root $env:PLUR1BUS_PM_QA_ROOT | Tee-Object -FilePath $receipt
+          python acceptance-harness/.github/scripts/verify-hermes-pm-install.py --hermes-source $env:PLUR1BUS_PM_HERMES_SOURCE --bundle $env:PLUR1BUS_PM_BUNDLE --qa-root $env:PLUR1BUS_PM_QA_ROOT | Tee-Object -FilePath $receipt
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Verify the native setup executable and default PM interpreter plan
@@ -235,6 +252,7 @@ jobs:
           if ($pmPair.Count -ne 2 -or $pmPair -notcontains 'payload/plugins/plur1bus/vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl' -or $pmPair -notcontains 'payload/plugins/plur1bus/vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl') { throw 'Package manifest does not contain the approved Hermes PM CPython 3.14 pair' }
           $provenance = [ordered]@{
             packageSource = @{ repository = 'Cyb3rb1ade/openclaw-plur1bus-memory'; revision = $env:PLUR1BUS_PACKAGE_SOURCE_REVISION; dirty = $manifest.dirty }
+            acceptanceHarness = @{ revision = $env:PLUR1BUS_ACCEPTANCE_HARNESS_REVISION; diagnosticOverlay = $true }
             hermes = @{ repository = 'NousResearch/hermes-agent'; revision = $env:PLUR1BUS_HERMES_SOURCE_REVISION }
             nativeArtifacts = @(
               @{ runId = $env:PLUR1BUS_CLASSIC_NATIVE_RUN; artifact = 'lancedb-0.34.0-windows-arm64-candidate'; source = '1545bd4b4fc3344420d1a65506d54b85f57edc54'; wheel = 'lancedb-0.34.0-cp39-abi3-win_arm64.whl'; sha256 = $env:PLUR1BUS_CLASSIC_LANCEDB_SHA256 },
