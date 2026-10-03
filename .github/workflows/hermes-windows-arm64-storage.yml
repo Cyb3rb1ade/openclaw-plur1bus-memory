@@ -206,6 +206,10 @@ jobs:
           # inherit a different runner-global Git config context.
           git -C $source config --local core.autocrlf false
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # The helper also needs the same long-path support as checkout and
+          # the runner's global Git config, particularly for nested skill docs.
+          git -C $source config --local core.longpaths true
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git -C $source remote add origin https://github.com/NousResearch/hermes-agent.git
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git -C $source fetch --quiet --depth 1 origin $env:PLUR1BUS_HERMES_SOURCE_REVISION

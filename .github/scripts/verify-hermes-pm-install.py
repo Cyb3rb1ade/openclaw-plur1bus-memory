@@ -241,6 +241,58 @@ $clangPath = if ($clang) { $clang.Source } else { $clangCandidates | Where-Objec
     return probe
 
 
+def git_checkout_diagnostics(source: Path, status_text: str, isolated_env: dict[str, str]) -> str:
+    """Compare narrow Git EOL config/attributes in ambient and isolated envs."""
+    paths = [line[3:] for line in status_text.splitlines() if len(line) > 3]
+    if not paths:
+        return ""
+    safe_paths = paths[:8]
+    outputs = []
+    contexts = (("ambient", os.environ.copy()), ("isolated", isolated_env))
+    for label, context in contexts:
+        config = subprocess.run(
+            ["git", "-C", str(source), "config", "--show-origin", "--get-regexp",
+             r"^core\.(autocrlf|eol|attributesfile|fsmonitor|longpaths)$"],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        config_rows = []
+        for row in config.stdout.splitlines():
+            origin_and_value = row.split(None, 1)
+            if len(origin_and_value) == 2:
+                origin = origin_and_value[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                key_value = origin_and_value[1].split(None, 1)
+                if len(key_value) == 2 and key_value[0].lower() == "core.attributesfile":
+                    key_value[1] = "<configured>"
+                config_rows.append(f"{origin}:{' '.join(key_value)}")
+        attrs = subprocess.run(
+            ["git", "-C", str(source), "check-attr", "text", "eol", "working-tree-encoding", "--", *safe_paths],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        numstat = subprocess.run(
+            ["git", "-C", str(source), "diff", "--numstat", "--", *safe_paths],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        header = subprocess.run(
+            ["git", "-C", str(source), "diff", "--no-ext-diff", "--unified=0", "--", safe_paths[0]],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        headers = [line for line in header.stdout.splitlines()
+                   if line.startswith(("diff --git ", "index ", "--- ", "+++ ", "@@"))][:8]
+        path_lengths = [f"{path}:len={len(str(source / path))}" for path in safe_paths]
+        outputs.append(
+            f"{label} gitconfig=[{'; '.join(config_rows) or 'none'}] "
+            f"attributes=[{_sanitized_tail(attrs.stdout, max_lines=16, max_line_chars=180) or 'none'}] "
+            f"numstat=[{_sanitized_tail(numstat.stdout, max_lines=8, max_line_chars=180) or 'none'}] "
+            f"diff-headers=[{' | '.join(headers) or 'none'}] "
+            f"paths=[{'; '.join(path_lengths)}]"
+        )
+    return "; ".join(outputs)
+
+
 def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
     """Run official Hermes PM bootstrap and native PLUR1BUS package acceptance."""
     root, source, home = validate_qa_layout(qa_root, hermes_source, bundle)
@@ -278,18 +330,8 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
                         env=env, label="Hermes source cleanliness check")
     if clean.stdout.strip():
         detail = _sanitized_tail(clean.stdout, max_lines=20, max_line_chars=240)
-        effective = subprocess.run(["git", "-C", str(source), "config", "--get", "core.autocrlf"],
-                                   cwd=source, env=env, capture_output=True, text=True,
-                                   encoding="utf-8", errors="replace", check=False)
-        numstat = subprocess.run(["git", "-C", str(source), "diff", "--numstat"], cwd=source,
-                                 env=env, capture_output=True, text=True, encoding="utf-8",
-                                 errors="replace", check=False)
-        diagnostics = []
-        if effective.returncode == 0:
-            diagnostics.append(f"effective core.autocrlf={effective.stdout.strip()}")
-        if numstat.returncode == 0 and numstat.stdout.strip():
-            diagnostics.append("diff numstat: " + _sanitized_tail(numstat.stdout, max_lines=8, max_line_chars=180))
-        diagnostic_text = "; " + "; ".join(diagnostics) if diagnostics else ""
+        diagnostics = git_checkout_diagnostics(source, clean.stdout, env)
+        diagnostic_text = f"; checkout diagnostics: {diagnostics}" if diagnostics else ""
         raise ValueError(f"Hermes source checkout must be clean and pinned before QA; status: {detail}{diagnostic_text}")
     (home / "config.yaml").write_text('memory:\n  provider: builtin\n', encoding="utf-8")
     # This is Hermes' own public bootstrap/launcher path. Its HERMES_HOME is

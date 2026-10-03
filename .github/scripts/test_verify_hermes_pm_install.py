@@ -63,6 +63,29 @@ class QaLayoutTests(unittest.TestCase):
         detail = qa._sanitized_tail(" M pm/config.py\n?? generated/file.tmp\n", max_lines=2)
         self.assertEqual(detail, "M pm/config.py | ?? generated/file.tmp")
 
+    def test_git_checkout_diagnostics_compare_config_and_attributes_without_file_bodies(self):
+        if not qa.shutil.which("git"):
+            self.skipTest("git is not installed")
+        with tempfile.TemporaryDirectory(prefix="git-diagnostics-") as temporary:
+            repo = Path(temporary)
+            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "QA"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "qa@example.invalid"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "core.autocrlf", "false"], check=True)
+            note = repo / "note.md"
+            note.write_text("one\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "note.md"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "--quiet", "-m", "fixture"], check=True)
+            note.write_text("one\ntwo\n", encoding="utf-8")
+            diagnostics = qa.git_checkout_diagnostics(
+                repo, " M note.md\n", qa.isolated_environment(repo, repo))
+        self.assertIn("ambient gitconfig=[config:core.autocrlf false]", diagnostics)
+        self.assertIn("isolated gitconfig=[config:core.autocrlf false]", diagnostics)
+        self.assertIn("attributes=[note.md: text: unspecified", diagnostics)
+        self.assertIn("numstat=[1\t0\tnote.md]", diagnostics)
+        self.assertIn("paths=[note.md:len=", diagnostics)
+        self.assertNotIn("two", diagnostics)
+
     def test_checked_process_failure_includes_both_sanitized_output_channels(self):
         failed = subprocess.CompletedProcess(
             ["python", "-m", "pm.cli", "install"], 1,
