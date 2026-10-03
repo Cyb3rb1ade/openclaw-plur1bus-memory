@@ -82,6 +82,33 @@ def atomic_write(path, data):
             os.unlink(temporary)
 
 
+def atomic_create_verified(path, data, expected_hash):
+    """Create a content-addressed file without replacing a concurrently-created target."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".plur1bus-wheel-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # Same-directory hard-link publication is atomic and fails if the
+            # destination already exists; unlike replace(), it cannot clobber it.
+            os.link(temporary, path)
+        except FileExistsError:
+            if redirected(path) or not path.is_file() or digest(path.read_bytes()) != expected_hash:
+                raise ValueError("shared PM native wheel cache collision; existing target was not replaced")
+            return False
+        except OSError as error:
+            raise ValueError("filesystem cannot atomically stage the shared PM native wheel") from error
+        if redirected(path) or digest(path.read_bytes()) != expected_hash:
+            raise ValueError("shared PM native wheel failed post-stage verification")
+        return True
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def run_python(python, code, data=None, timeout=None):
     try:
         arguments = [str(python), "-I", "-X", "utf8", "-c", code]
@@ -268,8 +295,8 @@ def _desired_plugin_selection(config):
     return sorted(set(enabled) | selected), sorted(set(disabled) - selected)
 
 
-def pm_member_project_bytes(data, plugin_name, profile_home):
-    """Give same-code profile members distinct uv names while retaining import aliases."""
+def pm_member_project_bytes(data, plugin_name, profile_home, native_sources=None):
+    """Give profile members unique uv names and bind approved native wheels to shared paths."""
     try:
         document = tomllib.loads(data.decode("utf-8"))
         original = document["project"]["name"]
@@ -291,25 +318,232 @@ def pm_member_project_bytes(data, plugin_name, profile_home):
                              'name = "' + unique_name + '"', section)
     if count != 1:
         raise ValueError("Hermes PM plugin project name could not be uniquely rewritten")
-    return (text[:heading.end()] + updated + text[stop:]).encode("utf-8")
+    rewritten = text[:heading.end()] + updated + text[stop:]
+    if native_sources:
+        if plugin_name != "plur1bus" or set(native_sources) != {"lancedb", "pyarrow"}:
+            raise ValueError("invalid shared Hermes PM native sources")
+        try:
+            project = tomllib.loads(rewritten)
+            sources = project["tool"]["uv"]["sources"]
+        except (KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+            raise ValueError("invalid PM native source declaration") from error
+        marker = "sys_platform == 'win32' and platform_machine == 'ARM64' and python_version >= '3.14' and python_version < '3.15'"
+        expected = {
+            "lancedb": ("vendor/windows-arm64/lancedb-0.34.0-cp39-abi3-win_arm64.whl", marker),
+            "pyarrow": ("vendor/windows-arm64/pyarrow-25.0.1-cp314-cp314-win_arm64.whl", marker),
+        }
+        if set(sources) != set(expected):
+            raise ValueError("unexpected PM native source metadata")
+        for name, (bundle_path, expected_marker) in expected.items():
+            declaration = sources.get(name)
+            shared = native_sources.get(name)
+            if (not isinstance(declaration, dict) or declaration.get("marker") != expected_marker
+                    or set(declaration) != {"path", "marker"}
+                    or declaration.get("path") not in {bundle_path, shared}):
+                raise ValueError("PM native source metadata differs from the approved bundle pair")
+            if not isinstance(shared, str) or not Path(shared).is_absolute():
+                raise ValueError("invalid shared PM native wheel path")
+            if declaration["path"] == bundle_path:
+                pattern = re.compile(r"(?m)^" + re.escape(name) + r"\s*=\s*\{[^\n]*\bpath\s*=\s*(['\"])(?:" + re.escape(bundle_path) + r")\1")
+                rewritten, count = pattern.subn(
+                    lambda match: match.group(0)[:match.group(0).find("path")]
+                    + "path = " + json.dumps(shared.replace("\\", "/"), ensure_ascii=False), rewritten)
+                if count != 1:
+                    raise ValueError("PM native source path could not be uniquely rewritten")
+        try:
+            roundtrip = tomllib.loads(rewritten)
+        except tomllib.TOMLDecodeError as error:
+            raise ValueError("rewritten PM project metadata is invalid") from error
+        if roundtrip["tool"]["uv"]["sources"] != {
+                name: {"path": native_sources[name], "marker": expected[name][1]}
+                for name in expected}:
+            raise ValueError("rewritten PM native source metadata did not roundtrip")
+    return rewritten.encode("utf-8")
 
 
-def check_unselected_pm_profiles(home, selected_names, python, bundle, manifest, expected_plugin_version):
-    """Refuse mixed or duplicate active members in Hermes PM's all-profile workspace."""
-    for name, target in targets(home, ["all"]).items():
-        if name in selected_names:
+PM_NATIVE_FILENAMES = frozenset({
+    "lancedb-0.34.0-cp39-abi3-win_arm64.whl",
+    "pyarrow-25.0.1-cp314-cp314-win_arm64.whl",
+})
+PM_NATIVE_MARKER = "sys_platform == 'win32' and platform_machine == 'ARM64' and python_version >= '3.14' and python_version < '3.15'"
+
+
+def pm_native_cache_path(version, sha, filename):
+    """Return the exact content-addressed path for one approved PM ARM wheel."""
+    if (not re.fullmatch(r"\d+\.\d+\.\d+-hermes(?:\.\d+)?", str(version))
+            or not re.fullmatch(r"[a-f0-9]{64}", str(sha))
+            or filename not in PM_NATIVE_FILENAMES):
+        raise ValueError("invalid shared PM native wheel identity")
+    return f".plur1bus-managed/native-wheels/{version}/{sha}/{filename}"
+
+
+def pm_native_cache_entries(home, bundle, manifest, relative_wheels):
+    """Validate pre-existing content cache entries and bind source paths to hashes."""
+    if not relative_wheels:
+        return []
+    entries = []
+    for relative in relative_wheels:
+        sha = manifest["files"][relative]
+        filename = Path(relative).name
+        cache = pm_native_cache_path(manifest["version"], sha, filename)
+        source = resolve_inside(bundle, relative)
+        target = resolve_inside(home, cache)
+        if not source.is_file() or digest(source.read_bytes()) != sha:
+            raise ValueError("PM native wheel differs from the verified bundle")
+        if target.exists() and (not target.is_file() or digest(target.read_bytes()) != sha):
+            raise ValueError("shared PM native wheel cache collision; no files were changed")
+        entries.append({"bundle": relative, "cache": cache, "sha256": sha, "filename": filename})
+    if {row["filename"] for row in entries} != PM_NATIVE_FILENAMES:
+        raise ValueError("incomplete shared PM native wheel pair")
+    return entries
+
+
+def pm_native_source_paths(home, entries):
+    """Create stable absolute wheel paths for PM project source declarations."""
+    mapping = {}
+    for entry in entries:
+        name = "lancedb" if entry["filename"].startswith("lancedb-") else "pyarrow"
+        mapping[name] = (home / entry["cache"]).as_posix()
+    return mapping
+
+
+def run_pm_inspection(home, python, code):
+    """Run a bounded read-only PM query against this exact Hermes home."""
+    project = home / "hermes-agent"
+    if redirected(project) or not project.is_dir():
+        raise ValueError("Hermes PM project is missing or redirected")
+    environment = dict(os.environ)
+    environment["HERMES_HOME"] = str(home)
+    try:
+        result = subprocess.run(
+            [str(python), "-I", "-B", "-X", "utf8", "-c", code, str(project)],
+            capture_output=True, text=True, encoding="utf-8", env=environment, timeout=60)
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("Hermes PM active plugin inspection timed out") from error
+    if result.returncode:
+        raise ValueError("Hermes PM active plugin inspection failed")
+    return result.stdout
+
+
+def pm_active_member_profiles(home, python):
+    """Ask installed Hermes PM for live homes selecting PLUR1BUS as plugin/provider."""
+    code = """
+import json, sys
+from pathlib import Path
+project = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(project))
+from pm.plugins_state import enabled_plugins_ordered
+rows = []
+for plugins_dir, names in enabled_plugins_ordered().items():
+    if 'plur1bus' in names:
+        rows.append({'plugins': str(plugins_dir.resolve()), 'names': names})
+print(json.dumps(rows))
+"""
+    payload = run_pm_inspection(home, python, code)
+    try:
+        rows = json.loads(payload)
+    except (ValueError, TypeError) as error:
+        raise ValueError("Hermes PM active plugin selection is invalid") from error
+    if not isinstance(rows, list):
+        raise ValueError("Hermes PM active plugin selection is invalid")
+    root = home.resolve()
+    active = {}
+    for row in rows:
+        if (not isinstance(row, dict) or not isinstance(row.get("plugins"), str)
+                or not isinstance(row.get("names"), list)
+                or any(not isinstance(name, str) for name in row["names"])):
+            raise ValueError("Hermes PM active plugin selection is invalid")
+        if "plur1bus" not in row["names"]:
             continue
-        config_path = resolve_inside(target, "config.yaml")
-        config = read_config(python, config_path)
-        if not isinstance(config, dict):
-            raise ValueError("invalid Hermes profile configuration")
-        plugins = config.get("plugins", {})
-        if not isinstance(plugins, dict):
-            raise ValueError("invalid Hermes plugin configuration")
-        enabled, disabled = plugins.get("enabled", []), set(plugins.get("disabled", []))
-        if not isinstance(enabled, list) or not all(isinstance(value, str) for value in enabled):
-            raise ValueError("invalid Hermes plugin allow/deny lists")
-        if "plur1bus" not in enabled or {"plur1bus", "plur1bus-controls"} & disabled:
+        plugin_dir = Path(row["plugins"])
+        profile = plugin_dir.parent
+        if profile == root:
+            name = "default"
+            resolve_inside(home, "plugins")
+        else:
+            try:
+                relative = profile.relative_to(root / "profiles")
+            except ValueError as error:
+                raise ValueError("Hermes PM selected a profile outside the installation home") from error
+            if len(relative.parts) != 1 or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", relative.name):
+                raise ValueError("Hermes PM selected an invalid profile identity")
+            name = relative.name
+            resolve_inside(home, "profiles/" + name + "/plugins")
+        if plugin_dir != (profile / "plugins").resolve() or name in active:
+            raise ValueError("Hermes PM active profile list is ambiguous")
+        active[name] = profile
+    return active
+
+
+def verify_pm_native_cache(home, entries):
+    """Recheck shared wheel identity and containment immediately before PM sync."""
+    for entry in entries:
+        target = resolve_inside(home, entry["cache"])
+        resolved = target.resolve(strict=True) if target.exists() else target
+        if (not resolved.is_relative_to(home.resolve()) or redirected(target)
+                or not target.is_file() or digest(target.read_bytes()) != entry["sha256"]
+                or target.resolve(strict=True) != resolved):
+            raise ValueError("shared PM native wheel changed before dependency synchronization")
+
+
+def verify_pm_member_native_sources(home, profiles, entries):
+    """Revalidate selected profile declarations immediately before PM sync."""
+    if not entries:
+        return
+    expected = pm_native_source_paths(home, entries)
+    marker = "sys_platform == 'win32' and platform_machine == 'ARM64' and python_version >= '3.14' and python_version < '3.15'"
+    for name, profile in profiles.items():
+        project_path = resolve_inside(profile, "plugins/plur1bus/pyproject.toml")
+        try:
+            project = tomllib.loads(project_path.read_text(encoding="utf-8"))
+            sources = project["tool"]["uv"]["sources"]
+        except (OSError, UnicodeError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+            raise ValueError("Hermes PM native project declaration changed before dependency synchronization") from error
+        if set(sources) != set(expected) or any(
+                not isinstance(sources.get(key), dict)
+                or sources[key] != {"path": value, "marker": marker}
+                for key, value in expected.items()):
+            raise ValueError("Hermes PM native project declaration changed before dependency synchronization")
+
+
+def verify_pm_materialized_native_sources(home, environment, entries):
+    """Require each active PM profile member to materialize the same shared wheel URLs."""
+    if not entries:
+        return
+    if not isinstance(environment, Path):
+        raise ValueError("Hermes PM did not publish a selected dependency environment")
+    expected_paths = pm_native_source_paths(home, entries)
+    expected_sources = {key: {"path": value, "marker": PM_NATIVE_MARKER}
+                        for key, value in expected_paths.items()}
+    workspace = environment.parent / "workspace" / "plugin-sources"
+    if redirected(workspace) or not workspace.is_dir():
+        raise ValueError("Hermes PM native source workspace is missing or redirected")
+    try:
+        active_members = pm_active_member_profiles(home, interpreter(home))
+        for profile, profile_home in active_members.items():
+            identity = resolve_inside(profile_home, "plugins/plur1bus").resolve()
+            member_key = "plur1bus-" + hashlib.sha256(str(identity).encode("utf-8")).hexdigest()[:16]
+            project_file = resolve_inside(workspace, member_key + "/pyproject.toml")
+            if not project_file.is_file():
+                raise ValueError("Hermes PM workspace is missing an active PLUR1BUS member")
+            project = tomllib.loads(project_file.read_text(encoding="utf-8"))
+            name = project.get("project", {}).get("name")
+            if not isinstance(name, str) or not name.startswith("plur1bus-profile-"):
+                raise ValueError("Hermes PM materialized a PLUR1BUS member with a non-unique project name")
+            sources = project.get("tool", {}).get("uv", {}).get("sources", {})
+            if sources != expected_sources:
+                raise ValueError("Hermes PM materialized a profile member with noncanonical native wheel paths")
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError, TypeError) as error:
+        raise ValueError("Hermes PM materialized native project metadata is invalid") from error
+    if not active_members:
+        raise ValueError("Hermes PM workspace has no active PLUR1BUS profile members")
+
+
+def check_unselected_pm_profiles(home, selected_names, python, bundle, manifest, expected_plugin_version,
+                                 native_sources=None):
+    """Refuse mixed or duplicate active members in Hermes PM's all-profile workspace."""
+    for name, target in pm_active_member_profiles(home, python).items():
+        if name in selected_names:
             continue
         plugin_manifest = resolve_inside(target, "plugins/plur1bus/plugin.yaml")
         if not plugin_manifest.is_file():
@@ -336,13 +570,21 @@ def check_unselected_pm_profiles(home, selected_names, python, bundle, manifest,
                 raise ValueError("an unselected active Hermes profile has unverifiable PM project metadata; select all profiles")
             try:
                 expected_name = tomllib.loads(pm_member_project_bytes(
-                    bundled_project.read_bytes(), plugin_name, target
+                    bundled_project.read_bytes(), plugin_name, target,
+                    native_sources if plugin_name == "plur1bus" and native_sources else None
                 ).decode("utf-8"))["project"]["name"]
-                actual_name = tomllib.loads(project_file.read_text(encoding="utf-8"))["project"]["name"]
+                actual_project = tomllib.loads(project_file.read_text(encoding="utf-8"))
+                actual_name = actual_project["project"]["name"]
             except (OSError, UnicodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
                 raise ValueError("an unselected active Hermes profile has invalid PM project metadata; select all profiles") from error
             if actual_name != expected_name:
                 raise ValueError("an unselected active Hermes profile has a non-unique PM project name; select all profiles")
+            if plugin_name == "plur1bus" and native_sources:
+                actual_sources = actual_project.get("tool", {}).get("uv", {}).get("sources", {})
+                expected_sources = {key: {"path": value, "marker": PM_NATIVE_MARKER}
+                                    for key, value in native_sources.items()}
+                if actual_sources != expected_sources:
+                    raise ValueError("an unselected active Hermes profile has noncanonical PM wheel sources; select all profiles")
 
 
 def torch_version(python):
@@ -413,7 +655,7 @@ def pm_arm_native_wheels(bundle, manifest):
         "lancedb": {"path": "vendor/windows-arm64/" + Path(relative[0]).name, "marker": marker},
         "pyarrow": {"path": "vendor/windows-arm64/" + Path(relative[1]).name, "marker": marker},
     }
-    if any(sources.get(name) != value for name, value in expected_sources.items()):
+    if set(sources) != set(expected_sources) or any(sources.get(name) != value for name, value in expected_sources.items()):
         raise ValueError("PM native sources must be exact, marker-scoped local plugin wheels")
     if not any(isinstance(dep, str) and dep.startswith("pyarrow==25.0.1;") and marker in dep for dep in deps):
         raise ValueError("PM native PyArrow dependency marker is missing")
@@ -566,6 +808,13 @@ def pm_selected_environment(home):
 def managed(relative):
     return isinstance(relative, str) and any(relative.startswith(prefix) for prefix in (
         "plugins/plur1bus/", "plugins/plur1bus-controls/", "desktop-plugins/plur1bus/"))
+
+
+def is_pm_native_cache_relative(relative):
+    """Recognize only exact version/hash paths for approved PM native wheels."""
+    return isinstance(relative, str) and re.fullmatch(
+        r"\.plur1bus-managed/native-wheels/\d+\.\d+\.\d+-hermes(?:\.\d+)?/[a-f0-9]{64}/(?:"
+        + "|".join(re.escape(name) for name in sorted(PM_NATIVE_FILENAMES)) + r")", relative) is not None
 
 
 def activation_status(config):
@@ -774,6 +1023,7 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
             or not re.fullmatch(r"vendor/macos-x86_64/lancedb-0\.34\.0-cp3\d+-abi3-macosx_\d+_\d+_x86_64\.whl", wheel)):
             raise ValueError("invalid bundled native dependency")
     pm_native = pm_arm_native_wheels(bundle, manifest)
+    pm_native_cache = pm_native_cache_entries(home, bundle, manifest, pm_native) if pm_managed else []
     native_wheels = []
     pm_native_wheels = []
     if not desktop_only and dependencies:
@@ -829,7 +1079,8 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
         plugin_version = bundled_plugin.get("version") if isinstance(bundled_plugin, dict) else None
         if not isinstance(plugin_version, str):
             raise ValueError("Hermes PM plugin version is missing from the verified payload")
-        check_unselected_pm_profiles(home, set(selected), python, bundle, manifest, plugin_version)
+        check_unselected_pm_profiles(home, set(selected), python, bundle, manifest, plugin_version,
+                                     pm_native_source_paths(home, pm_native_cache))
     torch = None if desktop_only else (
         {"action": "pm-managed", "version": torch_version(python), "index": None}
         if pm_managed else cpu_torch_decision(info, torch_version(python), dependencies)
@@ -841,7 +1092,8 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
               "profileStatus": profile_status, "warnings": warnings,
               "sharedDesktop": shared_desktop,
               "configs": configs, "receipts": receipts, "destinations": destinations, "wheels": wheels,
-              "nativeWheels": native_wheels, "pmNativeWheels": pm_native_wheels, "torch": torch,
+              "nativeWheels": native_wheels, "pmNativeWheels": pm_native_wheels,
+              "pmNativeCache": pm_native_cache, "torch": torch,
               "effects": ("Stage plugin files and use Hermes PM to atomically admit the dependency selection when activated; no direct pip writes to a PM-owned generation."
                          if pm_managed else "Install Python wheels into the selected legacy Hermes venv, back up and update selected plugin/UI files; optional explicit activation. No models, memory migration, host patch, restart or unselected profile configuration/backend writes. File rollback does not roll back pip dependencies.")}
     if not desktop_only:
@@ -899,6 +1151,21 @@ def apply_install(plan, confirmation, stopped=False):
         selected = targets(home, plan["profiles"], plan["desktopOnly"])
         manifest = verify_bundle(bundle)
         incoming = shared_desktop_updates(bundle, home, selected, manifest, plan["desktopOnly"])
+        pm_native_cache = plan.get("pmNativeCache", [])
+        pm_native_sources = pm_native_source_paths(home, pm_native_cache)
+        for entry in pm_native_cache:
+            source = resolve_inside(bundle, entry["bundle"])
+            data = source.read_bytes()
+            if digest(data) != entry["sha256"]:
+                raise ValueError("PM native wheel differs from the verified bundle")
+            destination = resolve_inside(home, entry["cache"])
+            if destination.exists() and digest(destination.read_bytes()) != entry["sha256"]:
+                raise ValueError("shared PM native wheel cache collision; no files were changed")
+            if destination.is_file():
+                # Existing content-addressed entries are immutable and already
+                # verified; do not journal-copy or atomically replace large wheels.
+                continue
+            incoming[entry["cache"]] = data
         pm_requests = {}
         for name, target in selected.items():
             prefix = "" if name == "default" else "profiles/" + name + "/"
@@ -918,7 +1185,9 @@ def apply_install(plan, confirmation, stopped=False):
                     if plan["pmManaged"] and relative.endswith("/pyproject.toml"):
                         plugin_root = relative.rsplit("/pyproject.toml", 1)[0]
                         if plugin_root in {"plugins/plur1bus", "plugins/plur1bus-controls"}:
-                            data = pm_member_project_bytes(data, Path(plugin_root).name, target)
+                            data = pm_member_project_bytes(
+                                data, Path(plugin_root).name, target,
+                                pm_native_sources if plugin_root == "plugins/plur1bus" and pm_native_sources else None)
                     incoming[prefix + relative] = data
                     receipt_files[relative] = digest(data)
             if plan["activate"]:
@@ -951,7 +1220,10 @@ def apply_install(plan, confirmation, stopped=False):
                     plugins["enabled"] = sorted(set(enabled) | {"plur1bus", "plur1bus-controls"})
                     plugins["disabled"] = [v for v in disabled if v not in {"plur1bus", "plur1bus-controls"}]
                     incoming[prefix + "config.yaml"] = config_bytes(plan["python"], config)
-            incoming[prefix + receipt_name] = json.dumps({"schema": 1, "version": plan["version"], "files": receipt_files}, indent=2).encode()
+            receipt_data = {"schema": 1, "version": plan["version"], "files": receipt_files}
+            if plan["pmManaged"] and pm_native_cache:
+                receipt_data["sharedFiles"] = {entry["cache"]: entry["sha256"] for entry in pm_native_cache}
+            incoming[prefix + receipt_name] = json.dumps(receipt_data, indent=2).encode()
         for relative, data in incoming.items():
             destination = resolve_inside(home, relative)
             old = destination.read_bytes() if destination.exists() else None
@@ -1045,15 +1317,26 @@ def apply_install(plan, confirmation, stopped=False):
         record()
         for relative, data in incoming.items():
             destination = resolve_inside(home, relative)
+            if is_pm_native_cache_relative(relative) and destination.is_file():
+                # Verified content-addressed bytes are immutable. Keep the same
+                # inode/path rather than atomically replacing a live PM source.
+                if digest(destination.read_bytes()) != digest(data):
+                    raise ValueError("shared PM native wheel cache collision; no files were changed")
+                continue
             if data is None:
                 if destination.exists():
                     retired = resolve_inside(transaction, "retired/" + relative)
                     retired.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(destination, retired)
             else:
+                if is_pm_native_cache_relative(relative):
+                    atomic_create_verified(destination, data, digest(data))
+                    continue
                 atomic_write(destination, data)
         for name, request in pm_requests.items():
             before = request["beforeConfig"]
+            verify_pm_native_cache(home, pm_native_cache)
+            verify_pm_member_native_sources(home, selected, pm_native_cache)
             run_pm_selection(home, request["target"], request["enabled"], request["disabled"], digest(before))
             config_path = resolve_inside(request["target"], "config.yaml")
             config_after_selection = config_path.read_bytes()
@@ -1074,7 +1357,11 @@ def apply_install(plan, confirmation, stopped=False):
             record()
         if pm_requests:
             selected_python = interpreter(home)
-            verify_pm_plugin_imports(selected_python, home, pm_selected_environment(home),
+            selected_environment = pm_selected_environment(home)
+            if pm_native_cache:
+                verify_pm_native_cache(home, pm_native_cache)
+                verify_pm_materialized_native_sources(home, selected_environment, pm_native_cache)
+            verify_pm_plugin_imports(selected_python, home, selected_environment,
                                      manifest, manifest["pythonVersion"])
         for relative, state in journal["files"].items():
             destination = resolve_inside(home, relative)
@@ -1111,7 +1398,12 @@ def rollback(home, transaction, confirmation=None, stopped=False):
         destination = resolve_inside(home, relative)
         # Restrict even a manipulated local journal to our explicit file domains.
         stripped = re.sub(r"^profiles/[A-Za-z0-9_-]{1,64}/", "", relative)
-        if relative != SHARED_DESKTOP_RECEIPT and stripped not in {"config.yaml", RECEIPT, DESKTOP_RECEIPT} and not managed(stripped):
+        if is_pm_native_cache_relative(stripped) and not is_pm_native_cache_relative(relative):
+            raise ValueError("shared PM native wheels must be rooted directly in the Hermes home")
+        if (not is_pm_native_cache_relative(relative)
+                and relative != SHARED_DESKTOP_RECEIPT
+                and stripped not in {"config.yaml", RECEIPT, DESKTOP_RECEIPT}
+                and not managed(stripped)):
             raise ValueError("invalid rollback target")
         sha = digest(destination.read_bytes()) if destination.exists() else None
         if sha not in {item["before"], item["after"]}:
@@ -1140,6 +1432,11 @@ def rollback(home, transaction, confirmation=None, stopped=False):
 
         def restore_file(relative, item):
             destination = resolve_inside(home, relative)
+            # A failed PM rollback may leave a published generation referring to
+            # these shared bytes. Retain content-addressed cache files rather
+            # than deleting shared state as part of one profile's rollback.
+            if is_pm_native_cache_relative(relative):
+                return
             if item["before"] is not None:
                 atomic_write(destination, resolve_inside(backup, "before/" + relative).read_bytes())
                 if "beforeMtimeNs" in item:

@@ -192,6 +192,22 @@ mitgeliefert und erscheint im Plan unter `pmNativeWheels`—nicht unter
 `nativeWheels`. Der Plan muss den tatsächlich ausgewählten Interpreter samt
 Architektur und das passende Wheel-Paar zeigen.
 
+Vor der PM-Aufnahme kann Hermes CPython 3.14 `ruamel.yaml` statt PyYAML
+bereitstellen; der Installer liest und schreibt Configs dann mit dem Safe-
+Backend-Fallback, ohne vorab Pakete in die PM-Umgebung zu installieren. Die zwei
+freigegebenen ARM-Wheels werden checksumgebunden und versionsgebunden gemeinsam
+unter `<Hermes-Home>/.plur1bus-managed/native-wheels/` abgelegt. PM-Profile
+verweisen auf dieselben absoluten Wheelpfade; diese liegen außerhalb der PM-
+Generationen und werden vor jedem Sync erneut geprüft. Bei Rollback bleiben die
+geteilten Cachedateien absichtlich erhalten, da eine veröffentlichte PM-
+Generation sie noch referenzieren kann. Der Installer führt dafür keine
+automatische Cachebereinigung durch.
+
+Wenn ein nicht ausgewähltes, aktives Profil noch eine ältere oder abweichende
+PLUR1BUS-Version beziehungsweise nicht-kanonische native Wheelquellen nutzt,
+verweigert der Plan die profilweise Aktualisierung. Dann alle aktiven Profile
+gemeinsam auswählen; ein default-only-Vorgang ändert unselektierte Profile nicht.
+
 Hermes-PM-Installation gilt nur für eine konkrete Release-Version als
 abgenommen, wenn deren releasegebundene Acceptance-Belege die erfolgreiche
 PM-Aufnahme in die ausgewählte CPython-3.14-Umgebung und den installierten
