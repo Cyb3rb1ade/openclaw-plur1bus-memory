@@ -1,4 +1,6 @@
 import importlib.util
+import builtins
+import io
 import json
 from pathlib import Path
 import shutil
@@ -6,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("portable_installer", Path(__file__).resolve().parents[1] / "installer.py")
@@ -601,6 +603,108 @@ class InstallerTests(unittest.TestCase):
         with patch.object(installer, "run_python", side_effect=pm_python):
             with self.assertRaisesRegex(ValueError, "cannot override Hermes PM"):
                 installer.plan_install(self.bundle, self.home, python=sys.executable)
+
+    def test_yaml_helpers_fall_back_to_ruamel_when_only_pyyaml_is_missing(self):
+        path = self.root / "ruamel-config.yaml"
+        path.write_text("memory: {}\n", encoding="utf-8")
+        observed = {"typ": None, "load": None, "dump": None, "sort": None}
+
+        class SafeYaml:
+            def __init__(self, typ):
+                observed["typ"] = typ
+
+            def load(self, text):
+                observed["load"] = text
+                return {"memory": {"provider": "builtin"}}
+
+            def dump(self, data, stream):
+                observed["dump"] = data
+                observed["sort"] = self.sort_base_mapping_type_on_output
+                stream.write('z:\n  nested:\n    flag: true\n    value: null\n  greeting: "Grüße 🌍"\na:\n- é\n')
+
+        ruamel = ModuleType("ruamel")
+        ruamel_yaml = ModuleType("ruamel.yaml")
+        ruamel_yaml.YAML = SafeYaml
+        ruamel.yaml = ruamel_yaml
+        real_import = builtins.__import__
+
+        def import_without_pyyaml(name, *args, **kwargs):
+            if name == "yaml":
+                raise ModuleNotFoundError("No module named yaml", name="yaml")
+            return real_import(name, *args, **kwargs)
+
+        def run_in_target(_python, code, data=None, timeout=None):
+            namespace = {"__builtins__": dict(vars(builtins), __import__=import_without_pyyaml)}
+            stdin = io.StringIO(data if isinstance(data, str) else "")
+            stdout = io.StringIO()
+            with patch.dict(sys.modules, {"ruamel": ruamel, "ruamel.yaml": ruamel_yaml}), \
+                 patch("sys.stdin", stdin), patch("sys.stdout", stdout):
+                exec(code, namespace)
+            return stdout.getvalue()
+
+        with patch.object(installer, "run_python", side_effect=run_in_target):
+            config = installer.read_config("managed-python", path)
+            ordered_config = {"z": {"nested": {"flag": True, "value": None}, "greeting": "Grüße 🌍"}, "a": ["é"]}
+            serialized = installer.config_bytes("managed-python", ordered_config)
+        self.assertEqual(config, {"memory": {"provider": "builtin"}})
+        self.assertEqual(observed["typ"], "safe")
+        self.assertEqual(observed["load"], "memory: {}\n")
+        self.assertEqual(observed["dump"], ordered_config)
+        self.assertIs(observed["sort"], False)
+        self.assertEqual(serialized.decode(), 'z:\n  nested:\n    flag: true\n    value: null\n  greeting: "Grüße 🌍"\na:\n- é\n')
+
+    def test_yaml_fallback_propagates_ruamel_parser_errors(self):
+        path = self.root / "malformed-config.yaml"
+        path.write_text("memory: [unterminated\n", encoding="utf-8")
+        ruamel = ModuleType("ruamel")
+        ruamel_yaml = ModuleType("ruamel.yaml")
+
+        class SafeYaml:
+            def __init__(self, typ):
+                self.assert_safe = typ == "safe"
+
+            def load(self, _text):
+                raise ValueError("malformed yaml")
+
+        ruamel_yaml.YAML = SafeYaml
+        ruamel.yaml = ruamel_yaml
+        real_import = builtins.__import__
+
+        def import_without_pyyaml(name, *args, **kwargs):
+            if name == "yaml":
+                raise ModuleNotFoundError("No module named yaml", name="yaml")
+            return real_import(name, *args, **kwargs)
+
+        def run_in_target(_python, code, data=None, timeout=None):
+            namespace = {"__builtins__": dict(vars(builtins), __import__=import_without_pyyaml)}
+            with patch.dict(sys.modules, {"ruamel": ruamel, "ruamel.yaml": ruamel_yaml}), \
+                 patch("sys.stdin", io.StringIO(data or "")), patch("sys.stdout", io.StringIO()):
+                exec(code, namespace)
+            return ""
+
+        with patch.object(installer, "run_python", side_effect=run_in_target):
+            with self.assertRaisesRegex(ValueError, "malformed yaml"):
+                installer.read_config("managed-python", path)
+
+    def test_yaml_fallback_does_not_mask_missing_yaml_dependency(self):
+        path = self.root / "config.yaml"
+        path.write_text("memory: {}\n", encoding="utf-8")
+        real_import = builtins.__import__
+
+        def import_with_broken_yaml(name, *args, **kwargs):
+            if name == "yaml":
+                raise ModuleNotFoundError("No module named optional_backend", name="optional_backend")
+            return real_import(name, *args, **kwargs)
+
+        def run_in_target(_python, code, data=None, timeout=None):
+            namespace = {"__builtins__": dict(vars(builtins), __import__=import_with_broken_yaml)}
+            with patch("sys.stdin", io.StringIO(data or "")), patch("sys.stdout", io.StringIO()):
+                exec(code, namespace)
+            return ""
+
+        with patch.object(installer, "run_python", side_effect=run_in_target):
+            with self.assertRaisesRegex(ModuleNotFoundError, "optional_backend"):
+                installer.read_config("managed-python", path)
 
     def test_pm_managed_windows_arm64_is_refused_before_writes(self):
         project = self.home / "hermes-agent"

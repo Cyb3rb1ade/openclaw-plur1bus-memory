@@ -104,14 +104,42 @@ def module_path_allowed(module_path, prefix, managed_plugin_root):
 
 
 def read_config(python, path):
-    return json.loads(run_python(python,
-        "import json,sys,yaml; print(json.dumps(yaml.safe_load(sys.stdin.read()) or {}))", path.read_text(encoding="utf-8")))
+    code = """
+import json,sys
+try:
+    import yaml
+except ModuleNotFoundError as error:
+    if error.name != 'yaml':
+        raise
+    from ruamel.yaml import YAML
+    _safe_load = YAML(typ='safe').load
+else:
+    _safe_load = yaml.safe_load
+print(json.dumps(_safe_load(sys.stdin.read()) or {}))
+"""
+    return json.loads(run_python(python, code, path.read_text(encoding="utf-8")))
 
 
 def config_bytes(python, config):
-    return run_python(python,
-        "import json,sys,yaml; print(yaml.safe_dump(json.load(sys.stdin),allow_unicode=True,sort_keys=False),end='')",
-        json.dumps(config)).encode("utf-8")
+    code = """
+import io,json,sys
+try:
+    import yaml
+except ModuleNotFoundError as error:
+    if error.name != 'yaml':
+        raise
+    from ruamel.yaml import YAML
+    _yaml = YAML(typ='safe')
+    _yaml.default_flow_style = False
+    _yaml.allow_unicode = True
+    _yaml.sort_base_mapping_type_on_output = False
+    _stream = io.StringIO()
+    _yaml.dump(json.load(sys.stdin), _stream)
+    sys.stdout.write(_stream.getvalue())
+else:
+    sys.stdout.write(yaml.safe_dump(json.load(sys.stdin), allow_unicode=True, sort_keys=False))
+"""
+    return run_python(python, code, json.dumps(config)).encode("utf-8")
 
 
 def environment_state(python):
