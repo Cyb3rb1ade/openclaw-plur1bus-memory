@@ -39,6 +39,11 @@ class InstallerTests(unittest.TestCase):
         self.real_run = subprocess.run
         self.real_python = installer.run_python
 
+    @staticmethod
+    def pm_python_path(environment):
+        """Use Hermes PM's platform-specific venv interpreter location."""
+        return environment / ("Scripts/python.exe" if installer.os.name == "nt" else "bin/python")
+
     def write_bundle(self, version="7.12.0-hermes.2"):
         for name, data in self.files.items():
             path = self.bundle / name
@@ -449,15 +454,15 @@ class InstallerTests(unittest.TestCase):
         project.mkdir()
         key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
         selected = self.home / "installs" / key / "environments" / "generation-314"
-        (selected / "bin").mkdir(parents=True)
+        python = self.pm_python_path(selected)
+        python.parent.mkdir(parents=True)
         (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
-        python = selected / "bin/python"
         python.write_text("#!/bin/sh\n")
         python.chmod(0o755)
         facts = self.home / "installs" / key / "facts.json"
         facts.parent.mkdir(parents=True, exist_ok=True)
         facts.write_text(json.dumps({"packages": {"venv": {"environment": str(selected)}}}))
-        stale = project / "venv/bin/python"
+        stale = self.pm_python_path(project / "venv")
         stale.parent.mkdir(parents=True)
         stale.write_text("#!/bin/sh\n")
         self.assertEqual(installer.interpreter(self.home), python)
@@ -468,13 +473,15 @@ class InstallerTests(unittest.TestCase):
         project.mkdir()
         key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
         selected = self.home / "installs" / key / "environments" / "generation-314" / "venv"
-        (selected / "bin").mkdir(parents=True)
+        python = self.pm_python_path(selected)
+        python.parent.mkdir(parents=True)
         (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
-        runtime = self.home / "tools/python-3.14/bin/python3"
+        runtime = self.home / "tools/python-3.14" / (
+            "python.exe" if installer.os.name == "nt" else "bin/python3"
+        )
         runtime.parent.mkdir(parents=True)
         runtime.write_text("#!/bin/sh\n")
         runtime.chmod(0o755)
-        python = selected / "bin/python"
         try:
             python.symlink_to(runtime)
         except OSError:
@@ -492,12 +499,12 @@ class InstallerTests(unittest.TestCase):
         project.mkdir()
         key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
         selected = self.home / "installs" / key / "environments" / "generation-314"
-        (selected / "bin").mkdir(parents=True)
+        python = self.pm_python_path(selected)
+        python.parent.mkdir(parents=True)
         (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
         outside = self.root / "outside-python"
         outside.write_text("#!/bin/sh\n")
         outside.chmod(0o755)
-        python = selected / "bin/python"
         try:
             python.symlink_to(outside)
         except OSError:
@@ -508,6 +515,34 @@ class InstallerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "trusted runtime roots"):
             installer.interpreter(self.home)
+
+    def test_pm_import_guard_accepts_verified_generation_workspace_and_rejects_outside(self):
+        selected = self.home / "installs/hash/environments/generation/venv"
+        sources = selected.parent / "workspace/plugin-sources"
+        hermes_source = sources / "plur1bus-unique"
+        controls_source = sources / "plur1bus-controls-unique"
+        hermes_source.mkdir(parents=True)
+        controls_source.mkdir(parents=True)
+        hermes_bytes = b"__version__ = '7.18.4.post0'\n"
+        controls_bytes = b"__version__ = '7.18.4.post0'\n"
+        (hermes_source / "__init__.py").write_bytes(hermes_bytes)
+        (controls_source / "__init__.py").write_bytes(controls_bytes)
+        expected = {
+            "plur1bus": {"__init__.py": installer.digest(hermes_bytes)},
+            "plur1bus-controls": {"__init__.py": installer.digest(controls_bytes)},
+        }
+        module_paths = {
+            "plur1bus_hermes": str(hermes_source / "__init__.py"),
+            "plur1bus_controls": str(controls_source / "__init__.py"),
+        }
+        installer.validate_pm_import_locations(self.home, selected, module_paths, expected)
+
+        outside = self.root / "outside-plugin" / "__init__.py"
+        outside.parent.mkdir()
+        outside.write_bytes(hermes_bytes)
+        module_paths["plur1bus_hermes"] = str(outside)
+        with self.assertRaisesRegex(ValueError, "escaped its trusted runtime roots"):
+            installer.validate_pm_import_locations(self.home, selected, module_paths, expected)
 
     def test_pm_selection_refuses_escape_or_missing_generation(self):
         project = self.home / "hermes-agent"
@@ -529,9 +564,9 @@ class InstallerTests(unittest.TestCase):
         project.mkdir()
         key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
         selected = self.home / "installs" / key / "environments" / "generation-314"
-        (selected / "bin").mkdir(parents=True)
+        python = self.pm_python_path(selected)
+        python.parent.mkdir(parents=True)
         (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
-        python = selected / "bin/python"
         python.write_text("#!/bin/sh\n")
         python.chmod(0o755)
         facts = self.home / "installs" / key / "facts.json"
@@ -572,9 +607,9 @@ class InstallerTests(unittest.TestCase):
         project.mkdir()
         key = installer.hashlib.sha256(str(project.resolve()).encode("utf-8")).hexdigest()[:16]
         selected = self.home / "installs" / key / "environments" / "generation-314"
-        (selected / "bin").mkdir(parents=True)
+        python = self.pm_python_path(selected)
+        python.parent.mkdir(parents=True)
         (selected / "pyvenv.cfg").write_text("version = 3.14.0\n")
-        python = selected / "bin/python"
         python.write_text("#!/bin/sh\n")
         python.chmod(0o755)
         facts = self.home / "installs" / key / "facts.json"
@@ -608,6 +643,15 @@ class InstallerTests(unittest.TestCase):
             if "packages = sorted" in code:
                 return json.dumps({"fingerprint": "f" * 64, "pipAvailable": False,
                                    "ensurepipAvailable": False})
+            if "'paths': {'plur1bus_hermes'" in code:
+                sources = selected.parent / "workspace/plugin-sources"
+                return json.dumps({
+                    "version": ["7.12.0.post2", "7.12.0.post2"],
+                    "paths": {
+                        "plur1bus_hermes": str(sources / "plur1bus-fixture/__init__.py"),
+                        "plur1bus_controls": str(sources / "plur1bus-controls-fixture/__init__.py"),
+                    },
+                })
             if code.startswith("import plur1bus_"):
                 return ""
             return self.real_python(_python, code, data, timeout=timeout)
@@ -642,6 +686,13 @@ class InstallerTests(unittest.TestCase):
             config.setdefault("plugins", {})["enabled"] = enabled
             config["plugins"]["disabled"] = disabled
             current.write_text(json.dumps(config))
+            sources = selected.parent / "workspace/plugin-sources"
+            sources.mkdir(parents=True, exist_ok=True)
+            for plugin_name, source_name in (("plur1bus", "plur1bus-fixture"),
+                                              ("plur1bus-controls", "plur1bus-controls-fixture")):
+                if (sources / source_name).exists():
+                    shutil.rmtree(sources / source_name)
+                shutil.copytree(profile_home / "plugins" / plugin_name, sources / source_name)
 
         patches = (
             patch.object(installer, "run_python", side_effect=pm_python),

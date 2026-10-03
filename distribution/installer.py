@@ -153,6 +153,80 @@ def run_pm_selection(home, profile_home, enabled, disabled, expected_config):
         raise ValueError("Hermes PM refused the plugin selection; config and dependency selection were not admitted")
 
 
+def _is_within(path, roots):
+    return any(path == root or root in path.parents for root in roots)
+
+
+def pm_plugin_source_root(selected_environment):
+    """Return a non-redirected PM workspace plugin source root if present."""
+    generation = Path(selected_environment).resolve().parent
+    candidate = resolve_inside(generation, "workspace/plugin-sources")
+    if not candidate.exists():
+        return None
+    if not candidate.is_dir():
+        raise ValueError("Hermes PM plugin source workspace is not a directory")
+    return candidate.resolve()
+
+
+def validate_pm_import_locations(home, selected_environment, module_paths, expected_hashes):
+    """Require imported packages under trusted roots and matching bundled Python sources."""
+    selected = Path(selected_environment).resolve()
+    roots = [selected, resolve_inside(home, "plugins/plur1bus").resolve(),
+             resolve_inside(home, "plugins/plur1bus-controls").resolve()]
+    workspace_sources = pm_plugin_source_root(selected)
+    if workspace_sources is not None:
+        roots.append(workspace_sources)
+    if not isinstance(module_paths, dict) or set(module_paths) != {"plur1bus_hermes", "plur1bus_controls"}:
+        raise ValueError("Hermes PM plugin import verification returned invalid paths")
+    for module_name, plugin_name in (("plur1bus_hermes", "plur1bus"),
+                                     ("plur1bus_controls", "plur1bus-controls")):
+        raw_path = module_paths[module_name]
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError("Hermes PM plugin import verification returned invalid paths")
+        module_path = Path(raw_path)
+        try:
+            module_path = module_path.resolve(strict=True)
+        except OSError as error:
+            raise ValueError("Hermes PM plugin import target is missing") from error
+        if module_path.suffix != ".py" or not _is_within(module_path, roots):
+            raise ValueError("Hermes PM plugin import escaped its trusted runtime roots")
+        expected = expected_hashes.get(plugin_name)
+        if not isinstance(expected, dict) or "__init__.py" not in expected:
+            raise ValueError("verified bundle is missing canonical plugin Python sources")
+        source_root = module_path.parent
+        for relative, expected_hash in expected.items():
+            try:
+                source = resolve_inside(source_root, relative).resolve(strict=True)
+            except (OSError, ValueError) as error:
+                raise ValueError("Hermes PM imported plugin source is incomplete") from error
+            if not source.is_file() or digest(source.read_bytes()) != expected_hash:
+                raise ValueError("Hermes PM imported plugin source differs from the verified bundle")
+
+
+def verify_pm_plugin_imports(python, home, selected_environment, manifest, expected_version):
+    """Probe selected PM imports, then verify their trusted paths and bundled code hashes."""
+    state = json.loads(run_python(python, """
+import json
+import plur1bus_hermes, plur1bus_controls
+print(json.dumps({
+    'version': [plur1bus_hermes.__version__, plur1bus_controls.__version__],
+    'paths': {'plur1bus_hermes': plur1bus_hermes.__file__,
+              'plur1bus_controls': plur1bus_controls.__file__},
+}))
+"""))
+    if (not isinstance(state, dict) or state.get("version") != [expected_version, expected_version]
+            or not isinstance(state.get("paths"), dict)):
+        raise ValueError("Hermes PM plugin version verification failed")
+    expected_hashes = {}
+    for plugin_name in ("plur1bus", "plur1bus-controls"):
+        prefix = f"payload/plugins/{plugin_name}/"
+        expected_hashes[plugin_name] = {
+            name[len(prefix):]: sha for name, sha in manifest["files"].items()
+            if name.startswith(prefix) and name.endswith(".py")
+        }
+    validate_pm_import_locations(home, selected_environment, state["paths"], expected_hashes)
+
+
 def _desired_plugin_selection(config):
     """Return current allow/deny lists with the two PLUR1BUS plugins enabled."""
     plugins = config.get("plugins", {})
@@ -916,15 +990,8 @@ def apply_install(plan, confirmation, stopped=False):
             record()
         if pm_requests:
             selected_python = interpreter(home)
-            managed_roots = [resolve_inside(home, "plugins/plur1bus").resolve(),
-                             resolve_inside(home, "plugins/plur1bus-controls").resolve()]
-            run_python(selected_python,
-                       "import plur1bus_hermes,plur1bus_controls,sys; from pathlib import Path; "
-                       "assert plur1bus_hermes.__version__ == plur1bus_controls.__version__ == " + repr(manifest["pythonVersion"]) + "; "
-                       "roots = (Path(sys.prefix).resolve(), " + ",".join("Path(" + repr(str(root)) + ").resolve()" for root in managed_roots) + "); "
-                       "assert all(any(Path(module.__file__).resolve() == root or root in Path(module.__file__).resolve().parents "
-                       "for root in roots) for module in (plur1bus_hermes, plur1bus_controls)), "
-                       "'plugin import escaped the selected Hermes environment or managed plugin roots'")
+            verify_pm_plugin_imports(selected_python, home, pm_selected_environment(home),
+                                     manifest, manifest["pythonVersion"])
         for relative, state in journal["files"].items():
             destination = resolve_inside(home, relative)
             if (digest(destination.read_bytes()) if destination.exists() else None) != state["after"]:
