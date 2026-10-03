@@ -173,7 +173,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           path: acceptance-harness
-          ref: 0b3a0d9961a120752d3ef857029554a7e2f7998e
+          ref: 83bd04bacdec20cf9a8a8a903099d7f1331ec502
           fetch-depth: 1
           persist-credentials: false
 
@@ -181,7 +181,7 @@ jobs:
         run: |
           $harnessCommit = (git -C acceptance-harness rev-parse --verify HEAD).Trim()
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          if ($harnessCommit -cne '0b3a0d9961a120752d3ef857029554a7e2f7998e') { throw 'Acceptance harness is not the pinned diagnostic revision' }
+          if ($harnessCommit -cne '83bd04bacdec20cf9a8a8a903099d7f1331ec502') { throw 'Acceptance harness is not the pinned diagnostic revision' }
           $harnessChanges = @(git -C acceptance-harness status --porcelain)
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ($harnessChanges.Count -ne 0) { throw 'Acceptance harness checkout must be clean' }
