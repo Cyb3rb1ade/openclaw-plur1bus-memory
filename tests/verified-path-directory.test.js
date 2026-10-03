@@ -337,8 +337,9 @@ describe("VerifiedPathDirectory", () => {
       userSid: USER_SID,
       aces: [{ sid: USER_SID, type: "Allow" }, { sid: SYSTEM_SID, type: "Allow" }],
     });
-    const ps = calls.find((call) => call.file === "powershell.exe");
+    const ps = calls.find((call) => String(call.file).toLowerCase().includes("powershell"));
     assert.ok(ps, "PowerShell remains the fallback when the fast-path spawn fails");
+    assert.match(String(ps.file).replaceAll("/", "\\"), /\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i);
     assert.ok(ps.args.includes("-NoProfile") && ps.args.includes("-NonInteractive"));
     for (const arg of ps.args) {
       for (const part of ["synthetic user", "Remove-Item", "shared"]) {

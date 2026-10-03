@@ -114,14 +114,19 @@ describe("readDirectoryAcl fast path fallback", () => {
     assert.equal(files.some((f) => f.includes("powershell")), false);
   });
 
+  function systemRoot() {
+    const root = process.env.SystemRoot;
+    return typeof root === "string"
+      && win32.isAbsolute(root)
+      && !root.includes("\0")
+      && !root.includes('"')
+      ? root
+      : "C:\\Windows";
+  }
+
   it("spawns cscript and whoami from System32", () => {
     const files = [];
-    const root = typeof process.env.SystemRoot === "string"
-      && win32.isAbsolute(process.env.SystemRoot)
-      && !process.env.SystemRoot.includes("\0")
-      && !process.env.SystemRoot.includes('"')
-      ? process.env.SystemRoot
-      : "C:\\Windows";
+    const root = systemRoot();
     readDirectoryAcl(target, {
       execFile: (file, _args, options) => {
         files.push(file);
@@ -138,6 +143,23 @@ describe("readDirectoryAcl fast path fallback", () => {
       win32.join(root, "System32", "cscript.exe"),
       win32.join(root, "System32", "whoami.exe"),
     ]);
+  });
+
+  it("spawns PowerShell 5.1 from System32 when the fast path fails", () => {
+    const files = [];
+    const root = systemRoot();
+    const acl = readDirectoryAcl(target, {
+      execFile: (file) => {
+        files.push(file);
+        if (String(file).toLowerCase().includes("powershell")) return JSON_ACL;
+        throw Object.assign(new Error("fast path missing"), { status: 1 });
+      },
+    });
+    assert.deepEqual(acl, JSON.parse(JSON_ACL));
+    assert.equal(
+      files.find((file) => String(file).toLowerCase().includes("powershell")),
+      win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    );
   });
 });
 
@@ -195,6 +217,33 @@ describe("readDirectoryAcl fast path matches PowerShell", {
     assert.ok(allowSids.includes(USERS_SID));
     const denySids = readDirectoryAcl(extraDeny).aces.filter((ace) => ace.type === "Deny").map((ace) => ace.sid.toUpperCase());
     assert.ok(denySids.includes(USERS_SID));
+  });
+
+  it("agrees on an inherit-only Users ACE", () => {
+    const user = process.env.USERDOMAIN
+      ? `${process.env.USERDOMAIN}\\${userInfo().username}`
+      : userInfo().username;
+    const dir = aclDir("inherit-only");
+    icacls([
+      dir,
+      "/inheritance:r",
+      "/grant:r",
+      `${user}:(OI)(CI)(F)`,
+      "/grant",
+      "*S-1-5-32-545:(OI)(CI)(IO)(R)",
+    ]);
+    const fast = readDirectoryAcl(dir);
+    const classic = powershellAcl(dir);
+    assert.equal(fast.ownerSid.toUpperCase(), classic.ownerSid.toUpperCase(), dir);
+    assert.equal(fast.userSid.toUpperCase(), classic.userSid.toUpperCase(), dir);
+    assert.deepEqual(bySidType(fast.aces), bySidType(classic.aces), JSON.stringify({
+      fast: fast.aces,
+      classic: classic.aces,
+    }));
+    assert.ok(
+      bySidType(fast.aces).includes(`Allow:${USERS_SID}`),
+      JSON.stringify(fast.aces),
+    );
   });
 
   it("records the PowerShell ACE list for a NULL DACL", () => {
