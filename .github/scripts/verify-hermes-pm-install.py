@@ -136,6 +136,9 @@ def run_checked(command: list[str], *, cwd: Path, env: dict[str, str], label: st
             channels.append(f"stdout: {stdout_detail}")
         if stderr_detail:
             channels.append(f"stderr: {stderr_detail}")
+        focused = _error_focused_excerpt(result.stdout + "\n" + result.stderr)
+        if focused:
+            channels.append(f"error-focused excerpt: {focused}")
         detail = " | ".join(channels)
         suffix = f"; sanitized output tail: {detail}" if detail else "; process output was empty"
         raise RuntimeError(f"{label} failed with exit code {result.returncode}{suffix}")
@@ -169,6 +172,24 @@ def _sanitized_tail(output: str, *, max_lines: int = 40, max_line_chars: int = 5
         value = credential.sub(r"\1\2<redacted>", value)
         rows.append(value[:max_line_chars])
     return " | ".join(rows)
+
+
+def _error_focused_excerpt(output: str, *, max_matches: int = 12) -> str:
+    """Keep a small sanitized context around compiler/linker error markers."""
+    lines = (output or "").splitlines()
+    marker = re.compile(r"(?i)(?:\berror\s*:|\bfatal error\b|\bcaused by\s*:|\bLNK\d{4}\b|\bMSB\d{4}\b)")
+    selected = set()
+    count = 0
+    for index, line in enumerate(lines):
+        if marker.search(line):
+            selected.update(range(max(0, index - 1), min(len(lines), index + 2)))
+            count += 1
+            if count >= max_matches:
+                break
+    if not selected:
+        return ""
+    excerpt = "\n".join(f"{index + 1}: {lines[index]}" for index in sorted(selected)[:48])
+    return _sanitized_tail(excerpt, max_lines=48, max_line_chars=600)
 
 
 def module_smoke_code(data_root: Path) -> str:

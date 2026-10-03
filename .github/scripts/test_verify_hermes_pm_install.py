@@ -90,8 +90,8 @@ class QaLayoutTests(unittest.TestCase):
     def test_checked_process_failure_includes_both_sanitized_output_channels(self):
         failed = subprocess.CompletedProcess(
             ["python", "-m", "pm.cli", "install"], 1,
-            stdout="PowerShell bootstrap failed: unable to create venv\nurl https://example.invalid/x?token=private\n",
-            stderr="Traceback follows\napi_key=also-private\n",
+            stdout="PowerShell bootstrap failed: unable to create venv\nerror: native link failed\nlinker context\nurl https://example.invalid/x?token=private\n",
+            stderr="Traceback follows\nCaused by: Rust build returned nonzero\napi_key=also-private\n",
         )
         with mock.patch.object(qa.subprocess, "run", return_value=failed):
             with self.assertRaisesRegex(RuntimeError, "failed with exit code 1") as caught:
@@ -99,6 +99,9 @@ class QaLayoutTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("stdout: PowerShell bootstrap failed", message)
         self.assertIn("stderr: Traceback follows", message)
+        self.assertIn("error-focused excerpt:", message)
+        self.assertIn("error: native link failed", message)
+        self.assertIn("Caused by: Rust build returned nonzero", message)
         self.assertNotIn("private", message)
         self.assertNotIn("also-private", message)
 
