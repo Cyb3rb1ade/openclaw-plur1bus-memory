@@ -101,7 +101,17 @@ class QaLayoutTests(unittest.TestCase):
     def test_environment_does_not_forward_credentials_or_profile_overrides(self):
         _, root, _, _ = self.make_layout()
         home = root / "home"
-        environment = qa.isolated_environment(home, root)
+        machine_paths = {
+            "ProgramFiles": r"C:\Program Files",
+            "ProgramFiles(x86)": r"C:\Program Files (x86)",
+            "ProgramW6432": r"C:\Program Files",
+            "CommonProgramFiles": r"C:\Program Files\Common Files",
+            "CommonProgramFiles(x86)": r"C:\Program Files (x86)\Common Files",
+            "ProgramData": r"C:\ProgramData",
+            "SystemDrive": "C:",
+        }
+        with mock.patch.dict(qa.os.environ, machine_paths):
+            environment = qa.isolated_environment(home, root)
         self.assertEqual(environment["HERMES_HOME"], str(home))
         self.assertEqual(environment["UV_CACHE_DIR"], str(root / "uv-cache"))
         profile = root / "runner-profile"
@@ -112,6 +122,8 @@ class QaLayoutTests(unittest.TestCase):
         self.assertEqual(environment["LOCALAPPDATA"], str(profile / "AppData" / "Local"))
         self.assertEqual(environment["CI"], "true")
         self.assertEqual(environment["GITHUB_ACTIONS"], "true")
+        self.assertEqual(environment["ProgramFiles(x86)"], r"C:\Program Files (x86)")
+        self.assertEqual(environment["SystemDrive"], "C:")
         for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
             self.assertTrue(qa._inside(Path(environment[name]), root))
         self.assertNotIn("OPENAI_API_KEY", environment)

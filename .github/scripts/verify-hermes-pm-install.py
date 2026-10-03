@@ -89,6 +89,8 @@ def isolated_environment(home: Path, qa_root: Path) -> dict[str, str]:
     allowed = {
         "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
         "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "NUMBER_OF_PROCESSORS",
+        "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMFILES",
+        "COMMONPROGRAMFILES(X86)", "PROGRAMDATA", "SYSTEMDRIVE",
     }
     environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     environment["HERMES_HOME"] = str(home)
@@ -203,21 +205,23 @@ print(json.dumps({"pluginVersion": sys.argv[1], "dependencies": versions,
 def windows_arm64_build_tools_probe(source: Path, env: dict[str, str]) -> dict:
     """Report only the exact compiler prerequisites Hermes PM checks on ARM64."""
     script = r'''
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$programFilesX86 = ${env:ProgramFiles(x86)}
+$vswhere = if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe' } else { $null }
 $arm64VisualStudio = $null
-if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+if ($vswhere -and (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
   $arm64VisualStudio = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath | Select-Object -First 1)
   if ($LASTEXITCODE -ne 0) { throw 'vswhere ARM64 component query failed' }
 }
 $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
 $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
-$clangCandidates = @((Join-Path $env:ProgramFiles 'LLVM\bin\clang.exe'))
+$clangCandidates = @()
+if ($env:ProgramFiles) { $clangCandidates += Join-Path $env:ProgramFiles 'LLVM\bin\clang.exe' }
 if ($arm64VisualStudio) {
   $clangCandidates += @((Join-Path $arm64VisualStudio 'VC\Tools\Llvm\ARM64\bin\clang.exe'),
                         (Join-Path $arm64VisualStudio 'VC\Tools\Llvm\bin\clang.exe'))
 }
 $clangPath = if ($clang) { $clang.Source } else { $clangCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1 }
-[ordered]@{ vswhereExists = (Test-Path -LiteralPath $vswhere -PathType Leaf); arm64VisualStudio = $arm64VisualStudio; cl = $(if ($cl) { $cl.Source } else { $null }); clang = $clangPath } | ConvertTo-Json -Compress
+[ordered]@{ programFiles = $env:ProgramFiles; programFilesX86 = $programFilesX86; systemDrive = $env:SystemDrive; vswhereExists = [bool]($vswhere -and (Test-Path -LiteralPath $vswhere -PathType Leaf)); arm64VisualStudio = $arm64VisualStudio; cl = $(if ($cl) { $cl.Source } else { $null }); clang = $clangPath } | ConvertTo-Json -Compress
 '''
     shell = shutil.which("powershell", path=env.get("PATH")) or shutil.which("pwsh", path=env.get("PATH"))
     if shell is None:
