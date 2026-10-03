@@ -326,6 +326,9 @@ describe("VerifiedPathDirectory", () => {
     const acl = readDirectoryAcl(target, {
       execFile: (file, args, options) => {
         calls.push({ file, args, options });
+        if (!String(file).toLowerCase().includes("powershell")) {
+          throw Object.assign(new Error("forced powershell fallback"), { status: 1 });
+        }
         return `\uFEFF${output}\r\n`;
       },
     });
@@ -334,20 +337,28 @@ describe("VerifiedPathDirectory", () => {
       userSid: USER_SID,
       aces: [{ sid: USER_SID, type: "Allow" }, { sid: SYSTEM_SID, type: "Allow" }],
     });
-    assert.equal(calls.length, 1);
-    const [{ file, args, options }] = calls;
-    assert.equal(file, "powershell.exe");
-    assert.ok(args.includes("-NoProfile") && args.includes("-NonInteractive"));
-    for (const arg of args) {
+    const ps = calls.find((call) => call.file === "powershell.exe");
+    assert.ok(ps, "PowerShell remains the fallback when the fast-path spawn fails");
+    assert.ok(ps.args.includes("-NoProfile") && ps.args.includes("-NonInteractive"));
+    for (const arg of ps.args) {
       for (const part of ["synthetic user", "Remove-Item", "shared"]) {
         assert.ok(!arg.includes(part), `argv must not carry the path: ${arg}`);
       }
     }
-    const script = Buffer.from(args[args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
+    const script = Buffer.from(ps.args[ps.args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
     assert.match(script, /\$env:PLUR1BUS_ACL_PATH/);
     assert.ok(!script.includes("synthetic user"));
-    assert.equal(options.env.PLUR1BUS_ACL_PATH, target);
+    assert.equal(ps.options.env.PLUR1BUS_ACL_PATH, target);
     assert.ok(!script.includes("Get-Acl"), "the ACL is read through .NET, not a cmdlet that needs a module");
+    const fast = calls.find((call) => /cscript/i.test(call.file));
+    if (fast) {
+      assert.equal(fast.options?.env?.PLUR1BUS_ACL_PATH, target);
+      for (const arg of fast.args) {
+        for (const part of ["synthetic user", "Remove-Item", "shared"]) {
+          assert.ok(!arg.includes(part), `cscript argv must not carry the path: ${arg}`);
+        }
+      }
+    }
 
     const missing = Object.assign(new Error("spawn powershell.exe ENOENT"), { code: "ENOENT" });
     assert.throws(
@@ -553,7 +564,14 @@ describe("VerifiedPathDirectory (fix round 1)", () => {
 });
 
 describe("readDirectoryAcl: Windows PowerShell 5.1 ConvertTo-Json shapes (E4.2 final review)", () => {
-  const read = (output) => readDirectoryAcl("C:\\synthetic\\dir", { execFile: () => output });
+  const read = (output) => readDirectoryAcl("C:\\synthetic\\dir", {
+    execFile: (file) => {
+      if (!String(file).toLowerCase().includes("powershell")) {
+        throw Object.assign(new Error("forced powershell fallback"), { status: 1 });
+      }
+      return output;
+    },
+  });
   it("unwraps an ETS array wrapper {value, Count}", () => {
     const aces = [{ sid: USER_SID, type: "Allow" }, { sid: SYSTEM_SID, type: "Allow" }];
     assert.deepEqual(
