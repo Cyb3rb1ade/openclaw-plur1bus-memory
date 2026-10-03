@@ -40,6 +40,20 @@ jobs:
           - os: windows-11-arm
             python: '3.13'
             native: windows-arm64
+          # Current Hermes PM uses Python 3.14. Keep legacy package gates too;
+          # these runs prove runtime compatibility, not official PM admission.
+          - os: ubuntu-24.04
+            python: '3.14'
+            artifact-suffix: '-py314'
+          - os: ubuntu-24.04-arm
+            python: '3.14'
+            artifact-suffix: '-py314'
+          - os: macos-15
+            python: '3.14'
+            artifact-suffix: '-py314'
+          - os: windows-2025
+            python: '3.14'
+            artifact-suffix: '-py314'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -98,7 +112,7 @@ jobs:
         run: python distribution/ci.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: plur1bus-hermes-${{ matrix.os }}
+          name: plur1bus-hermes-${{ matrix.os }}${{ matrix.artifact-suffix }}
           path: distribution-artifacts/*
           if-no-files-found: error
           retention-days: 14

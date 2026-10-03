@@ -89,3 +89,27 @@ Upstream: `9cc5f833b188d8299000faeb94bd0b2015e6217b` (v7.18.4), merged without d
 ## Evidence boundary
 
 Focused tests are not platform acceptance, local activation or publication. Final release receipts must identify the exact source commit and separately record each platform, signing/notarization, local UI acceptance and remote assets.
+
+## Current-Hermes integration checkpoint (2026-10-03)
+
+Hermes `b2860025adc1478eca63a0b2a82440798eadbfd1` uses managed Python
+3.14 environments and a shared, profile-multiplexed Desktop backend. Installation
+through the official PM selection succeeded for default, bernd, bernhardine,
+coder, heisenberg and rapidmlx; mtplx remains unchanged. The selected canonical
+PLUR1BUS package reports 7.18.4. Existing model configuration was preserved.
+
+Live Desktop inspection found an additional host integration defect: a backend
+launched for mtplx (where PLUR1BUS is disabled) serves Coder requests, but its
+startup API mount does not include PLUR1BUS. A missing API route is therefore
+not evidence that Coder disabled its provider. The Desktop now retains diagnostic
+navigation on missing routes while refusing memory requests until a profile-bound
+capability handshake explicitly confirms activation. This does not repair the
+underlying host routing by itself; profile-isolated plugin API routing and live
+acceptance remain release gates.
+
+Distribution CI run `37131118537`, pinned to `d1d99ec0`, passed macOS ARM,
+Windows x64, Windows ARM, Linux x64 and Linux ARM package tests. Its Windows ARM
+job uses Python 3.13, not the current Hermes PM Python 3.14 environment. The
+separate Python-3.14 native-wheel run `37129076589` must complete storage and PM
+acceptance before that newer Windows ARM path can be advertised. Later source
+changes require renewed source-bound verification and artifact generation.
