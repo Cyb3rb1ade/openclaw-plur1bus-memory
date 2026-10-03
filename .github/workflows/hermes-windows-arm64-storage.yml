@@ -181,7 +181,7 @@ jobs:
         run: |
           $harnessCommit = (git -C acceptance-harness rev-parse --verify HEAD).Trim()
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          if ($harnessCommit -cne 'cf89308edac367014eff0bbd72baab1b6e037ccb') { throw 'Acceptance harness is not the pinned diagnostic revision' }
+          if ($harnessCommit -cne '628e465e34aa096cb89c4a71ee8fa5e218ef00fd') { throw 'Acceptance harness is not the pinned diagnostic revision' }
           $harnessChanges = @(git -C acceptance-harness status --porcelain)
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ($harnessChanges.Count -ne 0) { throw 'Acceptance harness checkout must be clean' }
