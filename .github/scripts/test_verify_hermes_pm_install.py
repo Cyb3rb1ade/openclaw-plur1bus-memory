@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -104,6 +105,46 @@ class QaLayoutTests(unittest.TestCase):
         self.assertIn("Caused by: Rust build returned nonzero", message)
         self.assertNotIn("private", message)
         self.assertNotIn("also-private", message)
+
+    def test_preflight_diagnostic_reports_only_exception_and_module_metadata(self):
+        failed = subprocess.CompletedProcess(
+            ["python"], 1,
+            stdout='{"exception":"ModuleNotFoundError","module":"yaml"}\n',
+            stderr="private home path and API_KEY=private-value",
+        )
+        with mock.patch.object(qa.subprocess, "run", return_value=failed):
+            result = qa.installer_python_preflight_diagnostic(Path("python"), cwd=Path.cwd(), env={})
+        self.assertIn("exception=ModuleNotFoundError", result)
+        self.assertIn("module=yaml", result)
+        self.assertNotIn("private", result)
+
+    def test_preflight_diagnostic_does_not_expose_spawn_error_path(self):
+        with mock.patch.object(qa.subprocess, "run", side_effect=OSError("C:/private/user/path")):
+            result = qa.installer_python_preflight_diagnostic(Path("missing-python"),
+                                                               cwd=Path.cwd(), env={})
+        self.assertEqual(result, "python preflight diagnostic could not start: OSError")
+
+    def test_plan_callsite_diagnostic_reports_safe_probe_callsite(self):
+        class Loader:
+            def create_module(self, spec):
+                return None
+
+            def exec_module(self, module):
+                def fail_probe(*args):
+                    raise ValueError("raw private path")
+                module.run_python = fail_probe
+                module.plan_install = lambda *args: module.run_python("private", "private")
+
+        class Spec:
+            name = "fixture_installer"
+            loader = Loader()
+
+        with mock.patch("importlib.util.spec_from_file_location", return_value=Spec()), \
+             mock.patch("importlib.util.module_from_spec", return_value=types.ModuleType("fixture_installer")):
+            result = qa.installer_plan_callsite_diagnostic(Path("bundle"), Path("home"))
+        self.assertIn("plan diagnostic failed at <lambda>", result)
+        self.assertIn("ValueError", result)
+        self.assertNotIn("private", result)
 
     def test_rejects_source_outside_the_exact_qa_checkout_path(self):
         _, root, source, bundle = self.make_layout()

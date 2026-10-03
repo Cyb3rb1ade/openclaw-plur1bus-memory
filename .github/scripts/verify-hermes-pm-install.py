@@ -148,6 +148,85 @@ def run_checked(command: list[str], *, cwd: Path, env: dict[str, str], label: st
     return result
 
 
+def installer_python_preflight_diagnostic(python: Path, *, cwd: Path, env: dict[str, str]) -> str:
+    """Report only safe exception metadata for the installer's isolated Python probe."""
+    code = """import json,sys,platform,sysconfig
+try:
+    print(json.dumps({'version':list(sys.version_info[:3]),'venv':sys.prefix!=sys.base_prefix,
+        'prefix':sys.prefix,'platform':sys.platform,'architecture':platform.machine(),
+        'implementation':sys.implementation.name,'freeThreaded':bool(sysconfig.get_config_var('Py_GIL_DISABLED'))}))
+except BaseException as e:
+    print(json.dumps({'exception':type(e).__name__,'module':getattr(e,'name',None)}))
+    raise
+"""
+    try:
+        result = subprocess.run([str(python), "-I", "-X", "utf8", "-c", code],
+                                cwd=cwd, env=env, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        # Class names are safe; str(error) can contain host paths or user data.
+        return f"python preflight diagnostic could not start: {type(error).__name__}"
+    parsed = {}
+    try:
+        parsed = json.loads(result.stdout.splitlines()[0]) if result.stdout else {}
+    except (ValueError, json.JSONDecodeError):
+        pass
+    if result.returncode == 0:
+        return "python preflight diagnostic passed"
+    # Do not surface raw child output. The error type and optional missing
+    # module name are enough to identify packaging/interpreter failures.
+    exception = parsed.get("exception")
+    module = parsed.get("module")
+    safe_module = module if isinstance(module, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", module) else None
+    suffix = f", module={safe_module}" if safe_module else ""
+    return f"python preflight diagnostic failed: exit={result.returncode}, exception={exception or 'unknown'}{suffix}"
+
+
+def installer_plan_callsite_diagnostic(bundle: Path, home: Path) -> str:
+    """Replay the read-only plan in-process and identify a failed Python probe callsite."""
+    import importlib.util
+
+    installer_path = bundle / "installer.py"
+    spec = importlib.util.spec_from_file_location("plur1bus_qa_installer", installer_path)
+    if spec is None or spec.loader is None:
+        return "plan diagnostic unavailable: installer import metadata missing"
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as error:
+        return f"plan diagnostic import failed: {type(error).__name__}"
+
+    original = module.run_python
+    failure: dict[str, str] = {}
+
+    def traced_run_python(python, code, data=None, timeout=None):
+        try:
+            return original(python, code, data, timeout)
+        except Exception as error:
+            caller = sys._getframe(1)
+            failure.update({
+                "callsite": f"{caller.f_code.co_name}:{caller.f_lineno}",
+                "exception": type(error).__name__,
+                "module": getattr(error, "name", None) or "",
+            })
+            raise
+
+    module.run_python = traced_run_python
+    try:
+        module.plan_install(bundle, home, ["default", "qa-second"], None, True, True, False)
+    except Exception as error:
+        callsite = failure.get("callsite", "plan_install")
+        exception = failure.get("exception", type(error).__name__)
+        module_name = failure.get("module", "")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", module_name):
+            module_name = ""
+        suffix = f", module={module_name}" if module_name else ""
+        return f"plan diagnostic failed at {callsite}: {exception}{suffix}"
+    finally:
+        module.run_python = original
+    return "plan diagnostic passed on replay"
+
+
 def _sanitized_tail(output: str, *, max_lines: int = 40, max_line_chars: int = 500) -> str:
     """Keep brief failure clues while removing URL queries and credential-like values."""
     from urllib.parse import urlsplit, urlunsplit
@@ -377,9 +456,28 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
 
     profile_args = ["--profile", "default", "--profile", "qa-second"]
 
-    plan_result = run_checked([sys.executable, str(bundle / "installer.py"), "--bundle", str(bundle),
-                               "--home", str(home), *profile_args, "--activate"],
-                              cwd=root, env=env, label="PLUR1BUS installer plan")
+    preflight_diagnostic = "PM-selected interpreter metadata unavailable"
+    try:
+        key = hashlib.sha256(str(source.resolve()).encode("utf-8")).hexdigest()[:16]
+        facts_path = home / "installs" / key / "facts.json"
+        facts = json.loads(facts_path.read_text(encoding="utf-8"))
+        selected_python = Path(facts["packages"]["venv"]["environment"]) / "Scripts" / "python.exe"
+        preflight_diagnostic = installer_python_preflight_diagnostic(selected_python,
+                                                                      cwd=root, env=env)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        # The subsequent installer plan remains authoritative; this metadata
+        # probe must never turn a failed preflight into a pass or mask it.
+        pass
+    try:
+        plan_result = run_checked([sys.executable, str(bundle / "installer.py"), "--bundle", str(bundle),
+                                   "--home", str(home), *profile_args, "--activate"],
+                                  cwd=root, env=env, label="PLUR1BUS installer plan")
+    except RuntimeError as error:
+        plan_diagnostic = installer_plan_callsite_diagnostic(bundle, home)
+        raise RuntimeError(
+            f"{error}; safe interpreter preflight metadata: {preflight_diagnostic}; "
+            f"read-only plan replay: {plan_diagnostic}"
+        ) from error
     plan = json.loads(plan_result.stdout)
     if not plan.get("pmManaged") or plan.get("profiles") != ["default", "qa-second"] or not plan.get("activate"):
         raise ValueError("installer did not select both fresh profiles through Hermes PM")
