@@ -816,10 +816,13 @@ What is checked, and when:
   roughly 2.6 ms verifying paths — more on macOS. Accepted (E4-R16);
   de-duplicating the guard is a possible follow-up.
 - **Cost on Windows**: the first write lease per pool runs `icacls` (when it
-  created the root) and two PowerShell ACL reads (root and base). All are
-  synchronous `execFileSync` calls (typically 0.3-2 s, capped at 30 s each)
-  and block the event loop — recall budgets and the `status()` cap included —
-  while they run.
+  created the root) and two ACL reads (root and base). The fast path is
+  `%SystemRoot%\System32\cscript.exe` (constant WMI script) plus
+  `%SystemRoot%\System32\whoami.exe` (~0.4 s cold on windows-11-arm, probe
+  37123429626). PowerShell 5.1 is the fallback (15–45 s cold on that image).
+  All are synchronous `execFileSync` calls; the ACL read is capped at 30 s
+  for the whole operation (fast path plus fallback) and blocks the event
+  loop — recall budgets and the `status()` cap included — while it runs.
 
 **Known limitation — elevated Windows gateway** (`engine-windows:elevated-owner`,
 ruling EW-R4). A process running elevated (a member of Administrators with a
