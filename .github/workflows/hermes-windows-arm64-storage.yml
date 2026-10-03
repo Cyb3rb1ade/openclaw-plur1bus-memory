@@ -171,7 +171,7 @@ jobs:
           "PLUR1BUS_PM_BUNDLE=$bundle" >> $env:GITHUB_ENV
 
       - name: Test Hermes PM acceptance safety contracts
-        run: python -m unittest discover -s port/.github/scripts -p 'test_verify_hermes_pm_install.py'
+        run: python -m unittest discover -s .github/scripts -p 'test_verify_hermes_pm_install.py'
 
       - name: Create fresh official Hermes source checkout under isolated QA home
         run: |
@@ -200,7 +200,7 @@ jobs:
       - name: Run official Hermes PM install and native package acceptance
         run: |
           $receipt = Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'hermes-pm-acceptance.json'
-          python port/.github/scripts/verify-hermes-pm-install.py --hermes-source $env:PLUR1BUS_PM_HERMES_SOURCE --bundle $env:PLUR1BUS_PM_BUNDLE --qa-root $env:PLUR1BUS_PM_QA_ROOT | Tee-Object -FilePath $receipt
+          python .github/scripts/verify-hermes-pm-install.py --hermes-source $env:PLUR1BUS_PM_HERMES_SOURCE --bundle $env:PLUR1BUS_PM_BUNDLE --qa-root $env:PLUR1BUS_PM_QA_ROOT | Tee-Object -FilePath $receipt
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Verify the native setup executable and default PM interpreter plan

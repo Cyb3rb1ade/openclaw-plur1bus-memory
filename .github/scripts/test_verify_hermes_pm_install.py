@@ -1,6 +1,7 @@
 """Safety-contract tests for the Windows ARM64 Hermes PM acceptance helper."""
 import importlib.util
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -58,6 +59,21 @@ class QaLayoutTests(unittest.TestCase):
         self.assertNotIn("private", detail)
         self.assertNotIn("also-private", detail)
 
+    def test_checked_process_failure_includes_both_sanitized_output_channels(self):
+        failed = subprocess.CompletedProcess(
+            ["python", "-m", "pm.cli", "install"], 1,
+            stdout="PowerShell bootstrap failed: unable to create venv\nurl https://example.invalid/x?token=private\n",
+            stderr="Traceback follows\napi_key=also-private\n",
+        )
+        with mock.patch.object(qa.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(RuntimeError, "failed with exit code 1") as caught:
+                qa.run_checked(["python"], cwd=Path.cwd(), env={}, label="PM bootstrap")
+        message = str(caught.exception)
+        self.assertIn("stdout: PowerShell bootstrap failed", message)
+        self.assertIn("stderr: Traceback follows", message)
+        self.assertNotIn("private", message)
+        self.assertNotIn("also-private", message)
+
     def test_rejects_source_outside_the_exact_qa_checkout_path(self):
         _, root, source, bundle = self.make_layout()
         wrong = root / "other-checkout"
@@ -84,6 +100,14 @@ class QaLayoutTests(unittest.TestCase):
         environment = qa.isolated_environment(home, root)
         self.assertEqual(environment["HERMES_HOME"], str(home))
         self.assertEqual(environment["UV_CACHE_DIR"], str(root / "uv-cache"))
+        profile = root / "runner-profile"
+        self.assertEqual(environment["USERPROFILE"], str(profile))
+        self.assertEqual(environment["HOMEDRIVE"], profile.drive)
+        self.assertEqual(environment["HOMEPATH"], str(profile)[len(profile.drive):])
+        self.assertEqual(environment["APPDATA"], str(profile / "AppData" / "Roaming"))
+        self.assertEqual(environment["LOCALAPPDATA"], str(profile / "AppData" / "Local"))
+        for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+            self.assertTrue(qa._inside(Path(environment[name]), root))
         self.assertNotIn("OPENAI_API_KEY", environment)
         self.assertNotIn("ANTHROPIC_API_KEY", environment)
         self.assertNotIn("PYTHONPATH", environment)
