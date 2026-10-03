@@ -278,7 +278,19 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
                         env=env, label="Hermes source cleanliness check")
     if clean.stdout.strip():
         detail = _sanitized_tail(clean.stdout, max_lines=20, max_line_chars=240)
-        raise ValueError(f"Hermes source checkout must be clean and pinned before QA; status: {detail}")
+        effective = subprocess.run(["git", "-C", str(source), "config", "--get", "core.autocrlf"],
+                                   cwd=source, env=env, capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", check=False)
+        numstat = subprocess.run(["git", "-C", str(source), "diff", "--numstat"], cwd=source,
+                                 env=env, capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", check=False)
+        diagnostics = []
+        if effective.returncode == 0:
+            diagnostics.append(f"effective core.autocrlf={effective.stdout.strip()}")
+        if numstat.returncode == 0 and numstat.stdout.strip():
+            diagnostics.append("diff numstat: " + _sanitized_tail(numstat.stdout, max_lines=8, max_line_chars=180))
+        diagnostic_text = "; " + "; ".join(diagnostics) if diagnostics else ""
+        raise ValueError(f"Hermes source checkout must be clean and pinned before QA; status: {detail}{diagnostic_text}")
     (home / "config.yaml").write_text('memory:\n  provider: builtin\n', encoding="utf-8")
     # This is Hermes' own public bootstrap/launcher path. Its HERMES_HOME is
     # bound to the isolated QA home; it cannot see the runner's live profile.
