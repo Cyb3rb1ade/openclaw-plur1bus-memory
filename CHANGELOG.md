@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.12] — 2026-10-03
+
+### Hinzugefügt
+
+- **Abend-Review zeigt, was der Workspace zuletzt geschrieben hat.** Neuer Block „📂 Geschrieben“ mit Tagesnotiz (`memory/YYYY-MM-DD.md`), letztem Light-Traum, letztem REM-Bericht (`memory/dream-diary/rem/`), Traumtagebuch (`DREAMS.md`), `memory/KNOWLEDGE.md` und `MEMORY.md`, jeweils mit Zeitpunkt in der Review-Zeitzone. Eine Warnung erscheint, wenn die neueste Tagesnotiz älter als gestern ist oder der wöchentliche REM-Bericht älter als acht Tage. Gelesen werden nur Dateinamen und Änderungszeiten, keine Inhalte. Was ein Workspace nicht hat, fehlt im Block. Texte auf Deutsch und Englisch.
+
 ## [7.18.11] — 2026-10-03
 
 ### Behoben

@@ -193,6 +193,7 @@ export const DEPLOY_FILES = [
   "lib/atomic-file.js",
   "lib/mood-style-directive.js",
   "lib/review-narrative-lead.js",
+  "lib/review-workspace-status.js",
   "lib/open-threads.js",
   "lib/contradiction-disclosure.js",
   "lib/recall-confidence-framing.js",
