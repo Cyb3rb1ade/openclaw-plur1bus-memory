@@ -40,7 +40,7 @@ export async function checkDesktopCompatibility(runtime, bridge, current) {
       status: 'verified', message: 'Profilverbindung geprüft. Datenzugriff bleibt an das aktuell ausgewählte Profil gebunden.' };
   } catch (error) {
     return { ...base, status: current() !== identity ? 'stale' : 'blocked',
-      enabled: error?.plur1busDisabled ? false : null,
+      enabled: null,
       message: error?.plur1busReason || 'Profilverbindung nicht bestätigt. Datenzugriff bleibt gesperrt.' };
   }
 }
@@ -198,8 +198,9 @@ export function createProfileTransport(api, routes, owner, current, identity) {
       } catch (error) {
         // Never surface raw host errors (they can contain URLs or credentials).
         const message = String(error?.message || '');
-        if (/404|not found|not enabled|disabled/i.test(message)) {
-          throw Object.assign(unavailable('PLUR1BUS ist in diesem Profil nicht aktiviert oder sein Dashboard-Backend fehlt. Keine fremde Partition wird geladen.'), { plur1busDisabled: true });
+        const status = Number(error?.status ?? error?.statusCode ?? error?.response?.status);
+        if (status === 404 || /\b404\b|not found/i.test(message)) {
+          throw unavailable('Die PLUR1BUS-API ist auf dieser Backend-Route nicht verfügbar. Das Profil ist daher nicht bestätigt; Navigation bleibt sichtbar, Datenzugriff bleibt gesperrt.');
         }
         if (/409|profile mismatch/i.test(message)) {
           throw unavailable('Hermes hat die Anfrage einem anderen Profil zugeordnet. Der Zugriff wurde sicher gesperrt.');
@@ -215,6 +216,9 @@ export function createProfileTransport(api, routes, owner, current, identity) {
     if (capabilities?.profileBinding !== 1 || capabilities.profile !== route.targetProfile) {
       const actual = /^[a-zA-Z0-9_-]{1,64}$/.test(capabilities?.profile || '') ? capabilities.profile : 'nicht bestätigt';
       throw unavailable(`Das Backend bestätigt dieses Profil nicht (Backend: ${actual}). Bitte PLUR1BUS im Zielprofil aktualisieren und dessen Desktop-Backend neu starten.`);
+    }
+    if (path !== '/desktop/capabilities' && capabilities.memoryProviderEnabled !== true) {
+      throw unavailable('PLUR1BUS ist für dieses Profil nicht als aktiver Memory-Provider bestätigt. Es wurden keine Profildaten geladen.');
     }
     return path === '/desktop/capabilities' ? capabilities : send(path, options);
   };

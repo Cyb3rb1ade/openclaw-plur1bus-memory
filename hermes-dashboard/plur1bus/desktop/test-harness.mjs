@@ -103,6 +103,53 @@ const inactive = await checkDesktopCompatibility(compatibleHost, { api: async ()
 assert.equal(inactive.enabled, false);
 assert.match(plugin.namespace.compatibilityActivationMessage(inactive), /Sidebar- und Statusleisten-Eintrag ausgeblendet/);
 assert.match(plugin.namespace.compatibilityActivationMessage({ status: 'verified', enabled: null }), /nicht bestätigt/);
+
+// A shared backend may not have mounted the PLUR1BUS router at startup. Its
+// 404 is not proof that this selected profile disabled the provider: retain a
+// previously verified nav item, and never continue from the failed handshake
+// to a data endpoint.
+let missingApiCalls = [];
+const missingBackendApi = async request => {
+  missingApiCalls.push(request.path);
+  throw Object.assign(new Error('HTTP 404 Not Found'), { status: 404 });
+};
+const missingApiTransport = createProfileTransport(missingBackendApi, compatibleHost.profileRoutes,
+  { connection: 'local', profile: 'alpha' }, () => '["local","alpha"]', '["local","alpha"]');
+const missingBackend = await checkDesktopCompatibility(compatibleHost, { api: missingBackendApi },
+  () => '["local","alpha"]');
+assert.equal(missingBackend.status, 'blocked');
+assert.equal(missingBackend.enabled, null, '404 means activation is unknown, not disabled');
+assert.match(missingBackend.message, /API ist auf dieser Backend-Route nicht verfügbar/);
+assert.doesNotMatch(missingBackend.message, /404|Not Found/);
+assert.deepEqual(missingApiCalls, ['/api/plugins/plur1bus/desktop/capabilities'],
+  'failed capability handshake never requests profile data');
+await assert.rejects(missingApiTransport('/status'), /API ist auf dieser Backend-Route nicht verfügbar/);
+assert.deepEqual(missingApiCalls, [
+  '/api/plugins/plur1bus/desktop/capabilities',
+  '/api/plugins/plur1bus/desktop/capabilities',
+], 'a missing backend route prevents the subsequent status request');
+
+let currentNavProbe = true, missingNavStates = [];
+const missingNavVisibility = plugin.namespace.createNavigationVisibility(
+  async () => currentNavProbe, () => 'local:alpha', value => missingNavStates.push(value));
+await missingNavVisibility.refresh();
+currentNavProbe = missingBackend.enabled;
+await missingNavVisibility.refresh();
+assert.equal(missingNavStates.at(-1), true, 'startup/route 404 preserves known-active navigation');
+assert.ok(missingNavStates.every(value => value), 'an unknown probe never hides the known-active item');
+missingNavVisibility.dispose();
+
+// Even a direct/stale page mount cannot read data once the selected profile's
+// authenticated capability response explicitly says its provider is off.
+let disabledCalls = [];
+const disabledTransport = createProfileTransport(async request => {
+  disabledCalls.push(request.path);
+  return { profileBinding: 1, profile: 'alpha', memoryProviderEnabled: false };
+}, compatibleHost.profileRoutes, { connection: 'local', profile: 'alpha' },
+() => '["local","alpha"]', '["local","alpha"]');
+await assert.rejects(disabledTransport('/status'), /not as an active Memory-Provider|nicht als aktiver Memory-Provider/);
+assert.deepEqual(disabledCalls, ['/api/plugins/plur1bus/desktop/capabilities'],
+  'explicitly disabled profile cannot dispatch data requests');
 assert.equal(retrievalDefaults('local-onnx', 'embedding').licenseAccepted, false);
 assert.equal(retrievalDefaults('local-onnx', 'embedding').dimensions, 768);
 assert.deepEqual(retrievalDefaults('disabled', 'reranker'), { provider: 'disabled' });
@@ -122,7 +169,7 @@ const pinned = createProfileTransport(async request => {
   assert.equal(new URL(request.path, 'http://test').searchParams.get('expectedProfile'),
     request.path.includes('/desktop/capabilities') ? null : 'bernhardine');
   return request.path.includes('/desktop/capabilities')
-    ? { profileBinding: 1, profile: 'bernhardine' } : { agentId: 'bernhardine' };
+    ? { profileBinding: 1, profile: 'bernhardine', memoryProviderEnabled: true } : { agentId: 'bernhardine' };
 }, async () => [{ connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' }],
 { connection: 'local', profile: 'bernhardine' }, () => selected, selected);
 assert.equal((await pinned('/status')).agentId, 'bernhardine');
