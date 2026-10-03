@@ -59,6 +59,10 @@ class QaLayoutTests(unittest.TestCase):
         self.assertNotIn("private", detail)
         self.assertNotIn("also-private", detail)
 
+    def test_git_status_tail_preserves_bounded_path_evidence(self):
+        detail = qa._sanitized_tail(" M pm/config.py\n?? generated/file.tmp\n", max_lines=2)
+        self.assertEqual(detail, "M pm/config.py | ?? generated/file.tmp")
+
     def test_checked_process_failure_includes_both_sanitized_output_channels(self):
         failed = subprocess.CompletedProcess(
             ["python", "-m", "pm.cli", "install"], 1,

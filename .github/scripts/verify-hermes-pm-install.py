@@ -230,7 +230,8 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
     clean = run_checked(["git", "-C", str(source), "status", "--porcelain"], cwd=source,
                         env=env, label="Hermes source cleanliness check")
     if clean.stdout.strip():
-        raise ValueError("Hermes source checkout must be clean and pinned before QA")
+        detail = _sanitized_tail(clean.stdout, max_lines=20, max_line_chars=240)
+        raise ValueError(f"Hermes source checkout must be clean and pinned before QA; status: {detail}")
     (home / "config.yaml").write_text('memory:\n  provider: builtin\n', encoding="utf-8")
     # This is Hermes' own public bootstrap/launcher path. Its HERMES_HOME is
     # bound to the isolated QA home; it cannot see the runner's live profile.
