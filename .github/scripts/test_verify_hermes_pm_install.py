@@ -110,6 +110,8 @@ class QaLayoutTests(unittest.TestCase):
         self.assertEqual(environment["HOMEPATH"], str(profile)[len(profile.drive):])
         self.assertEqual(environment["APPDATA"], str(profile / "AppData" / "Roaming"))
         self.assertEqual(environment["LOCALAPPDATA"], str(profile / "AppData" / "Local"))
+        self.assertEqual(environment["CI"], "true")
+        self.assertEqual(environment["GITHUB_ACTIONS"], "true")
         for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
             self.assertTrue(qa._inside(Path(environment[name]), root))
         self.assertNotIn("OPENAI_API_KEY", environment)

@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -102,6 +103,10 @@ def isolated_environment(home: Path, qa_root: Path) -> dict[str, str]:
         "HOMEPATH": str(profile)[len(drive):],
         "APPDATA": str(profile / "AppData" / "Roaming"),
         "LOCALAPPDATA": str(profile / "AppData" / "Local"),
+        # These public markers affect Hermes' native-build prerequisite flow:
+        # CI must not try to open a UAC prompt or interactive installer UI.
+        "CI": "true",
+        "GITHUB_ACTIONS": "true",
     })
     environment["PYTHONNOUSERSITE"] = "1"
     environment.pop("PYTHONPATH", None)
@@ -195,6 +200,37 @@ print(json.dumps({"pluginVersion": sys.argv[1], "dependencies": versions,
 '''
 
 
+def windows_arm64_build_tools_probe(source: Path, env: dict[str, str]) -> dict:
+    """Report only the exact compiler prerequisites Hermes PM checks on ARM64."""
+    script = r'''
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$arm64VisualStudio = $null
+if (Test-Path -LiteralPath $vswhere -PathType Leaf) {
+  $arm64VisualStudio = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath | Select-Object -First 1)
+  if ($LASTEXITCODE -ne 0) { throw 'vswhere ARM64 component query failed' }
+}
+$cl = Get-Command cl.exe -ErrorAction SilentlyContinue
+$clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+$clangCandidates = @((Join-Path $env:ProgramFiles 'LLVM\bin\clang.exe'))
+if ($arm64VisualStudio) {
+  $clangCandidates += @((Join-Path $arm64VisualStudio 'VC\Tools\Llvm\ARM64\bin\clang.exe'),
+                        (Join-Path $arm64VisualStudio 'VC\Tools\Llvm\bin\clang.exe'))
+}
+$clangPath = if ($clang) { $clang.Source } else { $clangCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1 }
+[ordered]@{ vswhereExists = (Test-Path -LiteralPath $vswhere -PathType Leaf); arm64VisualStudio = $arm64VisualStudio; cl = $(if ($cl) { $cl.Source } else { $null }); clang = $clangPath } | ConvertTo-Json -Compress
+'''
+    shell = shutil.which("powershell", path=env.get("PATH")) or shutil.which("pwsh", path=env.get("PATH"))
+    if shell is None:
+        raise RuntimeError("PowerShell is required for the Windows ARM64 compiler prerequisite probe")
+    result = run_checked([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                          "-Command", script], cwd=source, env=env,
+                         label="Windows ARM64 compiler prerequisite probe", timeout=60)
+    probe = json.loads(result.stdout)
+    if not isinstance(probe, dict):
+        raise ValueError("Windows ARM64 compiler prerequisite probe returned invalid data")
+    return probe
+
+
 def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
     """Run official Hermes PM bootstrap and native PLUR1BUS package acceptance."""
     root, source, home = validate_qa_layout(qa_root, hermes_source, bundle)
@@ -222,6 +258,7 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
         if not _inside(path, root):
             raise ValueError("isolated Hermes profile path escaped the QA root")
         path.mkdir(parents=True, exist_ok=True)
+    build_tools = windows_arm64_build_tools_probe(source, env)
     checkout = run_checked(["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
                            cwd=source, env=env, label="Hermes source revision check")
     revision = checkout.stdout.strip()
@@ -235,8 +272,11 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
     (home / "config.yaml").write_text('memory:\n  provider: builtin\n', encoding="utf-8")
     # This is Hermes' own public bootstrap/launcher path. Its HERMES_HOME is
     # bound to the isolated QA home; it cannot see the runner's live profile.
-    run_checked([sys.executable, "-m", "pm.cli", "install"], cwd=source, env=env,
-                label="official Hermes PM bootstrap and initial install")
+    try:
+        run_checked([sys.executable, "-m", "pm.cli", "install"], cwd=source, env=env,
+                    label="official Hermes PM bootstrap and initial install")
+    except RuntimeError as error:
+        raise RuntimeError(f"{error}; runner ARM64 build-tools probe: {json.dumps(build_tools, sort_keys=True)}") from error
 
     second_profile = home / "profiles" / "qa-second"
     second_profile.mkdir(parents=True, exist_ok=False)
@@ -321,6 +361,7 @@ print(json.dumps(str(resolved[0])))
                         label="installed plugin import, real capture/recall, and agent-scope smoke", timeout=900)
     result = json.loads(smoke.stdout.strip().splitlines()[-1])
     return {"officialPmBootstrap": True, "hermesSourceRevision": revision,
+            "runnerArm64BuildTools": build_tools,
             "pmFacts": str(facts_path), "selectedPython": info,
             "selectedEnvironment": str(selected), "nativePair": sorted(declared),
             "installedProfiles": plan["profiles"],
