@@ -5,6 +5,20 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.11] — 2026-10-03
+
+### Behoben
+
+- **Morgen- und Abend-Review liefen nie.** `/plur1bus obsidian cron install-workspace-reviews` und `print-morning-review` legten die Reviews als agentTurn mit `--message "/plur1bus obsidian …-review"` an. Das Modell kann Plugin-Kommandos nicht ausführen; es suchte nach einem `plur1bus`-Binary, rief `date`, `df` und `ls` auf und schickte ein selbst gebautes „Review“. Der Cron meldete trotzdem `ok`. Die Reviews sind jetzt native Feature-Crons (`run-feature-cron.mjs --feature morning-review|evening-review`) ohne Modell.
+- **Bestehende Review-Jobs werden umgestellt.** Der Feature-Cron-Bootstrap erkennt agentTurn-Jobs, deren Prompt genau einen der beiden Befehle enthält, und stellt sie per `cron edit --command-argv` um. Voraussetzung ist ein konkretes Direktchat-Ziel (`--announce --channel telegram --to <id>`); Jobs ohne ein solches Ziel bleiben unverändert. Eigener Prompt-Text um den Befehl herum entfällt dabei.
+- **Wer das Review auslöst.** Ein Review schreibt in den Vault und verlangt deshalb einen berechtigten Absender. Der Cron führt es über den Operator-Pfad im Namen des Direktchats aus, an den er zustellt. Es gelten dieselben Regeln wie im Chat: `allowedUserIds`, Vault-Bestätigung und Antwortsprache.
+
+### Geändert
+
+- **Review-Texte sind mehrsprachig.** Morgen-, Abend- und Wochen-Review sowie `review show`/`prepare` kamen fest auf Deutsch. Die Texte stehen jetzt im i18n-Wörterbuch (de, en). Die Sprache kommt aus dem Kontext (`ctx.lang`, Chatverlauf), sonst aus der Plugin-Option `language` (Standard: Deutsch); Review-Crons nutzen `language`. Sprachen ohne Wörterbuch-Eintrag bekommen Englisch.
+- **Datum mit Wochentag in der richtigen Zeitzone.** Die Kopfzeile zeigte UTC ohne Wochentag („3. Oktober 2026, 17:28“ um 19:28 Ortszeit). Sie nutzt jetzt `Intl.DateTimeFormat` in der Sprache des Reviews und in `timezone` bzw. der Systemzeitzone („Samstag, 3. Oktober 2026 um 19:28“).
+- „📋 1 Vorschlagge warten“ heißt jetzt „📋 1 Vorschlag wartet“.
+
 ## [7.18.10] — 2026-10-02
 
 ### Geändert

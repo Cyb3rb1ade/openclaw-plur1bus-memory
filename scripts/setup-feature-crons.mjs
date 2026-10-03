@@ -22,6 +22,7 @@
 import {
   planFeatureCrons,
   planSafetyDisabledCronRecoveries,
+  planObsidianReviewCronMigrations,
   planUnsafeDirectCronDisables,
   REQUIRED_FEATURE_CRONS,
   selectAgentsForCronSetup,
@@ -603,7 +604,9 @@ export async function runSetupFeatureCrons(options = {}) {
     }
 
     let plan;
+    let plannedAgentIds;
     if (opts.agent) {
+      plannedAgentIds = new Set([opts.agent]);
       plan = planFeatureCrons(existingJobs, enabledSpecs, {
         agents: [{ id: opts.agent, isDefault: true }],
         account: opts.account,
@@ -612,6 +615,7 @@ export async function runSetupFeatureCrons(options = {}) {
     } else {
       const agents = discoverAgents(openclawImpl);
       if (agents) {
+        plannedAgentIds = new Set(agents.map((agent) => agent.id));
         plan = planFeatureCrons(existingJobs, enabledSpecs, { agents, channelConfig: configLoad.runtimeConfig });
       } else {
         if (opts.json) {
@@ -638,9 +642,14 @@ export async function runSetupFeatureCrons(options = {}) {
     // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
     // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
     // der /plur1bus-setup-crons-Parser nicht lesen kann).
-    const nativePayloadMigrations = plan.skip
-      .map((entry) => planNativeFeaturePayloadMigration(entry.existingJob, entry.spec))
-      .filter(Boolean);
+    const nativePayloadMigrations = [
+      ...plan.skip
+        .map((entry) => planNativeFeaturePayloadMigration(entry.existingJob, entry.spec))
+        .filter(Boolean),
+      // Review-Jobs gehoeren nicht zum Pflichtsatz (sie brauchen ein
+      // Zustellziel, das der Installer nicht kennt): nur bestehende umstellen.
+      ...planObsidianReviewCronMigrations(existingJobs.filter((job) => plannedAgentIds.has(job?.agentId))),
+    ];
     const recoveries = planSafetyDisabledCronRecoveries(plan.skip);
     const updates = mergeCronUpdates(
       mergeCronUpdates(Array.isArray(plan.update) ? plan.update : [], nativePayloadMigrations),
