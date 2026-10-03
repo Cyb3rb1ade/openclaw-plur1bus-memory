@@ -400,7 +400,7 @@ describe("DEPLOY_FILES coverage", () => {
   });
 
   it("contains the Windows ACL fast-path runtime files", () => {
-    assert.ok(DEPLOY_FILES.includes("lib/windows-acl-sddl.js"));
+    assert.ok(DEPLOY_FILES.includes("lib/windows-acl-parse.js"));
     assert.ok(DEPLOY_FILES.includes("lib/read-directory-acl.vbs"));
   });
 
