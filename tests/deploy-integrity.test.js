@@ -399,6 +399,11 @@ describe("DEPLOY_FILES coverage", () => {
     assert.ok(DEPLOY_FILES.includes("lib/llm-result-cache.js"));
   });
 
+  it("contains the Windows ACL fast-path runtime files", () => {
+    assert.ok(DEPLOY_FILES.includes("lib/windows-acl-parse.js"));
+    assert.ok(DEPLOY_FILES.includes("lib/read-directory-acl.vbs"));
+  });
+
   it("contains all v6.7.0 critical new runtime modules", () => {
     const v670Critical = [
       "lib/temporal-context.js",

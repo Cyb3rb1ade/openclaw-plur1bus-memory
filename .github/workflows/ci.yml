@@ -63,15 +63,11 @@ jobs:
     # (obsidian-bridge-memory-mirror kept a watch timer after failed assertions; fixed in the test file);
     # windows-11-arm is slower still. 60 keeps a margin; macOS stays at 45.
     timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 60 || 45 }}
-    # The windows-2025 legs are required since Windows round 4 (HM1-R22: informational until green; tc6 at 9be9b463
-    # failed only timing/port flakes, fixed in the tests). macOS stays blocking.
-    # windows-11-arm stays informational: Windows PowerShell 5.1 on the hosted arm64 image takes 15-45 s per cold run
-    # (tc6: the two b13 win32 ACL tests ran 88.8 s and 44.8 s there against 1.2-1.8 s on windows-2025), which is at the
-    # product's documented 30 s cap on one PowerShell ACL read (lib/platform.js readDirectoryAcl, docs/engine-api.md
-    # "Cost on Windows"). The first verified-path share then fails closed by design (tc6: "/share runs through
-    # engine.memory.share ..." answered "Sharing failed" after 30.3 s, same in tc2). Making the leg required needs an
-    # owner ruling on that cap (or a faster ACL read), not a test change; see ci/windows-failures-2.md, Round 4.
-    continue-on-error: ${{ matrix.os == 'windows-11-arm' }}
+    # windows-2025 is required since Windows round 4 (HM1-R22). macOS stays blocking.
+    # windows-11-arm is required: readDirectoryAcl uses System32 cscript WMI + whoami
+    # (~0.4 s cold on this image, probe 37123429626) and falls back to PowerShell 5.1
+    # (15-45 s). The 30 s product cap is unchanged. Three consecutive green legs on
+    # d90c278 (jobs 111220726960, 111224461284, 111228506814).
     strategy:
       fail-fast: false
       matrix:

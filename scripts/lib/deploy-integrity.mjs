@@ -391,6 +391,8 @@ export const DEPLOY_FILES = [
   "lib/pattern-detector-embedding.js",
   "lib/pattern-detector.js",
   "lib/platform.js",
+  "lib/windows-acl-parse.js",
+  "lib/read-directory-acl.vbs",
   // Not yet imported by index.js (Task 6, PR-02a) — listed early so Task 7's
   // index.js rewrite, which does import it, does not trip the DEPLOY_FILES
   // coverage tests.
