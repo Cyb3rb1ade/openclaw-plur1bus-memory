@@ -18,6 +18,8 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 | `canonicalFirst` | `boolean` | `true` | Kanonische Repräsentanten vor nicht-kanonischen bevorzugen |
 | `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
 | `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
+| `fullTextTopRecords` | `integer` | `3` | Anzahl der bestplatzierten Treffer, die mit gespeichertem Volltext statt Kurzfassung in den Prompt kommen. `0` stellt nur Zusammenfassungen wieder her. |
+| `fullTextMaxChars` | `integer` | `2000` | Zeichenlimit je Volltext-Treffer. Längere Einträge werden gekürzt und mit `truncated="true"` markiert. |
 
 ### Prompt-Injektions-Budgets
 

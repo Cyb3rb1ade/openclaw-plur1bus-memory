@@ -214,7 +214,9 @@ describe("B12-P advertised recall runtime contract", () => {
       category: ["fact", "project", "decision"][index],
     }));
     await storeRuntimeRows(baseDbPath, rows);
-    const api = makeRuntimeApi(baseDbPath, { enabled: true, tokenBudget: 1 });
+    // 7.18.16: Spitzentreffer umgehen die Kompression mit ihrem Volltext;
+    // ohne sie bleibt ein Budget von 1 Token wirkungsgleich mit "nichts".
+    const api = makeRuntimeApi(baseDbPath, { enabled: true, tokenBudget: 1 }, { fullTextTopRecords: 0 });
     plugin.register(api, { importRouting: async () => routingCapability });
     const hook = api.handlers.get("before_prompt_build")?.at(-1);
     const result = await hook(
@@ -263,5 +265,68 @@ describe("B12-P advertised recall runtime contract", () => {
       }
     }
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+  });
+});
+
+// 7.18.16: Ein gespeichertes Rezept kam als Bruchstueck an ("Mehl, 7 g
+// Hirschhornsalz, ... auskuehlen lassen"): Recall zeigte je Erinnerung nur die
+// Zusammenfassung, verdichtet auf ~16 Woerter und hoechstens 400 Zeichen.
+describe("recall injects the stored text of its top records", () => {
+  const recipe = [
+    "Ammonplaetzchen DDR 1959.",
+    "Teig: 250 g Mehl, 125 g weiche Butter, 125 g Zucker, 2 Eier, 1 Prise Salz.",
+    "Triebmittel: 7 g Hirschhornsalz in 2 EL kaltem Wasser.",
+    ...Array.from({ length: 12 }, (_, i) => `Schritt ${i + 1}: Teig ruhig weiterverarbeiten und auf das gefettete Blech setzen, Abstand lassen.`),
+    "Zum Schluss auskuehlen lassen und die Unterseite glasieren.",
+  ].join("\n");
+
+  async function promptFor(t, rows, recallOverrides = {}) {
+    const baseDbPath = makeTempDir("plur1bus-fulltext-");
+    const workspaceDir = makeTempDir("plur1bus-fulltext-ws-");
+    const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => runtimeVector();
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => runtimeVector();
+    t.after(() => {
+      LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
+    });
+    await storeRuntimeRows(baseDbPath, rows);
+    const api = makeRuntimeApi(baseDbPath, { enabled: true, tokenBudget: 1 }, recallOverrides);
+    plugin.register(api, { importRouting: async () => routingCapability });
+    const hook = api.handlers.get("before_prompt_build")?.at(-1);
+    const result = await hook(
+      { prompt: "Gib mir das alte Rezept", messages: [{ role: "user", content: "Gib mir das alte Rezept" }] },
+      { agentId: AGENT_ID, workspaceDir, workspaceKey: "b12p-runtime-workspace", userId: "owner", sessionKey: "fulltext" },
+    );
+    for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+    return result?.prependContext || "";
+  }
+
+  it("shows a long record in full despite a tight compression budget", async (t) => {
+    assert.ok(recipe.length > 1200 && recipe.length < 2000);
+    const context = await promptFor(t, [{
+      id: "00000000-0000-4000-8000-000000000101",
+      text: recipe,
+      summary: "Ammonplaetzchen DDR 1959",
+      category: "decision",
+    }]);
+    assert.match(context, /Schritt 7: Teig ruhig weiterverarbeiten/);
+    assert.match(context, /Zum Schluss auskuehlen lassen und die Unterseite glasieren\./);
+    assert.doesNotMatch(context, /truncated="true"/);
+  });
+
+  it("marks a record cut at fullTextMaxChars and tells the model how to get the rest", async (t) => {
+    const context = await promptFor(t, [{
+      id: "00000000-0000-4000-8000-000000000102",
+      text: recipe,
+      summary: "Ammonplaetzchen DDR 1959",
+      category: "decision",
+    }], { fullTextMaxChars: 400 });
+    assert.match(context, /truncated="true"/);
+    assert.match(context, /TRUNCATED RECALL: .*memory_recall with full_text: true/);
+    assert.doesNotMatch(context, /Zum Schluss auskuehlen/);
   });
 });

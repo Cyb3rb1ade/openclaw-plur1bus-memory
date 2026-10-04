@@ -163,6 +163,10 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     delete afterSchema.properties.runtime.properties.deferPostTurnLlm;
     assert.ok(Object.hasOwn(afterSchema.properties.dreaming.properties.narrative.properties, "diaryFromUserChats"));
     delete afterSchema.properties.dreaming.properties.narrative.properties.diaryFromUserChats;
+    assert.ok(Object.hasOwn(afterSchema.properties.recall.properties, "fullTextTopRecords"));
+    delete afterSchema.properties.recall.properties.fullTextTopRecords;
+    assert.ok(Object.hasOwn(afterSchema.properties.recall.properties, "fullTextMaxChars"));
+    delete afterSchema.properties.recall.properties.fullTextMaxChars;
     assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
     delete afterSchema.properties.healthWatch;
 

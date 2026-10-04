@@ -1445,6 +1445,20 @@
             "type": "number",
             "default": 5
           },
+          "fullTextTopRecords": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 15,
+            "default": 3,
+            "description": "7.18.16: number of top-ranked recalled memories injected with their stored full text instead of a compressed summary. 0 restores summaries only."
+          },
+          "fullTextMaxChars": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 8000,
+            "default": 2000,
+            "description": "7.18.16: character limit for each full-text recalled memory. Longer records are cut and marked truncated so the model fetches the rest with memory_recall full_text."
+          },
           "maxPromptMemories": {
             "type": "number",
             "default": 12
