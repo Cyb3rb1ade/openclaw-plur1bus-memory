@@ -759,7 +759,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     }
   });
 
-  it("creates the exact eleven per-agent jobs without model, auth, token, or API overrides", async () => {
+  it("creates the exact twelve per-agent jobs without model, auth, token, or API overrides", async () => {
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
       pluginConfig: {
@@ -797,7 +797,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     });
 
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(cronAdds.length, 11);
+    assert.strictEqual(cronAdds.length, 12);
     const byName = new Map(cronAdds.map((args) => [args[args.indexOf("--name") + 1], args]));
     assert.deepStrictEqual([...byName.keys()], [
       "plur1bus persona-evolve main",
@@ -806,6 +806,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       "plur1bus auto-accept-stale main",
       "plur1bus embedding-drain main",
       "plur1bus emotion-refine main",
+      "plur1bus post-turn-refine main",
       "plur1bus classify-recent main",
       "plur1bus rem-dream main",
       "plur1bus skill-miner main",
@@ -826,6 +827,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     };
     assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * *");
     assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "10800s");
+    assert.strictEqual(schedule("plur1bus post-turn-refine main", "--every"), "1200s");
     assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 4 * * *");
     // Erster Agent auf der Basisminute, klar getrennt von gc-run um 04:45.
     assert.strictEqual(schedule("plur1bus auto-accept-stale main", "--cron"), "50 4 * * *");

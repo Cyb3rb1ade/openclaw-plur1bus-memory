@@ -1,5 +1,5 @@
 /**
- * engine/jobs/internal-job-bodies.js — the 17 internal job runners (PR-07).
+ * engine/jobs/internal-job-bodies.js — the 18 internal job runners (PR-07).
  *
  * Was engine/commands/plur1bus-command.js:409-1178, the `/plur1bus internal
  * <job>` chain. Each branch is the job body for one name; its reply is the
@@ -27,6 +27,8 @@ import { LLM_RESULT_CACHE_PURPOSES, withLlmCallContext } from "../../lib/llm-res
 import { LLM_ROUTE_KINDS, isLlmRouteAvailable } from "../../lib/llm-router.js";
 import { pruneGraphEdges } from "../../lib/memory-graph.js";
 import { createNeoStore } from "../../lib/neo-arch.js";
+import { drainPostTurnWork } from "../../lib/post-turn-queue.js";
+import { createPostTurnWorkers } from "../capture/post-turn-work.js";
 import { readReplyOutcomeLog } from "../../lib/reply-outcome-tracking.js";
 import { activateSkillProposal } from "../../lib/telegram-commands/skill-commands.js";
 
@@ -43,6 +45,7 @@ export function createInternalJobBodies(ctx) {
     callLlm,
     cfg,
     conflictResolutionLlmCfg,
+    conversationInsightsLlmCfg,
     createFeatureRoute,
     createOwnerBoundMemoryStore,
     createOwnerBoundNeoStore,
@@ -52,6 +55,7 @@ export function createInternalJobBodies(ctx) {
     dreamNarrativeCfg,
     dreamNarrativeLlmCfg,
     embeddings,
+    emotionalPool,
     EMOTION_REFINE_DEADLINE_MS,
     EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES,
     EMOTION_REFINE_MAX_ROWS,
@@ -63,6 +67,7 @@ export function createInternalJobBodies(ctx) {
     host,
     memoryCompactionLlmCfg,
     memoryDbAdapter,
+    memoryWorkspaceAliases,
     mergingEnabled,
     metaCognitionLlmReport,
     NEO_MANUAL_DRAIN_DEADLINE_MS,
@@ -737,6 +742,73 @@ export function createInternalJobBodies(ctx) {
         });
         host.logger.info(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
         return formatJsonCommandResult({ job: "embedding-drain", ...result });
+      }
+      if (subKey === "post-turn-refine") {
+        // 7.18.14: arbeitet die von agent_end eingereihten Light-Traeume
+        // und Episoden ab, ausserhalb jeder Turn-Identitaet
+        // (openclaw/openclaw#162941). FIFO je Agent; ein Fehlschlag
+        // haelt die Schlange an, weil spaetere Episoden auf dem
+        // Zustand der frueheren aufbauen.
+        if (!neoEnabled) {
+          return jobCtx.skip("neo_disabled", formatJsonCommandResult({ job: "post-turn-refine", skipped: true, reason: "neo_disabled" }));
+        }
+        const { runLightDreamPostTurn, runEpisodePostTurn } = createPostTurnWorkers({
+          embeddings,
+          conversationInsightsLlmCfg,
+          dreamNarrativeLlmCfg,
+          dreamEchoLlmCfg,
+          personaVoiceLlmCfg,
+          skillMinerEnabled,
+          mergingEnabled,
+          callLlm,
+          logger: host.logger,
+          dreamNarrativeCfg,
+          resolveTemperamentName,
+          cfg,
+          memoryWorkspaceAliases,
+          baseDbPath,
+          emotionalPool,
+          episodeExtractionLlmCfg,
+        });
+        const refineResult = await drainPostTurnWork(baseDbPath, internalAgent, async (entry) => {
+          if (entry?.agentId !== internalAgent || !Array.isArray(entry?.turns) || typeof entry?.neoWorkspaceKey !== "string") return false;
+          const neoStore = createNeoStore(neoRoot, entry.neoWorkspaceKey);
+          return pool.withDb(internalAgent, async (db) => {
+            if (!db?.table && typeof db?.init === "function") await db.init();
+            let ok = true;
+            if (entry.lightDream) {
+              const processedDreams = neoStore.readHooks()?.agent_end?.processedDreams || [];
+              if (!processedDreams.includes(entry.digestHash)) {
+                ok = (await runLightDreamPostTurn({
+                  agentId: internalAgent,
+                  ctx: entry.ctx || {},
+                  neoStore,
+                  db,
+                  normalizedTurns: entry.turns,
+                  digestHash: entry.digestHash,
+                  processedDreams,
+                })) === true;
+              }
+            }
+            if (ok && entry.episodes) {
+              const entryHooks = neoStore.readHooks();
+              if (!(entryHooks?.agent_end?.processedEpisodes || []).includes(entry.digestHash)) {
+                ok = (await runEpisodePostTurn({
+                  agentId: internalAgent,
+                  ctx: entry.ctx || {},
+                  sessionKey: entry.sessionKey || "",
+                  neoStore,
+                  normalizedTurns: entry.turns,
+                  digestHash: entry.digestHash,
+                  hooks: entryHooks,
+                })) === true;
+              }
+            }
+            return ok;
+          });
+        }, { logger: host.logger, maxEntries: 10, budgetMs: 300_000 });
+        host.logger.info(`plur1bus internal post-turn-refine[${internalAgent}]: ${JSON.stringify(refineResult)}`);
+        return formatJsonCommandResult({ job: "post-turn-refine", ...refineResult });
       }
       if (subKey === "emotion-refine") {
         // Abschluss-Review, Important 6: emotion.t3 (die eigentliche

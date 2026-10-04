@@ -42,6 +42,7 @@ export const DEPLOY_FILES = [
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
+  "engine/capture/post-turn-work.js",
   "engine/capture/turn-replay-guard.js",
   "engine/checkpoint/checkpoint-store.js",
   "engine/commands/command-helpers.js",
@@ -270,6 +271,7 @@ export const DEPLOY_FILES = [
   "lib/mood-style-directive.js",
   "lib/review-narrative-lead.js",
   "lib/review-workspace-status.js",
+  "lib/post-turn-queue.js",
   "lib/open-threads.js",
   "lib/contradiction-disclosure.js",
   "lib/recall-confidence-framing.js",

@@ -40,7 +40,7 @@
  *            1.7.0 — EmbeddingService.probe(opts?) → EmbeddingProbeResult (identity, readiness, memoized); serve(address?: IpcAddress | null) → EmbeddingServeResult (real scoped IPC, in-process owner, no claim listener); HostCapabilities.pushCriticalButtons? typed (E3).
  *            1.8.0 — EngineStatus.jobs/models/journal/sharedMemory, degraded derived from model readiness; Engine.models (status, warm); HostCapabilities.journalBacklog?; MemoryOpErrorCode "unsupported"; CaptureResult.reason "duplicate-turn" (E4).
  *            1.9.0 — engine-config.schema.json with readAt/x-tier/x-sensitive and its types (EngineConfigSchema, EngineConfigKey, EngineConfigReadAt); RecallQuery.warmOnly; RecallTiming.totalMs covers queue wait and prelude (E5).
- *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.traceRegistrations first); no breaking change to existing callers.
+ *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.traceRegistrations first; later keys including runtime.deferPostTurnLlm) and JobName "post-turn-refine"; no breaking change to existing callers.
  */
 
 export type ContractVersion = "1.10.0";
@@ -406,7 +406,7 @@ export interface CheckpointResult {
 
 export type JobName =
   | "persona-evolve" | "afterthought" | "consolidate-daily" | "auto-accept-stale"
-  | "embedding-drain" | "emotion-refine" | "classify-recent" | "rem-dream"
+  | "embedding-drain" | "emotion-refine" | "post-turn-refine" | "classify-recent" | "rem-dream"
   | "skill-miner" | "discover-semantic-links" | "gc-run"
   | "reminder-dispatch" | "feedback-report" | "proactive-check" | "meta-reflect"
   | "skill-benefit-backfill" | "episodes-rebuild"

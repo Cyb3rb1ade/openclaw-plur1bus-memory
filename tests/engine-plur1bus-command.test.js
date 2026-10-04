@@ -2,7 +2,7 @@
  * tests/engine-plur1bus-command.test.js — PR-03f.
  *
  * The command runner is the deny-by-classification chokepoint and the home of
- * the 17 internal job runners. This pins the boundary; behaviour is covered by
+ * the 18 internal job runners. This pins the boundary; behaviour is covered by
  * the existing command tests.
  */
 
@@ -21,7 +21,7 @@ const INTERNAL_JOBS = [
   "skill-miner", "skill-benefit-backfill", "afterthought", "persona-evolve",
   "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain",
   "emotion-refine", "feedback-report", "proactive-check", "meta-reflect",
-  "episodes-rebuild",
+  "episodes-rebuild", "post-turn-refine",
 ];
 
 describe("engine/commands/plur1bus-command", () => {
@@ -33,7 +33,7 @@ describe("engine/commands/plur1bus-command", () => {
     assert.doesNotMatch(source, /(?<![.\w$/-])api\s*\./);
   });
 
-  it("still handles all 17 internal job names", () => {
+  it("still handles all 18 internal job names", () => {
     for (const job of INTERNAL_JOBS) {
       assert.match(source, new RegExp(`"${job}"`), `internal job ${job} must survive the move`);
     }

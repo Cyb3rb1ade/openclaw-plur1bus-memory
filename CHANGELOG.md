@@ -18,6 +18,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.11** — Obsidian reviews as native crons; review texts in several languages.
 - **7.18.12** — evening review shows the daily note, dreams and knowledge files.
 - **7.18.13** — evening review checks the dream diary against REM and shows the KNOWLEDGE backlog.
+- **7.18.14** — light dream and episode extraction enqueue from capture; cron `post-turn-refine` drains the queue every 20 minutes. `runtime.deferPostTurnLlm=false` restores the inline path.
 
 ### Hinzugefügt
 

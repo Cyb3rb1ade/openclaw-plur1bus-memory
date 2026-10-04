@@ -705,6 +705,11 @@
           "default": false,
           "description": "7.18.5 diagnostic for openclaw/openclaw#163029: log the call stack of every plugin registration (warn level), to show where OpenClaw's mid-turn plugin reloads come from. Off by default."
         },
+        "deferPostTurnLlm": {
+          "type": "boolean",
+          "default": true,
+          "description": "7.18.14: enqueue light-dream and episode extraction from capture and run them in the post-turn-refine cron, so plugin LLM calls are not refused after the turn ends (openclaw/openclaw#162941). Set false to restore the inline agent_end path."
+        },
         "llmResultCacheEnabled": {
           "type": "boolean",
           "default": true

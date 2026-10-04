@@ -440,7 +440,7 @@ export function createPlur1busCommandRunner(ctx) {
     if (actionKey === "internal") {
       const subKey = (sub || "").toLowerCase();
       if (!jobs || !INTERNAL_JOB_NAMES.includes(subKey)) {
-        return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "skill-benefit-backfill", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild"] });
+        return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "skill-benefit-backfill", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild", "post-turn-refine"] });
       }
       const internalRun = await jobs.run(subKey, commandCtx.agentId || "default", {
         trigger: cronInternal ? "cron" : "manual",

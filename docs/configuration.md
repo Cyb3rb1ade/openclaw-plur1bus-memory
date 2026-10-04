@@ -459,6 +459,10 @@ Gelesen wird nur das Ende der Logs von heute und gestern (höchstens 8 MiB je Da
 
 Mit `true` läuft diese Arbeit in einem Snapshot, der bei der Plugin-Registrierung genommen wird. Ein Snapshot stellt alle Host-Kontexte jenes Moments wieder her, nicht nur die Turn-Identität; deshalb ist der Schalter standardmäßig aus und sollte nach dem Einschalten ein paar Turns lang beobachtet werden. Wirkt nach einem Gateway-Neustart.
 
+## Light-Traum und Episoden nach dem Turn (7.18.14)
+
+`runtime.deferPostTurnLlm` (Standard `true`) reiht Light-Traum und Episoden-Extraktion nach `agent_end` in eine Dateischlange ein. Der native Cron `post-turn-refine` arbeitet sie alle 20 Minuten FIFO je Agent ab. Unter OpenClaw 2026.9.7 werden Plugin-LLM-Aufrufe nach dem Turn abgelehnt (`LLM_COMPLETION_NOT_AUTHORIZED`, openclaw/openclaw#162941). `false` stellt den bisherigen Inline-Pfad wieder her, inklusive `jobs.run("light-dream")`.
+
 ## Registrierungen nachverfolgen (7.18.5)
 
 `runtime.traceRegistrations` (Standard `false`) ist eine Diagnose für openclaw/openclaw#163029. OpenClaw 2026.9.7 lädt das Plugin nach einem Gateway-Start in Wellen mitten im Turn neu, jede Neuladung blockiert den Gateway 40–70 s. Mit `true` schreibt jede Registrierung eine Warnung `register trace #N (uptime …, … after previous)` mit dem Aufruf-Stack ins Gateway-Log. Die Nummer zählt je Prozess, auch über Neuladungen hinweg. Der Stack enthält Dateipfade des Hosts; vor dem Teilen kürzen. Wirkt nach einem Gateway-Neustart; nach dem Einfangen wieder ausschalten.

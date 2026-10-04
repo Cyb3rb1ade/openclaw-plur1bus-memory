@@ -34,6 +34,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ENGINE_PATHS = Object.freeze({
   assemblePromptContext: "engine/recall/assemble-prompt-context.js",
   captureTurn: "engine/capture/capture-turn.js",
+  postTurnWork: "engine/capture/post-turn-work.js",
   turnReplayGuard: "engine/capture/turn-replay-guard.js",
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
   engineConfigSchema: "engine/config/engine-config-schema.js",

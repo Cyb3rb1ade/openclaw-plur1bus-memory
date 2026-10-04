@@ -35,6 +35,8 @@ import { isBackgroundTurn, shouldSkipAutoCaptureForInternalTurn } from "../../li
 import { trySafeWarn } from "../../lib/safe-logging.js";
 import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
+import { enqueuePostTurnWork } from "../../lib/post-turn-queue.js";
+import { createPostTurnWorkers, postTurnContext } from "./post-turn-work.js";
 
 /**
  * Classifies a light-dream JobRun's effect on capture post-processing
@@ -177,6 +179,26 @@ export function createTurnCapture(ctx) {
     const work = jobCtx.input?.work;
     if (typeof work !== "function") return jobCtx.skip("no_turns");
     return { dreamed: await work() };
+  });
+
+  const deferPostTurnLlm = cfg?.runtime?.deferPostTurnLlm !== false;
+  const { runLightDreamPostTurn, runEpisodePostTurn } = createPostTurnWorkers({
+    embeddings,
+    conversationInsightsLlmCfg,
+    dreamNarrativeLlmCfg,
+    dreamEchoLlmCfg,
+    personaVoiceLlmCfg,
+    skillMinerEnabled,
+    mergingEnabled,
+    callLlm,
+    logger: host.logger,
+    dreamNarrativeCfg,
+    resolveTemperamentName,
+    cfg,
+    memoryWorkspaceAliases,
+    baseDbPath,
+    emotionalPool,
+    episodeExtractionLlmCfg,
   });
 
   // Per-registration one-shot warning latches (were index.js:10357-10358).
@@ -874,6 +896,10 @@ export function createTurnCapture(ctx) {
           // betrachtet (dauerhafter Episodenverlust, im Feld beobachtet).
           // Jeder Eintrag ist ein Promise<boolean>: true = erledigt.
           const postProcessing = [];
+          // 7.18.14: Light-Traum und Episoden per Default in die Warteschlange
+          // (openclaw/openclaw#162941). runtime.deferPostTurnLlm=false behält
+          // den bisherigen Inline-Pfad, inklusive jobs.run("light-dream").
+          const deferredWork = { lightDream: false, episodes: false };
 
           // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
           if (!background && mergingEnabled && isLlmRouteAvailable(conversationInsightsLlmCfg) && neoEnabled) {
@@ -884,6 +910,8 @@ export function createTurnCapture(ctx) {
               host.logger.info(`memory-lancedb-namespaced: skipping light dream - too few turns (${normalizedTurns.length})`);
             } else if (normalizedTurns.length > 50) {
               host.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
+            } else if (deferPostTurnLlm) {
+              deferredWork.lightDream = true;
             } else {
               // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
               let personaIdentityText = "";
@@ -984,84 +1012,61 @@ export function createTurnCapture(ctx) {
             const processedEpisodes = hooks?.agent_end?.processedEpisodes || [];
             if (processedEpisodes.includes(digestHash)) {
               host.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
+            } else if (deferPostTurnLlm) {
+              deferredWork.episodes = true;
             } else {
-              // Dedup MUSS pro Turn greifen, nicht pro Batch: Bleibt das
-              // Watermark nach einem Fehlschlag stehen, ist die naechste
-              // Slice BREITER (currentCount ist gewachsen) und damit auch
-              // der digestHash ein anderer — processedEpisodes wuerde nicht
-              // greifen und bereits geschriebene Spannen doppelt anlegen.
-              // Die Turn-IDs dagegen sind stabil, solange der Slice-START
-              // gleich bleibt, und genau das garantiert das haengende
-              // Watermark.
-              const episodedTurnIds = new Set(hooks?.agent_end?.episodedTurnIds || []);
-              // 7.12.40: die zuletzt geschriebene Episode wird fortgeschrieben,
-              // solange die Pause unter 30 Minuten liegt (Zustand im Hook-Record).
-              const openEpisodeState = hooks?.agent_end?.openEpisode || null;
-              // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
-              // 7.12.40: Namen aus USER.md/IDENTITY.md, Stimmung der
-              // EmotionEngine und Session-Art fuer brauchbare Karten-Metadaten.
-              postProcessing.push(extractEpisodesWithState(normalizedTurns, {
-                // 7.12.55: vor der Anreicherung bekannt geben, was bereits
-                // episodiert ist — sonst zahlt jede verworfene Spanne einen
-                // Modellaufruf.
-                episodedTurnIds,
-                workspaceKey: hookCtx?.workspaceKey,
-                workspaceDir: hookCtx?.workspaceDir,
-                sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
-                mood: (() => { try { return emotionalPool.describe(agentId); } catch (_) { return null; } })(),
-                openEpisode: openEpisodeState,
+              postProcessing.push(runEpisodePostTurn({
                 agentId,
-                llmCfg: mergingEnabled ? withLlmCallContext(
-                  episodeExtractionLlmCfg,
-                  agentId,
-                  "episode-extraction",
-                  { signal },
-                ) : null,
-                callLlm,
+                ctx: hookCtx,
+                sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
+                neoStore,
+                normalizedTurns,
+                digestHash,
+                hooks,
                 signal,
-              }).then(async ({ episodes, openEpisode: nextOpenEpisode, continuedId }) => {
-                throwIfAborted(signal, "episode commit aborted");
-                // Nur vollstaendig bereits episodierte Spannen verwerfen.
-                // Teilueberlappung bleibt erhalten — sie enthaelt neue Turns.
-                const { fresh, skipped } = filterAlreadyEpisoded(episodes, episodedTurnIds);
-                if (skipped > 0) {
-                  host.logger.info(`memory-lancedb-namespaced: ${skipped} bereits episodierte Spanne(n) uebersprungen (agent=${agentId})`);
-                }
-                const vaultPaths = new Map();
-                if (fresh.length > 0) {
-                  throwIfAborted(signal, "episode commit aborted");
-                  // 7.12.40: async mit langer Lock-Frist statt 5-s-Sync-Lock
-                  // (Backpressure gegen den Embedding-Drain, s. neo-arch.js).
-                  if (typeof neoStore.appendEpisodesAsync === "function") await neoStore.appendEpisodesAsync(fresh);
-                  else neoStore.appendEpisodes(fresh);
-                  const continuedCount = fresh.filter((ep) => ep.id === continuedId).length;
-                  host.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId} (continued=${continuedCount}, turns=${fresh.map((ep) => ep.turnCount).join("/")})`);
-                  if (hookCtx?.workspaceDir) {
-                    for (const ep of fresh) {
-                      throwIfAborted(signal, "episode commit aborted");
-                      const replacePath = continuedId && ep.id === continuedId ? openEpisodeState?.vaultPath || null : null;
-                      const written = writeEpisodeToVault(ep, hookCtx.workspaceDir, { replacePath });
-                      if (written?.written) vaultPaths.set(ep.id, written.path);
-                      else if (written?.error) host.logger.warn?.(`memory-lancedb-namespaced: episode card not written: ${written.error}`);
-                    }
-                  }
-                }
-                // Markiere als verarbeitet
-                const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
-                throwIfAborted(signal, "episode commit aborted");
-                const openEpisodeRecord = nextOpenEpisode
-                  ? { ...nextOpenEpisode, vaultPath: vaultPaths.get(nextOpenEpisode.id) || nextOpenEpisode.vaultPath || null }
-                  : null;
-                neoStore.recordHook("agent_end", {
-                  processedEpisodes: mergedEpisodes,
-                  episodedTurnIds: mergeEpisodedTurnIds(episodedTurnIds, fresh, EPISODED_TURN_ID_MEMORY),
-                  openEpisode: openEpisodeRecord,
-                });
-                return true;
-              }).catch((epErr) => {
-                host.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
-                return false;
               }));
+            }
+          }
+
+          if (deferredWork.lightDream || deferredWork.episodes) {
+            try {
+              const queued = enqueuePostTurnWork(baseDbPath, agentId, {
+                neoWorkspaceKey: rememberNeoWorkspace(hookCtx, event),
+                ctx: postTurnContext(hookCtx),
+                sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
+                digestHash,
+                turns: normalizedTurns,
+                lightDream: deferredWork.lightDream,
+                episodes: deferredWork.episodes,
+              }, { logger: host.logger });
+              host.logger.info(`memory-lancedb-namespaced: post-turn work queued for agent=${agentId} (light=${deferredWork.lightDream}, episodes=${deferredWork.episodes}, turns=${normalizedTurns.length}${queued.dropped ? `, dropped=${queued.dropped}` : ""})`);
+              postProcessing.push(Promise.resolve(true));
+            } catch (queueErr) {
+              host.logger.warn?.(`memory-lancedb-namespaced: post-turn queue unavailable, running inline: ${String(queueErr)}`);
+              if (deferredWork.lightDream) {
+                postProcessing.push(runLightDreamPostTurn({
+                  agentId,
+                  ctx: hookCtx,
+                  neoStore,
+                  db,
+                  normalizedTurns,
+                  digestHash,
+                  processedDreams: hooks?.agent_end?.processedDreams || [],
+                  signal,
+                }));
+              }
+              if (deferredWork.episodes) {
+                postProcessing.push(runEpisodePostTurn({
+                  agentId,
+                  ctx: hookCtx,
+                  sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
+                  neoStore,
+                  normalizedTurns,
+                  digestHash,
+                  hooks,
+                  signal,
+                }));
+              }
             }
           }
 

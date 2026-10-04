@@ -91,8 +91,10 @@ async function runScenario(t, pluginConfig) {
 // agent_end turn whose post-turn episode extraction hits a failing runtime LLM,
 // then the dashboard projection behind plur1bus.control.status.
 test("health watch is wired: route failures reach the dashboard, detachPostTurnWork reaches capture", async (t) => {
-  const detached = await runScenario(t, { runtime: { detachPostTurnWork: true } });
-  const attached = await runScenario(t, {});
+  // 7.18.14 queues light-dream/episodes by default (`runtime.deferPostTurnLlm`).
+  // This test pins the inline path that detachPostTurnWork wraps.
+  const detached = await runScenario(t, { runtime: { detachPostTurnWork: true, deferPostTurnLlm: false } });
+  const attached = await runScenario(t, { runtime: { deferPostTurnLlm: false } });
 
   for (const { status } of [detached, attached]) {
     const failures = status.healthWatch?.llm?.failures;

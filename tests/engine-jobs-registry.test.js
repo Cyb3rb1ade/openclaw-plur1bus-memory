@@ -1,7 +1,7 @@
 /**
  * tests/engine-jobs-registry.test.js — PR-07.
  *
- * The registry holds the contract's 18 names with one owner each, and every
+ * The registry holds the contract's 19 names with one owner each, and every
  * run — completed, skipped, incomplete, thrown — comes back as a JobRun.
  */
 
@@ -18,7 +18,7 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 
 const CONTRACT_JOB_NAMES = [
   "persona-evolve", "afterthought", "consolidate-daily", "auto-accept-stale",
-  "embedding-drain", "emotion-refine", "classify-recent", "rem-dream",
+  "embedding-drain", "emotion-refine", "post-turn-refine", "classify-recent", "rem-dream",
   "skill-miner", "discover-semantic-links", "gc-run",
   "reminder-dispatch", "feedback-report", "proactive-check", "meta-reflect",
   "skill-benefit-backfill", "episodes-rebuild",
@@ -31,10 +31,11 @@ function stubHost(events = []) {
 }
 
 describe("job specs", () => {
-  it("are exactly the contract's 18 names", () => {
+  it("are exactly the contract's 19 names", () => {
     assert.deepEqual(JOB_NAMES, CONTRACT_JOB_NAMES);
-    assert.equal(INTERNAL_JOB_NAMES.length, 17);
+    assert.equal(INTERNAL_JOB_NAMES.length, 18);
     assert.ok(!INTERNAL_JOB_NAMES.includes("light-dream"));
+    assert.ok(INTERNAL_JOB_NAMES.includes("post-turn-refine"));
   });
 
   it("carry phases, the gc-run singleton and the cron defaults", () => {
@@ -51,7 +52,7 @@ describe("job specs", () => {
 });
 
 describe("createJobRegistry", () => {
-  it("returns a JobRun for all 18 names, including the skip path", async () => {
+  it("returns a JobRun for all 19 names, including the skip path", async () => {
     const events = [];
     const jobs = createJobRegistry({ host: stubHost(events), idFactory: (() => { let n = 0; return () => `run-${++n}`; })() });
     for (const name of JOB_NAMES) jobs.bind(name, async (_n, ctx) => ctx.skip("test_skip", { text: name }));
@@ -65,7 +66,7 @@ describe("createJobRegistry", () => {
       assert.equal(run.attempt, 1);
       assert.ok(run.finishedAt >= run.startedAt);
     }
-    assert.equal(events.filter((e) => e.name === "job.run").length, 18);
+    assert.equal(events.filter((e) => e.name === "job.run").length, 19);
   });
 
   it("maps completed, incomplete and thrown bodies", async () => {
@@ -152,6 +153,7 @@ describe("/plur1bus internal goes through jobs.run", () => {
       "episodes-rebuild": "neo_disabled",
       "gc-run": "gc_disabled",
       "embedding-drain": "neo_disabled",
+      "post-turn-refine": "neo_disabled",
       "feedback-report": "no_workspace",
       "proactive-check": "no_workspace",
       "meta-reflect": "no_workspace",
