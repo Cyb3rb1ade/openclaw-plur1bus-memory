@@ -241,17 +241,20 @@ node --test tests/*.test.js
 
 ## Dependency Audit
 
-Last audit run: 2026-06-05
+Last audit run: 2026-10-04 (#208)
 
-- `npm audit`: **0 vulnerabilities**
+- `npm audit --omit=dev --audit-level=moderate`: **0 vulnerabilities** (CI blocking)
+- `npm audit`: **0 vulnerabilities** after the 2026.10-04 dev-graph cleanup
 - `npm ci --ignore-scripts`: passes
+
+The published runtime tree is LanceDB, apache-arrow, openai, and optional transformers. Issue #208's six findings lived only under the contract-test host `openclaw@2026.8.2`. The dev pin is now `openclaw@2026.8.33` (lowest later 2026.8.x with `undici@8.10.2`). Remaining MCP-SDK transitives are same-major overrides: `brace-expansion@5.0.12`, `fast-uri@3.1.8`, `hono@4.13.7`, `ip-address@10.7.1`. The declared build baseline stays `openclaw@2026.8.2`.
 
 ### Runtime Dependencies
 
 | Package | Spec | Resolved | Pinned? |
 |---------|------|----------|---------|
 | `@lancedb/lancedb` | `^0.26.2` | `0.26.2` | No (`^`) — version fixed by `package-lock.json` |
-| `openai` | `^6.27.0` | `6.42.0` | No (`^`) — version fixed by `package-lock.json` |
+| `openai` | `^6.27.0` | `6.49.0` | No (`^`) — version fixed by `package-lock.json` |
 
 ### Optional Dependencies
 
@@ -259,7 +262,7 @@ Last audit run: 2026-06-05
 |---------|------|----------|---------|
 | `@huggingface/transformers` | `4.2.0` | `4.2.0` | Yes |
 
-All versions are effectively pinned at install time by `package-lock.json`. No critical CVEs were reported at the time of the last audit. Major upgrades require a separate plan.
+All versions are effectively pinned at install time by `package-lock.json`. Major upgrades require a separate plan.
 
 ## Backup / Restore
 

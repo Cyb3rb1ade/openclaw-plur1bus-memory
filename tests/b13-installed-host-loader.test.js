@@ -13,11 +13,11 @@ function findPinnedOpenClawLoader() {
   const packageRoot = dirname(dirname(require.resolve("openclaw")));
   const packageJson = join(packageRoot, "package.json");
   const pkg = require(packageJson);
-  assert.equal(pkg.version, "2026.8.2", "loader test must use the exact target OpenClaw release");
+  assert.equal(pkg.version, "2026.8.33", "loader test must use the exact installed OpenClaw release");
   return join(packageRoot, "dist", "plugins", "loader.js");
 }
 
-it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin loader", async () => {
+it("loads reply_dispatch routing through the exact OpenClaw 2026.8.33 plugin loader", async () => {
   const loaderPath = findPinnedOpenClawLoader();
   assert.ok(existsSync(loaderPath), `pinned OpenClaw plugin loader is unavailable: ${loaderPath}`);
   // macOS resolves its per-user temporary root to a path that can exceed the
