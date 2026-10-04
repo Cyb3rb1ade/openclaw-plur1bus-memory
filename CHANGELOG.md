@@ -15,6 +15,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.8** — feature-cron bootstrap names pending jobs; read timeouts 60 s.
 - **7.18.9** — `setup-feature-crons` leaves the JSON output intact (`exitCode`).
 - **7.18.10** — cron setup `config.get` waits 60 s.
+- **7.18.11** — Obsidian reviews as native crons; review texts in several languages.
 
 ### Hinzugefügt
 
