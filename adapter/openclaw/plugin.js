@@ -608,13 +608,13 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     const groupReasoningFilter = createGroupReasoningFilter({
       enabled: true,
       prefixes: cfg.groupReasoningFilter?.prefixes,
-      logger: api.logger,
+      logger: host.logger,
     });
     for (const hookName of ["before_dispatch", "before_agent_reply"]) {
       try {
         api.on(hookName, groupReasoningFilter);
       } catch (error) {
-        api.logger?.warn?.(`memory-lancedb-namespaced: group reasoning filter not registered on ${hookName}: ${error?.message || error}`);
+        host.logger.warn(`memory-lancedb-namespaced: group reasoning filter not registered on ${hookName}: ${error?.message || error}`);
       }
     }
   }
@@ -640,5 +640,5 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   const registrationTrace = formatRegistrationTrace(
     recordRegistration({ enabled: cfg.runtime?.traceRegistrations === true }),
   );
-  if (registrationTrace) api.logger.warn(registrationTrace);
+  if (registrationTrace) host.logger.warn(registrationTrace);
 }
