@@ -10,6 +10,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 ### Ported from 7.18.5–7.18.20
 
 - **7.18.5** — `runtime.traceRegistrations` writes a registration stack to the gateway log (adapter). Contract 1.10.0: additive config keys, no breaking change.
+- **7.18.6** — registration trace keeps 200 frames instead of 60.
 
 ### Hinzugefügt
 
