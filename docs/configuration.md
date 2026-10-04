@@ -352,6 +352,11 @@ Nutzerpartitionen nie.
 folgt `timezone` aus der Plugin-Konfiguration. Derselbe Traum wird nicht
 zweimal eingetragen; ein Fehlschlag beim Schreiben bricht den Traum nicht ab.
 
+`dreaming.narrative.diaryFromUserChats` (Standard `false`, 7.18.15) lässt
+Light-Träume aus dem Chat mit einem identifizierten Nutzer (`scope: "user"`)
+ins Tagebuch. Nur für Agenten mit genau einem Besitzer: `DREAMS.md` liegt im
+Workspace des Agenten.
+
 Damit das Tagebuch einen Autor hat, sollte das verwaltete Träumen des Hosts aus
 sein. Der Host liest diesen Schalter aus dem Eintrag des Memory-Slot-Besitzers,
 also `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false`.

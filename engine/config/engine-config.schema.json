@@ -357,6 +357,11 @@
               "type": "boolean",
               "default": true,
               "description": "Also append each dream narrative to the agent's DREAMS.md, the file OpenClaw's Dreams page shows."
+            },
+            "diaryFromUserChats": {
+              "type": "boolean",
+              "default": false,
+              "description": "7.18.15: also write light-dream narratives from identified user chats (ACL scope user) into the agent DREAMS.md. Off by default because DREAMS.md lives in the agent workspace and anyone with access to it can read those narratives. Intended for agents with a single owner."
             }
           }
         }

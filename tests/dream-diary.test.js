@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -205,3 +205,50 @@ test("lightDream reicht die Host-Event-Bruecke durch, statt das SDK zu laden", a
     rmSync(workspaceDir, { recursive: true, force: true });
   }
 });
+
+// 7.18.15: Light-Traeume aus dem Chat mit dem Besitzer tragen den Bereich
+// "user" und blieben deshalb immer aus DREAMS.md heraus. Der Schalter
+// dreaming.narrative.diaryFromUserChats laesst sie zu; Standard bleibt aus.
+for (const [diaryFromUserChats, expected] of [[false, false], [true, true]]) {
+  test(`lightDream from a user chat writes the diary only with diaryFromUserChats=${diaryFromUserChats}`, async () => {
+    const { lightDream } = await import("../lib/dreaming/light-dream.js");
+    const { resolveMemoryRequestContext } = await import("../lib/memory-request-context.js");
+    const workspaceDir = makeTempDir("light-dream-user-diary-");
+    const createdAt = new Date().toISOString();
+    const requestContext = resolveMemoryRequestContext({
+      agentId: "diary-agent",
+      workspaceDir,
+      userId: "owner",
+      channel: "telegram",
+      accountId: "default",
+      chatId: "owner",
+    });
+    assert.ok(requestContext.userPrincipal, "an identified chat user resolves to a user principal");
+    await lightDream({
+      turns: Array.from({ length: 3 }, (_, i) => ({
+        id: `turn-${i}`, agentId: "diary-agent", workspaceKey: "default",
+        role: i % 2 === 0 ? "user" : "assistant", content: `Nachricht ${i} mit etwas Inhalt`, createdAt,
+      })),
+      workspaceDir,
+      neoStore: { readReactions: () => [], appendDreams: () => {}, appendBehaviorCards: () => {} },
+      db: { search: async () => [], store: async () => {} },
+      insightLlmCfg: { feature: "conversation-insights" },
+      narrativeLlmCfg: { feature: "dream-narrative" },
+      echoLlmCfg: { feature: "dream-echo" },
+      personaLlmCfg: { feature: "persona-voice" },
+      narrativeCfg: { enabled: true, storeAsMemory: false, diaryFromUserChats },
+      logger: { info: () => {}, warn: () => {} },
+      callLlm: async (_messages, cfg) => ({
+        "conversation-insights": JSON.stringify(["A durable project insight for the dream."]),
+        "dream-narrative": "A sufficiently long dream narrative crosses a quiet archive and returns with one clear project decision.",
+        "dream-echo": JSON.stringify({ sentence: "Die Entscheidung ging mir durch den Kopf.", topics: ["decision"] }),
+      })[cfg.feature],
+      requestContext,
+      aclBindings: { scope: "user", agentId: requestContext.agentId, workspaceIdentity: "", ownerUserId: requestContext.userPrincipal },
+      importHostEvents: async () => ({ appendMemoryHostEvent: async () => {} }),
+    });
+    const diaryPath = join(workspaceDir, "DREAMS.md");
+    const written = existsSync(diaryPath) && readFileSync(diaryPath, "utf8").includes("quiet archive");
+    assert.equal(written, expected);
+  });
+}
