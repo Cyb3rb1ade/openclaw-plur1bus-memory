@@ -223,12 +223,12 @@ describe("Der Abschalter ist wirklich erreichbar", () => {
     assert.equal(manifest.configSchema.properties.captureChunking?.default, true);
   });
 
-  it("bietet die drei Speicherweisen an", () => {
+  it("bietet die Speicherweisen an", () => {
     const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
     const modus = manifest.configSchema.properties.captureChunkingMode;
     // ganz = captureChunking:false, beides/geteilt = dieser Schluessel.
     assert.equal(modus?.type, "string");
-    assert.deepEqual(modus?.enum, ["beides", "geteilt"]);
+    assert.deepEqual(modus?.enum, ["beides", "geteilt", "automatisch"]);
     assert.equal(modus?.default, "beides", "die gemessen beste Variante ist die Vorgabe");
   });
 });

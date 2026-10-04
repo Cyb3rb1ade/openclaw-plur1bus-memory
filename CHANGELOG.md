@@ -5,6 +5,13 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.18] — 2026-10-04
+
+### Hinzugefügt
+
+- **Speicherweise „automatisch“: Jev entscheidet je Nachricht über die Aufteilung.** Die strukturelle Regel teilt an Aufzählungen, Überschriften und Absätzen, auch dort, wo alles zusammengehört: ein gespeichertes Rezept wurde zu 14 Zeilen wie „1 Prise Salz“. Mit `captureChunkingMode: "automatisch"` fragt der Capture für jede Nachricht, die die Regel teilen würde, das Entscheidungsmodell Jev (TypeSafe), ob sie eine zusammenhängende Einheit ist oder aus unabhängigen Einzelpunkten besteht. Sicher zusammenhängend → nur das Ganze; sicher unabhängig → nur die Teile; unsicher, „gemischt“, Fehler oder Timeout → Ganzes und Teile wie bei „beides“. Die Schnittstellen setzt weiter die Regel. Einstellungen unter `captureChunkingJev` (`apiKeyEnv`, Standard `TYPESAFE_API_KEY`; `model` `jev-latest`; `minConfidence` 0,85; `timeoutMs` 5000). Am 04.10.2026 auf deutschen Texten geprüft: Rezept und Erklärung „zusammenhängend“, vier unabhängige Anliegen „unabhängig“, jeweils Sicherheit 1,00 in 200–450 ms. Die Nachricht geht dafür an api.typesafe.ai; ohne Schlüssel verhält sich der Modus wie „beides“.
+- **Dashboard:** Der Speicherweise-Schalter auf der Capture-Karte bietet „Automatic (Jev)“ als vierte Stufe und warnt, wenn der Modus aktiv ist, aber kein Schlüssel gefunden wird (nur Vorhandensein, nie der Wert).
+
 ## [7.18.17] — 2026-10-04
 
 ### Behoben

@@ -388,7 +388,7 @@ import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessag
 import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
-import { expandForCapture } from "./lib/memory-chunking.js";
+import { expandForCapture, expandForCaptureDecided } from "./lib/memory-chunking.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
 import { planReminderExtraction } from "./lib/reminder-extraction.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
@@ -434,6 +434,7 @@ import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THRE
 import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
 import { drainPostTurnWork, enqueuePostTurnWork } from "./lib/post-turn-queue.js";
+import { createJevChunkDecider } from "./lib/jev-chunk-decider.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -10683,6 +10684,22 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     // zuvor direkt aus agent_end auf.
     // ========================================================================
     const deferPostTurnLlm = cfg.runtime?.deferPostTurnLlm !== false;
+    // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
+    // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
+    // unsicher -> beides. Ohne Schluessel verhaelt es sich wie "beides".
+    const jevChunkCfg = cfg.captureChunkingJev || {};
+    const jevChunkDecider = cfg.captureChunkingMode === "automatisch"
+      ? createJevChunkDecider({
+        apiKey: process.env[typeof jevChunkCfg.apiKeyEnv === "string" && jevChunkCfg.apiKeyEnv.trim() ? jevChunkCfg.apiKeyEnv.trim() : "TYPESAFE_API_KEY"],
+        model: jevChunkCfg.model,
+        minConfidence: jevChunkCfg.minConfidence,
+        timeoutMs: jevChunkCfg.timeoutMs,
+        logger: api.logger,
+      })
+      : null;
+    if (cfg.captureChunkingMode === "automatisch" && !jevChunkDecider) {
+      api.logger.warn?.("memory-lancedb-namespaced: captureChunkingMode \"automatisch\" without a Jev API key; storing whole and parts");
+    }
     // Nur die Felder, die die beiden Laeufe aus dem Hook-Kontext lesen.
     const postTurnContext = (ctx = {}) => {
       const pick = (value) => (typeof value === "string" || typeof value === "number" ? value : undefined);
@@ -11202,14 +11219,24 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             //   true + captureChunkingMode "beides" (Vorgabe) -> Ganzes und Teile
             //   true + captureChunkingMode "geteilt"       -> nur die Teile
             // Gemessen an 100 schweren Faellen: 36 % / 64 % / 49 %.
-            const chunkPlan = expandForCapture(preppedOk, {
-              enabled: cfg.captureChunking !== false,
-              keepWhole: cfg.captureChunkingMode !== "geteilt",
-              makeGroupId: randomUUID,
-            });
+            const chunkPlan = jevChunkDecider
+              ? await expandForCaptureDecided(preppedOk, {
+                enabled: cfg.captureChunking !== false,
+                makeGroupId: randomUUID,
+                decide: jevChunkDecider,
+              })
+              : expandForCapture(preppedOk, {
+                enabled: cfg.captureChunking !== false,
+                keepWhole: cfg.captureChunkingMode !== "geteilt",
+                makeGroupId: randomUUID,
+              });
+            throwIfCaptureAborted();
             const validPreps = chunkPlan.items;
-            if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0) {
-              api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model for agent=${agentId}`);
+            if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || chunkPlan.decisions) {
+              const decided = chunkPlan.decisions ? `, jev whole=${chunkPlan.decisions.whole} parts=${chunkPlan.decisions.parts} both=${chunkPlan.decisions.both}` : "";
+              if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || decided && Object.values(chunkPlan.decisions).some(Boolean)) {
+                api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model${decided} for agent=${agentId}`);
+              }
             }
             const textToVector = new Map();
             if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {

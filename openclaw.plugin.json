@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.18.17",
+  "version": "7.18.18",
   "kind": "memory",
   "cliCommands": [
     {
@@ -707,10 +707,40 @@
         "type": "string",
         "enum": [
           "beides",
-          "geteilt"
+          "geteilt",
+          "automatisch"
         ],
         "default": "beides",
         "description": "Was beim Aufteilen gespeichert wird. \"beides\" behält die Ursprungszeile UND legt ihre Teile daneben; \"geteilt\" speichert nur die Teile. An 100 gezielt ausgewählten schweren Fällen aus echten Daten gemessen (Abruf, Antwortmodell, Judge): ungeteilt 36 %, nur geteilt 49 %, beides 64 %. Reines Aufteilen findet mehr, verliert aber den Zusammenhang — die Ursprungszeile fängt das ab. \"geteilt\" spart dafür rund eine Zeile je geteilter Nachricht. Wirkt nur, wenn captureChunking an ist; auf false gesetzt wird gar nicht geteilt und die Nachricht bleibt ganz."
+      },
+      "captureChunkingJev": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "7.18.18: Einstellungen für captureChunkingMode \"automatisch\". Jev (TypeSafe) entscheidet je Nachricht, die die Regel teilen würde: zusammenhängend mit hoher Sicherheit → nur das Ganze, unabhängige Einzelpunkte mit hoher Sicherheit → nur die Teile, sonst Ganzes und Teile. Die Nachricht geht dafür an api.typesafe.ai. Ohne Schlüssel gilt \"beides\".",
+        "properties": {
+          "apiKeyEnv": {
+            "type": "string",
+            "default": "TYPESAFE_API_KEY",
+            "description": "Name der Umgebungsvariable mit dem TypeSafe-API-Schlüssel."
+          },
+          "model": {
+            "type": "string",
+            "default": "jev-latest"
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.85,
+            "description": "Ab dieser Sicherheit gilt Jevs Urteil; darunter wird Ganzes und Teile gespeichert."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 30000,
+            "default": 5000
+          }
+        }
       },
       "autoRecall": {
         "type": "boolean",
