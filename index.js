@@ -9174,11 +9174,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             if (actionKey === "state") {
               return runStatusCommand(commandCtx, memoryCtx);
             }
+            // Ueber /plur1bus steht "enable"/"disable" selbst in den Argumenten;
+            // parseFeatureArg las bis 7.18.15 deshalb "disable" als Feature-Namen.
             if (actionKey === "enable") {
-              return runFeatureToggle(commandCtx, true, memoryCtx);
+              return runFeatureToggle({ ...commandCtx, args: tokens.slice(1).join(" ") }, true, memoryCtx);
             }
             if (actionKey === "disable") {
-              return runFeatureToggle(commandCtx, false, memoryCtx);
+              return runFeatureToggle({ ...commandCtx, args: tokens.slice(1).join(" ") }, false, memoryCtx);
             }
             if (actionKey === "memory") {
               return runMemoryCommand(commandCtx, memoryCtx);
@@ -13063,6 +13065,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               category: r.entry.category,
               source: r.entry.origin || "dm",
               display: r.entry.summary || libGenerateSummary(r.entry.text, summaryMaxWords),
+              // 7.18.16: gespeicherter Volltext fuer die Spitzentreffer und die
+              // truncated-Markierung im Prompt.
+              fullText: typeof r.entry.text === "string" ? r.entry.text : "",
               memoryStrength: r.entry.memoryStrength ?? 1.0,
               graphSource: r.source,
               depth: r.depth,
@@ -13430,10 +13435,33 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             }
           } catch (_) { framedItems = associativeItems; }
 
+          // 7.18.16: Die bestplatzierten Treffer kommen mit ihrem gespeicherten
+          // Text (bis recall.fullTextMaxChars) statt als Kurzfassung in den
+          // Prompt. Bis dahin sah das Modell je Erinnerung nur eine
+          // Zusammenfassung, verdichtet auf ~16 Woerter und hoechstens 400
+          // Zeichen: Ein gespeichertes Rezept kam als "Mehl, 7 g
+          // Hirschhornsalz, ... auskuehlen lassen" an.
+          const fullTextTopRecords = normalizeBoundedRecallInteger(recallCfg.fullTextTopRecords, 3, 0, 15);
+          const fullTextMaxChars = normalizeBoundedRecallInteger(recallCfg.fullTextMaxChars, 2000, 400, 8000);
+          const fullTextIds = new Set();
+          for (const item of framedItems) {
+            if (fullTextIds.size >= fullTextTopRecords) break;
+            if (item?.fullText && item.memoryClass !== "dream" && item.category !== "canonical") fullTextIds.add(item.id);
+          }
+          // In place: an attached decision trace is a non-enumerable symbol and
+          // would not survive a spread copy.
+          for (const item of framedItems) {
+            if (!fullTextIds.has(item.id)) continue;
+            item.display = item.fullText;
+            item.displayMaxChars = fullTextMaxChars;
+            item.keepFullText = true;
+          }
+
           let promptItems = framedItems;
           let promptSemanticLensItems = semanticLensItems;
           if (semanticCompressionCfg.enabled !== false) {
             const allPromptItems = [...framedItems, ...semanticLensItems];
+            const compressibleItems = allPromptItems.filter((item) => !item.keepFullText);
             const tokenBudget = normalizeBoundedRecallInteger(
               semanticCompressionCfg.tokenBudget,
               240,
@@ -13441,7 +13469,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               1000,
             );
             const compressedSlots = compressMemorySlotsForPrompt(
-              allPromptItems.map((item) => ({
+              compressibleItems.map((item) => ({
                 entry: {
                   id: item.id,
                   text: item.display || "",
@@ -13452,9 +13480,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               })),
               tokenBudget,
             );
-            promptItems = allPromptItems.flatMap((item, index) => (
-              compressedSlots[index] ? [{ ...item, display: compressedSlots[index] }] : []
-            ));
+            let compressedIndex = 0;
+            promptItems = allPromptItems.flatMap((item) => {
+              if (item.keepFullText) return [item];
+              const slot = compressedSlots[compressedIndex++];
+              return slot ? [{ ...item, display: slot }] : [];
+            });
             promptSemanticLensItems = [];
           }
           const memoriesContext = formatRelevantMemoriesContext(promptItems, {

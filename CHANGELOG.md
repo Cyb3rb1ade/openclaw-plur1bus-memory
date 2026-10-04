@@ -5,6 +5,13 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.16] — 2026-10-04
+
+### Behoben
+
+- **Recall zeigte gespeicherte Erinnerungen nur als Bruchstück.** Jede Erinnerung kam als Zusammenfassung in den Prompt, die semantische Kompression verteilte dann 240 Wörter auf alle Treffer (bei 15 Treffern rund 16 Wörter je Erinnerung), und der Recall-Block kappte jeden Eintrag bei 400 Zeichen. Ein vollständig gespeichertes Rezept (2515 Zeichen) kam als „Mehl, 7 g Hirschhornsalz, … auskühlen lassen“ an; der Agent hielt die Mitte für verloren und suchte per `exec` in Sitzungsdateien. Die bestplatzierten Treffer (`recall.fullTextTopRecords`, Standard 3) kommen jetzt mit ihrem gespeicherten Text in den Prompt, bis `recall.fullTextMaxChars` (Standard 2000) und ohne Kompression. Was der Prompt kürzer zeigt als gespeichert, trägt `truncated="true"`, und der Block sagt dem Modell, den vollen Text vor dem Zitieren mit `memory_recall` und `full_text: true` zu holen. Die Gesamtgrenzen `recall.memoriesMaxChars` und `recall.globalInjectMaxChars` gelten unverändert.
+- **`/plur1bus enable|disable <feature>`** las das Wort „enable“/„disable“ selbst als Feature-Namen („Feature "disable" unknown“). `/enable` und `/disable` waren nicht betroffen.
+
 ## [7.18.15] — 2026-10-03
 
 ### Hinzugefügt
