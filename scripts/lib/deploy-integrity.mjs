@@ -124,6 +124,7 @@ export const DEPLOY_FILES = [
   "lib/health-watch.js",
   "lib/post-turn-detach.js",
   "lib/register-trace.js",
+  "lib/llm-warmth.js",
   "lib/memory-maintenance-gate.js",
   "lib/workspace-policy.js",
   "lib/workspace-policy-guard.js",

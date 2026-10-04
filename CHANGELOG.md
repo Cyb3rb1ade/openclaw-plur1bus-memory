@@ -11,6 +11,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 - **7.18.5** — `runtime.traceRegistrations` writes a registration stack to the gateway log (adapter). Contract 1.10.0: additive config keys, no breaking change.
 - **7.18.6** — registration trace keeps 200 frames instead of 60.
+- **7.18.7** — cold-start protection for plugin LLM calls (`lib/llm-warmth.js`).
 
 ### Hinzugefügt
 
