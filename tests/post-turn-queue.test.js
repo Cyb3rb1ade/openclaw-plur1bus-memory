@@ -35,7 +35,9 @@ describe("post-turn queue", () => {
     enqueuePostTurnWork(base, AGENT, { digestHash: "b" }, { now: 2000 });
     const files = entryFiles(base);
     assert.equal(files.length, 2);
-    assert.equal(statSync(join(base, POST_TURN_QUEUE_DIR, AGENT, files[0])).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal(statSync(join(base, POST_TURN_QUEUE_DIR, AGENT, files[0])).mode & 0o777, 0o600); // POSIX mode only
+    }
     const seen = [];
     const result = await drainPostTurnWork(base, AGENT, async (entry) => { seen.push(entry.digestHash); return true; });
     assert.deepEqual(seen, ["a", "b"]);

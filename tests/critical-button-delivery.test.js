@@ -89,6 +89,9 @@ test("finds the push target in the agent's own classify-recent cron and the bot 
   assert.deepEqual(findFeatureCronDelivery(jobs, "bernhardine", "classify-recent"), { channel: "telegram", to: "1211667028" });
   assert.equal(findFeatureCronDelivery(jobs, "heisenberg", "classify-recent"), null, "disabled job is no target");
   assert.equal(findFeatureCronDelivery([...jobs, job("main", "classify-recent", "1")], "main", "classify-recent"), null, "disagreeing targets");
+  const winJob = job("main", "classify-recent", "55736530");
+  winJob.payload.argv[1] = "C:\\Users\\ops\\.openclaw\\extensions\\memory-lancedb-namespaced\\scripts\\run-feature-cron.mjs";
+  assert.deepEqual(findFeatureCronDelivery([winJob], "main", "classify-recent"), { channel: "telegram", to: "55736530" });
 
   const cfg = { bindings: [
     { agentId: "main", match: { channel: "discord", accountId: "default" } },

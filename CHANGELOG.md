@@ -25,6 +25,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.18** — `captureChunkingMode: "automatisch"` lets Jev decide per message whether to store the whole row, only parts, or both; dashboard switch offers Automatic (Jev).
 - **7.18.19** — Host recovery and routing notices (gateway restart, queued user message, inter-session routing, `⟦openclaw:ctx⟧`) are not captured as user memories.
 - **7.18.20** — Group messages that look like another bot's visible reasoning (`🧠`, `<think>`, …) are claimed without a reply (`groupReasoningFilter`).
+- Native feature-cron delivery lookup matches Windows runner paths (`\run-feature-cron.mjs`) and review commands (`/plur1bus obsidian …-review`).
 
 ### Hinzugefügt
 

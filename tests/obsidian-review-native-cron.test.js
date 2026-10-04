@@ -173,6 +173,24 @@ describe("agentTurn review migration", () => {
     assert.deepStrictEqual(findFeatureCronDelivery([migrated], "main", "evening-review"), { channel: "telegram", to: "10000001" });
   });
 
+  it("finds a native review job whose runner path uses Windows separators", () => {
+    const migrated = {
+      ...agentTurnJob(),
+      payload: {
+        kind: "command",
+        argv: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\ops\\.openclaw\\extensions\\memory-lancedb-namespaced\\scripts\\run-feature-cron.mjs",
+          "--agent",
+          "main",
+          "--feature",
+          "evening-review",
+        ],
+      },
+    };
+    assert.deepStrictEqual(findFeatureCronDelivery([migrated], "main", "evening-review"), { channel: "telegram", to: "10000001" });
+  });
+
   it("generates native cron commands for new installations", () => {
     const plan = buildWorkspaceReviewCronJobs({}, {
       workspaces: [{ workspaceId: "main", agentId: "main", label: "Main" }],
