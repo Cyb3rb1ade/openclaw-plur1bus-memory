@@ -3534,7 +3534,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.9.0",
+    contract: "1.10.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3591,9 +3591,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.9.0).
+  // The Engine (types/engine.d.ts, contract 1.10.0).
   const engine = {
-    contract: "1.9.0",
+    contract: "1.10.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());

@@ -157,6 +157,8 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     delete afterSchema.properties.runtime.properties.lancedbCompaction;
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "detachPostTurnWork"));
     delete afterSchema.properties.runtime.properties.detachPostTurnWork;
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "traceRegistrations"));
+    delete afterSchema.properties.runtime.properties.traceRegistrations;
     assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
     delete afterSchema.properties.healthWatch;
 

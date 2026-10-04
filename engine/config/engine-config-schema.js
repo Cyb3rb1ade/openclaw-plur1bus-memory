@@ -1,6 +1,6 @@
 /**
  * engine/config/engine-config-schema.js — loader for engine/config/engine-config.schema.json
- * (types/engine.d.ts `EngineConfigSchema`, contract 1.9.0).
+ * (types/engine.d.ts `EngineConfigSchema`, contract 1.10.0).
  *
  * The JSON is the host-neutral engine config schema: the OpenClaw manifest's
  * `configSchema` plus three annotations — `readAt` (when the engine reads a

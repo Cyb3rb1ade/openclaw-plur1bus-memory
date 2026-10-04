@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "plur1bus-engine-config",
-  "x-contract": "1.9.0",
+  "x-contract": "1.10.0",
   "$defs": {
     "secretInput": {
       "type": [
@@ -699,6 +699,11 @@
           "type": "boolean",
           "default": false,
           "description": "Run post-turn capture work (episodes, insights, light dream) outside the finished turn's caller identity, so its LLM calls are not refused as unauthorized by hosts that revoke that identity when the turn ends (OpenClaw: LLM_COMPLETION_NOT_AUTHORIZED). Off by default; turn on and observe."
+        },
+        "traceRegistrations": {
+          "type": "boolean",
+          "default": false,
+          "description": "7.18.5 diagnostic for openclaw/openclaw#163029: log the call stack of every plugin registration (warn level), to show where OpenClaw's mid-turn plugin reloads come from. Off by default."
         },
         "llmResultCacheEnabled": {
           "type": "boolean",

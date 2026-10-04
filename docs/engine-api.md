@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.9.0** · frozen at 1.0.0 on 2026-09-22, amended ten times
+**Contract version 1.10.0** · frozen at 1.0.0 on 2026-09-22, amended eleven times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -128,6 +128,10 @@ own changelog:
   so a process with neo enabled can exit. See
   [Engine configuration schema in 1.9.0](#engine-configuration-schema-in-190)
   below.
+- **1.10.0** — additive engine-config keys from the 7.18.5–7.18.20 port onto
+  `main` (`runtime.traceRegistrations` first; later port commits add more
+  keys under the same minor). Existing callers keep working: new keys have
+  defaults that match the previous behaviour.
 
 ## The two halves
 

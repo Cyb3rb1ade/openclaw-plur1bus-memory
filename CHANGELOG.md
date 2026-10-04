@@ -7,6 +7,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Ported from 7.18.5–7.18.20
+
+- **7.18.5** — `runtime.traceRegistrations` writes a registration stack to the gateway log (adapter). Contract 1.10.0: additive config keys, no breaking change.
+
 ### Hinzugefügt
 
 - **Eingefrorener Engine-Vertrag** in `types/engine.d.ts` (Contract 1.2.0,

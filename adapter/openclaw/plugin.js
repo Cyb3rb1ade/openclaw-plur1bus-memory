@@ -56,6 +56,7 @@ import { createOpenClawSkillWorkshopClient } from "../../lib/setup/skill-worksho
 import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/runtime-config.js";
 import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
+import { formatRegistrationTrace, recordRegistration } from "../../lib/register-trace.js";
 
 /**
  * The OpenClaw plugin's register(): validate the test-injection dependencies,
@@ -616,4 +617,9 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     reembeddingSwitchRecovery,
     scopedEmbeddingServer,
   });
+  // 7.18.5: openclaw/openclaw#163029 — where mid-turn reloads come from.
+  const registrationTrace = formatRegistrationTrace(
+    recordRegistration({ enabled: cfg.runtime?.traceRegistrations === true }),
+  );
+  if (registrationTrace) api.logger.warn(registrationTrace);
 }
