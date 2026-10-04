@@ -44,11 +44,14 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
-      # Informational policy retained. The pinned optional inference patches
-      # (adm-zip 0.6.1, sharp 0.35.4) are covered by local-inference regressions;
-      # audit output remains visible for newly published advisories.
-      - name: Run security audit (informational)
-        run: npm audit --audit-level=moderate || true
+      # Shipped graph must stay clean. Dev/test findings (OpenClaw host and its
+      # transitive tree) are recorded as advisory so a new high does not block
+      # the suite; omit=dev is the gate that protects the published package.
+      - name: Audit shipped graph (blocking)
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: Audit full graph (advisory)
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - name: Verify lockfile signatures (informational)
         run: npm audit signatures || true
 
