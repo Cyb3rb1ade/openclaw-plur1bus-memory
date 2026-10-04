@@ -760,6 +760,9 @@ const IS_MAIN = (() => {
 
 if (IS_MAIN) {
   runSetupFeatureCrons().then((code) => {
-    process.exit(code);
+    // exitCode, not exit(): stdout to a pipe is asynchronous, and exit() cut
+    // the --json result off at 64 KiB. The bootstrap could not parse it and
+    // reported planCreateCount=1 after every gateway start (02.10.2026).
+    process.exitCode = code;
   });
 }
