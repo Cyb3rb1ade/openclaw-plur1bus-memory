@@ -196,6 +196,7 @@ export const DEPLOY_FILES = [
   "lib/review-workspace-status.js",
   "lib/post-turn-queue.js",
   "lib/jev-chunk-decider.js",
+  "lib/group-reasoning-filter.js",
   "lib/open-threads.js",
   "lib/contradiction-disclosure.js",
   "lib/recall-confidence-framing.js",

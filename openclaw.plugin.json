@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.18.19",
+  "version": "7.18.20",
   "kind": "memory",
   "cliCommands": [
     {
@@ -712,6 +712,22 @@
         ],
         "default": "beides",
         "description": "Was beim Aufteilen gespeichert wird. \"beides\" behält die Ursprungszeile UND legt ihre Teile daneben; \"geteilt\" speichert nur die Teile. An 100 gezielt ausgewählten schweren Fällen aus echten Daten gemessen (Abruf, Antwortmodell, Judge): ungeteilt 36 %, nur geteilt 49 %, beides 64 %. Reines Aufteilen findet mehr, verliert aber den Zusammenhang — die Ursprungszeile fängt das ab. \"geteilt\" spart dafür rund eine Zeile je geteilter Nachricht. Wirkt nur, wenn captureChunking an ist; auf false gesetzt wird gar nicht geteilt und die Nachricht bleibt ganz."
+      },
+      "groupReasoningFilter": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "7.18.20: In Gruppenchats keinen Turn auf Nachrichten starten, die wie der sichtbare Denkblock eines anderen Bots beginnen (z. B. \"🧠 …\" aus /reasoning stream). Anthropic lehnt Anfragen, die fremdes Modell-Denken enthalten, als reasoning_extraction ab. Der Bot bleibt stumm, ohne Modellaufruf.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "prefixes": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Anfänge, an denen ein Denkblock erkannt wird (ohne Groß-/Kleinschreibung). Ohne Angabe: 🧠, 💭, <think>, <thinking>, reasoning:, thinking:."
+          }
+        }
       },
       "captureChunkingJev": {
         "type": "object",

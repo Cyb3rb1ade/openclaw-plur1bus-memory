@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.20] — 2026-10-04
+
+### Behoben
+
+- **Bots antworteten in Gruppen auf den sichtbaren Denkblock anderer Bots, und Anthropic lehnte ab.** Mit `/reasoning stream` postet OpenClaw das Denken des Modells als Live-Vorschau („🧠 …“) und löscht sie nach der Antwort. Die anderen Bots der Gruppe erhalten diese Vorschau als normale neue Nachricht. Am 04.10. bekam Bernd Bernhardines Vorschau eine Sekunde nach dem Posten, startete darauf einen Turn, und Anthropic verweigerte die Anfrage („reasoning_extraction“). Neuer Filter `lib/group-reasoning-filter.js` auf `before_dispatch` und `before_agent_reply`: Beginnt eine Gruppennachricht mit einem Denk-Präfix, wird der Turn ohne Antwort und ohne Modellaufruf beansprucht. Direktchats bleiben unberührt. Voreingestellte Präfixe: 🧠, 💭, `<think>`, `<thinking>`, `reasoning:`, `thinking:` (auch hinter „Name: “). Einstellbar über `groupReasoningFilter.prefixes`, abschaltbar mit `groupReasoningFilter.enabled: false`. Das Log nennt nur Agent und Sitzung, nie den Text.
+
 ## [7.18.19] — 2026-10-04
 
 ### Behoben
