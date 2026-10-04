@@ -21,6 +21,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.14** — light dream and episode extraction enqueue from capture; cron `post-turn-refine` drains the queue every 20 minutes. `runtime.deferPostTurnLlm=false` restores the inline path.
 - **7.18.15** — `dreaming.narrative.diaryFromUserChats` (default false) writes light-dream narratives from identified user chats into `DREAMS.md`.
 - **7.18.16** — Recall injects stored full text of the top records (`recall.fullTextTopRecords` default 3, `recall.fullTextMaxChars` default 2000) and marks truncated records; `/plur1bus enable|disable` passes remaining tokens as the feature name.
+- **7.18.17** — Recall prefers the original stored row over its chunk parts (`dedupResults` replaces parts with the whole at the same place).
 
 ### Hinzugefügt
 
