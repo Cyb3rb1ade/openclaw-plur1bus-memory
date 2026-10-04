@@ -760,10 +760,40 @@
         "type": "string",
         "enum": [
           "beides",
-          "geteilt"
+          "geteilt",
+          "automatisch"
         ],
         "default": "beides",
-        "description": "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off."
+        "description": "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts, \"automatisch\" lets Jev decide per message; it has no effect when captureChunking is off."
+      },
+      "captureChunkingJev": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Settings for captureChunkingMode \"automatisch\". Jev (TypeSafe) decides per message that the splitter would cut: coherent with high confidence stores the whole row, independent points with high confidence store only the parts, otherwise whole and parts. The message is sent to api.typesafe.ai. Without a key the mode behaves like \"beides\".",
+        "properties": {
+          "apiKeyEnv": {
+            "type": "string",
+            "default": "TYPESAFE_API_KEY",
+            "description": "Name of the environment variable that holds the TypeSafe API key."
+          },
+          "model": {
+            "type": "string",
+            "default": "jev-latest"
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.85,
+            "description": "Minimum confidence at which Jev's verdict is used; below it, whole and parts are stored."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 30000,
+            "default": 5000
+          }
+        }
       },
       "autoRecall": {
         "type": "boolean",

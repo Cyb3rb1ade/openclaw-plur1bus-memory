@@ -23,7 +23,8 @@ import { IMPORTANCE_STATUS } from "../../lib/importance-status.js";
 import { runReflectionJob } from "../../lib/jobs/reflection-job.js";
 import { withLlmCallContext } from "../../lib/llm-result-cache.js";
 import { isLlmRouteAvailable } from "../../lib/llm-router.js";
-import { expandForCapture } from "../../lib/memory-chunking.js";
+import { expandForCapture, expandForCaptureDecided } from "../../lib/memory-chunking.js";
+import { createJevChunkDecider } from "../../lib/jev-chunk-decider.js";
 import { applyDynamicsDefaults } from "../../lib/memory-dynamics.js";
 import { buildEdgesForSession, buildEpisodeAnchorEdges, createGraphMetrics, extractGraphSignals, readBoundGraph, writeGraphConstellationReport } from "../../lib/memory-graph.js";
 import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
@@ -182,6 +183,22 @@ export function createTurnCapture(ctx) {
   });
 
   const deferPostTurnLlm = cfg?.runtime?.deferPostTurnLlm !== false;
+  // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
+  // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
+  // unsicher -> beides. Ohne Schluessel verhaelt es sich wie "beides".
+  const jevChunkCfg = cfg?.captureChunkingJev || {};
+  const jevChunkDecider = cfg?.captureChunkingMode === "automatisch"
+    ? createJevChunkDecider({
+      apiKey: process.env[typeof jevChunkCfg.apiKeyEnv === "string" && jevChunkCfg.apiKeyEnv.trim() ? jevChunkCfg.apiKeyEnv.trim() : "TYPESAFE_API_KEY"],
+      model: jevChunkCfg.model,
+      minConfidence: jevChunkCfg.minConfidence,
+      timeoutMs: jevChunkCfg.timeoutMs,
+      logger: host.logger,
+    })
+    : null;
+  if (cfg?.captureChunkingMode === "automatisch" && !jevChunkDecider) {
+    host.logger.warn?.("memory-lancedb-namespaced: captureChunkingMode \"automatisch\" without a Jev API key; storing whole and parts");
+  }
   const { runLightDreamPostTurn, runEpisodePostTurn } = createPostTurnWorkers({
     embeddings,
     conversationInsightsLlmCfg,
@@ -564,14 +581,24 @@ export function createTurnCapture(ctx) {
         //   true + captureChunkingMode "beides" (Vorgabe) -> Ganzes und Teile
         //   true + captureChunkingMode "geteilt"       -> nur die Teile
         // Gemessen an 100 schweren Faellen: 36 % / 64 % / 49 %.
-        const chunkPlan = expandForCapture(preppedOk, {
-          enabled: cfg.captureChunking !== false,
-          keepWhole: cfg.captureChunkingMode !== "geteilt",
-          makeGroupId: randomUUID,
-        });
+        const chunkPlan = jevChunkDecider
+          ? await expandForCaptureDecided(preppedOk, {
+            enabled: cfg.captureChunking !== false,
+            makeGroupId: randomUUID,
+            decide: jevChunkDecider,
+          })
+          : expandForCapture(preppedOk, {
+            enabled: cfg.captureChunking !== false,
+            keepWhole: cfg.captureChunkingMode !== "geteilt",
+            makeGroupId: randomUUID,
+          });
+        throwIfCaptureAborted();
         const validPreps = chunkPlan.items;
-        if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0) {
-          host.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model for agent=${agentId}`);
+        if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || chunkPlan.decisions) {
+          const decided = chunkPlan.decisions ? `, jev whole=${chunkPlan.decisions.whole} parts=${chunkPlan.decisions.parts} both=${chunkPlan.decisions.both}` : "";
+          if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || decided && Object.values(chunkPlan.decisions).some(Boolean)) {
+            host.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model${decided} for agent=${agentId}`);
+          }
         }
         const textToVector = new Map();
         if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {

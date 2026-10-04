@@ -78,7 +78,7 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       assert.ok(!text.includes(word), `configSchema must not contain ${word}`);
     }
     for (const key of ENGINE_ONLY_ROOT_KEYS) assert.ok(!Object.hasOwn(manifest.configSchema, key), key);
-    assert.equal(Object.keys(manifest.configSchema.properties).length, 56);
+    assert.equal(Object.keys(manifest.configSchema.properties).length, 57);
   });
 
   it("secretInputs follow the $ref secretInput nodes, not every x-sensitive path", () => {
@@ -167,6 +167,11 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     delete afterSchema.properties.recall.properties.fullTextTopRecords;
     assert.ok(Object.hasOwn(afterSchema.properties.recall.properties, "fullTextMaxChars"));
     delete afterSchema.properties.recall.properties.fullTextMaxChars;
+    assert.ok(Object.hasOwn(afterSchema.properties, "captureChunkingJev"));
+    delete afterSchema.properties.captureChunkingJev;
+    assert.deepEqual(afterSchema.properties.captureChunkingMode.enum.slice().sort(), ["automatisch", "beides", "geteilt"]);
+    afterSchema.properties.captureChunkingMode.enum = ["beides", "geteilt"];
+    afterSchema.properties.captureChunkingMode.description = "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.";
     assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
     delete afterSchema.properties.healthWatch;
 

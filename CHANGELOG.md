@@ -22,6 +22,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.15** — `dreaming.narrative.diaryFromUserChats` (default false) writes light-dream narratives from identified user chats into `DREAMS.md`.
 - **7.18.16** — Recall injects stored full text of the top records (`recall.fullTextTopRecords` default 3, `recall.fullTextMaxChars` default 2000) and marks truncated records; `/plur1bus enable|disable` passes remaining tokens as the feature name.
 - **7.18.17** — Recall prefers the original stored row over its chunk parts (`dedupResults` replaces parts with the whole at the same place).
+- **7.18.18** — `captureChunkingMode: "automatisch"` lets Jev decide per message whether to store the whole row, only parts, or both; dashboard switch offers Automatic (Jev).
 
 ### Hinzugefügt
 
