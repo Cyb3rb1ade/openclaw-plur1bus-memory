@@ -8,14 +8,17 @@
  */
 
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import moduleLib, { createRequire } from "node:module";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   SHARP_UNAVAILABLE_REASON,
   importTransformersBehindSharpProbe,
+  installSharpUnavailableStub,
+  isTransformersSharpCaller,
   sharpStubInstalled,
 } from "../lib/native/sharp-unavailable.js";
 import { throwSharpUnavailable } from "../lib/native/sharp-stub.js";
@@ -63,6 +66,17 @@ function dlopenError() {
   const error = new Error("The module '/tmp/sharp.node' failed: libvips-cpp.so.8.17.3: cannot open shared object file");
   error.code = "ERR_DLOPEN_FAILED";
   return error;
+}
+
+function sharpVersion(mod) {
+  return (mod?.default ?? mod)?.versions?.sharp;
+}
+
+function sharpCacheKeys() {
+  const cache = (moduleLib.Module ?? moduleLib)._cache ?? {};
+  return Object.keys(cache)
+    .filter((key) => key.replace(/\\/g, "/").includes("/node_modules/sharp/"))
+    .sort();
 }
 
 async function withUnhandledRejectionGuard(body) {
@@ -158,19 +172,60 @@ describe("selftest sharp degrade", () => {
     });
   });
 
+  it("imports of sharp from outside transformers stay the real module after the stub is installed", async () => {
+    const req = createRequire(import.meta.url);
+    const cjs = req("sharp");
+    assert.notEqual(sharpVersion(cjs), "unavailable");
+    const keysBefore = sharpCacheKeys();
+    assert.ok(keysBefore.length > 0, "real sharp is in Module._cache");
+
+    installSharpUnavailableStub();
+    assert.equal(sharpStubInstalled(), true);
+    assert.deepEqual(sharpCacheKeys(), keysBefore);
+
+    const cjsAfter = req("sharp");
+    const esm = await import("sharp");
+    assert.equal(cjsAfter, cjs);
+    assert.notEqual(sharpVersion(cjsAfter), "unavailable");
+    assert.notEqual(sharpVersion(esm), "unavailable");
+    assert.doesNotThrow(() => { cjsAfter(); });
+  });
+
   it("transformers import after a failed sharp probe uses the stub and does not reject", async () => {
-    const mod = await withUnhandledRejectionGuard(async () => {
-      const transformers = await importTransformersBehindSharpProbe({
+    const transformers = await withUnhandledRejectionGuard(async () => {
+      return importTransformersBehindSharpProbe({
         sharpImporter: async () => { throw dlopenError(); },
       });
-      const req = createRequire(import.meta.url);
-      const cjs = req("sharp");
-      const esm = await import("sharp");
-      return { transformers, cjs, esm: esm.default ?? esm };
     });
     assert.equal(sharpStubInstalled(), true);
-    assert.equal(typeof mod.transformers.pipeline, "function");
-    assert.throws(() => mod.cjs(), (error) => error.reason === SHARP_UNAVAILABLE_REASON);
-    assert.throws(() => mod.esm(), (error) => error.reason === SHARP_UNAVAILABLE_REASON);
+    assert.equal(typeof transformers.pipeline, "function");
+  });
+
+  it("imports of sharp from @huggingface/transformers receive the placeholder", async () => {
+    installSharpUnavailableStub();
+    const keysBefore = sharpCacheKeys();
+
+    assert.equal(isTransformersSharpCaller("/app/node_modules/@huggingface/transformers/src/utils/image.js"), true);
+    assert.equal(isTransformersSharpCaller("C:\\app\\node_modules\\@huggingface\\transformers\\src\\utils\\image.js"), true);
+    assert.equal(isTransformersSharpCaller("file:///app/node_modules/@huggingface/transformers/dist/transformers.node.mjs"), true);
+    assert.equal(isTransformersSharpCaller({ filename: "/app/tests/selftest-sharp-degrade.test.js" }), false);
+    assert.equal(isTransformersSharpCaller({ parentURL: "file:///app/lib/native/sharp-unavailable.js" }), false);
+    assert.equal(isTransformersSharpCaller(null), false);
+
+    const req = createRequire(import.meta.url);
+    const transformersEntry = req.resolve("@huggingface/transformers");
+    assert.equal(isTransformersSharpCaller(transformersEntry), true);
+    const fromTransformers = createRequire(transformersEntry)("sharp");
+    assert.equal(sharpVersion(fromTransformers), "unavailable");
+    assert.throws(() => fromTransformers(), (error) => error.reason === SHARP_UNAVAILABLE_REASON);
+    assert.deepEqual(sharpCacheKeys(), keysBefore);
+
+    const fakeDir = join(makeTempDir("st-tf-sharp-"), "node_modules", "@huggingface", "transformers");
+    mkdirSync(fakeDir, { recursive: true });
+    const fakeFile = join(fakeDir, "load-sharp.mjs");
+    writeFileSync(fakeFile, 'import sharp from "sharp";\nexport default sharp;\n');
+    const esm = await import(pathToFileURL(fakeFile).href);
+    assert.equal(sharpVersion(esm), "unavailable");
+    assert.throws(() => (esm.default ?? esm)(), (error) => error.reason === SHARP_UNAVAILABLE_REASON);
   });
 });

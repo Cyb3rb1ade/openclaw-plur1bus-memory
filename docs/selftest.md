@@ -39,6 +39,8 @@ triggers the rollback.
 `native_addon_unavailable:sharp` and `capabilities` containing
 `{ "id": "vision", "status": "degraded", "reason": "native_addon_unavailable:sharp" }`
 means image/vision paths are unavailable. Text embedding still loads
-`@huggingface/transformers` (the package imports `sharp` at module load; the
-plugin intercepts that import after a failed probe). A redacted warning is
-logged once; the failure is never swallowed silently.
+`@huggingface/transformers` (the package imports `sharp` at module load; after
+a failed probe the plugin intercepts only those `sharp` imports whose caller
+lives under `node_modules/@huggingface/transformers/`). Other `sharp` imports
+keep the real module. A redacted warning is logged once; the failure is never
+swallowed silently.
