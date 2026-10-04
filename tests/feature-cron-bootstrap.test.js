@@ -438,7 +438,8 @@ async function runJsonSetupDirect(
 }
 
 describe("loadFeatureCronConfig timeout budget", () => {
-  it("allows 30 seconds for the redacted gateway snapshot", () => {
+  // 7.18.10: 60 s — right after a 2026.9.7 start config.get took more than 30 s.
+  it("allows 60 seconds for the redacted gateway snapshot", () => {
     const sourceConfig = {
       plugins: {
         entries: {
@@ -455,7 +456,7 @@ describe("loadFeatureCronConfig timeout budget", () => {
     const result = loadFeatureCronConfig((args, timeout) => {
       assert.deepStrictEqual(args, ["gateway", "call", "config.get", "--json"]);
       receivedTimeout = timeout;
-      if (timeout < 30_000) {
+      if (timeout < 60_000) {
         return {
           ok: false,
           stdout: "",
@@ -472,7 +473,7 @@ describe("loadFeatureCronConfig timeout budget", () => {
       };
     });
 
-    assert.equal(receivedTimeout, 30_000);
+    assert.equal(receivedTimeout, 60_000);
     assert.deepStrictEqual(result, { ok: true, sourceConfig, runtimeConfig });
   });
 });
@@ -728,7 +729,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     assert.strictEqual(result.exitCode, 0);
     const configCalls = calls.filter(({ args }) => args.join(" ") === "gateway call config.get --json");
     assert.strictEqual(configCalls.length, 1);
-    assert.strictEqual(configCalls[0].timeout, 30000);
+    assert.strictEqual(configCalls[0].timeout, 60000);
     assert.strictEqual(cronAdds.length, 1);
     assert.ok(cronAdds[0].includes("plur1bus consolidate-daily main"));
   });
