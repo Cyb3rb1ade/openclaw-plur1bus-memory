@@ -46,6 +46,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Geändert
 
+- **Selftest / native `sharp`:** Wenn `sharp` nicht lädt (etwa
+  `ERR_DLOPEN_FAILED`, fehlendes libvips), bleibt der Text-Pfad (Embed,
+  Capture, Recall) grün. Vision wird als `degraded` mit Reason
+  `native_addon_unavailable:sharp` gemeldet; ein redigiertes Warning, kein
+  unhandledRejection. `@huggingface/transformers` wird hinter dem Probe
+  geladen. Der Platzhalter gilt nur für `sharp`-Imports aus
+  `node_modules/@huggingface/transformers/`; alle anderen behalten das echte
+  Modul. LanceDB und `onnxruntime-node` bleiben Pflicht.
 - **Windows-ACL-Lesen:** `readDirectoryAcl` startet auch PowerShell 5.1 über
   `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`. Der
   Vergleichstest prüft einen reinen Vererbungseintrag (`IO`).
