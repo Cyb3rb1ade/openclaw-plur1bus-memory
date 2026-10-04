@@ -57,6 +57,7 @@ import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/r
 import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { formatRegistrationTrace, recordRegistration } from "../../lib/register-trace.js";
+import { createGroupReasoningFilter } from "../../lib/group-reasoning-filter.js";
 
 /**
  * The OpenClaw plugin's register(): validate the test-injection dependencies,
@@ -598,6 +599,24 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       stateDir: host.stateDir,
       temporalContextEnabled,
     });
+  }
+
+  // 7.18.20: In Gruppen keinen Turn auf den sichtbaren Denkblock eines
+  // anderen Bots starten ("🧠 …" aus /reasoning stream). Der Hook beansprucht
+  // den Turn ohne Antwort.
+  if (typeof api.on === "function" && cfg.groupReasoningFilter?.enabled !== false) {
+    const groupReasoningFilter = createGroupReasoningFilter({
+      enabled: true,
+      prefixes: cfg.groupReasoningFilter?.prefixes,
+      logger: api.logger,
+    });
+    for (const hookName of ["before_dispatch", "before_agent_reply"]) {
+      try {
+        api.on(hookName, groupReasoningFilter);
+      } catch (error) {
+        api.logger?.warn?.(`memory-lancedb-namespaced: group reasoning filter not registered on ${hookName}: ${error?.message || error}`);
+      }
+    }
   }
 
   // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku (register-voice-mode.js).

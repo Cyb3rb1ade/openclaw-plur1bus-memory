@@ -795,6 +795,25 @@
           }
         }
       },
+      "groupReasoningFilter": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "In group chats, do not start a turn on messages that look like another bot's visible reasoning (for example \"🧠 …\" from /reasoning stream). Providers reject requests that contain another model's thinking as reasoning_extraction. The bot stays silent, with no model call.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Starts that mark a reasoning block (case-insensitive). Defaults: 🧠, 💭, <think>, <thinking>, reasoning:, thinking:."
+          }
+        }
+      },
       "autoRecall": {
         "type": "boolean",
         "default": true,
