@@ -144,6 +144,43 @@ describe("openclaw plur1bus selftest", () => {
     assert.equal(inside.out.join("").split("\n").some((line) => line.startsWith("notice")), false, "no notice when coexistence failed");
   });
 
+  it("sharp unavailable degrades vision and still exits 0", async () => {
+    const h = harness({
+      runResult: report(true, {
+        addons: [
+          { name: "@lancedb/lancedb", ok: true },
+          { name: "onnxruntime-node", ok: true },
+          { name: "sharp", ok: false, package: "@img/sharp-linux-x64", error: "ERR_DLOPEN_FAILED" },
+        ],
+        warnings: ["native_addon_unavailable:sharp"],
+        capabilities: [{ id: "vision", status: "degraded", reason: "native_addon_unavailable:sharp" }],
+      }),
+    });
+    await h.parse(["plur1bus", "selftest"]);
+    const text = h.out.join("");
+    assert.match(text, /degraded addon sharp: @img\/sharp-linux-x64 \(ERR_DLOPEN_FAILED\)/);
+    assert.equal(text.trimEnd().split("\n").at(-1), "selftest ok");
+    assert.deepEqual(h.exitCodes, [0]);
+    assert.match(h.err.join(""), /native_addon_unavailable:sharp/);
+
+    const json = harness({
+      runResult: report(true, {
+        addons: [
+          { name: "@lancedb/lancedb", ok: true },
+          { name: "onnxruntime-node", ok: true },
+          { name: "sharp", ok: false, package: "@img/sharp-linux-x64", error: "ERR_DLOPEN_FAILED" },
+        ],
+        warnings: ["native_addon_unavailable:sharp"],
+        capabilities: [{ id: "vision", status: "degraded", reason: "native_addon_unavailable:sharp" }],
+      }),
+    });
+    await json.parse(["plur1bus", "selftest", "--json"]);
+    const doc = JSON.parse(json.out.join(""));
+    assert.equal(doc.ok, true);
+    assert.equal(doc.capabilities[0].reason, "native_addon_unavailable:sharp");
+    assert.deepEqual(json.exitCodes, [0]);
+  });
+
   it("a usage error exits 2 without running the selftest", async () => {
     for (const args of [["plur1bus", "selftest", "--bogus"], ["plur1bus", "selftest", "extra"], ["plur1bus", "selftest", "--state-dir"]]) {
       const h = harness();

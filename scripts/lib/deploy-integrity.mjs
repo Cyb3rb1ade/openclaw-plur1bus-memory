@@ -209,6 +209,8 @@ export const DEPLOY_FILES = [
   "lib/providers/dimension-guard.js",
   "lib/providers/dimensions.js",
   "lib/providers/embedding-local-transformers.js",
+  "lib/native/sharp-stub.js",
+  "lib/native/sharp-unavailable.js",
   "lib/providers/local-transformers-shared-pool.js",
   "lib/providers/scoped-embedding-ipc.js",
   "lib/providers/local-model-artifacts.js",
