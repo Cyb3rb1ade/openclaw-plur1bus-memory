@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.19] — 2026-10-04
+
+### Behoben
+
+- **Hinweise des Hosts landeten als Nutzeraussagen im Gedächtnis.** OpenClaw legt nach einem Gateway-Neustart „[System] Your previous turn was interrupted by a gateway restart …“ als `user`-Nachricht in unterbrochene Sitzungen; ebenso eingereihte Nachrichten („[Queued user message from a previous active turn …“), Weiterleitungen aus anderen Sitzungen und die `⟦openclaw:ctx⟧`-Hülle. Der Auto-Capture hielt sie für Gesagtes: nach dem Deploy am 04.10. speicherte Heisenberg den Neustart-Hinweis als Erinnerung, ohne dass Erik etwas geschrieben hatte. `isInjectedContextText` erkennt diese Hinweise jetzt, am Zeilenanfang (auch mit vorangestelltem „User:“) bzw. an ihren eindeutigen Formulierungen; bloße Erwähnungen im Satz bleiben erfassbar.
+
 ## [7.18.18] — 2026-10-04
 
 ### Hinzugefügt
