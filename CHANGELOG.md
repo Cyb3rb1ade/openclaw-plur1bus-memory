@@ -17,6 +17,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.10** — cron setup `config.get` waits 60 s.
 - **7.18.11** — Obsidian reviews as native crons; review texts in several languages.
 - **7.18.12** — evening review shows the daily note, dreams and knowledge files.
+- **7.18.13** — evening review checks the dream diary against REM and shows the KNOWLEDGE backlog.
 
 ### Hinzugefügt
 
