@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.17] — 2026-10-04
+
+### Behoben
+
+- **Recall verwarf die vollständige Ursprungszeile zugunsten ihrer Teilstücke.** Seit 7.12.70 speichert der Capture lange Antworten zusätzlich in Teilstücken (`keepWhole`: Ganzes plus Teile, gleiche `sourceTurnId`, nur die Teile mit `chunkGroupId`). Die Textentdopplung in `dedupResults` hielt die Ursprungszeile für ein Duplikat ihres ersten Teilstücks, weil beide fast dieselbe Zusammenfassung haben, und warf sie heraus. Ein vollständig gespeichertes Rezept kam so auch über `memory_recall` mit `full_text: true` nur bis „250 g Mehl“ an. Die Ursprungszeile ersetzt jetzt ihre bereits aufgenommenen Teilstücke an deren Platz, und Teilstücke eines schon aufgenommenen Ganzen fallen weg. Gilt an allen drei Aufrufstellen (Auto-Recall, `memory_recall`, Namespace-Merge).
+
 ## [7.18.16] — 2026-10-04
 
 ### Behoben

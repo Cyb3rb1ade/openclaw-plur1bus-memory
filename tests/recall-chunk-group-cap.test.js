@@ -92,3 +92,33 @@ describe("Deckel je Herkunfts-Nachricht", () => {
     assert.strictEqual(out.length, 1, "Textdubletten bleiben Dubletten");
   });
 });
+
+// 7.18.16: Ganzes vor Teilen. Die Ursprungszeile (keepWhole) und das erste
+// Teilstueck haben fast dieselbe Zusammenfassung; die Textentdopplung warf
+// deshalb das Ganze heraus und liess nur Bruchstuecke uebrig.
+describe("Ursprungszeile vor ihren Teilstuecken", () => {
+  const rezept = "Ammonplaetzchen 1959. 250 g Mehl, 125 g Butter, 125 g Zucker, 2 Eier, 7 g Hirschhornsalz. Ablauf: ruehren, backen, glasieren.";
+  const ganz = (score) => ({ entry: { id: "whole", text: rezept, summary: "Ammonplaetzchen 1959. 250 g Mehl", chunkGroupId: "", sourceTurnId: "turn-1" }, score });
+  const teil = (id, text, score) => ({ entry: { id, text, summary: text.slice(0, 32), chunkGroupId: "g-rezept", sourceTurnId: "turn-1" }, score });
+  const fremd = { entry: { id: "other", text: WOERTER[1], summary: "", chunkGroupId: "", sourceTurnId: "turn-2" }, score: 0.5 };
+
+  it("ersetzt bereits aufgenommene Teilstuecke an ihrem Platz", () => {
+    const out = dedupResults([
+      teil("p1", "Ammonplaetzchen 1959. 250 g Mehl", 0.9),
+      fremd,
+      teil("p2", "7 g Hirschhornsalz", 0.45),
+      ganz(0.44),
+    ], 10, 0.78);
+    assert.deepStrictEqual(out.map((r) => r.entry.id), ["whole", "other"]);
+  });
+
+  it("laesst Teilstuecke weg, wenn das Ganze schon drin ist", () => {
+    const out = dedupResults([ganz(0.9), teil("p1", "Ammonplaetzchen 1959. 250 g Mehl", 0.8), teil("p2", "7 g Hirschhornsalz", 0.7), fremd], 10, 0.78);
+    assert.deepStrictEqual(out.map((r) => r.entry.id), ["whole", "other"]);
+  });
+
+  it("behandelt Teilstuecke ohne gespeicherte Ursprungszeile wie bisher", () => {
+    const out = dedupResults([teil("p1", WOERTER[2], 0.9), teil("p2", WOERTER[3], 0.8), teil("p3", WOERTER[4], 0.7)], 10, 0.78);
+    assert.deepStrictEqual(out.map((r) => r.entry.id), ["p1", "p2"]);
+  });
+});
