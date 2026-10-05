@@ -58,6 +58,10 @@ import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { formatRegistrationTrace, recordRegistration } from "../../lib/register-trace.js";
 import { createGroupReasoningFilter } from "../../lib/group-reasoning-filter.js";
+import {
+  buildWorkspaceReviewCronJobs,
+  printMorningReviewCronCommand,
+} from "./obsidian-review-cron-commands.js";
 
 /**
  * The OpenClaw plugin's register(): validate the test-injection dependencies,
@@ -121,6 +125,21 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   // register() ran them after its first config reads; an invalid config now
   // still probes once, then throws with zero registrations (a Task 13b
   // deviation, recorded in Task 13c).
+  const rawPluginConfig = api.pluginConfig && typeof api.pluginConfig === "object" ? api.pluginConfig : {};
+  const pluginConfig = {
+    ...rawPluginConfig,
+    runtime: {
+      ...rawPluginConfig.runtime,
+      ...(rawPluginConfig.runtime?.deferPostTurnLlm === undefined ? { deferPostTurnLlm: true } : {}),
+    },
+  };
+  const postTurnRefineScheduled = pluginConfig.neo?.enabled !== false
+    && pluginConfig.runtime.deferPostTurnLlm !== false;
+  const handleObsidianBridgeCommandWithNativeCron = (tokens, context) => registeredObsidianCommandHandler(tokens, {
+    ...context,
+    printMorningReviewCronCommand,
+    buildWorkspaceReviewCronJobs,
+  });
   const host = createHostServices(api, {
     events: hostEvents,
     ...(importRouting ? { routing: importRouting } : {}),
@@ -143,7 +162,8 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       configMutationNotice: configMutationLogNotice(api),
       resolveNeoHooksConfig: (commandConfig) => resolveNeoHooksConfig(api, commandConfig),
       commandRuntimeHooks,
-      handleObsidianBridgeCommand: registeredObsidianCommandHandler,
+      postTurnRefineScheduled,
+      handleObsidianBridgeCommand: handleObsidianBridgeCommandWithNativeCron,
       // MemoryOps archive-first backups stay where /forget and /correct have
       // always put them (~/.openclaw/memory/_archive, or under OPENCLAW_HOME).
       memoryArchiveDir: resolveDefaultArchiveDir,
@@ -172,7 +192,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       },
     },
   });
-  const engine = createEngine(host, api.pluginConfig || {}, engineInternals ? { internals: engineInternals } : {});
+  const engine = createEngine(host, pluginConfig, engineInternals ? { internals: engineInternals } : {});
   const internals = internalsOf(engine);
   const {
     REPLY_OUTCOME_SYNC_LOG_MS,

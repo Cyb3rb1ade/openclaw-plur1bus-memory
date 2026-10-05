@@ -23,12 +23,14 @@ import {
   validateFeatureCronRequest,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import {
-  buildWorkspaceReviewCronJobs,
   eveningReviewSummary,
   handleObsidianBridgeCommand,
-  printMorningReviewCronCommand,
   reviewBundleSummary,
 } from "../lib/obsidian-control-room.js";
+import {
+  buildWorkspaceReviewCronJobs,
+  printMorningReviewCronCommand,
+} from "../adapter/openclaw/obsidian-review-cron-commands.js";
 import { runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
 import { makeTempDir } from "./helpers/temp-dir.js";
 

@@ -129,10 +129,11 @@ own changelog:
   [Engine configuration schema in 1.9.0](#engine-configuration-schema-in-190)
   below.
 - **1.10.0** — additive engine-config keys from the 7.18.5–7.18.20 port onto
-  `main` (`runtime.traceRegistrations` first; later keys including
-  `runtime.deferPostTurnLlm`) and `JobName` `"post-turn-refine"`. Existing
-  callers keep working: new keys are optional with defaults, and the job
-  name is an additive union member.
+  `main` (`runtime.deferPostTurnLlm` default false, plus diary/chunking/full-text
+  keys) and `JobName` `"post-turn-refine"`. Adapter-only keys
+  (`runtime.traceRegistrations`, `groupReasoningFilter`) live on the OpenClaw
+  manifest. Existing callers keep working: new keys are optional with defaults,
+  and the job name is an additive union member.
 
 ## The two halves
 

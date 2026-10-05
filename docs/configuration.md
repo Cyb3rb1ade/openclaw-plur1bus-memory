@@ -468,7 +468,7 @@ Mit `true` läuft diese Arbeit in einem Snapshot, der bei der Plugin-Registrieru
 
 ## Light-Traum und Episoden nach dem Turn (7.18.14)
 
-`runtime.deferPostTurnLlm` (Standard `true`) reiht Light-Traum und Episoden-Extraktion nach `agent_end` in eine Dateischlange ein. Der native Cron `post-turn-refine` arbeitet sie alle 20 Minuten FIFO je Agent ab. Unter OpenClaw 2026.9.7 werden Plugin-LLM-Aufrufe nach dem Turn abgelehnt (`LLM_COMPLETION_NOT_AUTHORIZED`, openclaw/openclaw#162941). `false` stellt den bisherigen Inline-Pfad wieder her, inklusive `jobs.run("light-dream")`.
+`runtime.deferPostTurnLlm` reiht Light-Traum und Episoden-Extraktion nach `agent_end` in eine Dateischlange ein. In der Engine ist der Standard `false` (inline, inklusive `jobs.run("light-dream")`). Unter OpenClaw setzt der Adapter `true` und plant den Cron `post-turn-refine` (alle 20 Minuten, FIFO je Agent), weil Plugin-LLM-Aufrufe nach dem Turn sonst abgelehnt werden. Fehlt die Planung (`capabilities.postTurnRefineScheduled`), fällt die Engine auf den Inline-Pfad zurück.
 
 ## Registrierungen nachverfolgen (7.18.5)
 

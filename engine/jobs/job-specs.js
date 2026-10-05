@@ -1,13 +1,13 @@
 /**
  * engine/jobs/job-specs.js — the 19 engine-owned jobs (spec 3.3, contract JobName).
  *
- * Twelve carry a host cron default from lib/setup/feature-cron-plan.js; six are
+ * Twelve carry a host cron default from lib/feature-cron-specs.js; six are
  * RPC/CLI features with no default schedule; light-dream runs from capture.
  * `phase` marks the dreaming phases the per-sweep breaker counts (Task 8).
  * `needsLlm` is informational: whether the job can reach an LLM route at all.
  */
 
-import { REQUIRED_FEATURE_CRONS } from "../../lib/setup/feature-cron-plan.js";
+import { REQUIRED_FEATURE_CRONS } from "../../lib/feature-cron-specs.js";
 
 const JOB_TABLE = Object.freeze([
   ["persona-evolve", true, null],

@@ -39,6 +39,7 @@ export const DEPLOY_FILES = [
   "adapter/openclaw/host-probes.js",
   "adapter/openclaw/plugin.js",
   "adapter/openclaw/config-schema.js",
+  "adapter/openclaw/obsidian-review-cron-commands.js",
   // ── engine (host-neutral, engine-extraction M1a) ────────────────────────────
   "engine/admin/obsidian.js",
   "engine/capture/capture-turn.js",
@@ -188,6 +189,7 @@ export const DEPLOY_FILES = [
   "lib/setup/feature-cron-plugin-runtime.js",
   "lib/setup/skill-workshop-plugin-runtime.js",
   "lib/setup/skill-workshop-dashboard.js",
+  "lib/feature-cron-specs.js",
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/setup/control-ui-plugin-runtime.js",

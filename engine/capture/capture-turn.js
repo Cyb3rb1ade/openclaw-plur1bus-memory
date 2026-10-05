@@ -37,7 +37,7 @@ import { trySafeWarn } from "../../lib/safe-logging.js";
 import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
 import { enqueuePostTurnWork } from "../../lib/post-turn-queue.js";
-import { createPostTurnWorkers, postTurnContext } from "./post-turn-work.js";
+import { createPostTurnWorkers, postTurnContext, shouldDeferPostTurnLlm } from "./post-turn-work.js";
 
 /**
  * Classifies a light-dream JobRun's effect on capture post-processing
@@ -182,7 +182,7 @@ export function createTurnCapture(ctx) {
     return { dreamed: await work() };
   });
 
-  const deferPostTurnLlm = cfg?.runtime?.deferPostTurnLlm !== false;
+  const deferPostTurnLlm = shouldDeferPostTurnLlm(cfg, host);
   // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
   // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
   // unsicher -> beides. Ohne Schluessel verhaelt es sich wie "beides".
@@ -923,9 +923,11 @@ export function createTurnCapture(ctx) {
           // betrachtet (dauerhafter Episodenverlust, im Feld beobachtet).
           // Jeder Eintrag ist ein Promise<boolean>: true = erledigt.
           const postProcessing = [];
-          // 7.18.14: Light-Traum und Episoden per Default in die Warteschlange
-          // (openclaw/openclaw#162941). runtime.deferPostTurnLlm=false behält
-          // den bisherigen Inline-Pfad, inklusive jobs.run("light-dream").
+          // 7.18.14: Light-Traum und Episoden nur einreihen, wenn der Host
+          // post-turn-refine wirklich plant. Hosts, die die Caller-Identität
+          // nach dem Turn widerrufen, setzen deferPostTurnLlm und
+          // capabilities.postTurnRefineScheduled. Sonst bleibt der Inline-Pfad,
+          // inklusive jobs.run("light-dream").
           const deferredWork = { lightDream: false, episodes: false };
 
           // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)

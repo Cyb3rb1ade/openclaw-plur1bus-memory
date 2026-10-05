@@ -104,6 +104,7 @@ const ADAPTER_PATHS = Object.freeze({
   hostProbes: "adapter/openclaw/host-probes.js",
   plugin: "adapter/openclaw/plugin.js",
   configSchema: "adapter/openclaw/config-schema.js",
+  obsidianReviewCronCommands: "adapter/openclaw/obsidian-review-cron-commands.js",
 });
 
 function listJsFiles(relativeDir) {

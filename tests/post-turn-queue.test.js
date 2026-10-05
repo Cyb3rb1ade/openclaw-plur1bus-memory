@@ -18,7 +18,12 @@ import {
   drainPostTurnWork,
   enqueuePostTurnWork,
 } from "../lib/post-turn-queue.js";
+import { resolveEffectiveConfig } from "../lib/setup/config-contract.js";
 import { selectEnabledFeatureCronSpecs } from "../lib/setup/feature-cron-plan.js";
+import {
+  POST_TURN_REFINE_UNSCHEDULED_REASON,
+  shouldDeferPostTurnLlm,
+} from "../engine/capture/post-turn-work.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "main";
@@ -92,6 +97,36 @@ describe("post-turn queue", () => {
     assert.equal(countPostTurnWork(base, "bernhardine"), 1);
     assert.equal(countPostTurnWork(base, AGENT), 0);
     assert.throws(() => enqueuePostTurnWork(base, "../escape", { x: 1 }));
+  });
+});
+
+describe("shouldDeferPostTurnLlm", () => {
+  it("runs inline unless defer is true and the host scheduled post-turn-refine", () => {
+    const warnings = [];
+    const host = { logger: { warn: (message) => warnings.push(String(message)) }, capabilities: {} };
+    assert.equal(shouldDeferPostTurnLlm({}, host), false);
+    assert.equal(shouldDeferPostTurnLlm({ runtime: {} }, host), false);
+    assert.equal(shouldDeferPostTurnLlm({ runtime: { deferPostTurnLlm: false } }, host), false);
+    assert.equal(shouldDeferPostTurnLlm({ runtime: { deferPostTurnLlm: true } }, host), false);
+    assert.match(warnings.join("\n"), new RegExp(POST_TURN_REFINE_UNSCHEDULED_REASON));
+    assert.equal(
+      shouldDeferPostTurnLlm(
+        { runtime: { deferPostTurnLlm: true } },
+        { capabilities: { postTurnRefineScheduled: true } },
+      ),
+      true,
+    );
+  });
+
+  it("createEngine materializes the OpenClaw default, then falls back inline without a drain", () => {
+    const cfg = resolveEffectiveConfig({});
+    assert.equal(cfg.runtime.deferPostTurnLlm, true);
+    const warnings = [];
+    assert.equal(
+      shouldDeferPostTurnLlm(cfg, { logger: { warn: (message) => warnings.push(String(message)) }, capabilities: {} }),
+      false,
+    );
+    assert.match(warnings.join("\n"), new RegExp(POST_TURN_REFINE_UNSCHEDULED_REASON));
   });
 });
 
@@ -223,7 +258,7 @@ async function runTurn(t, runtimeOverrides) {
   return { api, baseDbPath, agentId, purposes };
 }
 
-test("agent_end queues light dream and episodes; the cron runs their LLM calls", async (t) => {
+test("OpenClaw adapter queues light dream and episodes; the cron runs their LLM calls", async (t) => {
   const { api, baseDbPath, agentId, purposes } = await runTurn(t, {});
   const queued = entryFiles(baseDbPath, agentId);
   assert.equal(queued.length, 1, JSON.stringify(api._logs.filter(([level]) => level !== "debug")).slice(0, 2000));

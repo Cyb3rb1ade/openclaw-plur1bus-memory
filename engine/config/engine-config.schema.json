@@ -624,24 +624,6 @@
         }
       }
     },
-    "groupReasoningFilter": {
-      "type": "object",
-      "additionalProperties": false,
-      "readAt": "construction",
-      "x-tier": "advanced",
-      "description": "In group chats, do not start a turn on messages that look like another bot's visible reasoning (for example \"🧠 …\" from /reasoning stream). Providers reject requests that contain another model's thinking as reasoning_extraction. The bot stays silent, with no model call.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true
-        },
-        "prefixes": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "description": "Starts that mark a reasoning block (case-insensitive). Defaults: 🧠, 💭, <think>, <thinking>, reasoning:, thinking:."
-        }
-      }
-    },
     "autoRecall": {
       "type": "boolean",
       "default": true,
@@ -755,15 +737,10 @@
           "default": false,
           "description": "Run post-turn capture work (episodes, insights, light dream) outside the finished turn's caller identity, so its LLM calls are not refused as unauthorized by hosts that revoke that identity when the turn ends (OpenClaw: LLM_COMPLETION_NOT_AUTHORIZED). Off by default; turn on and observe."
         },
-        "traceRegistrations": {
-          "type": "boolean",
-          "default": false,
-          "description": "7.18.5 diagnostic for openclaw/openclaw#163029: log the call stack of every plugin registration (warn level), to show where OpenClaw's mid-turn plugin reloads come from. Off by default."
-        },
         "deferPostTurnLlm": {
           "type": "boolean",
-          "default": true,
-          "description": "7.18.14: enqueue light-dream and episode extraction from capture and run them in the post-turn-refine cron, so plugin LLM calls are not refused after the turn ends (openclaw/openclaw#162941). Set false to restore the inline agent_end path."
+          "default": false,
+          "description": "Enqueue light-dream and episode extraction from capture for the post-turn-refine job. The engine default is inline (false). A host that schedules that job (and sets capabilities.postTurnRefineScheduled) should set this true; otherwise capture falls back to inline."
         },
         "llmResultCacheEnabled": {
           "type": "boolean",

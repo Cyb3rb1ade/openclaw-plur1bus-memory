@@ -931,7 +931,7 @@
           "deferPostTurnLlm": {
             "type": "boolean",
             "default": true,
-            "description": "7.18.14: enqueue light-dream and episode extraction from capture and run them in the post-turn-refine cron, so plugin LLM calls are not refused after the turn ends (openclaw/openclaw#162941). Set false to restore the inline agent_end path."
+            "description": "Enqueue light-dream and episode extraction from capture for the post-turn-refine job. The engine default is inline (false). A host that schedules that job (and sets capabilities.postTurnRefineScheduled) should set this true; otherwise capture falls back to inline."
           },
           "llmResultCacheEnabled": {
             "type": "boolean",

@@ -2,12 +2,33 @@
  * engine/capture/post-turn-work.js — Light-Traum and episode extraction
  * shared by capture (inline or queued) and the post-turn-refine job.
  *
- * Under OpenClaw 2026.9.7 plugin LLM calls made after a turn inherit the
- * finished turn's caller identity and are refused (openclaw/openclaw#162941).
- * Capture therefore enqueues the work by default; the cron runs these
- * helpers outside that identity. runtime.deferPostTurnLlm=false keeps the
- * previous inline path.
+ * Hosts that revoke caller identity after the turn refuse plugin LLM calls
+ * made from capture. Those hosts set runtime.deferPostTurnLlm and declare
+ * host.capabilities.postTurnRefineScheduled so capture can enqueue the work
+ * for the post-turn-refine job. The engine default is inline
+ * (deferPostTurnLlm=false).
  */
+
+/** Fixed log reason when defer is on but the host has not scheduled the drain. */
+export const POST_TURN_REFINE_UNSCHEDULED_REASON = "post-turn-refine-unscheduled";
+
+/**
+ * Whether capture should enqueue light-dream and episode work.
+ * Requires an explicit `runtime.deferPostTurnLlm === true` and a host that
+ * has scheduled `post-turn-refine`. Otherwise the inline path runs.
+ *
+ * @param {object} [cfg]
+ * @param {object} [host]
+ * @returns {boolean}
+ */
+export function shouldDeferPostTurnLlm(cfg, host) {
+  if (cfg?.runtime?.deferPostTurnLlm !== true) return false;
+  if (host?.capabilities?.postTurnRefineScheduled === true) return true;
+  host?.logger?.warn?.(
+    `memory-lancedb-namespaced: runtime.deferPostTurnLlm=true but post-turn-refine is not scheduled; running light dream and episodes inline (reason=${POST_TURN_REFINE_UNSCHEDULED_REASON})`,
+  );
+  return false;
+}
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

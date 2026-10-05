@@ -81,6 +81,17 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     assert.equal(Object.keys(manifest.configSchema.properties).length, 58);
   });
 
+  it("adapter-only keys stay off the engine schema and on the OpenClaw manifest", () => {
+    const engine = loadEngineConfigSchema();
+    const manifest = readManifest();
+    assert.equal(Object.hasOwn(engine.properties, "groupReasoningFilter"), false);
+    assert.equal(Object.hasOwn(engine.properties.runtime.properties, "traceRegistrations"), false);
+    assert.equal(engine.properties.runtime.properties.deferPostTurnLlm.default, false);
+    assert.ok(Object.hasOwn(manifest.configSchema.properties, "groupReasoningFilter"));
+    assert.ok(Object.hasOwn(manifest.configSchema.properties.runtime.properties, "traceRegistrations"));
+    assert.equal(manifest.configSchema.properties.runtime.properties.deferPostTurnLlm.default, true);
+  });
+
   it("secretInputs follow the $ref secretInput nodes, not every x-sensitive path", () => {
     const schema = loadEngineConfigSchema();
     const paths = readManifest().configContracts.secretInputs.paths;

@@ -19,6 +19,10 @@ import {
   handleObsidianBridgeCommand,
 } from "../lib/obsidian-control-room.js";
 import {
+  buildWorkspaceReviewCronJobs,
+  printMorningReviewCronCommand,
+} from "../adapter/openclaw/obsidian-review-cron-commands.js";
+import {
   parseObsidianCommandPlan,
 } from "../lib/obsidian-mutation-policy.js";
 import {
@@ -65,6 +69,8 @@ function commandContext({ baseDbPath, config, ctx = memoryCtx(), overrides = {} 
       baseDbPath,
       security: { allowedUserIds: ["owner"] },
     },
+    printMorningReviewCronCommand,
+    buildWorkspaceReviewCronJobs,
     ...overrides,
   };
 }

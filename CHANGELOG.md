@@ -26,6 +26,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.19** — Host recovery and routing notices (gateway restart, queued user message, inter-session routing, `⟦openclaw:ctx⟧`) are not captured as user memories.
 - **7.18.20** — Group messages that look like another bot's visible reasoning (`🧠`, `<think>`, …) are claimed without a reply (`groupReasoningFilter`).
 - Native feature-cron delivery lookup matches Windows runner paths (`\run-feature-cron.mjs`) and review commands (`/plur1bus obsidian …-review`).
+- Review of the port: engine `runtime.deferPostTurnLlm` defaults to false (inline); the OpenClaw adapter sets true and `postTurnRefineScheduled`. Adapter-only keys `runtime.traceRegistrations` and `groupReasoningFilter` stay out of the engine schema. Native review-cron builders live in the adapter so the engine graph does not load `feature-cron-native`. Queued post-turn work is not purged on `/forget` (follow-up).
 
 ### Hinzugefügt
 
