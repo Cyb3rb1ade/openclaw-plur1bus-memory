@@ -56,6 +56,7 @@ import { createOpenClawSkillWorkshopClient } from "../../lib/setup/skill-worksho
 import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/runtime-config.js";
 import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
+import { warnIfStoreInsideHarnessHome } from "../../lib/setup/harness-coexistence.js";
 import { formatRegistrationTrace, recordRegistration } from "../../lib/register-trace.js";
 import { createGroupReasoningFilter } from "../../lib/group-reasoning-filter.js";
 import {
@@ -194,6 +195,12 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   });
   const engine = createEngine(host, pluginConfig, engineInternals ? { internals: engineInternals } : {});
   const internals = internalsOf(engine);
+  // HM4 T7: warn on a store inside a Harness home. Do not throw — an existing
+  // violating config must keep serving so the operator can move baseDbPath.
+  warnIfStoreInsideHarnessHome({
+    storePath: internals.baseDbPath,
+    logger: host.logger,
+  });
   const {
     REPLY_OUTCOME_SYNC_LOG_MS,
     activeEmbeddingFingerprintId,

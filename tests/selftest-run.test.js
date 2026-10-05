@@ -16,6 +16,7 @@ import { dirname, join, normalize } from "node:path";
 import { describe, it } from "node:test";
 
 import { E5_EMBEDDING_PROFILE, BGE_RERANKER_PROFILE } from "../lib/providers/local-model-artifacts.js";
+import { canonicalPath } from "../lib/setup/harness-coexistence.js";
 import { probeNativeAddons } from "../lib/selftest/addon-probes.js";
 import { SELFTEST_SCHEMA, SELFTEST_STEPS, runSelftest } from "../lib/selftest/run-selftest.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -235,20 +236,24 @@ describe("runSelftest", () => {
     const inside = await run(box, { env, pluginConfig: { baseDbPath: join(harnessHome, "lancedb") } });
     const step = stepOf(inside, "coexistence");
     assert.equal(step.ok, false);
-    assert.equal(step.detail, "store-inside-harness-home");
+    assert.equal(step.code, "store-inside-harness-home");
+    assert.match(step.detail, /store path /);
+    assert.match(step.detail, /is inside harness home /);
+    assert.match(step.detail, /choose a path outside the Harness home, or use the Harness as the memory \(import\)/);
     assert.ok(inside.errors.includes("store-inside-harness-home"));
     assert.equal(inside.ok, false);
-    assert.equal(inside.harnessHome, harnessHome);
+    assert.equal(inside.harnessHome, canonicalPath(harnessHome));
 
     // A host path resolver that answers nothing (seen in a real OpenClaw CLI
     // action) falls back to the plain path.
     const unresolved = await run(box, { env, pluginConfig: { baseDbPath: join(harnessHome, "lancedb") }, resolvePath: () => undefined });
-    assert.equal(stepOf(unresolved, "coexistence").detail, "store-inside-harness-home");
+    assert.equal(stepOf(unresolved, "coexistence").code, "store-inside-harness-home");
+    assert.match(stepOf(unresolved, "coexistence").detail, /choose a path outside the Harness home/);
 
     // A harness home beside the store is reported, not refused.
     const beside = await run(box, { env, pluginConfig: { baseDbPath: join(box.root, "lancedb") } });
     assert.equal(stepOf(beside, "coexistence").ok, true);
-    assert.equal(beside.harnessHome, harnessHome);
+    assert.equal(beside.harnessHome, canonicalPath(harnessHome));
     assert.equal(beside.ok, true, beside.errors.join("; "));
 
     // The default store (~/.openclaw/memory/lancedb-namespaced) inside a
@@ -313,7 +318,8 @@ describe("runSelftest", () => {
     mkdirSync(harnessHome);
     writeFileSync(join(harnessHome, "manifest.json"), "{}\n");
     const report = await run(box, { env: { ...box.env, PLUR1BUS_HOME: harnessHome }, pluginConfig: { baseDbPath: "harness/lancedb" } });
-    assert.equal(stepOf(report, "coexistence").detail, "store-inside-harness-home");
+    assert.equal(stepOf(report, "coexistence").code, "store-inside-harness-home");
+    assert.equal(stepOf(report, "coexistence").ok, false);
   });
 
   it("never includes config values in the report, even before the scrub", async () => {
