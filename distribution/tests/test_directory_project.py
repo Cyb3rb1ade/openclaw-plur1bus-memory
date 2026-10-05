@@ -14,7 +14,7 @@ def test_directory_project_installs_canonical_package():
                             ("plur1bus-controls", "plur1bus_controls")):
         data = tomllib.loads(BUILD.directory_project(package, module).decode())
         assert data["project"]["name"] == package
-        assert data["project"]["version"] == "7.18.4"
+        assert data["project"]["version"] == "7.18.20"
         assert data["tool"]["setuptools"]["packages"] == [module]
         assert data["tool"]["setuptools"]["package-dir"] == {module: "."}
         assert "readme" not in data["project"]
