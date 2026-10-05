@@ -13,8 +13,8 @@ import type {
   EngineConfigKey, EngineConfigReadAt, EngineConfigSchema,
   EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostServices,
   HostCapabilities, IpcAddress, JobLastRun, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
-  MemoryProposalStatus, ModelsStatus, ModelState, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
-  SchemaVersion, TurnOrigin, TurnRecord,
+  MemoryImportOutcome, MemoryImportRejectReason, MemoryProposalStatus, ModelsStatus, ModelState, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
+  SchemaVersion, StoreAdoptIdentitySource, StoreAdoptIncompatibleReason, StoreOps, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
 
@@ -105,7 +105,7 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.10.0">>();
+assertTrue<Exact<ContractVersion, "1.11.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
@@ -142,6 +142,16 @@ assertTrue<Exact<MemoryOps["proposals"]["reject"], (proposalId: string, p: Princ
 assertTrue<Exact<MemoryProposalStatus, "pending" | "accepted" | "rejected" | "stale">>();
 assertTrue<Exact<Extract<EngineEventName, `memory.${string}`>, "memory.proposal">>();
 assertTrue<Exact<EngineStatus["storeSchema"], { current: SchemaVersion | null; expected: SchemaVersion }>>();
+
+// 1.11.0: memory.import and stores.adopt.
+assertTrue<Exact<MemoryOps["import"], (req: import("./engine.js").MemoryImportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryImportResult>>>();
+assertTrue<Exact<MemoryImportOutcome, "created" | "matched-existing" | "rejected">>();
+assertTrue<Exact<MemoryImportRejectReason, "invalid-input" | "tombstone-blocked" | "principal-unresolved" | "empty-text" | "provenance-not-imported" | "previously-imported-deleted" | "aborted">>();
+assertTrue<Exact<Engine["stores"], StoreOps>>();
+assertTrue<Exact<StoreOps["adopt"], (req: import("./engine.js").StoreAdoptRequest) => Promise<import("./engine.js").StoreAdoptResult>>>();
+assertTrue<Exact<StoreAdoptIdentitySource, "manifest" | "probe">>();
+assertTrue<Exact<StoreAdoptIncompatibleReason, "path-unreadable" | "not-a-store" | "schema-unreadable" | "schema-mismatch" | "identity-unreadable" | "identity-mismatch" | "identity-unverifiable" | "dimension-mismatch" | "target-running">>();
+assertTrue<Exact<import("./engine.js").MemoryCard["provenance"], "imported" | undefined>>();
 
 // 1.7.0: EmbeddingService probe/serve; HostCapabilities.pushCriticalButtons (E3 Task 1).
 assertTrue<Exact<Engine["embedding"]["probe"], (opts?: { signal?: AbortSignal; refresh?: boolean }) => Promise<import("./engine.js").EmbeddingProbeResult>>>();

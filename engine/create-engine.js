@@ -126,7 +126,9 @@ import { createMemoryRead } from "./memory-ops/read.js";
 import { createMemoryWrite } from "./memory-ops/write.js";
 import { createProposalStore } from "./memory-ops/proposal-store.js";
 import { createMemoryProposals } from "./memory-ops/proposals.js";
+import { createMemoryImport } from "./memory-ops/import.js";
 import { memoryOpError } from "./memory-ops/errors.js";
+import { createStoreAdopt } from "./stores/adopt.js";
 import { createObsidianOps } from "./admin/obsidian.js";
 
 // Nothing in this file otherwise reads the plugin's own package.json version
@@ -1531,6 +1533,17 @@ export function createEngine(host, config, testOptions = {}) {
     getWorkspaceAliases: () => internals.memoryWorkspaceAliases ?? memoryWorkspaceAliases,
     isClosed: () => closing != null,
   });
+  const memoryImport = createMemoryImport({
+    opsContext: memoryOpsContext,
+    pool,
+    embeddings,
+    baseDbPath,
+    logger: host.logger,
+    clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
+    halfLifeOverrides,
+    flashbulbEncodingEnabled,
+    summaryMaxWords,
+  });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,
     pool,
@@ -1539,6 +1552,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryDbAdapter,
     baseDbPath,
     logger: host.logger,
+    importLedger: memoryImport.ledger,
   });
   const memoryWrite = createMemoryWrite({
     opsContext: memoryOpsContext,
@@ -3119,6 +3133,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryDbAdapter,
     memoryOpsContext,
     memoryProposals,
+    memoryImport,
     memoryRead,
     memoryWrite,
     memoryTextContradictionLlmCfg,
@@ -3541,7 +3556,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.10.0",
+    contract: "1.11.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3598,9 +3613,21 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.10.0).
+  // The Engine (types/engine.d.ts, contract 1.11.0).
+  const storeAdopt = createStoreAdopt({
+    baseDbPath,
+    pool,
+    embeddings,
+    getIdentity: () => embeddingService.identities()[0],
+    vectorDim,
+    host,
+    logger: host.logger,
+    expectedSchema: STORE_SCHEMA_VERSION,
+    AgentDbPool: EngineAgentDbPool,
+  });
+  internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.10.0",
+    contract: "1.11.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3739,6 +3766,9 @@ export function createEngine(host, config, testOptions = {}) {
       warm: async (opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => modelsService.warm(opts)); },
     }),
     admin: adminOps,
+    stores: Object.freeze({
+      adopt: async (req) => { assertMemoryOpen(); return memoryOpsContext.track(() => storeAdopt.adopt(req)); },
+    }),
     // Typed MemoryOps surface (contract 1.5.0, E1). After close() every member
     // rejects with MemoryOpError "storage" before it touches a store, so a
     // late call can neither reopen LanceDB nor write an archive or tombstone.
@@ -3752,6 +3782,7 @@ export function createEngine(host, config, testOptions = {}) {
       state: async (p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.state(p, a)); },
       // Change proposals (E2 Tasks 5 and 6, D31): tracked like every other member.
       propose: async (sharedId, newText, p, a, opts) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.propose(sharedId, newText, p, a, opts)); },
+      import: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryImport.importCards(req, p, a)); },
       proposals: Object.freeze({
         list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.list(q, p, a)); },
         accept: async (proposalId, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.accept(proposalId, p, a)); },

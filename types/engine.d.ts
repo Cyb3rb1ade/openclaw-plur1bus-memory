@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.10.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended eleven times under the policy below — see the changelog at the end
+ * Contract version 1.11.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended twelve times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -41,9 +41,10 @@
  *            1.8.0 — EngineStatus.jobs/models/journal/sharedMemory, degraded derived from model readiness; Engine.models (status, warm); HostCapabilities.journalBacklog?; MemoryOpErrorCode "unsupported"; CaptureResult.reason "duplicate-turn" (E4).
  *            1.9.0 — engine-config.schema.json with readAt/x-tier/x-sensitive and its types (EngineConfigSchema, EngineConfigKey, EngineConfigReadAt); RecallQuery.warmOnly; RecallTiming.totalMs covers queue wait and prelude (E5).
  *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.deferPostTurnLlm, diaryFromUserChats, captureChunkingJev, recall.fullTextTopRecords/fullTextMaxChars) and JobName "post-turn-refine"; adapter-only keys stay on the OpenClaw manifest; no breaking change to existing callers.
+ *            1.11.0 — MemoryOps.import (finished-card ingest with deterministic ids) and Engine.stores.adopt (copy-never-move store take-over with a sample cosine probe for legacy stores); MemoryCard.provenance/sourceRef optional; no breaking change to existing callers.
  */
 
-export type ContractVersion = "1.10.0";
+export type ContractVersion = "1.11.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -655,6 +656,10 @@ export interface MemoryCard {
   /** 1.6.0, only on workspace/user copies: the sharing agent and its original card. */
   sharedBy?: AgentId;
   sourceId?: string;
+  /** 1.11.0: set when the card was written by `memory.import`. */
+  provenance?: "imported";
+  /** 1.11.0: import source reference, truncated to ≤ 500 characters before store. */
+  sourceRef?: string;
 }
 
 export interface MemoryListQuery {
@@ -751,6 +756,108 @@ export interface MemoryOps {
     accept(proposalId: string, p: Principal, a: AgentContext): Promise<MemoryProposalAcceptResult>;
     reject(proposalId: string, p: Principal, a: AgentContext, opts?: { note?: string }): Promise<MemoryProposalRejectResult>;
   };
+  /**
+   * 1.11.0: ingest finished cards (text + provenance + source timestamp) without
+   * the live-store LLM merge. `p` is the operator; `req.principal` is the card
+   * ACL binding. Requires `a.origin === "system"` and `a.background === false`.
+   * At most 500 cards per call.
+   */
+  import(req: MemoryImportRequest, p: Principal, a: AgentContext): Promise<MemoryImportResult>;
+}
+
+export type MemoryImportProvenance = "imported";
+export type MemoryImportOutcome = "created" | "matched-existing" | "rejected";
+
+export interface MemoryImportCardInput {
+  /** Stable caller key; a second call with the same key and agent is a resume. */
+  idempotencyKey: string;
+  text: string;
+  /** Mapped onto `MemoryCard` category; omitted → auto-categorise. */
+  kind?: string;
+  createdAt?: number;
+  provenance: MemoryImportProvenance;
+  /** Truncated to ≤ 500 characters before store. */
+  sourceRef?: string;
+  scope?: MemoryScope;
+}
+
+export interface MemoryImportRequest {
+  agentId: AgentId;
+  /** Card ACL binding (A1). Must share `agentId` with `p` and `req.agentId`. */
+  principal: Principal;
+  cards: MemoryImportCardInput[];
+  dryRun?: boolean;
+  signal?: AbortSignal;
+}
+
+export type MemoryImportRejectReason =
+  | "invalid-input"
+  | "tombstone-blocked"
+  | "principal-unresolved"
+  | "empty-text"
+  | "provenance-not-imported"
+  | "previously-imported-deleted"
+  | "aborted";
+
+export interface MemoryImportCardResult {
+  idempotencyKey: string;
+  outcome: MemoryImportOutcome;
+  /** Set on created and matched-existing. Omitted on dry-run created. */
+  id?: string;
+  /** Machine-stable; never card text. `already-imported` only with matched-existing. */
+  reason?: MemoryImportRejectReason | "already-imported";
+}
+
+export interface MemoryImportResult {
+  agentId: AgentId;
+  dryRun: boolean;
+  created: number;
+  matchedExisting: number;
+  rejected: number;
+  cards: MemoryImportCardResult[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Store take-over (1.11.0)                                            */
+/* ------------------------------------------------------------------ */
+
+export interface StoreAdoptRequest {
+  /** Absolute store root (the path `createEngine` would use as `baseDbPath`). */
+  path: string;
+  expectedIdentity: EmbeddingIdentity;
+  dryRun?: boolean;
+}
+
+export type StoreAdoptIncompatibleReason =
+  | "path-unreadable"
+  | "not-a-store"
+  | "schema-unreadable"
+  | "schema-mismatch"
+  | "identity-unreadable"
+  | "identity-mismatch"
+  | "identity-unverifiable"
+  | "dimension-mismatch"
+  | "target-running";
+
+export type StoreAdoptIdentitySource = "manifest" | "probe";
+
+export interface StoreAdoptResult {
+  verdict: "ok" | "incompatible";
+  dryRun: boolean;
+  reason?: StoreAdoptIncompatibleReason;
+  storeSchema?: { current: SchemaVersion | null; expected: SchemaVersion };
+  identity?: EmbeddingIdentity | null;
+  /** How identity was established when a check ran. */
+  identitySource?: StoreAdoptIdentitySource;
+}
+
+export interface StoreOps {
+  /**
+   * 1.11.0: inspect a copied store (copy-never-move). Does not migrate, does
+   * not re-embed, and does not take `state/core.lock` — the host holds that
+   * lock before `createEngine`. `incompatible` is a result, not a throw.
+   */
+  adopt(req: StoreAdoptRequest): Promise<StoreAdoptResult>;
 }
 
 export type EngineEventName =
@@ -838,6 +945,8 @@ export interface Engine {
   /** 1.8.0 */
   models: ModelsService;
   admin: AdminOps;
+  /** 1.11.0: inspect a copied store before the host points `baseDbPath` at it. */
+  stores: StoreOps;
   events: EngineEvents;
   /** The open channel vocabulary (ChannelRef): a host declares its channels. */
   channels: { register(name: ChannelRef): string; has(name: ChannelRef): boolean; list(): ChannelRef[] };
