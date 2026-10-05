@@ -30,6 +30,8 @@ import {
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(REPO, "scripts", "snapshot-store.mjs");
+/** Hard bound for one CLI child (a run takes well under 2 s; the headroom covers a slow Windows runner). */
+const CLI_TIMEOUT_MS = 60_000;
 const SECRET_MARKER = "sk-TEST-ONLY-must-never-be-copied";
 
 /** Build a state dir with a two-agent store plus the memory side files. */
@@ -461,7 +463,14 @@ describe("store snapshot: compare the live store (HM1-R-F2)", () => {
 });
 
 describe("snapshot-store CLI", () => {
-  const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
+  // spawnSync blocks the event loop, so neither node:test's --test-timeout nor an outer timer can interrupt a hung
+  // CLI child: the bound has to live on the child itself. A timed-out child sets r.error, which fails the test
+  // with the command name instead of the job eating its whole budget.
+  const run = (...args) => {
+    const r = spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", timeout: CLI_TIMEOUT_MS, killSignal: "SIGKILL" });
+    assert.equal(r.error, undefined, `snapshot-store CLI ${args[0] ?? "(no command)"} did not finish within ${CLI_TIMEOUT_MS} ms: ${r.error?.message}`);
+    return r;
+  };
 
   it("create, list, verify, restore, prune with --json; exit 2 on usage, 1 on SnapshotError", async () => {
     const { stateDir, baseDbPath } = await makeState();
