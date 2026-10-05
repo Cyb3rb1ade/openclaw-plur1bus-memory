@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
@@ -206,6 +206,30 @@ describe("withRegistryLock", () => {
       for (let i = 0; i < 5; i += 1) withRegistryLock(lockPath, () => i);
       assert.throws(() => withRegistryLock(lockPath, () => { throw new Error("boom"); }), /boom/);
       assert.deepEqual(readdirSync(dir), []);
+    });
+
+    // Lock gehalten (frisch, lebender Halter), Leftover daneben, Waiter läuft über den Contention-Pfad.
+    function sweepWithLeftover(t, pid) {
+      const dir = tempDir(t);
+      const lockPath = join(dir, "registry.lock");
+      const leftover = join(dir, "registry.lock.break-x");
+      writeFileSync(lockPath, JSON.stringify({ nonce: "halter", pid: process.pid, host: hostname() }));
+      writeFileSync(leftover, JSON.stringify({ nonce: "beiseite", pid, host: hostname() }));
+      ancientBy(leftover, 2_000); // 2 × staleMs: > staleMs, < Hard-Ceiling
+      assert.throws(
+        () => withRegistryLock(lockPath, () => "nie", { staleMs: 1000, timeoutMs: 100, retryMs: 10 }),
+        /lock busy/,
+      );
+      return leftover;
+    }
+
+    it("sweept ein beiseitegelegtes Leftover eines lebenden Halters nicht", T, (t) => {
+      assert.equal(existsSync(sweepWithLeftover(t, process.pid)), true);
+    });
+
+    it("sweept ein beiseitegelegtes Leftover eines toten Prozesses", T, (t) => {
+      const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+      assert.equal(existsSync(sweepWithLeftover(t, deadPid)), false);
     });
 
     it("räumt alte .rel-/.break-Leftovers beim Contention-Pfad weg", T, (t) => {
