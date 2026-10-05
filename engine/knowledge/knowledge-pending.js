@@ -5,10 +5,11 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripFrontmatter, withFrontmatter } from "../../lib/frontmatter.js";
 import { LLM_RESULT_CACHE_PURPOSES } from "../../lib/llm-result-cache.js";
+import { tryAcquireOwnedLock } from "../../lib/registry-lock.js";
 import { dbg } from "../runtime/debug-log.js";
 import { callLlm, withDeterministicLlmContext } from "../runtime/llm-calls.js";
 
@@ -85,23 +86,24 @@ function normalizeKnowledgePending(raw) {
   };
 }
 
+// Eigentumsprotokoll wie lib/registry-lock.js (N1): Freigabe nur bei eigener
+// Nonce, veraltet erst bei age > 60 s UND (Halter tot ODER age > 10 min).
+// Früher: Existenz-Check + mtime-Alter + unbedingtes unlink — ein nach 60 s
+// gebrochener Lock eines lebenden Halters und die Freigabe eines bereits
+// übernommenen Locks löschten jeweils den Lock eines anderen.
+const KNOWLEDGE_PENDING_LOCK_STALE_MS = 60 * 1000;
+
+/** @returns {{release: () => void}} Handle; wirft, wenn der Lock belegt ist. */
 function acquireKnowledgePendingLock(workspaceDir) {
   const dir = join(workspaceDir, ".adaptive-learning");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const lockPath = join(dir, KNOWLEDGE_PENDING_LOCK_FILE);
-  if (existsSync(lockPath)) {
-    const lockAge = Date.now() - statSync(lockPath).mtimeMs;
-    if (lockAge > 60 * 1000) unlinkSync(lockPath);
-    else throw new Error("knowledge pending lock held");
-  }
-  const fd = openSync(lockPath, "wx");
-  writeFileSync(fd, new Date().toISOString());
-  closeSync(fd);
-  return lockPath;
+  const handle = tryAcquireOwnedLock(join(dir, KNOWLEDGE_PENDING_LOCK_FILE), { staleMs: KNOWLEDGE_PENDING_LOCK_STALE_MS });
+  if (!handle) throw new Error("knowledge pending lock held");
+  return handle;
 }
 
-function releaseKnowledgePendingLock(lockPath) {
-  try { if (lockPath && existsSync(lockPath)) unlinkSync(lockPath); } catch (_e) { dbg(_e); }
+function releaseKnowledgePendingLock(handle) {
+  try { handle?.release(); } catch (_e) { dbg(_e); }
 }
 
 function readKnowledgePendingUnlocked(workspaceDir) {
@@ -124,14 +126,14 @@ function writeKnowledgePendingUnlocked(workspaceDir, state) {
 }
 
 function readKnowledgePending(workspaceDir) {
-  let lockPath = null;
+  let pendingLock = null;
   try {
-    lockPath = acquireKnowledgePendingLock(workspaceDir);
+    pendingLock = acquireKnowledgePendingLock(workspaceDir);
     return readKnowledgePendingUnlocked(workspaceDir);
   } catch (_) {
     return normalizeKnowledgePending({});
   } finally {
-    releaseKnowledgePendingLock(lockPath);
+    releaseKnowledgePendingLock(pendingLock);
   }
 }
 
@@ -140,10 +142,10 @@ function readKnowledgePendingSnapshot(workspaceDir) {
 }
 
 function trackKnowledgePending(workspaceDir, memory) {
-  let lockPath = null;
+  let pendingLock = null;
   try {
     if (!memory?.sourceAgent || !memory?.memoryId) return;
-    lockPath = acquireKnowledgePendingLock(workspaceDir);
+    pendingLock = acquireKnowledgePendingLock(workspaceDir);
     const state = readKnowledgePendingUnlocked(workspaceDir);
     const entry = {
       key: pendingKey(memory.sourceAgent, memory.memoryId),
@@ -171,21 +173,21 @@ function trackKnowledgePending(workspaceDir, memory) {
       });
     }
   } catch (_e) { dbg(_e); }
-  finally { releaseKnowledgePendingLock(lockPath); }
+  finally { releaseKnowledgePendingLock(pendingLock); }
 }
 
 function removeKnowledgePending(workspaceDir, removeKeys, removeLegacyIds = []) {
-  let lockPath = null;
+  let pendingLock = null;
   try {
     const keys = new Set(removeKeys || []);
     const legacy = new Set(removeLegacyIds || []);
-    lockPath = acquireKnowledgePendingLock(workspaceDir);
+    pendingLock = acquireKnowledgePendingLock(workspaceDir);
     const state = readKnowledgePendingUnlocked(workspaceDir);
     state.pending = state.pending.filter(item => !keys.has(item.key) && !(item.sourceAgent === null && legacy.has(item.memoryId)));
     state.lastUpdateAt = new Date().toISOString();
     writeKnowledgePendingUnlocked(workspaceDir, state);
   } catch (_e) { dbg(_e); }
-  finally { releaseKnowledgePendingLock(lockPath); }
+  finally { releaseKnowledgePendingLock(pendingLock); }
 }
 
 // ============================================================================

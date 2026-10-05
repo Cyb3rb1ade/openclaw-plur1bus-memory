@@ -72,7 +72,7 @@ describe("neo workspace write lock", () => {
     }
   });
 
-  it("übernimmt ein überaltertes Lock auch bei lebender PID (deckt PID-Wiederverwendung ab)", () => {
+  it("übernimmt ein Lock jenseits des Hard-Ceilings auch bei lebender PID (deckt PID-Wiederverwendung ab)", () => {
     const { root, store, lockPath } = freshStore();
     try {
       mkdirSync(lockPath, { recursive: false });
@@ -80,7 +80,7 @@ describe("neo workspace write lock", () => {
         pid: process.pid, // lebt, aber das Lock ist uralt
         acquiredAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       }), "utf8");
-      ageLock(lockPath, 60 * 60_000); // 1h > NEO_LOCK_STALE_MS (5min)
+      ageLock(lockPath, 60 * 60_000); // 1h > Hard-Ceiling (10 × NEO_LOCK_STALE_MS = 50 min)
 
       store.appendEpisodes([{ id: "ep_aged", agentId: "main" }]);
       assert.match(readFileSync(store.paths.episodes, "utf8"), /ep_aged/);
