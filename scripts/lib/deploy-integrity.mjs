@@ -202,6 +202,7 @@ export const DEPLOY_FILES = [
   "lib/setup/obsidian-vault-plugin-runtime.js",
   "lib/setup/reembedding-plugin-runtime.js",
   "lib/setup/workspace-policy-plugin-runtime.js",
+  "lib/setup/harness-coexistence.js",
   "lib/temporal-context.js",
   "lib/temporal-filter.js",
   "lib/temporal-provenance.js",
