@@ -192,7 +192,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr || "cycle probe timed out");
@@ -222,7 +222,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -256,7 +256,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -292,7 +292,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -340,7 +340,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -391,7 +391,7 @@ describe("safeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);

@@ -165,6 +165,8 @@ describe("readDirectoryAcl fast path fallback", () => {
 
 describe("readDirectoryAcl fast path matches PowerShell", {
   skip: process.platform !== "win32" && "win32-only icacls/PowerShell ACL parity",
+  // Worst case: 5 cold PowerShell calls x 120 s per-call limit; test:cross default is 600 s.
+  timeout: 900_000,
 }, () => {
   function aclDir(tag) {
     const base = makeTempDir(`acl-parity-${tag}-`);
@@ -180,8 +182,9 @@ describe("readDirectoryAcl fast path matches PowerShell", {
   function powershellAcl(dir) {
     return readDirectoryAcl(dir, {
       // Product cap stays 30 s. Forcing 5.1 on windows-11-arm needs more:
-      // probe 37123429626, cold first 32 s.
-      timeoutMs: 60_000,
+      // probe 37123429626, cold first 32 s; main runs 22-32 s per call, and a
+      // slow run exceeded the former 60 s. 120 s = ~4x the slowest observed.
+      timeoutMs: 120_000,
       execFile: (file, args, options) => {
         if (!String(file).toLowerCase().includes("powershell")) {
           throw Object.assign(new Error("forced powershell path"), { status: 1 });
@@ -261,7 +264,7 @@ describe("readDirectoryAcl fast path matches PowerShell", {
     execFileSyncBounded("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {
       env: { ...process.env, PLUR1BUS_ACL_PATH: dir },
       windowsHide: true,
-      timeout: 60_000,
+      timeout: 120_000,
     });
     const classic = powershellAcl(dir);
     assert.match(classic.ownerSid, /^S-1-/);

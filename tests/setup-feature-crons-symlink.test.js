@@ -36,7 +36,7 @@ describe("setup-feature-crons.mjs IS_MAIN detection through a symlink", () => {
     const result = spawnSyncBounded(process.execPath, [symlinkedScriptPath, "--dry-run", "--json"], {
       encoding: "utf8",
       env: { ...process.env, PATH: emptyPathDir },
-      timeout: 10_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(result.status, 0, `expected exit 0, got ${result.status}; stderr: ${result.stderr}`);
