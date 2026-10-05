@@ -47,6 +47,7 @@ import { generateSummary as libGenerateSummary } from "../../lib/text-utils.js";
 import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../../lib/valid-time.js";
 import { guardWorkspaceTools } from "../../lib/workspace-policy-guard.js";
+import { describeText } from "../../lib/log-redact.js";
 
 /**
  * Build the OpenClaw tool factory from an already-resolved engine context.
@@ -428,7 +429,7 @@ export function createMemoryTools(ctx) {
           // That is the conservative outcome, and the decision is already durable in the
           // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
           // routine store into an operator alarm -- 192 of them in one seeded run.
-          host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+          host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: ${describeText(params.text)}`);
                 addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
               } else {
                 if (toolCtx.workspaceDir) appendCurationLog(toolCtx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -466,7 +467,7 @@ export function createMemoryTools(ctx) {
                   prepareReplacement: async (authoritativeCandidate, replacementId) => {
                     let mergeResult = null;
                     if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
-                      host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                      host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: new ${describeText(params.text)} vs existing ${describeText(authoritativeCandidate.text)}`);
                       addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
                     } else {
                       try {
@@ -490,7 +491,7 @@ export function createMemoryTools(ctx) {
                       return null;
                     }
                     if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
-                      host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                      host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: merged ${describeText(mergeResult.mergedText)}`);
                       addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                       return null;
                     }
