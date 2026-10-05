@@ -42,7 +42,7 @@
  *            1.9.0 — engine-config.schema.json with readAt/x-tier/x-sensitive and its types (EngineConfigSchema, EngineConfigKey, EngineConfigReadAt); RecallQuery.warmOnly; RecallTiming.totalMs covers queue wait and prelude (E5).
  *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.deferPostTurnLlm, diaryFromUserChats, captureChunkingJev, recall.fullTextTopRecords/fullTextMaxChars) and JobName "post-turn-refine"; adapter-only keys stay on the OpenClaw manifest; no breaking change to existing callers.
  *            1.11.0 — MemoryOps.import (finished-card ingest with deterministic ids) and Engine.stores.adopt (copy-never-move store take-over with a sample cosine probe for legacy stores); MemoryCard.provenance/sourceRef optional; no breaking change to existing callers.
- *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound"; no breaking change to existing callers.
+ *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound" | "ledger-corrupt"; no breaking change to existing callers.
  */
 
 export type ContractVersion = "1.12.0";
@@ -636,7 +636,9 @@ export type MemoryOpErrorCode =
   /** 1.8.0: the operation needs a capability this engine does not have on this platform (e.g. shared memory). */
   | "unsupported"
   /** 1.12.0: rebind of a channel identity that is already mapped to a different user. */
-  | "identity-already-bound";
+  | "identity-already-bound"
+  /** 1.12.0: the `_rebinds/<id>.jsonl` sidecar has no complete line and was quarantined. */
+  | "ledger-corrupt";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
 export interface MemoryOpError extends Error {

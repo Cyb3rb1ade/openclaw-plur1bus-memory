@@ -9,7 +9,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
-- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User. Nur Scope `user`, nur Owner-Metadaten. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync. `ADOPT_PROBE_MIN_ROWS = min(8, vorhanden)`. Package bleibt 7.18.4.
+- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock um Prüfung und Schreibvorgang. `ADOPT_PROBE_MIN_ROWS` prüft `min(8, vorhanden)` Zeilen. Package bleibt 7.18.4.
 
 ### Ported from 7.18.5–7.18.20
 

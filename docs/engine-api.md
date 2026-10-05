@@ -224,7 +224,8 @@ carries card text or a raw storage error; `isMemoryOpError` in
 |---|---|
 | `not-found` | no such card, or one the caller may not see, or one that is not live — deliberately indistinguishable (anti-oracle) |
 | `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy; `rebind`/`unbind`/`import` with an origin other than `"system"` or with `background` not `false` |
-| `identity-already-bound` | 1.12.0: `rebind` of a channel identity that already has an applied (not reversed) mapping to a **different** harness user. Nothing is written. |
+| `identity-already-bound` | 1.12.0: `rebind` of a channel identity that already has an applied (not reversed) mapping to a **different** harness user, **anywhere in this engine** (not per agent). Nothing is written. |
+| `ledger-corrupt` | 1.12.0: a `_rebinds/<rebindId>.jsonl` sidecar has no complete line. The file is quarantined as `.corrupt-<ts>` and not truncated to empty. |
 | `invalid-input` | a malformed id, principal or agent id, an empty or over-long `newText` (1–8 000 characters after trim), an unknown `share` target, an agent without a workspace directory for a destructive member; for `list` an empty or whitespace-only `topic`, `until` with `topic`, or `until` before `since` |
 | `approval-required` | `share` of a sensitive card without `allowSensitive: true` |
 | `conflict` | `correct` to a text that matches a forgotten memory in the same scope (tombstone guard), or a share source that changed while it was being copied |
@@ -375,10 +376,13 @@ manifest) a sample probe is mandatory: up to 16 rows with text and a
 finite, non-zero stored vector, spread across agent tables, re-embedded
 with the engine provider. The probe path also requires
 `engineIdentity.fingerprintId === expectedIdentity.fingerprintId`.
-Pass (positive gate, 1.12.0): `scores.length >= min(8, availableValidRows)`
-and every score finite, min ≥ 0.999 and median ≥ 0.9995. Zero-norm or
-non-finite stored vectors are skipped when sampling. Any non-finite
-score is `identity-unverifiable`. Below the cosine floor:
+Pass (positive gate, 1.12.0): probe `min(8, availableValidRows)` rows,
+spread across tables (deterministic round-robin), and every probed row
+must yield a finite score; min ≥ 0.999 and median ≥ 0.9995. Zero-norm or
+non-finite stored vectors are skipped when sampling. A non-finite
+re-embed of a probed row is skipped rather than aborting the loop; if
+that leaves fewer than `min(8, availableValidRows)` finite scores the
+verdict is `identity-unverifiable`. Below the cosine floor:
 `identity-mismatch`. A cosine of 0.99 is a mismatch (fail-closed).
 The result carries `identitySource: "manifest" | "probe"`. When a
 manifest matches and rows exist, the probe still runs.
@@ -387,14 +391,15 @@ manifest matches and rows exist, the probe still runs.
 A read-only `MemoryDB.init()` does not add columns or create tables.
 
 The sample-probe count floor (1.12.0) is `min(8, availableValidRows)`.
-`availableValidRows` is the number of sampled rows that have text and a
-finite, non-zero stored vector of the expected dimension (the same rows
-the cosine loop scores). If fewer than 8 such rows exist, every one of
-them must yield a finite score. A store with 3 valid rows therefore
-requires 3 finite scores; a store with 20 valid rows is sampled at
-`ADOPT_PROBE_SIZE` (16) and needs at least 8 finite scores. Zero valid
-rows on the probe path stays `identity-unverifiable`. Cosine floors
-(`min ≥ 0.999`, `median ≥ 0.9995`) and the positive gate are unchanged.
+`availableValidRows` is the number of collected rows that have text and a
+finite, non-zero stored vector of the expected dimension, capped at
+`ADOPT_PROBE_SIZE` (16). The cosine loop then probes exactly
+`min(8, availableValidRows)` of those rows, spread across tables. Every
+probed row must yield a finite score: a store with 3 valid rows probes 3;
+a store with 20 valid rows probes 8. Setting the floor to 1 would probe
+one row and is rejected by the tests. Zero valid rows on the probe path
+stays `identity-unverifiable`. Cosine floors (`min ≥ 0.999`,
+`median ≥ 0.9995`) and the positive gate are unchanged.
 
 ### Single-writer precondition (A9)
 
@@ -415,7 +420,13 @@ stays separate: only scope `user`, only the owner/subject binding. Text,
 summary and vectors are not rewritten.
 
 Cardinality is **N:1**: one user may own many channel identities; each
-identity belongs to at most one user.
+identity belongs to at most one user **in the whole engine**, not per
+agent. Rebinding the same identity to the same user on a second agent is
+allowed (a separate sidecar). Rebinding it to a different user on any
+agent is `identity-already-bound`. The mapping is recorded in
+`_rebinds/by-identity/<sha256(fromOwner)>.json` as well as in sidecar
+headers. Hashed principals are pseudonymity, not secrecy: the hash is
+unsalted SHA-256 of a low-entropy channel id.
 
 ### Why `fromIdentity` / `toUser`, not pre-hashed principals
 
@@ -487,24 +498,34 @@ it is `""` because no audit record is written.
 Agent-private, workspace, and any other owner's user-scope cards are not
 matches. Content, category, provenance and vectors are not consulted.
 
-**Apply** (`dryRun: false`), under `pool.withWriteDb(agentId)`:
+**Apply** (`dryRun: false`), under an exclusive `_rebinds/.lock` (O_EXCL,
+cross-process; plus an in-process mutex) then `pool.withWriteDb(agentId)`:
 
 1. If an applied (not reversed) mapping already exists for this
-   `fromOwner` on this agent to a **different** `toOwner`, throw
-   `identity-already-bound`. Nothing is written.
-2. If an applied mapping exists for the same `fromOwner` and `toOwner`,
-   reuse that `rebindId` (idempotent). Newly arrived matching cards are
-   appended to the same sidecar (crash resume uses this path too). A
-   second call with nothing left to move returns `rebound: 0` and the
-   existing `rebindId`.
-3. Otherwise allocate a new `rebindId` and write the sidecar header.
+   `fromOwner` **on any agent** to a **different** `toOwner`, throw
+   `identity-already-bound`. A pending header counts as bound. Nothing is
+   written.
+2. If an applied mapping exists for the same `fromOwner` and `toOwner`
+   **on this agent**, reuse that `rebindId` (idempotent). Newly arrived
+   matching cards are appended to the same sidecar (crash resume uses
+   this path too). A second call with nothing left to move returns
+   `rebound: 0` and the existing `rebindId`.
+3. Otherwise allocate a new `rebindId`, write the identity claim (same
+   user on another agent reuses the claim), and write the sidecar header.
 4. For each match not already recorded in this sidecar: append one audit
-   line, `fsync`, then `MemoryDB.update` with `{ ownerUserId: toOwner,
-   updatedAt }` only. No `text`, no `summary`, no `vector`.
-   `isContentChangingUpdate` stays false.
+   line, `fsync`, then `MemoryDB.update` with `{ ownerUserId: toOwner }`
+   only. `updatedAt` is left unchanged (it drives recall freshness). No
+   `text`, no `summary`, no `vector`. `isContentChangingUpdate` stays
+   false.
 5. Cards already in the sidecar whose owner is still `fromOwner` are
    patched without a second audit line (crash between append and patch).
 6. Inner batches are ≤ 64 cards; `signal` is observed between batches.
+   An observed abort rejects `storage` with message "rebind aborted".
+
+dryRun and apply both read the **write** namespace
+(`withAuthoritativeReadDb` / `withWriteDb`), not `dbs[0]` of the recall
+list. Cards that live only in a read-only legacy namespace are not
+matches and are not counted.
 
 A mapping is recorded even when `matched === 0`, so a later rebind of the
 same identity to a different user still fails N:1.
@@ -516,26 +537,33 @@ same identity to a different user still fails N:1.
 and rescan: a later independent write (a new card, a later rebind of a
 different identity) must survive.
 
-- `rebindId` must pass `safeUuid` (`invalid-input` otherwise). Missing or
-  unreadable sidecar is `not-found`.
-- `p.agentId` must equal the header `agentId`.
-- Same origin guard as rebind.
+- `rebindId` must pass `safeUuid` (`invalid-input` otherwise) and is
+  lower-cased after validation so Linux and macOS resolve the same file.
+- Missing sidecar, unreadable sidecar, or a sidecar whose header
+  `agentId` is not the operator is `not-found` (anti-oracle: a foreign
+  agent's id is not distinguishable from an unknown id).
+- Same origin guard as rebind. Unbind takes the same exclusive lock as
+  rebind and loads the sidecar **inside** that lock.
 - `dryRun` defaults to **`false`**: the caller already named a specific
   audit record. `true` reports counters without writing.
 
 Per sidecar card line:
 
 - row gone → `skipped` (not restored, not created)
-- `ownerUserId` is no longer `toOwner` → `skippedModified` (and counted
-  in `skipped`). A later rebind or other owner patch wins.
-- otherwise patch `{ ownerUserId: fromOwner, updatedAt }` (metadata only)
+- `ownerUserId` is already `fromOwner` → `skipped` (already restored)
+- `ownerUserId` is no longer `toOwner`, or `updatedAt` no longer equals
+  the sidecar `fromUpdatedAt` → `skippedModified` (and counted in
+  `skipped`). A later rebind, owner patch, or content edit wins.
+- otherwise patch `{ ownerUserId: fromOwner }` only. `updatedAt` is not
+  rewritten, so unbind restores the pre-rebind row except the owner.
 
 After a successful applying unbind the sidecar gets a `kind: "reversed"`
-line. A second unbind of the same id restores nothing (`unbound: 0`).
-The identity is free for a new rebind.
+line and the identity claim is removed if no other applied sidecar still
+binds that identity. A second unbind of the same id restores nothing
+(`unbound: 0`). The identity is then free for a new rebind.
 
-A card **written after** the rebind is not in the sidecar, so unbind
-leaves it on the harness user.
+A card **written after** the rebind (including one written for the
+harness user) is not in the sidecar, so unbind leaves it.
 
 ### Audit sidecar
 
@@ -554,12 +582,21 @@ principals (`user:v1:…` / `user:v2:…`). No card text.
 - Unbind appends `{ v, kind: "reversed", rebindId, reversedAt }`. Last
   status-bearing line wins.
 
-Append is atomic: open `a+` `0o600`, repair a torn last line by
-truncating to the last complete newline, write one line, `fsync`, close.
-The sidecar is the source of truth for resume: a crash after append and
-before the row patch is closed by the next identical `rebind` (patch,
-no duplicate line). Duplicate `cardId` lines in one file are ignored
-(first wins).
+Append is atomic: open `a+` `0o600`, repair a torn last line by scanning
+backwards in 64 KiB chunks and truncating to the last complete newline,
+write one line, `fsync` the file, `fsync` the parent directory (where the
+platform allows it), close. A non-empty file with no newline is renamed
+to `<file>.corrupt-<ts>` and the call rejects `ledger-corrupt`; it is
+never truncated to empty. The sidecar is the source of truth for resume:
+a crash after append and before the row patch is closed by the next
+identical `rebind` (patch, no duplicate line). Duplicate `cardId` lines
+in one file are ignored (first wins).
+
+Check, header write, card patches and unbind run under one exclusive
+lock (`_rebinds/.lock` plus an in-process mutex). Two concurrent rebinds
+of one identity to two users: one succeeds, the other
+`identity-already-bound`. Two concurrent identical rebinds share one
+`rebindId`.
 
 ### What logs and results contain
 

@@ -28,10 +28,39 @@ const config = (baseDbPath) => ({
   duplicateThreshold: 1.01,
 });
 
-function embedder(axis) {
+function embedder(axis, onProbeCount) {
   const vector = () => Array.from({ length: 384 }, (_, i) => (i === axis ? 1 : 0));
-  const one = async () => vector();
-  return { embed: one, embedQuery: one, embedPassage: one, embedBatch: async (texts) => texts.map(vector), shutdown: async () => {} };
+  const one = async () => {
+    onProbeCount?.(1);
+    return vector();
+  };
+  return {
+    embed: one,
+    embedQuery: one,
+    embedPassage: one,
+    embedBatch: async (texts) => {
+      onProbeCount?.(texts.length);
+      return texts.map(vector);
+    },
+    shutdown: async () => {},
+  };
+}
+
+function partialFiniteEmbedder(finiteCount) {
+  const vector = () => Array.from({ length: 384 }, (_, i) => (i === 0 ? 1 : 0));
+  const bad = () => Array.from({ length: 384 }, () => Number.NaN);
+  let seen = 0;
+  const next = () => {
+    seen += 1;
+    return seen <= finiteCount ? vector() : bad();
+  };
+  return {
+    embed: async () => next(),
+    embedQuery: async () => next(),
+    embedPassage: async () => next(),
+    embedBatch: async (texts) => texts.map(() => next()),
+    shutdown: async () => {},
+  };
 }
 
 function principalFor(agentId) {
@@ -57,33 +86,60 @@ async function seed(engine, agentId, n = 3) {
 describe("Engine.stores.adopt", () => {
   it("same-model legacy store is ok via probe (3 rows, floor min(8, available))", { timeout: 30_000 }, async () => {
     const baseDbPath = freshBaseDbPath("adopt-ok-");
+    let probed = 0;
     const engine = createEngine(
       createStubHost({ stateDir: makeTempDir("adopt-ok-state-") }),
       config(baseDbPath),
-      { internals: { embeddings: embedder(0) } },
+      { internals: { embeddings: embedder(0, (n) => { probed += n; }) } },
     );
     await seed(engine, "agent-a", 3);
+    probed = 0;
     const identity = engine.embedding.identities()[0];
     const result = await engine.stores.adopt({ path: baseDbPath, expectedIdentity: identity });
     assert.equal(result.verdict, "ok");
     assert.equal(result.identitySource, "probe");
     assert.equal(result.reason, undefined);
     assert.deepEqual(result.storeSchema, { current: "1", expected: "1" });
+    assert.equal(probed, 3, "MIN_ROWS=1 would probe 1 of 3");
     await engine.close({ budgetMs: 5_000 });
   });
 
   it("same-model legacy store is ok via probe with 20 rows", { timeout: 60_000 }, async () => {
     const baseDbPath = freshBaseDbPath("adopt-ok20-");
+    let probed = 0;
     const engine = createEngine(
       createStubHost({ stateDir: makeTempDir("adopt-ok20-state-") }),
       config(baseDbPath),
-      { internals: { embeddings: embedder(0) } },
+      { internals: { embeddings: embedder(0, (n) => { probed += n; }) } },
     );
     await seed(engine, "agent-a", 20);
+    probed = 0;
     const identity = engine.embedding.identities()[0];
     const result = await engine.stores.adopt({ path: baseDbPath, expectedIdentity: identity });
     assert.equal(result.verdict, "ok");
     assert.equal(result.identitySource, "probe");
+    assert.equal(probed, 8, "MIN_ROWS=1 would probe 1 of 20; the floor must probe 8");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("a 20-row store with only 5 finite re-embeds is identity-unverifiable", { timeout: 60_000 }, async () => {
+    const baseDbPath = freshBaseDbPath("adopt-5fin-");
+    const seeder = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-5fin-seed-") }),
+      config(baseDbPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(seeder, "agent-a", 20);
+    const identity = seeder.embedding.identities()[0];
+    await seeder.close({ budgetMs: 5_000 });
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-5fin-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: partialFiniteEmbedder(5) } },
+    );
+    const result = await engine.stores.adopt({ path: baseDbPath, expectedIdentity: identity });
+    assert.equal(result.verdict, "incompatible");
+    assert.equal(result.reason, "identity-unverifiable");
     await engine.close({ budgetMs: 5_000 });
   });
 

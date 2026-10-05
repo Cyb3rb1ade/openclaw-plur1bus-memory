@@ -543,8 +543,8 @@ export function createStoreAdopt({
       return incompatible("identity-unverifiable", { storeSchema, identity: engineIdentity, identitySource: identitySource || "probe" });
     }
 
-    const sample = sampleRows(tables, ADOPT_PROBE_SIZE);
-    if (sample.length === 0) {
+    const available = sampleRows(tables, ADOPT_PROBE_SIZE);
+    if (available.length === 0) {
       if (identitySource === "manifest") {
         return { verdict: "ok", dryRun, storeSchema, identity: engineIdentity, identitySource };
       }
@@ -554,6 +554,9 @@ export function createStoreAdopt({
         identitySource: "probe",
       });
     }
+
+    const probeN = Math.min(ADOPT_PROBE_MIN_ROWS, available.length);
+    const sample = available.slice(0, probeN);
 
     for (const row of sample) {
       if (row.vector.length !== expectedIdentity.dimensions) {
@@ -588,13 +591,7 @@ export function createStoreAdopt({
     for (let i = 0; i < sample.length; i++) {
       const stored = sample[i].vector;
       const fresh = vectorOf({ vector: reembedded[i] });
-      if (!fresh) {
-        return incompatible("identity-unverifiable", {
-          storeSchema,
-          identity: engineIdentity,
-          identitySource: "probe",
-        });
-      }
+      if (!fresh) continue;
       if (fresh.length !== stored.length) {
         return incompatible("dimension-mismatch", {
           storeSchema,
@@ -602,9 +599,11 @@ export function createStoreAdopt({
           identitySource: "probe",
         });
       }
-      scores.push(cosineSimilarityVec(stored, fresh));
+      const score = cosineSimilarityVec(stored, fresh);
+      if (!Number.isFinite(score)) continue;
+      scores.push(score);
     }
-    const minRows = Math.min(ADOPT_PROBE_MIN_ROWS, sample.length);
+    const minRows = Math.min(ADOPT_PROBE_MIN_ROWS, available.length);
     const finite = scores.length >= minRows && scores.every(Number.isFinite);
     if (!finite) {
       return incompatible("identity-unverifiable", {
