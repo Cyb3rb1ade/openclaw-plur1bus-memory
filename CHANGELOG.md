@@ -9,6 +9,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Fixed
 
+- `scripts/setup-feature-crons.mjs`: the npm `postinstall` no longer touches OpenClaw cron jobs in a development checkout (`INIT_CWD` = package root and `.git` present) or under `CI=true`; `PLUR1BUS_SETUP_CRONS=1` opts in. Real installs, the gateway bootstrap and `/plur1bus setup crons` are unchanged.
 - `lib/registry-lock.js`: the tombstone-registry lock now carries an ownership nonce. Release only removes a lock that still holds our nonce (rename-aside, no check-then-unlink race), and a live holder is no longer reaped after 10 s: stale = age > `staleMs` and (holder pid dead or age > 10 × `staleMs`).
 
 ### Ported from 7.18.5–7.18.20
