@@ -23,4 +23,4 @@ def test_upstream_7169_inventory_and_source():
         if path == "tests/release-750-compat.test.js":
             continue
         if path.startswith(("lib/", "tests/", "scripts/")) or path == "index.js":
-            assert (ROOT / path).read_text() == git("show", "v7.18.4:" + path), path
+            assert (ROOT / path).read_text() == git("show", "v7.18.20:" + path), path

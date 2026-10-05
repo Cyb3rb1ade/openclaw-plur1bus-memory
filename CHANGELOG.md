@@ -34,6 +34,117 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.20] — 2026-10-04
+
+### Behoben
+
+- **Bots antworteten in Gruppen auf den sichtbaren Denkblock anderer Bots, und Anthropic lehnte ab.** Mit `/reasoning stream` postet OpenClaw das Denken des Modells als Live-Vorschau („🧠 …“) und löscht sie nach der Antwort. Die anderen Bots der Gruppe erhalten diese Vorschau als normale neue Nachricht. Am 04.10. bekam Bernd Bernhardines Vorschau eine Sekunde nach dem Posten, startete darauf einen Turn, und Anthropic verweigerte die Anfrage („reasoning_extraction“). Neuer Filter `lib/group-reasoning-filter.js` auf `before_dispatch` und `before_agent_reply`: Beginnt eine Gruppennachricht mit einem Denk-Präfix, wird der Turn ohne Antwort und ohne Modellaufruf beansprucht. Direktchats bleiben unberührt. Voreingestellte Präfixe: 🧠, 💭, `<think>`, `<thinking>`, `reasoning:`, `thinking:` (auch hinter „Name: “). Einstellbar über `groupReasoningFilter.prefixes`, abschaltbar mit `groupReasoningFilter.enabled: false`. Das Log nennt nur Agent und Sitzung, nie den Text.
+
+## [7.18.19] — 2026-10-04
+
+### Behoben
+
+- **Hinweise des Hosts landeten als Nutzeraussagen im Gedächtnis.** OpenClaw legt nach einem Gateway-Neustart „[System] Your previous turn was interrupted by a gateway restart …“ als `user`-Nachricht in unterbrochene Sitzungen; ebenso eingereihte Nachrichten („[Queued user message from a previous active turn …“), Weiterleitungen aus anderen Sitzungen und die `⟦openclaw:ctx⟧`-Hülle. Der Auto-Capture hielt sie für Gesagtes: nach dem Deploy am 04.10. speicherte Heisenberg den Neustart-Hinweis als Erinnerung, ohne dass Erik etwas geschrieben hatte. `isInjectedContextText` erkennt diese Hinweise jetzt, am Zeilenanfang (auch mit vorangestelltem „User:“) bzw. an ihren eindeutigen Formulierungen; bloße Erwähnungen im Satz bleiben erfassbar.
+
+## [7.18.18] — 2026-10-04
+
+### Hinzugefügt
+
+- **Speicherweise „automatisch“: Jev entscheidet je Nachricht über die Aufteilung.** Die strukturelle Regel teilt an Aufzählungen, Überschriften und Absätzen, auch dort, wo alles zusammengehört: ein gespeichertes Rezept wurde zu 14 Zeilen wie „1 Prise Salz“. Mit `captureChunkingMode: "automatisch"` fragt der Capture für jede Nachricht, die die Regel teilen würde, das Entscheidungsmodell Jev (TypeSafe), ob sie eine zusammenhängende Einheit ist oder aus unabhängigen Einzelpunkten besteht. Sicher zusammenhängend → nur das Ganze; sicher unabhängig → nur die Teile; unsicher, „gemischt“, Fehler oder Timeout → Ganzes und Teile wie bei „beides“. Die Schnittstellen setzt weiter die Regel. Einstellungen unter `captureChunkingJev` (`apiKeyEnv`, Standard `TYPESAFE_API_KEY`; `model` `jev-latest`; `minConfidence` 0,85; `timeoutMs` 5000). Am 04.10.2026 auf deutschen Texten geprüft: Rezept und Erklärung „zusammenhängend“, vier unabhängige Anliegen „unabhängig“, jeweils Sicherheit 1,00 in 200–450 ms. Die Nachricht geht dafür an api.typesafe.ai; ohne Schlüssel verhält sich der Modus wie „beides“.
+- **Dashboard:** Der Speicherweise-Schalter auf der Capture-Karte bietet „Automatic (Jev)“ als vierte Stufe und warnt, wenn der Modus aktiv ist, aber kein Schlüssel gefunden wird (nur Vorhandensein, nie der Wert).
+
+## [7.18.17] — 2026-10-04
+
+### Behoben
+
+- **Recall verwarf die vollständige Ursprungszeile zugunsten ihrer Teilstücke.** Seit 7.12.70 speichert der Capture lange Antworten zusätzlich in Teilstücken (`keepWhole`: Ganzes plus Teile, gleiche `sourceTurnId`, nur die Teile mit `chunkGroupId`). Die Textentdopplung in `dedupResults` hielt die Ursprungszeile für ein Duplikat ihres ersten Teilstücks, weil beide fast dieselbe Zusammenfassung haben, und warf sie heraus. Ein vollständig gespeichertes Rezept kam so auch über `memory_recall` mit `full_text: true` nur bis „250 g Mehl“ an. Die Ursprungszeile ersetzt jetzt ihre bereits aufgenommenen Teilstücke an deren Platz, und Teilstücke eines schon aufgenommenen Ganzen fallen weg. Gilt an allen drei Aufrufstellen (Auto-Recall, `memory_recall`, Namespace-Merge).
+
+## [7.18.16] — 2026-10-04
+
+### Behoben
+
+- **Recall zeigte gespeicherte Erinnerungen nur als Bruchstück.** Jede Erinnerung kam als Zusammenfassung in den Prompt, die semantische Kompression verteilte dann 240 Wörter auf alle Treffer (bei 15 Treffern rund 16 Wörter je Erinnerung), und der Recall-Block kappte jeden Eintrag bei 400 Zeichen. Ein vollständig gespeichertes Rezept (2515 Zeichen) kam als „Mehl, 7 g Hirschhornsalz, … auskühlen lassen“ an; der Agent hielt die Mitte für verloren und suchte per `exec` in Sitzungsdateien. Die bestplatzierten Treffer (`recall.fullTextTopRecords`, Standard 3) kommen jetzt mit ihrem gespeicherten Text in den Prompt, bis `recall.fullTextMaxChars` (Standard 2000) und ohne Kompression. Was der Prompt kürzer zeigt als gespeichert, trägt `truncated="true"`, und der Block sagt dem Modell, den vollen Text vor dem Zitieren mit `memory_recall` und `full_text: true` zu holen. Die Gesamtgrenzen `recall.memoriesMaxChars` und `recall.globalInjectMaxChars` gelten unverändert.
+- **`/plur1bus enable|disable <feature>`** las das Wort „enable“/„disable“ selbst als Feature-Namen („Feature "disable" unknown“). `/enable` und `/disable` waren nicht betroffen.
+
+## [7.18.15] — 2026-10-03
+
+### Hinzugefügt
+
+- **`dreaming.narrative.diaryFromUserChats` (Standard `false`).** Light-Träume aus dem Chat mit einem identifizierten Nutzer laufen im Bereich `user`; `diaryScopeAllowed` lässt ins Traumtagebuch nur den privaten Bereich des Agenten, deshalb kam aus echten Chats nie ein Light-Eintrag in `DREAMS.md`. Eingeschaltet schreiben auch diese Erzählungen ins Tagebuch. Nur für Agenten mit genau einem Besitzer gedacht: `DREAMS.md` liegt im Workspace des Agenten, und jeder mit Zugriff darauf liest die Erzählung.
+
+## [7.18.14] — 2026-10-03
+
+### Behoben
+
+- **Light-Träume und Episoden laufen wieder mit LLM.** Unter OpenClaw 2026.9.7 lehnt der Host jeden Plugin-LLM-Aufruf aus `agent_end` mit `LLM_COMPLETION_NOT_AUTHORIZED: agent tool caller authority is no longer active` ab, weil die Nacharbeit die Identität des schon beendeten Turns erbt (openclaw/openclaw#162941, upstream offen). Betroffen waren Gesprächserkenntnisse, Traumerzählung, Traum-Echo, Persona-Stimme und Episoden-Extraktion: Light-Träume kamen ohne Erzählung und nie ins Traumtagebuch, Episoden ohne LLM-Anreicherung. `agent_end` reiht diese Arbeit jetzt nur noch ein (`<baseDbPath>/.post-turn-queue/<agent>/`, eine Datei je Turn-Stapel, Modus 0600, nach der Verarbeitung gelöscht), der neue native Feature-Cron `post-turn-refine` arbeitet sie alle 20 Minuten ab, FIFO je Agent hinter einem Job-Lock. Scheitert ein Eintrag, hält die Schlange an (Episoden bauen aufeinander auf); nach drei Versuchen wird er mit Warnung verworfen. Fällt das Einreihen aus, läuft die Arbeit wie bisher direkt im Hook.
+
+### Hinzugefügt
+
+- `runtime.deferPostTurnLlm` (Standard `true`). `false` führt Light-Traum und Episoden wie vor 7.18.14 direkt in `agent_end` aus; dann entsteht auch kein `post-turn-refine`-Cron.
+
+## [7.18.13] — 2026-10-03
+
+### Geändert
+
+- **„📂 Geschrieben“ kennt die Wochenrhythmen.** Das Traumtagebuch bekommt seinen automatischen Eintrag mit dem wöchentlichen REM-Traum; die Zeile ist ✅, solange DREAMS.md zum letzten REM-Bericht geschrieben wurde, und warnt, wenn dieser Eintrag fehlt. KNOWLEDGE.md zeigt jetzt, wie viele Erinnerungen auf die Einarbeitung warten und seit wann (`.adaptive-learning/knowledge-pending.json`, nur Anzahl und Zeitpunkte). Eine Warnung gibt es erst, wenn etwas offen ist und die Datei über eine Woche nicht geschrieben wurde.
+
+## [7.18.12] — 2026-10-03
+
+### Hinzugefügt
+
+- **Abend-Review zeigt, was der Workspace zuletzt geschrieben hat.** Neuer Block „📂 Geschrieben“ mit Tagesnotiz (`memory/YYYY-MM-DD.md`), letztem Light-Traum, letztem REM-Bericht (`memory/dream-diary/rem/`), Traumtagebuch (`DREAMS.md`), `memory/KNOWLEDGE.md` und `MEMORY.md`, jeweils mit Zeitpunkt in der Review-Zeitzone. Eine Warnung erscheint, wenn die neueste Tagesnotiz älter als gestern ist oder der wöchentliche REM-Bericht älter als acht Tage. Gelesen werden nur Dateinamen und Änderungszeiten, keine Inhalte. Was ein Workspace nicht hat, fehlt im Block. Texte auf Deutsch und Englisch.
+
+## [7.18.11] — 2026-10-03
+
+### Behoben
+
+- **Morgen- und Abend-Review liefen nie.** `/plur1bus obsidian cron install-workspace-reviews` und `print-morning-review` legten die Reviews als agentTurn mit `--message "/plur1bus obsidian …-review"` an. Das Modell kann Plugin-Kommandos nicht ausführen; es suchte nach einem `plur1bus`-Binary, rief `date`, `df` und `ls` auf und schickte ein selbst gebautes „Review“. Der Cron meldete trotzdem `ok`. Die Reviews sind jetzt native Feature-Crons (`run-feature-cron.mjs --feature morning-review|evening-review`) ohne Modell.
+- **Bestehende Review-Jobs werden umgestellt.** Der Feature-Cron-Bootstrap erkennt agentTurn-Jobs, deren Prompt genau einen der beiden Befehle enthält, und stellt sie per `cron edit --command-argv` um. Voraussetzung ist ein konkretes Direktchat-Ziel (`--announce --channel telegram --to <id>`); Jobs ohne ein solches Ziel bleiben unverändert. Eigener Prompt-Text um den Befehl herum entfällt dabei.
+- **Wer das Review auslöst.** Ein Review schreibt in den Vault und verlangt deshalb einen berechtigten Absender. Der Cron führt es über den Operator-Pfad im Namen des Direktchats aus, an den er zustellt. Es gelten dieselben Regeln wie im Chat: `allowedUserIds`, Vault-Bestätigung und Antwortsprache.
+
+### Geändert
+
+- **Review-Texte sind mehrsprachig.** Morgen-, Abend- und Wochen-Review sowie `review show`/`prepare` kamen fest auf Deutsch. Die Texte stehen jetzt im i18n-Wörterbuch (de, en). Die Sprache kommt aus dem Kontext (`ctx.lang`, Chatverlauf), sonst aus der Plugin-Option `language` (Standard: Deutsch); Review-Crons nutzen `language`. Sprachen ohne Wörterbuch-Eintrag bekommen Englisch.
+- **Datum mit Wochentag in der richtigen Zeitzone.** Die Kopfzeile zeigte UTC ohne Wochentag („3. Oktober 2026, 17:28“ um 19:28 Ortszeit). Sie nutzt jetzt `Intl.DateTimeFormat` in der Sprache des Reviews und in `timezone` bzw. der Systemzeitzone („Samstag, 3. Oktober 2026 um 19:28“).
+- „📋 1 Vorschlagge warten“ heißt jetzt „📋 1 Vorschlag wartet“.
+
+## [7.18.10] — 2026-10-02
+
+### Geändert
+
+- **`config.get` der Cron-Einrichtung wartet 60 s statt 30 s.** Die neue Diagnose aus 7.18.8 zeigte direkt nach dem Start von 7.18.9 `pending reason=config-load-failed`: Unter OpenClaw 2026.9.7 braucht der Aufruf im Leerlauf 4 s, kurz nach einem Gateway-Start über 30 s. Der Bootstrap änderte dann nichts und lief beim nächsten Start erneut an.
+
+## [7.18.9] — 2026-10-02
+
+### Behoben
+
+- **`planCreateCount=1` nach jedem Gateway-Start war ein Lesefehler.** `setup-feature-crons.mjs --json` beendete sich mit `process.exit()`, direkt nachdem es rund 170 KB JSON geschrieben hatte. Über die Pipe des Bootstraps kamen davon nur 64 KiB an. Der Bootstrap konnte das abgeschnittene JSON nicht lesen und wertete das pauschal als einen offenen Job. Das Skript setzt jetzt `process.exitCode` und lässt die Ausgabe vollständig ab. Es fehlte nie ein Cron.
+
+## [7.18.8] — 2026-10-02
+
+### Geändert
+
+- **Feature-Cron-Bootstrap sagt, was offen ist.** Nach jedem Gateway-Start meldete das Log `planCreateCount=1`, ohne den Job zu nennen. Bleibt etwas offen, folgt jetzt eine Zeile `plur1bus-feature-crons: pending …` mit den geplanten und geänderten Jobs, den gescheiterten Aufrufen oder dem Abbruchgrund (nur Jobnamen, keine Inhalte).
+- **Lesende CLI-Aufrufe der Cron-Einrichtung warten 60 s statt 15 s** (`agents list`, `cron list`). Unter OpenClaw 2026.9.7 braucht `agents list` schon im Leerlauf 11–13 s, direkt nach einem Start länger. Der Bootstrap gab dann mit `planCreateCount=11` auf. Schreibende Aufrufe (`cron add`/`edit`) behalten ihr kurzes Budget.
+
+## [7.18.7] — 2026-10-02
+
+### Behoben
+
+- **Endlosschleife aus Plugin-Neuladen und LLM-Timeouts unter OpenClaw 2026.9.7.** Der erste `runtime.llm`-Aufruf je Agent und Modell lässt den Host einen Laufzeitstand bauen, der alle Plugins neu lädt und den Gateway 40–70 s blockiert. Gab der Aufrufer vorher auf (Skill-Miner nach 30 s), warf der Host den fertigen Bau weg, und der nächste Aufruf baute erneut: Am 02.10.2026 folgten so für Bernhardine 4 und für Heisenberg 5 Neuladungen samt Stillstand aufeinander, jeweils mit Timeout (openclaw/openclaw#163029). Für einen Schlüssel ohne jüngsten Erfolg bekommt der Host-Aufruf jetzt ein eigenes Abbruchsignal (180 s). Der Aufrufer hört weiterhin nach seinem Timeout auf zu warten, der Host baut aber fertig und behält den Stand für die nächsten Aufrufe. Läuft ein warmer Schlüssel in den Timeout, gilt er wieder als kalt.
+
+## [7.18.6] — 2026-10-02
+
+### Geändert
+
+- **`runtime.traceRegistrations` hält 200 statt 60 Stack-Frames fest.** Der erste live eingefangene Stack brach in `prepared-model-runtime` ab, vor dem Aufrufer, der entscheidet, ob ein Turn oder ein Plugin-LLM-Aufruf die Neuladung auslöst.
+
+## [7.18.5] — 2026-10-02
+
+### Hinzugefügt
+
+- **Diagnose `runtime.traceRegistrations` (Standard aus).** OpenClaw 2026.9.7 lädt das Plugin nach einem Gateway-Start in Wellen mitten im Turn neu, jede Neuladung blockiert den Gateway 40–70 s (openclaw/openclaw#163029). Upstream braucht den Aufruf-Stack einer solchen Neuladung. Eingeschaltet schreibt jede Registrierung eine Warnung mit laufender Nummer je Prozess, Uptime, Abstand zur vorigen Registrierung und Aufruf-Stack ins Gateway-Log.
+
 ## [7.18.4] — 2026-10-02
 
 ### Behoben

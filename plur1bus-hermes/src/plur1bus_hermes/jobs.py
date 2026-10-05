@@ -189,6 +189,8 @@ def run_jobs(
                     "reminders": reminders,
                 })
             if mode in {"daily", "all"}:
+                if callable(getattr(domain, "workspace_review", None)):
+                    results["workspaceReview"] = scoped_call(domain.workspace_review)
                 if callable(getattr(domain, "run_episode_narratives", None)):
                     results["episodeNarratives"] = gate.run(
                         "episode-narratives", 86_400, lambda: scoped_call(domain.run_episode_narratives)
@@ -208,7 +210,7 @@ def run_jobs(
                 )
                 results["lightDream"] = (
                     gate.run("light-dream", 86_400, lambda: scoped_call(domain.run_light_dream))
-                    if scope_type == "agent-private" and callable(getattr(domain, "run_light_dream", None))
+                    if scope_type in {"agent-private", "user"} and callable(getattr(domain, "run_light_dream", None))
                     else {"skipped": True, "reason": "agent-private-only-or-unavailable"}
                 )
                 results["knowledgeProposals"] = (

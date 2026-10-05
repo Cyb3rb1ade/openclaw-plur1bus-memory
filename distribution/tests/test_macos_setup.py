@@ -61,6 +61,13 @@ class MacSetupTests(unittest.TestCase):
             self.assertEqual(info["CFBundleVersion"], "7.12.7")
             self.assertEqual(info["PLUR1BUSReleaseVersion"], "7.12.7-hermes.4")
 
+    def test_automatic_bootstrap_does_not_override_pm_target(self):
+        source = (Path(packaging.__file__).parent / "macos/Setup.swift").read_text()
+        self.assertIn("automaticPython = python", source)
+        self.assertIn('return python == automaticPython ? args : args + ["--python", python]', source)
+        base = source.split("private func baseArguments()", 1)[1].split("func preview()", 1)[0]
+        self.assertNotIn('"--home", home, "--python", python]', base)
+
     def test_partial_signing_configuration_is_rejected_before_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -20,8 +20,10 @@ BOOLEANS = {
     "memoryDynamics.flashbulbEncoding": False,
     "emotion.t3.enabled": False, "recall.queryRefinement.enabled": True,
     "metaCognition.enabled": False, "contradictionDisclosure.enabled": True,
+    "dreaming.narrative.diaryFromUserChats": False,
 }
 LABELS = {
+    "dreaming.narrative.diaryFromUserChats": "Light-Träume aus Nutzer-Chats im Traumtagebuch",
     "autoCapture": "Automatisch speichern", "autoRecall": "Automatisch erinnern",
     "merging.enabled": "Ähnliche Erinnerungen zusammenführen", "gc.enabled": "Speicherbereinigung",
     "obsidianBridge.watch": "Obsidian-Änderungen beobachten", "skillWorkshop.enabled": "Skill Workshop",
@@ -38,6 +40,7 @@ INTEGERS = {"recall.candidateTopK": (40, 5, 100), "recall.maxPromptMemories": (1
 LABELS.update({"recall.candidateTopK": "Suchkandidaten vor dem Ranking",
                "recall.maxPromptMemories": "Erinnerungen im Prompt"})
 HELP = {
+    "dreaming.narrative.diaryFromUserChats": "Light-Träume dürfen im isolierten Nutzer-Workspace ein Traumtagebuch schreiben. Gruppen und REM-Träume bleiben ausgeschlossen.",
     "recall.candidateTopK": "5 bis 100 Kandidaten je Suchpfad vor dem Ranking, Standard 40. Mehr Kandidaten können Ranking-Zeit kosten; sie landen nicht automatisch im Prompt.",
     "recall.maxPromptMemories": "Höchstens 5 bis 100 Erinnerungen im Prompt, Standard 12. Mehr Treffer können mehr Kontext-Tokens verbrauchen; das Zeichenbudget begrenzt zusätzlich.",
     "autoCapture": "Neue Gesprächsinhalte automatisch für das Langzeitgedächtnis verarbeiten. Manuelles Speichern bleibt davon unabhängig.",
@@ -57,7 +60,7 @@ HELP = {
     "recall.queryRefinement.enabled": "Bei schwachen ersten Suchtreffern eine verfeinerte Anfrage versuchen. Kann zusätzliche Embedding-Arbeit auslösen.",
     "metaCognition.enabled": "Lokale Feedback-Metriken mit einem LLM reflektieren. Die Reflexion ändert keine Einstellungen automatisch und kann Tokens verbrauchen.",
     "contradictionDisclosure.enabled": "Erkannte Widersprüche beim Erinnern sichtbar machen. Gegensätzliche Aussagen werden dadurch nicht automatisch gelöscht.",
-    "capture.mode": "Ganz speichert den vollständigen Text, geteilt speichert Segmente, beides behält Volltext und Segmente. Die Auswahl gilt für neue Captures, nicht rückwirkend.",
+    "capture.mode": "Ganz speichert Volltext, geteilt Segmente, beides beide Varianten. Automatisch lässt Jev entscheiden und sendet den Text an api.typesafe.ai. Ohne TYPESAFE_API_KEY bleibt es bei beides. Gilt für neue Captures.",
     "dailyConsolidation.decayMode": "Batch berechnet die Verfallsverarbeitung gebündelt; Einzelzeilen verwendet den zeilenweisen Pfad. Die Einstellung gilt für die nächste Konsolidierung.",
 }
 MODEL_LABELS = {"*": "Standard für interne Aufgaben", "conversation-insights": "Gesprächserkenntnisse",
@@ -92,8 +95,8 @@ def public_settings(view):
                  if type(_get(view.config, key, default)) is bool else default, "choices": [True, False]}
                 for key, default in BOOLEANS.items()]
     mode = ("ganz" if view.config.get("captureChunking") is False else
-            "geteilt" if view.config.get("captureChunkingMode") == "geteilt" else "beides")
-    settings.append({"id": "capture.mode", "value": mode, "choices": ["ganz", "beides", "geteilt"]})
+            view.config.get("captureChunkingMode") if view.config.get("captureChunkingMode") in {"geteilt", "automatisch"} else "beides")
+    settings.append({"id": "capture.mode", "value": mode, "choices": ["ganz", "beides", "geteilt", "automatisch"]})
     for key, choices in ENUMS.items():
         value = _get(view.config, key, choices[0])
         settings.append({"id": key, "value": value if value in choices else choices[0], "choices": list(choices)})
@@ -114,7 +117,7 @@ def public_settings(view):
         task = key.removeprefix("model.")
         setting["label"] = LABELS.get(key, MODEL_LABELS.get(task, task))
         setting["description"] = HELP.get(key, "Modell für diese interne Aufgabe im aktiven Profil. Standard erben verwendet die bestehende Modellzuordnung; das Chat-Modell bleibt unverändert.")
-        setting["choiceLabels"] = ({"ganz": "Volltext", "geteilt": "Segmente", "beides": "Volltext und Segmente"} if key == "capture.mode"
+        setting["choiceLabels"] = ({"ganz": "Volltext", "geteilt": "Segmente", "beides": "Volltext und Segmente", "automatisch": "Automatisch (Jev)"} if key == "capture.mode"
             else {"batch": "Gebündelt (Batch)", "rows": "Einzelzeilen"} if key in ENUMS else {})
         setting["group"] = "Aufgabenmodelle" if key.startswith("model.") else "Speicherung" if key in {"capture.mode", "autoCapture", "merging.enabled", "gc.enabled", "dailyConsolidation.decayMode"} else "Gedächtnisfunktionen"
     return {"agentId": view.agent_id, "profile": view.profile,
@@ -131,7 +134,7 @@ def validate_change(view, identifier, value):
         _, minimum, maximum = INTEGERS[identifier]
         if minimum <= value <= maximum:
             return
-    if identifier == "capture.mode" and isinstance(value, str) and value in {"ganz", "beides", "geteilt"}:
+    if identifier == "capture.mode" and isinstance(value, str) and value in {"ganz", "beides", "geteilt", "automatisch"}:
         return
     if identifier in ENUMS and isinstance(value, str) and value in ENUMS[identifier]:
         return

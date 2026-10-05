@@ -61,6 +61,7 @@ func runInstaller(python: String, arguments: [String], completion: @escaping (In
 final class SetupModel: ObservableObject {
     @Published var home = ProcessInfo.processInfo.environment["HERMES_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".hermes").path
     @Published var python = ""
+    private var automaticPython = ""
     @Published var profiles: [Profile] = []
     @Published var selected: Set<String> = []
     @Published var activate = true
@@ -100,6 +101,7 @@ final class SetupModel: ObservableObject {
             python = ["hermes-agent/venv/bin/python", "hermes-agent/.venv/bin/python"]
                 .map { URL(fileURLWithPath: home).appendingPathComponent($0).path }
                 .first { FileManager.default.isExecutableFile(atPath: $0) } ?? ""
+            automaticPython = python
         }
         python = NSString(string: python).expandingTildeInPath
         guard FileManager.default.isExecutableFile(atPath: python) else {
@@ -121,7 +123,10 @@ final class SetupModel: ObservableObject {
 
     private func baseArguments() -> [String] {
         // The signed app bundle must stay immutable, including Python imports.
-        ["-I", "-B", payload.appendingPathComponent("installer.py").path, "--bundle", payload.path, "--home", home, "--python", python]
+        // The bootstrap interpreter only starts the installer. Hermes PM owns
+        // the target generation; only a user-selected path is an override.
+        let args = ["-I", "-B", payload.appendingPathComponent("installer.py").path, "--bundle", payload.path, "--home", home]
+        return python == automaticPython ? args : args + ["--python", python]
     }
 
     func preview() {

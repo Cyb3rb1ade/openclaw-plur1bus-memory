@@ -23,4 +23,4 @@ def test_complete_upstream_7184_delta():
         if path == "tests/release-750-compat.test.js":
             continue
         if path.startswith(("lib/", "tests/", "scripts/")) or path in {"index.js", "test/memory-edit.test.js"}:
-            assert (ROOT / path).read_text() == git("show", TARGET + ":" + path), path
+            assert (ROOT / path).read_text() == git("show", "v7.18.20:" + path), path

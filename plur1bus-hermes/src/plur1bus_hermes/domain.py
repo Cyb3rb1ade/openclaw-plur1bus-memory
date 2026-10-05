@@ -2401,6 +2401,13 @@ class Plur1busDomain:
         self._commit_job_page(page)
         return dream
 
+    def workspace_review(self, *, acl_bindings=None, scope_key=None, **kwargs):
+        """Inspect only the selected scope's workspace, without file mutations."""
+        from .workspace_review import collect_workspace_status
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        return collect_workspace_status(self._scope_workspace_dir(selector),
+                                        timezone_name=self.config.get("timezone"))
+
     def run_light_dream(
         self,
         *,
@@ -2416,7 +2423,10 @@ class Plur1busDomain:
         config = self.config.get("lightDream")
         if not isinstance(config, Mapping) or config.get("enabled") is not True:
             return {"executed": False, "reason": "disabled"}
-        if selector.scope_type != "agent-private":
+        dreaming = self.config.get("dreaming")
+        narrative = dreaming.get("narrative") if isinstance(dreaming, Mapping) else None
+        allow_user_chats = isinstance(narrative, Mapping) and narrative.get("diaryFromUserChats") is True
+        if selector.scope_type != "agent-private" and not (allow_user_chats and selector.scope_type == "user"):
             return {"executed": False, "reason": "private-scope-required"}
         backend = self._llm_backend
         if backend is None or not backend.available():
@@ -2461,6 +2471,7 @@ class Plur1busDomain:
                 agent_id=self.agent_id, narrative="\n\n".join(insights),
                 scope=selector.acl_bindings, mode="light",
                 timezone_name=str(self.config.get("timezone") or "") or None,
+                allow_user_chats=allow_user_chats,
             )
             if not diary.get("written") and diary.get("code") != "already_present":
                 logging.getLogger(__name__).warning("light dream diary write failed: %s", diary.get("code"))

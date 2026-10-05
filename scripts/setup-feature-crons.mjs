@@ -22,6 +22,7 @@
 import {
   planFeatureCrons,
   planSafetyDisabledCronRecoveries,
+  planObsidianReviewCronMigrations,
   planUnsafeDirectCronDisables,
   REQUIRED_FEATURE_CRONS,
   selectAgentsForCronSetup,
@@ -49,6 +50,12 @@ import {
  * probe runs in the deferred bootstrap, off any request path.
  */
 export const NATIVE_PROBE_TIMEOUT_MS = 120_000;
+// 7.18.8: read-only CLI calls. Under OpenClaw 2026.9.7 `agents list` takes
+// 11–13 s on an idle gateway and longer right after a start; the old 15 s made
+// the bootstrap give up with planCreateCount=11. 7.18.10: config.get too, it
+// ran past 30 s right after a start (reason=config-load-failed). Writes (cron add/edit) keep
+// their short budget.
+export const READ_TIMEOUT_MS = 60_000;
 
 /**
  * Probe the two documented CLI surfaces required by native feature crons.
@@ -298,7 +305,7 @@ function isPlainObject(value) {
 export function loadFeatureCronConfig(openclawImpl = openclaw) {
   let result;
   try {
-    result = openclawImpl(["gateway", "call", "config.get", "--json"], 30000);
+    result = openclawImpl(["gateway", "call", "config.get", "--json"], READ_TIMEOUT_MS);
   } catch (_error) {
     return { ok: false, error: { code: "config-call-failed" } };
   }
@@ -328,7 +335,7 @@ export function loadFeatureCronConfig(openclawImpl = openclaw) {
  * @returns {Array<{id: string, isDefault: boolean}> | null}
  */
 function discoverAgents(openclawImpl = openclaw) {
-  const r = openclawImpl(["agents", "list", "--json"], 15000);
+  const r = openclawImpl(["agents", "list", "--json"], READ_TIMEOUT_MS);
   if (!r.ok) return null;
   let parsed;
   try {
@@ -416,7 +423,7 @@ export async function runSetupFeatureCrons(options = {}) {
     }
 
     if (!nativeDispatchReady) {
-      const list = openclawImpl(["cron", "list", "--json", "--all"], 15000);
+      const list = openclawImpl(["cron", "list", "--json", "--all"], READ_TIMEOUT_MS);
       let existingJobs = null;
       if (list.ok) {
         try {
@@ -551,7 +558,7 @@ export async function runSetupFeatureCrons(options = {}) {
     // --all ist Pflicht: ohne das Flag blendet die CLI disabled Jobs aus —
     // genau der delivery-sichere disabled-Default würde sonst bei jedem
     // Lauf erneut angelegt und stapelt Duplikate.
-    const list = openclawImpl(["cron", "list", "--json", "--all"], 15000);
+    const list = openclawImpl(["cron", "list", "--json", "--all"], READ_TIMEOUT_MS);
     if (!list.ok) {
       if (opts.json) {
         writeOutput(
@@ -597,7 +604,9 @@ export async function runSetupFeatureCrons(options = {}) {
     }
 
     let plan;
+    let plannedAgentIds;
     if (opts.agent) {
+      plannedAgentIds = new Set([opts.agent]);
       plan = planFeatureCrons(existingJobs, enabledSpecs, {
         agents: [{ id: opts.agent, isDefault: true }],
         account: opts.account,
@@ -606,6 +615,7 @@ export async function runSetupFeatureCrons(options = {}) {
     } else {
       const agents = discoverAgents(openclawImpl);
       if (agents) {
+        plannedAgentIds = new Set(agents.map((agent) => agent.id));
         plan = planFeatureCrons(existingJobs, enabledSpecs, { agents, channelConfig: configLoad.runtimeConfig });
       } else {
         if (opts.json) {
@@ -632,9 +642,14 @@ export async function runSetupFeatureCrons(options = {}) {
     // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
     // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
     // der /plur1bus-setup-crons-Parser nicht lesen kann).
-    const nativePayloadMigrations = plan.skip
-      .map((entry) => planNativeFeaturePayloadMigration(entry.existingJob, entry.spec))
-      .filter(Boolean);
+    const nativePayloadMigrations = [
+      ...plan.skip
+        .map((entry) => planNativeFeaturePayloadMigration(entry.existingJob, entry.spec))
+        .filter(Boolean),
+      // Review-Jobs gehoeren nicht zum Pflichtsatz (sie brauchen ein
+      // Zustellziel, das der Installer nicht kennt): nur bestehende umstellen.
+      ...planObsidianReviewCronMigrations(existingJobs.filter((job) => plannedAgentIds.has(job?.agentId))),
+    ];
     const recoveries = planSafetyDisabledCronRecoveries(plan.skip);
     const updates = mergeCronUpdates(
       mergeCronUpdates(Array.isArray(plan.update) ? plan.update : [], nativePayloadMigrations),
@@ -755,6 +770,9 @@ const IS_MAIN = (() => {
 
 if (IS_MAIN) {
   runSetupFeatureCrons().then((code) => {
-    process.exit(code);
+    // exitCode, not exit(): stdout to a pipe is asynchronous, and exit() cut
+    // the --json result off at 64 KiB. The bootstrap could not parse it and
+    // reported planCreateCount=1 after every gateway start (02.10.2026).
+    process.exitCode = code;
   });
 }

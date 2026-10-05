@@ -115,11 +115,14 @@ def append_dream_diary_entry(
     timezone_name: str | None = None,
     now: datetime | None = None,
     workspace_root: str | Path | None = None,
+    allow_user_chats: bool = False,
 ) -> dict[str, Any]:
     """Append one private-agent dream in the host managed block, idempotently."""
     try:
         agent_id = safe_agent_id(agent_id)
-        if binding_from_scope(agent_id, scope).scope_type != "agent-private":
+        scope_type = binding_from_scope(agent_id, scope).scope_type
+        if scope_type != "agent-private" and not (
+                allow_user_chats is True and mode == "light" and scope_type == "user"):
             return {"written": False, "code": "not_private_scope"}
         text = _normalize_narrative(narrative)
         if not text:

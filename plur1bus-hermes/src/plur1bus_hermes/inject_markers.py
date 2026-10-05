@@ -55,6 +55,9 @@ INJECTED_QUICK_MARKERS = (
     "conversation info (untrusted metadata)",
     "[openclaw heartbeat",
     "write a dream diary entry from these memory fragments",
+    "your previous turn was interrupted by a gateway restart",
+    "this content was routed by openclaw from another session",
+    "⟦openclaw:ctx⟧",
 )
 
 # Upstream INJECTED_JSON_REGEXES (case-insensitive, evaluated only after a hint).
@@ -71,9 +74,11 @@ JSON_MARKER_HINTS = ('capturedby', 'embeddingstatus', '"chat_id"', '"message_id"
 
 # Upstream INJECTED_HEADER_RE: line-header anchors only.
 _INJECTED_HEADER_RE = re.compile(
-    r"^(?:<<<)?begin_openclaw_internal_context\b"
+    r"^(?:user:\s*)?(?:<<<)?begin_openclaw_internal_context\b"
     r"|^\[subagent context\]"
-    r"|^\[inter-session message\]",
+    r"|^\[inter-session message\]"
+    r"|^\[system\] your previous turn was interrupted\b"
+    r"|^\[queued user message from a previous active turn\b",
     re.IGNORECASE,
 )
 
@@ -113,3 +118,15 @@ def is_injected_context_text(text: object) -> bool:
 def looks_like_prompt_injection(text: object) -> bool:
     """Return True when the text matches the upstream prompt-injection regex."""
     return bool(PROMPT_INJECTION_RE.search(str(text or "")))
+
+
+def is_host_notice(text: object) -> bool:
+    """Recognize recovery/routing envelopes, not ordinary restart discussion."""
+    value = str(text or "")
+    lower = value.lower()
+    if any(marker in lower for marker in (
+            "your previous turn was interrupted by a gateway restart",
+            "this content was routed by openclaw from another session", "⟦openclaw:ctx⟧")):
+        return True
+    return any(re.match(r"^\[queued user message from a previous active turn\b", line.strip(), re.I)
+               for line in value.splitlines())

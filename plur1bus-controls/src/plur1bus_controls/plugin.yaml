@@ -1,6 +1,6 @@
 name: plur1bus-controls
 kind: standalone
-version: 7.18.4
+version: 7.18.20
 description: Canonical PLUR1BUS controls and lifecycle hooks for Hermes
 min_hermes_version: 0.19.0
 requires_plugins:

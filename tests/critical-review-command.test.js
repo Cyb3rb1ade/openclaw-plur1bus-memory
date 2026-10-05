@@ -415,7 +415,8 @@ test("eine zitierte Push-Antwort „bitte alle akzeptieren“ wird vor dem Agent
   // The chat dispatch path fires before_dispatch (with the quoted text); the
   // agent-runner path fires before_agent_reply. The same handler serves both.
   const dispatchHandlers = hooks.filter((entry) => entry.name === "before_dispatch").map((entry) => entry.fn);
-  const handler = hooks.filter((entry) => entry.name === "before_agent_reply").at(-1)?.fn;
+  // Seit 7.18.20 hängt auch der Gruppen-Denkblock-Filter an beiden Hooks.
+  const handler = hooks.find((entry) => entry.name === "before_agent_reply" && entry.fn.name === "answerQuotedCriticalReply")?.fn;
   assert.ok(dispatchHandlers.length > 0, "the plugin listens before dispatch");
   assert.equal(typeof handler, "function", "the plugin listens before the agent replies");
   // Seit 7.17.0 hängt auch /modus an before_dispatch; der Critical-Handler

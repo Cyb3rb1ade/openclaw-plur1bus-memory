@@ -33,6 +33,7 @@ from .epistemic import (
     is_recallable_epistemic,
 )
 from .inject_budget import apply_global_inject_budget, trim_memory_items
+from .recall_origins import prefer_whole_rows, recall_text
 from .llm_cache import LlmResultCache
 from .semantic_input import prepare_semantic_input
 from .namespaces import (
@@ -1252,7 +1253,7 @@ class Plur1busRuntime:
             if using_heuristic:
                 refined_rows = heuristic_rows(refined_rows)
             rows.extend(lifecycle_rows(refined_rows))
-        rows = self._reranker.rerank(semantic_query, rows)
+        rows = prefer_whole_rows(self._reranker.rerank(semantic_query, rows))
         deduplicated = []
         groups: dict[str, int] = {}
         seen_content: dict[str, list[dict[str, Any]]] = {}
@@ -1297,8 +1298,8 @@ class Plur1busRuntime:
         ]
         rows = rows[:adaptive_limit]
         memory_items = [
-            f"- {escape(str(row['content']) if full_text else str(row['content'])[:2000])} {validity_label(row)}".rstrip()
-            for row in rows
+            f"- {escape(recall_text(row, position, full_text))} {validity_label(row)}".rstrip()
+            for position, row in enumerate(rows)
             if row.get("content")
         ]
         recalled = trim_memory_items(memory_items, recall_config.get("memoriesMaxChars", 12_000))
@@ -1340,8 +1341,8 @@ class Plur1busRuntime:
         )
         # Credit only primary rows whose complete rendered line survived the
         # global budget. A full worker queue never delays or breaks recall.
-        eligible = [row for row in deduplicated if row.get("content") and
-                    escape(str(row["content"]) if full_text else str(row["content"])[:2000]) in output]
+        eligible = [row for position, row in enumerate(deduplicated) if row.get("content") and
+                    escape(recall_text(row, position, full_text)) in output]
         metadata_path = getattr(self._domain, "_metadata_path", None)
         if eligible and isinstance(metadata_path, Path) and (metadata_path / "metadata.lance").is_dir():
             try:
@@ -1859,14 +1860,30 @@ class Plur1busRuntime:
                       captured_at: str | None = None,
                       receipt_required: bool = False,
                       capture_payload: dict[str, Any] | None = None) -> None:
+        from .inject_markers import is_host_notice
+        if is_host_notice(user):
+            LOGGER.debug("capture skipped: host recovery or routing notice")
+            return
         if capture_id is None:
             capture_id, default_at = mint_capture_identity()
             captured_at = captured_at or default_at
         payload = capture_payload if capture_payload is not None else {}
         options = payload.setdefault("chunkingPlan", capture_options(self.config))
-        planned = [(role, text, capture_rows(text, capture_id=capture_id,
-                    agent_id=self.agent_id, scope_key=self.scope_key, role=role, options=options))
-                   for role, text in (("user", user), ("assistant", assistant))]
+        planned = []
+        for role, text in (("user", user), ("assistant", assistant)):
+            role_options = options
+            if options.get("automatic") is True:
+                from .chunking import plan_chunks
+                from .jev_chunk_decider import decide_storage
+                decisions = payload.setdefault("chunkingDecisions", {})
+                if role not in decisions:
+                    decisions[role] = decide_storage(text, self.config) if len(plan_chunks(text)) > 1 else "whole"
+                decision = decisions[role]
+                if decision not in {"whole", "parts", "both"}:
+                    raise ValueError("invalid persisted chunking decision")
+                role_options = {"version": 2, "enabled": decision != "whole", "keepWhole": decision != "parts"}
+            planned.append((role, text, capture_rows(text, capture_id=capture_id,
+                agent_id=self.agent_id, scope_key=self.scope_key, role=role, options=role_options)))
         self._domain.on_turn(
             user,
             assistant,

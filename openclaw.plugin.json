@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.18.4-hermes.0",
+  "version": "7.18.20-hermes.0",
   "kind": "memory",
   "cliCommands": [
     {
@@ -494,6 +494,11 @@
                 "type": "boolean",
                 "default": true,
                 "description": "Also append each dream narrative to the agent's DREAMS.md, the file OpenClaw's Dreams page shows."
+              },
+              "diaryFromUserChats": {
+                "type": "boolean",
+                "default": false,
+                "description": "7.18.15: also append light dreams from a chat with an identified user (scope \"user\") to DREAMS.md. Off by default because the diary is the agent's file; only turn on for agents with a single owner."
               }
             }
           }
@@ -702,10 +707,56 @@
         "type": "string",
         "enum": [
           "beides",
-          "geteilt"
+          "geteilt",
+          "automatisch"
         ],
         "default": "beides",
         "description": "Was beim Aufteilen gespeichert wird. \"beides\" behält die Ursprungszeile UND legt ihre Teile daneben; \"geteilt\" speichert nur die Teile. An 100 gezielt ausgewählten schweren Fällen aus echten Daten gemessen (Abruf, Antwortmodell, Judge): ungeteilt 36 %, nur geteilt 49 %, beides 64 %. Reines Aufteilen findet mehr, verliert aber den Zusammenhang — die Ursprungszeile fängt das ab. \"geteilt\" spart dafür rund eine Zeile je geteilter Nachricht. Wirkt nur, wenn captureChunking an ist; auf false gesetzt wird gar nicht geteilt und die Nachricht bleibt ganz."
+      },
+      "groupReasoningFilter": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "7.18.20: In Gruppenchats keinen Turn auf Nachrichten starten, die wie der sichtbare Denkblock eines anderen Bots beginnen (z. B. \"🧠 …\" aus /reasoning stream). Anthropic lehnt Anfragen, die fremdes Modell-Denken enthalten, als reasoning_extraction ab. Der Bot bleibt stumm, ohne Modellaufruf.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "prefixes": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Anfänge, an denen ein Denkblock erkannt wird (ohne Groß-/Kleinschreibung). Ohne Angabe: 🧠, 💭, <think>, <thinking>, reasoning:, thinking:."
+          }
+        }
+      },
+      "captureChunkingJev": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "7.18.18: Einstellungen für captureChunkingMode \"automatisch\". Jev (TypeSafe) entscheidet je Nachricht, die die Regel teilen würde: zusammenhängend mit hoher Sicherheit → nur das Ganze, unabhängige Einzelpunkte mit hoher Sicherheit → nur die Teile, sonst Ganzes und Teile. Die Nachricht geht dafür an api.typesafe.ai. Ohne Schlüssel gilt \"beides\".",
+        "properties": {
+          "apiKeyEnv": {
+            "type": "string",
+            "default": "TYPESAFE_API_KEY",
+            "description": "Name der Umgebungsvariable mit dem TypeSafe-API-Schlüssel."
+          },
+          "model": {
+            "type": "string",
+            "default": "jev-latest"
+          },
+          "minConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.85,
+            "description": "Ab dieser Sicherheit gilt Jevs Urteil; darunter wird Ganzes und Teile gespeichert."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 30000,
+            "default": 5000
+          }
+        }
       },
       "autoRecall": {
         "type": "boolean",
@@ -808,6 +859,16 @@
           },
           "embeddingCacheMaxBytes": {
             "type": "number"
+          },
+          "traceRegistrations": {
+            "type": "boolean",
+            "default": false,
+            "description": "7.18.5 diagnostic for openclaw/openclaw#163029: log the call stack of every plugin registration (warn level), to show where OpenClaw's mid-turn plugin reloads come from. Off by default."
+          },
+          "deferPostTurnLlm": {
+            "type": "boolean",
+            "default": true,
+            "description": "7.18.14: queue post-turn light dreams and episode extraction for the post-turn-refine cron instead of running them in agent_end, where OpenClaw 2026.9.7 refuses their LLM calls (openclaw/openclaw#162941). false runs them inline as before."
           },
           "detachPostTurnWork": {
             "type": "boolean",
@@ -1331,6 +1392,20 @@
           "canonicalMaxItems": {
             "type": "number",
             "default": 5
+          },
+          "fullTextTopRecords": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 15,
+            "default": 3,
+            "description": "7.18.16: number of top-ranked recalled memories injected with their stored full text instead of a compressed summary. 0 restores summaries only."
+          },
+          "fullTextMaxChars": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 8000,
+            "default": 2000,
+            "description": "7.18.16: character limit for each full-text recalled memory. Longer records are cut and marked truncated so the model fetches the rest with memory_recall full_text."
           },
           "maxPromptMemories": {
             "type": "number",

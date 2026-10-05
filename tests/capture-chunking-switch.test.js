@@ -15,8 +15,10 @@ import { resolveEffectiveConfig } from "../lib/setup/config-contract.js";
 
 const ids = CAPTURE_CHUNKING_CHOICES.map((choice) => choice.id);
 
-test("bietet genau die drei Speicherweisen an", () => {
-  assert.deepEqual(ids.slice().sort(), ["beides", "ganz", "geteilt"]);
+test("bietet genau die vier Speicherweisen an", () => {
+  // 7.18.18: "automatisch" laesst Jev je Nachricht entscheiden.
+  assert.deepEqual(ids.slice().sort(), ["automatisch", "beides", "ganz", "geteilt"]);
+  assert.equal(captureChunkingChoice("automatisch")?.mode, "automatisch");
   assert.equal(captureChunkingChoice("beides")?.enabled, true);
   assert.equal(captureChunkingChoice("ganz")?.enabled, false);
   assert.equal(captureChunkingChoice("ganz")?.mode, null, "ganz laesst den zuletzt gewaehlten Modus stehen");
@@ -28,6 +30,7 @@ test("liest die laufende Weise so, wie der Capture-Pfad sie auslegt", () => {
   // liest dann captureChunking !== false und captureChunkingMode !== "geteilt".
   assert.equal(activeCaptureChunkingId({}), "beides");
   assert.equal(activeCaptureChunkingId({ captureChunkingMode: "geteilt" }), "geteilt");
+  assert.equal(activeCaptureChunkingId({ captureChunkingMode: "automatisch" }), "automatisch");
   assert.equal(activeCaptureChunkingId({ captureChunking: false }), "ganz");
   assert.equal(
     activeCaptureChunkingId({ captureChunking: false, captureChunkingMode: "geteilt" }),
@@ -101,7 +104,7 @@ test("das Schema kennt beide Schluessel, die der Mutator schreibt", async () => 
   const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
   const props = manifest.configSchema.properties;
   assert.equal(props.captureChunking.type, "boolean");
-  assert.deepEqual(props.captureChunkingMode.enum.slice().sort(), ["beides", "geteilt"]);
+  assert.deepEqual(props.captureChunkingMode.enum.slice().sort(), ["automatisch", "beides", "geteilt"]);
   for (const choice of CAPTURE_CHUNKING_CHOICES) {
     if (choice.mode) assert.ok(props.captureChunkingMode.enum.includes(choice.mode), `${choice.id} ist im Schema erlaubt`);
   }

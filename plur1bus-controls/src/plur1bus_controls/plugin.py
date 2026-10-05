@@ -888,6 +888,11 @@ class Plur1busControlsPlugin:
             if command == "obsidian":
                 feature_status = domain.status(**scope_kwargs)
                 scoped_workspace = Path(feature_status["workspace"])
+                if arguments and arguments[0] in {"morning-review", "evening-review"}:
+                    from plur1bus_hermes.workspace_review import collect_workspace_status
+                    return json.dumps({"kind": arguments[0], "workspace": str(scoped_workspace),
+                        "status": collect_workspace_status(scoped_workspace, timezone_name=runtime.config.get("timezone"))},
+                        ensure_ascii=False, indent=2)
                 result = {
                     "workspace": str(scoped_workspace),
                     "memoryMirror": feature_status["obsidianMirror"],
@@ -1089,7 +1094,7 @@ class Plur1busControlsPlugin:
         register_command = getattr(ctx, "register_command", None)
         if callable(register_command):
             register_command("plur1bus", handler=self.handle_command, description="PLUR1BUS persistent-memory controls")
-        HookCollector(self._on_gateway_dispatch).register(ctx)
+        HookCollector(self._on_gateway_dispatch, self.config).register(ctx)
         PLUR1BUS_CONTROLS_CONTAINER.put("last_bootstrap_at", _utcnow())
         PLUR1BUS_CONTROLS_CONTAINER.put("commands", self.commands)
 

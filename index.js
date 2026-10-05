@@ -49,7 +49,7 @@ import {
 } from "./lib/memory-merge-safety.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
-import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
+import { describeFeatureCronBootstrapResult, shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { registerFeatureCronNativeDispatch, listPluginPublicArtifacts, loadOpenClawPluginSdkRuntime } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
@@ -104,6 +104,7 @@ import {
   scanGatewayLog,
 } from "./lib/health-watch.js";
 import { createPostTurnDetacher } from "./lib/post-turn-detach.js";
+import { formatRegistrationTrace, recordRegistration } from "./lib/register-trace.js";
 import {
   createControlPlaneHealthInspector,
   createControlPlaneHealthScan,
@@ -387,7 +388,7 @@ import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessag
 import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
-import { expandForCapture } from "./lib/memory-chunking.js";
+import { expandForCapture, expandForCaptureDecided } from "./lib/memory-chunking.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
 import { planReminderExtraction } from "./lib/reminder-extraction.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
@@ -432,6 +433,9 @@ import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.j
 import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "./lib/open-threads.js";
 import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
+import { drainPostTurnWork, enqueuePostTurnWork } from "./lib/post-turn-queue.js";
+import { createJevChunkDecider } from "./lib/jev-chunk-decider.js";
+import { createGroupReasoningFilter } from "./lib/group-reasoning-filter.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -3634,6 +3638,10 @@ async function runDeferredFeatureCronBootstrap(api, {
       api.logger?.info?.(
         `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
       );
+      if (lastPlanCreateCount > 0) {
+        const detail = describeFeatureCronBootstrapResult(parsedResult);
+        if (detail) api.logger?.info?.(`plur1bus-feature-crons: pending ${detail}`);
+      }
     } else {
       api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap attempt failed");
     }
@@ -4847,6 +4855,10 @@ const plugin = {
       // The narrative also goes into the agent's DREAMS.md, which is what the
       // host's Dreams page shows. Off only on explicit request.
       diary: dreamNarrativeRawCfg.diary !== false,
+      // 7.18.15: Light-Traeume aus dem Chat mit einem identifizierten Nutzer
+      // tragen den Bereich "user" und bleiben sonst aus DREAMS.md heraus.
+      // Nur fuer Agenten mit genau einem Besitzer einschalten.
+      diaryFromUserChats: dreamNarrativeRawCfg.diaryFromUserChats === true,
       timezone: typeof cfg.timezone === "string" && cfg.timezone.trim() ? cfg.timezone.trim() : null,
     };
     const resolveTemperamentName = (forAgentId) =>
@@ -6267,6 +6279,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     }
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
+    // 7.18.5: openclaw/openclaw#163029 — where mid-turn reloads come from.
+    const registrationTrace = formatRegistrationTrace(
+      recordRegistration({ enabled: cfg.runtime?.traceRegistrations === true }),
+    );
+    if (registrationTrace) api.logger.warn(registrationTrace);
 
     function resolveStoreScopeAccess(memoryCtx, rawScope) {
       const scope = MEMORY_SCOPES.includes(rawScope) ? rawScope : "agent-private";
@@ -8202,6 +8219,39 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 api.logger?.info?.(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "embedding-drain", ...result });
               }
+              if (subKey === "post-turn-refine") {
+                // 7.18.14: arbeitet die von agent_end eingereihten Light-Traeume
+                // und Episoden ab, ausserhalb jeder Turn-Identitaet
+                // (openclaw/openclaw#162941). FIFO je Agent; ein Fehlschlag
+                // haelt die Schlange an, weil spaetere Episoden auf dem
+                // Zustand der frueheren aufbauen.
+                if (!neoEnabled) {
+                  return formatJsonCommandResult({ job: "post-turn-refine", skipped: true, reason: "neo_disabled" });
+                }
+                const refineResult = await drainPostTurnWork(baseDbPath, internalAgent, async (entry) => {
+                  if (entry?.agentId !== internalAgent || !Array.isArray(entry?.turns) || typeof entry?.neoWorkspaceKey !== "string") return false;
+                  const neoStore = createNeoStore(neoRoot, entry.neoWorkspaceKey);
+                  return pool.withDb(internalAgent, async (db) => {
+                    if (!db?.table && typeof db?.init === "function") await db.init();
+                    let ok = true;
+                    if (entry.lightDream) {
+                      const processedDreams = neoStore.readHooks()?.agent_end?.processedDreams || [];
+                      if (!processedDreams.includes(entry.digestHash)) {
+                        ok = (await runLightDreamPostTurn({ agentId: internalAgent, ctx: entry.ctx || {}, neoStore, db, normalizedTurns: entry.turns, digestHash: entry.digestHash, processedDreams })) === true;
+                      }
+                    }
+                    if (ok && entry.episodes) {
+                      const hooks = neoStore.readHooks();
+                      if (!(hooks?.agent_end?.processedEpisodes || []).includes(entry.digestHash)) {
+                        ok = (await runEpisodePostTurn({ agentId: internalAgent, ctx: entry.ctx || {}, sessionKey: entry.sessionKey || "", neoStore, normalizedTurns: entry.turns, digestHash: entry.digestHash, hooks })) === true;
+                      }
+                    }
+                    return ok;
+                  });
+                }, { logger: api.logger, maxEntries: 10, budgetMs: 300_000 });
+                api.logger?.info?.(`plur1bus internal post-turn-refine[${internalAgent}]: ${JSON.stringify(refineResult)}`);
+                return formatJsonCommandResult({ job: "post-turn-refine", ...refineResult });
+              }
               if (subKey === "emotion-refine") {
                 // Abschluss-Review, Important 6: emotion.t3 (die eigentliche
                 // Tier-3-Emotionsklassifikation) und die Importance-Klärung
@@ -8377,7 +8427,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "skill-benefit-backfill", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "skill-benefit-backfill", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "embedding-drain", "emotion-refine", "feedback-report", "proactive-check", "meta-reflect", "episodes-rebuild", "post-turn-refine"] });
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -9126,11 +9176,13 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             if (actionKey === "state") {
               return runStatusCommand(commandCtx, memoryCtx);
             }
+            // Ueber /plur1bus steht "enable"/"disable" selbst in den Argumenten;
+            // parseFeatureArg las bis 7.18.15 deshalb "disable" als Feature-Namen.
             if (actionKey === "enable") {
-              return runFeatureToggle(commandCtx, true, memoryCtx);
+              return runFeatureToggle({ ...commandCtx, args: tokens.slice(1).join(" ") }, true, memoryCtx);
             }
             if (actionKey === "disable") {
-              return runFeatureToggle(commandCtx, false, memoryCtx);
+              return runFeatureToggle({ ...commandCtx, args: tokens.slice(1).join(" ") }, false, memoryCtx);
             }
             if (actionKey === "memory") {
               return runMemoryCommand(commandCtx, memoryCtx);
@@ -10626,6 +10678,217 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     }
 
     // ========================================================================
+    // Post-turn LLM work (7.18.14): Light-Traum und Episoden-Extraktion.
+    // Laufen per Default im Cron post-turn-refine, weil Plugin-LLM-Aufrufe
+    // nach dem Turn unter OpenClaw 2026.9.7 abgelehnt werden
+    // (openclaw/openclaw#162941). runtime.deferPostTurnLlm=false ruft sie wie
+    // zuvor direkt aus agent_end auf.
+    // ========================================================================
+    const deferPostTurnLlm = cfg.runtime?.deferPostTurnLlm !== false;
+    // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
+    // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
+    // unsicher -> beides. Ohne Schluessel verhaelt es sich wie "beides".
+    const jevChunkCfg = cfg.captureChunkingJev || {};
+    const jevChunkDecider = cfg.captureChunkingMode === "automatisch"
+      ? createJevChunkDecider({
+        apiKey: process.env[typeof jevChunkCfg.apiKeyEnv === "string" && jevChunkCfg.apiKeyEnv.trim() ? jevChunkCfg.apiKeyEnv.trim() : "TYPESAFE_API_KEY"],
+        model: jevChunkCfg.model,
+        minConfidence: jevChunkCfg.minConfidence,
+        timeoutMs: jevChunkCfg.timeoutMs,
+        logger: api.logger,
+      })
+      : null;
+    if (cfg.captureChunkingMode === "automatisch" && !jevChunkDecider) {
+      api.logger.warn?.("memory-lancedb-namespaced: captureChunkingMode \"automatisch\" without a Jev API key; storing whole and parts");
+    }
+    // Nur die Felder, die die beiden Laeufe aus dem Hook-Kontext lesen.
+    const postTurnContext = (ctx = {}) => {
+      const pick = (value) => (typeof value === "string" || typeof value === "number" ? value : undefined);
+      return {
+        workspaceDir: pick(ctx?.workspaceDir),
+        workspaceKey: pick(ctx?.workspaceKey),
+        sessionKey: pick(ctx?.sessionKey),
+        userId: pick(ctx?.userId),
+        senderId: pick(ctx?.senderId),
+        channel: pick(ctx?.channel),
+        messageProvider: pick(ctx?.messageProvider),
+        accountId: pick(ctx?.accountId ?? ctx?.channelContext?.accountId),
+        chatId: pick(ctx?.chatId),
+      };
+    };
+    const runLightDreamPostTurn = ({ agentId, ctx, neoStore, db, normalizedTurns, digestHash, processedDreams = [], signal = null }) => {
+      // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+      let personaIdentityText = "";
+      if (ctx?.workspaceDir) {
+        for (const identityFile of ["SOUL.md", "IDENTITY.md", "AGENT.md"]) {
+          try {
+            personaIdentityText = readFileSync(join(ctx.workspaceDir, identityFile), "utf8").slice(0, 2000);
+            break;
+          } catch (_) { /* try next */ }
+        }
+      }
+      let lightRequestContext = null;
+      try {
+        lightRequestContext = resolveMemoryRequestContext({
+          agentId,
+          workspaceDir: ctx?.workspaceDir,
+          workspaceKey: ctx?.workspaceKey,
+          userId: ctx?.userId ?? ctx?.senderId,
+          channel: ctx?.channel ?? ctx?.messageProvider,
+          accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+          chatId: ctx?.chatId,
+        }, { workspaceAliases: memoryWorkspaceAliases });
+      } catch (_) {
+        lightRequestContext = null;
+      }
+      const lightAclBindings = lightRequestContext
+        ? (lightRequestContext.userPrincipal
+          ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
+          : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
+        : null;
+      return lightDream({
+        turns: normalizedTurns,
+        neoStore,
+        db,
+        embeddings,
+        insightLlmCfg: withLlmCallContext(
+          conversationInsightsLlmCfg,
+          agentId,
+          "conversation-insights",
+          { signal },
+        ),
+        narrativeLlmCfg: withLlmCallContext(
+          dreamNarrativeLlmCfg,
+          agentId,
+          "dream-narrative",
+          { signal },
+        ),
+        echoLlmCfg: withLlmCallContext(
+          dreamEchoLlmCfg,
+          agentId,
+          "dream-echo",
+          { signal },
+        ),
+        personaLlmCfg: (skillMinerEnabled || mergingEnabled) ? withLlmCallContext(
+          personaVoiceLlmCfg,
+          agentId,
+          "persona-voice",
+          { signal },
+        ) : null,
+        callLlm,
+        logger: api.logger,
+        narrativeCfg: dreamNarrativeCfg,
+        workspaceDir: ctx?.workspaceDir || null,
+        temperamentName: resolveTemperamentName(agentId),
+        personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
+          ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
+          : null,
+        requestContext: lightRequestContext,
+        aclBindings: lightAclBindings,
+        signal,
+      }).then((dreamResult) => {
+        throwIfAborted(signal, "light dream commit aborted");
+        if (ctx?.workspaceDir) {
+          throwIfAborted(signal, "light dream commit aborted");
+          writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
+        }
+        // Markiere als verarbeitet
+        const mergedDreams = [...processedDreams.slice(-100), digestHash];
+        throwIfAborted(signal, "light dream commit aborted");
+        neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+        // Light sleep has no schedule; its last run is the only
+        // time the Memory page can show for it.
+        recordLightDreamRun({ baseDbPath, agentId }).catch((runErr) => {
+          api.logger.debug?.(`memory-lancedb-namespaced: light dream run not recorded: ${String(runErr)}`);
+        });
+        return true;
+      }).catch((dreamErr) => {
+        api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
+        return false;
+      });
+    };
+    const runEpisodePostTurn = ({ agentId, ctx, sessionKey, neoStore, normalizedTurns, digestHash, hooks, signal = null }) => {
+      const processedEpisodes = hooks?.agent_end?.processedEpisodes || [];
+      // Dedup MUSS pro Turn greifen, nicht pro Batch: Bleibt das
+      // Watermark nach einem Fehlschlag stehen, ist die naechste
+      // Slice BREITER (currentCount ist gewachsen) und damit auch
+      // der digestHash ein anderer — processedEpisodes wuerde nicht
+      // greifen und bereits geschriebene Spannen doppelt anlegen.
+      // Die Turn-IDs dagegen sind stabil, solange der Slice-START
+      // gleich bleibt, und genau das garantiert das haengende
+      // Watermark.
+      const episodedTurnIds = new Set(hooks?.agent_end?.episodedTurnIds || []);
+      // 7.12.40: die zuletzt geschriebene Episode wird fortgeschrieben,
+      // solange die Pause unter 30 Minuten liegt (Zustand im Hook-Record).
+      const openEpisodeState = hooks?.agent_end?.openEpisode || null;
+      // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+      // 7.12.40: Namen aus USER.md/IDENTITY.md, Stimmung der
+      // EmotionEngine und Session-Art fuer brauchbare Karten-Metadaten.
+      return extractEpisodesWithState(normalizedTurns, {
+        // 7.12.55: vor der Anreicherung bekannt geben, was bereits
+        // episodiert ist — sonst zahlt jede verworfene Spanne einen
+        // Modellaufruf.
+        episodedTurnIds,
+        workspaceKey: ctx?.workspaceKey,
+        workspaceDir: ctx?.workspaceDir,
+        sessionKey: sessionKey || "",
+        mood: (() => { try { return emotionalPool.describe(agentId); } catch (_) { return null; } })(),
+        openEpisode: openEpisodeState,
+        agentId,
+        llmCfg: mergingEnabled ? withLlmCallContext(
+          episodeExtractionLlmCfg,
+          agentId,
+          "episode-extraction",
+          { signal },
+        ) : null,
+        callLlm,
+        signal,
+      }).then(async ({ episodes, openEpisode: nextOpenEpisode, continuedId }) => {
+        throwIfAborted(signal, "episode commit aborted");
+        // Nur vollstaendig bereits episodierte Spannen verwerfen.
+        // Teilueberlappung bleibt erhalten — sie enthaelt neue Turns.
+        const { fresh, skipped } = filterAlreadyEpisoded(episodes, episodedTurnIds);
+        if (skipped > 0) {
+          api.logger.info(`memory-lancedb-namespaced: ${skipped} bereits episodierte Spanne(n) uebersprungen (agent=${agentId})`);
+        }
+        const vaultPaths = new Map();
+        if (fresh.length > 0) {
+          throwIfAborted(signal, "episode commit aborted");
+          // 7.12.40: async mit langer Lock-Frist statt 5-s-Sync-Lock
+          // (Backpressure gegen den Embedding-Drain, s. neo-arch.js).
+          if (typeof neoStore.appendEpisodesAsync === "function") await neoStore.appendEpisodesAsync(fresh);
+          else neoStore.appendEpisodes(fresh);
+          const continuedCount = fresh.filter((ep) => ep.id === continuedId).length;
+          api.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId} (continued=${continuedCount}, turns=${fresh.map((ep) => ep.turnCount).join("/")})`);
+          if (ctx?.workspaceDir) {
+            for (const ep of fresh) {
+              throwIfAborted(signal, "episode commit aborted");
+              const replacePath = continuedId && ep.id === continuedId ? openEpisodeState?.vaultPath || null : null;
+              const written = writeEpisodeToVault(ep, ctx.workspaceDir, { replacePath });
+              if (written?.written) vaultPaths.set(ep.id, written.path);
+              else if (written?.error) api.logger.warn?.(`memory-lancedb-namespaced: episode card not written: ${written.error}`);
+            }
+          }
+        }
+        // Markiere als verarbeitet
+        const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
+        throwIfAborted(signal, "episode commit aborted");
+        const openEpisodeRecord = nextOpenEpisode
+          ? { ...nextOpenEpisode, vaultPath: vaultPaths.get(nextOpenEpisode.id) || nextOpenEpisode.vaultPath || null }
+          : null;
+        neoStore.recordHook("agent_end", {
+          processedEpisodes: mergedEpisodes,
+          episodedTurnIds: mergeEpisodedTurnIds(episodedTurnIds, fresh, EPISODED_TURN_ID_MEMORY),
+          openEpisode: openEpisodeRecord,
+        });
+        return true;
+      }).catch((epErr) => {
+        api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
+        return false;
+      });
+    };
+
+    // ========================================================================
     // Auto-Capture: Speichere User-Nachrichten automatisch
     // ========================================================================
 
@@ -10957,14 +11220,24 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             //   true + captureChunkingMode "beides" (Vorgabe) -> Ganzes und Teile
             //   true + captureChunkingMode "geteilt"       -> nur die Teile
             // Gemessen an 100 schweren Faellen: 36 % / 64 % / 49 %.
-            const chunkPlan = expandForCapture(preppedOk, {
-              enabled: cfg.captureChunking !== false,
-              keepWhole: cfg.captureChunkingMode !== "geteilt",
-              makeGroupId: randomUUID,
-            });
+            const chunkPlan = jevChunkDecider
+              ? await expandForCaptureDecided(preppedOk, {
+                enabled: cfg.captureChunking !== false,
+                makeGroupId: randomUUID,
+                decide: jevChunkDecider,
+              })
+              : expandForCapture(preppedOk, {
+                enabled: cfg.captureChunking !== false,
+                keepWhole: cfg.captureChunkingMode !== "geteilt",
+                makeGroupId: randomUUID,
+              });
+            throwIfCaptureAborted();
             const validPreps = chunkPlan.items;
-            if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0) {
-              api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model for agent=${agentId}`);
+            if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || chunkPlan.decisions) {
+              const decided = chunkPlan.decisions ? `, jev whole=${chunkPlan.decisions.whole} parts=${chunkPlan.decisions.parts} both=${chunkPlan.decisions.both}` : "";
+              if (chunkPlan.split > 0 || chunkPlan.needsLlm > 0 || decided && Object.values(chunkPlan.decisions).some(Boolean)) {
+                api.logger.info(`memory-lancedb-namespaced: chunking split ${chunkPlan.split} of ${preppedOk.length} item(s) into ${chunkPlan.parts} part(s), ${chunkPlan.needsLlm} would need a model${decided} for agent=${agentId}`);
+              }
             }
             const textToVector = new Map();
             if (validPreps.length > 0 && typeof embeddings.embedBatch === "function") {
@@ -11233,6 +11506,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               // betrachtet (dauerhafter Episodenverlust, im Feld beobachtet).
               // Jeder Eintrag ist ein Promise<boolean>: true = erledigt.
               const postProcessing = [];
+              // 7.18.14: Light-Traum und Episoden laufen per Default im
+              // Cron post-turn-refine (openclaw/openclaw#162941); hier wird
+              // nur vermerkt, was fuer diese Turns ansteht.
+              const deferredWork = { lightDream: false, episodes: false };
 
               // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
               if (!background && mergingEnabled && isLlmRouteAvailable(conversationInsightsLlmCfg) && neoEnabled) {
@@ -11243,96 +11520,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   api.logger.info(`memory-lancedb-namespaced: skipping light dream - too few turns (${normalizedTurns.length})`);
                 } else if (normalizedTurns.length > 50) {
                   api.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
+                } else if (deferPostTurnLlm) {
+                  deferredWork.lightDream = true;
                 } else {
-                  // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
-                  let personaIdentityText = "";
-                  if (ctx?.workspaceDir) {
-                    for (const identityFile of ["SOUL.md", "IDENTITY.md", "AGENT.md"]) {
-                      try {
-                        personaIdentityText = readFileSync(join(ctx.workspaceDir, identityFile), "utf8").slice(0, 2000);
-                        break;
-                      } catch (_) { /* try next */ }
-                    }
-                  }
-                  let lightRequestContext = null;
-                  try {
-                    lightRequestContext = resolveMemoryRequestContext({
-                      agentId,
-                      workspaceDir: ctx?.workspaceDir,
-                      workspaceKey: ctx?.workspaceKey,
-                      userId: ctx?.userId ?? ctx?.senderId,
-                      channel: ctx?.channel ?? ctx?.messageProvider,
-                      accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
-                      chatId: ctx?.chatId,
-                    }, { workspaceAliases: memoryWorkspaceAliases });
-                  } catch (_) {
-                    lightRequestContext = null;
-                  }
-                  const lightAclBindings = lightRequestContext
-                    ? (lightRequestContext.userPrincipal
-                      ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
-                      : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
-                    : null;
-                  postProcessing.push(lightDream({
-                    turns: normalizedTurns,
-                    neoStore,
-                    db,
-                    embeddings,
-                    insightLlmCfg: withLlmCallContext(
-                      conversationInsightsLlmCfg,
-                      agentId,
-                      "conversation-insights",
-                      { signal },
-                    ),
-                    narrativeLlmCfg: withLlmCallContext(
-                      dreamNarrativeLlmCfg,
-                      agentId,
-                      "dream-narrative",
-                      { signal },
-                    ),
-                    echoLlmCfg: withLlmCallContext(
-                      dreamEchoLlmCfg,
-                      agentId,
-                      "dream-echo",
-                      { signal },
-                    ),
-                    personaLlmCfg: (skillMinerEnabled || mergingEnabled) ? withLlmCallContext(
-                      personaVoiceLlmCfg,
-                      agentId,
-                      "persona-voice",
-                      { signal },
-                    ) : null,
-                    callLlm,
-                    logger: api.logger,
-                    narrativeCfg: dreamNarrativeCfg,
-                    workspaceDir: ctx?.workspaceDir || null,
-                    temperamentName: resolveTemperamentName(agentId),
-                    personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
-                      ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
-                      : null,
-                    requestContext: lightRequestContext,
-                    aclBindings: lightAclBindings,
-                    signal,
-                  }).then((dreamResult) => {
-                    throwIfAborted(signal, "light dream commit aborted");
-                    if (ctx?.workspaceDir) {
-                      throwIfAborted(signal, "light dream commit aborted");
-                      writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
-                    }
-                    // Markiere als verarbeitet
-                    const mergedDreams = [...processedDreams.slice(-100), digestHash];
-                    throwIfAborted(signal, "light dream commit aborted");
-                    neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
-                    // Light sleep has no schedule; its last run is the only
-                    // time the Memory page can show for it.
-                    recordLightDreamRun({ baseDbPath, agentId }).catch((runErr) => {
-                      api.logger.debug?.(`memory-lancedb-namespaced: light dream run not recorded: ${String(runErr)}`);
-                    });
-                    return true;
-                  }).catch((dreamErr) => {
-                    api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
-                    return false;
-                  }));
+                  postProcessing.push(runLightDreamPostTurn({ agentId, ctx, neoStore, db, normalizedTurns, digestHash, processedDreams, signal }));
                 }
               }
 
@@ -11341,84 +11532,37 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 const processedEpisodes = hooks?.agent_end?.processedEpisodes || [];
                 if (processedEpisodes.includes(digestHash)) {
                   api.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
+                } else if (deferPostTurnLlm) {
+                  deferredWork.episodes = true;
                 } else {
-                  // Dedup MUSS pro Turn greifen, nicht pro Batch: Bleibt das
-                  // Watermark nach einem Fehlschlag stehen, ist die naechste
-                  // Slice BREITER (currentCount ist gewachsen) und damit auch
-                  // der digestHash ein anderer — processedEpisodes wuerde nicht
-                  // greifen und bereits geschriebene Spannen doppelt anlegen.
-                  // Die Turn-IDs dagegen sind stabil, solange der Slice-START
-                  // gleich bleibt, und genau das garantiert das haengende
-                  // Watermark.
-                  const episodedTurnIds = new Set(hooks?.agent_end?.episodedTurnIds || []);
-                  // 7.12.40: die zuletzt geschriebene Episode wird fortgeschrieben,
-                  // solange die Pause unter 30 Minuten liegt (Zustand im Hook-Record).
-                  const openEpisodeState = hooks?.agent_end?.openEpisode || null;
-                  // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
-                  // 7.12.40: Namen aus USER.md/IDENTITY.md, Stimmung der
-                  // EmotionEngine und Session-Art fuer brauchbare Karten-Metadaten.
-                  postProcessing.push(extractEpisodesWithState(normalizedTurns, {
-                    // 7.12.55: vor der Anreicherung bekannt geben, was bereits
-                    // episodiert ist — sonst zahlt jede verworfene Spanne einen
-                    // Modellaufruf.
-                    episodedTurnIds,
-                    workspaceKey: ctx?.workspaceKey,
-                    workspaceDir: ctx?.workspaceDir,
+                  postProcessing.push(runEpisodePostTurn({ agentId, ctx, sessionKey: event?.sessionKey || ctx?.sessionKey || "", neoStore, normalizedTurns, digestHash, hooks, signal }));
+                }
+              }
+
+              if (deferredWork.lightDream || deferredWork.episodes) {
+                try {
+                  const queued = enqueuePostTurnWork(baseDbPath, agentId, {
+                    neoWorkspaceKey: rememberNeoWorkspace(ctx, event),
+                    ctx: postTurnContext(ctx),
                     sessionKey: event?.sessionKey || ctx?.sessionKey || "",
-                    mood: (() => { try { return emotionalPool.describe(agentId); } catch (_) { return null; } })(),
-                    openEpisode: openEpisodeState,
-                    agentId,
-                    llmCfg: mergingEnabled ? withLlmCallContext(
-                      episodeExtractionLlmCfg,
-                      agentId,
-                      "episode-extraction",
-                      { signal },
-                    ) : null,
-                    callLlm,
-                    signal,
-                  }).then(async ({ episodes, openEpisode: nextOpenEpisode, continuedId }) => {
-                    throwIfAborted(signal, "episode commit aborted");
-                    // Nur vollstaendig bereits episodierte Spannen verwerfen.
-                    // Teilueberlappung bleibt erhalten — sie enthaelt neue Turns.
-                    const { fresh, skipped } = filterAlreadyEpisoded(episodes, episodedTurnIds);
-                    if (skipped > 0) {
-                      api.logger.info(`memory-lancedb-namespaced: ${skipped} bereits episodierte Spanne(n) uebersprungen (agent=${agentId})`);
-                    }
-                    const vaultPaths = new Map();
-                    if (fresh.length > 0) {
-                      throwIfAborted(signal, "episode commit aborted");
-                      // 7.12.40: async mit langer Lock-Frist statt 5-s-Sync-Lock
-                      // (Backpressure gegen den Embedding-Drain, s. neo-arch.js).
-                      if (typeof neoStore.appendEpisodesAsync === "function") await neoStore.appendEpisodesAsync(fresh);
-                      else neoStore.appendEpisodes(fresh);
-                      const continuedCount = fresh.filter((ep) => ep.id === continuedId).length;
-                      api.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId} (continued=${continuedCount}, turns=${fresh.map((ep) => ep.turnCount).join("/")})`);
-                      if (ctx?.workspaceDir) {
-                        for (const ep of fresh) {
-                          throwIfAborted(signal, "episode commit aborted");
-                          const replacePath = continuedId && ep.id === continuedId ? openEpisodeState?.vaultPath || null : null;
-                          const written = writeEpisodeToVault(ep, ctx.workspaceDir, { replacePath });
-                          if (written?.written) vaultPaths.set(ep.id, written.path);
-                          else if (written?.error) api.logger.warn?.(`memory-lancedb-namespaced: episode card not written: ${written.error}`);
-                        }
-                      }
-                    }
-                    // Markiere als verarbeitet
-                    const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
-                    throwIfAborted(signal, "episode commit aborted");
-                    const openEpisodeRecord = nextOpenEpisode
-                      ? { ...nextOpenEpisode, vaultPath: vaultPaths.get(nextOpenEpisode.id) || nextOpenEpisode.vaultPath || null }
-                      : null;
-                    neoStore.recordHook("agent_end", {
-                      processedEpisodes: mergedEpisodes,
-                      episodedTurnIds: mergeEpisodedTurnIds(episodedTurnIds, fresh, EPISODED_TURN_ID_MEMORY),
-                      openEpisode: openEpisodeRecord,
-                    });
-                    return true;
-                  }).catch((epErr) => {
-                    api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
-                    return false;
-                  }));
+                    digestHash,
+                    turns: normalizedTurns,
+                    lightDream: deferredWork.lightDream,
+                    episodes: deferredWork.episodes,
+                  }, { logger: api.logger });
+                  api.logger.info(`memory-lancedb-namespaced: post-turn work queued for agent=${agentId} (light=${deferredWork.lightDream}, episodes=${deferredWork.episodes}, turns=${normalizedTurns.length}${queued.dropped ? `, dropped=${queued.dropped}` : ""})`);
+                  postProcessing.push(Promise.resolve(true));
+                } catch (queueErr) {
+                  // Faellt die Warteschlange aus, laeuft die Arbeit wie vor
+                  // 7.18.14 direkt — lieber ein abgelehnter LLM-Aufruf als
+                  // verlorene Turns.
+                  api.logger.warn?.(`memory-lancedb-namespaced: post-turn queue unavailable, running inline: ${String(queueErr)}`);
+                  if (deferredWork.lightDream) {
+                    postProcessing.push(runLightDreamPostTurn({ agentId, ctx, neoStore, db, normalizedTurns, digestHash, processedDreams: hooks?.agent_end?.processedDreams || [], signal }));
+                  }
+                  if (deferredWork.episodes) {
+                    postProcessing.push(runEpisodePostTurn({ agentId, ctx, sessionKey: event?.sessionKey || ctx?.sessionKey || "", neoStore, normalizedTurns, digestHash, hooks, signal }));
+                  }
                 }
               }
 
@@ -12949,6 +13093,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               category: r.entry.category,
               source: r.entry.origin || "dm",
               display: r.entry.summary || libGenerateSummary(r.entry.text, summaryMaxWords),
+              // 7.18.16: gespeicherter Volltext fuer die Spitzentreffer und die
+              // truncated-Markierung im Prompt.
+              fullText: typeof r.entry.text === "string" ? r.entry.text : "",
               memoryStrength: r.entry.memoryStrength ?? 1.0,
               graphSource: r.source,
               depth: r.depth,
@@ -13316,10 +13463,33 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             }
           } catch (_) { framedItems = associativeItems; }
 
+          // 7.18.16: Die bestplatzierten Treffer kommen mit ihrem gespeicherten
+          // Text (bis recall.fullTextMaxChars) statt als Kurzfassung in den
+          // Prompt. Bis dahin sah das Modell je Erinnerung nur eine
+          // Zusammenfassung, verdichtet auf ~16 Woerter und hoechstens 400
+          // Zeichen: Ein gespeichertes Rezept kam als "Mehl, 7 g
+          // Hirschhornsalz, ... auskuehlen lassen" an.
+          const fullTextTopRecords = normalizeBoundedRecallInteger(recallCfg.fullTextTopRecords, 3, 0, 15);
+          const fullTextMaxChars = normalizeBoundedRecallInteger(recallCfg.fullTextMaxChars, 2000, 400, 8000);
+          const fullTextIds = new Set();
+          for (const item of framedItems) {
+            if (fullTextIds.size >= fullTextTopRecords) break;
+            if (item?.fullText && item.memoryClass !== "dream" && item.category !== "canonical") fullTextIds.add(item.id);
+          }
+          // In place: an attached decision trace is a non-enumerable symbol and
+          // would not survive a spread copy.
+          for (const item of framedItems) {
+            if (!fullTextIds.has(item.id)) continue;
+            item.display = item.fullText;
+            item.displayMaxChars = fullTextMaxChars;
+            item.keepFullText = true;
+          }
+
           let promptItems = framedItems;
           let promptSemanticLensItems = semanticLensItems;
           if (semanticCompressionCfg.enabled !== false) {
             const allPromptItems = [...framedItems, ...semanticLensItems];
+            const compressibleItems = allPromptItems.filter((item) => !item.keepFullText);
             const tokenBudget = normalizeBoundedRecallInteger(
               semanticCompressionCfg.tokenBudget,
               240,
@@ -13327,7 +13497,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               1000,
             );
             const compressedSlots = compressMemorySlotsForPrompt(
-              allPromptItems.map((item) => ({
+              compressibleItems.map((item) => ({
                 entry: {
                   id: item.id,
                   text: item.display || "",
@@ -13338,9 +13508,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               })),
               tokenBudget,
             );
-            promptItems = allPromptItems.flatMap((item, index) => (
-              compressedSlots[index] ? [{ ...item, display: compressedSlots[index] }] : []
-            ));
+            let compressedIndex = 0;
+            promptItems = allPromptItems.flatMap((item) => {
+              if (item.keepFullText) return [item];
+              const slot = compressedSlots[compressedIndex++];
+              return slot ? [{ ...item, display: slot }] : [];
+            });
             promptSemanticLensItems = [];
           }
           const memoriesContext = formatRelevantMemoriesContext(promptItems, {
@@ -13740,6 +13913,24 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           return { prependContext: [startNoticeContext, nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
         }
       });
+    }
+
+    // 7.18.20: In Gruppen keinen Turn auf den sichtbaren Denkblock eines
+    // anderen Bots starten ("🧠 …" aus /reasoning stream). Anthropic lehnt das
+    // als reasoning_extraction ab; der Hook beansprucht den Turn ohne Antwort.
+    if (typeof api.on === "function" && cfg.groupReasoningFilter?.enabled !== false) {
+      const groupReasoningFilter = createGroupReasoningFilter({
+        enabled: true,
+        prefixes: cfg.groupReasoningFilter?.prefixes,
+        logger: api.logger,
+      });
+      for (const hookName of ["before_dispatch", "before_agent_reply"]) {
+        try {
+          api.on(hookName, groupReasoningFilter);
+        } catch (error) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: group reasoning filter not registered on ${hookName}: ${error?.message || error}`);
+        }
+      }
     }
 
     // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku. Nie per

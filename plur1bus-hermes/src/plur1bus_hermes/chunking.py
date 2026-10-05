@@ -89,8 +89,11 @@ def plan_chunks(text: str, version: int = 2) -> list[str]:
 
 def capture_options(config: dict[str, Any]) -> dict[str, Any]:
     """Snapshot the splitting mode at admission, not when a delayed retry runs."""
-    return {"version": 2, "enabled": config.get("captureChunking") is not False,
-            "keepWhole": config.get("captureChunkingMode") != "geteilt"}
+    options = {"version": 2, "enabled": config.get("captureChunking") is not False,
+               "keepWhole": config.get("captureChunkingMode") != "geteilt"}
+    if options["enabled"] and config.get("captureChunkingMode") == "automatisch":
+        options["automatic"] = True
+    return options
 
 
 def capture_rows(text: str, *, capture_id: str, agent_id: str, scope_key: str,
