@@ -10,9 +10,33 @@ The immutable build baseline is `openclaw@2026.8.2`, commit
 `0965053fe6b9341776df147a6934b7485c60b5ca`, and npm integrity
 `sha512-I9aqK1attaONePpWs2gPqh23s1s1EDcN/6icF2AAfONdtowu4156QD7g6oD7KlA2vQ9yiqnvlAVH6yduvGH9Ig==`.
 The package is built and tested against a host in its own supported range
-rather than against a beta no operator runs. This matters beyond metadata: the
-installed-host loader test drives that exact OpenClaw plugin loader, so the
-build baseline decides which host contract the fast test loop measures.
+rather than against a beta no operator runs. The build baseline is release
+metadata only; it is not the host the fast test loop runs against. The
+installed-host loader test and the `feature-cron-plugin-runtime` host test load
+the OpenClaw that `npm ci` installs, which is the development pin
+`devDependencies.openclaw` (`2026.8.33`, see the table below), and assert that
+exact version.
+
+## Which OpenClaw version means what
+
+The sections below were written release by release, so older sentences name
+versions that were current then. This table is the current answer; every row
+names its source of truth.
+
+| Role | Version | Source of truth |
+| --- | --- | --- |
+| Compatibility floor (the one floor) | `2026.8.1`, plugin API `>=2026.8.1` | `package.json` `openclaw.compat.minGatewayVersion` and `openclaw.compat.pluginApi`. Enforced at install time by the host and by the Host-Addons installer (`scripts/dist/installer/compat.mjs`); the plugin code performs no version check of its own (capability detection only, no version-string branch). `package.json` declares no `peerDependencies`; `engines` constrains Node only. |
+| Tested in CI: `min` | `2026.8.1`, resolved from the packed plugin's own `minGatewayVersion` | Host-Addons `.github/workflows/plugin-dist.yml` (`openclaw: [min, latest]`); recorded as `OpenClaw 2026.8.1 (ea80657)` in Host-Addons `docs/distribution/openclaw-cli-facts.md`. |
+| Tested in CI: `latest` | `npm view openclaw dist-tags.latest` at run time; `2026.9.6` (`eb377ac`) when last recorded, 2026-09-28 | Same workflow and facts file. It moves with every OpenClaw release; the recorded value is a dated observation. |
+| Build baseline (release metadata) | `openclaw@2026.8.2` | `package.json` `openclaw.build.openclawVersion` and `pluginSdkVersion`, pinned by `tests/dev-openclaw-pin.test.js` and `tests/release-750-compat.test.js`. |
+| Development pin (what the test suite loads) | `openclaw@2026.8.33` | `package.json` `devDependencies.openclaw`, `package-lock.json`, asserted by `tests/dev-openclaw-pin.test.js`, `tests/b13-installed-host-loader.test.js` and `tests/feature-cron-plugin-runtime.test.js`. It is the lowest 2026.8.x line with a patched `undici`. |
+| Manually verified targets | `2026.8.2` (full runtime matrix, 7.5.0), `2026.9.1` (loader plus full suite, 7.5.6) | The sections "Scope of the compatibility claim" and "OpenClaw 2026.9.1" below. |
+
+Four different version numbers are therefore expected: floor, CI `latest`, build
+baseline and development pin each answer a different question. Only the floor
+is a compatibility claim; the others describe what was built or tested.
+
+## Upstream base
 
 The PLUR1BUS upstream base is the official annotated Git tag `v7.4.10`
 (tag object `f6cf0e75b4f8df509cac7b68bc437a25d650af73`), dereferencing exact commit
@@ -302,9 +326,10 @@ Evidence:
   the `reply_dispatch` hook, and the named registrations) is present.
 - The full suite runs against 2026.9.1: 4176 assertions pass. The two failures
   are not compatibility defects. `feature-cron-plugin-runtime` asserts the
-  installed host is exactly the 2026.8.2 build baseline, which is the pin doing
-  its job, and `local-inference-dependency` fails identically on 2026.8.2 in the
-  same sandbox.
+  installed host is exactly the pinned development host (2026.8.2 at the time
+  of that run, `2026.8.33` today), which is the pin doing its job, and
+  `local-inference-dependency` fails identically on 2026.8.2 in the same
+  sandbox.
 - Host contract comparison, 2026.8.2 against 2026.9.1: the accepted plugin API
   range is unchanged at `>=2026.5.17`, all 42 hook names are identical, every
   registrar used here is present, the export map only gains
