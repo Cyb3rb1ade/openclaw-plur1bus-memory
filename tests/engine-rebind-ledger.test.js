@@ -14,6 +14,7 @@ const TIMEOUT = { timeout: 10_000 };
 
 describe("rebind ledger", () => {
   it("repairs a torn last line before the next append", TIMEOUT, () => {
+    // Production opens r+ (Windows cannot ftruncate an a+ handle).
     const baseDbPath = join(makeTempDir("rebind-ledger-"), "store");
     const ledger = createRebindLedger({ baseDbPath });
     const rebindId = "11111111-1111-4111-8111-111111111111";

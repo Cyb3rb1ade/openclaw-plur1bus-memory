@@ -13,9 +13,9 @@
 
 import { createHash } from "node:crypto";
 import {
-  appendFileSync, closeSync, existsSync, fstatSync, fsyncSync, ftruncateSync,
+  closeSync, existsSync, fstatSync, fsyncSync, ftruncateSync,
   mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync,
-  statSync, unlinkSync, writeFileSync,
+  statSync, unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveInside, safeUuid } from "../../lib/sql-safety.js";
@@ -173,7 +173,9 @@ export function createRebindLedger({
     const line = `${JSON.stringify(row)}\n`;
     let fd;
     try {
-      fd = openSync(path, "a+", 0o600);
+      // r+/wx, not a+: Windows rejects ftruncate on an O_APPEND handle
+      // (the torn-line repair). After truncate, write at the new size.
+      fd = openSync(path, created ? "wx" : "r+", 0o600);
       try {
         repairTornLastLine(fd);
       } catch (err) {
@@ -185,12 +187,13 @@ export function createRebindLedger({
         }
         throw err;
       }
-      appendFileSync(fd, line);
+      const { size } = fstatSync(fd);
+      writeSync(fd, line, size);
       fsyncSync(fd);
     } catch (err) {
       if (err?.name === "MemoryOpError") throw err;
       logger?.warn?.(`memory-ops.rebind.ledger: append failed: ${err?.code || "error"}`);
-      throw memoryOpError("storage", "rebind ledger write failed");
+      throw memoryOpError("storage", `rebind ledger write failed (${err?.code || "error"})`);
     } finally {
       if (fd !== undefined) {
         try { closeSync(fd); } catch { /* already closed */ }
