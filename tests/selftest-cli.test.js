@@ -126,22 +126,24 @@ describe("openclaw plur1bus selftest", () => {
     assert.deepEqual(ok.exitCodes, [0]);
   });
 
-  it("prints one notice line when a harness home exists beside the store (HM1-R17)", async () => {
+  it("prints one info line when a harness home exists beside the store (HM4)", async () => {
     const h = harness({ runResult: report(true, { harnessHome: "/home/u/.plur1bus" }) });
     await h.parse(["plur1bus", "selftest"]);
     const lines = h.out.join("").trimEnd().split("\n");
-    assert.equal(lines.filter((line) => line.includes("/home/u/.plur1bus")).length, 1);
-    assert.match(lines.find((line) => line.includes("/home/u/.plur1bus")), /^notice/);
+    const info = lines.filter((line) => line.startsWith("info"));
+    assert.equal(info.length, 1);
+    assert.match(info[0], /^info\s+PLUR1BUS Harness found: separate memory until you migrate \(`plur1bus import openclaw`\) or switch this plugin to thin client$/);
     assert.equal(lines.length, 3 + SELFTEST_STEPS.length + 2);
     assert.equal(lines.at(-1), "selftest ok");
 
     const inside = harness({ runResult: report(false, {
       harnessHome: "/home/u/.plur1bus",
-      steps: SELFTEST_STEPS.map((id) => (id === "coexistence" ? { id, ok: false, ms: 0, detail: "store-inside-harness-home" } : { id, ok: true, ms: 1 })),
+      steps: SELFTEST_STEPS.map((id) => (id === "coexistence" ? { id, ok: false, ms: 0, detail: "store path /x is inside harness home /home/u/.plur1bus; choose a path outside the Harness home, or use the Harness as the memory (import)", code: "store-inside-harness-home" } : { id, ok: true, ms: 1 })),
       errors: ["store-inside-harness-home"],
     }) });
     await inside.parse(["plur1bus", "selftest"]);
-    assert.equal(inside.out.join("").split("\n").some((line) => line.startsWith("notice")), false, "no notice when coexistence failed");
+    assert.equal(inside.out.join("").split("\n").some((line) => line.startsWith("info")), false, "no info line when coexistence failed");
+    assert.match(inside.out.join(""), /FAILED  coexistence \(store path/);
   });
 
   it("sharp unavailable degrades vision and still exits 0", async () => {

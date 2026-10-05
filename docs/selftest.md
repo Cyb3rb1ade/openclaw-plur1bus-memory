@@ -12,7 +12,11 @@ install verify step runs it. It:
    unloadable `sharp` degrades the `vision` capability
    (`native_addon_unavailable:sharp`) and does **not** fail the selftest when
    the text embed, capture and recall steps pass;
-2. refuses a configured store inside a PLUR1BUS harness home;
+2. refuses a configured store inside a PLUR1BUS harness home (typed code
+   `store-inside-harness-home`). When a Harness is found and this store is
+   outside it, the human report prints one info line: "PLUR1BUS Harness found:
+   separate memory until you migrate (`plur1bus import openclaw`) or switch
+   this plugin to thin client". The check does not read the Harness store;
 3. checks the embedding model in the plugin's cache (downloads only with
    `--download-models`);
 4. opens a **throw-away** store `<stateDir>/plur1bus-selftest-<random>`, embeds
