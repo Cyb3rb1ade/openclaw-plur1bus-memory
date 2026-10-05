@@ -11,6 +11,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 - **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock um Prüfung und Schreibvorgang. `ADOPT_PROBE_MIN_ROWS` prüft `min(8, vorhanden)` Zeilen. Package bleibt 7.18.4.
 
+### Fixed
+
+- `lib/registry-lock.js`: the tombstone-registry lock now carries an ownership nonce. Release only removes a lock that still holds our nonce (rename-aside, no check-then-unlink race), and a live holder is no longer reaped after 10 s: stale = age > `staleMs` and (holder pid dead or age > 10 × `staleMs`).
+
 ### Ported from 7.18.5–7.18.20
 
 - **7.18.5** — `runtime.traceRegistrations` writes a registration stack to the gateway log (adapter). Contract 1.10.0: additive config keys, no breaking change.
