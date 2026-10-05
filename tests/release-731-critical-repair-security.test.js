@@ -7,7 +7,7 @@
  */
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import {
   existsSync,
   mkdirSync,
@@ -96,7 +96,7 @@ function tempDir(t, prefix) {
 }
 
 function runRepair(args) {
-  const result = spawnSync(process.execPath, [REPAIR_SCRIPT, ...args], {
+  const result = spawnSyncBounded(process.execPath, [REPAIR_SCRIPT, ...args], {
     encoding: "utf8",
     env: process.env,
   });

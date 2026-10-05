@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./helpers/run-sync.js";
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const HELPER = new URL("./helpers/temp-dir.js", import.meta.url).href;
 
 function runChild(body) {
-  return execFileSync(process.execPath, ["--input-type=module", "-e", `
+  return execFileSyncBounded(process.execPath, ["--input-type=module", "-e", `
     import { makeTempDir, forgetTempDir } from ${JSON.stringify(HELPER)};
     ${body}
   `], { encoding: "utf8" }).trim();
@@ -56,7 +56,7 @@ describe("Aufräumender Test-Temp-Helfer", () => {
     const custom = makeTempDir("temp-helper-root-", tmpdir());
     assert.ok(custom.startsWith(tmpdir()));
     // Aufräumen, was der Kindprozess bewusst stehen ließ.
-    execFileSync("rm", ["-rf", kept]);
+    execFileSyncBounded("rm", ["-rf", kept]);
   });
 
   // Wächter: neue Tests sollen nicht wieder selbst mkdtemp aufrufen, sonst

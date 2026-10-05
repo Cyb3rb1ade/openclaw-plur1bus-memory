@@ -14,7 +14,7 @@ import assert from "node:assert";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import { fileURLToPath } from "node:url";
 import {
   applyDynamicsDefaults,
@@ -240,7 +240,7 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
     assert.ok(match, "canonical JQ_PATCH heredoc missing");
 
     for (const pluginEntry of installerPatchFixtures()) {
-      const run = spawnSync(
+      const run = spawnSyncBounded(
         "jq",
         [
           "--null-input",
@@ -273,7 +273,7 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
           .replaceAll("'${TARGET_CONFIG}'", JSON.stringify(configPath))
           .replace("${PLUGIN_CONFIG_ESCAPED}", JSON.stringify(pluginEntry));
         writeFileSync(programPath, program);
-        const run = spawnSync(process.execPath, [programPath], {
+        const run = spawnSyncBounded(process.execPath, [programPath], {
           encoding: "utf8",
           env: childEnvironment(),
           timeout: 5_000,

@@ -11,7 +11,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import { mkdtempSync, symlinkSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -33,7 +33,7 @@ describe("setup-feature-crons.mjs IS_MAIN detection through a symlink", () => {
     symlinkSync(path.dirname(scriptPath), linkDir);
     const symlinkedScriptPath = path.join(linkDir, path.basename(scriptPath));
 
-    const result = spawnSync(process.execPath, [symlinkedScriptPath, "--dry-run", "--json"], {
+    const result = spawnSyncBounded(process.execPath, [symlinkedScriptPath, "--dry-run", "--json"], {
       encoding: "utf8",
       env: { ...process.env, PATH: emptyPathDir },
       timeout: 10_000,

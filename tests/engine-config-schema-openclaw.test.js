@@ -15,7 +15,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,7 @@ const SCRIPT = fileURLToPath(new URL("../scripts/gen-openclaw-config-schema.mjs"
 const PRE_E5_COMMIT = "72b6697f";
 
 const readManifest = (file = MANIFEST_FILE) => JSON.parse(readFileSync(file, "utf8"));
-const runGenerator = (args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd: REPO_ROOT, encoding: "utf8" });
+const runGenerator = (args) => spawnSyncBounded(process.execPath, [SCRIPT, ...args], { cwd: REPO_ROOT, encoding: "utf8" });
 
 const SECRET_INPUTS = [
   "embedding.apiKey",
@@ -148,7 +148,7 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
   });
 
   it("the generated manifest validates exactly as the pre-E5 manifest did", (t) => {
-    const git = spawnSync("git", ["show", `${PRE_E5_COMMIT}:openclaw.plugin.json`], {
+    const git = spawnSyncBounded("git", ["show", `${PRE_E5_COMMIT}:openclaw.plugin.json`], {
       cwd: REPO_ROOT,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,

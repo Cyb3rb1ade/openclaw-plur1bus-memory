@@ -19,7 +19,7 @@
  * owner-only ACL. It is a no-op on every other platform.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./run-sync.js";
 import { mkdirSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -38,7 +38,7 @@ export function prepareWin32SharedBase(baseDir, { platform = process.platform } 
   const root = join(baseDir, SHARED_ROOT_SEGMENT);
   mkdirSync(root, { recursive: true });
   const user = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${userInfo().username}` : userInfo().username;
-  const icacls = (args) => execFileSync("icacls", args, { stdio: "ignore", windowsHide: true });
+  const icacls = (args) => execFileSyncBounded("icacls", args, { stdio: "ignore", windowsHide: true });
   icacls([baseDir, "/setowner", user]);
   icacls([root, "/setowner", user]);
   icacls([root, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)(F)`]);

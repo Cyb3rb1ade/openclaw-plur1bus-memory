@@ -12,7 +12,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./helpers/run-sync.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,8 +28,9 @@ const script = join(root, "scripts", "lint-no-api-outside-adapter.mjs");
  */
 function run(target) {
   try {
-    return { status: 0, out: execFileSync(process.execPath, [script, target], { cwd: root, encoding: "utf8" }) };
+    return { status: 0, out: execFileSyncBounded(process.execPath, [script, target], { cwd: root, encoding: "utf8" }) };
   } catch (error) {
+    if (error.code === "ETIMEDOUT") throw error; // bounded child timed out: fail loudly, not as lint output
     return { status: error.status ?? 1, out: `${error.stdout ?? ""}${error.stderr ?? ""}` };
   }
 }

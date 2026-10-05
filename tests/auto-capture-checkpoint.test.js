@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import {
   existsSync,
   mkdirSync,
@@ -303,7 +303,7 @@ function createFixture(sessionText) {
       const nodeArgs = overrides.CAPTURE_ROTATE_AFTER_IDENTITY_PATH
         ? ["--require", liveRotationPreloadPath]
         : [];
-      return spawnSync(process.execPath, [...nodeArgs, SCRIPT_PATH, AGENT_ID], {
+      return spawnSyncBounded(process.execPath, [...nodeArgs, SCRIPT_PATH, AGENT_ID], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
