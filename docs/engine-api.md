@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.10.0** · frozen at 1.0.0 on 2026-09-22, amended eleven times
+**Contract version 1.11.0** · frozen at 1.0.0 on 2026-09-22, amended twelve times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -134,6 +134,9 @@ own changelog:
   (`runtime.traceRegistrations`, `groupReasoningFilter`) live on the OpenClaw
   manifest. Existing callers keep working: new keys are optional with defaults,
   and the job name is an additive union member.
+- **1.11.0** — `MemoryOps.import` (finished-card ingest) and `Engine.stores.adopt`
+  (copy-never-move store take-over). Additive members only. See
+  [Import and store adopt in 1.11.0](#import-and-store-adopt-in-1110) below.
 
 ## The two halves
 
@@ -196,6 +199,7 @@ The implementation lives in `engine/memory-ops/` (`context.js`, `errors.js`,
 | `correct(id, newText, p, a)` | `MemoryCorrectResult` | archive-first, then a version-chain update through `lib/safe-update.js` (new row, old row superseded, summary re-derived from the new text, `updateSource: "user_correction"` and an evidence line naming the stored text, the Neo reconsolidation event, retrieval reinforcement). **`id` is the new, live version's id**; the id passed in is superseded. |
 | `share(id, target, p, a, opts?)` | `MemoryShareResult` | copies a card into the `"workspace"` or `"user"` pool; needs a `"proved"` principal that carries that identity. A sensitive card (category, core, `neverForget`, importance ≥ 0.9) is refused with `approval-required` until the caller repeats the call with `{ allowSensitive: true }` after the person confirmed. |
 | `state(p, a)` | `MemoryState` | live card counts per scope (`null` when a scope cannot be counted), the tombstone count (`null` when the registry is unreadable, never a false zero) and the archive directory. |
+| `import(req, p, a)` | `MemoryImportResult` | 1.11.0: ingest finished cards. `p` is the operator, `req.principal` the card ACL binding. Requires `a.origin === "system"` and `a.background === false`. At most 500 cards per call. |
 
 **`forget`, `correct` and `share` act on the caller's own agent-private
 cards only** (1.5.0). An id that is a live card in a workspace or user pool
@@ -255,6 +259,133 @@ transitions) is not a MemoryOps member and keeps its own path.
 **`runCommand` is deprecated** (1.5.0) and removed in contract 2.0: string
 commands are the OpenClaw adapter's own chat surface, and a host that needs to
 read or edit memory uses `Engine.memory`.
+
+## Import and store adopt in 1.11.0
+
+M7 (Hermes cards, OpenClaw store take-over) writes through the engine. Direct
+LanceDB writes remain forbidden (T7/D28). 1.11.0 adds two members; existing
+callers are unchanged. The OpenClaw adapter does not have to call them.
+
+### `memory.import`
+
+`Engine.memory.import(req, p, a)` ingests finished cards (text, provenance
+`imported`, optional `kind`/`createdAt`/`sourceRef`/`scope`).
+
+- `p` is the operator; `req.principal` is the card ACL binding. Both
+  `agentId`s must equal `req.agentId`. An unresolved user binding
+  (`scope: "user"` without a proved `user` principal) rejects that card with
+  `principal-unresolved`.
+- `a.origin` must be `"system"` and `a.background` must be `false`. Any other
+  origin is `denied`. This is not the destructive-ops guard (`forget` still
+  requires `"user"`).
+- At most 500 cards per call (`invalid-input` above that). The host splits
+  larger batches. Embeddings are computed in one `embedBatch` **before**
+  `withWriteDb` for the cards that will be stored. A mid-batch store or
+  embed failure rejects that card (`storage` or `aborted`) and keeps the
+  earlier per-card results.
+- `kind` maps onto `category`. A value outside `MEMORY_CATEGORIES` is
+  `rejected` / `invalid-input`; a missing value is auto-categorised.
+- `sourceRef` is truncated to 500 characters and stored as `sourceUrl`.
+- `createdAt` of the source is kept when it is a finite epoch-ms number.
+  `validFrom`/`validUntil` are not derived from it.
+- No LLM merge, no similarity skip. A second call with the same
+  `idempotencyKey` for the same agent is `matched-existing` /
+  `already-imported`. A second card with the same key **inside one batch**
+  is `matched-existing` / `duplicate-in-batch` (first card counts; no
+  second store).
+- Card id is `H(agentId, idempotencyKey)`: UUID v5 of `${agentId}\0${key}`
+  in the RFC 4122 URL namespace `6ba7b811-9dad-11d1-80b4-00c04fd430c8`
+  (`safeAgentId` forbids NUL, so the name is unambiguous). The store row
+  is the source of truth. The sidecar ledger
+  `{baseDbPath}/_imports/<agentId>.jsonl` is provenance display and a cache.
+  A crash after `store()` and before the ledger line resumes as
+  `matched-existing` and backfills the missing ledger line.
+- A previously imported, since-forgotten card (deleted, archived, superseded,
+  or ledger-only after purge) is `rejected` / `previously-imported-deleted`.
+  It is not resurrected.
+- On-disk card `origin` is `"internal"`. That value is not filtered out of
+  recall, list/show, dreaming, GC/decay, export, or the display sources
+  (see below). Results and logs never contain card text.
+
+`dryRun: true` reports the same counters without writing the store or the
+ledger.
+
+### Origin `"internal"` on imported cards
+
+Imported cards keep `origin: "internal"`. Grep of `engine/**` and `lib/**`
+for `origin\s*[!=]==?`, `origin IN`, `internal`, and `MEMORY_ORIGINS` found
+no **card**-origin filter that would hide them. Hits:
+
+| Path | Line | What `"internal"` means there |
+|---|---|---|
+| `engine/recall/assemble-prompt-context.js` (`skipInternalRecall`) | 159 | **Turn** `AgentContext.origin !== "user"`, not card origin |
+| `lib/runtime-scheduler.js` (`isBackgroundTurn`) | 74 | Turn/event origin `cron`/`internal`, not card origin |
+| `lib/runtime-scheduler.js` (`shouldSkipAutoRecallForInternalTurn`) | 112 | Turn skip for cron/dream/heartbeat, not card origin |
+| `lib/recall-pipeline.js` | 122 | Copies `row.origin`; no `MEMORY_ORIGINS` exclusion |
+| `engine/memory-ops/read.js` | `toMemoryCard` | Maps `origin`; list/show do not filter it |
+| `lib/memory-context-sanitize.js` (`DISPLAY_SOURCES`) | 10 | Includes `"internal"` |
+| `lib/epistemic-capture.js` | 7, 22 | `NON_USER_ORIGINS` includes `internal` → capture rank `untrusted`; still recallable |
+| `lib/memory-fact-quality.js` (`computeMemoryImportance`) | 412 | Reads `origin` for fact-quality reasons; does not drop `internal` |
+| `lib/db-adapter.js` (`findRecentUnclassified`) | 1104 | `origin != 'dream'` only (critical-classification cron); `internal` stays |
+| `lib/critical-review.js` (`isDreamCard`) | 148 | `origin === "dream"`; `internal` is not a dream card |
+| `lib/promoted-memory-reindex.js` | 244 | `origin === "dreaming-promotion"` predecessor check; does not hide `internal` |
+| `lib/dreaming/dream-narrative.js` | 314 | Writes new cards with `origin: "dream"`; does not filter stored `internal` |
+| `lib/garbage-collector.js` (`selectCandidatesForGc`) | 91 | Strength/age/count policy; no origin filter. Imported cards are collected like any other |
+| `lib/memory-dynamics.js` (`applyDynamicsDefaults`) | 422 | Half-life from category/`memoryClass`; no origin filter |
+| `lib/jobs/gc-job.js` | 29 | Agent-directory discovery; no origin filter |
+| `lib/obsidian-control-room.js` | 286 | Display default `origin: raw.origin \|\| "internal"`; not a hide filter |
+| `engine/tools/memory-tools.js` | 319 | Tool enum is `MEMORY_ORIGINS` (`dm`/`group`/`cron`/`internal`); no extra origin |
+
+There is no `"imported"` origin and no schema `1→2` step for origin in 1.11.0.
+`MemoryCard.provenance?: "imported"` is derived from the import ledger.
+
+### `stores.adopt`
+
+`Engine.stores.adopt({ path, expectedIdentity, dryRun? })` inspects a copied
+store root (the path `createEngine` would use as `baseDbPath`). It does not
+migrate, re-embed, or rewrite LanceDB.
+
+Check order, first failure wins: `path-unreadable` → `not-a-store` →
+`schema-unreadable` / `schema-mismatch` → identity. `incompatible` is a
+result, not a throw. `MemoryOpError` is only for a closed engine (`storage`)
+or an unsafe/relative path (`invalid-input`), including a path with `..`
+segments, a symlinked root, or a host `isUnsafeLink` that is missing or
+throws (fail-closed).
+
+Schema is report-only (A6). A `"0"` marker against this engine's `"1"` is
+`schema-mismatch`; the host calls `admin.migrate("0","1")`. Adopt never
+writes `_schema.json`.
+
+Identity: when `{store}/generations/<id>/generation.json` is present (the
+same layout as `{stateRoot}/generations/<id>/generation.json` in
+`resolveEmbeddingGenerationLayout`; for legacy-flat `stateRoot` equals
+`baseDbPath`), matching `fingerprintId` / `dimensions` against
+`expectedIdentity` set `identitySource: "manifest"`. A retained rollback
+generation with a different fingerprint is ignored when a matching
+generation exists. Tables under the matching generation are probed via
+`resolveEmbeddingGenerationLayout`. For legacy stores (no matching
+manifest) a sample probe is mandatory: up to 16 rows with text and a
+finite, non-zero stored vector, spread across agent tables, re-embedded
+with the engine provider. The probe path also requires
+`engineIdentity.fingerprintId === expectedIdentity.fingerprintId`.
+Pass (positive gate): at least one finite score, min ≥ 0.999 and median
+≥ 0.9995. Zero-norm or non-finite stored vectors are skipped when
+sampling. Any non-finite score is `identity-unverifiable`. Below the
+floor: `identity-mismatch`. A cosine of 0.99 is a mismatch (fail-closed).
+The result carries `identitySource: "manifest" | "probe"`. When a
+manifest matches and rows exist, the probe still runs.
+
+`dryRun` changes nothing on disk. Adopt does not write a second manifest (A8).
+A read-only `MemoryDB.init()` does not add columns or create tables.
+
+### Single-writer precondition (A9)
+
+The engine does not take a store lock. The host holds `state/core.lock`
+(Harness ADR-012, SQLite `BEGIN EXCLUSIVE`) and stops the resident core
+before `createEngine` on the target home. Adopt does not emit
+`target-running`; that reason exists on the type for a host that checks the
+lock itself. Two `createEngine` instances on one `baseDbPath` in one test
+process stay 1.10.0 behaviour (no engine lockfile).
 
 ## Shared copies and change proposals (1.6.0, D31)
 
@@ -1563,6 +1694,10 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/memory-ops/shared.js` | `createSharedMemoryOps` — shared-copy retract/refresh (D31), `isLive`/`isSharer` |
 | `engine/memory-ops/proposal-store.js` | `createProposalStore` — the one-file-per-proposal JSON store under `_proposals/<sharerAgentId>/` |
 | `engine/memory-ops/proposals.js` | `createMemoryProposals` — `MemoryOps.propose`/`.proposals.{list,accept,reject}`, `memory.proposal` event |
+| `engine/memory-ops/import-id.js` | UUID v5 card id for `memory.import` (1.11.0) |
+| `engine/memory-ops/import-ledger.js` | `{baseDbPath}/_imports/<agentId>.jsonl` sidecar (1.11.0) |
+| `engine/memory-ops/import.js` | `Engine.memory.import` (1.11.0) |
+| `engine/stores/adopt.js` | `Engine.stores.adopt` sample probe and schema report (1.11.0) |
 | `engine/admin/obsidian.js` | `createObsidianOps` — `AdminOps.obsidian.{detect,prepare,confirm}` |
 | `engine/store/schema-version.js` | `createStoreMigrator` — `AdminOps.migrate`, the `_schema.json` marker |
 | `engine/identity/principal.js` | `memoryContextFromPrincipal` — `Principal`/`AgentContext` as explicit inputs, the channel registry |

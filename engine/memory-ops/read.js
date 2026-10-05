@@ -24,7 +24,7 @@ function toEpochMsOrNull(value) {
 }
 
 /** Maps a projected card (memory-query.js/recall-pipeline.js shape) onto the typed MemoryCard. */
-function toMemoryCard(card, { includeScore }) {
+function toMemoryCard(card, { includeScore, imported }) {
   const scope = KNOWN_SCOPES.has(card?.scope) ? card.scope : "agent-private";
   const out = {
     id: card.id,
@@ -39,6 +39,10 @@ function toMemoryCard(card, { includeScore }) {
   if (scope !== "agent-private" && card.sourceAgentId) {
     out.sharedBy = card.sourceAgentId;
     out.sourceId = card.sourceMemoryId || undefined;
+  }
+  if (imported) {
+    out.provenance = "imported";
+    if (imported.sourceRef) out.sourceRef = imported.sourceRef;
   }
   if (includeScore && typeof card.score === "number") out.score = card.score;
   return out;
@@ -151,7 +155,19 @@ async function countSharedLiveCards(leaseFn, memoryCtx, now, scope, agentId, log
  * @param {{opsContext: object, pool: object, sharedMemoryPool: object, embeddings: object, memoryDbAdapter: object, baseDbPath: string, logger?: object}} deps
  * @returns {{list: Function, show: Function, state: Function}}
  */
-export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embeddings, memoryDbAdapter, baseDbPath, logger }) {
+export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embeddings, memoryDbAdapter, baseDbPath, logger, importLedger }) {
+  function loadImportedIndex(agentId) {
+    if (!importLedger || typeof importLedger.load !== "function") return null;
+    try {
+      return importLedger.load(agentId);
+    } catch {
+      return { byKey: new Map(), byCardId: new Map() };
+    }
+  }
+  function importedOf(index, cardId) {
+    if (!index) return null;
+    return index.byCardId.get(cardId) || null;
+  }
   async function list(q, p, a) {
     const { agentId, memoryCtx } = await opsContext.resolve(p, a);
 
@@ -202,7 +218,12 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
 
     const truncated = items.length > limit;
     const sliced = items.slice(0, limit);
-    return { agentId, items: sliced.map((card) => toMemoryCard(card, { includeScore: hasTopic })), truncated };
+    const importedIndex = loadImportedIndex(agentId);
+    return {
+      agentId,
+      items: sliced.map((card) => toMemoryCard(card, { includeScore: hasTopic, imported: importedOf(importedIndex, card.id) })),
+      truncated,
+    };
   }
 
   async function show(id, p, a) {
@@ -239,7 +260,7 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     if (!found) {
       throw memoryOpError("not-found", "memory not found");
     }
-    return toMemoryCard(found.card, { includeScore: false });
+    return toMemoryCard(found.card, { includeScore: false, imported: importedOf(loadImportedIndex(agentId), found.card.id) });
   }
 
   async function state(p, a) {
