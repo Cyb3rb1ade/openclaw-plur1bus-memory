@@ -55,7 +55,7 @@ async function seed(engine, agentId, n = 3) {
 }
 
 describe("Engine.stores.adopt", () => {
-  it("same-model legacy store is ok via probe", async () => {
+  it("same-model legacy store is ok via probe (3 rows, floor min(8, available))", { timeout: 30_000 }, async () => {
     const baseDbPath = freshBaseDbPath("adopt-ok-");
     const engine = createEngine(
       createStubHost({ stateDir: makeTempDir("adopt-ok-state-") }),
@@ -69,6 +69,21 @@ describe("Engine.stores.adopt", () => {
     assert.equal(result.identitySource, "probe");
     assert.equal(result.reason, undefined);
     assert.deepEqual(result.storeSchema, { current: "1", expected: "1" });
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("same-model legacy store is ok via probe with 20 rows", { timeout: 60_000 }, async () => {
+    const baseDbPath = freshBaseDbPath("adopt-ok20-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-ok20-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(engine, "agent-a", 20);
+    const identity = engine.embedding.identities()[0];
+    const result = await engine.stores.adopt({ path: baseDbPath, expectedIdentity: identity });
+    assert.equal(result.verdict, "ok");
+    assert.equal(result.identitySource, "probe");
     await engine.close({ budgetMs: 5_000 });
   });
 

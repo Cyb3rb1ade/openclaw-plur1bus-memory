@@ -7,6 +7,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User. Nur Scope `user`, nur Owner-Metadaten. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync. `ADOPT_PROBE_MIN_ROWS = min(8, vorhanden)`. Package bleibt 7.18.4.
+
 ### Ported from 7.18.5–7.18.20
 
 - **7.18.5** — `runtime.traceRegistrations` writes a registration stack to the gateway log (adapter). Contract 1.10.0: additive config keys, no breaking change.

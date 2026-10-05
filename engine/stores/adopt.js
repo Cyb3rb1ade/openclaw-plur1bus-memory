@@ -26,7 +26,7 @@ import { memoryOpError } from "../memory-ops/errors.js";
 export const ADOPT_PROBE_SIZE = 16;
 export const ADOPT_PROBE_MIN_COSINE = 0.999;
 export const ADOPT_PROBE_MEDIAN_COSINE = 0.9995;
-export const ADOPT_PROBE_MIN_ROWS = 1;
+export const ADOPT_PROBE_MIN_ROWS = 8;
 
 const GENERATIONS_DIR = "generations";
 
@@ -604,7 +604,8 @@ export function createStoreAdopt({
       }
       scores.push(cosineSimilarityVec(stored, fresh));
     }
-    const finite = scores.length >= ADOPT_PROBE_MIN_ROWS && scores.every(Number.isFinite);
+    const minRows = Math.min(ADOPT_PROBE_MIN_ROWS, sample.length);
+    const finite = scores.length >= minRows && scores.every(Number.isFinite);
     if (!finite) {
       return incompatible("identity-unverifiable", {
         storeSchema,
