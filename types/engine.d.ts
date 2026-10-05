@@ -797,15 +797,19 @@ export type MemoryImportRejectReason =
   | "empty-text"
   | "provenance-not-imported"
   | "previously-imported-deleted"
-  | "aborted";
+  | "aborted"
+  | "storage";
 
 export interface MemoryImportCardResult {
   idempotencyKey: string;
   outcome: MemoryImportOutcome;
   /** Set on created and matched-existing. Omitted on dry-run created. */
   id?: string;
-  /** Machine-stable; never card text. `already-imported` only with matched-existing. */
-  reason?: MemoryImportRejectReason | "already-imported";
+  /**
+   * Machine-stable; never card text.
+   * `already-imported` / `duplicate-in-batch` only with matched-existing.
+   */
+  reason?: MemoryImportRejectReason | "already-imported" | "duplicate-in-batch";
 }
 
 export interface MemoryImportResult {

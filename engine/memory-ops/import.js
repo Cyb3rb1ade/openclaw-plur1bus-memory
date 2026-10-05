@@ -3,7 +3,7 @@
  *
  * Finished-card ingest for M7: deterministic store id, no LLM merge, origin
  * `internal` on the card, operator origin `system`. Batch ≤ 500. Embeddings
- * are batched. Errors and logs never carry card text.
+ * are batched outside the write lock. Errors and logs never carry card text.
  */
 
 import { MEMORY_CATEGORIES, MEMORY_SCOPES, categorizeMemoryWithReason } from "../../lib/categorize.js";
@@ -36,9 +36,15 @@ function logSafe(logger, message) {
   logger?.debug?.(message);
 }
 
+function isAbortError(err, signal) {
+  return signal?.aborted === true
+    || err?.name === "AbortError"
+    || err?.code === "ABORT_ERR";
+}
+
 /**
  * @param {object} deps
- * @returns {{import: Function, ledger: object}}
+ * @returns {{importCards: Function, ledger: object}}
  */
 export function createMemoryImport({
   opsContext,
@@ -60,6 +66,11 @@ export function createMemoryImport({
     }
     const out = [];
     for (const text of texts) {
+      if (signal?.aborted) {
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        throw err;
+      }
       if (typeof embeddings.embedPassage === "function") {
         out.push(await embeddings.embedPassage(text, { agentId, signal }));
       } else {
@@ -69,11 +80,25 @@ export function createMemoryImport({
     return out;
   }
 
+  async function lookupById(db, cardId, agentId) {
+    if (!db) return null;
+    try {
+      const initialized = await db.init();
+      if (initialized === false || !db.table) return null;
+      return await db.getById(cardId);
+    } catch (err) {
+      logger?.warn?.(`memory-ops.import: lookup failed for agent '${agentId}' id='${cardId}': ${err?.code || "error"}`);
+      const wrapped = memoryOpError("storage", "import lookup failed");
+      wrapped.cause = err;
+      throw wrapped;
+    }
+  }
+
   async function importCards(req, p, a) {
-    const resolved = await opsContext.resolve(p, a);
     if (!a || a.origin !== "system" || a.background !== false) {
       throw memoryOpError("denied", "import requires origin \"system\" and background false");
     }
+    const resolved = await opsContext.resolve(p, a);
     if (!req || typeof req !== "object") {
       throw memoryOpError("invalid-input", "import request is required");
     }
@@ -100,7 +125,7 @@ export function createMemoryImport({
     const signal = req.signal;
     const importedAt = clock();
 
-    const cardResults = req.cards.map((card, index) => ({ index, card, result: null, plan: null }));
+    const cardResults = req.cards.map((card, index) => ({ index, card, result: null, plan: null, backfill: null }));
 
     function reject(entry, reason) {
       const key = typeof entry.card?.idempotencyKey === "string" ? entry.card.idempotencyKey : "";
@@ -108,10 +133,9 @@ export function createMemoryImport({
       entry.plan = null;
     }
 
-    const index = ledger.load(agentId);
-
-    const classify = async (db) => {
+    async function classify(db, index, seenKeys) {
       for (const entry of cardResults) {
+        if (entry.result) continue;
         if (signal?.aborted) {
           reject(entry, "aborted");
           continue;
@@ -127,6 +151,19 @@ export function createMemoryImport({
           continue;
         }
         entry.card = { ...card, idempotencyKey: key };
+
+        const priorInBatch = seenKeys.get(key);
+        if (priorInBatch) {
+          entry.result = {
+            idempotencyKey: key,
+            outcome: "matched-existing",
+            id: priorInBatch.id,
+            reason: "duplicate-in-batch",
+          };
+          entry.plan = null;
+          continue;
+        }
+
         if (card.provenance !== "imported") {
           reject(entry, "provenance-not-imported");
           continue;
@@ -160,22 +197,23 @@ export function createMemoryImport({
 
         const cardId = importCardId(agentId, key);
         let existing = null;
-        if (db) {
-          try {
-            const initialized = await db.init();
-            if (initialized !== false && db.table) {
-              existing = await db.getById(cardId);
-            }
-          } catch (err) {
-            logger?.warn?.(`memory-ops.import: lookup failed for agent '${agentId}' id='${cardId}': ${err?.code || "error"}`);
-            throw memoryOpError("storage", "import lookup failed");
-          }
+        try {
+          existing = await lookupById(db, cardId, agentId);
+        } catch {
+          reject(entry, "storage");
+          continue;
         }
 
         if (existing) {
           if (isLiveStatus(existing.status)) {
+            const sourceRef = truncateSourceRef(card.sourceRef)
+              || (typeof existing.sourceUrl === "string" ? existing.sourceUrl : "");
             entry.result = { idempotencyKey: key, outcome: "matched-existing", id: cardId, reason: "already-imported" };
             entry.plan = null;
+            seenKeys.set(key, { id: cardId });
+            if (!index.byCardId.has(cardId)) {
+              entry.backfill = { cardId, key, sourceRef };
+            }
             continue;
           }
           reject(entry, "previously-imported-deleted");
@@ -207,14 +245,33 @@ export function createMemoryImport({
         const category = card.kind
           ? card.kind
           : categorizeMemoryWithReason(text).category;
+        seenKeys.set(key, { id: cardId });
         entry.plan = { cardId, key, text, scope, ownerUserId, workspaceIdentity, sourceRef, createdAt, category };
       }
-    };
+    }
+
+    function backfillLedger(index, entry, now) {
+      const row = entry.backfill;
+      if (!row || index.byCardId.has(row.cardId)) return;
+      try {
+        ledger.append(agentId, {
+          idempotencyKey: row.key,
+          cardId: row.cardId,
+          importedAt: now,
+          sourceRef: row.sourceRef,
+        });
+        index.byKey.set(row.key, { cardId: row.cardId });
+        index.byCardId.set(row.cardId, { idempotencyKey: row.key, sourceRef: row.sourceRef });
+      } catch (err) {
+        logger?.warn?.(`memory-ops.import: ledger backfill failed for agent '${agentId}' id='${row.cardId}': ${err?.code || "error"}`);
+      }
+    }
 
     if (dryRun) {
       await pool.withReadOnlyReadDbs(agentId, async (dbs) => {
         const db = dbs[0]?.db ?? null;
-        await classify(db);
+        const index = ledger.load(agentId);
+        await classify(db, index, new Map());
       });
       for (const entry of cardResults) {
         if (entry.plan && !entry.result) {
@@ -222,87 +279,162 @@ export function createMemoryImport({
         }
       }
     } else {
-      await pool.withWriteDb(agentId, async (db) => {
-        await classify(db);
-        const pending = cardResults.filter((entry) => entry.plan && !entry.result);
-        if (pending.length === 0) return;
+      const seenKeys = new Map();
+      await pool.withReadOnlyReadDbs(agentId, async (dbs) => {
+        const db = dbs[0]?.db ?? null;
+        const index = ledger.load(agentId);
+        await classify(db, index, seenKeys);
+      });
 
-      const vectors = await embedPassages(pending.map((entry) => entry.plan.text), agentId, signal);
-      if (vectors.length !== pending.length) {
-        throw memoryOpError("storage", "import embedding batch failed");
+      const pending = cardResults.filter((entry) => entry.plan && !entry.result);
+      const vectorsByEntry = new Map();
+      if (pending.length > 0) {
+        if (signal?.aborted) {
+          for (const entry of pending) reject(entry, "aborted");
+        } else {
+          try {
+            const vectors = await embedPassages(pending.map((entry) => entry.plan.text), agentId, signal);
+            if (signal?.aborted) {
+              for (const entry of pending) reject(entry, "aborted");
+            } else if (!Array.isArray(vectors) || vectors.length !== pending.length) {
+              logger?.warn?.(`memory-ops.import: embed batch size mismatch for agent '${agentId}'`);
+              for (const entry of pending) reject(entry, "storage");
+            } else {
+              for (let i = 0; i < pending.length; i++) vectorsByEntry.set(pending[i], vectors[i]);
+            }
+          } catch (err) {
+            if (isAbortError(err, signal)) {
+              for (const entry of pending) reject(entry, "aborted");
+            } else {
+              logger?.warn?.(`memory-ops.import: embed failed for agent '${agentId}': ${err?.code || "error"}`);
+              for (const entry of pending) reject(entry, "storage");
+            }
+          }
+        }
       }
 
-      for (let i = 0; i < pending.length; i++) {
-        const entry = pending[i];
-        if (signal?.aborted) {
-          reject(entry, "aborted");
-          continue;
+      await pool.withWriteDb(agentId, async (db) => {
+        const index = ledger.load(agentId);
+        const nowForBackfill = clock();
+        for (const entry of cardResults) {
+          if (entry.backfill) backfillLedger(index, entry, nowForBackfill);
         }
-        const plan = entry.plan;
-        const vector = vectors[i];
-        const categoryResult = entry.card.kind
-          ? { category: plan.category, reason: "caller-provided" }
-          : categorizeMemoryWithReason(plan.text);
-        const importanceResult = computeMemoryImportance({
-          text: plan.text,
-          category: categoryResult.category,
-          categoryReason: categoryResult.reason,
-          origin: "internal",
-        });
-        const now = clock();
-        const entryRow = applyDynamicsDefaults({
-          id: plan.cardId,
-          text: plan.text,
-          summary: generateSummary(plan.text, summaryMaxWords),
-          origin: "internal",
-          vector,
-          importance: importanceResult.importance,
-          category: categoryResult.category,
-          createdAt: plan.createdAt,
-          mergedFrom: "[]",
-          expiresAt: 0,
-          agentId,
-          storedBy: agentId,
-          workspaceId: plan.workspaceIdentity,
-          workspaceKey: plan.workspaceIdentity,
-          ownerUserId: plan.ownerUserId,
-          sourceTurnId: "",
-          sourceMessageRole: "",
-          sourceTimestamp: now,
-          sourceUrl: plan.sourceRef,
-          evidenceQuote: "",
-          scope: plan.scope,
-          validFrom: 0,
-          validUntil: 0,
-          epistemicStatus: decideEpistemicStatusForCapture({
-            text: plan.text,
-            sourceMessageRole: "",
-            origin: "internal",
-          }),
-        }, now, halfLifeOverrides, { flashbulbEncodingEnabled });
 
-        try {
-          await db.store(entryRow);
-        } catch (err) {
-          if (err?.action === "tombstone_blocked" || err?.reason === "tombstone_blocked") {
-            reject(entry, "tombstone-blocked");
+        for (const entry of pending) {
+          if (entry.result) continue;
+          if (signal?.aborted) {
+            reject(entry, "aborted");
             continue;
           }
-          logger?.warn?.(`memory-ops.import: store failed for agent '${agentId}' id='${plan.cardId}': ${err?.code || "error"}`);
-          throw memoryOpError("storage", "import store failed");
-        }
+          const plan = entry.plan;
+          let existing = null;
+          try {
+            existing = await lookupById(db, plan.cardId, agentId);
+          } catch {
+            reject(entry, "storage");
+            continue;
+          }
+          if (existing) {
+            if (isLiveStatus(existing.status)) {
+              entry.result = {
+                idempotencyKey: plan.key,
+                outcome: "matched-existing",
+                id: plan.cardId,
+                reason: "already-imported",
+              };
+              entry.plan = null;
+              if (!index.byCardId.has(plan.cardId)) {
+                entry.backfill = {
+                  cardId: plan.cardId,
+                  key: plan.key,
+                  sourceRef: plan.sourceRef || (typeof existing.sourceUrl === "string" ? existing.sourceUrl : ""),
+                };
+                backfillLedger(index, entry, clock());
+              }
+              continue;
+            }
+            reject(entry, "previously-imported-deleted");
+            continue;
+          }
+          if (index.byKey.get(plan.key)) {
+            reject(entry, "previously-imported-deleted");
+            continue;
+          }
 
-        ledger.append(agentId, {
-          idempotencyKey: plan.key,
-          cardId: plan.cardId,
-          importedAt: now,
-          sourceRef: plan.sourceRef,
-        });
-        index.byKey.set(plan.key, { cardId: plan.cardId });
-        index.byCardId.set(plan.cardId, { idempotencyKey: plan.key, sourceRef: plan.sourceRef });
-        entry.result = { idempotencyKey: plan.key, outcome: "created", id: plan.cardId };
-        logSafe(logger, `memory-ops.import: created agent='${agentId}' id='${plan.cardId}'`);
-      }
+          const vector = vectorsByEntry.get(entry);
+          if (!vector) {
+            reject(entry, "storage");
+            continue;
+          }
+
+          const categoryResult = entry.card.kind
+            ? { category: plan.category, reason: "caller-provided" }
+            : categorizeMemoryWithReason(plan.text);
+          const importanceResult = computeMemoryImportance({
+            text: plan.text,
+            category: categoryResult.category,
+            categoryReason: categoryResult.reason,
+            origin: "internal",
+          });
+          const now = clock();
+          const entryRow = applyDynamicsDefaults({
+            id: plan.cardId,
+            text: plan.text,
+            summary: generateSummary(plan.text, summaryMaxWords),
+            origin: "internal",
+            vector,
+            importance: importanceResult.importance,
+            category: categoryResult.category,
+            createdAt: plan.createdAt,
+            mergedFrom: "[]",
+            expiresAt: 0,
+            agentId,
+            storedBy: agentId,
+            workspaceId: plan.workspaceIdentity,
+            workspaceKey: plan.workspaceIdentity,
+            ownerUserId: plan.ownerUserId,
+            sourceTurnId: "",
+            sourceMessageRole: "",
+            sourceTimestamp: now,
+            sourceUrl: plan.sourceRef,
+            evidenceQuote: "",
+            scope: plan.scope,
+            validFrom: 0,
+            validUntil: 0,
+            epistemicStatus: decideEpistemicStatusForCapture({
+              text: plan.text,
+              sourceMessageRole: "",
+              origin: "internal",
+            }),
+          }, now, halfLifeOverrides, { flashbulbEncodingEnabled });
+
+          try {
+            await db.store(entryRow);
+          } catch (err) {
+            if (err?.action === "tombstone_blocked" || err?.reason === "tombstone_blocked") {
+              reject(entry, "tombstone-blocked");
+              continue;
+            }
+            logger?.warn?.(`memory-ops.import: store failed for agent '${agentId}' id='${plan.cardId}': ${err?.code || "error"}`);
+            reject(entry, "storage");
+            continue;
+          }
+
+          try {
+            ledger.append(agentId, {
+              idempotencyKey: plan.key,
+              cardId: plan.cardId,
+              importedAt: now,
+              sourceRef: plan.sourceRef,
+            });
+            index.byKey.set(plan.key, { cardId: plan.cardId });
+            index.byCardId.set(plan.cardId, { idempotencyKey: plan.key, sourceRef: plan.sourceRef });
+          } catch (err) {
+            logger?.warn?.(`memory-ops.import: ledger append failed for agent '${agentId}' id='${plan.cardId}': ${err?.code || "error"}`);
+          }
+          entry.result = { idempotencyKey: plan.key, outcome: "created", id: plan.cardId };
+          logSafe(logger, `memory-ops.import: created agent='${agentId}' id='${plan.cardId}'`);
+        }
       });
     }
 

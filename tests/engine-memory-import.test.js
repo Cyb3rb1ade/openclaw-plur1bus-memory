@@ -8,11 +8,14 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
+import { internalsOf } from "../engine/internals.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 import { importCardId } from "../engine/memory-ops/import-id.js";
 import { importLedgerPath } from "../engine/memory-ops/import-ledger.js";
 import { IMPORT_CARD_BATCH_LIMIT } from "../engine/memory-ops/import.js";
+import { selectCandidatesForGc } from "../lib/garbage-collector.js";
+import { appendTombstoneToRegistry, buildTombstone } from "../lib/tombstone.js";
 
 function freshBaseDbPath(prefix) {
   return join(makeTempDir(`${prefix}root-`), "lancedb-namespaced");
@@ -77,6 +80,7 @@ describe("importCardId", () => {
     assert.match(a, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     assert.notEqual(a, c);
     assert.notEqual(a, d);
+    assert.equal(a, "91f6610d-fadf-5fb6-99ca-87211285d436");
   });
 });
 
@@ -117,15 +121,6 @@ describe("Engine.memory.import", () => {
     const listed = await engine.memory.list({ topic: "spare key flowerpot" }, principalFor(agentId), userAgent);
     assert.ok(listed.items.some((c) => c.id === shown.id));
 
-    const recalled = await engine.recall({
-      query: "spare key flowerpot",
-      principal: principalFor(agentId),
-      agent: userAgent,
-      signal: AbortSignal.timeout(8_000),
-    });
-    const memories = recalled.blocks?.find((b) => b.name === "memories")?.text || "";
-    assert.equal(memories.includes(FIXTURE) || listed.items.some((c) => c.id === shown.id), true);
-
     await engine.close({ budgetMs: 5_000 });
   });
 
@@ -165,6 +160,8 @@ describe("Engine.memory.import", () => {
     assert.equal(second.cards[0].id, first.cards[0].id);
     const listed = await engine.memory.list({ topic: "greenhouse code" }, principalFor(agentId), userAgent);
     assert.equal(listed.items.filter((c) => c.id === first.cards[0].id).length, 1);
+    const shown = await engine.memory.show(first.cards[0].id, principalFor(agentId), userAgent);
+    assert.equal(shown.provenance, "imported");
     await engine.close({ budgetMs: 5_000 });
   });
 
@@ -271,51 +268,76 @@ describe("Engine.memory.import", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
-  it("abort after the first card rejects the rest; resume matches the first", async () => {
-    const engine = createEngine(
-      createStubHost({ stateDir: makeTempDir("imp-abort-state-") }),
-      config(freshBaseDbPath("imp-abort-")),
-      { internals: { embeddings: flatEmbedder() } },
-    );
-    const agentId = "agent-a";
+  it("abort during embed marks remaining aborted and writes nothing", async () => {
     const controller = new AbortController();
-    const originalBatch = flatEmbedder().embedBatch;
     const embeddings = {
       ...flatEmbedder(),
-      embedBatch: async (texts, ...rest) => {
-        const out = await originalBatch(texts, ...rest);
+      embedBatch: async () => {
         controller.abort();
-        return out;
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        throw err;
       },
     };
-    const engine2 = createEngine(
-      createStubHost({ stateDir: makeTempDir("imp-abort2-state-") }),
-      config(freshBaseDbPath("imp-abort2-")),
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-abort-embed-state-") }),
+      config(freshBaseDbPath("imp-abort-embed-")),
       { internals: { embeddings } },
     );
-    // Signal already aborted: every card is aborted, no write.
-    controller.abort();
+    const agentId = "agent-a";
     const aborted = await engine.memory.import(
       importReq(agentId, [card("k-a", "First imported line."), card("k-b", "Second imported line.")], { signal: controller.signal }),
       principalFor(agentId),
       systemAgent,
     );
     assert.equal(aborted.cards.every((c) => c.reason === "aborted"), true);
+    assert.equal(aborted.created, 0);
+    await assert.rejects(
+      () => engine.memory.show(importCardId(agentId, "k-a"), principalFor(agentId), userAgent),
+      (e) => e.code === "not-found",
+    );
+    await engine.close({ budgetMs: 5_000 });
+  });
 
-    const live = await engine.memory.import(
-      importReq(agentId, [card("k-a", "First imported line."), card("k-b", "Second imported line.")]),
+  it("abort after the first store rejects the rest; resume matches the first", async () => {
+    const controller = new AbortController();
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-abort-store-state-") }),
+      config(freshBaseDbPath("imp-abort-store-")),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const internals = internalsOf(engine);
+    const orig = internals.pool.withWriteDb.bind(internals.pool);
+    let stores = 0;
+    internals.pool.withWriteDb = async (agentId, fn) => orig(agentId, async (db) => {
+      const origStore = db.store.bind(db);
+      db.store = async (row) => {
+        const out = await origStore(row);
+        stores += 1;
+        if (stores >= 1) controller.abort();
+        return out;
+      };
+      return fn(db);
+    });
+    const agentId = "agent-a";
+    const aborted = await engine.memory.import(
+      importReq(agentId, [card("k-a", "First imported line."), card("k-b", "Second imported line.")], { signal: controller.signal }),
       principalFor(agentId),
       systemAgent,
     );
-    assert.equal(live.created, 2);
+    assert.equal(aborted.cards[0].outcome, "created");
+    assert.equal(aborted.cards[1].reason, "aborted");
+    assert.equal(aborted.created, 1);
+    assert.equal(aborted.rejected, 1);
+
     const resume = await engine.memory.import(
       importReq(agentId, [card("k-a", "First imported line."), card("k-b", "Second imported line.")]),
       principalFor(agentId),
       systemAgent,
     );
-    assert.equal(resume.matchedExisting, 2);
+    assert.equal(resume.cards[0].outcome, "matched-existing");
+    assert.equal(resume.cards[1].outcome, "created");
     await engine.close({ budgetMs: 5_000 });
-    await engine2.close({ budgetMs: 5_000 });
   });
 
   it("closed engine rejects import with storage", async () => {
@@ -325,5 +347,266 @@ describe("Engine.memory.import", () => {
       () => engine.memory.import(importReq("agent-a", [card("k", "x")]), principalFor("agent-a"), systemAgent),
       (e) => e.code === "storage",
     );
+  });
+
+  it("duplicate idempotencyKey in one batch stores once (apply and dryRun)", async () => {
+    const baseDbPath = freshBaseDbPath("imp-dup-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-dup-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const id = importCardId(agentId, "k-dup");
+    const dry = await engine.memory.import(
+      importReq(agentId, [card("k-dup", "The same line twice."), card("k-dup", "The same line twice.")], { dryRun: true }),
+      principalFor(agentId),
+      systemAgent,
+    );
+    assert.equal(dry.created, 1);
+    assert.equal(dry.matchedExisting, 1);
+    assert.equal(dry.cards[0].outcome, "created");
+    assert.equal(dry.cards[1].outcome, "matched-existing");
+    assert.equal(dry.cards[1].reason, "duplicate-in-batch");
+    assert.equal(dry.cards[1].id, id);
+    assert.equal(existsSync(importLedgerPath(baseDbPath, agentId)), false);
+
+    const applied = await engine.memory.import(
+      importReq(agentId, [card("k-dup", "The same line twice."), card("k-dup", "The same line twice.")]),
+      principalFor(agentId),
+      systemAgent,
+    );
+    assert.equal(applied.created, 1);
+    assert.equal(applied.matchedExisting, 1);
+    assert.equal(applied.cards[0].outcome, "created");
+    assert.equal(applied.cards[0].id, id);
+    assert.equal(applied.cards[1].outcome, "matched-existing");
+    assert.equal(applied.cards[1].reason, "duplicate-in-batch");
+    assert.equal(applied.cards[1].id, id);
+    const listed = await engine.memory.list({ topic: "same line twice" }, principalFor(agentId), userAgent);
+    assert.equal(listed.items.filter((c) => c.id === id).length, 1);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("imported card ranks above a distractor on the real recall path", async () => {
+    const DISTRACTOR = "DISTRACTOR_TOKEN_9C2E";
+    function twoAxisEmbedder() {
+      const axisOf = (text) => (String(text).includes(DISTRACTOR) ? 1 : 0);
+      const vector = (text) => Array.from({ length: 384 }, (_, i) => (i === axisOf(text) ? 1 : 0));
+      return {
+        embed: async (t) => vector(t),
+        embedQuery: async (t) => vector(t),
+        embedPassage: async (t) => vector(t),
+        embedBatch: async (texts) => texts.map(vector),
+        shutdown: async () => {},
+      };
+    }
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-recall-state-") }),
+      config(freshBaseDbPath("imp-recall-")),
+      { internals: { embeddings: twoAxisEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const result = await engine.memory.import(
+      importReq(agentId, [
+        card("k-hit", `The spare key lives under the third flowerpot. ${FIXTURE}`),
+        card("k-miss", `A completely unrelated weather note. ${DISTRACTOR}`),
+      ]),
+      principalFor(agentId),
+      systemAgent,
+    );
+    assert.equal(result.created, 2);
+    const recalled = await engine.recall({
+      query: "spare key flowerpot",
+      principal: principalFor(agentId),
+      agent: userAgent,
+      signal: AbortSignal.timeout(8_000),
+    });
+    const memories = recalled.blocks?.find((b) => b.name === "memories")?.text || "";
+    assert.equal(memories.includes(FIXTURE), true);
+    const hitAt = memories.indexOf(FIXTURE);
+    const missAt = memories.indexOf(DISTRACTOR);
+    assert.ok(missAt === -1 || hitAt < missAt, "imported card ranks above the distractor");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("tombstone-blocked rejects a new key whose text is tombstoned", async () => {
+    const baseDbPath = freshBaseDbPath("imp-tomb-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-tomb-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const text = "The cellar hatch sticks in January.";
+    const tombstone = buildTombstone({
+      card: { id: "aaaaaaaa-1111-4111-8111-111111111111", text, scope: "agent-private", storedBy: agentId },
+      agentId,
+      actor: "user",
+      actorType: "human",
+      reason: "test",
+      sourceOp: "forget",
+    });
+    appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "committed" });
+    const result = await engine.memory.import(
+      importReq(agentId, [card("k-tomb", text)]),
+      principalFor(agentId),
+      systemAgent,
+    );
+    assert.equal(result.cards[0].outcome, "rejected");
+    assert.equal(result.cards[0].reason, "tombstone-blocked");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("correct-superseded re-import is previously-imported-deleted", async () => {
+    const stateDir = makeTempDir("imp-corr-state-");
+    const engine = createEngine(
+      stubHostForDestructiveOps(stateDir),
+      config(freshBaseDbPath("imp-corr-")),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "bernd";
+    const principal = principalForDestructive(agentId);
+    const first = await engine.memory.import(
+      { agentId, principal, cards: [card("k-corr", "The attic window faces west.")] },
+      principal,
+      systemAgent,
+    );
+    assert.equal(first.cards[0].outcome, "created");
+    await engine.memory.correct(first.cards[0].id, "The attic window faces east.", principal, userAgent);
+    const again = await engine.memory.import(
+      { agentId, principal, cards: [card("k-corr", "The attic window faces west.")] },
+      principal,
+      systemAgent,
+    );
+    assert.equal(again.cards[0].outcome, "rejected");
+    assert.equal(again.cards[0].reason, "previously-imported-deleted");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("scope user and workspace succeed with a proved principal", async () => {
+    const stateDir = makeTempDir("imp-scope-state-");
+    const shared = join(stateDir, "workspaces", "shared-ws");
+    mkdirSync(shared, { recursive: true });
+    const engine = createEngine(
+      createStubHost({ stateDir, workspaceDir: async () => shared }),
+      config(freshBaseDbPath("imp-scope-")),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const USER = `user:v1:${"a".repeat(64)}`;
+    const p = {
+      agentId,
+      channel: "telegram",
+      accountId: "default",
+      chat: { id: "c1", kind: "direct" },
+      trust: "proved",
+      user: USER,
+    };
+    const userResult = await engine.memory.import(
+      { agentId, principal: p, cards: [card("k-user-ok", "A private user fact about oat milk.", { scope: "user" })] },
+      p,
+      systemAgent,
+    );
+    assert.equal(userResult.cards[0].outcome, "created", JSON.stringify(userResult.cards[0]));
+    const shownUser = await engine.memory.show(userResult.cards[0].id, p, userAgent);
+    assert.equal(shownUser.scope, "user");
+
+    const wsResult = await engine.memory.import(
+      { agentId, principal: p, cards: [card("k-ws-ok", "The team printer is in the hallway.", { scope: "workspace" })] },
+      p,
+      systemAgent,
+    );
+    assert.equal(wsResult.cards[0].outcome, "created", JSON.stringify(wsResult.cards[0]));
+    const shownWs = await engine.memory.show(wsResult.cards[0].id, p, userAgent);
+    assert.equal(shownWs.scope, "workspace");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("kind is stored as category", async () => {
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-kind-state-") }),
+      config(freshBaseDbPath("imp-kind-")),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const result = await engine.memory.import(
+      importReq(agentId, [card("k-kind", "Node 22 is the supported runtime.", { kind: "knowledge" })]),
+      principalFor(agentId),
+      systemAgent,
+    );
+    assert.equal(result.cards[0].outcome, "created");
+    const row = await internalsOf(engine).pool.withDb(agentId, (db) => db.getById(result.cards[0].id));
+    assert.equal(row.category, "knowledge");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("background true and agentId mismatch are denied or invalid-input without card text", async () => {
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-deny-state-") }),
+      config(freshBaseDbPath("imp-deny-")),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const secret = `SECRET_DENY_${FIXTURE}`;
+    await assert.rejects(
+      () => engine.memory.import(importReq(agentId, [card("k-bg", secret)]), principalFor(agentId), { origin: "system", background: true }),
+      (e) => e.code === "denied" && !String(e.message).includes(secret) && !String(e.stack || "").includes(secret),
+    );
+    await assert.rejects(
+      () => engine.memory.import(importReq(agentId, [card("k-mm", secret)]), principalFor("other-agent"), systemAgent),
+      (e) => e.code === "invalid-input" && !String(e.message).includes(secret),
+    );
+    await assert.rejects(
+      () => engine.memory.import(
+        { agentId, principal: principalFor("other-agent"), cards: [card("k-mm2", secret)] },
+        principalFor(agentId),
+        systemAgent,
+      ),
+      (e) => e.code === "invalid-input" && !String(e.message).includes(secret),
+    );
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("batch of 500 is accepted; embedBatch is called once", async () => {
+    let batchCalls = 0;
+    const embeddings = {
+      ...flatEmbedder(),
+      embedBatch: async (texts) => {
+        batchCalls += 1;
+        return texts.map(() => Array.from({ length: 384 }, (_, i) => (i === 0 ? 1 : 0)));
+      },
+    };
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("imp-500-state-") }),
+      config(freshBaseDbPath("imp-500-")),
+      { internals: { embeddings } },
+    );
+    const agentId = "agent-a";
+    const dry = await engine.memory.import(
+      importReq(agentId, Array.from({ length: IMPORT_CARD_BATCH_LIMIT }, (_, i) => card(`k${i}`, `batch line ${i}`)), { dryRun: true }),
+      principalFor(agentId),
+      systemAgent,
+    );
+    assert.equal(dry.created, IMPORT_CARD_BATCH_LIMIT);
+    assert.equal(batchCalls, 0);
+    const three = await engine.memory.import(
+      importReq(agentId, [card("e1", "embed one."), card("e2", "embed two."), card("e3", "embed three.")]),
+      principalFor(agentId),
+      systemAgent,
+    );
+    assert.equal(three.created, 3);
+    assert.equal(batchCalls, 1);
+    await engine.close({ budgetMs: 5_000 });
+  });
+});
+
+describe("imported origin internal vs GC", () => {
+  it("selectCandidatesForGc does not skip origin internal", () => {
+    const ids = selectCandidatesForGc([
+      { id: "a", origin: "internal", status: "active", memoryStrength: 0.1, createdAt: 1 },
+      { id: "b", origin: "dm", status: "active", memoryStrength: 0.1, createdAt: 1 },
+    ], { minMemoryStrength: 0.5 });
+    assert.deepEqual([...ids].sort(), ["a", "b"]);
   });
 });

@@ -279,43 +279,62 @@ callers are unchanged. The OpenClaw adapter does not have to call them.
   origin is `denied`. This is not the destructive-ops guard (`forget` still
   requires `"user"`).
 - At most 500 cards per call (`invalid-input` above that). The host splits
-  larger batches. Embeddings are computed in one `embedBatch` for the cards
-  that will be stored.
+  larger batches. Embeddings are computed in one `embedBatch` **before**
+  `withWriteDb` for the cards that will be stored. A mid-batch store or
+  embed failure rejects that card (`storage` or `aborted`) and keeps the
+  earlier per-card results.
 - `kind` maps onto `category`. A value outside `MEMORY_CATEGORIES` is
   `rejected` / `invalid-input`; a missing value is auto-categorised.
 - `sourceRef` is truncated to 500 characters and stored as `sourceUrl`.
 - `createdAt` of the source is kept when it is a finite epoch-ms number.
   `validFrom`/`validUntil` are not derived from it.
 - No LLM merge, no similarity skip. A second call with the same
-  `idempotencyKey` for the same agent is `matched-existing`.
-- Card id is `H(agentId, idempotencyKey)` (UUID v5, store UUID format). The
-  store row is the source of truth. The sidecar ledger
+  `idempotencyKey` for the same agent is `matched-existing` /
+  `already-imported`. A second card with the same key **inside one batch**
+  is `matched-existing` / `duplicate-in-batch` (first card counts; no
+  second store).
+- Card id is `H(agentId, idempotencyKey)`: UUID v5 of `${agentId}\0${key}`
+  in the RFC 4122 URL namespace `6ba7b811-9dad-11d1-80b4-00c04fd430c8`
+  (`safeAgentId` forbids NUL, so the name is unambiguous). The store row
+  is the source of truth. The sidecar ledger
   `{baseDbPath}/_imports/<agentId>.jsonl` is provenance display and a cache.
   A crash after `store()` and before the ledger line resumes as
-  `matched-existing`.
+  `matched-existing` and backfills the missing ledger line.
 - A previously imported, since-forgotten card (deleted, archived, superseded,
   or ledger-only after purge) is `rejected` / `previously-imported-deleted`.
   It is not resurrected.
 - On-disk card `origin` is `"internal"`. That value is not filtered out of
-  recall, list/show, dreaming, or the display sources (see below). Results and
-  logs never contain card text.
+  recall, list/show, dreaming, GC/decay, export, or the display sources
+  (see below). Results and logs never contain card text.
 
 `dryRun: true` reports the same counters without writing the store or the
 ledger.
 
 ### Origin `"internal"` on imported cards
 
-Imported cards keep `origin: "internal"`. A pass over the recall and display
-paths showed no filter that would hide them:
+Imported cards keep `origin: "internal"`. Grep of `engine/**` and `lib/**`
+for `origin\s*[!=]==?`, `origin IN`, `internal`, and `MEMORY_ORIGINS` found
+no **card**-origin filter that would hide them. Hits:
 
-| Path | What `"internal"` means there |
-|---|---|
-| `engine/recall/assemble-prompt-context.js` (`skipInternalRecall`) | **Turn** `AgentContext.origin !== "user"`, not card origin |
-| `lib/runtime-scheduler.js` (`isBackgroundTurn`) | Turn/event origin, not card origin |
-| `lib/recall-pipeline.js` | Copies `row.origin`; no `MEMORY_ORIGINS` exclusion |
-| `engine/memory-ops/read.js` | `toMemoryCard` maps `origin`; list/show do not filter it |
-| `lib/memory-context-sanitize.js` (`DISPLAY_SOURCES`) | Includes `"internal"` |
-| `lib/epistemic-capture.js` | `internal` is a non-user origin → `untrusted` rank, still recallable |
+| Path | Line | What `"internal"` means there |
+|---|---|---|
+| `engine/recall/assemble-prompt-context.js` (`skipInternalRecall`) | 159 | **Turn** `AgentContext.origin !== "user"`, not card origin |
+| `lib/runtime-scheduler.js` (`isBackgroundTurn`) | 74 | Turn/event origin `cron`/`internal`, not card origin |
+| `lib/runtime-scheduler.js` (`shouldSkipAutoRecallForInternalTurn`) | 112 | Turn skip for cron/dream/heartbeat, not card origin |
+| `lib/recall-pipeline.js` | 122 | Copies `row.origin`; no `MEMORY_ORIGINS` exclusion |
+| `engine/memory-ops/read.js` | `toMemoryCard` | Maps `origin`; list/show do not filter it |
+| `lib/memory-context-sanitize.js` (`DISPLAY_SOURCES`) | 10 | Includes `"internal"` |
+| `lib/epistemic-capture.js` | 7, 22 | `NON_USER_ORIGINS` includes `internal` → capture rank `untrusted`; still recallable |
+| `lib/memory-fact-quality.js` (`computeMemoryImportance`) | 412 | Reads `origin` for fact-quality reasons; does not drop `internal` |
+| `lib/db-adapter.js` (`findRecentUnclassified`) | 1104 | `origin != 'dream'` only (critical-classification cron); `internal` stays |
+| `lib/critical-review.js` (`isDreamCard`) | 148 | `origin === "dream"`; `internal` is not a dream card |
+| `lib/promoted-memory-reindex.js` | 244 | `origin === "dreaming-promotion"` predecessor check; does not hide `internal` |
+| `lib/dreaming/dream-narrative.js` | 314 | Writes new cards with `origin: "dream"`; does not filter stored `internal` |
+| `lib/garbage-collector.js` (`selectCandidatesForGc`) | 91 | Strength/age/count policy; no origin filter. Imported cards are collected like any other |
+| `lib/memory-dynamics.js` (`applyDynamicsDefaults`) | 422 | Half-life from category/`memoryClass`; no origin filter |
+| `lib/jobs/gc-job.js` | 29 | Agent-directory discovery; no origin filter |
+| `lib/obsidian-control-room.js` | 286 | Display default `origin: raw.origin \|\| "internal"`; not a hide filter |
+| `engine/tools/memory-tools.js` | 319 | Tool enum is `MEMORY_ORIGINS` (`dm`/`group`/`cron`/`internal`); no extra origin |
 
 There is no `"imported"` origin and no schema `1→2` step for origin in 1.11.0.
 `MemoryCard.provenance?: "imported"` is derived from the import ledger.
@@ -329,24 +348,35 @@ migrate, re-embed, or rewrite LanceDB.
 Check order, first failure wins: `path-unreadable` → `not-a-store` →
 `schema-unreadable` / `schema-mismatch` → identity. `incompatible` is a
 result, not a throw. `MemoryOpError` is only for a closed engine (`storage`)
-or an unsafe/relative path (`invalid-input`).
+or an unsafe/relative path (`invalid-input`), including a path with `..`
+segments, a symlinked root, or a host `isUnsafeLink` that is missing or
+throws (fail-closed).
 
 Schema is report-only (A6). A `"0"` marker against this engine's `"1"` is
 `schema-mismatch`; the host calls `admin.migrate("0","1")`. Adopt never
 writes `_schema.json`.
 
-Identity: when `generations/<id>/generation.json` is present, its
-`fingerprintId` / `dimensions` are compared to `expectedIdentity`. For
-legacy stores (no manifest — the usual OpenClaw plugin store) a sample probe
-is mandatory: up to 16 rows with text and vector, spread across agent tables,
-re-embedded with the engine provider, cosine against the stored vectors.
-Pass: min ≥ 0.999 and median ≥ 0.9995 (deterministic providers score 1.0;
-an unrelated 384-d unit vector scores ~0, which is the case the probe exists
-to catch). Too few usable rows: `identity-unverifiable`. Below the floor:
-`identity-mismatch`. The result carries `identitySource: "manifest" | "probe"`.
-When a manifest matches and rows exist, the probe still runs.
+Identity: when `{store}/generations/<id>/generation.json` is present (the
+same layout as `{stateRoot}/generations/<id>/generation.json` in
+`resolveEmbeddingGenerationLayout`; for legacy-flat `stateRoot` equals
+`baseDbPath`), matching `fingerprintId` / `dimensions` against
+`expectedIdentity` set `identitySource: "manifest"`. A retained rollback
+generation with a different fingerprint is ignored when a matching
+generation exists. Tables under the matching generation are probed via
+`resolveEmbeddingGenerationLayout`. For legacy stores (no matching
+manifest) a sample probe is mandatory: up to 16 rows with text and a
+finite, non-zero stored vector, spread across agent tables, re-embedded
+with the engine provider. The probe path also requires
+`engineIdentity.fingerprintId === expectedIdentity.fingerprintId`.
+Pass (positive gate): at least one finite score, min ≥ 0.999 and median
+≥ 0.9995. Zero-norm or non-finite stored vectors are skipped when
+sampling. Any non-finite score is `identity-unverifiable`. Below the
+floor: `identity-mismatch`. A cosine of 0.99 is a mismatch (fail-closed).
+The result carries `identitySource: "manifest" | "probe"`. When a
+manifest matches and rows exist, the probe still runs.
 
 `dryRun` changes nothing on disk. Adopt does not write a second manifest (A8).
+A read-only `MemoryDB.init()` does not add columns or create tables.
 
 ### Single-writer precondition (A9)
 

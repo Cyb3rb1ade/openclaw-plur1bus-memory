@@ -4,8 +4,9 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, join, sep } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
 import { createStubHost } from "../lib/host-services.js";
@@ -241,5 +242,275 @@ describe("Engine.stores.adopt", () => {
     assert.equal(result.verdict, "ok");
     assert.equal(result.identitySource, "probe");
     await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("zero-norm and NaN stored vectors are never ok", async () => {
+    function zeroEmbedder() {
+      const vector = () => Array.from({ length: 384 }, () => 0);
+      const one = async () => vector();
+      return { embed: one, embedQuery: one, embedPassage: one, embedBatch: async (texts) => texts.map(vector), shutdown: async () => {} };
+    }
+    function nanEmbedder() {
+      const vector = () => Array.from({ length: 384 }, (_, i) => (i === 0 ? Number.NaN : 0));
+      const one = async () => vector();
+      return { embed: one, embedQuery: one, embedPassage: one, embedBatch: async (texts) => texts.map(vector), shutdown: async () => {} };
+    }
+    const zeroPath = freshBaseDbPath("adopt-zero-");
+    const zeroEngine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-zero-state-") }),
+      config(zeroPath),
+      { internals: { embeddings: zeroEmbedder() } },
+    );
+    await seed(zeroEngine, "agent-a", 3);
+    const zeroResult = await zeroEngine.stores.adopt({
+      path: zeroPath,
+      expectedIdentity: zeroEngine.embedding.identities()[0],
+    });
+    assert.equal(zeroResult.verdict, "incompatible");
+    assert.notEqual(zeroResult.reason, undefined);
+    assert.notEqual(zeroResult.verdict, "ok");
+    await zeroEngine.close({ budgetMs: 5_000 });
+
+    const nanPath = freshBaseDbPath("adopt-nan-");
+    const nanEngine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-nan-state-") }),
+      config(nanPath),
+      { internals: { embeddings: nanEmbedder() } },
+    );
+    await seed(nanEngine, "agent-a", 3);
+    const nanResult = await nanEngine.stores.adopt({
+      path: nanPath,
+      expectedIdentity: nanEngine.embedding.identities()[0],
+    });
+    assert.equal(nanResult.verdict, "incompatible");
+    assert.notEqual(nanResult.verdict, "ok");
+    await nanEngine.close({ budgetMs: 5_000 });
+  });
+
+  it("cosine 0.99 is identity-mismatch", async () => {
+    function cosineEmbedder(cosine) {
+      const vector = () => {
+        const v = Array.from({ length: 384 }, () => 0);
+        v[0] = cosine;
+        v[1] = Math.sqrt(Math.max(0, 1 - cosine * cosine));
+        return v;
+      };
+      const one = async () => vector();
+      return { embed: one, embedQuery: one, embedPassage: one, embedBatch: async (texts) => texts.map(vector), shutdown: async () => {} };
+    }
+    const root = makeTempDir("adopt-099-root-");
+    const baseDbPath = join(root, "lancedb-namespaced");
+    const first = createEngine(
+      createStubHost({ stateDir: join(root, "state-a") }),
+      config(baseDbPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(first, "agent-a", 3);
+    await first.close({ budgetMs: 5_000 });
+
+    const second = createEngine(
+      createStubHost({ stateDir: join(root, "state-b") }),
+      config(baseDbPath),
+      { internals: { embeddings: cosineEmbedder(0.99) } },
+    );
+    const result = await second.stores.adopt({
+      path: baseDbPath,
+      expectedIdentity: second.embedding.identities()[0],
+    });
+    assert.equal(result.verdict, "incompatible");
+    assert.equal(result.reason, "identity-mismatch");
+    assert.equal(result.identitySource, "probe");
+    await second.close({ budgetMs: 5_000 });
+  });
+
+  it("probe path mismatches when expectedIdentity fingerprint differs", async () => {
+    const baseDbPath = freshBaseDbPath("adopt-fp-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-fp-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(engine, "agent-a", 2);
+    const identity = engine.embedding.identities()[0];
+    const result = await engine.stores.adopt({
+      path: baseDbPath,
+      expectedIdentity: { ...identity, fingerprintId: `embedding:v1:sha256:${"0".repeat(64)}` },
+    });
+    assert.equal(result.verdict, "incompatible");
+    assert.equal(result.reason, "identity-mismatch");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("symlinked root, symlinked table, and .. segments are invalid-input", async () => {
+    const baseDbPath = freshBaseDbPath("adopt-sym-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-sym-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(engine, "agent-a", 2);
+    const identity = engine.embedding.identities()[0];
+    const link = join(makeTempDir("adopt-sym-link-"), "store-link");
+    try {
+      symlinkSync(baseDbPath, link);
+      await assert.rejects(
+        () => engine.stores.adopt({ path: link, expectedIdentity: identity }),
+        (e) => e.code === "invalid-input",
+      );
+    } catch (err) {
+      if (err?.code !== "EPERM" && err?.code !== "EACCES") throw err;
+    }
+    const viaDotDot = `${baseDbPath}${sep}..${sep}${basename(baseDbPath)}`;
+    await assert.rejects(
+      () => engine.stores.adopt({ path: viaDotDot, expectedIdentity: identity }),
+      (e) => e.code === "invalid-input",
+    );
+    await engine.close({ budgetMs: 5_000 });
+
+    const childRoot = makeTempDir("adopt-sym-child-root-");
+    const childStore = join(childRoot, "lancedb-namespaced");
+    const childEngine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-sym-child-state-") }),
+      config(childStore),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(childEngine, "agent-a", 2);
+    await childEngine.close({ budgetMs: 5_000 });
+    const lance = join(childStore, "agent-a", "memories.lance");
+    const moved = join(childRoot, "memories.lance");
+    renameSync(lance, moved);
+    try {
+      symlinkSync(moved, lance);
+      const childEngine2 = createEngine(
+        createStubHost({ stateDir: makeTempDir("adopt-sym-child2-state-") }),
+        config(freshBaseDbPath("adopt-sym-child2-eng-")),
+        { internals: { embeddings: embedder(0) } },
+      );
+      const childResult = await childEngine2.stores.adopt({
+        path: childStore,
+        expectedIdentity: childEngine2.embedding.identities()[0],
+      });
+      assert.equal(childResult.verdict, "incompatible");
+      await childEngine2.close({ budgetMs: 5_000 });
+    } catch (err) {
+      if (err?.code !== "EPERM" && err?.code !== "EACCES") throw err;
+    }
+  });
+
+  it("adopt does not change the store tree hash", async () => {
+    function treeFingerprint(root) {
+      const entries = [];
+      const walk = (dir, rel) => {
+        let names;
+        try {
+          names = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        names.sort((a, b) => a.name.localeCompare(b.name));
+        for (const entry of names) {
+          const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+          const full = join(dir, entry.name);
+          if (entry.isDirectory() && !entry.isSymbolicLink()) walk(full, relPath);
+          else if (entry.isFile()) {
+            const st = statSync(full);
+            entries.push(`${relPath}:${st.size}:${createHash("sha256").update(readFileSync(full)).digest("hex")}`);
+          }
+        }
+      };
+      walk(root, "");
+      return entries.join("\n");
+    }
+    const baseDbPath = freshBaseDbPath("adopt-hash-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-hash-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(engine, "agent-a", 2);
+    const before = treeFingerprint(baseDbPath);
+    const dry = await engine.stores.adopt({
+      path: baseDbPath,
+      expectedIdentity: engine.embedding.identities()[0],
+      dryRun: true,
+    });
+    assert.equal(dry.verdict, "ok");
+    assert.equal(treeFingerprint(baseDbPath), before);
+    const applied = await engine.stores.adopt({
+      path: baseDbPath,
+      expectedIdentity: engine.embedding.identities()[0],
+    });
+    assert.equal(applied.verdict, "ok");
+    assert.equal(treeFingerprint(baseDbPath), before);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("generation layout: mismatch, unreadable, and tables under generations/<id>/", async () => {
+    const identityOf = (engine) => engine.embedding.identities()[0];
+
+    const mmPath = freshBaseDbPath("adopt-gen-mm-");
+    const mmEngine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-gen-mm-state-") }),
+      config(mmPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    const mmIdentity = identityOf(mmEngine);
+    const mmDir = join(mmPath, "generations", "g1");
+    mkdirSync(mmDir, { recursive: true });
+    writeFileSync(join(mmDir, "generation.json"), JSON.stringify({
+      schemaVersion: 1,
+      generation: "g1",
+      fingerprintId: `embedding:v1:sha256:${"ab".repeat(32)}`,
+      provider: mmIdentity.provider,
+      model: mmIdentity.model,
+      dimensions: mmIdentity.dimensions,
+      tables: {},
+    }));
+    const mm = await mmEngine.stores.adopt({ path: mmPath, expectedIdentity: mmIdentity });
+    assert.equal(mm.verdict, "incompatible");
+    assert.equal(mm.reason, "identity-mismatch");
+    assert.equal(mm.identitySource, "manifest");
+
+    writeFileSync(join(mmDir, "generation.json"), JSON.stringify({
+      schemaVersion: 1,
+      generation: "g1",
+      fingerprintId: mmIdentity.fingerprintId,
+      provider: mmIdentity.provider,
+      model: mmIdentity.model,
+      dimensions: mmIdentity.dimensions + 1,
+      tables: {},
+    }));
+    const dim = await mmEngine.stores.adopt({ path: mmPath, expectedIdentity: mmIdentity });
+    assert.equal(dim.reason, "dimension-mismatch");
+
+    writeFileSync(join(mmDir, "generation.json"), "not json");
+    const unread = await mmEngine.stores.adopt({ path: mmPath, expectedIdentity: mmIdentity });
+    assert.equal(unread.reason, "identity-unreadable");
+    await mmEngine.close({ budgetMs: 5_000 });
+
+    const genPath = freshBaseDbPath("adopt-gen-real-");
+    const genEngine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-gen-real-state-") }),
+      config(genPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(genEngine, "agent-a", 3);
+    const genIdentity = identityOf(genEngine);
+    const genDir = join(genPath, "generations", "g1");
+    mkdirSync(genDir, { recursive: true });
+    renameSync(join(genPath, "agent-a"), join(genDir, "agent-a"));
+    writeFileSync(join(genDir, "generation.json"), JSON.stringify({
+      schemaVersion: 1,
+      generation: "g1",
+      fingerprintId: genIdentity.fingerprintId,
+      provider: genIdentity.provider,
+      model: genIdentity.model,
+      dimensions: genIdentity.dimensions,
+      tables: {},
+    }));
+    const moved = await genEngine.stores.adopt({ path: genPath, expectedIdentity: genIdentity });
+    assert.equal(moved.verdict, "ok");
+    assert.equal(moved.identitySource, "probe");
+    await genEngine.close({ budgetMs: 5_000 });
   });
 });

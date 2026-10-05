@@ -156,13 +156,17 @@ async function countSharedLiveCards(leaseFn, memoryCtx, now, scope, agentId, log
  * @returns {{list: Function, show: Function, state: Function}}
  */
 export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embeddings, memoryDbAdapter, baseDbPath, logger, importLedger }) {
-  function importedOf(agentId, cardId) {
+  function loadImportedIndex(agentId) {
     if (!importLedger || typeof importLedger.load !== "function") return null;
     try {
-      return importLedger.load(agentId).byCardId.get(cardId) || null;
+      return importLedger.load(agentId);
     } catch {
-      return null;
+      return { byKey: new Map(), byCardId: new Map() };
     }
+  }
+  function importedOf(index, cardId) {
+    if (!index) return null;
+    return index.byCardId.get(cardId) || null;
   }
   async function list(q, p, a) {
     const { agentId, memoryCtx } = await opsContext.resolve(p, a);
@@ -214,9 +218,10 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
 
     const truncated = items.length > limit;
     const sliced = items.slice(0, limit);
+    const importedIndex = loadImportedIndex(agentId);
     return {
       agentId,
-      items: sliced.map((card) => toMemoryCard(card, { includeScore: hasTopic, imported: importedOf(agentId, card.id) })),
+      items: sliced.map((card) => toMemoryCard(card, { includeScore: hasTopic, imported: importedOf(importedIndex, card.id) })),
       truncated,
     };
   }
@@ -255,7 +260,7 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     if (!found) {
       throw memoryOpError("not-found", "memory not found");
     }
-    return toMemoryCard(found.card, { includeScore: false, imported: importedOf(agentId, found.card.id) });
+    return toMemoryCard(found.card, { includeScore: false, imported: importedOf(loadImportedIndex(agentId), found.card.id) });
   }
 
   async function state(p, a) {

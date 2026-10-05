@@ -8,11 +8,14 @@
  * different model". The engine does not take `state/core.lock`.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 
 import { cosineSimilarityVec } from "../../lib/text-utils.js";
 import { isSafeAgentId, resolveInside } from "../../lib/sql-safety.js";
+import { canonicalIdentityPath } from "../../lib/platform.js";
+import { resolveNamespaceLayout } from "../../lib/namespace-config.js";
+import { resolveEmbeddingGenerationLayout } from "../../lib/reembedding/generation-layout.js";
 import {
   STORE_SCHEMA_VERSION,
   readStoreSchemaVersion,
@@ -23,35 +26,62 @@ import { memoryOpError } from "../memory-ops/errors.js";
 export const ADOPT_PROBE_SIZE = 16;
 export const ADOPT_PROBE_MIN_COSINE = 0.999;
 export const ADOPT_PROBE_MEDIAN_COSINE = 0.9995;
+export const ADOPT_PROBE_MIN_ROWS = 1;
+
+const GENERATIONS_DIR = "generations";
 
 /**
  * Probe floors sit just below 1.0 so float32 rounding of a deterministic
  * provider still passes, and far above the ~0 cosine of two unrelated 384-d
  * unit vectors, which is the case this check exists to catch (same dimension,
- * different model).
+ * different model). A positive gate is required: NaN comparisons are false,
+ * so `min < T || median < T2` would fail-open.
  */
+
+function hasPathDotDot(path) {
+  return String(path).split(/[\\/]/).includes("..");
+}
+
+function realpathOrNull(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function sameRealPath(a, b) {
+  if (!a || !b) return false;
+  return canonicalIdentityPath(a) === canonicalIdentityPath(b);
+}
 
 function vectorOf(row) {
   const v = row?.vector;
   if (!v || typeof v !== "object") return null;
+  let converted = null;
   // LanceDB 0.26 returns apache-arrow Vector: iterable, not Array.isArray,
   // and index access is undefined. toArray() yields Float32Array.
   if (typeof v.toArray === "function") {
     try {
       const arr = v.toArray();
       if (arr && typeof arr.length === "number" && arr.length > 0) {
-        return Array.from(arr, Number);
+        converted = Array.from(arr, Number);
       }
     } catch {
       // fall through to iterable / array-like
     }
   }
-  if (Array.isArray(v) && v.length > 0) return v.map(Number);
-  if (typeof v.length === "number" && v.length > 0) {
-    const converted = Array.from(v, Number);
-    if (converted.length === v.length) return converted;
+  if (!converted && Array.isArray(v) && v.length > 0) converted = v.map(Number);
+  if (!converted && typeof v.length === "number" && v.length > 0) {
+    const fromIter = Array.from(v, Number);
+    if (fromIter.length === v.length) converted = fromIter;
   }
-  return null;
+  if (!converted || converted.length === 0) return null;
+  if (!converted.every(Number.isFinite)) return null;
+  let normSq = 0;
+  for (const x of converted) normSq += x * x;
+  if (!(normSq > 0)) return null;
+  return converted;
 }
 
 function median(values) {
@@ -60,15 +90,29 @@ function median(values) {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+function isOrdinaryTableChild(root, name, child) {
+  const target = join(root, name, child);
+  let st;
+  try {
+    st = lstatSync(target);
+  } catch {
+    return false;
+  }
+  if (st.isSymbolicLink()) return false;
+  return st.isDirectory();
+}
+
 function looksLikeAgentTable(root, name) {
-  return existsSync(join(root, name, "memories.lance"))
-    || existsSync(join(root, name, "memories"));
+  return isOrdinaryTableChild(root, name, "memories.lance")
+    || isOrdinaryTableChild(root, name, "memories");
 }
 
 /**
  * Agent tables sit at `{store}/{agentId}/memories.lance` (legacy-flat) or
  * `{store}/{namespace}/{agentId}/memories.lance` (named layout). Each hit
  * records the pool base (parent of the agent directory).
+ * `generations/` is scanned separately so tables under
+ * `{store}/generations/<id>/` are reached.
  * @param {string} storePath
  * @returns {{poolBase: string, agentId: string}[]}
  */
@@ -85,6 +129,7 @@ function listAgentTables(storePath) {
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
       if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
+      if (entry.name === GENERATIONS_DIR) continue;
       if (!isSafeAgentId(entry.name) || !looksLikeAgentTable(root, entry.name)) continue;
       add(root, entry.name);
     }
@@ -100,6 +145,7 @@ function listAgentTables(storePath) {
   for (const entry of top) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     if (entry.name.startsWith("_") || entry.name.startsWith(".")) continue;
+    if (entry.name === GENERATIONS_DIR) continue;
     if (isSafeAgentId(entry.name) && looksLikeAgentTable(storePath, entry.name)) continue;
     const nestedRoot = join(storePath, entry.name);
     let nested;
@@ -115,7 +161,7 @@ function listAgentTables(storePath) {
 }
 
 function readGenerationManifests(storePath) {
-  const generationsDir = join(storePath, "generations");
+  const generationsDir = join(storePath, GENERATIONS_DIR);
   if (!existsSync(generationsDir)) return { present: false, manifests: [], unreadable: false };
   let names;
   try {
@@ -152,6 +198,7 @@ function readGenerationManifests(storePath) {
         continue;
       }
       manifests.push({
+        id: entry.name,
         fingerprintId: manifest.fingerprintId,
         provider: typeof manifest.provider === "string" ? manifest.provider : "",
         model: typeof manifest.model === "string" ? manifest.model : "",
@@ -164,6 +211,24 @@ function readGenerationManifests(storePath) {
   return { present: true, manifests, unreadable };
 }
 
+function generationProbeRoot(storePath, generationId, expectedIdentity) {
+  try {
+    const namespaceLayout = resolveNamespaceLayout(storePath);
+    const layout = resolveEmbeddingGenerationLayout({
+      stateRoot: storePath,
+      namespaceLayout,
+      selection: {
+        activeGeneration: generationId,
+        fingerprintId: expectedIdentity.fingerprintId,
+        dimensions: expectedIdentity.dimensions,
+      },
+    });
+    return layout.activeRoot || join(storePath, GENERATIONS_DIR, generationId);
+  } catch {
+    return null;
+  }
+}
+
 function isStoreShape(storePath) {
   if (existsSync(schemaMarkerPath(storePath))) return true;
   if (listAgentTables(storePath).length > 0) return true;
@@ -174,24 +239,42 @@ function isStoreShape(storePath) {
 /**
  * Read up to ADOPT_PROBE_SIZE live rows with text+vector. Goes through the
  * table query, not `scanActiveBatches`: that normaliser drops LanceDB Vector
- * because it is not a JS array.
+ * because it is not a JS array. Does not call `init()` when the table is
+ * already open. Read-only `init()` does not add columns or create tables.
  * @param {object|null} db
  * @param {string} agentId
  * @returns {Promise<{text: string, vector: number[], agentId: string}[]>}
  */
 async function readProbeRowsFromDb(db, agentId) {
   if (!db) return [];
-  const initialized = await db.init();
-  if (initialized === false || !db.table) return [];
+  if (!db.table) {
+    if (typeof db.init !== "function") return [];
+    const initialized = await db.init();
+    if (initialized === false || !db.table) return [];
+  }
   const rows = [];
   const batchSize = 200;
   let offset = 0;
+  let withStatus = true;
   while (rows.length < ADOPT_PROBE_SIZE) {
-    let query = db.table.query().where("status IS NULL OR status = 'active' OR status = ''");
-    if (typeof query.limit === "function") query = query.limit(batchSize);
-    if (offset > 0 && typeof query.offset === "function") query = query.offset(offset);
-    if (typeof query.select === "function") query = query.select(["text", "vector"]);
-    const raw = await query.toArray({ maxBatchLength: batchSize });
+    let raw;
+    try {
+      let query = db.table.query();
+      if (withStatus) {
+        query = query.where("status IS NULL OR status = 'active' OR status = ''");
+      }
+      if (typeof query.limit === "function") query = query.limit(batchSize);
+      if (offset > 0 && typeof query.offset === "function") query = query.offset(offset);
+      if (typeof query.select === "function") query = query.select(["text", "vector"]);
+      raw = await query.toArray({ maxBatchLength: batchSize });
+    } catch {
+      if (withStatus) {
+        withStatus = false;
+        offset = 0;
+        continue;
+      }
+      break;
+    }
     if (!Array.isArray(raw) || raw.length === 0) break;
     for (const row of raw) {
       const text = typeof row.text === "string" ? row.text.trim() : "";
@@ -224,6 +307,27 @@ function sampleRows(tables, n) {
   return sample;
 }
 
+function assertSafeAdoptPath(path, host) {
+  if (typeof path !== "string" || !path || !isAbsolute(path) || hasPathDotDot(path)) {
+    throw memoryOpError("invalid-input", "path must be an absolute store root");
+  }
+  const resolved = resolve(path);
+  const check = host?.platform?.isUnsafeLink;
+  if (typeof check !== "function") {
+    throw memoryOpError("invalid-input", "path is not a safe store root");
+  }
+  let unsafe;
+  try {
+    unsafe = check(path) === true || check(resolved) === true;
+  } catch {
+    throw memoryOpError("invalid-input", "path is not a safe store root");
+  }
+  if (unsafe) {
+    throw memoryOpError("invalid-input", "path is not a safe store root");
+  }
+  return resolved;
+}
+
 /**
  * @param {object} deps
  */
@@ -238,25 +342,22 @@ export function createStoreAdopt({
   expectedSchema = STORE_SCHEMA_VERSION,
   AgentDbPool,
 } = {}) {
-  async function collectProbeRows(storePath, useEnginePool) {
-    const locations = listAgentTables(storePath);
+  async function collectProbeRows(scanRoots, enginePoolReal) {
+    const locations = [];
+    const seen = new Set();
+    for (const root of scanRoots) {
+      for (const loc of listAgentTables(root)) {
+        const key = `${loc.poolBase}\0${loc.agentId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        locations.push(loc);
+      }
+    }
     const tables = [];
     const scanOne = async (db, agentId) => {
       const rows = await readProbeRowsFromDb(db, agentId);
       if (rows.length > 0) tables.push({ agentId, rows });
     };
-
-    if (useEnginePool) {
-      const agentIds = [...new Set(locations.map((loc) => loc.agentId))];
-      for (const agentId of agentIds) {
-        await pool.withReadOnlyReadDbs(agentId, async (dbs) => {
-          for (const lease of dbs) {
-            await scanOne(lease?.db ?? null, agentId);
-          }
-        });
-      }
-      return tables;
-    }
 
     const byBase = new Map();
     for (const loc of locations) {
@@ -265,15 +366,26 @@ export function createStoreAdopt({
       byBase.set(loc.poolBase, list);
     }
     for (const [poolBase, agentIds] of byBase) {
+      const useEnginePool = sameRealPath(realpathOrNull(poolBase), enginePoolReal);
+      if (useEnginePool) {
+        for (const agentId of [...new Set(agentIds)]) {
+          await pool.withReadOnlyReadDbs(agentId, async (dbs) => {
+            for (const lease of dbs) {
+              await scanOne(lease?.db ?? null, agentId);
+            }
+          });
+        }
+        continue;
+      }
       const tmp = new AgentDbPool(poolBase, vectorDim, logger, { readOnly: true });
       try {
-        for (const agentId of agentIds) {
+        for (const agentId of [...new Set(agentIds)]) {
           await tmp.withDb(agentId, async (db) => {
             await scanOne(db, agentId);
           });
         }
       } finally {
-        await tmp.shutdown?.();
+        await tmp.shutdown();
       }
     }
     return tables;
@@ -300,10 +412,6 @@ export function createStoreAdopt({
       throw memoryOpError("invalid-input", "adopt request is required");
     }
     const dryRun = req.dryRun === true;
-    const path = req.path;
-    if (typeof path !== "string" || !path || !isAbsolute(path)) {
-      throw memoryOpError("invalid-input", "path must be an absolute store root");
-    }
     const expectedIdentity = req.expectedIdentity;
     if (
       !expectedIdentity
@@ -316,20 +424,14 @@ export function createStoreAdopt({
       throw memoryOpError("invalid-input", "expectedIdentity is invalid");
     }
 
+    const path = assertSafeAdoptPath(req.path, host);
+
     const incompatible = (reason, extra = {}) => ({
       verdict: "incompatible",
       dryRun,
       reason,
       ...extra,
     });
-
-    try {
-      if (typeof host.platform?.isUnsafeLink === "function" && host.platform.isUnsafeLink(path)) {
-        throw memoryOpError("invalid-input", "path is not a safe store root");
-      }
-    } catch (err) {
-      if (err?.name === "MemoryOpError") throw err;
-    }
 
     if (!existsSync(path)) {
       return incompatible("path-unreadable");
@@ -357,56 +459,88 @@ export function createStoreAdopt({
       return incompatible("schema-mismatch", { storeSchema });
     }
 
-    const engineIdentity = getIdentity();
-    if (!engineIdentity || engineIdentity.dimensions !== expectedIdentity.dimensions) {
-      return incompatible("dimension-mismatch", {
+    const engineIdentity = typeof getIdentity === "function" ? getIdentity() : null;
+    if (!engineIdentity || !Number.isSafeInteger(engineIdentity.dimensions) || engineIdentity.dimensions <= 0) {
+      return incompatible("identity-unverifiable", {
         storeSchema,
         identity: engineIdentity ?? null,
+      });
+    }
+    if (engineIdentity.dimensions !== expectedIdentity.dimensions) {
+      return incompatible("dimension-mismatch", {
+        storeSchema,
+        identity: engineIdentity,
       });
     }
 
     const gens = readGenerationManifests(path);
     let identitySource;
+    let matchingGeneration = null;
     if (gens.present) {
       if (gens.unreadable && gens.manifests.length === 0) {
         return incompatible("identity-unreadable", { storeSchema, identity: engineIdentity });
       }
-      for (const manifest of gens.manifests) {
-        if (manifest.dimensions !== expectedIdentity.dimensions) {
-          return incompatible("dimension-mismatch", {
-            storeSchema,
-            identity: {
-              fingerprintId: manifest.fingerprintId,
-              provider: manifest.provider || expectedIdentity.provider,
-              model: manifest.model || expectedIdentity.model,
-              dimensions: manifest.dimensions,
-            },
-            identitySource: "manifest",
-          });
-        }
-        if (manifest.fingerprintId !== expectedIdentity.fingerprintId) {
-          return incompatible("identity-mismatch", {
-            storeSchema,
-            identity: {
-              fingerprintId: manifest.fingerprintId,
-              provider: manifest.provider || expectedIdentity.provider,
-              model: manifest.model || expectedIdentity.model,
-              dimensions: manifest.dimensions,
-            },
-            identitySource: "manifest",
-          });
-        }
+      const matching = gens.manifests.filter((manifest) => (
+        manifest.fingerprintId === expectedIdentity.fingerprintId
+        && manifest.dimensions === expectedIdentity.dimensions
+      ));
+      const mismatched = gens.manifests.filter((manifest) => (
+        manifest.fingerprintId !== expectedIdentity.fingerprintId
+        || manifest.dimensions !== expectedIdentity.dimensions
+      ));
+      if (matching.length === 0 && mismatched.length > 0) {
+        const manifest = mismatched[0];
+        const reason = manifest.dimensions !== expectedIdentity.dimensions
+          ? "dimension-mismatch"
+          : "identity-mismatch";
+        return incompatible(reason, {
+          storeSchema,
+          identity: {
+            fingerprintId: manifest.fingerprintId,
+            provider: manifest.provider || expectedIdentity.provider,
+            model: manifest.model || expectedIdentity.model,
+            dimensions: manifest.dimensions,
+          },
+          identitySource: "manifest",
+        });
       }
-      if (gens.manifests.length > 0) identitySource = "manifest";
+      if (matching.length > 0) {
+        identitySource = "manifest";
+        matchingGeneration = matching[0];
+      }
     }
 
-    const useEnginePool = path === baseDbPath;
+    if (!identitySource && engineIdentity.fingerprintId !== expectedIdentity.fingerprintId) {
+      return incompatible("identity-mismatch", {
+        storeSchema,
+        identity: engineIdentity,
+        identitySource: "probe",
+      });
+    }
+
+    const scanRoots = [path];
+    if (matchingGeneration) {
+      const genRoot = generationProbeRoot(path, matchingGeneration.id, expectedIdentity);
+      if (!genRoot) {
+        return incompatible("identity-unreadable", {
+          storeSchema,
+          identity: engineIdentity,
+          identitySource: "manifest",
+        });
+      }
+      if (genRoot !== path) scanRoots.push(genRoot);
+    }
+
+    const pathReal = realpathOrNull(path);
+    const baseReal = realpathOrNull(baseDbPath);
+    const enginePoolReal = sameRealPath(pathReal, baseReal) ? baseReal : null;
+
     let tables;
     try {
-      tables = await collectProbeRows(path, useEnginePool);
+      tables = await collectProbeRows(scanRoots, enginePoolReal);
     } catch (err) {
       logger?.warn?.(`stores.adopt: probe scan failed: ${err?.code || "error"}`);
-      return incompatible("identity-unverifiable", { storeSchema, identity: engineIdentity, identitySource: "probe" });
+      return incompatible("identity-unverifiable", { storeSchema, identity: engineIdentity, identitySource: identitySource || "probe" });
     }
 
     const sample = sampleRows(tables, ADOPT_PROBE_SIZE);
@@ -454,7 +588,14 @@ export function createStoreAdopt({
     for (let i = 0; i < sample.length; i++) {
       const stored = sample[i].vector;
       const fresh = vectorOf({ vector: reembedded[i] });
-      if (!fresh || fresh.length !== stored.length) {
+      if (!fresh) {
+        return incompatible("identity-unverifiable", {
+          storeSchema,
+          identity: engineIdentity,
+          identitySource: "probe",
+        });
+      }
+      if (fresh.length !== stored.length) {
         return incompatible("dimension-mismatch", {
           storeSchema,
           identity: engineIdentity,
@@ -463,9 +604,18 @@ export function createStoreAdopt({
       }
       scores.push(cosineSimilarityVec(stored, fresh));
     }
+    const finite = scores.length >= ADOPT_PROBE_MIN_ROWS && scores.every(Number.isFinite);
+    if (!finite) {
+      return incompatible("identity-unverifiable", {
+        storeSchema,
+        identity: engineIdentity,
+        identitySource: "probe",
+      });
+    }
     const minScore = Math.min(...scores);
     const medianScore = median(scores);
-    if (minScore < ADOPT_PROBE_MIN_COSINE || medianScore < ADOPT_PROBE_MEDIAN_COSINE) {
+    const ok = minScore >= ADOPT_PROBE_MIN_COSINE && medianScore >= ADOPT_PROBE_MEDIAN_COSINE;
+    if (!ok) {
       return incompatible("identity-mismatch", {
         storeSchema,
         identity: engineIdentity,

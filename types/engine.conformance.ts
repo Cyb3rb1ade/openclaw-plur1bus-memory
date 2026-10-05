@@ -146,7 +146,7 @@ assertTrue<Exact<EngineStatus["storeSchema"], { current: SchemaVersion | null; e
 // 1.11.0: memory.import and stores.adopt.
 assertTrue<Exact<MemoryOps["import"], (req: import("./engine.js").MemoryImportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryImportResult>>>();
 assertTrue<Exact<MemoryImportOutcome, "created" | "matched-existing" | "rejected">>();
-assertTrue<Exact<MemoryImportRejectReason, "invalid-input" | "tombstone-blocked" | "principal-unresolved" | "empty-text" | "provenance-not-imported" | "previously-imported-deleted" | "aborted">>();
+assertTrue<Exact<MemoryImportRejectReason, "invalid-input" | "tombstone-blocked" | "principal-unresolved" | "empty-text" | "provenance-not-imported" | "previously-imported-deleted" | "aborted" | "storage">>();
 assertTrue<Exact<Engine["stores"], StoreOps>>();
 assertTrue<Exact<StoreOps["adopt"], (req: import("./engine.js").StoreAdoptRequest) => Promise<import("./engine.js").StoreAdoptResult>>>();
 assertTrue<Exact<StoreAdoptIdentitySource, "manifest" | "probe">>();
