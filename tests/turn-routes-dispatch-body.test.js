@@ -11,14 +11,14 @@ const routingCapability = Object.freeze({
   normalizeMessageChannel(value) { return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined; },
   isIncognitoSessionKey() { return false; },
 });
-const SESSION_KEY = "agent:bernhardine:telegram:bernhardine:direct:1211667028";
+const SESSION_KEY = "agent:bernhardine:telegram:bernhardine:direct:10000003";
 
 function dispatch(bodyFields, runId = "run-1") {
   return {
-    runId, sessionKey: SESSION_KEY, originatingChannel: "telegram", originatingTo: "1211667028", originatingAccountId: "bernhardine",
+    runId, sessionKey: SESSION_KEY, originatingChannel: "telegram", originatingTo: "10000003", originatingAccountId: "bernhardine",
     ctx: {
-      AgentId: "bernhardine", SessionKey: SESSION_KEY, AccountId: "bernhardine", SenderId: "1211667028",
-      Provider: "telegram", ChatId: "1211667028", OriginatingTo: "1211667028", ...bodyFields,
+      AgentId: "bernhardine", SessionKey: SESSION_KEY, AccountId: "bernhardine", SenderId: "10000003",
+      Provider: "telegram", ChatId: "10000003", OriginatingTo: "10000003", ...bodyFields,
     },
   };
 }

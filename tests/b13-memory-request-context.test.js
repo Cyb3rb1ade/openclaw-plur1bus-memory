@@ -1366,24 +1366,24 @@ describe("operator session context for identity-bound steps", () => {
 
   it("resolves a direct chat session to the conversation's identity-bound context", async () => {
     const ctx = await resolveSessionOwnerMemoryContext({
-      sessionKey: "agent:heisenberg:telegram:heisenberg:direct:2048378590",
+      sessionKey: "agent:heisenberg:telegram:heisenberg:direct:10000004",
       routingLoader: async () => routingCapability,
       resolveAgentWorkspaceDir,
-      resolveSessionEntry: async () => ({ available: true, entry: { sessionId: "706f9ef6-06ca-4dc6-9469-e2531524dd9c" } }),
+      resolveSessionEntry: async () => ({ available: true, entry: { sessionId: "00000000-0000-4000-8000-000000000001" } }),
     });
     assert.equal(ctx.agentId, "heisenberg");
-    assert.equal(ctx.userId, "2048378590");
+    assert.equal(ctx.userId, "10000004");
     assert.equal(ctx.channel, "telegram");
     assert.equal(ctx.accountId, "heisenberg");
     assert.match(ctx.conversationPrincipal, /^conversation:v1:/);
     assert.ok(ctx.userPrincipal, "a channel/account-bound user principal is present");
-    assert.equal(ctx.sessionKey, "agent:heisenberg:telegram:heisenberg:direct:2048378590");
+    assert.equal(ctx.sessionKey, "agent:heisenberg:telegram:heisenberg:direct:10000004");
     // The same conversation always yields the same principal, as the chat command path does.
     const again = await resolveSessionOwnerMemoryContext({
-      sessionKey: "agent:heisenberg:telegram:heisenberg:direct:2048378590",
+      sessionKey: "agent:heisenberg:telegram:heisenberg:direct:10000004",
       routingLoader: async () => routingCapability,
       resolveAgentWorkspaceDir,
-      resolveSessionEntry: async () => ({ available: true, entry: { sessionId: "706f9ef6-06ca-4dc6-9469-e2531524dd9c" } }),
+      resolveSessionEntry: async () => ({ available: true, entry: { sessionId: "00000000-0000-4000-8000-000000000001" } }),
     });
     assert.equal(again.conversationPrincipal, ctx.conversationPrincipal);
   });
@@ -1436,8 +1436,8 @@ describe("shared user pool labels", () => {
       channels: {
         telegram: {
           accounts: {
-            default: { allowFrom: [55736530] },
-            bernhardine: { allowFrom: ["1211667028"] },
+            default: { allowFrom: [10000002] },
+            bernhardine: { allowFrom: ["10000003"] },
             shared: { allowFrom: [111, 222] },
             unbound: { allowFrom: [333] },
           },
@@ -1454,10 +1454,10 @@ describe("shared user pool labels", () => {
     const labels = describeUserPoolLabels(hostConfig);
     const byLabel = Object.fromEntries(labels.map((entry) => [entry.label, entry.poolKey]));
     assert.deepEqual(Object.keys(byLabel).sort(), ["bernhardine.telegram.bernhardine", "main.telegram.default", "telegram.shared.1", "telegram.shared.2", "telegram.unbound"]);
-    const expected = resolveMemoryRequestContext({ agentId: "main", channel: "telegram", accountId: "default", userId: "55736530", chatId: "55736530" });
+    const expected = resolveMemoryRequestContext({ agentId: "main", channel: "telegram", accountId: "default", userId: "10000002", chatId: "10000002" });
     assert.equal(byLabel["main.telegram.default"], userPoolKey(expected.userPrincipal));
     for (const label of Object.keys(byLabel)) {
-      assert.doesNotMatch(label, /55736530|1211667028|111|222|333/, "labels never carry a user id");
+      assert.doesNotMatch(label, /10000002|10000003|111|222|333/, "labels never carry a user id");
       assert.match(label, /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
     }
     assert.deepEqual(describeUserPoolLabels({}), []);
