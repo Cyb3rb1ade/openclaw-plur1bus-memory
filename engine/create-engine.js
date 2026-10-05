@@ -471,6 +471,10 @@ export function createEngine(host, config, testOptions = {}) {
     // The narrative also goes into the agent's DREAMS.md, which is what the
     // host's Dreams page shows. Off only on explicit request.
     diary: dreamNarrativeRawCfg.diary !== false,
+    // 7.18.15: Light-Traeume aus dem Chat mit einem identifizierten Nutzer
+    // tragen den Bereich "user" und bleiben sonst aus DREAMS.md heraus.
+    // Nur fuer Agenten mit genau einem Besitzer einschalten.
+    diaryFromUserChats: dreamNarrativeRawCfg.diaryFromUserChats === true,
     timezone: typeof cfg.timezone === "string" && cfg.timezone.trim() ? cfg.timezone.trim() : null,
   };
   const resolveTemperamentName = (forAgentId) =>
@@ -2854,6 +2858,7 @@ export function createEngine(host, config, testOptions = {}) {
     confirmationIndex,
     confirmationStore,
     conflictResolutionLlmCfg,
+    conversationInsightsLlmCfg,
     createFeatureRoute,
     createOwnerBoundMemoryStore,
     createOwnerBoundNeoStore,
@@ -2864,6 +2869,7 @@ export function createEngine(host, config, testOptions = {}) {
     dreamNarrativeCfg,
     dreamNarrativeLlmCfg,
     embeddings,
+    emotionalPool,
     EMOTION_REFINE_DEADLINE_MS,
     EMOTION_REFINE_MAX_CONSECUTIVE_FAILURES,
     EMOTION_REFINE_MAX_ROWS,
@@ -2882,6 +2888,7 @@ export function createEngine(host, config, testOptions = {}) {
     legacyMigrationShutdown,
     memoryCompactionLlmCfg,
     memoryDbAdapter,
+    memoryWorkspaceAliases,
     mergingEnabled,
     metaCognitionLlmReport,
     NEO_MANUAL_DRAIN_DEADLINE_MS,
@@ -3534,7 +3541,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.9.0",
+    contract: "1.10.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3591,9 +3598,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.9.0).
+  // The Engine (types/engine.d.ts, contract 1.10.0).
   const engine = {
-    contract: "1.9.0",
+    contract: "1.10.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());

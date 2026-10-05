@@ -34,6 +34,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ENGINE_PATHS = Object.freeze({
   assemblePromptContext: "engine/recall/assemble-prompt-context.js",
   captureTurn: "engine/capture/capture-turn.js",
+  postTurnWork: "engine/capture/post-turn-work.js",
   turnReplayGuard: "engine/capture/turn-replay-guard.js",
   checkpointStore: "engine/checkpoint/checkpoint-store.js",
   engineConfigSchema: "engine/config/engine-config-schema.js",
@@ -103,6 +104,7 @@ const ADAPTER_PATHS = Object.freeze({
   hostProbes: "adapter/openclaw/host-probes.js",
   plugin: "adapter/openclaw/plugin.js",
   configSchema: "adapter/openclaw/config-schema.js",
+  obsidianReviewCronCommands: "adapter/openclaw/obsidian-review-cron-commands.js",
 });
 
 function listJsFiles(relativeDir) {

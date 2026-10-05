@@ -22,6 +22,7 @@ const ROUTED = [
   "lib/reembedding/lance-backend.js",
   "lib/reembedding/state-store.js",
   "lib/llm-result-cache.js",
+  "lib/post-turn-queue.js",
 ];
 
 describe("PR-01b platform call sites", () => {

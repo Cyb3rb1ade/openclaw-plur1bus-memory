@@ -1035,7 +1035,8 @@ test("continuity overlay contradiction enrichment reuses the recall target set",
   });
   const results = await api._emit("before_prompt_build", turn.event, turn.ctx);
 
-  assert.ok(results.some((result) => result?.prependContext?.includes("Original release verification process")));
+  // 7.18.16: Spitzentreffer erscheinen mit ihrem Volltext statt der Zusammenfassung.
+  assert.ok(results.some((result) => result?.prependContext?.includes("The release process originally required a full verification run.")));
   assert.doesNotMatch(
     JSON.stringify(api._logs),
     /continuity-engine: contradiction enrichment failed/,

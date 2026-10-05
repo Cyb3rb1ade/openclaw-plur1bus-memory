@@ -4,8 +4,9 @@
  * The dependency rule for the extraction (engine-extraction.md §b.1, §c PR-03):
  *
  *   1. `engine/**` never imports the host. Forbidden: the `openclaw` package
- *      and its subpaths, `lib/setup/*-plugin-runtime.js`,
- *      `lib/runtime-shutdown.js`, `lib/host-services.js`,
+ *      and its subpaths, `adapter/`, `lib/setup/feature-cron-*`,
+ *      `lib/setup/*-plugin-runtime.js`, `lib/runtime-shutdown.js`,
+ *      `lib/host-services.js`,
  *      `lib/providers/openclaw-memory-embedding-adapters.js`.
  *   2. Neither `engine/**` nor `adapter/**` imports `index.js`. Everything they
  *      need arrives through their context object. An import back into the
@@ -97,6 +98,8 @@ const FORBIDDEN_FOR_ENGINE = [
   { test: (spec, target) => target === "lib/host-services.js", why: "lib/host-services.js (built from the OpenClaw api)" },
   { test: (spec, target) => target === "lib/providers/openclaw-memory-embedding-adapters.js", why: "the OpenClaw embedding adapter" },
   { test: (spec, target) => /^lib\/setup\/[^/]+-plugin-runtime\.js$/.test(target || ""), why: "a lib/setup plugin runtime" },
+  { test: (spec, target) => /^lib\/setup\/feature-cron-/.test(target || ""), why: "a lib/setup feature-cron module" },
+  { test: (spec, target) => Boolean(target && target.startsWith("adapter/")), why: "adapter/" },
 ];
 
 const IMPORT_PATTERNS = [

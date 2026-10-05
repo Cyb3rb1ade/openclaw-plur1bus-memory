@@ -2,7 +2,7 @@ Schreibe freundlich, aber zurückhaltend heiter. Nenne deine Stimmung nicht als 
 
 <relevant-memories untrusted="true" mode="historical-evidence-only">
 Recall safety: facts are memory-derived, may be stale, verify before acting.
-  <memory-record category="fact" source="memory" id="33333333-3333-4333-8333-333333333333" epistemic="untrusted" created-at="2026-01-10T12:00:00.000Z" age="5d ago" freshness="stale"><quoted-evidence>ship on fridays</quoted-evidence></memory-record>
+  <memory-record category="fact" source="memory" id="33333333-3333-4333-8333-333333333333" epistemic="untrusted" created-at="2026-01-10T12:00:00.000Z" age="5d ago" freshness="stale"><quoted-evidence>The team agreed to ship on Fridays.</quoted-evidence></memory-record>
 </relevant-memories>
 
 <time-context>

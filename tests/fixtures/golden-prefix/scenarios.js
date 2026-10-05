@@ -31,19 +31,20 @@ function eventFor(prompt, session, run) {
 }
 
 /**
- * Bulk body text for the two `recall-large-text-records` memories. It never
- * reaches the prompt — only a record's summary does — so it exercises the
- * store, embed and ranking path with large rows, not the injection budget.
- * `recall-truncated` is the scenario that covers truncation.
+ * Bulk body text for the two `recall-large-text-records` memories. Since
+ * 7.18.16 the top records inject stored full text (up to
+ * recall.fullTextMaxChars), so this filler can reach the prompt and be
+ * marked truncated. `recall-truncated` still covers the memoriesMaxChars
+ * block cap.
  */
 const FILLER = "Deployment note. ".repeat(700); // ~11 900 chars
 
 /**
- * Only a record's *summary* reaches the prompt, capped at 400 chars by
- * `sanitizeMemoryTextForPrompt(rawDisplay, 400)` (lib/relevant-memory-context.js:122).
- * The 17 000-char budget is therefore reachable only through record *count*,
- * not through one long text. 60 records of ~350 visible chars overshoot it by
- * roughly a factor of two.
+ * Since 7.18.16 the top `recall.fullTextTopRecords` (default 3) inject stored
+ * full text up to `recall.fullTextMaxChars` (default 2000). Remaining records
+ * still show the summary, capped at 400 chars. The 17 000-char budget is
+ * therefore reachable through record *count* plus those full-text slots.
+ * 60 records of ~350 visible chars overshoot it by roughly a factor of two.
  */
 const TRUNCATION_RECORD_COUNT = 60;
 

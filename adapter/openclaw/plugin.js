@@ -56,6 +56,12 @@ import { createOpenClawSkillWorkshopClient } from "../../lib/setup/skill-worksho
 import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/runtime-config.js";
 import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
+import { formatRegistrationTrace, recordRegistration } from "../../lib/register-trace.js";
+import { createGroupReasoningFilter } from "../../lib/group-reasoning-filter.js";
+import {
+  buildWorkspaceReviewCronJobs,
+  printMorningReviewCronCommand,
+} from "./obsidian-review-cron-commands.js";
 
 /**
  * The OpenClaw plugin's register(): validate the test-injection dependencies,
@@ -119,6 +125,21 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
   // register() ran them after its first config reads; an invalid config now
   // still probes once, then throws with zero registrations (a Task 13b
   // deviation, recorded in Task 13c).
+  const rawPluginConfig = api.pluginConfig && typeof api.pluginConfig === "object" ? api.pluginConfig : {};
+  const pluginConfig = {
+    ...rawPluginConfig,
+    runtime: {
+      ...rawPluginConfig.runtime,
+      ...(rawPluginConfig.runtime?.deferPostTurnLlm === undefined ? { deferPostTurnLlm: true } : {}),
+    },
+  };
+  const postTurnRefineScheduled = pluginConfig.neo?.enabled !== false
+    && pluginConfig.runtime.deferPostTurnLlm !== false;
+  const handleObsidianBridgeCommandWithNativeCron = (tokens, context) => registeredObsidianCommandHandler(tokens, {
+    ...context,
+    printMorningReviewCronCommand,
+    buildWorkspaceReviewCronJobs,
+  });
   const host = createHostServices(api, {
     events: hostEvents,
     ...(importRouting ? { routing: importRouting } : {}),
@@ -141,7 +162,8 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       configMutationNotice: configMutationLogNotice(api),
       resolveNeoHooksConfig: (commandConfig) => resolveNeoHooksConfig(api, commandConfig),
       commandRuntimeHooks,
-      handleObsidianBridgeCommand: registeredObsidianCommandHandler,
+      postTurnRefineScheduled,
+      handleObsidianBridgeCommand: handleObsidianBridgeCommandWithNativeCron,
       // MemoryOps archive-first backups stay where /forget and /correct have
       // always put them (~/.openclaw/memory/_archive, or under OPENCLAW_HOME).
       memoryArchiveDir: resolveDefaultArchiveDir,
@@ -170,7 +192,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       },
     },
   });
-  const engine = createEngine(host, api.pluginConfig || {}, engineInternals ? { internals: engineInternals } : {});
+  const engine = createEngine(host, pluginConfig, engineInternals ? { internals: engineInternals } : {});
   const internals = internalsOf(engine);
   const {
     REPLY_OUTCOME_SYNC_LOG_MS,
@@ -599,6 +621,24 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     });
   }
 
+  // 7.18.20: In Gruppen keinen Turn auf den sichtbaren Denkblock eines
+  // anderen Bots starten ("🧠 …" aus /reasoning stream). Der Hook beansprucht
+  // den Turn ohne Antwort.
+  if (typeof api.on === "function" && cfg.groupReasoningFilter?.enabled !== false) {
+    const groupReasoningFilter = createGroupReasoningFilter({
+      enabled: true,
+      prefixes: cfg.groupReasoningFilter?.prefixes,
+      logger: host.logger,
+    });
+    for (const hookName of ["before_dispatch", "before_agent_reply"]) {
+      try {
+        api.on(hookName, groupReasoningFilter);
+      } catch (error) {
+        host.logger.warn(`memory-lancedb-namespaced: group reasoning filter not registered on ${hookName}: ${error?.message || error}`);
+      }
+    }
+  }
+
   // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku (register-voice-mode.js).
   registerVoiceModelOverride({ api, host, baseDbPath });
 
@@ -616,4 +656,9 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     reembeddingSwitchRecovery,
     scopedEmbeddingServer,
   });
+  // 7.18.5: openclaw/openclaw#163029 — where mid-turn reloads come from.
+  const registrationTrace = formatRegistrationTrace(
+    recordRegistration({ enabled: cfg.runtime?.traceRegistrations === true }),
+  );
+  if (registrationTrace) host.logger.warn(registrationTrace);
 }

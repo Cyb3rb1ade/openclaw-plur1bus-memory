@@ -70,6 +70,24 @@ describe("lint-engine-imports", () => {
     assert.match(result.out, /clean \(2 module\(s\), 0 lib module\(s\) reached\)/);
   });
 
+  it("rejects engine code importing a feature-cron module", (t) => {
+    const base = fixture(t, {
+      "engine/bad.js": 'import { REQUIRED_FEATURE_CRONS } from "../lib/setup/feature-cron-plan.js";\nexport const x = REQUIRED_FEATURE_CRONS;\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /must not import a lib\/setup feature-cron module/);
+  });
+
+  it("rejects engine code importing adapter/", (t) => {
+    const base = fixture(t, {
+      "engine/bad.js": 'import { registerPlur1bus } from "../adapter/openclaw/plugin.js";\nexport const x = registerPlur1bus;\n',
+    });
+    const result = run(base);
+    assert.equal(result.status, 1);
+    assert.match(result.out, /must not import adapter\//);
+  });
+
   it("rejects engine code importing the adapter lifecycle", (t) => {
     const base = fixture(t, {
       "engine/bad.js": 'import { runtimeIfUsable } from "../lib/runtime-shutdown.js";\nexport const x = runtimeIfUsable;\n',

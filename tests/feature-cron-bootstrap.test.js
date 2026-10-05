@@ -438,7 +438,8 @@ async function runJsonSetupDirect(
 }
 
 describe("loadFeatureCronConfig timeout budget", () => {
-  it("allows 30 seconds for the redacted gateway snapshot", () => {
+  // 7.18.10: 60 s — right after a 2026.9.7 start config.get took more than 30 s.
+  it("allows 60 seconds for the redacted gateway snapshot", () => {
     const sourceConfig = {
       plugins: {
         entries: {
@@ -455,7 +456,7 @@ describe("loadFeatureCronConfig timeout budget", () => {
     const result = loadFeatureCronConfig((args, timeout) => {
       assert.deepStrictEqual(args, ["gateway", "call", "config.get", "--json"]);
       receivedTimeout = timeout;
-      if (timeout < 30_000) {
+      if (timeout < 60_000) {
         return {
           ok: false,
           stdout: "",
@@ -472,7 +473,7 @@ describe("loadFeatureCronConfig timeout budget", () => {
       };
     });
 
-    assert.equal(receivedTimeout, 30_000);
+    assert.equal(receivedTimeout, 60_000);
     assert.deepStrictEqual(result, { ok: true, sourceConfig, runtimeConfig });
   });
 });
@@ -728,7 +729,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     assert.strictEqual(result.exitCode, 0);
     const configCalls = calls.filter(({ args }) => args.join(" ") === "gateway call config.get --json");
     assert.strictEqual(configCalls.length, 1);
-    assert.strictEqual(configCalls[0].timeout, 30000);
+    assert.strictEqual(configCalls[0].timeout, 60000);
     assert.strictEqual(cronAdds.length, 1);
     assert.ok(cronAdds[0].includes("plur1bus consolidate-daily main"));
   });
@@ -758,7 +759,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     }
   });
 
-  it("creates the exact eleven per-agent jobs without model, auth, token, or API overrides", async () => {
+  it("creates the exact twelve per-agent jobs without model, auth, token, or API overrides", async () => {
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
       pluginConfig: {
@@ -796,7 +797,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     });
 
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(cronAdds.length, 11);
+    assert.strictEqual(cronAdds.length, 12);
     const byName = new Map(cronAdds.map((args) => [args[args.indexOf("--name") + 1], args]));
     assert.deepStrictEqual([...byName.keys()], [
       "plur1bus persona-evolve main",
@@ -805,6 +806,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       "plur1bus auto-accept-stale main",
       "plur1bus embedding-drain main",
       "plur1bus emotion-refine main",
+      "plur1bus post-turn-refine main",
       "plur1bus classify-recent main",
       "plur1bus rem-dream main",
       "plur1bus skill-miner main",
@@ -825,6 +827,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     };
     assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * *");
     assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "10800s");
+    assert.strictEqual(schedule("plur1bus post-turn-refine main", "--every"), "1200s");
     assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 4 * * *");
     // Erster Agent auf der Basisminute, klar getrennt von gc-run um 04:45.
     assert.strictEqual(schedule("plur1bus auto-accept-stale main", "--cron"), "50 4 * * *");

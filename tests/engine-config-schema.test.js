@@ -28,6 +28,10 @@ import {
 
 const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"));
 
+/** OpenClaw adapter-only keys live on the generated manifest, not the engine schema (I3). */
+const ADAPTER_ONLY_TOP_LEVEL_KEYS = new Set(["groupReasoningFilter"]);
+const ADAPTER_ONLY_RUNTIME_KEYS = new Set(["traceRegistrations"]);
+
 // SecretInput nodes ($ref #/$defs/secretInput): the manifest's secretInputs.paths.
 const SECRET_INPUTS = [
   "embedding.apiKey",
@@ -66,8 +70,12 @@ const SENSITIVE = [
 describe("engine-config.schema.json", () => {
   it("the schema carries every manifest key with type, description, readAt and x-tier", () => {
     const keys = engineConfigKeys();
-    assert.equal(keys.length, 56);
-    assert.deepEqual(keys.map((k) => k.key), Object.keys(manifest.configSchema.properties));
+    const manifestKeys = Object.keys(manifest.configSchema.properties);
+    assert.equal(keys.length, 57);
+    for (const key of ADAPTER_ONLY_TOP_LEVEL_KEYS) {
+      assert.ok(manifestKeys.includes(key), `OpenClaw adapter-only key ${key}`);
+    }
+    assert.deepEqual(keys.map((k) => k.key), manifestKeys.filter((key) => !ADAPTER_ONLY_TOP_LEVEL_KEYS.has(key)));
     for (const k of keys) {
       assert.equal(typeof k.description, "string", k.key);
       assert.ok(k.description.trim().length > 0, `${k.key}: empty description`);
@@ -76,7 +84,7 @@ describe("engine-config.schema.json", () => {
       assert.equal(k.tier, "advanced", k.key);
     }
     const schema = loadEngineConfigSchema();
-    assert.equal(schema["x-contract"], "1.9.0");
+    assert.equal(schema["x-contract"], "1.10.0");
     assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
     assert.equal(schema.$id, "plur1bus-engine-config");
     assert.equal(ENGINE_CONFIG_SCHEMA_FILE, "engine/config/engine-config.schema.json");
@@ -201,6 +209,7 @@ describe("engine-config.schema.json", () => {
     const byKey = new Map(engineConfigKeys().map((k) => [k.key, k]));
     let withDefault = 0;
     for (const [key, node] of Object.entries(manifest.configSchema.properties)) {
+      if (ADAPTER_ONLY_TOP_LEVEL_KEYS.has(key)) continue;
       const reported = byKey.get(key);
       if (Object.hasOwn(node, "default")) {
         withDefault += 1;
@@ -227,6 +236,11 @@ describe("engine-config.schema.json", () => {
     };
     const stripped = strip(schema, "");
     const expected = structuredClone(manifest.configSchema);
+    for (const key of ADAPTER_ONLY_TOP_LEVEL_KEYS) delete expected.properties[key];
+    for (const key of ADAPTER_ONLY_RUNTIME_KEYS) delete expected.properties.runtime.properties[key];
+    // OpenClaw overrides the engine default (false/inline) to true so the UI matches the release line.
+    expected.properties.runtime.properties.deferPostTurnLlm.default =
+      stripped.properties.runtime.properties.deferPostTurnLlm.default;
     // Descriptions are the one other difference: added where missing, replaced where German (E5-R6).
     for (const [key, node] of Object.entries(stripped.properties)) {
       expected.properties[key].description = node.description;

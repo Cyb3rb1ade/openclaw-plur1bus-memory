@@ -30,6 +30,7 @@ describe("REQUIRED_FEATURE_CRONS", () => {
         "auto-accept-stale",
         "embedding-drain",
         "emotion-refine",
+        "post-turn-refine",
         "classify-recent",
         "rem-dream",
         "skill-miner",

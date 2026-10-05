@@ -78,7 +78,18 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       assert.ok(!text.includes(word), `configSchema must not contain ${word}`);
     }
     for (const key of ENGINE_ONLY_ROOT_KEYS) assert.ok(!Object.hasOwn(manifest.configSchema, key), key);
-    assert.equal(Object.keys(manifest.configSchema.properties).length, 56);
+    assert.equal(Object.keys(manifest.configSchema.properties).length, 58);
+  });
+
+  it("adapter-only keys stay off the engine schema and on the OpenClaw manifest", () => {
+    const engine = loadEngineConfigSchema();
+    const manifest = readManifest();
+    assert.equal(Object.hasOwn(engine.properties, "groupReasoningFilter"), false);
+    assert.equal(Object.hasOwn(engine.properties.runtime.properties, "traceRegistrations"), false);
+    assert.equal(engine.properties.runtime.properties.deferPostTurnLlm.default, false);
+    assert.ok(Object.hasOwn(manifest.configSchema.properties, "groupReasoningFilter"));
+    assert.ok(Object.hasOwn(manifest.configSchema.properties.runtime.properties, "traceRegistrations"));
+    assert.equal(manifest.configSchema.properties.runtime.properties.deferPostTurnLlm.default, true);
   });
 
   it("secretInputs follow the $ref secretInput nodes, not every x-sensitive path", () => {
@@ -157,6 +168,23 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     delete afterSchema.properties.runtime.properties.lancedbCompaction;
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "detachPostTurnWork"));
     delete afterSchema.properties.runtime.properties.detachPostTurnWork;
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "traceRegistrations"));
+    delete afterSchema.properties.runtime.properties.traceRegistrations;
+    assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "deferPostTurnLlm"));
+    delete afterSchema.properties.runtime.properties.deferPostTurnLlm;
+    assert.ok(Object.hasOwn(afterSchema.properties.dreaming.properties.narrative.properties, "diaryFromUserChats"));
+    delete afterSchema.properties.dreaming.properties.narrative.properties.diaryFromUserChats;
+    assert.ok(Object.hasOwn(afterSchema.properties.recall.properties, "fullTextTopRecords"));
+    delete afterSchema.properties.recall.properties.fullTextTopRecords;
+    assert.ok(Object.hasOwn(afterSchema.properties.recall.properties, "fullTextMaxChars"));
+    delete afterSchema.properties.recall.properties.fullTextMaxChars;
+    assert.ok(Object.hasOwn(afterSchema.properties, "captureChunkingJev"));
+    delete afterSchema.properties.captureChunkingJev;
+    assert.ok(Object.hasOwn(afterSchema.properties, "groupReasoningFilter"));
+    delete afterSchema.properties.groupReasoningFilter;
+    assert.deepEqual(afterSchema.properties.captureChunkingMode.enum.slice().sort(), ["automatisch", "beides", "geteilt"]);
+    afterSchema.properties.captureChunkingMode.enum = ["beides", "geteilt"];
+    afterSchema.properties.captureChunkingMode.description = "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.";
     assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
     delete afterSchema.properties.healthWatch;
 

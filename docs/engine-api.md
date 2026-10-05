@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.9.0** · frozen at 1.0.0 on 2026-09-22, amended ten times
+**Contract version 1.10.0** · frozen at 1.0.0 on 2026-09-22, amended eleven times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -128,6 +128,12 @@ own changelog:
   so a process with neo enabled can exit. See
   [Engine configuration schema in 1.9.0](#engine-configuration-schema-in-190)
   below.
+- **1.10.0** — additive engine-config keys from the 7.18.5–7.18.20 port onto
+  `main` (`runtime.deferPostTurnLlm` default false, plus diary/chunking/full-text
+  keys) and `JobName` `"post-turn-refine"`. Adapter-only keys
+  (`runtime.traceRegistrations`, `groupReasoningFilter`) live on the OpenClaw
+  manifest. Existing callers keep working: new keys are optional with defaults,
+  and the job name is an additive union member.
 
 ## The two halves
 
@@ -1560,7 +1566,7 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/admin/obsidian.js` | `createObsidianOps` — `AdminOps.obsidian.{detect,prepare,confirm}` |
 | `engine/store/schema-version.js` | `createStoreMigrator` — `AdminOps.migrate`, the `_schema.json` marker |
 | `engine/identity/principal.js` | `memoryContextFromPrincipal` — `Principal`/`AgentContext` as explicit inputs, the channel registry |
-| `engine/jobs/job-registry.js` | `createJobRegistry` — the 18 engine-owned jobs, retry/abandon/breaker, `MAX_ATTEMPTS`, `BREAKER_LIMIT`, `sweepKey` |
+| `engine/jobs/job-registry.js` | `createJobRegistry` — the 19 engine-owned jobs, retry/abandon/breaker, `MAX_ATTEMPTS`, `BREAKER_LIMIT`, `sweepKey` |
 | `engine/jobs/job-ledger.js` | the append-only `ledger.jsonl` + started-markers, crash detection |
 | `engine/jobs/job-specs.js` | the `JobSpec` table (name, `needsLlm`, `singleton`, `defaultSchedule`, `phase`) |
 | `engine/jobs/internal-job-bodies.js` | the job bodies themselves |

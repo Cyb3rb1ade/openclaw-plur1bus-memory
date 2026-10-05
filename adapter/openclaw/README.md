@@ -44,9 +44,10 @@ those lists:
   pair **between** the Obsidian bridge pair and the Neo service pair.
 - the deferred feature-cron `gateway_start` handler is registered **between**
   the Obsidian bridge pair and the Neo service pair as well.
-- `tests/critical-review-command.test.js` reads the *last* registered
-  `before_agent_reply` handler, which is only the critical-reply handler
-  because the unsafe-cron guard is registered long before the chat commands.
+- `tests/critical-review-command.test.js` finds the critical-reply handler by
+  function name (`answerQuotedCriticalReply`). Since 7.18.20 the group
+  reasoning filter is also registered on `before_dispatch` and
+  `before_agent_reply`, after the chat commands.
 
 Two timeout budgets must survive every future move:
 

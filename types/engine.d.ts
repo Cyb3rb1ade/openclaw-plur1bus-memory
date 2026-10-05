@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.9.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended ten times under the policy below — see the changelog at the end
+ * Contract version 1.10.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended eleven times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -40,9 +40,10 @@
  *            1.7.0 — EmbeddingService.probe(opts?) → EmbeddingProbeResult (identity, readiness, memoized); serve(address?: IpcAddress | null) → EmbeddingServeResult (real scoped IPC, in-process owner, no claim listener); HostCapabilities.pushCriticalButtons? typed (E3).
  *            1.8.0 — EngineStatus.jobs/models/journal/sharedMemory, degraded derived from model readiness; Engine.models (status, warm); HostCapabilities.journalBacklog?; MemoryOpErrorCode "unsupported"; CaptureResult.reason "duplicate-turn" (E4).
  *            1.9.0 — engine-config.schema.json with readAt/x-tier/x-sensitive and its types (EngineConfigSchema, EngineConfigKey, EngineConfigReadAt); RecallQuery.warmOnly; RecallTiming.totalMs covers queue wait and prelude (E5).
+ *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.deferPostTurnLlm, diaryFromUserChats, captureChunkingJev, recall.fullTextTopRecords/fullTextMaxChars) and JobName "post-turn-refine"; adapter-only keys stay on the OpenClaw manifest; no breaking change to existing callers.
  */
 
-export type ContractVersion = "1.9.0";
+export type ContractVersion = "1.10.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -216,6 +217,8 @@ export interface HostCapabilities {
   pushCriticalButtons?(args: CriticalButtonPushArgs): Promise<CriticalButtonPushResult | null>;
   /** 1.8.0: read by Engine.status(); absent, throwing, invalid or slower than 50 ms → `EngineStatus.journal: null`. */
   journalBacklog?(): JournalBacklog | null | Promise<JournalBacklog | null>;
+  /** 1.10.0: host has scheduled the post-turn-refine drain. Absent or false → capture runs light-dream/episodes inline. */
+  postTurnRefineScheduled?: boolean;
   [capability: string]: unknown;
 }
 
@@ -405,7 +408,7 @@ export interface CheckpointResult {
 
 export type JobName =
   | "persona-evolve" | "afterthought" | "consolidate-daily" | "auto-accept-stale"
-  | "embedding-drain" | "emotion-refine" | "classify-recent" | "rem-dream"
+  | "embedding-drain" | "emotion-refine" | "post-turn-refine" | "classify-recent" | "rem-dream"
   | "skill-miner" | "discover-semantic-links" | "gc-run"
   | "reminder-dispatch" | "feedback-report" | "proactive-check" | "meta-reflect"
   | "skill-benefit-backfill" | "episodes-rebuild"

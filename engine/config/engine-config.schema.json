@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "plur1bus-engine-config",
-  "x-contract": "1.9.0",
+  "x-contract": "1.10.0",
   "$defs": {
     "secretInput": {
       "type": [
@@ -357,6 +357,11 @@
               "type": "boolean",
               "default": true,
               "description": "Also append each dream narrative to the agent's DREAMS.md, the file OpenClaw's Dreams page shows."
+            },
+            "diaryFromUserChats": {
+              "type": "boolean",
+              "default": false,
+              "description": "7.18.15: also write light-dream narratives from identified user chats (ACL scope user) into the agent DREAMS.md. Off by default because DREAMS.md lives in the agent workspace and anyone with access to it can read those narratives. Intended for agents with a single owner."
             }
           }
         }
@@ -580,12 +585,44 @@
       "type": "string",
       "enum": [
         "beides",
-        "geteilt"
+        "geteilt",
+        "automatisch"
       ],
       "default": "beides",
-      "description": "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.",
+      "description": "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts, \"automatisch\" lets Jev decide per message; it has no effect when captureChunking is off.",
       "readAt": "construction",
       "x-tier": "advanced"
+    },
+    "captureChunkingJev": {
+      "type": "object",
+      "additionalProperties": false,
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "description": "Settings for captureChunkingMode \"automatisch\". Jev (TypeSafe) decides per message that the splitter would cut: coherent with high confidence stores the whole row, independent points with high confidence store only the parts, otherwise whole and parts. The message is sent to api.typesafe.ai. Without a key the mode behaves like \"beides\".",
+      "properties": {
+        "apiKeyEnv": {
+          "type": "string",
+          "default": "TYPESAFE_API_KEY",
+          "description": "Name of the environment variable that holds the TypeSafe API key."
+        },
+        "model": {
+          "type": "string",
+          "default": "jev-latest"
+        },
+        "minConfidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.85,
+          "description": "Minimum confidence at which Jev's verdict is used; below it, whole and parts are stored."
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 30000,
+          "default": 5000
+        }
+      }
     },
     "autoRecall": {
       "type": "boolean",
@@ -699,6 +736,11 @@
           "type": "boolean",
           "default": false,
           "description": "Run post-turn capture work (episodes, insights, light dream) outside the finished turn's caller identity, so its LLM calls are not refused as unauthorized by hosts that revoke that identity when the turn ends (OpenClaw: LLM_COMPLETION_NOT_AUTHORIZED). Off by default; turn on and observe."
+        },
+        "deferPostTurnLlm": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enqueue light-dream and episode extraction from capture for the post-turn-refine job. The engine default is inline (false). A host that schedules that job (and sets capabilities.postTurnRefineScheduled) should set this true; otherwise capture falls back to inline."
         },
         "llmResultCacheEnabled": {
           "type": "boolean",
@@ -1293,6 +1335,20 @@
         "canonicalMaxItems": {
           "type": "number",
           "default": 5
+        },
+        "fullTextTopRecords": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15,
+          "default": 3,
+          "description": "7.18.16: number of top-ranked recalled memories injected with their stored full text instead of a compressed summary. 0 restores summaries only."
+        },
+        "fullTextMaxChars": {
+          "type": "integer",
+          "minimum": 400,
+          "maximum": 8000,
+          "default": 2000,
+          "description": "7.18.16: character limit for each full-text recalled memory. Longer records are cut and marked truncated so the model fetches the rest with memory_recall full_text."
         },
         "maxPromptMemories": {
           "type": "number",

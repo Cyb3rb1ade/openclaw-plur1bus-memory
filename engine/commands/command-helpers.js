@@ -8,7 +8,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
-import { isGuardedDirectFeatureCronMessage } from "../../lib/setup/feature-cron-plan.js";
+import { isGuardedDirectFeatureCronMessage } from "../../lib/feature-cron-specs.js";
 import { t } from "../../lib/i18n.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { validateConfirmation } from "../../lib/security.js";

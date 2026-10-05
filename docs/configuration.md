@@ -18,6 +18,8 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 | `canonicalFirst` | `boolean` | `true` | Kanonische Repräsentanten vor nicht-kanonischen bevorzugen |
 | `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
 | `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
+| `fullTextTopRecords` | `integer` | `3` | Anzahl der bestplatzierten Treffer, die mit gespeichertem Volltext statt Kurzfassung in den Prompt kommen. `0` stellt nur Zusammenfassungen wieder her. |
+| `fullTextMaxChars` | `integer` | `2000` | Zeichenlimit je Volltext-Treffer. Längere Einträge werden gekürzt und mit `truncated="true"` markiert. |
 
 ### Prompt-Injektions-Budgets
 
@@ -352,6 +354,11 @@ Nutzerpartitionen nie.
 folgt `timezone` aus der Plugin-Konfiguration. Derselbe Traum wird nicht
 zweimal eingetragen; ein Fehlschlag beim Schreiben bricht den Traum nicht ab.
 
+`dreaming.narrative.diaryFromUserChats` (Standard `false`, 7.18.15) lässt
+Light-Träume aus dem Chat mit einem identifizierten Nutzer (`scope: "user"`)
+ins Tagebuch. Nur für Agenten mit genau einem Besitzer: `DREAMS.md` liegt im
+Workspace des Agenten.
+
 Damit das Tagebuch einen Autor hat, sollte das verwaltete Träumen des Hosts aus
 sein. Der Host liest diesen Schalter aus dem Eintrag des Memory-Slot-Besitzers,
 also `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false`.
@@ -458,6 +465,14 @@ Gelesen wird nur das Ende der Logs von heute und gestern (höchstens 8 MiB je Da
 `runtime.detachPostTurnWork` (Standard `false`) ist ein Workaround für openclaw/openclaw#162941. OpenClaw reicht die Identität eines Turns per `AsyncLocalStorage` an alle asynchronen Folgeaufrufe weiter. Die Nachbearbeitung, die PLUR1BUS nach `agent_end` einreiht (Capture, Episoden, Gesprächserkenntnisse, Light Dream), läuft erst nach dem Turn — dessen Identität ist dann widerrufen, und Plugin-LLM-Aufrufe scheitern mit `LLM_COMPLETION_NOT_AUTHORIZED` (im Dashboard: Ursache „turn authority already expired“).
 
 Mit `true` läuft diese Arbeit in einem Snapshot, der bei der Plugin-Registrierung genommen wird. Ein Snapshot stellt alle Host-Kontexte jenes Moments wieder her, nicht nur die Turn-Identität; deshalb ist der Schalter standardmäßig aus und sollte nach dem Einschalten ein paar Turns lang beobachtet werden. Wirkt nach einem Gateway-Neustart.
+
+## Light-Traum und Episoden nach dem Turn (7.18.14)
+
+`runtime.deferPostTurnLlm` reiht Light-Traum und Episoden-Extraktion nach `agent_end` in eine Dateischlange ein. In der Engine ist der Standard `false` (inline, inklusive `jobs.run("light-dream")`). Unter OpenClaw setzt der Adapter `true` und plant den Cron `post-turn-refine` (alle 20 Minuten, FIFO je Agent), weil Plugin-LLM-Aufrufe nach dem Turn sonst abgelehnt werden. Fehlt die Planung (`capabilities.postTurnRefineScheduled`), fällt die Engine auf den Inline-Pfad zurück.
+
+## Registrierungen nachverfolgen (7.18.5)
+
+`runtime.traceRegistrations` (Standard `false`) ist eine Diagnose für openclaw/openclaw#163029. OpenClaw 2026.9.7 lädt das Plugin nach einem Gateway-Start in Wellen mitten im Turn neu, jede Neuladung blockiert den Gateway 40–70 s. Mit `true` schreibt jede Registrierung eine Warnung `register trace #N (uptime …, … after previous)` mit dem Aufruf-Stack ins Gateway-Log. Die Nummer zählt je Prozess, auch über Neuladungen hinweg. Der Stack enthält Dateipfade des Hosts; vor dem Teilen kürzen. Wirkt nach einem Gateway-Neustart; nach dem Einfangen wieder ausschalten.
 
 ## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
 

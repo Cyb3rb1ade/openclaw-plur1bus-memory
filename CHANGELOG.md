@@ -7,6 +7,27 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Ported from 7.18.5–7.18.20
+
+- **7.18.5** — `runtime.traceRegistrations` writes a registration stack to the gateway log (adapter). Contract 1.10.0: additive config keys, no breaking change.
+- **7.18.6** — registration trace keeps 200 frames instead of 60.
+- **7.18.7** — cold-start protection for plugin LLM calls (`lib/llm-warmth.js`).
+- **7.18.8** — feature-cron bootstrap names pending jobs; read timeouts 60 s.
+- **7.18.9** — `setup-feature-crons` leaves the JSON output intact (`exitCode`).
+- **7.18.10** — cron setup `config.get` waits 60 s.
+- **7.18.11** — Obsidian reviews as native crons; review texts in several languages.
+- **7.18.12** — evening review shows the daily note, dreams and knowledge files.
+- **7.18.13** — evening review checks the dream diary against REM and shows the KNOWLEDGE backlog.
+- **7.18.14** — light dream and episode extraction enqueue from capture; cron `post-turn-refine` drains the queue every 20 minutes. `runtime.deferPostTurnLlm=false` restores the inline path.
+- **7.18.15** — `dreaming.narrative.diaryFromUserChats` (default false) writes light-dream narratives from identified user chats into `DREAMS.md`.
+- **7.18.16** — Recall injects stored full text of the top records (`recall.fullTextTopRecords` default 3, `recall.fullTextMaxChars` default 2000) and marks truncated records; `/plur1bus enable|disable` passes remaining tokens as the feature name.
+- **7.18.17** — Recall prefers the original stored row over its chunk parts (`dedupResults` replaces parts with the whole at the same place).
+- **7.18.18** — `captureChunkingMode: "automatisch"` lets Jev decide per message whether to store the whole row, only parts, or both; dashboard switch offers Automatic (Jev).
+- **7.18.19** — Host recovery and routing notices (gateway restart, queued user message, inter-session routing, `⟦openclaw:ctx⟧`) are not captured as user memories.
+- **7.18.20** — Group messages that look like another bot's visible reasoning (`🧠`, `<think>`, …) are claimed without a reply (`groupReasoningFilter`).
+- Native feature-cron delivery lookup matches Windows runner paths (`\run-feature-cron.mjs`) and review commands (`/plur1bus obsidian …-review`).
+- Review of the port: engine `runtime.deferPostTurnLlm` defaults to false (inline); the OpenClaw adapter sets true and `postTurnRefineScheduled`. Adapter-only keys `runtime.traceRegistrations` and `groupReasoningFilter` stay out of the engine schema. Native review-cron builders live in the adapter so the engine graph does not load `feature-cron-native`. Queued post-turn work is not purged on `/forget` (follow-up).
+
 ### Hinzugefügt
 
 - **Eingefrorener Engine-Vertrag** in `types/engine.d.ts` (Contract 1.2.0,

@@ -11,6 +11,7 @@ import {
   resolveFeatureLlmRoute,
   errorHint,
 } from "../lib/llm-router.js";
+import { isWarm, markCold, markWarm, warmthKey } from "../lib/llm-warmth.js";
 
 function createLogger() {
   const calls = [];
@@ -776,6 +777,8 @@ test("native timeout aborts the request and clears its timer", async () => {
 });
 
 test("native timeout settles even when the runtime ignores abort", async () => {
+  // Warm key: the host call shares the caller's abort (cold keys: see the cold-start tests).
+  markWarm(warmthKey("agent-a", undefined));
   let receivedSignal;
   const route = resolveFeatureLlmRoute({}, {
     feature: "recall-query",
@@ -849,6 +852,8 @@ test("a pre-aborted caller starts neither native nor direct transport", async ()
 });
 
 test("caller cancellation aborts native dispatch and removes its listener after settlement", async () => {
+  // Warm key: the host call shares the caller's abort (cold keys: see the cold-start tests).
+  markWarm(warmthKey("agent-a", undefined));
   const logger = createLogger();
   const timer = createTimerHarness();
   const caller = createInspectableCallerSignal();
@@ -891,6 +896,8 @@ test("caller cancellation aborts native dispatch and removes its listener after 
 });
 
 test("native success removes the caller abort listener and timer", async () => {
+  // Warm key: exactly one caller listener (cold keys add the cold-start forwarder).
+  markWarm(warmthKey(undefined, undefined));
   const caller = createInspectableCallerSignal();
   const timer = createTimerHarness();
   const route = resolveFeatureLlmRoute({}, {
@@ -1115,4 +1122,58 @@ test("defaultModel: eigener Transport wird nicht mit fremdem Modell ueberschrieb
   const cfg = withFeatureDefault(
     { baseUrl: "https://example.invalid", model: "eigenes-modell" }, "anthropic/claude-haiku-4-5");
   assert.equal(cfg.model, "eigenes-modell");
+});
+
+test("cold key: the host call outlives the caller's timeout and warms the key", async () => {
+  markCold(warmthKey("agent-cold", undefined));
+  let receivedSignal;
+  let finishHost;
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "skill-miner",
+    runtimeLlm: {
+      complete(params) {
+        receivedSignal = params.signal;
+        return new Promise((resolve) => { finishHost = resolve; });
+      },
+    },
+    logger: createLogger(),
+  });
+
+  const outcome = await completeFeatureLlm([], route, { agentId: "agent-cold", timeoutMs: 15 });
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.error.name, "TimeoutError");
+  assert.equal(receivedSignal.aborted, false, "the host keeps building after the caller gave up");
+  assert.equal(isWarm(warmthKey("agent-cold", undefined)), false);
+  finishHost({ text: "late", provider: "anthropic", model: "m", agentId: "agent-cold" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(isWarm(warmthKey("agent-cold", undefined)), true, "the finished host call warms the key");
+  markCold(warmthKey("agent-cold", undefined));
+});
+
+test("warm key that times out turns cold again", async () => {
+  const key = warmthKey("agent-evicted", undefined);
+  markWarm(key);
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "episode-extraction",
+    runtimeLlm: { complete: () => new Promise(() => {}) },
+    logger: createLogger(),
+  });
+  const outcome = await completeFeatureLlm([], route, { agentId: "agent-evicted", timeoutMs: 15 });
+  assert.equal(outcome.status, "failed");
+  assert.equal(isWarm(key), false);
+});
+
+test("a successful call warms its key", async () => {
+  const key = warmthKey("agent-ok", undefined);
+  markCold(key);
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "conversation-insights",
+    runtimeLlm: { complete: async () => ({ text: "ok", provider: "p", model: "m", agentId: "agent-ok" }) },
+    logger: createLogger(),
+  });
+  const outcome = await completeFeatureLlm([], route, { agentId: "agent-ok", timeoutMs: 1000 });
+  assert.equal(outcome.status, "ok");
+  assert.equal(isWarm(key), true);
+  markCold(key);
 });

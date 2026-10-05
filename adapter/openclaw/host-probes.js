@@ -16,7 +16,7 @@ import { readJsonSafe, writeJsonAtomic } from "../../lib/atomic-file.js";
 import { runtimeIfUsable } from "../../lib/runtime-shutdown.js";
 import { withTimeout } from "../../lib/with-timeout.js";
 import { planUnsafeDirectCronDisables } from "../../lib/setup/feature-cron-plan.js";
-import { shouldRunCronBootstrap } from "../../lib/setup/feature-cron-bootstrap.js";
+import { describeFeatureCronBootstrapResult, shouldRunCronBootstrap } from "../../lib/setup/feature-cron-bootstrap.js";
 import { PLUGIN_ROOT, PLUGIN_VERSION } from "../../lib/plugin-meta.js";
 import { featureCronsMarkerPath, parseFeatureCronBootstrapLastPlanCreateCount, resetFeatureCronsHintCache } from "../../lib/feature-crons-hint.js";
 
@@ -221,6 +221,10 @@ async function runDeferredFeatureCronBootstrap(api, {
       api.logger?.info?.(
         `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
       );
+      if (lastPlanCreateCount > 0) {
+        const detail = describeFeatureCronBootstrapResult(parsedResult);
+        if (detail) api.logger?.info?.(`plur1bus-feature-crons: pending ${detail}`);
+      }
     } else {
       api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap attempt failed");
     }

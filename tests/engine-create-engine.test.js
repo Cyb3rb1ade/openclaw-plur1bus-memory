@@ -40,7 +40,7 @@ describe("createEngine", () => {
     const internals = internalsOf(engine);
     assert.equal(typeof internals.pool.withDb, "function");
     assert.equal(typeof internals.runPlur1busCommand, "function", "the command runner is built without a registerCommand host");
-    assert.equal(internals.jobs.list().length, 18);
+    assert.equal(internals.jobs.list().length, 19);
     await engine.close({ budgetMs: 5_000 });
   });
 
