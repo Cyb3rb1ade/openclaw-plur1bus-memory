@@ -10,6 +10,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 ### Fixed
 
 - `lib/registry-lock.js`: the tombstone-registry lock now carries an ownership nonce. Release only removes a lock that still holds our nonce (rename-aside, no check-then-unlink race), and a live holder is no longer reaped after 10 s: stale = age > `staleMs` and (holder pid dead or age > 10 × `staleMs`).
+- Lock audit N1: the same ownership protocol now covers every other file lock that released by unconditional delete or reaped a live holder by age alone. `lib/registry-lock.js` exports `tryAcquireOwnedLock` (non-blocking, returns a handle whose `release()` only removes our own lock). `lib/job-lock.js` (cron jobs, config lock, post-turn drain), the knowledge-pending lock and the `knowledge_update` lock use it; a refused `knowledge_update` acquire no longer unlinks the other holder's lock in its `finally`. `lib/proactive-governor.js` releases and reclaims via rename-aside + re-check instead of check-then-unlink. The neo workspace write lock (`.neo-write.lock` directory) carries a nonce in `owner.json`, releases only its own lock, re-verifies a takeover on a moved-aside name, and no longer reaps a live holder before 10 × `NEO_LOCK_STALE_MS`.
 
 ### Ported from 7.18.5–7.18.20
 
