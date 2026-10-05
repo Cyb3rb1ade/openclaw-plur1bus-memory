@@ -17,7 +17,7 @@
  */
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./helpers/run-sync.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,13 +39,14 @@ function tempDir(t) {
 describe("K4 repair-tombstones — fail-closed wie reapply", () => {
   function runRepair(home, extraArgs = []) {
     try {
-      const stdout = execFileSync(process.execPath, [REPAIR_SCRIPT, ...extraArgs], {
+      const stdout = execFileSyncBounded(process.execPath, [REPAIR_SCRIPT, ...extraArgs], {
         encoding: "utf8",
         env: { ...process.env, OPENCLAW_HOME: home },
         timeout: 60_000,
       });
       return { code: 0, report: JSON.parse(stdout) };
     } catch (err) {
+      if (err.code === "ETIMEDOUT") throw err; // bounded child timed out: fail loudly
       return { code: err.status ?? 1, report: JSON.parse(String(err.stdout || "{}")) };
     }
   }

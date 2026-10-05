@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +18,7 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 const SCRIPTS = fileURLToPath(new URL("../scripts", import.meta.url));
 
 function run(script, args, env = {}) {
-  const result = spawnSync(process.execPath, [join(SCRIPTS, script), ...args], {
+  const result = spawnSyncBounded(process.execPath, [join(SCRIPTS, script), ...args], {
     encoding: "utf8",
     env: { ...process.env, ...env },
   });

@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./helpers/run-sync.js";
 import { mkdirSync } from "node:fs";
 import { join, win32 } from "node:path";
 import { userInfo } from "node:os";
@@ -174,7 +174,7 @@ describe("readDirectoryAcl fast path matches PowerShell", {
   }
 
   function icacls(args) {
-    execFileSync("icacls.exe", args, { stdio: "ignore", windowsHide: true });
+    execFileSyncBounded("icacls.exe", args, { stdio: "ignore", windowsHide: true });
   }
 
   function powershellAcl(dir) {
@@ -186,7 +186,7 @@ describe("readDirectoryAcl fast path matches PowerShell", {
         if (!String(file).toLowerCase().includes("powershell")) {
           throw Object.assign(new Error("forced powershell path"), { status: 1 });
         }
-        return execFileSync(file, args, options);
+        return execFileSyncBounded(file, args, options);
       },
     });
   }
@@ -258,7 +258,7 @@ describe("readDirectoryAcl fast path matches PowerShell", {
       "$sd.SetSecurityDescriptorSddlForm(($sd.GetSecurityDescriptorSddlForm('Owner') + 'D:NO_ACCESS_CONTROL'))",
       "[System.IO.Directory]::SetAccessControl($p, $sd)",
     ].join("\n"), "utf16le").toString("base64");
-    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {
+    execFileSyncBounded("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {
       env: { ...process.env, PLUR1BUS_ACL_PATH: dir },
       windowsHide: true,
       timeout: 60_000,

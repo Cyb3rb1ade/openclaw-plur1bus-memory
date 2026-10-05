@@ -12,7 +12,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./helpers/run-sync.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,7 +34,7 @@ function makeTable(base, agentDir, manifestCount) {
 // `homedir()/.openclaw-backups` an. Ohne diese Isolation schreiben Testläufe in
 // das echte Backup-Verzeichnis des Hosts.
 function run(base, extraArgs = []) {
-  return execFileSync(process.execPath, [SCRIPT, "--db-path", base, ...extraArgs], {
+  return execFileSyncBounded(process.execPath, [SCRIPT, "--db-path", base, ...extraArgs], {
     encoding: "utf8",
     // USERPROFILE: os.homedir() reads it instead of HOME on win32.
     env: { ...process.env, HOME: base, USERPROFILE: base },

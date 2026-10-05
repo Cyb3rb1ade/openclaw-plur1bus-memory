@@ -5,7 +5,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ function fixture(prefix, { git }) {
 function runPostinstall(fx, env) {
   const clean = { ...process.env };
   for (const k of ["CI", "INIT_CWD", "PLUR1BUS_SETUP_CRONS", "npm_lifecycle_event"]) delete clean[k];
-  return spawnSync(process.execPath, [join(fx.pkg, "scripts", "setup-feature-crons.mjs")], {
+  return spawnSyncBounded(process.execPath, [join(fx.pkg, "scripts", "setup-feature-crons.mjs")], {
     encoding: "utf8",
     timeout: 20_000,
     env: { ...clean, PATH: `${fx.bin}:${dirname(process.execPath)}`, npm_lifecycle_event: "postinstall", ...env },

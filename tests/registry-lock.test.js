@@ -7,7 +7,8 @@
  */
 
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import { existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,7 +172,7 @@ describe("withRegistryLock", () => {
     it("reapt einen veralteten Lock eines toten Prozesses", T, (t) => {
       const dir = tempDir(t);
       const lockPath = join(dir, "registry.lock");
-      const deadPid = spawnSync(process.execPath, ["-e", ""]).pid; // beendet und eingesammelt
+      const deadPid = spawnSyncBounded(process.execPath, ["-e", ""]).pid; // beendet und eingesammelt
       writeFileSync(lockPath, JSON.stringify({ nonce: "tot", pid: deadPid, acquiredAt: "x" }));
       ancientBy(lockPath, 5_000); // > staleMs, < Ceiling → nur wegen toter pid veraltet
 
@@ -181,7 +182,7 @@ describe("withRegistryLock", () => {
 
     it("reapt einen frischen Lock eines toten Prozesses nicht (age <= staleMs)", T, (t) => {
       const lockPath = join(tempDir(t), "registry.lock");
-      const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+      const deadPid = spawnSyncBounded(process.execPath, ["-e", ""]).pid;
       writeFileSync(lockPath, JSON.stringify({ nonce: "tot", pid: deadPid, acquiredAt: "x" }));
 
       assert.throws(
@@ -228,7 +229,7 @@ describe("withRegistryLock", () => {
     });
 
     it("sweept ein beiseitegelegtes Leftover eines toten Prozesses", T, (t) => {
-      const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+      const deadPid = spawnSyncBounded(process.execPath, ["-e", ""]).pid;
       assert.equal(existsSync(sweepWithLeftover(t, deadPid)), false);
     });
 
