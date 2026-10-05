@@ -7,6 +7,7 @@
 
 import { createEmbeddingCache } from "../../lib/embedding-cache.js";
 import { getOpenAI } from "../store/lancedb-loader.js";
+import { createProviderHttpError, sanitizeProviderSdkError } from "../../lib/provider-error.js";
 
 // ============================================================================
 // Legacy Reranker — Cohere Rerank API v2 (kept for old local test imports)
@@ -38,8 +39,8 @@ class Reranker {
     });
 
     if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Cohere rerank failed (${response.status}): ${err}`);
+      const body = await response.text().catch(() => "");
+      throw createProviderHttpError("Cohere rerank failed", response.status, body);
     }
 
     const data = await response.json();
@@ -96,7 +97,7 @@ class Embeddings {
       logger?.info?.(`memory-lancedb-namespaced: model '${this.model}' yields ${this._detectedDim}-dim vectors`);
       return this._detectedDim;
     } catch (e) {
-      throw new Error(`Cannot determine embedding dimension for '${this.model}' (${e.message}). Please set 'dimensions' explicitly in openclaw.json.`);
+      throw new Error(`Cannot determine embedding dimension for '${this.model}' (${sanitizeProviderSdkError(e, "embedding")?.message}). Please set 'dimensions' explicitly in openclaw.json.`);
     }
   }
 
@@ -191,9 +192,9 @@ class Embeddings {
         return vector;
       } catch (fallbackErr) {
         // Both failed — throw original error for clarity
-        throw lastErr;
+        throw sanitizeProviderSdkError(lastErr, "embedding");
       }
     }
-    throw lastErr;
+    throw sanitizeProviderSdkError(lastErr, "embedding");
   }
 }
