@@ -1105,7 +1105,7 @@ The two configuration views have separate roles: `sourceConfig` alone controls e
 
 Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
 
-- **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`).
+- **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`). It is skipped in a development checkout: when `npm ci`/`npm install` runs in the repository itself (`INIT_CWD` is the package root and a `.git` entry exists there, so also in worktrees) the script prints `[setup-feature-crons] skipped: development checkout` and never calls `openclaw`. It is also skipped when `CI=true`. Set `PLUR1BUS_SETUP_CRONS=1` to run it anyway (manual tests). Installs as a dependency or from the unpacked package are unaffected, as are gateway startup and `/plur1bus setup crons`. When working on the repo, still prefer `npm ci --ignore-scripts`.
 - **Gateway startup (deferred bootstrap)** — runtime registration verifies the
   public Gateway method, CLI, and command dispatcher exactly once. A
   `gateway_start` handler schedules a bounded reconciliation after the gateway
