@@ -83,7 +83,7 @@ test("finds the push target in the agent's own classify-recent cron and the bot 
     job("main", "classify-recent", "10000002"),
     job("main", "afterthought", "999"),
     job("bernhardine", "classify-recent", "10000003"),
-    job("heisenberg", "classify-recent", "2048378590", { enabled: false }),
+    job("heisenberg", "classify-recent", "10000004", { enabled: false }),
   ];
   assert.deepEqual(findFeatureCronDelivery(jobs, "main", "classify-recent"), { channel: "telegram", to: "10000002" });
   assert.deepEqual(findFeatureCronDelivery(jobs, "bernhardine", "classify-recent"), { channel: "telegram", to: "10000003" });

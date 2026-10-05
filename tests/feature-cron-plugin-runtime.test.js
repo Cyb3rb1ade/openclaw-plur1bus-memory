@@ -120,14 +120,14 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     let output = "";
     const reply = await executePluginCommandCli({
       agentId: "main",
-      sessionKey: "agent:main:telegram:default:direct:55736530",
+      sessionKey: "agent:main:telegram:default:direct:10000002",
       command: "/plur1bus_status",
       callGateway: async (...args) => { calls.push(args); return { reply: { text: "Status: ok" } }; },
       write: (chunk) => { output += chunk; },
     });
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], PLUGIN_COMMAND_GATEWAY_METHOD);
-    assert.deepStrictEqual(calls[0][2], { agentId: "main", sessionKey: "agent:main:telegram:default:direct:55736530", command: "/plur1bus_status" });
+    assert.deepStrictEqual(calls[0][2], { agentId: "main", sessionKey: "agent:main:telegram:default:direct:10000002", command: "/plur1bus_status" });
     assert.deepStrictEqual(calls[0][3], { progress: false, scopes: ["operator.write"] });
     assert.deepStrictEqual(reply, { text: "Status: ok" });
     assert.equal(output, "Status: ok\n");
@@ -193,13 +193,13 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
             agentId: "main",
             enabled: true,
             payload: { kind: "command", argv: ["/usr/bin/node", "/opt/x/scripts/run-feature-cron.mjs", "--agent", "main", "--feature", "classify-recent"] },
-            delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+            delivery: { mode: "announce", channel: "telegram", to: "10000002" },
           }];
         },
       },
     };
     await handler({ params: { agentId: "main", feature: "classify-recent" }, respond: responseCapture().respond, context });
-    assert.deepStrictEqual(await seen[0].resolveCronDelivery(), { channel: "telegram", to: "55736530" });
+    assert.deepStrictEqual(await seen[0].resolveCronDelivery(), { channel: "telegram", to: "10000002" });
   });
 
   // Ohne workspaceDir uebersprang afterthought sich bei jedem Cron-Lauf still

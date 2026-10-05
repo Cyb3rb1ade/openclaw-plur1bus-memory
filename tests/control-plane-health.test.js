@@ -305,7 +305,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
   });
 
   it("drops only the unsupported partition id and still counts its siblings", async () => {
-    // The directory filter admits "_internal" and "55736530"; the public-id
+    // The directory filter admits "_internal" and "10000002"; the public-id
     // contract does not. One such name must not discard the whole root.
     const scan = createControlPlaneHealthScan({
       namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
@@ -315,7 +315,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
       maxPartitions: 8,
       listPartitions: async ({ kind }) => ({
         agent: ["_internal", "agent-a", "agent-b"],
-        user: ["55736530", "u-0123456789abcdef"],
+        user: ["10000002", "u-0123456789abcdef"],
       })[kind],
       inspectRows: async ({ kind, partitionId }) => ({
         "agent:agent-a": 3,
@@ -332,7 +332,7 @@ describe("PLUR1BUS control-plane health inspector", () => {
         { id: "shared-users", dimensions: 768, rows: 1 },
       ],
       cards: {
-        // The dropped id "55736530" sits in the user root; the agent listing is
+        // The dropped id "10000002" sits in the user root; the agent listing is
         // untouched, so the agent inventory is still vouched for.
         largestAgentCards: 5,
         byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
@@ -387,8 +387,8 @@ describe("PLUR1BUS control-plane health inspector", () => {
 
     it("keeps its answer when a name only the public contract rejects is dropped", async () => {
       const snapshot = await scanWith({
-        listPartitions: async () => ["agent-a", "55736530"],
-        inspectRows: rowsByName({ "agent-a": 3, 55736530: 900 }),
+        listPartitions: async () => ["agent-a", "10000002"],
+        inspectRows: rowsByName({ "agent-a": 3, 10000002: 900 }),
       });
       assert.deepStrictEqual(snapshot.cards.byAgent, [{ id: "agent-a", cards: 3 }]);
       assert.equal(snapshot.cards.largestAgentCards, 900, "GC bereinigt es, also zaehlt es — sperren waere falsch");

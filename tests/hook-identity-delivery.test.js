@@ -33,7 +33,7 @@ const routingCapability = Object.freeze({
   },
 });
 
-const SESSION_KEY = "agent:main:telegram:default:direct:55736530";
+const SESSION_KEY = "agent:main:telegram:default:direct:10000002";
 
 function registryWithDispatch() {
   const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
@@ -41,11 +41,11 @@ function registryWithDispatch() {
     runId: "run-a",
     sessionKey: SESSION_KEY,
     originatingChannel: "telegram",
-    originatingTo: "55736530",
+    originatingTo: "10000002",
     originatingAccountId: "default",
     ctx: {
-      AgentId: "main", SessionKey: SESSION_KEY, AccountId: "default", SenderId: "55736530",
-      Provider: "telegram", ChatId: "55736530", OriginatingTo: "55736530", CommandBody: "ordinary message",
+      AgentId: "main", SessionKey: SESSION_KEY, AccountId: "default", SenderId: "10000002",
+      Provider: "telegram", ChatId: "10000002", OriginatingTo: "10000002", CommandBody: "ordinary message",
     },
   }), undefined);
   return registry;
@@ -54,8 +54,8 @@ function registryWithDispatch() {
 function hookCtx(workspaceDir, extra = {}) {
   return {
     runId: "run-a", agentId: "main", sessionKey: SESSION_KEY, sessionId: "session-a", workspaceDir,
-    messageProvider: "telegram", senderId: "55736530", chatId: "55736530",
-    channelContext: { sender: { id: "55736530" }, chat: { id: "55736530" } },
+    messageProvider: "telegram", senderId: "10000002", chatId: "10000002",
+    channelContext: { sender: { id: "10000002" }, chat: { id: "10000002" } },
     ...extra,
   };
 }
@@ -67,9 +67,9 @@ function deliveryEntry() {
     chatType: "direct",
     delivery: {
       kind: "external",
-      route: { channel: "telegram", accountId: "default", target: { to: "telegram:55736530" } },
-      context: { channel: "telegram", to: "telegram:55736530", accountId: "default" },
-      origin: { provider: "telegram", to: "telegram:55736530", accountId: "default", chatType: "direct", surface: "telegram", from: "telegram:55736530" },
+      route: { channel: "telegram", accountId: "default", target: { to: "telegram:10000002" } },
+      context: { channel: "telegram", to: "telegram:10000002", accountId: "default" },
+      origin: { provider: "telegram", to: "telegram:10000002", accountId: "default", chatType: "direct", surface: "telegram", from: "telegram:10000002" },
     },
   };
 }

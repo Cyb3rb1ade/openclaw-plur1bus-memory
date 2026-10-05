@@ -288,11 +288,11 @@ describe("Obsidian vault operator CLI", () => {
     clis[0].builder({ program });
     assert.equal(state.name, OBSIDIAN_VAULT_CLI_COMMAND);
 
-    await state.action("use", { session: "agent:heisenberg:telegram:heisenberg:direct:2048378590", path: "/vaults/h" });
+    await state.action("use", { session: "agent:heisenberg:telegram:heisenberg:direct:10000004", path: "/vaults/h" });
     const [method, opts, params, extra] = calls.at(-1);
     assert.equal(method, OBSIDIAN_VAULT_GATEWAY_METHODS.prepare);
     assert.equal(opts.json, true, "the host prints progress unless json is requested");
-    assert.deepEqual(params, { session: "agent:heisenberg:telegram:heisenberg:direct:2048378590", vaultPath: "/vaults/h", create: false });
+    assert.deepEqual(params, { session: "agent:heisenberg:telegram:heisenberg:direct:10000004", vaultPath: "/vaults/h", create: false });
     assert.deepEqual(extra, { progress: false, scopes: ["operator.write"] });
     assert.match(out.at(-1), /"callbackData": "cb-1"/, "the result is written, the host does not print return values");
 

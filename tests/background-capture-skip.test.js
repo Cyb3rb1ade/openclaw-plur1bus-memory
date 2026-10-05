@@ -46,7 +46,7 @@ describe("shouldSkipAutoCaptureForInternalTurn", () => {
   it("skips OpenClaw active-memory child sessions", () => {
     assert.strictEqual(
       shouldSkipAutoCaptureForInternalTurn({}, {
-        sessionKey: "agent:bernhardine:telegram:bernhardine:direct:1211667028:active-memory:ffe3629431db",
+        sessionKey: "agent:bernhardine:telegram:bernhardine:direct:10000003:active-memory:aaaaaaaaaaaa",
       }),
       true,
     );

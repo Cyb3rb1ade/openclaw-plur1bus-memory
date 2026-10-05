@@ -32,10 +32,10 @@ describe("process singletons", () => {
     const gatewayInstance = getSharedMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
     const runInstance = getSharedMemoryTurnRouteRegistry({ routingCapability, logger: { warn() {} } });
     assert.equal(gatewayInstance, runInstance);
-    const SESSION_KEY = "agent:main:telegram:default:direct:55736530";
+    const SESSION_KEY = "agent:main:telegram:default:direct:10000002";
     gatewayInstance.observeReplyDispatch({
-      sessionKey: SESSION_KEY, originatingChannel: "telegram", originatingTo: "55736530", originatingAccountId: "default",
-      ctx: { AgentId: "main", SessionKey: SESSION_KEY, AccountId: "default", SenderId: "55736530", Provider: "telegram", ChatId: "55736530", OriginatingTo: "55736530", CommandBody: "hallo" },
+      sessionKey: SESSION_KEY, originatingChannel: "telegram", originatingTo: "10000002", originatingAccountId: "default",
+      ctx: { AgentId: "main", SessionKey: SESSION_KEY, AccountId: "default", SenderId: "10000002", Provider: "telegram", ChatId: "10000002", OriginatingTo: "10000002", CommandBody: "hallo" },
     });
     assert.equal(runInstance.pendingCount(), 1);
     const claimed = runInstance.claimForPrompt({ runId: "run-1", sessionKey: SESSION_KEY, sessionId: "s" }, "account-session", () => true);
