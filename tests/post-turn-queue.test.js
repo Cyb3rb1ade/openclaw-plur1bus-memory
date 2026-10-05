@@ -9,7 +9,9 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync 
 import { join } from "node:path";
 import { describe, it, test } from "node:test";
 
+import { createEngine } from "../engine/create-engine.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { createStubHost } from "../lib/host-services.js";
 import {
   POST_TURN_MAX_ATTEMPTS,
   POST_TURN_QUEUE_CAP,
@@ -24,6 +26,7 @@ import {
   POST_TURN_REFINE_UNSCHEDULED_REASON,
   shouldDeferPostTurnLlm,
 } from "../engine/capture/post-turn-work.js";
+import { flatEmbedder } from "./helpers/shared-workspace-engine.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const AGENT = "main";
@@ -127,6 +130,72 @@ describe("shouldDeferPostTurnLlm", () => {
       false,
     );
     assert.match(warnings.join("\n"), new RegExp(POST_TURN_REFINE_UNSCHEDULED_REASON));
+  });
+
+  it("createEngine without postTurnRefineScheduled runs a light dream or episode inline", async () => {
+    const baseDbPath = join(makeTempDir("pt-inline-root-"), "lancedb-namespaced");
+    const purposes = [];
+    const warnings = [];
+    const host = createStubHost({
+      stateDir: makeTempDir("pt-inline-state-"),
+      workspaceDir: async () => makeTempDir("pt-inline-ws-"),
+      logger: { warn: (message) => warnings.push(String(message)) },
+      runtime: {
+        llm: {
+          async complete(params) {
+            const purpose = typeof params?.purpose === "string" ? params.purpose : "";
+            if (purpose) purposes.push(purpose);
+            return { text: "[]", provider: "test", model: "test", usage: {} };
+          },
+        },
+      },
+    });
+    assert.notEqual(host.capabilities?.postTurnRefineScheduled, true);
+    const engine = createEngine(host, {
+      baseDbPath,
+      embedding: { provider: "local-transformers", local: { dimensions: 384 } },
+      autoCapture: true,
+      autoRecall: false,
+      neo: { enabled: true },
+      gc: { enabled: false },
+      obsidianBridge: { enabled: false },
+      merging: { enabled: true },
+      dreaming: { enabled: false },
+      skillMiner: { enabled: false },
+      temporalContext: { enabled: false },
+      conversationReactivationRecall: { enabled: false },
+      reranker: { enabled: false },
+      runtime: { recallTimeoutMs: 10_000, deferPostTurnLlm: true },
+      duplicateThreshold: 1.01,
+    }, { internals: { embeddings: flatEmbedder(), reranker: null } });
+    try {
+      const outcome = await engine.capture({
+        agentId: "agent-a",
+        principal: { agentId: "agent-a", workspace: "workspace:v1:main", channel: "telegram", accountId: "default", chat: { id: "c1", kind: "direct" }, trust: "inferred" },
+        agent: { origin: "user", background: false },
+        messages: [
+          { role: "user", content: "We decided to move the weekly planning meeting to Thursday mornings from now on." },
+          { role: "assistant", content: "Noted: weekly planning moves to Thursday mornings." },
+          { role: "user", content: "Also remember that the release freeze starts two days before every planning meeting." },
+          { role: "assistant", content: "Understood, the release freeze begins two days earlier." },
+        ],
+        sessionKey: "agent:agent-a:main",
+        incognito: false,
+        signal: AbortSignal.timeout(8_000),
+      }).done;
+      assert.ok(outcome.stored >= 1, JSON.stringify(outcome));
+      for (let i = 0; i < 100 && !purposes.includes("conversation-insights") && !purposes.includes("episode-analysis"); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(entryFiles(baseDbPath, "agent-a").length, 0, "must not enqueue post-turn work");
+      assert.match(warnings.join("\n"), new RegExp(POST_TURN_REFINE_UNSCHEDULED_REASON));
+      assert.ok(
+        purposes.includes("conversation-insights") || purposes.includes("episode-analysis"),
+        `inline light dream or episode must call the LLM, got: ${purposes.join(",") || "(none)"}`,
+      );
+    } finally {
+      await engine.close({ budgetMs: 5_000 });
+    }
   });
 });
 
