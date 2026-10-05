@@ -226,7 +226,7 @@ function buildConflictSummaryFromLog(workspaceDir, options = {}) {
       }
       if (record.pending || record.status === "pending") pendingCount++;
     } catch (e) {
-      console.warn("[conflict-summary] malformed line:", e?.message, lines[i].slice(0, 100));
+      console.warn("[conflict-summary] malformed line:", { lineLength: lines[i].length, lineIndex: i });
     }
   }
   return {

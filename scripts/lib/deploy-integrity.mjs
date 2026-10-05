@@ -113,6 +113,7 @@ export const DEPLOY_FILES = [
   "lib/local-model-generation.js",
   "lib/recall-budget.js",
   "lib/with-timeout.js",
+  "lib/log-redact.js",
   "lib/safe-logging.js",
   "lib/llm-call.js",
   "lib/llm-failure.js",
