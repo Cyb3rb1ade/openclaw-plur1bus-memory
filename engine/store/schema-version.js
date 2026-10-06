@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isMemoryOpError, memoryOpError } from "../memory-ops/errors.js";
+import { sweepStaleTmp } from "../../lib/atomic-file.js";
 import { writeTextFsync } from "../../lib/fsync-atomic.js";
 
 /** The schema version this engine build writes. */
@@ -79,7 +80,10 @@ export function writeStoreSchemaMarker(baseDbPath, version, { engineVersion, clo
   // Unique tmp + fsync + rename. Two processes initialising the same brand-new
   // store race here; a lost rename is forgiven when the marker already holds
   // the version this call meant to write (idempotent init).
+  // Orphans of a crashed writer (SIGKILL between temp create and rename).
+  sweepStaleTmp(baseDbPath, "_schema.json");
   writeTextFsync(markerPath, JSON.stringify(payload, null, 2), {
+    mode: 0o666, // umask-governed, as the previous writeFileSync (not forced to 0600)
     acceptExisting: (text) => {
       try { return JSON.parse(text)?.schemaVersion === String(version); } catch { return false; }
     },

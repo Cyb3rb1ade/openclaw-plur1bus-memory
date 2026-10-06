@@ -9,10 +9,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  renameWithWinRetry,
+  renameWithWinRetrySync,
+  sweepStaleTmp,
   uniqueTmpPath,
   writeFileAtomic,
   writeFileAtomicSync,
@@ -65,12 +69,13 @@ function leftoverTmp(dir) {
 
 describe("unique temp names (F1)", () => {
   it("uniqueTmpPath is unique per call, same directory, ends .tmp", () => {
-    const a = uniqueTmpPath("/x/y/file.json");
-    const b = uniqueTmpPath("/x/y/file.json");
+    const target = join(tmpdir(), "x", "y", "file.json");
+    const a = uniqueTmpPath(target);
+    const b = uniqueTmpPath(target);
     assert.notStrictEqual(a, b);
-    assert.strictEqual(dirname(a), "/x/y");
-    assert.match(a, /file\.json\.\d+\.[0-9a-f]{12}\.tmp$/);
-    assert.match(uniqueTmpPath("/x/y/file.json", { hidden: true }), /\/\.file\.json\.\d+\.[0-9a-f]{12}\.tmp$/);
+    assert.strictEqual(dirname(a), dirname(target));
+    assert.match(basename(a), /^file\.json\.\d+\.[0-9a-f]{12}\.tmp$/);
+    assert.match(basename(uniqueTmpPath(target, { hidden: true })), /^\.file\.json\.\d+\.[0-9a-f]{12}\.tmp$/);
   });
 
   it("two child processes initialising the same brand-new store both succeed", { timeout: 60_000 }, async () => {
@@ -111,7 +116,7 @@ describe("unique temp names (F1)", () => {
     const dir = tmpDir();
     const target = join(dir, "a-directory");
     mkdirSync(target);
-    assert.throws(() => writeFileAtomicSync(target, "x"));
+    assert.throws(() => writeFileAtomicSync(target, "x", { winRetryMs: 100 }));
     assert.deepStrictEqual(leftoverTmp(dir), []);
   });
 
@@ -119,7 +124,7 @@ describe("unique temp names (F1)", () => {
     const dir = tmpDir();
     const target = join(dir, "a-directory");
     mkdirSync(target);
-    await assert.rejects(() => writeFileAtomic(target, "x"));
+    await assert.rejects(() => writeFileAtomic(target, "x", { winRetryMs: 100 }));
     const ok = join(dir, "ok.txt");
     assert.strictEqual(await writeFileAtomic(ok, "hello"), true);
     assert.strictEqual(readFileSync(ok, "utf8"), "hello");
@@ -142,6 +147,49 @@ describe("unique temp names (F1)", () => {
     assert.deepStrictEqual(leftoverTmp(dir), []);
   });
 
+  it("win32 rename retry: EPERM/EBUSY/EACCES are retried then succeed; other platforms and codes throw at once", async () => {
+    const flaky = (code, failures) => {
+      let calls = 0;
+      const fn = () => {
+        calls++;
+        if (calls <= failures) throw Object.assign(new Error(code), { code });
+        return "renamed";
+      };
+      return { fn, calls: () => calls };
+    };
+    for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+      const a = flaky(code, 3);
+      assert.strictEqual(renameWithWinRetrySync("a", "b", { platform: "win32", rename: a.fn, maxMs: 5_000 }), "renamed");
+      assert.strictEqual(a.calls(), 4);
+      const b = flaky(code, 3);
+      assert.strictEqual(await renameWithWinRetry("a", "b", { platform: "win32", rename: async () => b.fn(), maxMs: 5_000 }), "renamed");
+    }
+    const posix = flaky("EPERM", 1);
+    assert.throws(() => renameWithWinRetrySync("a", "b", { platform: "linux", rename: posix.fn }), /EPERM/);
+    assert.strictEqual(posix.calls(), 1);
+    const other = flaky("ENOENT", 1);
+    assert.throws(() => renameWithWinRetrySync("a", "b", { platform: "win32", rename: other.fn }), /ENOENT/);
+    assert.strictEqual(other.calls(), 1);
+    const never = flaky("EPERM", 1e9);
+    const t0 = Date.now();
+    assert.throws(() => renameWithWinRetrySync("a", "b", { platform: "win32", rename: never.fn, maxMs: 150 }), /EPERM/);
+    assert.ok(Date.now() - t0 < 5_000, "bounded");
+  });
+
+  it("sweepStaleTmp removes only old orphans of that exact target", () => {
+    const dir = tmpDir();
+    const stale = join(dir, "._schema.json.4242.0123456789ab.tmp");
+    const fresh = join(dir, "._schema.json.4243.abcdef012345.tmp");
+    const other = join(dir, "other.json.4242.0123456789ab.tmp");
+    const marker = join(dir, "_schema.json");
+    for (const f of [stale, fresh, other, marker]) writeFileSync(f, "x");
+    const old = new Date(Date.now() - 3_600_000);
+    utimesSync(stale, old, old);
+    utimesSync(other, old, old);
+    assert.strictEqual(sweepStaleTmp(dir, "_schema.json"), 1);
+    assert.deepStrictEqual(readdirSync(dir).sort(), [basename(fresh), basename(marker), basename(other)].sort());
+  });
+
   it("writeTextAtomic still creates parent dirs and overwrites", () => {
     const dir = tmpDir();
     const p = join(dir, "n", "m", "f.txt");
@@ -155,7 +203,7 @@ describe("regression guard: no fixed `.tmp` sibling names", () => {
   it("source files do not build a shared `<target>.tmp` path", () => {
     const offenders = [];
     const FIXED = /(\+ ?["'`]\.tmp["'`]|\}\.tmp`|["'`]\.tmp["'`])/;
-    const SAFE = /pid|random|uuid|Date\.now|mkstemp|mktemp/i;
+    const SAFE = /pid|random|uuid|Date\.now|mkstemp|mktemp|endsWith\(|extname\(|fixed-tmp-ok/i;
     const walk = (dir) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (entry.name === "node_modules" || entry.name === ".git") continue;

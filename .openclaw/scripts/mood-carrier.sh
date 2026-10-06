@@ -24,7 +24,10 @@ def write_atomic(path, text):
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(tmp, 0o644)
+        # mkstemp makes 0600; restore what open() gave before: 0666 & ~umask
+        um = os.umask(0)
+        os.umask(um)
+        os.chmod(tmp, 0o666 & ~um)
         os.replace(tmp, path)
     except BaseException:
         try: os.unlink(tmp)
@@ -140,9 +143,11 @@ build_mood_block() {
     printf '[%s] mood carrier: state file missing, skip\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$log_file"
     # B-lite: write unknown marker atomically even when no state available
     local mood_tmp
-    mood_tmp=$(mktemp "$workspace_dir/.current-mood.txt.XXXXXX" 2>/dev/null) && {
-      printf 'mood: unknown\nupdated: %s\n' "$(date -Iseconds)" > "$mood_tmp" \
-        && chmod 644 "$mood_tmp" && mv "$mood_tmp" "$mood_file" 2>/dev/null || rm -f "$mood_tmp"
+    # mktemp -u only picks a unique name; noclobber (`set -C`) then creates the
+    # file exclusively with the normal 0666 & ~umask mode, as the old `>` did.
+    mood_tmp=$(mktemp -u "$workspace_dir/.current-mood.txt.XXXXXX" 2>/dev/null) && {
+      ( set -C; printf 'mood: unknown\nupdated: %s\n' "$(date -Iseconds)" > "$mood_tmp" ) 2>/dev/null \
+        && mv "$mood_tmp" "$mood_file" 2>/dev/null || rm -f "$mood_tmp"
     } || true
     return 0
   fi

@@ -5,7 +5,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
@@ -109,6 +109,35 @@ describe("store schema marker (final review)", () => {
     assert.equal(migrator.current(), "0");
     assert.ok(!existsSync(schemaMarkerPath(baseDbPath)), "no marker written");
     assert.ok(!readdirSync(baseDbPath).some((f) => f.endsWith(".tmp")), "no temp file left behind");
+  });
+});
+
+describe("store schema marker (engine wiring)", () => {
+  // A read-only store directory fails the marker write for real. Root ignores
+  // mode bits and Windows ignores chmod, so those runners skip this one; the
+  // clock-injection test above covers the guarded-step mapping everywhere.
+  const canFail = process.platform !== "win32" && !(typeof process.getuid === "function" && process.getuid() === 0);
+  it("engine.admin.migrate answers storage with the fixed message and status keeps the old version", { skip: !canFail }, async () => {
+    const baseDbPath = join(makeTempDir("ess-engine-rofail-"), "lancedb-namespaced");
+    mkdirSync(baseDbPath, { recursive: true });
+    writeFileSync(join(baseDbPath, "some-legacy-file.txt"), "pretend this is an old store");
+    const warnings = [];
+    const logger = { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} };
+    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ess-state-"), logger }), config(baseDbPath));
+    try {
+      chmodSync(baseDbPath, 0o500);
+      await assert.rejects(engine.admin.migrate("0", "1"), (e) => {
+        assert.equal(e.name, "MemoryOpError");
+        assert.equal(e.code, "storage");
+        assert.equal(e.message, "store migration failed");
+        return true;
+      });
+      assert.ok(warnings.some((w) => w.includes("admin.migrate")), "the raw error is logged");
+      assert.deepEqual((await engine.status()).storeSchema, { current: "0", expected: "1" });
+    } finally {
+      chmodSync(baseDbPath, 0o700);
+      await engine.close({ budgetMs: 5_000 });
+    }
   });
 });
 

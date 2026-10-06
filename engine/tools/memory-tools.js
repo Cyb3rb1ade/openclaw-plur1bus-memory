@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkAccess } from "../../lib/acl-middleware.js";
 import { categorizeMemoryWithReason, MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES } from "../../lib/categorize.js";

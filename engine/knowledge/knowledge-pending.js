@@ -5,7 +5,7 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripFrontmatter, withFrontmatter } from "../../lib/frontmatter.js";
 import { LLM_RESULT_CACHE_PURPOSES } from "../../lib/llm-result-cache.js";
