@@ -359,7 +359,8 @@ describe("Engine", () => {
     const host = createStubHost({ stateDir: makeTempDir("ec-state-"), logger: { info() {}, warn: (m) => warned.push(String(m)), error: (m) => warned.push(String(m)), debug() {} } });
     const engine = createEngine(host, config(makeTempDir("ec-db-")), { internals: { embeddings: flatEmbedder(), closeResources: async () => { throw new Error("store refused to close"); } } });
     await engine.close({ budgetMs: 5_000 });
-    assert.ok(warned.some((m) => /store refused to close/.test(m)), "the close failure is logged");
+    assert.ok(warned.some((m) => /close failed/.test(m)), "the close failure is logged");
+    assert.ok(warned.every((m) => !/store refused to close/.test(m)), "the close error text is redacted");
     const recalled = await engine.recall({ query: "anything at all", principal, agent, signal: AbortSignal.timeout(1_000) });
     assert.equal(recalled.degraded?.reason, "engine-closed");
     const captured = await engine.capture({ agentId: "agent-a", principal, agent, messages: [], incognito: false, signal: AbortSignal.timeout(1_000) }).done;
