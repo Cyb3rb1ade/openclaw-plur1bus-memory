@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "plur1bus-engine-config",
-  "x-contract": "1.12.0",
+  "x-contract": "1.13.0",
   "$defs": {
     "secretInput": {
       "type": [

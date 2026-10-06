@@ -1,6 +1,7 @@
 /**
  * engine/memory-ops/import-lock.js — per-agent writer lock for the apply path
- * of `memory.import` (K1).
+ * of `memory.import` (K1) and of `memory.unimport` (1.13.0): no import and
+ * unimport of one agent run concurrently.
  *
  * `pool.withWriteDb` is a refcount lease, not a mutex, so two imports of one
  * idempotencyKey could both re-check "absent" and both `store()` the same id.
@@ -123,6 +124,13 @@ function lockBusyError(lockPath, timeoutMs) {
   return err;
 }
 
+function lockLostError(lockPath) {
+  const err = new Error("import lock was lost");
+  err.code = "IMPORT_LOCK_LOST";
+  err.lockPath = lockPath;
+  return err;
+}
+
 function abortError() {
   const err = new Error("aborted");
   err.name = "AbortError";
@@ -136,7 +144,8 @@ function abortError() {
  *
  * @param {string} baseDbPath
  * @param {string} agentId
- * @param {(ctx: {heartbeat: () => void}) => Promise<any>} fn
+ * @param {(ctx: {heartbeat: () => void, assertHeld: () => void}) => Promise<any>} fn
+ *   `assertHeld()` throws `code: "IMPORT_LOCK_LOST"` when the lock file no longer carries our nonce.
  * @param {{staleMs?: number, timeoutMs?: number, retryMs?: number, heartbeatMs?: number, signal?: AbortSignal}} [opts]
  * @returns {Promise<any>}
  * @throws {Error} `code: "IMPORT_LOCK_BUSY"` on timeout, an AbortError when
@@ -180,8 +189,21 @@ export async function withImportLock(baseDbPath, agentId, fn, opts = {}) {
       }
     };
 
+    // 1.13.0 fence: `memory.unimport` calls this before every store or ledger
+    // write. A lock file that is gone, unreadable or carries another nonce
+    // means a waiter judged us stale and took over; the holder must stop.
+    const assertHeld = () => {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(readFileSync(lockPath, "utf8"));
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || parsed.nonce !== handle.nonce) throw lockLostError(lockPath);
+    };
+
     try {
-      return await fn({ heartbeat });
+      return await fn({ heartbeat, assertHeld });
     } finally {
       handle.release();
     }
