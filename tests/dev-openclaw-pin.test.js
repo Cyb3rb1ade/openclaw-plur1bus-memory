@@ -33,7 +33,7 @@ test("dev OpenClaw pin is the lowest 2026.8.x with patched undici; build baselin
   assert.equal(packageJson.overrides["fast-uri"], "3.1.8");
   assert.equal(packageJson.overrides.hono, "4.13.7");
   assert.equal(packageJson.overrides["ip-address"], "10.7.1");
-  assert.equal(packageJson.overrides["@huggingface/transformers"].sharp, "0.35.4");
+  assert.equal(packageJson.overrides["@huggingface/transformers"].sharp, "0.35.5");
   assert.equal(lock.packages["node_modules/brace-expansion"].version, "5.0.12");
   assert.equal(lock.packages["node_modules/fast-uri"].version, "3.1.8");
   assert.equal(lock.packages["node_modules/hono"].version, "4.13.7");
