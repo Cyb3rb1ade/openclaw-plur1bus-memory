@@ -5,13 +5,14 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripFrontmatter, withFrontmatter } from "../../lib/frontmatter.js";
 import { LLM_RESULT_CACHE_PURPOSES } from "../../lib/llm-result-cache.js";
 import { tryAcquireOwnedLock } from "../../lib/registry-lock.js";
 import { dbg } from "../runtime/debug-log.js";
 import { callLlm, withDeterministicLlmContext } from "../runtime/llm-calls.js";
+import { writeFileAtomicSync } from "../../lib/atomic-file.js";
 
 // ============================================================================
 // Curation-Log
@@ -119,9 +120,7 @@ function writeKnowledgePendingUnlocked(workspaceDir, state) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const p = join(dir, KNOWLEDGE_PENDING_FILE);
   const normalized = normalizeKnowledgePending(state);
-  const tmpPath = p + ".tmp";
-  writeFileSync(tmpPath, JSON.stringify(normalized, null, 2), "utf8");
-  renameSync(tmpPath, p);
+  writeFileAtomicSync(p, JSON.stringify(normalized, null, 2));
   return normalized;
 }
 
@@ -276,9 +275,7 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
   const finalContent = withFrontmatter(finalBody, { agentId, sourceMemoryIds: mergedSources, today });
 
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
-  const tmpPath = knowledgePath + ".tmp";
-  writeFileSync(tmpPath, finalContent, "utf8");
-  renameSync(tmpPath, knowledgePath);
+  writeFileAtomicSync(knowledgePath, finalContent);
 }
 
 export { appendCurationLog, KNOWLEDGE_LOCK_FILE, readKnowledgePending, readKnowledgePendingSnapshot, trackKnowledgePending, removeKnowledgePending };

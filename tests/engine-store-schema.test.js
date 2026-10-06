@@ -12,6 +12,7 @@ import { createEngine } from "../engine/create-engine.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 import {
+  createStoreMigrator,
   schemaMarkerPath,
   readStoreSchemaVersion,
   writeStoreSchemaMarker,
@@ -92,21 +93,22 @@ describe("store schema marker (final review)", () => {
     writeFileSync(join(baseDbPath, "some-legacy-file.txt"), "pretend this is an old store");
     const warnings = [];
     const logger = { warn: (m) => warnings.push(m), info() {}, debug() {}, error() {} };
-    const engine = createEngine(createStubHost({ stateDir: makeTempDir("ess-state-"), logger }), config(baseDbPath));
-    try {
-      // A directory where the marker's temp file goes: the write fails (even as root).
-      mkdirSync(`${schemaMarkerPath(baseDbPath)}.tmp`);
-      await assert.rejects(engine.admin.migrate("0", "1"), (e) => {
-        assert.equal(e.name, "MemoryOpError");
-        assert.equal(e.code, "storage");
-        assert.equal(e.message, "store migration failed");
-        return true;
-      });
-      assert.ok(warnings.some((w) => w.includes("admin.migrate")), "the raw error is logged");
-      assert.deepEqual((await engine.status()).storeSchema, { current: "0", expected: "1" });
-    } finally {
-      await engine.close({ budgetMs: 5_000 });
-    }
+    // The marker temp file now has a unique name, so a squatting directory can no
+    // longer force a write failure. A raw (non-MemoryOpError) error thrown from
+    // inside the marker write -- here the payload clock, which runs in the same
+    // guarded step as the fs calls -- takes the same path as an fs error.
+    const rawFsError = () => { throw Object.assign(new Error("EACCES: simulated marker write failure"), { code: "EACCES" }); };
+    const migrator = createStoreMigrator({ baseDbPath, logger, engineVersion: "0.0.0-test", clock: rawFsError });
+    await assert.rejects(migrator.migrate("0", "1"), (e) => {
+      assert.equal(e.name, "MemoryOpError");
+      assert.equal(e.code, "storage");
+      assert.equal(e.message, "store migration failed");
+      return true;
+    });
+    assert.ok(warnings.some((w) => w.includes("admin.migrate") && w.includes("EACCES")), "the raw error is logged");
+    assert.equal(migrator.current(), "0");
+    assert.ok(!existsSync(schemaMarkerPath(baseDbPath)), "no marker written");
+    assert.ok(!readdirSync(baseDbPath).some((f) => f.endsWith(".tmp")), "no temp file left behind");
   });
 });
 

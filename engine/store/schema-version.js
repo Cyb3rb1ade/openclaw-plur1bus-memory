@@ -11,9 +11,10 @@
  * `admin.migrate`.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isMemoryOpError, memoryOpError } from "../memory-ops/errors.js";
+import { writeTextFsync } from "../../lib/fsync-atomic.js";
 
 /** The schema version this engine build writes. */
 export const STORE_SCHEMA_VERSION = "1";
@@ -64,20 +65,25 @@ export function readStoreSchemaVersion(baseDbPath, { logger } = {}) {
 }
 
 /**
- * Writes the schema marker atomically (write to a `.tmp` sibling, then
- * rename over the marker path). Creates `baseDbPath` if it does not exist.
+ * Writes the schema marker atomically (unique `.tmp` sibling, fsync, rename
+ * over the marker path, directory fsync). Creates `baseDbPath` if it does not exist.
  */
 export function writeStoreSchemaMarker(baseDbPath, version, { engineVersion, clock = Date.now } = {}) {
   mkdirSync(baseDbPath, { recursive: true });
   const markerPath = schemaMarkerPath(baseDbPath);
-  const tmpPath = `${markerPath}.tmp`;
   const payload = {
     schemaVersion: String(version),
     writtenAt: new Date(clock()).toISOString(),
     engineVersion,
   };
-  writeFileSync(tmpPath, JSON.stringify(payload, null, 2));
-  renameSync(tmpPath, markerPath);
+  // Unique tmp + fsync + rename. Two processes initialising the same brand-new
+  // store race here; a lost rename is forgiven when the marker already holds
+  // the version this call meant to write (idempotent init).
+  writeTextFsync(markerPath, JSON.stringify(payload, null, 2), {
+    acceptExisting: (text) => {
+      try { return JSON.parse(text)?.schemaVersion === String(version); } catch { return false; }
+    },
+  });
   return payload;
 }
 

@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkAccess } from "../../lib/acl-middleware.js";
 import { categorizeMemoryWithReason, MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES } from "../../lib/categorize.js";
@@ -48,6 +48,7 @@ import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../../lib/valid-time.js";
 import { guardWorkspaceTools } from "../../lib/workspace-policy-guard.js";
 import { describeText } from "../../lib/log-redact.js";
+import { writeFileAtomicSync } from "../../lib/atomic-file.js";
 
 /**
  * Build the OpenClaw tool factory from an already-resolved engine context.
@@ -912,9 +913,7 @@ export function createMemoryTools(ctx) {
 
             // Atomic write
             if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
-            const tmpPath = knowledgePath + ".tmp";
-            writeFileSync(tmpPath, finalContent, "utf8");
-            renameSync(tmpPath, knowledgePath);
+            writeFileAtomicSync(knowledgePath, finalContent);
 
             // Pending cleanup: under the KNOWLEDGE lock, briefly re-lock pending,
             // re-read current state, and subtract only successfully integrated keys.
