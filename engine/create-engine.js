@@ -77,6 +77,7 @@ import { createConfiguredSecretInputResolver } from "../lib/providers/secret-inp
 import { createBackgroundMemoryScheduler } from "../lib/runtime-scheduler.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 import { safeDebug, safeWarn } from "../lib/safe-logging.js";
+import { describeError, describeText, redactUrl } from "../lib/log-redact.js";
 import { LLM_ROUTE_KINDS, isLlmRouteAvailable, resolveFeatureLlmRoute } from "../lib/llm-router.js";
 import { LLM_RESULT_CACHE_PURPOSES, createLlmResultCache, withLlmCallContext, withLlmResultCacheContext } from "../lib/llm-result-cache.js";
 import { createLlmFailureRecorder } from "../lib/health-watch.js";
@@ -158,7 +159,7 @@ export function createEngine(host, config, testOptions = {}) {
       try {
         listener(payload);
       } catch (error) {
-        host.logger.debug(`engine listener ${name} failed: ${String(error?.message || error)}`);
+        host.logger.debug(`engine listener ${name} failed: ${describeError(error)}`);
       }
     }
   };
@@ -374,7 +375,7 @@ export function createEngine(host, config, testOptions = {}) {
         baseUrl: normalizedEmbeddingCfg.fallback.baseUrl,
       }
     : null;
-  if (fallbackEmbeddingCfg) host.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl || "openai"})`);
+  if (fallbackEmbeddingCfg) host.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl ? redactUrl(fallbackEmbeddingCfg.baseUrl) : "openai"})`);
   const autoCapture = cfg.autoCapture !== false;
   const autoRecall = cfg.autoRecall !== false;
 
@@ -769,10 +770,10 @@ export function createEngine(host, config, testOptions = {}) {
       } else {
         // Provider-Modell (OpenRouter, etc.) ohne dimensions — hart fail
         throw new Error(
-          `memory-lancedb-namespaced: Modell '${model}' (Provider: ${baseUrl || "?"}) hat keine konfigurierten 'dimensions'. ` +
+          `memory-lancedb-namespaced: Modell '${model}' (Provider: ${baseUrl ? redactUrl(baseUrl) : "?"}) hat keine konfigurierten 'dimensions'. ` +
           `Setze plugins.entries.memory-lancedb-namespaced.config.embedding.dimensions explizit ` +
           `(z.B. 1024 für BAAI/Mistral, 2048 für NVIDIA-Nemotron, 3072 für Gemini). ` +
-          `Test-Call: curl -H "Authorization: Bearer KEY" -d '{"model":"${model}","input":"test","encoding_format":"float"}' ${baseUrl || "https://api.openai.com/v1"}/embeddings ` +
+          `Test-Call: curl -H "Authorization: Bearer KEY" -d '{"model":"${model}","input":"test","encoding_format":"float"}' ${baseUrl ? redactUrl(baseUrl) : "https://api.openai.com/v1"}/embeddings ` +
           `→ data[0].embedding.length lesen.`
         );
       }
@@ -911,7 +912,7 @@ export function createEngine(host, config, testOptions = {}) {
   try {
     hostMemoryConfig = typeof host.runtime?.config?.current === "function" ? host.runtime.config.current() : (host.runtime?.config || {});
   } catch (error) {
-    host.logger.warn(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
+    host.logger.warn(`memory-lancedb-namespaced: account topology snapshot unavailable: ${describeError(error)}`);
   }
   const memoryAccountTopology = buildMemoryAccountTopology(hostMemoryConfig);
   const hostRoutingLoader = createHostRoutingLoader({ logger: host.logger, importRouting: host.routing });
@@ -927,7 +928,7 @@ export function createEngine(host, config, testOptions = {}) {
           turnRouteState.registry = getSharedMemoryTurnRouteRegistry({ routingCapability, logger: host.logger });
           return turnRouteState.registry;
         } catch (error) {
-          host.logger.warn(`memory-lancedb-namespaced: turn route registry unavailable: ${String(error)}`);
+          host.logger.warn(`memory-lancedb-namespaced: turn route registry unavailable: ${describeError(error)}`);
           return null;
         }
       })();
@@ -967,7 +968,7 @@ export function createEngine(host, config, testOptions = {}) {
       }, { workspaceAliases: memoryWorkspaceAliases });
       return workspacePolicyGuard.automatic(memoryCtx);
     } catch (error) {
-      host.logger.debug(`memory-lancedb-namespaced: workspace policy context unavailable: ${String(error)}`);
+      host.logger.debug(`memory-lancedb-namespaced: workspace policy context unavailable: ${describeError(error)}`);
       return { allowed: false, reason: "workspace_identity_required" };
     }
   };
@@ -1363,7 +1364,7 @@ export function createEngine(host, config, testOptions = {}) {
       try {
         syncControlHealthWorkspaceIdentities();
       } catch (error) {
-        host.logger.warn(`memory-lancedb-namespaced: control health workspace identities unavailable: ${error?.message || error}`);
+        host.logger.warn(`memory-lancedb-namespaced: control health workspace identities unavailable: ${describeError(error)}`);
       }
       return controlHealthScan();
     },
@@ -1638,7 +1639,7 @@ export function createEngine(host, config, testOptions = {}) {
       } catch (error) {
         // null is indistinguishable from "no evidence exists", so record
         // that this was a failed read instead.
-        host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
+        host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${describeError(error)}`);
         return null;
       }
     },
@@ -2188,7 +2189,7 @@ export function createEngine(host, config, testOptions = {}) {
         // Rejection beobachten, damit ein Late-Audit-Fehler nicht als
         // unhandled rejection den Prozess beendet; das Settlement bleibt abgelehnt.
         derived.catch((lateErr) => {
-          host.logger.warn(`memory-lancedb-namespaced: memory_forget late settlement audit failed for agent=${agentId} memory=${memoryId}: ${String(lateErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: memory_forget late settlement audit failed for agent=${agentId} memory=${memoryId}: ${describeError(lateErr)}`);
         });
         err.settlement = derived;
         throw err;
@@ -2281,7 +2282,7 @@ export function createEngine(host, config, testOptions = {}) {
       }
       return durableMergeLineage(expectedCandidate).every((marker) => lineage.includes(marker));
     } catch (error) {
-      host.logger.debug(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${String(error)}`);
+      host.logger.debug(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${describeError(error)}`);
       return false;
     }
   }
@@ -2302,14 +2303,14 @@ export function createEngine(host, config, testOptions = {}) {
         // The predecessor already delivered its own failure. Keep the key
         // usable for the next independent attempt and make the continuation
         // visible without propagating the old rejection into the new work.
-        host.logger.debug(`memory-lancedb-namespaced: durable merge predecessor failed for ${queueKey}: ${String(predecessorErr)}`);
+        host.logger.debug(`memory-lancedb-namespaced: durable merge predecessor failed for ${queueKey}: ${describeError(predecessorErr)}`);
       })
       .then(operation);
     const settlementTail = operationPromise.catch(async (error) => {
       const settlement = await waitForTimeoutSettlement(error);
       if (settlement.status === "rejected") {
         host.logger.debug(
-          `memory-lancedb-namespaced: durable merge late settlement failed for ${queueKey}: ${String(settlement.error)}`,
+          `memory-lancedb-namespaced: durable merge late settlement failed for ${queueKey}: ${describeError(settlement.error)}`,
         );
       }
     });
@@ -2319,7 +2320,7 @@ export function createEngine(host, config, testOptions = {}) {
         if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
       },
       (trackingError) => {
-        host.logger.warn(`memory-lancedb-namespaced: durable merge settlement tracking failed for ${queueKey}: ${String(trackingError)}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge settlement tracking failed for ${queueKey}: ${describeError(trackingError)}`);
         if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
       },
     );
@@ -2342,7 +2343,7 @@ export function createEngine(host, config, testOptions = {}) {
       const authoritativeCandidate = await db.getById(candidateId);
       if (!isExpectedMergeCandidate(authoritativeCandidate, selectedCandidate.entry, candidateId, accessCtx)) {
         const staleErr = new Error("merge candidate is stale, no longer active, or no longer authorized");
-        host.logger.warn(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${staleErr.message}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${describeError(staleErr)}`);
         throw staleErr;
       }
 
@@ -2355,12 +2356,12 @@ export function createEngine(host, config, testOptions = {}) {
       try {
         candidateAfterPreparation = await db.getById(candidateId);
       } catch (revalidationErr) {
-        host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(revalidationErr)}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${describeError(revalidationErr)}`);
         throw revalidationErr;
       }
       if (!isExpectedMergeCandidate(candidateAfterPreparation, authoritativeCandidate, candidateId, accessCtx)) {
         const staleErr = new Error("stale merge candidate changed during replacement preparation");
-        host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${staleErr.message}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${describeError(staleErr)}`);
         throw staleErr;
       }
 
@@ -2370,7 +2371,7 @@ export function createEngine(host, config, testOptions = {}) {
       try {
         archivePath = archiveCard(authoritativeCandidate, agentId);
       } catch (archiveErr) {
-        host.logger.warn(`memory-lancedb-namespaced: durable merge archive failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath || "unwritten"}: ${String(archiveErr)}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge archive failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath || "unwritten"}: ${describeError(archiveErr)}`);
         throw archiveErr;
       }
 
@@ -2379,12 +2380,12 @@ export function createEngine(host, config, testOptions = {}) {
         try {
           verifiedReplacement = await db.getById(replacementId);
         } catch (verificationErr) {
-          host.logger.warn(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(verificationErr)}`);
           throw verificationErr;
         }
         if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry, authoritativeCandidate)) {
           const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
-          host.logger.warn(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(verificationErr)}`);
           throw verificationErr;
         }
 
@@ -2392,12 +2393,12 @@ export function createEngine(host, config, testOptions = {}) {
         try {
           candidateBeforeDelete = await db.getById(candidateId);
         } catch (revalidationErr) {
-          host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(revalidationErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(revalidationErr)}`);
           throw revalidationErr;
         }
         if (!isExpectedMergeCandidate(candidateBeforeDelete, authoritativeCandidate, candidateId, accessCtx)) {
           const staleErr = new Error("stale merge candidate changed before original deletion");
-          host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${staleErr.message}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(staleErr)}`);
           throw staleErr;
         }
 
@@ -2416,11 +2417,11 @@ export function createEngine(host, config, testOptions = {}) {
               timestamp: new Date().toISOString(),
             },
             onLateFailure: (lateDeleteError) => {
-              host.logger.warn(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateDeleteError)}`);
+              host.logger.warn(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(lateDeleteError)}`);
             },
           });
         } catch (deleteErr) {
-          host.logger.warn(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(deleteErr)}`);
           throw deleteErr;
         }
         return { ...prepared, authoritativeCandidate, archivePath, idempotencyKey };
@@ -2430,7 +2431,7 @@ export function createEngine(host, config, testOptions = {}) {
       try {
         existingReplacement = await db.getById(replacementId);
       } catch (idempotencyReadError) {
-        host.logger.warn(`memory-lancedb-namespaced: durable merge idempotency read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(idempotencyReadError)}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge idempotency read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${describeError(idempotencyReadError)}`);
         throw idempotencyReadError;
       }
       if (existingReplacement) {
@@ -2448,12 +2449,12 @@ export function createEngine(host, config, testOptions = {}) {
           storeErr.settlement = rawStoreSettlement.then(
             () => finishDurableMerge(),
             (lateStoreError) => {
-              host.logger.warn(`memory-lancedb-namespaced: durable merge late store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateStoreError)}`);
+              host.logger.warn(`memory-lancedb-namespaced: durable merge late store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(lateStoreError)}`);
               throw lateStoreError;
             },
           );
         }
-        host.logger.warn(`memory-lancedb-namespaced: durable merge store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(storeErr)}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(storeErr)}`);
         throw storeErr;
       }
 
@@ -2558,7 +2559,7 @@ export function createEngine(host, config, testOptions = {}) {
           // That is the conservative outcome, and the decision is already durable in the
           // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
           // routine store into an operator alarm -- 192 of them in one seeded run.
-          host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+          host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: ${describeText(params.text)}`);
           addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
         } else {
           if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -2596,7 +2597,7 @@ export function createEngine(host, config, testOptions = {}) {
             prepareReplacement: async (authoritativeCandidate, replacementId) => {
               let mergeResult = null;
               if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
-                host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: new ${describeText(params.text)} vs existing ${describeText(authoritativeCandidate.text)}`);
                 addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
               } else {
                 try {
@@ -2625,7 +2626,7 @@ export function createEngine(host, config, testOptions = {}) {
                 return null;
               }
               if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
-                host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: merged ${describeText(mergeResult.mergedText)}`);
                 addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                 return null;
               }
@@ -2674,7 +2675,7 @@ export function createEngine(host, config, testOptions = {}) {
               maxAffected: riCfg.maxAffected ?? 5,
             }));
           return maintenance.catch((err) => {
-            host.logger.warn("[retroactive-interference] failed", err?.message ?? err);
+            host.logger.warn(`[retroactive-interference] failed ${describeError(err)}`);
           });
         });
       }
@@ -2999,13 +3000,13 @@ export function createEngine(host, config, testOptions = {}) {
           skipped: true,
         });
       } catch (neoErr) {
-        host.logger.warn(`plur1bus-neo: before_prompt_build maintenance tracking failed: ${String(neoErr)}`);
+        host.logger.warn(`plur1bus-neo: before_prompt_build maintenance tracking failed: ${describeError(neoErr)}`);
       }
     }
     // GC: purge expired memories (non-blocking, throttled on hot path)
     if (gcEnabled) {
       pool.withDb(agentId, (db) => db.purgeExpiredThrottled(host.logger)).catch((gcErr) => {
-        host.logger.warn(`memory-lancedb-namespaced: GC purge on internal turn failed: ${String(gcErr)}`);
+        host.logger.warn(`memory-lancedb-namespaced: GC purge on internal turn failed: ${describeError(gcErr)}`);
       });
     }
     return undefined;
@@ -3051,7 +3052,7 @@ export function createEngine(host, config, testOptions = {}) {
       Promise.resolve()
         .then(() => memoryOpsContext.drain())
         .then(() => internals.closeResources())
-        .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${detailOf(error)}`); }),
+        .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${describeError(error)}`); }),
       new Promise((resolve) => {
         const timer = setTimeout(() => {
           host.logger.warn(`plur1bus engine: close exceeded ${budget} ms; resources still closing in the background`);
@@ -3235,6 +3236,7 @@ export function createEngine(host, config, testOptions = {}) {
     vectorDim,
     wikiLlmCfg,
     withDurableMerge,
+    storeMemoryFromToolParams,
     workspacePolicyGuard,
     workspacePolicyStore,
     runPlur1busCommand: runPlur1busCommandWithIdentity,

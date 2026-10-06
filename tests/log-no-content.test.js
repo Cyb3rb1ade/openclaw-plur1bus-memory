@@ -22,6 +22,7 @@ import { createStubHost } from "../lib/host-services.js";
 import { buildConflictSummaryFromLog } from "../engine/commands/command-helpers.js";
 import { createInternalJobBodies } from "../engine/jobs/internal-job-bodies.js";
 import {
+  describeError,
   describeSessionKey,
   describeText,
   summarizeAfterthoughtResultForLog,
@@ -44,6 +45,15 @@ describe("lib/log-redact", () => {
     const out = describeText("zzsecretzz");
     assert.match(out, /^textLen=10 sha=[0-9a-f]{12}$/);
     assert.ok(!out.includes("secret"));
+  });
+
+  it("describeError keeps class and code, not the message body", () => {
+    const err = Object.assign(new Error("secret path /tmp/zzsecretzz"), { name: "Error", code: "ENOENT" });
+    const out = describeError(err);
+    assert.match(out, /^Error code=ENOENT textLen=\d+ sha=[0-9a-f]{12}$/);
+    assert.ok(!out.includes("secret"));
+    assert.ok(!out.includes("/tmp/"));
+    assert.equal(describeError(Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" })).includes("ECONNRESET"), true);
   });
 
   it("describeSessionKey keeps agent, channel and kind but hashes the peer", () => {
