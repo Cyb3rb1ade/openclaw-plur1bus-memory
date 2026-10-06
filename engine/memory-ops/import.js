@@ -58,8 +58,10 @@ export function createMemoryImport({
   flashbulbEncodingEnabled = false,
   summaryMaxWords = 150,
   importLock = {},
+  ledgerSync = {},
 } = {}) {
-  const ledger = createImportLedger({ baseDbPath, logger });
+  // `importLock` (withImportLock opts) and `ledgerSync` ({syncFile, syncDir}) are test seams.
+  const ledger = createImportLedger({ baseDbPath, logger, ...ledgerSync });
 
   async function embedPassages(texts, agentId, signal) {
     if (texts.length === 0) return [];

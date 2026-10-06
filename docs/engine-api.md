@@ -315,11 +315,14 @@ callers are unchanged. The OpenClaw adapter does not have to call them.
   nonce-owned `tryAcquireOwnedLock` file lock; the holder refreshes the
   lock mtime at most every 2 s). Of N concurrent calls with one key exactly one is
   `created`, the others `matched-existing` / `already-imported`; one row.
-  If the lock cannot be acquired within 120 s the pending cards are
-  `rejected` / `storage` (`aborted` if `signal` fires while waiting) and
-  nothing is written. `dryRun` takes no lock.
+  If the lock cannot be acquired within 120 s (one deadline covering the
+  in-process queue wait and the file-lock acquire) the pending cards are
+  `rejected` / `storage` (`aborted` if `signal` fires while waiting, in
+  either phase) and nothing is written. `dryRun` takes no lock.
 - Every ledger append is fsynced; creating the ledger file also fsyncs
-  `_imports/` and `baseDbPath` (no-op on win32). A torn last line is
+  `_imports/` and `baseDbPath` (no-op on win32; best-effort where the
+  filesystem refuses a directory fsync — warned once, the card stays
+  `created`). A torn last line is
   newline-terminated before the next append and skipped on load.
 - A previously imported, since-forgotten card (deleted, archived, superseded,
   or ledger-only after purge) is `rejected` / `previously-imported-deleted`.

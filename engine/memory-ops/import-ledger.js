@@ -70,6 +70,25 @@ function parseLine(line) {
 export function createImportLedger({
   baseDbPath, logger, syncFile = fsyncSync, syncDir = fsyncDirectory,
 } = {}) {
+  let dirSyncWarned = false;
+
+  /**
+   * Directory fsync is best-effort: some filesystems refuse it (EINVAL/ENOTSUP/
+   * EPERM/EISDIR on FUSE, SMB, Docker Desktop bind mounts). The line itself is
+   * already appended and file-fsynced, and the store row (written before the
+   * ledger) is the source of truth, so a refusal must not turn a stored card
+   * into a failure. Warned once per ledger.
+   */
+  function syncDirBestEffort(dir) {
+    try {
+      syncDir(dir);
+    } catch (err) {
+      if (dirSyncWarned) return;
+      dirSyncWarned = true;
+      logger?.warn?.(`memory-ops.import.ledger: directory fsync not supported here (${err?.code || "error"}); continuing without it`);
+    }
+  }
+
   function ensureRoot() {
     const root = importsRoot(baseDbPath);
     if (!existsSync(root)) mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -145,8 +164,8 @@ export function createImportLedger({
       if (created) {
         // New file: make its entry durable in `_imports/`, and `_imports/` in baseDbPath
         // (the root may have been created by the import lock, not by ensureRoot).
-        syncDir(dirname(path));
-        syncDir(dirname(dirname(path)));
+        syncDirBestEffort(dirname(path));
+        syncDirBestEffort(dirname(dirname(path)));
       }
     } catch (err) {
       logger?.warn?.(`memory-ops.import.ledger: append failed for agent '${safeAgentId(agentId)}': ${err?.code || "error"}`);

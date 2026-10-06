@@ -5,13 +5,19 @@
  * `pool.withWriteDb` is a refcount lease, not a mutex, so two imports of one
  * idempotencyKey could both re-check "absent" and both `store()` the same id.
  * This lock serialises the re-check → store → ledger section per agent:
- *  - in-process: a promise-tail mutex keyed by lock path (two engines in one
+ *  - in-process: a FIFO waiter queue keyed by lock path (two engines in one
  *    process on one store share it, and nobody polls the file lock in-process);
  *  - cross-process: `tryAcquireOwnedLock` from lib/registry-lock.js (O_EXCL,
  *    nonce ownership, pid/incarnation-aware staleness), polled asynchronously
  *    so the event loop is not blocked while another process holds it.
+ * One deadline (`timeoutMs`, default 120 s) covers the in-process queue wait
+ * and the file-lock acquire; `signal` is honoured in both. A waiter that times
+ * out or aborts leaves the queue without disturbing the other waiters.
  * The holder refreshes the lock mtime (`heartbeat()`) so a long batch is never
- * judged stale by a waiter while the holder is alive.
+ * judged stale by a waiter while the holder is alive. The heartbeat is
+ * call-driven (import.js calls it once per pending card), not a timer, so it
+ * is not refreshed during a single slow `store()` or the backfill loop; only
+ * foreign-host waiters judge by age, at 10 × staleMs = 300 s.
  *
  * Lock file: `{baseDbPath}/_imports/.locks/<agentId>.lock` (dir 0700). dryRun
  * never takes it, so a dry run creates no directory.
@@ -27,8 +33,14 @@ export const IMPORT_LOCK_TIMEOUT_MS = 120_000;
 const IMPORT_LOCK_RETRY_MS = 25;
 const HEARTBEAT_MIN_INTERVAL_MS = 2_000;
 
-/** In-process tails, keyed by absolute lock path. */
-const tails = new Map();
+/**
+ * In-process queues, keyed by absolute lock path: `{ held, waiters }`.
+ * Invariant: `waiters.length > 0` implies `held`. Release hands the slot to the
+ * first waiter synchronously (no lost wake-up); a waiter that times out or is
+ * aborted removes itself before it can be granted, so it never holds or
+ * releases the slot.
+ */
+const queues = new Map();
 
 /**
  * @param {string} baseDbPath
@@ -43,20 +55,65 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Runs `fn` after every earlier holder of `key` in this process has settled. */
-async function withInProcessMutex(key, fn) {
-  const prev = tails.get(key) ?? Promise.resolve();
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const tail = prev.then(() => gate);
-  tails.set(key, tail);
-  await prev;
-  try {
-    return await fn();
-  } finally {
-    release();
-    if (tails.get(key) === tail) tails.delete(key);
+function releaserFor(key, q) {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = q.waiters.shift();
+    if (next) {
+      next.grant();
+    } else {
+      q.held = false;
+      if (queues.get(key) === q) queues.delete(key);
+    }
+  };
+}
+
+/**
+ * Takes the in-process slot for `key` in FIFO order. Rejects with
+ * IMPORT_LOCK_BUSY at `deadline` or with an AbortError when `signal` aborts,
+ * in both cases leaving the queue intact for the other waiters.
+ * @returns {Promise<() => void>} idempotent release
+ */
+function acquireInProcess(key, { deadline, signal, timeoutMs }) {
+  let q = queues.get(key);
+  if (!q) {
+    q = { held: false, waiters: [] };
+    queues.set(key, q);
   }
+  if (signal?.aborted) return Promise.reject(abortError());
+  if (!q.held) {
+    q.held = true;
+    return Promise.resolve(releaserFor(key, q));
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.reject(lockBusyError(key, timeoutMs));
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      signal?.removeEventListener?.("abort", onAbort);
+    };
+    const drop = (err) => {
+      const idx = q.waiters.indexOf(waiter);
+      if (idx < 0) return; // already granted
+      q.waiters.splice(idx, 1);
+      cleanup();
+      reject(err);
+    };
+    function onAbort() { drop(abortError()); }
+    const waiter = {
+      grant() {
+        cleanup();
+        resolve(releaserFor(key, q));
+      },
+    };
+    q.waiters.push(waiter);
+    timer = setTimeout(() => drop(lockBusyError(key, timeoutMs)), remaining);
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+  });
 }
 
 function lockBusyError(lockPath, timeoutMs) {
@@ -93,17 +150,20 @@ export async function withImportLock(baseDbPath, agentId, fn, opts = {}) {
   const heartbeatMs = Math.max(0, Number(opts.heartbeatMs ?? HEARTBEAT_MIN_INTERVAL_MS));
   const signal = opts.signal;
 
-  return withInProcessMutex(lockPath, async () => {
+  // One deadline covers the in-process queue wait and the file-lock acquire.
+  const deadline = Date.now() + timeoutMs;
+  const releaseInProcess = await acquireInProcess(lockPath, { deadline, signal, timeoutMs });
+  try {
     const dir = dirname(lockPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const deadline = Date.now() + timeoutMs;
     let handle = null;
     for (;;) {
       if (signal?.aborted) throw abortError();
       handle = tryAcquireOwnedLock(lockPath, { staleMs });
       if (handle) break;
-      if (Date.now() >= deadline) throw lockBusyError(lockPath, timeoutMs);
-      await delay(retryMs);
+      const left = deadline - Date.now();
+      if (left <= 0) throw lockBusyError(lockPath, timeoutMs);
+      await delay(Math.min(retryMs, left));
     }
 
     let lastBeat = Date.now();
@@ -125,5 +185,7 @@ export async function withImportLock(baseDbPath, agentId, fn, opts = {}) {
     } finally {
       handle.release();
     }
-  });
+  } finally {
+    releaseInProcess();
+  }
 }
