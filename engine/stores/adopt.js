@@ -26,7 +26,7 @@ import { memoryOpError } from "../memory-ops/errors.js";
 export const ADOPT_PROBE_SIZE = 16;
 export const ADOPT_PROBE_MIN_COSINE = 0.999;
 export const ADOPT_PROBE_MEDIAN_COSINE = 0.9995;
-export const ADOPT_PROBE_MIN_ROWS = 1;
+export const ADOPT_PROBE_MIN_ROWS = 8;
 
 const GENERATIONS_DIR = "generations";
 
@@ -543,8 +543,8 @@ export function createStoreAdopt({
       return incompatible("identity-unverifiable", { storeSchema, identity: engineIdentity, identitySource: identitySource || "probe" });
     }
 
-    const sample = sampleRows(tables, ADOPT_PROBE_SIZE);
-    if (sample.length === 0) {
+    const available = sampleRows(tables, ADOPT_PROBE_SIZE);
+    if (available.length === 0) {
       if (identitySource === "manifest") {
         return { verdict: "ok", dryRun, storeSchema, identity: engineIdentity, identitySource };
       }
@@ -554,6 +554,8 @@ export function createStoreAdopt({
         identitySource: "probe",
       });
     }
+
+    const sample = available;
 
     for (const row of sample) {
       if (row.vector.length !== expectedIdentity.dimensions) {
@@ -588,13 +590,7 @@ export function createStoreAdopt({
     for (let i = 0; i < sample.length; i++) {
       const stored = sample[i].vector;
       const fresh = vectorOf({ vector: reembedded[i] });
-      if (!fresh) {
-        return incompatible("identity-unverifiable", {
-          storeSchema,
-          identity: engineIdentity,
-          identitySource: "probe",
-        });
-      }
+      if (!fresh) continue;
       if (fresh.length !== stored.length) {
         return incompatible("dimension-mismatch", {
           storeSchema,
@@ -602,9 +598,12 @@ export function createStoreAdopt({
           identitySource: "probe",
         });
       }
-      scores.push(cosineSimilarityVec(stored, fresh));
+      const score = cosineSimilarityVec(stored, fresh);
+      if (!Number.isFinite(score)) continue;
+      scores.push(score);
     }
-    const finite = scores.length >= ADOPT_PROBE_MIN_ROWS && scores.every(Number.isFinite);
+    const minRows = Math.min(ADOPT_PROBE_MIN_ROWS, available.length);
+    const finite = scores.length >= minRows && scores.every(Number.isFinite);
     if (!finite) {
       return incompatible("identity-unverifiable", {
         storeSchema,

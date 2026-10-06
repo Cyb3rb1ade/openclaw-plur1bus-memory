@@ -7,6 +7,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock über `tryAcquireOwnedLock` (Nonce, Freigabe nur des eigenen Locks). Ein Claim für einen anderen Nutzer ist `identity-already-bound` und wird nicht gelöscht. `ADOPT_PROBE_MIN_ROWS` verlangt `min(8, vorhanden)` endliche Scores bei bis zu 16 Probe-Zeilen. Package bleibt 7.18.4.
+
 ### Fixed
 
 - Leak audit, remaining items: whole-result job logs (`consolidate-daily`, `classify-recent`, `auto-accept-stale`, `rem-dream`, `skill-miner`, `episodes-rebuild`, `gc-run`, `embedding-drain`, `feedback-report`, `meta-reflect`) now go through the deny-by-default `summarizeJobResultForLog`; recall query refinement, the group-reasoning filter, chat-model session release, skill auto-apply and several error logs no longer print queries, session keys, skill names or raw error messages. Job return values and command replies are unchanged.

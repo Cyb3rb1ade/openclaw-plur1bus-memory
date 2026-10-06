@@ -9,7 +9,7 @@
  */
 
 import { INPUT_LIMITS } from "../../lib/input-limits.js";
-import { listRouteProviders, normalizeChatKind, registerRouteProvider, resolveMemoryRequestContext, validatedIdentity } from "../../lib/memory-request-context.js";
+import { listRouteProviders, normalizeChatKind, registerRouteProvider, resolveMemoryRequestContext, USER_PRINCIPAL_PATTERN, validatedIdentity } from "../../lib/memory-request-context.js";
 import { safeDebug } from "../../lib/safe-logging.js";
 
 export const DEFAULT_CHANNELS = Object.freeze(["telegram", "discord", "slack", "mattermost"]);
@@ -18,7 +18,7 @@ export const DEFAULT_CHANNELS = Object.freeze(["telegram", "discord", "slack", "
 // (stableIdentityHash's sha256 hex digest, lib/memory-request-context.js);
 // nothing else is a proof of anything, and trusting it verbatim would let a
 // forged Principal name any pool it likes.
-const USER_PRINCIPAL_FORMAT = /^user:v1:[0-9a-f]{64}$/;
+const USER_PRINCIPAL_FORMAT = USER_PRINCIPAL_PATTERN;
 
 // The contract's ChatKind (direct | dm | group | channel) and the lib's
 // request-context vocabulary (private | group, anything else "unknown")
