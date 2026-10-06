@@ -143,6 +143,27 @@ describe("Engine.stores.adopt", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
+  it("a 20-row store with 8 finite re-embeds is ok", { timeout: 60_000 }, async () => {
+    const baseDbPath = freshBaseDbPath("adopt-8fin-");
+    const seeder = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-8fin-seed-") }),
+      config(baseDbPath),
+      { internals: { embeddings: embedder(0) } },
+    );
+    await seed(seeder, "agent-a", 20);
+    const identity = seeder.embedding.identities()[0];
+    await seeder.close({ budgetMs: 5_000 });
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("adopt-8fin-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: partialFiniteEmbedder(8) } },
+    );
+    const result = await engine.stores.adopt({ path: baseDbPath, expectedIdentity: identity });
+    assert.equal(result.verdict, "ok");
+    assert.equal(result.identitySource, "probe");
+    await engine.close({ budgetMs: 5_000 });
+  });
+
   it("a different model with the same dimension is identity-mismatch", async () => {
     const root = makeTempDir("adopt-mm-root-");
     const baseDbPath = join(root, "lancedb-namespaced");

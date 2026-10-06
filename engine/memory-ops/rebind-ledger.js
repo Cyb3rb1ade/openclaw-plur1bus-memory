@@ -363,6 +363,7 @@ export function createRebindLedger({
   }
 
   function releaseClaimIfFree(fromOwner) {
+    assertLockHeld();
     const still = listApplied().some((rec) => rec.header.fromOwner === fromOwner);
     if (still) return;
     try {
@@ -468,6 +469,7 @@ export function createRebindLedger({
     readClaim,
     writeClaim,
     releaseClaimIfFree,
+    assertLockHeld,
     withLock,
   };
 }

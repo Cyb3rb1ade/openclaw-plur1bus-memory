@@ -5,7 +5,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
@@ -16,7 +17,7 @@ import {
   harnessUserPrincipal,
 } from "../lib/memory-request-context.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
-import { rebindLedgerPath } from "../engine/memory-ops/rebind-ledger.js";
+import { rebindLedgerPath, rebindLockPath } from "../engine/memory-ops/rebind-ledger.js";
 import { classifyMemoryFreshness, computeMemoryAge } from "../lib/temporal-provenance.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 
@@ -122,6 +123,53 @@ function collectingLogger() {
     lines,
     logger: { info: push, warn: push, error: push, debug: push },
   };
+}
+
+function stealLockOnUpdate(engine, baseDbPath) {
+  const internals = internalsOf(engine);
+  const orig = internals.pool.withWriteDb.bind(internals.pool);
+  let updates = 0;
+  internals.pool.withWriteDb = async (id, fn) => orig(id, async (db) => {
+    const inner = db.update.bind(db);
+    db.update = async (...args) => {
+      updates += 1;
+      if (updates === 1) {
+        writeFileSync(rebindLockPath(baseDbPath), JSON.stringify({
+          nonce: "stolen",
+          pid: process.pid,
+          host: hostname(),
+          acquiredAt: new Date().toISOString(),
+        }));
+      }
+      return inner(...args);
+    };
+    try {
+      return await fn(db);
+    } finally {
+      db.update = inner;
+    }
+  });
+  return {
+    get updates() { return updates; },
+    restore() { internals.pool.withWriteDb = orig; },
+  };
+}
+
+function unlinkStolenLock(baseDbPath) {
+  try { unlinkSync(rebindLockPath(baseDbPath)); } catch { /* live stolen lock is not reaped */ }
+}
+
+async function countOwners(engine, agentId, ids, fromOwner, toOwner) {
+  let atFrom = 0;
+  let atTo = 0;
+  await internalsOf(engine).pool.withWriteDb(agentId, async (db) => {
+    for (const id of ids) {
+      const row = await db.getById(id);
+      if ((row.ownerUserId || "") === fromOwner) atFrom += 1;
+      if ((row.ownerUserId || "") === toOwner) atTo += 1;
+    }
+  });
+  return { atFrom, atTo };
 }
 
 async function importUserCard(engine, agentId, fromIdentity, key, text) {
@@ -840,6 +888,205 @@ describe("Engine.memory.rebind", () => {
     assert.equal(internalsOf(engine).memoryRebind.ledger.readClaim(fromOwner).toOwner, other);
     const applied = internalsOf(engine).memoryRebind.ledger.listApplied();
     assert.equal(applied.length, 0);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("an orphan claim for the same user is recovered by rebind then unbind", TIMEOUT, async () => {
+    const baseDbPath = freshBaseDbPath("rebind-orphan-claim-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-orphan-claim-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const fromIdentity = { channel: "telegram", identityKey: PLAIN_KEY };
+    const cardId = await importUserCard(engine, agentId, fromIdentity, "k-orphan", `${SECRET_TEXT} orphan`);
+    const fromOwner = channelIdentityUserPrincipal("telegram", PLAIN_KEY, "default");
+    const toOwner = harnessUserPrincipal(TO_USER);
+    internalsOf(engine).memoryRebind.ledger.writeClaim(fromOwner, toOwner);
+    assert.equal(internalsOf(engine).memoryRebind.ledger.listApplied().length, 0);
+
+    const applied = await engine.memory.rebind(
+      { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.match(applied.rebindId, /^[0-9a-f-]{36}$/);
+    assert.equal(applied.rebound, 1);
+    const row = await internalsOf(engine).pool.withWriteDb(agentId, (db) => db.getById(cardId));
+    assert.equal(row.ownerUserId, toOwner);
+
+    const unbound = await engine.memory.unbind(
+      { rebindId: applied.rebindId, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.equal(unbound.unbound, 1);
+    const restored = await internalsOf(engine).pool.withWriteDb(agentId, (db) => db.getById(cardId));
+    assert.equal(restored.ownerUserId, fromOwner);
+    assert.equal(internalsOf(engine).memoryRebind.ledger.readClaim(fromOwner), null);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("resume aborts with lock-lost on a stolen nonce and a rerun converges", TIMEOUT, async () => {
+    const baseDbPath = freshBaseDbPath("rebind-n5-resume-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-n5-resume-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const fromIdentity = { channel: "telegram", identityKey: PLAIN_KEY };
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      ids.push(await importUserCard(engine, agentId, fromIdentity, `k-n5r-${i}`, `${SECRET_TEXT} n5r ${i}`));
+    }
+    const first = await engine.memory.rebind(
+      { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.equal(first.rebound, 3);
+    const fromOwner = channelIdentityUserPrincipal("telegram", PLAIN_KEY, "default");
+    const toOwner = harnessUserPrincipal(TO_USER);
+    await internalsOf(engine).pool.withWriteDb(agentId, async (db) => {
+      for (const id of ids) await db.update(id, { ownerUserId: fromOwner });
+    });
+
+    const steal = stealLockOnUpdate(engine, baseDbPath);
+    await assert.rejects(
+      () => engine.memory.rebind(
+        { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+        operatorFor(agentId),
+        systemAgent,
+      ),
+      (e) => e.code === "lock-lost",
+    );
+    steal.restore();
+    assert.equal(steal.updates, 1);
+    const afterSteal = await countOwners(engine, agentId, ids, fromOwner, toOwner);
+    assert.equal(afterSteal.atTo, 1);
+    assert.equal(afterSteal.atFrom, 2);
+    unlinkStolenLock(baseDbPath);
+
+    const resumed = await engine.memory.rebind(
+      { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.equal(resumed.rebindId, first.rebindId);
+    assert.equal(resumed.rebound, 2);
+    const done = await countOwners(engine, agentId, ids, fromOwner, toOwner);
+    assert.equal(done.atTo, 3);
+    assert.equal(done.atFrom, 0);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("unbind aborts with lock-lost on a stolen nonce and a rerun converges", TIMEOUT, async () => {
+    const baseDbPath = freshBaseDbPath("rebind-n5-unbind-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-n5-unbind-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const fromIdentity = { channel: "telegram", identityKey: PLAIN_KEY };
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      ids.push(await importUserCard(engine, agentId, fromIdentity, `k-n5u-${i}`, `${SECRET_TEXT} n5u ${i}`));
+    }
+    const applied = await engine.memory.rebind(
+      { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.equal(applied.rebound, 3);
+    const fromOwner = channelIdentityUserPrincipal("telegram", PLAIN_KEY, "default");
+    const toOwner = harnessUserPrincipal(TO_USER);
+
+    const steal = stealLockOnUpdate(engine, baseDbPath);
+    await assert.rejects(
+      () => engine.memory.unbind(
+        { rebindId: applied.rebindId, dryRun: false },
+        operatorFor(agentId),
+        systemAgent,
+      ),
+      (e) => e.code === "lock-lost",
+    );
+    steal.restore();
+    assert.equal(steal.updates, 1);
+    const afterSteal = await countOwners(engine, agentId, ids, fromOwner, toOwner);
+    assert.equal(afterSteal.atFrom, 1);
+    assert.equal(afterSteal.atTo, 2);
+    assert.equal(internalsOf(engine).memoryRebind.ledger.load(applied.rebindId).reversed, false);
+    unlinkStolenLock(baseDbPath);
+
+    const unbound = await engine.memory.unbind(
+      { rebindId: applied.rebindId, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.equal(unbound.unbound, 2);
+    const done = await countOwners(engine, agentId, ids, fromOwner, toOwner);
+    assert.equal(done.atFrom, 3);
+    assert.equal(done.atTo, 0);
+    assert.equal(internalsOf(engine).memoryRebind.ledger.load(applied.rebindId).reversed, true);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
+  it("unbind aborts with lock-lost before releasing the claim", TIMEOUT, async () => {
+    const baseDbPath = freshBaseDbPath("rebind-n5-claim-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-n5-claim-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const fromIdentity = { channel: "telegram", identityKey: PLAIN_KEY };
+    const cardId = await importUserCard(engine, agentId, fromIdentity, "k-n5c", `${SECRET_TEXT} n5c`);
+    const applied = await engine.memory.rebind(
+      { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    const fromOwner = channelIdentityUserPrincipal("telegram", PLAIN_KEY, "default");
+    const internals = internalsOf(engine);
+    const orig = internals.pool.withWriteDb.bind(internals.pool);
+    internals.pool.withWriteDb = async (id, fn) => {
+      const result = await orig(id, fn);
+      writeFileSync(rebindLockPath(baseDbPath), JSON.stringify({
+        nonce: "stolen",
+        pid: process.pid,
+        host: hostname(),
+        acquiredAt: new Date().toISOString(),
+      }));
+      return result;
+    };
+    try {
+      await assert.rejects(
+        () => engine.memory.unbind(
+          { rebindId: applied.rebindId, dryRun: false },
+          operatorFor(agentId),
+          systemAgent,
+        ),
+        (e) => e.code === "lock-lost",
+      );
+    } finally {
+      internals.pool.withWriteDb = orig;
+    }
+    const row = await internals.pool.withWriteDb(agentId, (db) => db.getById(cardId));
+    assert.equal(row.ownerUserId, fromOwner);
+    assert.equal(internals.memoryRebind.ledger.load(applied.rebindId).reversed, true);
+    assert.ok(internals.memoryRebind.ledger.readClaim(fromOwner));
+    unlinkStolenLock(baseDbPath);
+
+    const again = await engine.memory.unbind(
+      { rebindId: applied.rebindId, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.equal(again.unbound, 0);
+    assert.equal(internals.memoryRebind.ledger.readClaim(fromOwner), null);
     await engine.close({ budgetMs: 5_000 });
   });
 });
