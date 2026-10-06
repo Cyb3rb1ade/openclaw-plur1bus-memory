@@ -13,6 +13,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Fixed
 
+- Security: optional inference dependency `sharp` (via `@huggingface/transformers`) override 0.35.4 → **0.35.5** for GHSA-wq5f-xc86-pv6w (CVE-2026-96889, published 2026-10-06), which made the blocking `npm audit --omit=dev --audit-level=moderate` step fail. Lockfile only; no code change.
 - `memory.rebind` / `unbind`: die Nonce-Prüfung (`lock-lost`) läuft vor jedem Store-Patch, nicht nur vor Ledger-Schreiben. Ein verlorenes Lock bricht die Schleife sofort ab; ein erneuter Aufruf läuft über das Sidecar zu Ende.
 - `engine/create-engine.js`: Merge-Safety-Logs schreiben Memory-Text nur noch über `describeText()`, Fallback-`baseUrl` über `redactUrl()`, Fehler in Log-Zeilen über `describeError()`.
 - Error messages in logs: about 130 log lines in capture, recall, db-adapter, jobs, obsidian bridge, scheduler and engine paths now print `describeError` (class, code, message length and hash, URLs reduced to host plus path hash) instead of `String(err)` / `err.message`; `safeWarn`/`safeDebug`/`trySafeWarn` do the same via the new `describeErrorForLog`. `redactError` is unchanged for callers that need the message (rethrown, returned, CLI stderr). `reason`/`note` log values no longer keep `<platform>:<digits>`.
