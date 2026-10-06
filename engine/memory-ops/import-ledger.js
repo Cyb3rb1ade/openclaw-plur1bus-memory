@@ -101,20 +101,19 @@ export function createImportLedger({
   }
 
   /**
-   * Last line wins per key and per card id.
+   * Every parseable line in file order (raw, not last-line-wins). Used by
+   * `memory.unimport` (1.13.0) to select the lines of one import run.
    * @param {string} agentId
-   * @returns {{byKey: Map<string, object>, byCardId: Map<string, object>}}
+   * @returns {object[]}
    */
-  function load(agentId) {
-    const byKey = new Map();
-    const byCardId = new Map();
+  function readLines(agentId) {
     let path;
     try {
       path = importLedgerPath(baseDbPath, agentId);
     } catch {
-      return { byKey, byCardId };
+      return [];
     }
-    if (!existsSync(path)) return { byKey, byCardId };
+    if (!existsSync(path)) return [];
     let text;
     try {
       text = readFileSync(path, "utf8");
@@ -122,31 +121,77 @@ export function createImportLedger({
       logger?.warn?.(`memory-ops.import.ledger: read failed for agent '${safeAgentId(agentId)}': ${err?.code || "error"}`);
       throw memoryOpError("storage", "import ledger unreadable");
     }
+    const rows = [];
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
         const row = parseLine(line);
-        if (!row) continue;
-        byKey.set(row.idempotencyKey, row);
-        byCardId.set(row.cardId, row);
+        if (row) rows.push(row);
       } catch {
         // A torn or foreign line does not hide the rest (same anti-oracle as proposals).
       }
     }
-    return { byKey, byCardId };
+    return rows;
+  }
+
+  /**
+   * Last line wins per key and per card id. A 1.13.0 `kind: "unimported"`
+   * line frees its key: it removes the key and card id from the index and
+   * records the card id in `unimportedByCardId`; a later import line for the
+   * same card re-adds it. (An engine before 1.13.0 reads the unimported line
+   * as an ordinary line and keeps the key blocked — the safe direction.)
+   * @param {string} agentId
+   * @returns {{byKey: Map<string, object>, byCardId: Map<string, object>, unimportedByCardId: Map<string, object>}}
+   */
+  function load(agentId) {
+    const byKey = new Map();
+    const byCardId = new Map();
+    const unimportedByCardId = new Map();
+    for (const row of readLines(agentId)) {
+      if (row.kind === "unimported") {
+        if (byKey.get(row.idempotencyKey)?.cardId === row.cardId) byKey.delete(row.idempotencyKey);
+        byCardId.delete(row.cardId);
+        unimportedByCardId.set(row.cardId, row);
+        continue;
+      }
+      if (row.kind != null) continue; // unknown future kind: ignore
+      byKey.set(row.idempotencyKey, row);
+      byCardId.set(row.cardId, row);
+      unimportedByCardId.delete(row.cardId);
+    }
+    return { byKey, byCardId, unimportedByCardId };
+  }
+
+  function lineFor(row) {
+    if (row.kind === "unimported") {
+      return {
+        v: IMPORT_LEDGER_VERSION,
+        kind: "unimported",
+        idempotencyKey: row.idempotencyKey,
+        cardId: row.cardId,
+        importRunId: row.importRunId,
+        at: row.at,
+      };
+    }
+    const out = {
+      v: IMPORT_LEDGER_VERSION,
+      idempotencyKey: row.idempotencyKey,
+      cardId: row.cardId,
+      importedAt: row.importedAt,
+      sourceRef: typeof row.sourceRef === "string" ? row.sourceRef : "",
+    };
+    // 1.13.0 optional fields; parseLine of 1.11/1.12 checks only v/key/cardId.
+    if (typeof row.importRunId === "string" && row.importRunId) out.importRunId = row.importRunId;
+    if (row.backfilled === true) out.backfilled = true;
+    if (row.digest && typeof row.digest === "object") out.digest = row.digest;
+    return out;
   }
 
   function append(agentId, row) {
     const path = pathFor(agentId);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const created = !existsSync(path);
-    const line = `${JSON.stringify({
-      v: IMPORT_LEDGER_VERSION,
-      idempotencyKey: row.idempotencyKey,
-      cardId: row.cardId,
-      importedAt: row.importedAt,
-      sourceRef: typeof row.sourceRef === "string" ? row.sourceRef : "",
-    })}\n`;
+    const line = `${JSON.stringify(lineFor(row))}\n`;
     let fd;
     try {
       fd = openSync(path, "a+", 0o600);
@@ -177,5 +222,5 @@ export function createImportLedger({
     }
   }
 
-  return { load, append, pathFor };
+  return { load, readLines, append, pathFor };
 }

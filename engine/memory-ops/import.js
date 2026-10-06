@@ -12,15 +12,18 @@ import { computeMemoryImportance } from "../../lib/memory-fact-quality.js";
 import { applyDynamicsDefaults } from "../../lib/memory-dynamics.js";
 import { decideEpistemicStatusForCapture } from "../../lib/epistemic-capture.js";
 import { generateSummary } from "../../lib/text-utils.js";
-import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
+import { findBlockingTombstoneForCapture, findTombstoneByOriginId } from "../../lib/tombstone.js";
 import { memoryOpError } from "./errors.js";
 import { importCardId } from "./import-id.js";
+import { importRowDigest } from "./import-digest.js";
 import { createImportLedger } from "./import-ledger.js";
 import { withImportLock } from "./import-lock.js";
 
 export const IMPORT_CARD_BATCH_LIMIT = 500;
 export const IMPORT_SOURCE_REF_MAX = 500;
 export const IMPORT_IDEMPOTENCY_KEY_MAX = 256;
+/** 1.13.0: same shape as the Harness RUN_ID_RE. */
+export const IMPORT_RUN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 const LIVE_STATUS = new Set(["active", "", null, undefined]);
 
@@ -98,6 +101,26 @@ export function createMemoryImport({
     }
   }
 
+  function safeDigest(row) {
+    try {
+      return importRowDigest(row);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 1.13.0 (owner ruling a): a soft-deleted row whose last ledger line for its
+   * card is `unimported` may be imported again. A card the user forgot (no
+   * unimported line, or a committed registry tombstone for its id) stays
+   * blocked. Throws when the registry cannot be read (caller → storage).
+   */
+  function isReimportableAfterUnimport(existing, index, agentId) {
+    if (String(existing?.status || "") !== "deleted") return false;
+    if (!index.unimportedByCardId?.has(existing.id)) return false;
+    return findTombstoneByOriginId(baseDbPath, agentId, existing.id) == null;
+  }
+
   async function importCards(req, p, a) {
     if (!a || a.origin !== "system" || a.background !== false) {
       throw memoryOpError("denied", "import requires origin \"system\" and background false");
@@ -120,6 +143,14 @@ export function createMemoryImport({
     }
     if (req.cards.length > IMPORT_CARD_BATCH_LIMIT) {
       throw memoryOpError("invalid-input", `cards exceeds maximum of ${IMPORT_CARD_BATCH_LIMIT} per call`);
+    }
+
+    let importRunId = "";
+    if (req.importRunId != null) {
+      if (typeof req.importRunId !== "string" || !IMPORT_RUN_ID_RE.test(req.importRunId)) {
+        throw memoryOpError("invalid-input", "importRunId is invalid");
+      }
+      importRunId = req.importRunId;
     }
 
     const binding = await opsContext.resolve(req.principal, a);
@@ -208,6 +239,7 @@ export function createMemoryImport({
           continue;
         }
 
+        let replaceUnimported = false;
         if (existing) {
           if (isLiveStatus(existing.status)) {
             const sourceRef = truncateSourceRef(card.sourceRef)
@@ -216,12 +248,22 @@ export function createMemoryImport({
             entry.plan = null;
             seenKeys.set(key, { id: cardId });
             if (!index.byCardId.has(cardId)) {
-              entry.backfill = { cardId, key, sourceRef };
+              entry.backfill = { cardId, key, sourceRef, digest: safeDigest(existing) };
             }
             continue;
           }
-          reject(entry, "previously-imported-deleted");
-          continue;
+          let reimport;
+          try {
+            reimport = isReimportableAfterUnimport(existing, index, agentId);
+          } catch {
+            reject(entry, "storage");
+            continue;
+          }
+          if (!reimport) {
+            reject(entry, "previously-imported-deleted");
+            continue;
+          }
+          replaceUnimported = true;
         }
 
         const prior = index.byKey.get(key);
@@ -250,7 +292,7 @@ export function createMemoryImport({
           ? card.kind
           : categorizeMemoryWithReason(text).category;
         seenKeys.set(key, { id: cardId });
-        entry.plan = { cardId, key, text, scope, ownerUserId, workspaceIdentity, sourceRef, createdAt, category };
+        entry.plan = { cardId, key, text, scope, ownerUserId, workspaceIdentity, sourceRef, createdAt, category, replaceUnimported };
       }
     }
 
@@ -263,6 +305,10 @@ export function createMemoryImport({
           cardId: row.cardId,
           importedAt: now,
           sourceRef: row.sourceRef,
+          // 1.13.0: attributed to this run only as a backfill; the digest is
+          // taken from the row found, so unimport can still judge it.
+          ...(importRunId ? { importRunId, backfilled: true } : {}),
+          ...(row.digest ? { digest: row.digest } : {}),
         });
         index.byKey.set(row.key, { cardId: row.cardId });
         index.byCardId.set(row.cardId, { idempotencyKey: row.key, sourceRef: row.sourceRef });
@@ -344,6 +390,7 @@ export function createMemoryImport({
             reject(entry, "storage");
             continue;
           }
+          let existingUnimported = false;
           if (existing) {
             if (isLiveStatus(existing.status)) {
               entry.result = {
@@ -358,13 +405,24 @@ export function createMemoryImport({
                   cardId: plan.cardId,
                   key: plan.key,
                   sourceRef: plan.sourceRef || (typeof existing.sourceUrl === "string" ? existing.sourceUrl : ""),
+                  digest: safeDigest(existing),
                 };
                 backfillLedger(index, entry, clock());
               }
               continue;
             }
-            reject(entry, "previously-imported-deleted");
-            continue;
+            let reimport;
+            try {
+              reimport = isReimportableAfterUnimport(existing, index, agentId);
+            } catch {
+              reject(entry, "storage");
+              continue;
+            }
+            if (!reimport) {
+              reject(entry, "previously-imported-deleted");
+              continue;
+            }
+            existingUnimported = true;
           }
           if (index.byKey.get(plan.key)) {
             reject(entry, "previously-imported-deleted");
@@ -419,6 +477,11 @@ export function createMemoryImport({
           }, now, halfLifeOverrides, { flashbulbEncodingEnabled });
 
           try {
+            // 1.13.0 re-import after unimport: the soft-deleted row (archived
+            // when it was unimported) holds this deterministic id; replace it.
+            // A crash between delete and store leaves no row and a freed key,
+            // so the next call creates it.
+            if (existingUnimported) await db.delete(plan.cardId);
             await db.store(entryRow);
           } catch (err) {
             if (err?.action === "tombstone_blocked" || err?.reason === "tombstone_blocked") {
@@ -430,15 +493,29 @@ export function createMemoryImport({
             continue;
           }
 
+          // 1.13.0: digest of the row as stored (read back, so column
+          // coercion cannot make an untouched card look modified later).
+          let digest = null;
+          if (importRunId) {
+            try {
+              digest = safeDigest((await db.getById(plan.cardId)) || entryRow);
+            } catch {
+              digest = safeDigest(entryRow);
+            }
+          }
+
           try {
             ledger.append(agentId, {
               idempotencyKey: plan.key,
               cardId: plan.cardId,
               importedAt: now,
               sourceRef: plan.sourceRef,
+              ...(importRunId ? { importRunId } : {}),
+              ...(digest ? { digest } : {}),
             });
             index.byKey.set(plan.key, { cardId: plan.cardId });
             index.byCardId.set(plan.cardId, { idempotencyKey: plan.key, sourceRef: plan.sourceRef });
+            index.unimportedByCardId?.delete(plan.cardId);
           } catch (err) {
             logger?.warn?.(`memory-ops.import: ledger append failed for agent '${agentId}' id='${plan.cardId}': ${err?.code || "error"}`);
           }

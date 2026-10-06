@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.12.0** · frozen at 1.0.0 on 2026-09-22, amended thirteen times
+**Contract version 1.13.0** · frozen at 1.0.0 on 2026-09-22, amended fourteen times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -141,6 +141,10 @@ own changelog:
   link; owner metadata only) and `ADOPT_PROBE_MIN_ROWS = min(8, available)`.
   `UserPrincipal` accepts `user:v1:` and `user:v2:`. Additive members only. See
   [Rebind in 1.12.0](#rebind-in-1120) below.
+- **1.13.0** — `MemoryOps.unimport` (roll back the cards one `memory.import`
+  run created) and the optional `MemoryImportRequest.importRunId`.
+  `MemoryOpErrorCode` gains `"lock-busy"`. Additive members only. See
+  [Unimport in 1.13.0](#unimport-in-1130) below.
 
 ## The two halves
 
@@ -206,6 +210,7 @@ The implementation lives in `engine/memory-ops/` (`context.js`, `errors.js`,
 | `import(req, p, a)` | `MemoryImportResult` | 1.11.0: ingest finished cards. `p` is the operator, `req.principal` the card ACL binding. Requires `a.origin === "system"` and `a.background === false`. At most 500 cards per call. |
 | `rebind(req, p, a)` | `MemoryRebindResult` | 1.12.0: attach `user`-scope cards of one channel identity to a harness user. Counters only. `dryRun` defaults to `true`. Requires `a.origin === "system"` and `a.background === false`. |
 | `unbind(req, p, a)` | `MemoryUnbindResult` | 1.12.0: restore the owner bindings recorded under `req.rebindId`. Cards written after that rebind are left alone. |
+| `unimport(req, p, a)` | `MemoryUnimportResult` | 1.13.0: roll back the cards `import` created under `req.importRunId` for `req.agentId`. Unmodified cards are archived and soft-deleted without a registry tombstone, and their keys are freed for re-import; modified cards are kept with a reason. `dryRun` defaults to `true`. Requires `a.origin === "system"` and `a.background === false`. |
 
 **`forget`, `correct` and `share` act on the caller's own agent-private
 cards only** (1.5.0). An id that is a live card in a workspace or user pool
@@ -223,10 +228,11 @@ carries card text or a raw storage error; `isMemoryOpError` in
 | `code` | When |
 |---|---|
 | `not-found` | no such card, or one the caller may not see, or one that is not live — deliberately indistinguishable (anti-oracle) |
-| `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy; `rebind`/`unbind`/`import` with an origin other than `"system"` or with `background` not `false` |
+| `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy; `rebind`/`unbind`/`import`/`unimport` with an origin other than `"system"` or with `background` not `false` |
 | `identity-already-bound` | 1.12.0: `rebind` of a channel identity that already has an applied (not reversed) mapping to a **different** harness user, **anywhere in this engine** (not per agent). Nothing is written. |
-| `ledger-corrupt` | 1.12.0: a `_rebinds/<rebindId>.jsonl` sidecar has no complete line. The file is quarantined as `.corrupt-<ts>` and not truncated to empty. |
-| `lock-lost` | 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce before a ledger write. The caller retries later via the sidecar; the identity claim is left in place. |
+| `ledger-corrupt` | 1.12.0: a `_rebinds/<rebindId>.jsonl` sidecar has no complete line. The file is quarantined as `.corrupt-<ts>` and not truncated to empty. 1.13.0: the same for a `_unimports/<agentId>/<importRunId>.jsonl` sidecar; detected before any store write. |
+| `lock-lost` | 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce before a ledger write. The caller retries later via the sidecar; the identity claim is left in place. 1.13.0: also `unimport` when the per-agent import lock no longer carries our nonce before a store or ledger write; the call stops at once and a rerun converges. |
+| `lock-busy` | 1.13.0: `unimport` apply could not take the per-agent import lock (`_imports/.locks/<agentId>.lock`) within its deadline (120 s) because an `import` or `unimport` of that agent holds it. Nothing was written. Retry later. |
 | `invalid-input` | a malformed id, principal or agent id, an empty or over-long `newText` (1–8 000 characters after trim), an unknown `share` target, an agent without a workspace directory for a destructive member; for `list` an empty or whitespace-only `topic`, `until` with `topic`, or `until` before `since` |
 | `approval-required` | `share` of a sensitive card without `allowSensitive: true` |
 | `conflict` | `correct` to a text that matches a forgotten memory in the same scope (tombstone guard), or a share source that changed while it was being copied |
@@ -333,6 +339,18 @@ callers are unchanged. The OpenClaw adapter does not have to call them.
 
 `dryRun: true` reports the same counters without writing the store or the
 ledger.
+
+1.13.0: an optional `importRunId` (`/^[A-Za-z0-9_-]{1,64}$/`, otherwise
+`invalid-input`) is recorded on every ledger line the call writes, together
+with three 16-hex group digests of the stored row (`content`, `binding`,
+`meta`; hashes only). A backfilled line (crash between `store()` and the
+ledger) carries `importRunId` plus `backfilled: true` and the digest of the
+row it found. `memory.unimport` selects by `importRunId`. The ledger stays
+`v: 1`: an engine before 1.13 ignores the extra fields. A soft-deleted row
+whose last ledger line is `unimported` (and that has no committed registry
+tombstone) is imported again: the old row is replaced and the result is
+`created` with the same id. A forgotten card stays
+`previously-imported-deleted`.
 
 ### Origin `"internal"` on imported cards
 
@@ -637,6 +655,139 @@ hashes; they still do not appear in info logs.
   `ownerUserId`; rebind patches that column. Shared copies created by
   `memory.share` live in the user pool keyed by the then-current
   principal and are out of scope for this member.
+- Package version stays 7.18.4.
+
+## Unimport in 1.13.0
+
+`Engine.memory.unimport(req, p, a)` rolls back one `memory.import` run for
+one agent, so a botched import can be undone and re-run. Source:
+`engine/memory-ops/unimport.js`, `unimport-ledger.js`, `import-digest.js`.
+
+### Request and guards
+
+- `req.agentId`, `req.importRunId` (required, same regex as import),
+  optional `idempotencyKeys` (≤ 500, each 1–256 characters; a narrowing
+  filter that never widens the selection), `dryRun` (default **true**),
+  `force` (default false), optional `principal` (the import's card binding:
+  its workspace/user pools are searched for shared copies too; must share
+  `agentId`), `signal`.
+- `a.origin === "system"` and `a.background === false`, else `denied`.
+  `p.agentId === req.agentId`, else `invalid-input`.
+- An `importRunId` with no lines is `selected: 0`, not an error.
+
+### Selection: created by this run
+
+The engine decides from its own `_imports/<agentId>.jsonl`: raw lines (not
+the last-line-wins index) with `importRunId === req.importRunId` whose
+`cardId` is the deterministic id of `(agentId, idempotencyKey)`. One entry
+per card; the last such line counts. A card that run B only saw as
+`matched-existing` has no B line and is never touched by rolling back B.
+Legacy lines without `importRunId` (1.11/1.12) are never selected.
+
+### Decision per card (first hit wins; the row is read inside the lock)
+
+| Check | Outcome |
+|---|---|
+| sidecar `done` for this card and import | `already-unimported` |
+| no row, no intent | `missing` (key stays blocked) |
+| no row, intent | finish → `unimported` |
+| `status "deleted"` with a committed registry tombstone, or without our intent / `unimported` line | `already-forgotten` (untouched, key stays blocked) |
+| `status "deleted"` with our intent or `unimported` line | finish → `unimported` |
+| `status "superseded"` or `supersededBy` set | kept / `superseded` |
+| other non-live status | kept / `metadata-changed` |
+| row `agentId` differs | kept / `binding-changed` |
+| listed in an applied (not reversed) `_rebinds/` sidecar | kept / `rebound` |
+| a live workspace/user copy with `sourceMemoryId` = card, shared by this agent | kept / `shared` |
+| digest group differs (binding, then content, then meta) | kept / `binding-changed`, `content-changed`, `metadata-changed` |
+| no digest and `updatedAt !== importedAt` | kept / `edited` |
+| otherwise | `unimported` |
+
+Retrieval, strength, replay, dynamics, enrichment status, emotion fields and
+the vector are not in the digest, so recall and background bookkeeping do not
+make a card look modified. Jobs that edit editorial fields bump `updatedAt`
+(part of `meta`), so such cards are kept: the fail-safe direction. Kept rows
+are never written (no marker, no `updatedAt` touch).
+
+**`force` (owner ruling b).** It overrides only `content-changed`,
+`metadata-changed` and `edited`, per card. It never undoes `superseded`,
+`shared`, `rebound` or `binding-changed` cards (cross-user or cross-agent),
+never touches forgotten or missing cards, and never selects a card the run
+did not create.
+
+### Apply
+
+Under the per-agent import lock (`_imports/.locks/<agentId>.lock`, the same
+lock `import` takes): no import and unimport of one agent run concurrently.
+A held lock past the 120 s deadline is `lock-busy`; an abort while waiting
+returns the result with `remaining = selected` and writes nothing. Per
+eligible card:
+
+1. fence; archive the row (`archiveCard`, as forget does: content at rest
+   under the host archive dir; the path is not returned);
+2. fence; append `intent` to `_unimports/<agentId>/<importRunId>.jsonl` + fsync;
+3. fence; soft delete (`status "deleted"`, `epistemicStatus "invalidated"`,
+   the store's forget primitive) — **no** registry tombstone, so neither a
+   re-import nor a later live capture of the same text is blocked; a
+   `memory.unimported` audit line goes to the workspace destructive-ops log;
+4. fence; append `{kind: "unimported", idempotencyKey, cardId, importRunId, at}`
+   to `_imports/<agentId>.jsonl` + fsync — this frees the key;
+5. fence; append `done`.
+
+"Fence" re-reads the lock file and compares our nonce; a mismatch throws
+`lock-lost` at once, so no store or ledger write happens after the lock is
+lost. A per-card archive or store failure is `failed` / `storage` (the
+remaining cards continue); ledger failures end the call.
+
+| Crash after | Next call |
+|---|---|
+| 1 | row live, no intent → classified again (a second archive copy is harmless) |
+| 2 | intent, row live → classified again under the lock; deleted if still eligible |
+| 3 | intent, row deleted, key blocked → steps 4, 5 → `unimported` |
+| 4 | key freed, no `done` → step 5 only (no second ledger line) |
+| 5 | `already-unimported` |
+
+An `unimported` line read by an engine before 1.13 parses as an ordinary
+line, so that engine keeps the key blocked (`previously-imported-deleted`):
+the safe direction on a downgrade.
+
+### Owner rulings applied
+
+- **(a) Re-import after rollback is allowed.** The ledger marks rolled-back
+  entries (`kind: "unimported"`); a later import of the same key creates the
+  card again with the same id. Rolling back the earlier run again reports
+  `already-unimported` and does not touch the re-imported card.
+- **(b) `force` scope** as above; **archive-first**: rolled-back cards are
+  archived and soft-deleted per the engine's forget semantics, not
+  hard-deleted. (The registry fingerprint tombstone forget also writes is
+  deliberately left out, because it would contradict ruling a.) The
+  soft-deleted row is replaced only when the same key is imported again.
+
+### Result
+
+`selected`, `unimported`, `keptModified`, `alreadyForgotten`,
+`alreadyUnimported`, `missing`, `failed`, `remaining` (cards not visited
+after an abort), `cards` (`idempotencyKey`, `id`, `outcome`, `reason`) and
+`derived.jobsSinceImport`: the derivation-capable jobs (`consolidate-daily`,
+`rem-dream`, `light-dream`, `meta-reflect`, `episodes-rebuild`,
+`skill-miner`) with a `completed` or `incomplete` run in
+`_jobs/<agentId>/ledger.jsonl` that finished after the earliest selected
+`importedAt`. Dreams, promotions and episodes carry no lineage and are not
+cascaded; the caller warns. One call visits every selected card (no page
+limit).
+
+`dryRun` takes no lock, writes nothing (no `_unimports/`, no lock dir) and
+reports exactly what apply would do, from the authoritative write namespace.
+
+Logs: `agentId`, `importRunId`, card ids, counters, error codes. Never card
+text or `sourceRef`; the sidecar holds ids, keys and timestamps only.
+
+### What 1.13.0 does not do
+
+- No cascade into dreams, promotions or episodes.
+- No undo of `stores.adopt`.
+- Concurrency with `rebind`/`unbind` and live writers (capture, correct,
+  forget, jobs) is governed by the host single-writer precondition A9, as
+  for `stores.adopt`; unimport does not take `_rebinds/.lock`.
 - Package version stays 7.18.4.
 
 ## Shared copies and change proposals (1.6.0, D31)
@@ -1948,10 +2099,13 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/memory-ops/proposals.js` | `createMemoryProposals` — `MemoryOps.propose`/`.proposals.{list,accept,reject}`, `memory.proposal` event |
 | `engine/memory-ops/import-id.js` | UUID v5 card id for `memory.import` (1.11.0) |
 | `engine/memory-ops/import-ledger.js` | `{baseDbPath}/_imports/<agentId>.jsonl` sidecar (1.11.0) |
-| `engine/memory-ops/import-lock.js` | per-agent writer lock for the `memory.import` apply path (K1) |
+| `engine/memory-ops/import-lock.js` | per-agent writer lock for the `memory.import` and `memory.unimport` apply paths (K1; `assertHeld` fence 1.13.0) |
+| `engine/memory-ops/import-digest.js` | per-group row digests on import ledger lines (1.13.0) |
 | `engine/memory-ops/import.js` | `Engine.memory.import` (1.11.0) |
 | `engine/memory-ops/rebind-ledger.js` | `{baseDbPath}/_rebinds/<rebindId>.jsonl` sidecar (1.12.0) |
 | `engine/memory-ops/rebind.js` | `Engine.memory.rebind` / `unbind` (1.12.0) |
+| `engine/memory-ops/unimport-ledger.js` | `{baseDbPath}/_unimports/<agentId>/<importRunId>.jsonl` write-ahead sidecar (1.13.0) |
+| `engine/memory-ops/unimport.js` | `Engine.memory.unimport` (1.13.0) |
 | `engine/stores/adopt.js` | `Engine.stores.adopt` sample probe and schema report (1.11.0; probe floor 1.12.0) |
 | `engine/admin/obsidian.js` | `createObsidianOps` — `AdminOps.obsidian.{detect,prepare,confirm}` |
 | `engine/store/schema-version.js` | `createStoreMigrator` — `AdminOps.migrate`, the `_schema.json` marker |

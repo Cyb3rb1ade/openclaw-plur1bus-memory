@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.12.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended thirteen times under the policy below — see the changelog at the end
+ * Contract version 1.13.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended fourteen times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -43,9 +43,10 @@
  *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.deferPostTurnLlm, diaryFromUserChats, captureChunkingJev, recall.fullTextTopRecords/fullTextMaxChars) and JobName "post-turn-refine"; adapter-only keys stay on the OpenClaw manifest; no breaking change to existing callers.
  *            1.11.0 — MemoryOps.import (finished-card ingest with deterministic ids) and Engine.stores.adopt (copy-never-move store take-over with a sample cosine probe for legacy stores); MemoryCard.provenance/sourceRef optional; no breaking change to existing callers.
  *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound" | "ledger-corrupt" | "lock-lost"; no breaking change to existing callers.
+ *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
  */
 
-export type ContractVersion = "1.12.0";
+export type ContractVersion = "1.13.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -639,8 +640,11 @@ export type MemoryOpErrorCode =
   | "identity-already-bound"
   /** 1.12.0: the `_rebinds/<id>.jsonl` sidecar has no complete line and was quarantined. */
   | "ledger-corrupt"
-  /** 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce; finish later via the sidecar. */
-  | "lock-lost";
+  /** 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce; finish later via the sidecar.
+   *  1.13.0: also `unimport` when the per-agent import lock no longer carries our nonce; a rerun converges. */
+  | "lock-lost"
+  /** 1.13.0: `unimport` apply could not take the per-agent import lock in time (an import or unimport of that agent is running). Nothing was written. */
+  | "lock-busy";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
 export interface MemoryOpError extends Error {
@@ -782,6 +786,12 @@ export interface MemoryOps {
    * Cards written after that rebind are left alone. `dryRun` defaults to false.
    */
   unbind(req: MemoryUnbindRequest, p: Principal, a: AgentContext): Promise<MemoryUnbindResult>;
+  /**
+   * 1.13.0: roll back the cards `import` created under `req.importRunId` for
+   * `req.agentId`. `dryRun` defaults to true. Requires `a.origin === "system"`
+   * and `a.background === false`. Ids, keys, counters and reason codes only.
+   */
+  unimport(req: MemoryUnimportRequest, p: Principal, a: AgentContext): Promise<MemoryUnimportResult>;
 }
 
 export interface MemoryRebindFromIdentity {
@@ -849,6 +859,8 @@ export interface MemoryImportRequest {
   cards: MemoryImportCardInput[];
   dryRun?: boolean;
   signal?: AbortSignal;
+  /** 1.13.0: `/^[A-Za-z0-9_-]{1,64}$/`. Recorded on every ledger line this call writes; `unimport` selects by it. */
+  importRunId?: string;
 }
 
 export type MemoryImportRejectReason =
@@ -880,6 +892,69 @@ export interface MemoryImportResult {
   matchedExisting: number;
   rejected: number;
   cards: MemoryImportCardResult[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Import rollback (1.13.0)                                            */
+/* ------------------------------------------------------------------ */
+
+export interface MemoryUnimportRequest {
+  agentId: AgentId;
+  /** Required; selects the `_imports/` ledger lines written with this `importRunId`. */
+  importRunId: string;
+  /** Optional narrowing filter (≤ 500); never widens the selection. */
+  idempotencyKeys?: string[];
+  /** Defaults to true. Writes only when explicitly `false`. */
+  dryRun?: boolean;
+  /** Also undo cards kept as `content-changed`, `metadata-changed` or `edited`. Never `superseded`, `shared`, `rebound`, `binding-changed`, forgotten or missing cards. */
+  force?: boolean;
+  /** Optional card ACL binding used at import; its workspace/user pools are searched for shared copies too. Must share `agentId`. */
+  principal?: Principal;
+  signal?: AbortSignal;
+}
+
+export type MemoryUnimportOutcome =
+  | "unimported"
+  | "kept-modified"
+  | "already-forgotten"
+  | "already-unimported"
+  | "missing"
+  | "failed";
+
+export type MemoryUnimportKeptReason =
+  | "superseded"
+  | "content-changed"
+  | "binding-changed"
+  | "metadata-changed"
+  | "edited"
+  | "shared"
+  | "rebound";
+
+export interface MemoryUnimportCardResult {
+  idempotencyKey: string;
+  id: string;
+  outcome: MemoryUnimportOutcome;
+  /** `kept-modified`: the kept reason. `failed`: "storage" | "aborted". */
+  reason?: MemoryUnimportKeptReason | "storage" | "aborted";
+}
+
+export interface MemoryUnimportResult {
+  agentId: AgentId;
+  importRunId: string;
+  dryRun: boolean;
+  /** Cards attributed to this run (after the key filter). */
+  selected: number;
+  unimported: number;
+  keptModified: number;
+  alreadyForgotten: number;
+  alreadyUnimported: number;
+  missing: number;
+  failed: number;
+  /** Selected cards not visited in this call (abort). A rerun visits them. */
+  remaining: number;
+  cards: MemoryUnimportCardResult[];
+  /** Derivation-capable jobs with a run that finished after the earliest selected import. */
+  derived: { jobsSinceImport: JobName[] };
 }
 
 /* ------------------------------------------------------------------ */

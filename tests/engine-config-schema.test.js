@@ -84,7 +84,7 @@ describe("engine-config.schema.json", () => {
       assert.equal(k.tier, "advanced", k.key);
     }
     const schema = loadEngineConfigSchema();
-    assert.equal(schema["x-contract"], "1.12.0");
+    assert.equal(schema["x-contract"], "1.13.0");
     assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
     assert.equal(schema.$id, "plur1bus-engine-config");
     assert.equal(ENGINE_CONFIG_SCHEMA_FILE, "engine/config/engine-config.schema.json");

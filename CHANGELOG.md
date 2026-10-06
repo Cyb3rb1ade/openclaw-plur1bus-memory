@@ -9,6 +9,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Hinzugefügt
 
+- **Engine-Vertrag 1.13.0** — `memory.unimport`: macht die Karten eines `memory.import`-Laufs (`importRunId`) für einen Agenten rückgängig. Archive-first und Soft-Delete wie bei forget, aber ohne Registry-Tombstone; eine `unimported`-Zeile im Import-Ledger gibt den Key frei, ein späterer Re-Import legt die Karte wieder an. Geänderte Karten bleiben (`superseded`, `content-changed`, `binding-changed`, `metadata-changed`, `edited`, `shared`, `rebound`); `force` überschreibt nur Content/Metadaten-Änderungen. Läuft unter dem Import-Lock des Agenten mit Nonce-Fence vor jedem Store- und Ledger-Schreiben (`lock-lost`), Write-ahead-Sidecar `_unimports/<agentId>/<runId>.jsonl`, `dryRun` standardmäßig an. Neuer Fehlercode `lock-busy`. `memory.import` nimmt optional `importRunId` und schreibt Gruppen-Digests ins Ledger. Package bleibt 7.18.4.
 - **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock über `tryAcquireOwnedLock` (Nonce, Freigabe nur des eigenen Locks). Ein Claim für einen anderen Nutzer ist `identity-already-bound` und wird nicht gelöscht. `ADOPT_PROBE_MIN_ROWS` verlangt `min(8, vorhanden)` endliche Scores bei bis zu 16 Probe-Zeilen. Package bleibt 7.18.4.
 
 ### Fixed

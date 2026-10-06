@@ -129,6 +129,7 @@ import { createProposalStore } from "./memory-ops/proposal-store.js";
 import { createMemoryProposals } from "./memory-ops/proposals.js";
 import { createMemoryImport } from "./memory-ops/import.js";
 import { createMemoryRebind } from "./memory-ops/rebind.js";
+import { createMemoryUnimport } from "./memory-ops/unimport.js";
 import { memoryOpError } from "./memory-ops/errors.js";
 import { createStoreAdopt } from "./stores/adopt.js";
 import { createObsidianOps } from "./admin/obsidian.js";
@@ -1552,6 +1553,16 @@ export function createEngine(host, config, testOptions = {}) {
     baseDbPath,
     logger: host.logger,
     clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
+  });
+  const memoryUnimport = createMemoryUnimport({
+    opsContext: memoryOpsContext,
+    pool,
+    sharedMemoryPool,
+    baseDbPath,
+    jobsRoot: join(baseDbPath, "_jobs"),
+    logger: host.logger,
+    clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
+    importLedger: memoryImport.ledger,
   });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,
@@ -3144,6 +3155,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryProposals,
     memoryImport,
     memoryRebind,
+    memoryUnimport,
     memoryRead,
     memoryWrite,
     memoryTextContradictionLlmCfg,
@@ -3567,7 +3579,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.12.0",
+    contract: "1.13.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3624,7 +3636,7 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.12.0).
+  // The Engine (types/engine.d.ts, contract 1.13.0).
   const storeAdopt = createStoreAdopt({
     baseDbPath,
     pool,
@@ -3638,7 +3650,7 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.12.0",
+    contract: "1.13.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3796,6 +3808,7 @@ export function createEngine(host, config, testOptions = {}) {
       import: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryImport.importCards(req, p, a)); },
       rebind: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRebind.rebind(req, p, a)); },
       unbind: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRebind.unbind(req, p, a)); },
+      unimport: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryUnimport.unimport(req, p, a)); },
       proposals: Object.freeze({
         list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.list(q, p, a)); },
         accept: async (proposalId, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.accept(proposalId, p, a)); },

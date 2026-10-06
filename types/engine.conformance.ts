@@ -105,11 +105,11 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.12.0">>();
+assertTrue<Exact<ContractVersion, "1.13.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
-assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost">>();
+assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost" | "lock-busy">>();
 // 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
 assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
 assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();
@@ -150,6 +150,12 @@ assertTrue<Exact<MemoryOps["rebind"], (req: import("./engine.js").MemoryRebindRe
 assertTrue<Exact<MemoryOps["unbind"], (req: import("./engine.js").MemoryUnbindRequest, p: Principal, a: AgentContext) => Promise<MemoryUnbindResult>>>();
 assertTrue<Exact<keyof MemoryRebindResult, "rebindId" | "matched" | "rebound" | "skipped" | "dryRun">>();
 assertTrue<Exact<keyof MemoryUnbindResult, "rebindId" | "matched" | "unbound" | "skipped" | "skippedModified" | "dryRun">>();
+// 1.13.0: memory.unimport (additive) and MemoryImportRequest.importRunId.
+assertTrue<Exact<MemoryOps["unimport"], (req: import("./engine.js").MemoryUnimportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryUnimportResult>>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportOutcome, "unimported" | "kept-modified" | "already-forgotten" | "already-unimported" | "missing" | "failed">>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportKeptReason, "superseded" | "content-changed" | "binding-changed" | "metadata-changed" | "edited" | "shared" | "rebound">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryUnimportResult, "agentId" | "importRunId" | "dryRun" | "selected" | "unimported" | "keptModified" | "alreadyForgotten" | "alreadyUnimported" | "missing" | "failed" | "remaining" | "cards" | "derived">>();
+assertTrue<Exact<import("./engine.js").MemoryImportRequest["importRunId"], string | undefined>>();
 assertTrue<Exact<MemoryImportOutcome, "created" | "matched-existing" | "rejected">>();
 assertTrue<Exact<MemoryImportRejectReason, "invalid-input" | "tombstone-blocked" | "principal-unresolved" | "empty-text" | "provenance-not-imported" | "previously-imported-deleted" | "aborted" | "storage">>();
 assertTrue<Exact<Engine["stores"], StoreOps>>();
@@ -175,6 +181,7 @@ assertTrue<Exact<EngineStatus["sharedMemory"]["mode"], "fd-capability" | "verifi
 assertTrue<"unsupported" extends MemoryOpErrorCode ? true : false>();
 assertTrue<"ledger-corrupt" extends MemoryOpErrorCode ? true : false>();
 assertTrue<"lock-lost" extends MemoryOpErrorCode ? true : false>();
+assertTrue<"lock-busy" extends MemoryOpErrorCode ? true : false>();
 assertTrue<Exact<AgentJobHealth["lastRuns"], Partial<Record<JobName, JobLastRun>>>>();
 
 // 1.9.0: engine config schema, warm-only recall (E5 Task 1).
