@@ -26,7 +26,7 @@ import { resolveHalfLifeDays } from "../../lib/memory-dynamics.js";
 import { PURGE_THROTTLE_MS, purgeThrottleMap } from "../runtime/debug-log.js";
 import { TABLE_NAME } from "../runtime/constants.js";
 import { getLanceDB } from "./lancedb-loader.js";
-import { describeError } from "../../lib/log-redact.js";
+import { describeError, shortHash } from "../../lib/log-redact.js";
 
 // ============================================================================
 // MemoryDB — pro Agent eine Instanz
@@ -725,7 +725,7 @@ class MemoryDB {
               await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
             } catch (e) {
               if (e instanceof TimeoutError) throw e;
-              console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${describeError(e)}`);
+              console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in db=${shortHash(this.dbPath)}: ${describeError(e)}`);
             }
           }
         }
