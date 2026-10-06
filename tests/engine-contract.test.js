@@ -259,7 +259,17 @@ describe("Engine", () => {
     const cfg = { ...config(makeTempDir("ec-db-")), runtime: { recallTimeoutMs: 400 } };
     const engine = createEngine(host, cfg, { internals: { embeddings: switching } });
     const query = "which release notes are still open";
-    const first = await engine.recall({ query, principal: provedPrincipal, agent, signal: AbortSignal.timeout(8_000) });
+    // Precondition: one clean recall fills the cache. The first recall of a
+    // fresh engine also pays the one-time cold cost (store open, table
+    // creation): ~440 ms standalone on macOS against ~10-20 ms warm, and on a
+    // loaded windows-2025 runner it overran the 400 ms budget (PR #219 run
+    // 37432136368: this assertion saw degraded.timeout after 407 ms). Repeat
+    // the same query until it is clean; only a timeout may precede that.
+    let first = null;
+    for (let attempt = 0; attempt < 5 && first?.degraded !== null; attempt += 1) {
+      first = await engine.recall({ query, principal: provedPrincipal, agent, signal: AbortSignal.timeout(8_000) });
+      if (first.degraded !== null) assert.deepEqual(first.degraded, { reason: "timeout", capability: "recall" }, "only the cold-start budget overrun is retried");
+    }
     assert.equal(first.degraded, null);
     assert.ok(first.blocks.length > 0, "the first recall produced blocks to cache");
     mode.hang = true;

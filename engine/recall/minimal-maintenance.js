@@ -20,6 +20,7 @@ import { contextBlock, recallResult } from "./recall-result.js";
 import { shouldSkipAutoRecallForInternalTurn } from "../../lib/runtime-scheduler.js";
 import { recordActivity, formatTimeContext, getLastActivity } from "../../lib/session-time.js";
 import { formatTemporalContinuityContext } from "../../lib/temporal-context.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * @param {object} ctx Engine context.
@@ -126,7 +127,7 @@ export function createMinimalMaintenance(ctx) {
         reminderNudge = formatReminderNudge(allDue, { lang, tone });
         for (const r of dueFromDb) {
           await presentReminder(db, r.id).catch((err) => {
-            host.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
+            host.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${describeError(err)}`);
           });
         }
         if (dueFromPending.length > 0) {

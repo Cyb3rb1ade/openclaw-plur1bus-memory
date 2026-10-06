@@ -19,6 +19,7 @@ import { planUnsafeDirectCronDisables } from "../../lib/setup/feature-cron-plan.
 import { describeFeatureCronBootstrapResult, shouldRunCronBootstrap } from "../../lib/setup/feature-cron-bootstrap.js";
 import { PLUGIN_ROOT, PLUGIN_VERSION } from "../../lib/plugin-meta.js";
 import { featureCronsMarkerPath, parseFeatureCronBootstrapLastPlanCreateCount, resetFeatureCronsHintCache } from "../../lib/feature-crons-hint.js";
+import { describeError } from "../../lib/log-redact.js";
 
 function resolveNeoHooksConfig(api, commandConfig) {
   try {
@@ -27,7 +28,7 @@ function resolveNeoHooksConfig(api, commandConfig) {
   } catch (error) {
     // An empty object disables every Neo hook. Say so rather than looking
     // like a deliberately empty configuration.
-    api?.logger?.warn?.(`memory-lancedb-namespaced: neo hook config unreadable, all neo hooks stay disabled: ${String(error)}`);
+    api?.logger?.warn?.(`memory-lancedb-namespaced: neo hook config unreadable, all neo hooks stay disabled: ${describeError(error)}`);
     return {};
   }
 }
@@ -70,7 +71,7 @@ async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {
     cron = gatewayContext?.getCron?.();
   } catch (error) {
     api.logger?.warn?.(
-      `plur1bus-feature-crons: gateway cron service lookup failed (${error?.message || String(error)})`,
+      `plur1bus-feature-crons: gateway cron service lookup failed (${describeError(error)})`,
     );
     return { available: false, disabled: 0, failed: 0 };
   }
@@ -88,7 +89,7 @@ async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {
     );
   } catch (error) {
     api.logger?.warn?.(
-      `plur1bus-feature-crons: immediate cron list failed (${error?.message || String(error)})`,
+      `plur1bus-feature-crons: immediate cron list failed (${describeError(error)})`,
     );
     return { available: true, disabled: 0, failed: 1 };
   }
@@ -110,7 +111,7 @@ async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {
     } catch (error) {
       failed += 1;
       api.logger?.warn?.(
-        `plur1bus-feature-crons: immediate safety-disable failed for ${job.id} (${error?.message || String(error)})`,
+        `plur1bus-feature-crons: immediate safety-disable failed for ${job.id} (${describeError(error)})`,
       );
     }
   }

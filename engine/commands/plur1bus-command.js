@@ -31,6 +31,7 @@ import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
 import { withConfigLock } from "../../lib/telegram-commands/feature-toggle.js";
 import { activateSkillProposal, buildSkillReviewPayload, findProposalWorkspace, listActiveSkills, rejectSkillProposalWithWorkshop, showProposal } from "../../lib/telegram-commands/skill-commands.js";
 import { applyTemperamentToRawConfig, renderTemperamentOverview } from "../../lib/temperament-command.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * Build the /plur1bus command runner from an already-resolved engine context.
@@ -801,7 +802,7 @@ export function createPlur1busCommandRunner(ctx) {
             } catch (error) {
               // null is indistinguishable from "no evidence exists",
               // so record that this was a failed read instead.
-              host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
+              host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${describeError(error)}`);
               return null;
             }
           },
@@ -840,7 +841,7 @@ export function createPlur1busCommandRunner(ctx) {
             } catch (error) {
               // null is indistinguishable from "no evidence exists",
               // so record that this was a failed read instead.
-              host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
+              host.logger.warn(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${describeError(error)}`);
               return null;
             }
           },
@@ -896,7 +897,7 @@ export function createPlur1busCommandRunner(ctx) {
           try {
             rows = await listReminders(rdb, reminderAgent, reminderWsKey);
           } catch (e) {
-            host.logger.warn(`plur1bus-reminder: list failed: ${String(e)}`);
+            host.logger.warn(`plur1bus-reminder: list failed: ${describeError(e)}`);
           }
           const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
           if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };

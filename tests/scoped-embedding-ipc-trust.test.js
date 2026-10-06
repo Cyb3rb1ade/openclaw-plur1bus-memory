@@ -6,13 +6,13 @@
 
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { ipcAddress } from "../lib/platform.js";
+import { ipcAddress, unixSocketPathMaxBytes } from "../lib/platform.js";
 import {
   IpcScopedEmbeddingProvider,
   assertIpcPeerIdentity,
@@ -141,6 +141,48 @@ describe("K8-I1 embedding IPC trust", () => {
       await client?.shutdown();
       await closeServer(server);
     }
+  });
+
+  it("maps a missing socket file to ipc_unavailable", posixOnly, () => {
+    const dir = makeTempDir("e3-trust-gone-");
+    chmodSync(dir, 0o700);
+    assert.throws(
+      () => assertTrustedUnixSocketPath(join(dir, "e.sock")),
+      (error) => {
+        assert.equal(error.code, "scoped_embedding_ipc_unavailable");
+        assert.equal(error.cause?.code, "ENOENT");
+        return true;
+      },
+    );
+  });
+
+  it("refuses a unix-socket path Node would silently truncate", () => {
+    const longPath = `/${"x".repeat(130)}/owner.sock`;
+    assert.throws(
+      () => assertTrustedUnixSocketPath(longPath, { platform: "linux" }),
+      (error) => error.code === "scoped_embedding_socket_path_too_long",
+    );
+    assert.throws(
+      () => assertTrustedUnixSocketPath(longPath, { platform: "darwin" }),
+      (error) => error.code === "scoped_embedding_socket_path_too_long",
+    );
+  });
+
+  it("refuses a long stateRoot before creating IPC children", posixOnly, () => {
+    const parent = makeTempDir("e3-trust-long-", shortTmp);
+    const suffix = "/control/embedding-ipc/owner.sock";
+    const resolvedParent = realpathSync(parent);
+    const over = unixSocketPathMaxBytes() + 1 - Buffer.byteLength(resolvedParent) - 1 - Buffer.byteLength(suffix);
+    const stateRoot = join(parent, "x".repeat(Math.max(over, 1)));
+    assert.throws(
+      () => resolveScopedEmbeddingIpcPaths(stateRoot),
+      (error) => {
+        assert.equal(error.code, "scoped_embedding_socket_path_too_long");
+        assert.match(error.message, /shorter state root/i);
+        return true;
+      },
+    );
+    assert.equal(existsSync(join(stateRoot, "control")), false);
   });
 
   it("refuses an abstract socket when the peer uid cannot be read", () => {

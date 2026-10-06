@@ -7,6 +7,7 @@ import {
   registerModelPreparationServiceAfterLifecycle,
   registerReembeddingRecoveryServiceAfterLifecycle,
 } from "../lib/runtime-shutdown.js";
+import { describeError } from "../lib/log-redact.js";
 import { readRuntimeSources } from "./helpers/runtime-sources.js";
 
 function makeDependencies(overrides = {}) {
@@ -233,17 +234,17 @@ describe("LLM result cache lifecycle", () => {
     assert.equal(calls.length, 11);
     assert.deepStrictEqual(calls.toSorted(), ["model-preparation", "reembedding", "adapter", "pool", "shared", "routes", "metrics", "cache", "scoped-embedding-ipc", "embeddings", "reranker"].toSorted());
     assert.deepStrictEqual(warnings.toSorted(), [
-      "memory-lancedb-namespaced: model preparation shutdown failed: model-preparation broke",
-      "memory-lancedb-namespaced: reembedding coordinator shutdown failed: reembedding broke",
-      "memory-lancedb-namespaced: adapter shutdown failed: adapter broke",
-      "memory-lancedb-namespaced: pool shutdown failed: pool broke",
-      "memory-lancedb-namespaced: shared pool shutdown failed: shared broke",
-      "memory-lancedb-namespaced: turn route shutdown failed: routes broke",
-      "metrics flush failed: metrics broke",
-      "memory-lancedb-namespaced: LLM result cache shutdown failed: cache broke",
-      "memory-lancedb-namespaced: scoped embedding IPC shutdown failed: scoped-embedding-ipc broke",
-      "memory-lancedb-namespaced: embedding provider shutdown failed: embeddings broke",
-      "memory-lancedb-namespaced: reranker shutdown failed: reranker broke",
+      `memory-lancedb-namespaced: model preparation shutdown failed: ${describeError(new Error("model-preparation broke"))}`,
+      `memory-lancedb-namespaced: reembedding coordinator shutdown failed: ${describeError(new Error("reembedding broke"))}`,
+      `memory-lancedb-namespaced: adapter shutdown failed: ${describeError(new Error("adapter broke"))}`,
+      `memory-lancedb-namespaced: pool shutdown failed: ${describeError(new Error("pool broke"))}`,
+      `memory-lancedb-namespaced: shared pool shutdown failed: ${describeError(new Error("shared broke"))}`,
+      `memory-lancedb-namespaced: turn route shutdown failed: ${describeError(new Error("routes broke"))}`,
+      `metrics flush failed: ${describeError(new Error("metrics broke"))}`,
+      `memory-lancedb-namespaced: LLM result cache shutdown failed: ${describeError(new Error("cache broke"))}`,
+      `memory-lancedb-namespaced: scoped embedding IPC shutdown failed: ${describeError(new Error("scoped-embedding-ipc broke"))}`,
+      `memory-lancedb-namespaced: embedding provider shutdown failed: ${describeError(new Error("embeddings broke"))}`,
+      `memory-lancedb-namespaced: reranker shutdown failed: ${describeError(new Error("reranker broke"))}`,
     ].toSorted());
   });
 

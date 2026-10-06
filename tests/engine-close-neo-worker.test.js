@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url";
 import { createEngine } from "../engine/create-engine.js";
 import { internalsOf } from "../engine/internals.js";
 import { createResourceCloser } from "../engine/lifecycle/close-resources.js";
+import { describeError } from "../lib/log-redact.js";
 import { createStubHost } from "../lib/host-services.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -112,7 +113,7 @@ describe("Engine.close() and the shared neo worker (E5 Task 5)", () => {
       neoWorker: { release: async () => { throw new Error("neo broke"); } },
     });
     await close();
-    assert.deepEqual(warned, ["plur1bus-neo: worker release failed: neo broke"]);
+    assert.deepEqual(warned, [`plur1bus-neo: worker release failed: ${describeError(new Error("neo broke"))}`]);
   });
 
   it("the process exits after close with neo enabled", async () => {

@@ -31,7 +31,7 @@ import { drainPostTurnWork } from "../../lib/post-turn-queue.js";
 import { createPostTurnWorkers } from "../capture/post-turn-work.js";
 import { readReplyOutcomeLog } from "../../lib/reply-outcome-tracking.js";
 import { activateSkillProposal } from "../../lib/telegram-commands/skill-commands.js";
-import { summarizeAfterthoughtResultForLog, summarizePersonaResultForLog, summarizeReminderResultForLog } from "../../lib/log-redact.js";
+import { describeError, shortHash, summarizeJobResultForLog, summarizeAfterthoughtResultForLog, summarizePersonaResultForLog, summarizeReminderResultForLog } from "../../lib/log-redact.js";
 
 /**
  * @param {Record<string, any>} ctx The command runner's context plus its factory-level helpers.
@@ -234,7 +234,7 @@ export function createInternalJobBodies(ctx) {
           vectorCompaction,
           lancedbOptimize,
         };
-        host.logger.info(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         return formatJsonCommandResult({ job: "consolidate-daily", ...result });
       }
       if (subKey === "classify-recent") {
@@ -284,7 +284,7 @@ export function createInternalJobBodies(ctx) {
           maxPerDay: cpCfg.maxPerDay ?? 3,
           hideTypes: cpCfg.hideTypes,
         });
-        host.logger.info(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         // 7.16.10: eine Telegram-Nachricht je Karte mit Annehmen/Ablehnen.
         // Nicht gesendete Karten gehen wie bisher als Text über die
         // Cron-Zustellung raus. Den Versand macht der Host über
@@ -304,7 +304,7 @@ export function createInternalJobBodies(ctx) {
               warning: classifierPartialFailureWarning(result),
             });
           } catch (error) {
-            host.logger.warn(`plur1bus critical[${internalAgent}]: button push failed: ${error?.message || error}`);
+            host.logger.warn(`plur1bus critical[${internalAgent}]: button push failed: ${describeError(error)}`);
             delivery = null;
           }
           if (delivery) {
@@ -327,7 +327,7 @@ export function createInternalJobBodies(ctx) {
         // Notiz statt automatisch als Critical akzeptiert zu werden.
         // Name und Cron bleiben für bestehende Installationen gleich.
         const result = await runExpireStaleCriticals(memoryDbAdapter, internalAgent, { logger: host.logger, hours: 24 });
-        host.logger.info(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
       }
       if (subKey === "rem-dream") {
@@ -406,7 +406,7 @@ export function createInternalJobBodies(ctx) {
           if (partitionResult.report) {
             writeRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget);
           }
-          host.logger.info(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
+          host.logger.info(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(summarizeJobResultForLog(partitionResult.report || partitionResult))}`);
           remRuns.push({ scope: remAclPartition.scope, result: partitionResult });
           if (partitionResult?.diary) jobCtx.noteDiary(partitionResult.diary);
         }
@@ -424,7 +424,7 @@ export function createInternalJobBodies(ctx) {
                 defaultAgentId: internalAgent,
               }))
             .then((r) => host.logger.info(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
-            .catch((err) => host.logger.warn(`plur1bus-semantic: discovery failed: ${String(err)}`));
+            .catch((err) => host.logger.warn(`plur1bus-semantic: discovery failed: ${describeError(err)}`));
         }
         const remReply = formatJsonCommandResult({
           job: "rem-dream",
@@ -523,7 +523,7 @@ export function createInternalJobBodies(ctx) {
             skillRuns.push({ scope: skillAclPartition.scope, failed: true });
           }
         }
-        host.logger.info(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(skillRuns)}`);
+        host.logger.info(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(skillRuns))}`);
         const result = aggregateSkillMinerRuns(skillRuns, internalAgent);
         return formatJsonCommandResult({
           job: "skill-miner",
@@ -701,7 +701,7 @@ export function createInternalJobBodies(ctx) {
             result.errors.push(`${ep.id}: ${String(rebuildErr?.message || rebuildErr).slice(0, 120)}`);
           }
         }
-        host.logger.info(`plur1bus internal episodes-rebuild[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal episodes-rebuild[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         return formatJsonCommandResult(result);
       }
       if (subKey === "gc-run") {
@@ -716,7 +716,7 @@ export function createInternalJobBodies(ctx) {
           workspaceDir: commandCtx.workspaceDir,
           logger: host.logger,
         });
-        host.logger.info(`plur1bus internal gc-run[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal gc-run[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         return formatJsonCommandResult({ job: "gc-run", ...result });
       }
       // Wartungsgriff fuer die Neo-Embedding-Warteschlange. Bisher lief der
@@ -741,7 +741,7 @@ export function createInternalJobBodies(ctx) {
           dimensions: vectorDim,
           embedder: (text) => embeddings.embed(text, { agentId: internalAgent }),
         });
-        host.logger.info(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal embedding-drain[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         return formatJsonCommandResult({ job: "embedding-drain", ...result });
       }
       if (subKey === "post-turn-refine") {
@@ -914,7 +914,7 @@ export function createInternalJobBodies(ctx) {
           return jobCtx.skip("no_workspace", formatJsonCommandResult({ job: "feedback-report", skipped: true, reason: "no_workspace" }));
         }
         const result = await runFeedbackAnalyzer(commandCtx.workspaceDir);
-        host.logger.info(`plur1bus internal feedback-report[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal feedback-report[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         return formatJsonCommandResult({ job: "feedback-report", ...result });
       }
       if (subKey === "discover-semantic-links") {
@@ -953,7 +953,7 @@ export function createInternalJobBodies(ctx) {
             totalErrors += semResult.errors;
             if (semResult.blocked) totalBlocked++;
           } catch (err) {
-            host.logger.warn(`[discover-semantic-links] workspace ${ws.path} failed: ${err.message}`);
+            host.logger.warn(`[discover-semantic-links] workspace ${shortHash(ws.path)} failed: ${describeError(err)}`);
             totalErrors++;
           }
         }
@@ -984,7 +984,7 @@ export function createInternalJobBodies(ctx) {
           logger: host.logger,
           llmReport: metaCognitionLlmReport,
         });
-        host.logger.info(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(summarizeJobResultForLog(result))}`);
         return formatJsonCommandResult({ job: "meta-reflect", ...result });
       }
 

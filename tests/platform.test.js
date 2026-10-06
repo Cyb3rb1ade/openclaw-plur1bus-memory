@@ -160,6 +160,18 @@ describe("lib/platform ipcAddress", () => {
     assert.equal(a.address, b.address);
     assert.notEqual(a.address, c.address);
   });
+
+  it("refuses a unix-socket path Node would silently truncate", () => {
+    const longRoot = `/${"x".repeat(130)}`;
+    assert.throws(
+      () => ipcAddress(longRoot, { platform: "linux" }),
+      (error) => error.code === "scoped_embedding_socket_path_too_long",
+    );
+    assert.throws(
+      () => ipcAddress(longRoot, { platform: "darwin" }),
+      (error) => error.code === "scoped_embedding_socket_path_too_long",
+    );
+  });
 });
 
 describe("lib/platform isUnsafeLink", () => {

@@ -13,6 +13,7 @@
 import { sanitizeMemoryTextForPrompt } from "../../lib/memory-context-sanitize.js";
 import { routeNeoRecall, workspaceKeyFromContext } from "../../lib/neo-arch.js";
 import { buildSystemSupplement } from "../../engine/recall/system-supplement.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * @param {object} ctx Registration context: the engine context plus `api`.
@@ -63,7 +64,7 @@ export function registerPromptSupplements(ctx) {
         const items = [...store.readCandidates(500, requester), ...store.readBehaviorCards(200, requester)];
         let queryVector = null;
         try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(params?.query || "", { agentId: requester.requesterAgentId }) : embeddings.embed(params?.query || "", { agentId: requester.requesterAgentId })); }
-        catch (error) { host.logger.debug(`plur1bus-neo: corpus query embedding unavailable: ${String(error)}`); }
+        catch (error) { host.logger.debug(`plur1bus-neo: corpus query embedding unavailable: ${describeError(error)}`); }
         try { runNeoGlobalSearch(store, items, queryVector, requester); }
         catch (globalErr) { host.logger.debug(`plur1bus-neo: corpus global search failed: ${String(globalErr)}`); }
         const lanes = routeNeoRecall(items, params?.query || "", { ...requester, queryVector, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });

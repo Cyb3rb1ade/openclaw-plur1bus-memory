@@ -38,6 +38,7 @@ import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
 import { enqueuePostTurnWork } from "../../lib/post-turn-queue.js";
 import { createPostTurnWorkers, postTurnContext, shouldDeferPostTurnLlm } from "./post-turn-work.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * Classifies a light-dream JobRun's effect on capture post-processing
@@ -286,7 +287,7 @@ export function createTurnCapture(ctx) {
           sessionId: hookCtx?.sessionId ?? event?.sessionId,
         }, { workspaceAliases: memoryWorkspaceAliases });
       } catch (err) {
-        host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+        host.logger.debug(`memory-lancedb-namespaced: capture memory context unavailable: ${describeError(err)}`);
       }
     }
     if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
@@ -561,7 +562,7 @@ export function createTurnCapture(ctx) {
             }
             return { it, text, ok: true };
           } catch (err) {
-            host.logger.warn(`memory-lancedb-namespaced: text prep failed for capture item: ${String(err)}`);
+            host.logger.warn(`memory-lancedb-namespaced: text prep failed for capture item: ${describeError(err)}`);
             return { it, text, ok: false };
           }
         }));
@@ -636,7 +637,7 @@ export function createTurnCapture(ctx) {
             try {
               vector = await embeddings.embed(p.text, { agentId });
             } catch (err) {
-              host.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
+              host.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${describeError(err)}`);
               return { it: p.it, text: p.text, chunkGroupId: p.chunkGroupId || "", vector: null, ok: false };
             }
           }
@@ -653,7 +654,7 @@ export function createTurnCapture(ctx) {
               if (existing.length > 0) return null;
               return p;
             } catch (err) {
-              host.logger.warn(`memory-lancedb-namespaced: dedup-check failed: ${String(err)}`);
+              host.logger.warn(`memory-lancedb-namespaced: dedup-check failed: ${describeError(err)}`);
               dedupFailed++;
               return null;
             }
@@ -752,7 +753,7 @@ export function createTurnCapture(ctx) {
             // abbrechen, der aeussere Block meldet den Zaehlstand.
             if (isAbortError(err)) throw err;
             storeFailed++;
-            host.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
+            host.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${describeError(err)}`);
           }
         }
         throwIfCaptureAborted();
@@ -830,7 +831,7 @@ export function createTurnCapture(ctx) {
                 host.logger.info(`memory-lancedb-namespaced: meta-reflection triggered after ${metaCognitionSessionThreshold} sessions`);
               }
             } catch (err) {
-              host.logger.warn(`memory-lancedb-namespaced: meta-reflection failed: ${String(err)}`);
+              host.logger.warn(`memory-lancedb-namespaced: meta-reflection failed: ${describeError(err)}`);
             }
           }
         }
@@ -1179,7 +1180,7 @@ export function createTurnCapture(ctx) {
                 ],
               });
             } catch (err) {
-              host.logger.debug(`memory-graph: recent ownership projection failed: ${String(err)}`);
+              host.logger.debug(`memory-graph: recent ownership projection failed: ${describeError(err)}`);
             }
 
             // Baue neue Edges
@@ -1246,7 +1247,7 @@ export function createTurnCapture(ctx) {
           // Eintrag im Log ("stored memory ...").
           host.logger.info(`memory-lancedb-namespaced: capture budget exhausted for agent=${agentId} — das bereits Gespeicherte steht, der Rest folgt beim naechsten Turn`);
         } else {
-          host.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
+          host.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${describeError(err)}`);
         }
       }
       });

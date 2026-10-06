@@ -7,6 +7,7 @@
 
 import { getMergeResultByMediaOutputId } from "../../lib/speaker-mapping-store.js";
 import { proposeSpeakerNames, storeNewProposals } from "../../lib/speaker-proposer.js";
+import { describeError } from "../../lib/log-redact.js";
 
 // Modulweiter Debug-Logger: wird in register() per setPluginLogger(host.logger)
 // gesetzt. So können auch leere best-effort-catches (#10) ihren Fehler auf
@@ -57,7 +58,7 @@ async function runSpeakerProposalPipeline(agentId, mediaOutputIds) {
     }
     return { proposals: totalStored };
   } catch (err) {
-    pluginLogger?.warn?.(`[plur1bus] speaker proposal pipeline failed: ${String(err)}`);
+    pluginLogger?.warn?.(`[plur1bus] speaker proposal pipeline failed: ${describeError(err)}`);
     return { proposals: 0 };
   }
 }

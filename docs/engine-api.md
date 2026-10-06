@@ -309,6 +309,21 @@ callers are unchanged. The OpenClaw adapter does not have to call them.
   `{baseDbPath}/_imports/<agentId>.jsonl` is provenance display and a cache.
   A crash after `store()` and before the ledger line resumes as
   `matched-existing` and backfills the missing ledger line.
+- Concurrent imports (same process, two engines, or two processes on one
+  store) are serialised per agent around re-check → `store()` → ledger by
+  `{baseDbPath}/_imports/.locks/<agentId>.lock` (in-process mutex plus the
+  nonce-owned `tryAcquireOwnedLock` file lock; the holder refreshes the
+  lock mtime at most every 2 s). Of N concurrent calls with one key exactly one is
+  `created`, the others `matched-existing` / `already-imported`; one row.
+  If the lock cannot be acquired within 120 s (one deadline covering the
+  in-process queue wait and the file-lock acquire) the pending cards are
+  `rejected` / `storage` (`aborted` if `signal` fires while waiting, in
+  either phase) and nothing is written. `dryRun` takes no lock.
+- Every ledger append is fsynced; creating the ledger file also fsyncs
+  `_imports/` and `baseDbPath` (no-op on win32; best-effort where the
+  filesystem refuses a directory fsync — warned once, the card stays
+  `created`). A torn last line is
+  newline-terminated before the next append and skipped on load.
 - A previously imported, since-forgotten card (deleted, archived, superseded,
   or ledger-only after purge) is `rejected` / `previously-imported-deleted`.
   It is not resurrected.
@@ -1940,6 +1955,7 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/memory-ops/proposals.js` | `createMemoryProposals` — `MemoryOps.propose`/`.proposals.{list,accept,reject}`, `memory.proposal` event |
 | `engine/memory-ops/import-id.js` | UUID v5 card id for `memory.import` (1.11.0) |
 | `engine/memory-ops/import-ledger.js` | `{baseDbPath}/_imports/<agentId>.jsonl` sidecar (1.11.0) |
+| `engine/memory-ops/import-lock.js` | per-agent writer lock for the `memory.import` apply path (K1) |
 | `engine/memory-ops/import.js` | `Engine.memory.import` (1.11.0) |
 | `engine/memory-ops/rebind-ledger.js` | `{baseDbPath}/_rebinds/<rebindId>.jsonl` sidecar (1.12.0) |
 | `engine/memory-ops/rebind.js` | `Engine.memory.rebind` / `unbind` (1.12.0) |

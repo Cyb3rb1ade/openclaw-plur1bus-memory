@@ -360,7 +360,7 @@ export class AgentDbPool {
             const loggingError = await this._warnLifecycle(
               id,
               "late-settlement",
-              new Error("late database operation failed"),
+              "late database operation failed", // fester, inhaltsfreier Grund (String bleibt lesbar)
             );
             if (loggingError) this._recordBackgroundLifecycleError(loggingError);
           }

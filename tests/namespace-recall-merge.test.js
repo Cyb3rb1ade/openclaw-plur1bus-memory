@@ -494,6 +494,6 @@ describe("emitRetrievalLedger", () => {
     assert.ok(!warnings[0].includes(queryText));
     assert.ok(!warnings[0].includes(memoryText));
     assert.ok(!warnings[0].includes(credential));
-    assert.match(warnings[0], /retrieval callback failed/i);
+    assert.match(warnings[0], /recall-pipeline\.retrievalLogger.*Error textLen=\d+ sha=[0-9a-f]{12}/);
   });
 });

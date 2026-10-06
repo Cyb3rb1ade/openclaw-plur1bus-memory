@@ -16,6 +16,7 @@ import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
 import { memoryOpError } from "./errors.js";
 import { importCardId } from "./import-id.js";
 import { createImportLedger } from "./import-ledger.js";
+import { withImportLock } from "./import-lock.js";
 
 export const IMPORT_CARD_BATCH_LIMIT = 500;
 export const IMPORT_SOURCE_REF_MAX = 500;
@@ -56,8 +57,11 @@ export function createMemoryImport({
   halfLifeOverrides = {},
   flashbulbEncodingEnabled = false,
   summaryMaxWords = 150,
+  importLock = {},
+  ledgerSync = {},
 } = {}) {
-  const ledger = createImportLedger({ baseDbPath, logger });
+  // `importLock` (withImportLock opts) and `ledgerSync` ({syncFile, syncDir}) are test seams.
+  const ledger = createImportLedger({ baseDbPath, logger, ...ledgerSync });
 
   async function embedPassages(texts, agentId, signal) {
     if (texts.length === 0) return [];
@@ -313,7 +317,12 @@ export function createMemoryImport({
         }
       }
 
-      await pool.withWriteDb(agentId, async (db) => {
+      // K1: re-check → store → ledger runs under the per-agent import lock.
+      // `withWriteDb` alone is a shared lease; without the lock two concurrent
+      // imports of one key both re-check "absent" and both store the same id.
+      let heartbeat = () => {};
+      let entered = false;
+      const writePhase = () => pool.withWriteDb(agentId, async (db) => {
         const index = ledger.load(agentId);
         const nowForBackfill = clock();
         for (const entry of cardResults) {
@@ -321,6 +330,7 @@ export function createMemoryImport({
         }
 
         for (const entry of pending) {
+          heartbeat();
           if (entry.result) continue;
           if (signal?.aborted) {
             reject(entry, "aborted");
@@ -436,6 +446,24 @@ export function createMemoryImport({
           logSafe(logger, `memory-ops.import: created agent='${agentId}' id='${plan.cardId}'`);
         }
       });
+
+      try {
+        await withImportLock(baseDbPath, agentId, (ctx) => {
+          entered = true;
+          heartbeat = ctx.heartbeat;
+          return writePhase();
+        }, { ...importLock, signal });
+      } catch (err) {
+        if (entered) throw err;
+        // Lock not acquired: nothing was written. Per-card semantics as for a store failure.
+        const aborted = isAbortError(err, signal);
+        if (!aborted) {
+          logger?.warn?.(`memory-ops.import: import lock unavailable for agent '${agentId}': ${err?.code || "error"}`);
+        }
+        for (const entry of pending) {
+          if (!entry.result) reject(entry, aborted ? "aborted" : "storage");
+        }
+      }
     }
 
     const cards = cardResults.map((entry) => {

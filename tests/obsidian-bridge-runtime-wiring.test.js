@@ -250,9 +250,10 @@ describe("registered Obsidian bridge runtime wiring", () => {
 
     await service.start();
     await waitFor(
-      () => warnings.some((message) => message.includes("injected authoritative scan failure")),
+      () => warnings.some((message) => /plur1bus-obsidian-bridge.*Error textLen=\d+ sha=[0-9a-f]{12}/.test(message)),
       "visible authoritative scan failure",
     );
+    assert.ok(warnings.every((message) => !message.includes("injected authoritative scan failure")), "the raw error message stays out of the log");
 
     assert.equal(existsSync(join(vaultPath, "plur1bus", "memories")), false);
   });
