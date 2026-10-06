@@ -5,7 +5,7 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { isGuardedDirectFeatureCronMessage } from "../../lib/feature-cron-specs.js";
@@ -13,6 +13,7 @@ import { t } from "../../lib/i18n.js";
 import { safeUuid } from "../../lib/sql-safety.js";
 import { validateConfirmation } from "../../lib/security.js";
 import { findLatestNeoRecord } from "../../lib/neo-arch.js";
+import { appendPrivateFileSync, ensurePrivateDir, writePrivateFileSync } from "../../lib/private-fs.js";
 import { readFileHeadSync } from "../runtime/env-config.js";
 import { readKnowledgePending } from "../knowledge/knowledge-pending.js";
 
@@ -192,9 +193,9 @@ function writeConflictSummary(workspaceDir, summary) {
   try {
     const path = conflictSummaryPath(workspaceDir);
     const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    ensurePrivateDir(dir);
     const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmp, JSON.stringify(summary) + "\n", "utf8");
+    writePrivateFileSync(tmp, JSON.stringify(summary) + "\n");
     renameSync(tmp, path);
   } catch (e) {
     console.warn("[conflict-summary] write failed:", e?.message);
@@ -279,8 +280,8 @@ function updateConflictSummary(workspaceDir, entry) {
 function appendConflictLog(workspaceDir, entry) {
   try {
     const dir = join(workspaceDir, ".adaptive-learning");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, "conflict-log.jsonl"), JSON.stringify(entry) + "\n", "utf8");
+    ensurePrivateDir(dir);
+    appendPrivateFileSync(join(dir, "conflict-log.jsonl"), JSON.stringify(entry) + "\n");
     // P0-4: Summary für promptnahe Reads pflegen.
     updateConflictSummary(workspaceDir, entry);
   } catch (e) {

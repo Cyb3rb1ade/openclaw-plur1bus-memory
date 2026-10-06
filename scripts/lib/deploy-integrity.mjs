@@ -114,6 +114,8 @@ export const DEPLOY_FILES = [
   "lib/recall-budget.js",
   "lib/with-timeout.js",
   "lib/log-redact.js",
+  "lib/provider-error.js",
+  "lib/private-fs.js",
   "lib/safe-logging.js",
   "lib/llm-call.js",
   "lib/llm-failure.js",
