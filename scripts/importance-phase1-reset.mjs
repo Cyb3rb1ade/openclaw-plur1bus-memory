@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 /**
+ * Operator-Werkzeug: gibt im Dry-Run Zeilentext aus (Vorschau, gewollt); nicht für geteilte Logs.
+ *
  * scripts/importance-phase1-reset.mjs — Phase 1 der Importance-Migration:
  * räumt das Agentenband (importance >= 0.95).
  *

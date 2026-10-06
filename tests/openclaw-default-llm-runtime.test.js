@@ -897,7 +897,8 @@ test("engine classify-recent falls back to the cron text and warns when the capa
   });
   assert.equal(calls.length, 1, "the capability is asked once");
   assert.match(output.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
-  assert.match(JSON.stringify(logger.calls), /button push failed: third-party host exploded/);
+  assert.match(JSON.stringify(logger.calls), /button push failed: Error textLen=\d+ sha=[0-9a-f]{12}/);
+  assert.ok(!JSON.stringify(logger.calls).includes("third-party host exploded"), "the host error message stays out of the log");
 });
 
 test("engine classify-recent keeps the cron text when the capability returns no unsentTexts", async (t) => {
