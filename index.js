@@ -9239,7 +9239,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           if (operatorLang) commandCtx.lang = operatorLang;
           const result = await spec.handler(commandCtx);
           const text = typeof result === "string" ? result : result?.text;
-          return { text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY" };
+          return {
+            text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY",
+            // 7.18.22: Der Review-Cron wertet eine Policy-Ablehnung als Fehler.
+            ...(result?.policyDenied ? { policyDenied: result.policyDenied } : {}),
+          };
         };
         if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
           registerFeatureCronNativeDispatch({

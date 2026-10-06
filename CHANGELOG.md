@@ -5,6 +5,13 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.22] — 2026-10-06
+
+### Behoben
+
+- **Abgelehnte Obsidian-Befehle schickten rohes JSON in den Chat.** Am 06.10. lehnte die Mutation-Policy das Abend-Review ab (`mode_not_apply(augment)`), und Telegram bekam `{"ok": true, "applied": false, "reason": "mutation_policy_denied", …}`. Die Ablehnung ist jetzt ein übersetzter Text: was gesperrt ist, welcher Schalter es freigibt, und darunter die technischen Gate-Namen.
+- **Review-Cron meldete trotz Ablehnung „ok“.** Der Feature-Cron gibt den Text weiter aus und beendet sich danach mit Fehler, sodass der Lauf als `error` erscheint. Das Ergebnis des Befehls trägt dafür ein nicht aufzählbares `policyDenied`, das nur der Operator-/Cron-Pfad ausliest; der Chat-Host sieht weiter nur `{ text }`.
+
 ## [7.18.21] — 2026-10-06
 
 ### Behoben
