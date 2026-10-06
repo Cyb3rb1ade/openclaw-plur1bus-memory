@@ -45,6 +45,16 @@ function foreignHostLock(dir, ageMs, name = "x.lock") {
   return p;
 }
 
+/** A lock held by a live process (our parent) on this host, no procStart info. */
+function sameHostLiveLock(dir, ageMs, name = "live.lock") {
+  const p = join(dir, name);
+  writeFileSync(p, JSON.stringify({
+    nonce: "live-parent", pid: process.ppid, host: hostname(), acquiredAt: "2026-10-05T00:00:00.000Z",
+  }));
+  age(p, ageMs);
+  return p;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitFor(pred, ms = 3_000) {
@@ -112,6 +122,59 @@ describe("K2 hardCeilingMs", T, () => {
     // age is ~0 <= staleMs, so the ceiling is not even consulted
     assert.equal(tryAcquireOwnedLock(join(dir, "own.lock"), { staleMs: 60_000, hardCeilingMs: 1 }), null);
     h.release();
+  });
+
+  it("a live same-host holder at 5 x staleMs is NOT reaped by a 4 x ceiling (tryAcquireOwnedLock)", T, (t) => {
+    const dir = tempDir(t);
+    const p = sameHostLiveLock(dir, 5 * STALE);
+    assert.equal(tryAcquireOwnedLock(p, { staleMs: STALE, hardCeilingMs: 4 * STALE }), null);
+    assert.equal(JSON.parse(readFileSync(p, "utf8")).nonce, "live-parent");
+  });
+
+  it("a live same-host holder at 5 x staleMs is NOT reaped by a 4 x ceiling (acquireJobLock)", T, (t) => {
+    const dir = tempDir(t);
+    const p = sameHostLiveLock(dir, 5 * STALE, "job-live.lock");
+    assert.throws(
+      () => acquireJobLock(p, { staleMs: STALE, hardCeilingMs: STALE * JOB_LOCK_HARD_CEILING_FACTOR }),
+      /lock held/,
+    );
+    assert.equal(JSON.parse(readFileSync(p, "utf8")).nonce, "live-parent");
+  });
+
+  it("a live same-host holder is still reaped past 10 x staleMs (pid-reuse bound)", T, (t) => {
+    const dir = tempDir(t);
+    const p = sameHostLiveLock(dir, 11 * STALE);
+    const h = tryAcquireOwnedLock(p, { staleMs: STALE, hardCeilingMs: 4 * STALE });
+    assert.ok(h);
+    h.release();
+  });
+
+  it("a foreign-host holder past the 4 x ceiling IS reaped (both entry points)", T, (t) => {
+    const dir = tempDir(t);
+    const a = foreignHostLock(dir, 5 * STALE, "a.lock");
+    const h = tryAcquireOwnedLock(a, { staleMs: STALE, hardCeilingMs: 4 * STALE });
+    assert.ok(h);
+    h.release();
+    const b = foreignHostLock(dir, 5 * STALE, "b.lock");
+    assert.equal(acquireJobLock(b, { staleMs: STALE, hardCeilingMs: STALE * JOB_LOCK_HARD_CEILING_FACTOR }), b);
+    releaseJobLock(b);
+  });
+
+  it("hardCeilingMs is clamped to >= staleMs and <= 10 x staleMs", T, (t) => {
+    const dir = tempDir(t);
+    // below staleMs: a foreign lock at 2 x staleMs must wait for staleMs, a lock at 0.5 x is never stale
+    const young = foreignHostLock(dir, STALE / 2, "young.lock");
+    assert.equal(tryAcquireOwnedLock(young, { staleMs: STALE, hardCeilingMs: 10 }), null);
+    // clamped to staleMs: past staleMs it is reaped
+    const mid = foreignHostLock(dir, 2 * STALE, "mid.lock");
+    const h = tryAcquireOwnedLock(mid, { staleMs: STALE, hardCeilingMs: 10 });
+    assert.ok(h);
+    h.release();
+    // above 10 x: cannot loosen the default bound
+    const old = foreignHostLock(dir, 11 * STALE, "old.lock");
+    const h2 = tryAcquireOwnedLock(old, { staleMs: STALE, hardCeilingMs: 100 * STALE });
+    assert.ok(h2);
+    h2.release();
   });
 
   it("acquireJobLock passes hardCeilingMs through; default unchanged", T, (t) => {
