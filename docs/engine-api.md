@@ -632,11 +632,20 @@ Check, header write, card patches and unbind run under one exclusive
 lock: `_rebinds/.lock` via `tryAcquireOwnedLock` (nonce, rename-aside
 release, stale = age > 60 s AND (holder pid dead OR age > 10 min)) plus
 an in-process mutex. Lock age uses wall-clock, never `host.clock`. Before
-each ledger write the holder re-checks its nonce; a mismatch is
-`lock-lost`. A claim file for a different user is `identity-already-bound`
-and is never unlinked. Two concurrent rebinds of one identity to two
-users: one succeeds, the other `identity-already-bound`. Two concurrent
-identical rebinds share one `rebindId`.
+each ledger write **and each store patch** the holder re-checks its nonce;
+a mismatch is `lock-lost` and the call stops at once. A later identical
+`rebind` or `unbind` finishes from the sidecar. A claim file for a
+different user is `identity-already-bound` and is never unlinked. Two
+concurrent rebinds of one identity to two users: one succeeds, the other
+`identity-already-bound`. Two concurrent identical rebinds share one
+`rebindId`.
+
+A crash between `writeClaim` and `writeHeader` leaves an orphan claim
+and no `rebindId`. The identity stays bound to that user
+(`identity-already-bound` for any other `toUser`). Recovery: call
+`rebind` again with the **same** `toUser`; that writes the header and
+patches, then `unbind` that `rebindId`. Do not delete the claim file by
+hand.
 
 ### What logs and results contain
 
