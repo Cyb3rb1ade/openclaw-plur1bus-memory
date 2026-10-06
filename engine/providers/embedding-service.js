@@ -150,7 +150,7 @@ export function validateIpcAddress(address, { platform = process.platform } = {}
   if (kind === "unix-socket") {
     if (platform === "win32") throw invalidInput("unix sockets are not used on Windows; use a named pipe");
     if (!posix.isAbsolute(value)) throw invalidInput("socket path must be absolute");
-    if (Buffer.byteLength(value) > (platform === "darwin" ? 103 : 107)) {
+    if (Buffer.byteLength(value) > (platform === "darwin" ? 104 : 108)) {
       throw invalidInput("socket path exceeds the platform limit");
     }
     if (value.includes("\0")) throw invalidInput("invalid socket path");

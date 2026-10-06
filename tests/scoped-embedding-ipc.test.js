@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ import {
   resolveScopedEmbeddingIpcPaths,
   resolveScopedEmbeddingOwnerClaimAddress,
 } from "../lib/providers/scoped-embedding-ipc.js";
-import { ipcAddress, readDirectoryAcl } from "../lib/platform.js";
+import { ipcAddress, readDirectoryAcl, unixSocketPathMaxBytes } from "../lib/platform.js";
 import { claimAddressUnavailable, makeClaimableStateRoot } from "./helpers/claimable-state-root.js";
 import { runTracked, spawnTracked, waitForOutput } from "./helpers/spawn-tracked.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -79,7 +79,7 @@ function fixtureEmbeddings() {
 }
 
 async function createStateRoot(prefix) {
-  // macOS limits filesystem Unix socket names to 103 bytes.  Its default
+  // macOS limits filesystem Unix socket names to 104 bytes.  Its default
   // per-user temporary directory is longer than that before this test adds
   // the private IPC path, while /tmp keeps this fixture portable.
   // win32 has neither /tmp nor socket files (the owner listens on a named pipe).
@@ -264,11 +264,12 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     }
   });
 
-  it("diagnoses an oversized macOS data socket path before creating IPC children", {
-    skip: process.platform !== "darwin" && "macOS-only socket path length limit (sun_path 104)",
-  }, async () => {
+  it("diagnoses an oversized unix-socket path before creating IPC children", posixSocketFile, async () => {
     const parent = await createStateRoot("plur1bus-scoped-embedding-path-");
-    const stateRoot = join(parent, "x".repeat(100));
+    const suffix = "/control/embedding-ipc/owner.sock";
+    const resolvedParent = realpathSync(parent);
+    const over = unixSocketPathMaxBytes() + 1 - Buffer.byteLength(resolvedParent) - 1 - Buffer.byteLength(suffix);
+    const stateRoot = join(parent, "x".repeat(Math.max(over, 1)));
     try {
       assert.throws(
         () => resolveScopedEmbeddingIpcPaths(stateRoot),
@@ -842,7 +843,16 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   // run 37432579022), so these tests take a stateRoot whose claim port was
   // bindable and connection-refused when it was rolled.
   function e3Client(stateRoot, address, fingerprintId = ACTIVE_FINGERPRINT_ID) {
-    return new IpcScopedEmbeddingProvider({ stateRoot, model: "fixture/e5", dimensions: 2, fingerprintId, address });
+    return new IpcScopedEmbeddingProvider({
+      stateRoot,
+      model: "fixture/e5",
+      dimensions: 2,
+      fingerprintId,
+      address,
+      // Explicit abstract sockets fail closed without a peer uid; this suite's
+      // abstract cases are about owner exclusivity, not SO_PEERCRED.
+      ...(address?.kind === "abstract-socket" ? { readPeerUid: () => process.getuid() } : {}),
+    });
   }
 
   it("serves a round trip on an explicit unix socket and removes socket and token on shutdown", async () => {

@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
 import { createStubHost } from "../lib/host-services.js";
-import { IpcScopedEmbeddingProvider } from "../lib/providers/scoped-embedding-ipc.js";
+import { IpcScopedEmbeddingProvider, resolveScopedEmbeddingIpcPaths } from "../lib/providers/scoped-embedding-ipc.js";
 import { createEmbeddingServing, validateIpcAddress } from "../engine/providers/embedding-service.js";
 import { spawnTracked, waitForOutput } from "./helpers/spawn-tracked.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -55,7 +55,7 @@ function stubEmbedder() {
 }
 
 // macOS: $TMPDIR realpaths to /private/var/folders/<..>/T/ (~57 bytes), so
-// <baseDbPath>/control/embedding-ipc/owner.sock exceeds the 103-byte sun_path
+// <baseDbPath>/control/embedding-ipc/owner.sock exceeds the 104-byte sun_path
 // limit that resolveScopedEmbeddingIpcPaths() enforces for every serve() on
 // darwin. A real store (~/.openclaw/memory/...) is far shorter; /tmp is too.
 const shortTmp = process.platform === "darwin" ? "/tmp" : tmpdir();
@@ -164,12 +164,17 @@ describe("EmbeddingService.serve() (E3 Task 4)", () => {
     }
   });
 
-  it("(c) serve() without an address binds the platform default", { skip: process.platform !== "linux" && "platform default address is the Linux abstract socket" }, async () => {
+  it("(c) serve() without an address binds the platform default", posixOnly, async () => {
     const { engine, host, baseDbPath } = setup("e3-serve-c-");
     try {
       const result = await engine.embedding.serve();
-      assert.equal(result.address.kind, "abstract-socket");
-      assert.deepEqual(result.address, host.platform.ipcAddress(join(baseDbPath, "control", "embedding-ipc")));
+      assert.equal(result.address.kind, "unix-socket");
+      assert.deepEqual(
+        result.address,
+        host.platform.ipcAddress(resolveScopedEmbeddingIpcPaths(baseDbPath).directory),
+      );
+      assert.match(result.address.address, /owner\.sock$/);
+      assert.equal(result.address.address.includes("\0"), false);
       assert.equal((await roundTrip(baseDbPath, result)).length, 384);
     } finally {
       await engine.close();
@@ -351,13 +356,25 @@ describe("EmbeddingService.serve() (E3 Task 4)", () => {
       () => validateIpcAddress({ kind: "abstract-socket", address: "\0plur1bus-embedding-x" }, { platform: "darwin" }),
       { code: "invalid-input", message: "abstract sockets are Linux-only" },
     );
-    const long = `/${"a".repeat(103)}`;
-    assert.equal(Buffer.byteLength(long), 104);
+    const atDarwinLimit = `/${"a".repeat(103)}`;
+    assert.equal(Buffer.byteLength(atDarwinLimit), 104);
+    assert.deepEqual(
+      validateIpcAddress({ kind: "unix-socket", address: atDarwinLimit }, { platform: "darwin" }),
+      { kind: "unix-socket", address: atDarwinLimit },
+    );
+    const pastDarwin = `/${"a".repeat(104)}`;
+    assert.equal(Buffer.byteLength(pastDarwin), 105);
     assert.throws(
-      () => validateIpcAddress({ kind: "unix-socket", address: long }, { platform: "darwin" }),
+      () => validateIpcAddress({ kind: "unix-socket", address: pastDarwin }, { platform: "darwin" }),
       { code: "invalid-input", message: "socket path exceeds the platform limit" },
     );
-    assert.deepEqual(validateIpcAddress({ kind: "unix-socket", address: long }, { platform: "linux" }), { kind: "unix-socket", address: long });
+    assert.deepEqual(validateIpcAddress({ kind: "unix-socket", address: atDarwinLimit }, { platform: "linux" }), { kind: "unix-socket", address: atDarwinLimit });
+    const pastLinux = `/${"a".repeat(108)}`;
+    assert.equal(Buffer.byteLength(pastLinux), 109);
+    assert.throws(
+      () => validateIpcAddress({ kind: "unix-socket", address: pastLinux }, { platform: "linux" }),
+      { code: "invalid-input", message: "socket path exceeds the platform limit" },
+    );
     assert.throws(() => validateIpcAddress({ kind: "unix-socket", address: "/a.sock" }, { platform: "win32" }), { message: "unix sockets are not used on Windows; use a named pipe" });
     assert.throws(() => validateIpcAddress({ kind: "unix-socket", address: "/a\0b" }, { platform: "linux" }), { message: "invalid socket path" });
     assert.throws(() => validateIpcAddress({ kind: "abstract-socket", address: "\0has space" }, { platform: "linux" }), { message: "invalid abstract socket name" });

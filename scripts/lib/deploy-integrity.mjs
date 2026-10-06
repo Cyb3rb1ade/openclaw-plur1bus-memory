@@ -231,6 +231,7 @@ export const DEPLOY_FILES = [
   "lib/native/sharp-stub.js",
   "lib/native/sharp-unavailable.js",
   "lib/providers/local-transformers-shared-pool.js",
+  "lib/peercred.js",
   "lib/providers/scoped-embedding-ipc.js",
   "lib/providers/local-model-artifacts.js",
   "lib/providers/embedding-openai.js",
