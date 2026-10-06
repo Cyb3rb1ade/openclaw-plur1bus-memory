@@ -5,6 +5,14 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.21] — 2026-10-06
+
+### Behoben
+
+- **Morgen-Review meldete bei `obsidianBridge.mode: "apply"` „❌ System: 1 Fehler“.** Der Health-Check in `runMaintenanceLight` ließ nur `augment` gelten, das Schema erlaubt `augment` und `apply`. Wer deshalb auf `augment` umstellte, verlor alle Schreibrechte der Reviews: Die Mutation-Policy verlangt `apply` und lehnte mit `mode_not_apply(augment)` ab. Der Check akzeptiert jetzt beide Werte.
+- **Systemhinweise im Review mehrfach.** Hinweise werden nach Code gruppiert; „Dashboard-Link zu prüfen“ erscheint einmal mit Zähler statt fünfmal.
+- `invalid_mode` und die Fußnote des Morgen-Reviews sind übersetzt.
+
 ## [7.18.20] — 2026-10-04
 
 ### Behoben
