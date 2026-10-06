@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.11.0** · frozen at 1.0.0 on 2026-09-22, amended twelve times
+**Contract version 1.12.0** · frozen at 1.0.0 on 2026-09-22, amended thirteen times
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -137,6 +137,10 @@ own changelog:
 - **1.11.0** — `MemoryOps.import` (finished-card ingest) and `Engine.stores.adopt`
   (copy-never-move store take-over). Additive members only. See
   [Import and store adopt in 1.11.0](#import-and-store-adopt-in-1110) below.
+- **1.12.0** — `MemoryOps.rebind` / `MemoryOps.unbind` (manual N:1 channel-identity
+  link; owner metadata only) and `ADOPT_PROBE_MIN_ROWS = min(8, available)`.
+  `UserPrincipal` accepts `user:v1:` and `user:v2:`. Additive members only. See
+  [Rebind in 1.12.0](#rebind-in-1120) below.
 
 ## The two halves
 
@@ -172,8 +176,8 @@ verified-path mode end to end; the pool is captured by local bindings in
 - **`signal` is mandatory** on `RecallQuery` and `TurnRecord`. A missing or already-aborted signal degrades immediately (`degraded.reason` `"invalid-query"`/`"aborted"`) rather than throwing or hanging.
 - **`capture()` returns immediately.** The caller gets a `CaptureHandle` with a `done` promise it may await or abandon. `capture()` fails closed on `incognito`: `TurnRecord.incognito` is a required field, and any value other than `false` (including a caller who leaves it unset) resolves `done` to `{ stored: 0, skipped: 1, reason: "incognito" }` without touching a store. `incognito: false` is the host's own classification and is final: the engine does not consult the host routing classifier (`HostServices.routing`) again, so a host without routing still captures a turn that carries a `sessionKey`. (Were that classifier ever consulted from an Engine caller and fail, the turn is not stored and the reason is `"incognito-unclassifiable"`.) `CaptureResult.stored` is the number of records the capture pipeline actually stored for the turn (0 or more; `skipped` is the pipeline's own count of texts it passed over); a turn the pipeline finds nothing worth storing in, with every item cleanly considered and none of them failing, resolves `{ stored: 0, skipped: 0 }` with no `reason` — a clean capture, not a failure. `{ stored: 0, skipped: 0 }` is **not** a blanket "nothing went wrong" signal, though: as of 1.8.0 a turn whose items all failed (embedder down, dedup or write failure) resolves with `reason: "capture-incomplete"` instead, `"aborted"` for a cancellation before any row settled, or `"capture-failed"` for any other pipeline error on the typed path — see [Turn replay (Q3)](#turn-replay-q3-a-replayed-capture-does-not-run-twice) below for these and for `"duplicate-turn"`. A turn that is not captured at all resolves `{ stored: 0, skipped: 1, reason }` — `"incognito"`, `"principal-agent-mismatch"`, `"engine-closed"`, `"duplicate-turn"`, or whatever the capture pipeline itself reports.
 - **The six blocks are the output shape, and they are data — the host joins them.** `neo`, `start` and `memories` are droppable; `time`, `temporal` and `reminder` are not. `RecallResult.blocks`/`capChars` are plain data; nothing in `engine/**` concatenates them into a prompt string. `adapter/openclaw/join-recall.js`'s `prependContextFromRecall(result)` is the OpenClaw host's own join-and-cap step (`lib/inject-budget.js`'s `applyGlobalInjectBudget`), producing the `{ prependContext }` shape `before_prompt_build` expects; a harness host does its own equivalent joining.
-- **`UserPrincipal` stays `user:v1:sha256([channel, accountId, userId])`.** The hash is an on-disk pool directory name; changing it orphans every `user`-scoped row.
-- **`trust: "inferred"` degrades to agent-private and never throws.** `engine/identity/principal.js`'s `memoryContextFromPrincipal` gives a `"proved"` principal the same defence-in-depth `lib/memory-request-context.js` already applies to a host hook (user format `/^user:v1:[0-9a-f]{64}$/`, channel must be registered, chat kind normalized, workspace resolved through the canonical resolver with the conflicting-workspace-identity check); when any of that fails, or the principal is `"inferred"`, the memory context falls back to the unclaimed, agent-private base context rather than throwing — the same fail-open-to-degraded behaviour `resolveHostHookMemoryContext`'s `catch` block already had. `AgentContext.origin` from a caller of `Engine.recall`/`capture`/`runCommand` is taken as given; a hook-derived origin resolved inside the adapter (e.g. a background job body) never claims `"cron"` for itself — that origin is reserved for `agentContextFromCommand`, and a background hook turn maps to `"system"`.
+- **`UserPrincipal` is `user:v1:sha256([channel, accountId, userId])` or, from 1.12.0, `user:v2:sha256(harnessUserId)`.** Live capture still writes v1; the v1 hash remains the on-disk pool directory name for OpenClaw. v2 is the rebind target and the harness recall principal for a linked user. The accepted on-disk/ACL form is `/^user:v[12]:[a-f0-9]{64}$/`. Changing an existing v1 hash still orphans that identity's rows; rebind patches `ownerUserId` instead of renaming the hash.
+- **`trust: "inferred"` degrades to agent-private and never throws.** `engine/identity/principal.js`'s `memoryContextFromPrincipal` gives a `"proved"` principal the same defence-in-depth `lib/memory-request-context.js` already applies to a host hook (user format `/^user:v[12]:[0-9a-f]{64}$/`, channel must be registered, chat kind normalized, workspace resolved through the canonical resolver with the conflicting-workspace-identity check); when any of that fails, or the principal is `"inferred"`, the memory context falls back to the unclaimed, agent-private base context rather than throwing — the same fail-open-to-degraded behaviour `resolveHostHookMemoryContext`'s `catch` block already had. `AgentContext.origin` from a caller of `Engine.recall`/`capture`/`runCommand` is taken as given; a hook-derived origin resolved inside the adapter (e.g. a background job body) never claims `"cron"` for itself — that origin is reserved for `agentContextFromCommand`, and a background hook turn maps to `"system"`.
 - **Every clip or drop the join performs is a `Deferral`, and every `Deferral` is also an L3 event.** `Deferral.reason` is `"global-cap"` (the outer `capChars` budget, `lib/inject-budget.js`'s planner) or `"memories-cap"` (`recall.memoriesMaxChars`'s inner cap via `onTruncate`) — those are the only two values in the union (unchanged since 1.4.0). `engine/recall/assemble-prompt-context.js` emits one `recall.block-clipped` or `recall.block-dropped` host event per deferral, `{ agentId, ...deferral }`, alongside the ones it collects into `RecallResult.deferrals`.
 - **The cancellation signal reaches every recall dependency, and abort returns what finished.** `RecallQuery.signal`/`opts.signal` threads into the embedder (`embedQuery`/`embed`), the reranker (`raceAbort(reranker.rerank(...), rerankAbort, ...)`, one timer — see below), and LanceDB's own query path (`db.table` reads). An aborted or timed-out recall does **not** come back empty: it returns the blocks that finished before the cutoff (`completed.neo`/`completed.start`, whichever the prelude produced) with `degraded.reason` set to `"aborted"` (caller-initiated) or `"timeout"` (the scheduler's own budget) — spec §3.2's abort contract, a deliberate behaviour change from M1a (Global Constraint 7c): the seven golden scenarios never time out, so their oracle is unaffected. When the scheduler answers an aborted or timed-out recall from its recall cache, the result still carries `degraded.reason: "aborted"` or `"timeout"`; `Engine.recall` keys that cache by the whole principal (agent, workspace identity, user, channel, account, chat, trust) plus the query, so a cached answer never crosses principals, and every result is a copy of what the cache holds. An aborted recall stops its side effects: due reminders are not marked presented, and a late value is never written to the cache.
 - **One rerank timer, not two.** The reranker gets one signal (`rerankSignal(signal, rerankerTimeoutMs)`: the caller's signal plus the single `rerankerTimeoutMs` timer) and is raced against that same signal (`raceAbort(reranker.rerank(...), rerankAbort, "reranker timeout")`) — "one timeout owner" means one timer, not that nothing bounds a provider that ignores its own signal. The embedder and the LanceDB reads have no timer of their own: they are bounded by the caller's signal through `raceAbort` in the providers and in `lib/recall-pipeline.js`.
@@ -200,6 +204,8 @@ The implementation lives in `engine/memory-ops/` (`context.js`, `errors.js`,
 | `share(id, target, p, a, opts?)` | `MemoryShareResult` | copies a card into the `"workspace"` or `"user"` pool; needs a `"proved"` principal that carries that identity. A sensitive card (category, core, `neverForget`, importance ≥ 0.9) is refused with `approval-required` until the caller repeats the call with `{ allowSensitive: true }` after the person confirmed. |
 | `state(p, a)` | `MemoryState` | live card counts per scope (`null` when a scope cannot be counted), the tombstone count (`null` when the registry is unreadable, never a false zero) and the archive directory. |
 | `import(req, p, a)` | `MemoryImportResult` | 1.11.0: ingest finished cards. `p` is the operator, `req.principal` the card ACL binding. Requires `a.origin === "system"` and `a.background === false`. At most 500 cards per call. |
+| `rebind(req, p, a)` | `MemoryRebindResult` | 1.12.0: attach `user`-scope cards of one channel identity to a harness user. Counters only. `dryRun` defaults to `true`. Requires `a.origin === "system"` and `a.background === false`. |
+| `unbind(req, p, a)` | `MemoryUnbindResult` | 1.12.0: restore the owner bindings recorded under `req.rebindId`. Cards written after that rebind are left alone. |
 
 **`forget`, `correct` and `share` act on the caller's own agent-private
 cards only** (1.5.0). An id that is a live card in a workspace or user pool
@@ -217,7 +223,10 @@ carries card text or a raw storage error; `isMemoryOpError` in
 | `code` | When |
 |---|---|
 | `not-found` | no such card, or one the caller may not see, or one that is not live — deliberately indistinguishable (anti-oracle) |
-| `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy |
+| `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy; `rebind`/`unbind`/`import` with an origin other than `"system"` or with `background` not `false` |
+| `identity-already-bound` | 1.12.0: `rebind` of a channel identity that already has an applied (not reversed) mapping to a **different** harness user, **anywhere in this engine** (not per agent). Nothing is written. |
+| `ledger-corrupt` | 1.12.0: a `_rebinds/<rebindId>.jsonl` sidecar has no complete line. The file is quarantined as `.corrupt-<ts>` and not truncated to empty. |
+| `lock-lost` | 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce before a ledger write. The caller retries later via the sidecar; the identity claim is left in place. |
 | `invalid-input` | a malformed id, principal or agent id, an empty or over-long `newText` (1–8 000 characters after trim), an unknown `share` target, an agent without a workspace directory for a destructive member; for `list` an empty or whitespace-only `topic`, `until` with `topic`, or `until` before `since` |
 | `approval-required` | `share` of a sensitive card without `allowSensitive: true` |
 | `conflict` | `correct` to a text that matches a forgotten memory in the same scope (tombstone guard), or a share source that changed while it was being copied |
@@ -380,15 +389,30 @@ manifest) a sample probe is mandatory: up to 16 rows with text and a
 finite, non-zero stored vector, spread across agent tables, re-embedded
 with the engine provider. The probe path also requires
 `engineIdentity.fingerprintId === expectedIdentity.fingerprintId`.
-Pass (positive gate): at least one finite score, min ≥ 0.999 and median
-≥ 0.9995. Zero-norm or non-finite stored vectors are skipped when
-sampling. Any non-finite score is `identity-unverifiable`. Below the
-floor: `identity-mismatch`. A cosine of 0.99 is a mismatch (fail-closed).
+Pass (positive gate, 1.12.0): re-embed all `availableValidRows` (capped
+at `ADOPT_PROBE_SIZE` = 16), spread across tables (deterministic
+round-robin). Zero-norm or non-finite stored vectors are skipped when
+sampling. A non-finite re-embed is skipped rather than aborting the
+loop; at least `min(8, availableValidRows)` finite scores are required,
+then min ≥ 0.999 and median ≥ 0.9995. Fewer finite scores:
+`identity-unverifiable`. Below the cosine floor: `identity-mismatch`.
+A cosine of 0.99 is a mismatch (fail-closed).
 The result carries `identitySource: "manifest" | "probe"`. When a
 manifest matches and rows exist, the probe still runs.
 
 `dryRun` changes nothing on disk. Adopt does not write a second manifest (A8).
 A read-only `MemoryDB.init()` does not add columns or create tables.
+
+The sample-probe count floor (1.12.0) is `min(8, availableValidRows)`
+finite scores. `availableValidRows` is the number of collected rows that
+have text and a finite, non-zero stored vector of the expected dimension,
+capped at `ADOPT_PROBE_SIZE` (16). All of those rows are re-embedded.
+A store with 3 valid rows probes 3 and needs 3 finite scores; a store
+with 20 valid rows probes 16 and needs 8 finite scores. Setting the
+floor to 1 would accept a single finite score and is rejected by the
+tests. Zero valid rows on the probe path stays `identity-unverifiable`.
+Cosine floors (`min ≥ 0.999`, `median ≥ 0.9995`) and the positive gate
+are unchanged.
 
 ### Single-writer precondition (A9)
 
@@ -398,6 +422,219 @@ before `createEngine` on the target home. Adopt does not emit
 `target-running`; that reason exists on the type for a host that checks the
 lock itself. Two `createEngine` instances on one `baseDbPath` in one test
 process stay 1.10.0 behaviour (no engine lockfile).
+
+## Rebind in 1.12.0
+
+Owner decision ADR-007 Q4: when a person **deliberately and manually** links
+a channel identity to a harness user (Bernd on Telegram, Discord and Matrix),
+existing `user`-scope memories of those identities are attached to that user.
+Heuristic or suggested matches never rebind (fail-closed). Agent knowledge
+stays separate: only scope `user`, only the owner/subject binding. Text,
+summary and vectors are not rewritten.
+
+Cardinality is **N:1**: one user may own many channel identities; each
+identity belongs to at most one user **in the whole engine**, not per
+agent. Rebinding the same identity to the same user on a second agent is
+allowed (a separate sidecar). Rebinding it to a different user on any
+agent is `identity-already-bound`. The mapping is recorded in
+`_rebinds/by-identity/<sha256(fromOwner)>.json` as well as in sidecar
+headers. Hashed principals are pseudonymity, not secrecy: the hash is
+unsalted SHA-256 of a low-entropy channel id.
+
+### Why `fromIdentity` / `toUser`, not pre-hashed principals
+
+The live v1 owner on a captured card is
+
+`user:v1:` + `sha256(JSON.stringify([channel, accountId, userId]))`
+
+(`stableIdentityHash` in `lib/memory-request-context.js`). The engine already
+owns that formula. The host therefore passes the channel identity in the
+clear (channel + opaque key) and the harness user id in the clear; the
+engine hashes both. That keeps the hash in one place and means logs and
+results never need the raw keys.
+
+`accountId` on `fromIdentity` is optional and defaults to `"default"`, which
+is the account id live capture uses when the host does not name another
+bot account. The official sketch named only channel and identity key; the
+third tuple member has always been part of v1, so the default preserves
+existing owners.
+
+The harness user is hashed independently:
+
+`user:v2:` + `sha256(toUser)`
+
+`UserPrincipal` in this contract is `` `user:v1:${string}` | `user:v2:${string}` ``.
+On disk and in ACL checks the string still matches
+`^user:v[12]:[a-f0-9]{64}$`. The ACL and `memoryContextFromPrincipal` accept
+both versions so a card rebound to v2 remains readable. OpenClaw capture
+still writes v1; v2 appears only as a rebind target (and as the recall
+principal the harness uses for that user).
+
+### `memory.rebind`
+
+`Engine.memory.rebind(req, p, a)` with
+
+```
+req = { agentId, fromIdentity: { channel, identityKey, accountId? }, toUser, dryRun?, signal? }
+```
+
+returns `{ rebindId, matched, rebound, skipped, dryRun }`. Counters only: no
+card text, no card ids of other people, no raw identity key, no raw
+`toUser`. `rebindId` is a UUID v4 on an applying call (including a call that
+only records the identity mapping because no cards matched). On `dryRun`
+it is `""` because no audit record is written.
+
+- `p` is the operator. `p.agentId` and `req.agentId` must match
+  (`invalid-input` otherwise).
+- `a.origin` must be `"system"` and `a.background` must be `false` (`denied`
+  otherwise). Same guard as `memory.import`, not the destructive-ops
+  `"user"` guard.
+- `dryRun` **defaults to `true`**. Writes happen only when the caller passes
+  `dryRun: false`. A dry-run reports the same `matched` a write would see
+  and leaves the store tree byte-identical.
+- `fromIdentity.channel` and `fromIdentity.identityKey` are required,
+  non-empty, length-capped (`CHANNEL_ID` / `USER_ID`). `accountId` defaults
+  to `"default"` and uses `ACCOUNT_ID`. `toUser` is required, non-empty,
+  length-capped (`USER_ID`). The engine does not require the channel to be
+  in the route-provider registry: a historical identity can still be
+  rebound after a provider is unregistered.
+- `fromOwner === toOwner` is `invalid-input` (the two hashes use different
+  prefixes, so this is a defence in depth).
+
+**Match.** A live row is a match when all of these hold:
+
+- `scope === "user"`
+- `ownerUserId === fromOwner` (the v1 hash of `fromIdentity`)
+- status is `active`, `''` or null/undefined (same live set as import)
+- `id` passes `safeUuid`
+
+Agent-private, workspace, and any other owner's user-scope cards are not
+matches. Content, category, provenance and vectors are not consulted.
+
+**Apply** (`dryRun: false`), under an exclusive `_rebinds/.lock` (O_EXCL,
+cross-process; plus an in-process mutex) then `pool.withWriteDb(agentId)`:
+
+1. If an applied (not reversed) mapping already exists for this
+   `fromOwner` **on any agent** to a **different** `toOwner`, throw
+   `identity-already-bound`. A pending header counts as bound. Nothing is
+   written.
+2. If an applied mapping exists for the same `fromOwner` and `toOwner`
+   **on this agent**, reuse that `rebindId` (idempotent). Newly arrived
+   matching cards are appended to the same sidecar (crash resume uses
+   this path too). A second call with nothing left to move returns
+   `rebound: 0` and the existing `rebindId`.
+3. Otherwise allocate a new `rebindId`, write the identity claim (same
+   user on another agent reuses the claim), and write the sidecar header.
+4. For each match not already recorded in this sidecar: append one audit
+   line, `fsync`, then `MemoryDB.update` with `{ ownerUserId: toOwner }`
+   only. `updatedAt` is left unchanged (it drives recall freshness). No
+   `text`, no `summary`, no `vector`. `isContentChangingUpdate` stays
+   false.
+5. Cards already in the sidecar whose owner is still `fromOwner` are
+   patched without a second audit line (crash between append and patch).
+6. Inner batches are ≤ 64 cards; `signal` is observed between batches.
+   An observed abort rejects `storage` with message "rebind aborted".
+
+dryRun and apply both read the **write** namespace
+(`withAuthoritativeReadDb` / `withWriteDb`), not `dbs[0]` of the recall
+list. Cards that live only in a read-only legacy namespace are not
+matches and are not counted.
+
+A mapping is recorded even when `matched === 0`, so a later rebind of the
+same identity to a different user still fails N:1.
+
+### `memory.unbind`
+
+`Engine.memory.unbind({ rebindId, dryRun?, signal? }, p, a)` restores
+**exactly** the cards listed in that sidecar. It does not swap from/to
+and rescan: a later independent write (a new card, a later rebind of a
+different identity) must survive.
+
+- `rebindId` must pass `safeUuid` (`invalid-input` otherwise) and is
+  lower-cased after validation so Linux and macOS resolve the same file.
+- Missing sidecar, unreadable sidecar, or a sidecar whose header
+  `agentId` is not the operator is `not-found` (anti-oracle: a foreign
+  agent's id is not distinguishable from an unknown id).
+- Same origin guard as rebind. Unbind takes the same exclusive lock as
+  rebind and loads the sidecar **inside** that lock.
+- `dryRun` defaults to **`false`**: the caller already named a specific
+  audit record. `true` reports counters without writing.
+
+Per sidecar card line:
+
+- row gone → `skipped` (not restored, not created)
+- `ownerUserId` is already `fromOwner` → `skipped` (already restored)
+- `ownerUserId` is no longer `toOwner`, or `updatedAt` no longer equals
+  the sidecar `fromUpdatedAt` → `skippedModified` (and counted in
+  `skipped`). A later rebind, owner patch, or content edit wins.
+- otherwise patch `{ ownerUserId: fromOwner }` only. `updatedAt` is not
+  rewritten, so unbind restores the pre-rebind row except the owner.
+
+After a successful applying unbind the sidecar gets a `kind: "reversed"`
+line and the identity claim is removed if no other applied sidecar still
+binds that identity. A second unbind of the same id restores nothing
+(`unbound: 0`). The identity is then free for a new rebind.
+
+A card **written after** the rebind (including one written for the
+harness user) is not in the sidecar, so unbind leaves it.
+
+### Audit sidecar
+
+Path: `{baseDbPath}/_rebinds/<rebindId>.jsonl`. Directory `0o700`, file
+`0o600`. Path via `resolveInside` + `safeUuid`. Analogous to
+`_imports/<agentId>.jsonl`, one file per apply rather than per agent
+because unbind is keyed only by `rebindId`.
+
+JSONL, version 1. Identity keys and `toUser` appear only as the hashed
+principals (`user:v1:…` / `user:v2:…`). No card text.
+
+- First line is a **header**: `{ v, kind: "header", rebindId, agentId,
+  fromOwner, toOwner, status: "applied", createdAt }`.
+- Each moved card is `{ v, kind: "card", rebindId, cardId, fromOwner,
+  toOwner, fromUpdatedAt }`.
+- Unbind appends `{ v, kind: "reversed", rebindId, reversedAt }`. Last
+  status-bearing line wins.
+
+Append is atomic: open `r+` (existing) or `wx` (new) `0o600` — not `a+`,
+because Windows rejects `ftruncate` on an append handle — repair a torn
+last line by scanning backwards in 64 KiB chunks and truncating to the
+last complete newline, write one line at the new size, `fsync` the file,
+`fsync` the parent directory (where the platform allows it), close. A
+non-empty file with no newline is renamed to `<file>.corrupt-<ts>` and
+the call rejects `ledger-corrupt`; it is never truncated to empty. The
+sidecar is the source of truth for resume: a crash after append and
+before the row patch is closed by the next identical `rebind` (patch, no
+duplicate line). Duplicate `cardId` lines in one file are ignored (first
+wins).
+
+Check, header write, card patches and unbind run under one exclusive
+lock: `_rebinds/.lock` via `tryAcquireOwnedLock` (nonce, rename-aside
+release, stale = age > 60 s AND (holder pid dead OR age > 10 min)) plus
+an in-process mutex. Lock age uses wall-clock, never `host.clock`. Before
+each ledger write the holder re-checks its nonce; a mismatch is
+`lock-lost`. A claim file for a different user is `identity-already-bound`
+and is never unlinked. Two concurrent rebinds of one identity to two
+users: one succeeds, the other `identity-already-bound`. Two concurrent
+identical rebinds share one `rebindId`.
+
+### What logs and results contain
+
+Logs: `agentId`, `rebindId`, counters, `dryRun`, error codes. Never card
+text, never `fromIdentity.identityKey`, never `toUser` in the clear.
+`MemoryOpError.message` stays log-safe English. Principal strings are
+hashes; they still do not appear in info logs.
+
+### What 1.12.0 does not do
+
+- No heuristic, automatic, or "suggested" rebind path.
+- No from/to swap as reverse.
+- No schema `1→2` step, no new LanceDB column.
+- No move between physical user-pool directories. Capture and
+  `memory.import` with `scope: "user"` write the agent table with
+  `ownerUserId`; rebind patches that column. Shared copies created by
+  `memory.share` live in the user pool keyed by the then-current
+  principal and are out of scope for this member.
+- Package version stays 7.18.4.
 
 ## Shared copies and change proposals (1.6.0, D31)
 
@@ -1710,7 +1947,9 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/memory-ops/import-ledger.js` | `{baseDbPath}/_imports/<agentId>.jsonl` sidecar (1.11.0) |
 | `engine/memory-ops/import-lock.js` | per-agent writer lock for the `memory.import` apply path (K1) |
 | `engine/memory-ops/import.js` | `Engine.memory.import` (1.11.0) |
-| `engine/stores/adopt.js` | `Engine.stores.adopt` sample probe and schema report (1.11.0) |
+| `engine/memory-ops/rebind-ledger.js` | `{baseDbPath}/_rebinds/<rebindId>.jsonl` sidecar (1.12.0) |
+| `engine/memory-ops/rebind.js` | `Engine.memory.rebind` / `unbind` (1.12.0) |
+| `engine/stores/adopt.js` | `Engine.stores.adopt` sample probe and schema report (1.11.0; probe floor 1.12.0) |
 | `engine/admin/obsidian.js` | `createObsidianOps` — `AdminOps.obsidian.{detect,prepare,confirm}` |
 | `engine/store/schema-version.js` | `createStoreMigrator` — `AdminOps.migrate`, the `_schema.json` marker |
 | `engine/identity/principal.js` | `memoryContextFromPrincipal` — `Principal`/`AgentContext` as explicit inputs, the channel registry |

@@ -7,6 +7,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock über `tryAcquireOwnedLock` (Nonce, Freigabe nur des eigenen Locks). Ein Claim für einen anderen Nutzer ist `identity-already-bound` und wird nicht gelöscht. `ADOPT_PROBE_MIN_ROWS` verlangt `min(8, vorhanden)` endliche Scores bei bis zu 16 Probe-Zeilen. Package bleibt 7.18.4.
+
 ### Fixed
 
 - `memory.import` (K1): concurrent imports of one `idempotencyKey` (same process, two engines, or two processes on one store) could each store the card — duplicate rows and several `created` outcomes — because the write phase ran under the shared `withWriteDb` lease. Re-check → `store()` → ledger now runs under a per-agent lock (`engine/memory-ops/import-lock.js`: in-process mutex plus `tryAcquireOwnedLock` on `_imports/.locks/<agentId>.lock`, mtime heartbeat). Exactly one call is `created`, the rest `matched-existing`. Each `_imports/` ledger append is now fsynced, and creating the ledger file fsyncs its parent directories (no-op on win32). Contract 1.11.0 semantics unchanged.
