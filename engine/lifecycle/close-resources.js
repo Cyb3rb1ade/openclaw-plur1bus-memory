@@ -7,6 +7,8 @@
  * cleanup and gateway_stop handler; Engine.close() races it against a budget.
  */
 
+import { describeError } from "../../lib/log-redact.js";
+
 /**
  * Build the idempotent resource closer.
  *
@@ -53,7 +55,7 @@ export function createResourceCloser({
     localModelGeneration?.beginCleanup?.();
     shutdownPromise = (async () => {
       const cleanup = async (label, operation) => {
-        try { await operation(); } catch (err) { logger.warn?.(`${label}: ${err?.message}`); }
+        try { await operation(); } catch (err) { logger.warn?.(`${label}: ${describeError(err)}`); }
       };
       const localModelResources = (async () => {
         if (typeof embeddingServer?.shutdown === "function") {

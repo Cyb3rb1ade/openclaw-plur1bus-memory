@@ -59,12 +59,12 @@ export function memoryContextFromPrincipal(principal, { workspaceDir, sessionKey
   // to "inferred" (agent-private) rather than trusting the bad field.
   const rawUser = typeof principal.user === "string" ? principal.user : "";
   if (rawUser && !USER_PRINCIPAL_FORMAT.test(rawUser)) {
-    safeDebug(logger, "principal.invalid-user", new Error("proved principal's user does not match the stable-hash format"));
+    safeDebug(logger, "principal.invalid-user", "proved principal's user does not match the stable-hash format");
     return inferred();
   }
   const rawChannel = typeof principal.channel === "string" ? principal.channel.toLowerCase() : "";
   if (rawChannel && !listRouteProviders().includes(rawChannel)) {
-    safeDebug(logger, "principal.unknown-channel", new Error("proved principal named a channel outside the registered vocabulary"));
+    safeDebug(logger, "principal.unknown-channel", "proved principal named a channel outside the registered vocabulary");
     return inferred();
   }
 
@@ -89,7 +89,7 @@ export function memoryContextFromPrincipal(principal, { workspaceDir, sessionKey
   // account and user (resolveMemoryRequestContext); a claimed user without
   // the other two names a pool the lib itself could never have produced.
   if (rawUser && !(rawChannel && accountId)) {
-    safeDebug(logger, "principal.incomplete-user", new Error("proved principal names a user without both channel and accountId"));
+    safeDebug(logger, "principal.incomplete-user", "proved principal names a user without both channel and accountId");
     return inferred();
   }
 

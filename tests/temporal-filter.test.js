@@ -134,7 +134,8 @@ describe("temporalRangeFromAnchor", () => {
     });
     assert.strictEqual(range, null);
     assert.equal(diagnostics.length, 1);
-    assert.match(diagnostics[0], /temporal-filter\.anchor.*embedding down/);
+    assert.match(diagnostics[0], /temporal-filter\.anchor.*Error textLen=14 sha=[0-9a-f]{12}/);
+    assert.ok(!diagnostics[0].includes("embedding down"), "the raw error message stays out of the log");
   });
 
   it("propagates an attached anchor-read timeout only in strict mode", async () => {

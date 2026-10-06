@@ -50,6 +50,7 @@ import { withAccessReadDbs } from "../../lib/shared-memory.js";
 import { formatTemporalContinuityContext } from "../../lib/temporal-context.js";
 import { compressMemorySlotsForPrompt, generateSummary as libGenerateSummary } from "../../lib/text-utils.js";
 import { hourInTimeZone } from "../../lib/time-window.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * Build the `before_prompt_build` recall handler from an already-resolved
@@ -290,7 +291,7 @@ export function createPromptContextAssembler(ctx) {
           recallPrelude.lanesMs += Date.now() - formatStartedAt;
         }
       } catch (neoErr) {
-        host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
+        host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${describeError(neoErr)}`);
       }
     }
     completed.neo = neoContext;
@@ -331,7 +332,7 @@ export function createPromptContextAssembler(ctx) {
     if (gcEnabled) {
       pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(host.logger))
         .catch((gcErr) => {
-          host.logger.warn(`memory-lancedb-namespaced: GC purge before recall failed: ${String(gcErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: GC purge before recall failed: ${describeError(gcErr)}`);
         });
     }
     try {
@@ -632,7 +633,7 @@ export function createPromptContextAssembler(ctx) {
               });
             }
           } catch (e) {
-            host.logger.warn?.(`continuity-engine: pattern surfacing failed: ${String(e)}`);
+            host.logger.warn?.(`continuity-engine: pattern surfacing failed: ${describeError(e)}`);
             matchedPattern = null;
           }
         }
@@ -648,7 +649,7 @@ export function createPromptContextAssembler(ctx) {
           }
           overlays = await overlayStore.loadForTargets(targetIds, overlayCfg.maxAgeDays ?? 30);
         } catch (e) {
-          host.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
+          host.logger.warn?.(`continuity-engine: overlay load failed: ${describeError(e)}`);
         }
         // Enrich loaded overlays with contradiction flags from persisted records.
         try {
@@ -674,7 +675,7 @@ export function createPromptContextAssembler(ctx) {
             }
           }
         } catch (e) {
-          host.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
+          host.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${describeError(e)}`);
         }
         if (autoCreateOverlays && overlayGenerator && overlayStore) {
           const emotionalState = emotionalPool.get(agentId);
@@ -707,14 +708,14 @@ export function createPromptContextAssembler(ctx) {
                     throwIfAborted(signal, "recall aborted");
                   } catch (e) {
                     throwIfAborted(signal, "recall aborted");
-                    host.logger.warn?.(`continuity-engine: contradiction audit append failed: ${String(e)}`);
+                    host.logger.warn?.(`continuity-engine: contradiction audit append failed: ${describeError(e)}`);
                   }
                 }
                 if (written) overlays.push(newOverlay);
               }
             } catch (e) {
               throwIfAborted(signal, "recall aborted");
-              host.logger.warn?.(`continuity-engine: overlay generation failed: ${String(e)}`);
+              host.logger.warn?.(`continuity-engine: overlay generation failed: ${describeError(e)}`);
             }
           }
         }
@@ -746,7 +747,7 @@ export function createPromptContextAssembler(ctx) {
           throwIfAborted(signal, "recall aborted");
         } catch (e) {
           throwIfAborted(signal, "recall aborted");
-          host.logger.warn(`continuity-engine: memory-text contradiction detection failed: ${String(e)}`);
+          host.logger.warn(`continuity-engine: memory-text contradiction detection failed: ${describeError(e)}`);
         }
       }
       const contradictionPairs = [];
@@ -797,7 +798,7 @@ export function createPromptContextAssembler(ctx) {
           }
         } catch (e) {
           throwIfAborted(signal, "recall aborted");
-          host.logger.warn(`continuity-engine: failed to persist memory-text contradictions: ${String(e)}`);
+          host.logger.warn(`continuity-engine: failed to persist memory-text contradictions: ${describeError(e)}`);
         }
       }
 
@@ -876,7 +877,7 @@ export function createPromptContextAssembler(ctx) {
             maxAssistantChars: replyOutcomeMaxAssistantChars,
           });
         } catch (err) {
-          host.logger.warn(`reply-outcome-tracking: recording pending outcome failed: ${String(err)}`);
+          host.logger.warn(`reply-outcome-tracking: recording pending outcome failed: ${describeError(err)}`);
         }
       }
 
@@ -885,7 +886,7 @@ export function createPromptContextAssembler(ctx) {
           const { enrichTraceWithTemporalProvenance } = await import("../../lib/temporal-provenance.js");
           enrichTraceWithTemporalProvenance(trace, associativeItems, { now: nowMs });
         } catch (e) {
-          host.logger.warn(`temporal-provenance: trace enrichment failed: ${String(e)}`);
+          host.logger.warn(`temporal-provenance: trace enrichment failed: ${describeError(e)}`);
         }
       }
 
@@ -1202,7 +1203,7 @@ export function createPromptContextAssembler(ctx) {
           reminderNudge = formatReminderNudge(allDue, { lang, tone });
           for (const r of dueFromDb) {
             await presentReminder(db, r.id).catch((err) => {
-              host.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
+              host.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${describeError(err)}`);
             });
           }
           // Batch remove all from pending file in one write
@@ -1249,7 +1250,7 @@ export function createPromptContextAssembler(ctx) {
     } catch (err) {
       throwIfAborted(signal, "recall aborted");
       innerFailure = { reason: "error", capability: "recall", detail: String(err?.message || err).slice(0, 200) };
-      host.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
+      host.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${describeError(err)}`);
       const fallbackBlocks = [contextBlock("neo", neoContext, true), contextBlock("start", startNoticeContext, true)]
         .filter((block) => block.text);
       if (fallbackBlocks.length > 0) return recallResult({ blocks: fallbackBlocks });

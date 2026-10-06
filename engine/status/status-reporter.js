@@ -12,6 +12,7 @@
  */
 import { isAbortError, raceAbort } from "../../lib/abort.js";
 import { readinessOf } from "../providers/model-readiness.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /** Cap on waiting for `host.capabilities.journalBacklog()` (global constraint: "capped at 50 ms"). */
 export const JOURNAL_BACKLOG_TIMEOUT_MS = 50;
@@ -74,7 +75,7 @@ export function createStatusReporter({ jobs, models, getIdentity, sharedMemoryPo
   const logJournalUnavailable = (reason) => {
     if (loggedJournalReasons.has(reason)) return;
     loggedJournalReasons.add(reason);
-    host?.logger?.debug?.(`engine.status: journal backlog unavailable: ${reason}`);
+    host?.logger?.debug?.(`engine.status: journal backlog unavailable: ${describeError(reason)}`);
   };
 
   function safeJobsHealth() {

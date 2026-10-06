@@ -41,6 +41,7 @@ import {
   registerModelPreparationServiceAfterLifecycle,
   registerReembeddingRecoveryServiceAfterLifecycle,
 } from "../../lib/runtime-shutdown.js";
+import { describeError } from "../../lib/log-redact.js";
 
 // 7.12.24: Der erste agent_end nach einem Gateway-Neustart brauchte 8–18 s
 // bis "worker captured" (sonst 0,4–1 s). Den Worker-Thread deshalb kurz
@@ -106,7 +107,7 @@ export function registerNeoServiceLifecycle(ctx) {
       try {
         await neoWorkerRuntime?.close?.();
       } catch (err) {
-        host.logger.warn?.(`plur1bus-neo: worker shutdown failed: ${String(err)}`);
+        host.logger.warn?.(`plur1bus-neo: worker shutdown failed: ${describeError(err)}`);
       }
       host.logger.info("plur1bus-neo: service stopped");
     };

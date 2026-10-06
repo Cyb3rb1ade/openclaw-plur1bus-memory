@@ -47,7 +47,7 @@ import { generateSummary as libGenerateSummary } from "../../lib/text-utils.js";
 import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../../lib/valid-time.js";
 import { guardWorkspaceTools } from "../../lib/workspace-policy-guard.js";
-import { describeText } from "../../lib/log-redact.js";
+import { describeError, describeText } from "../../lib/log-redact.js";
 import { writeFileAtomicSync } from "../../lib/atomic-file.js";
 
 /**
@@ -624,7 +624,7 @@ export function createMemoryTools(ctx) {
                   archivePath,
                 });
               } catch (err) {
-                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${params.memoryId}: ${String(err)}`);
+                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${params.memoryId}: ${describeError(err)}`);
                 return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
               }
               return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (tombstoned).` }] };
@@ -671,7 +671,7 @@ export function createMemoryTools(ctx) {
                     archivePath: "",
                   });
                 } catch (err) {
-                  host.logger.warn(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedId}: ${String(err)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedId}: ${describeError(err)}`);
                   return { content: [{ type: "text", text: `Memory forget failed for ${deletedId}: ${String(err)}` }] };
                 }
                 return { content: [{ type: "text", text: `Forgotten (audit recovered for ${deletedId}).` }] };
@@ -702,7 +702,7 @@ export function createMemoryTools(ctx) {
                   archivePath,
                 });
               } catch (err) {
-                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${String(err)}`);
+                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${describeError(err)}`);
                 return { content: [{ type: "text", text: `Memory forget failed for ${targetId}: ${String(err)}` }] };
               }
               return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (tombstoned).` }] };
