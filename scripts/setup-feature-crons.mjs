@@ -33,6 +33,7 @@ import { validateInput } from "../lib/input-limits.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 import { fileURLToPath } from "node:url";
 import { existsSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import {
   FEATURE_CRON_RUNNER_PATH,
   buildNativeFeatureCommandArgv,
@@ -754,6 +755,48 @@ export async function runSetupFeatureCrons(options = {}) {
   }
 }
 
+const SKIP_DEV_CHECKOUT_LINE = "[setup-feature-crons] skipped: development checkout";
+const SKIP_CI_LINE = "[setup-feature-crons] skipped: CI environment (set PLUR1BUS_SETUP_CRONS=1 to run anyway)";
+
+/** realpath, sonst der aufgelöste Pfad (Symlinks wie /tmp → /private/tmp auf macOS). */
+function canonicalPath(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/**
+ * Soll der npm-`postinstall` übersprungen werden? Nur dieser Pfad ist betroffen:
+ * Gateway-Bootstrap und `/plur1bus setup crons` starten das Skript ohne
+ * `npm_lifecycle_event=postinstall` und laufen unverändert.
+ *
+ * Dev-Checkout = `INIT_CWD` ist das Paket-Root (`npm ci` im Repo selbst, nicht als
+ * Dependency) UND dort liegt `.git` (Verzeichnis oder Worktree-Datei). `INIT_CWD`
+ * allein reicht nicht: ein Plugin-Installer, der das Paket entpackt und dort
+ * `npm install` startet, hat ebenfalls INIT_CWD == Root, aber kein `.git`.
+ * Das veröffentlichte Paket enthält kein `.git` (`files` in package.json).
+ * `PLUR1BUS_SETUP_CRONS=1` erzwingt den Lauf (manuelle Tests des Owners).
+ *
+ * @param {{env?: object, packageRoot: string}} options
+ * @returns {"development-checkout" | "ci" | null}
+ */
+export function postinstallSkipReason({ env = process.env, packageRoot }) {
+  if (env.npm_lifecycle_event !== "postinstall") return null;
+  if (env.PLUR1BUS_SETUP_CRONS === "1") return null;
+  if (env.CI === "true" || env.CI === "1") return "ci";
+  const initCwd = env.INIT_CWD;
+  if (
+    typeof initCwd === "string" && initCwd.length > 0
+    && canonicalPath(initCwd) === canonicalPath(packageRoot)
+    && existsSync(join(packageRoot, ".git"))
+  ) {
+    return "development-checkout";
+  }
+  return null;
+}
+
 // process.argv[1] === fileURLToPath(import.meta.url) is false through
 // symlinked dirs AND symlinked files (pnpm, npm link, symlinked extensions
 // dir) — comparing realpaths survives those. Without this, postinstall,
@@ -769,10 +812,18 @@ const IS_MAIN = (() => {
 })();
 
 if (IS_MAIN) {
-  runSetupFeatureCrons().then((code) => {
-    // exitCode, not exit(): stdout to a pipe is asynchronous, and exit() cut
-    // the --json result off at 64 KiB. The bootstrap could not parse it and
-    // reported planCreateCount=1 after every gateway start (02.10.2026).
-    process.exitCode = code;
-  });
+  const packageRoot = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
+  const skipReason = postinstallSkipReason({ packageRoot });
+  if (skipReason) {
+    // Kein `openclaw`-Aufruf: ein Dev-Checkout/CI darf keine echten Cron-Jobs verändern.
+    process.stdout.write(`${skipReason === "ci" ? SKIP_CI_LINE : SKIP_DEV_CHECKOUT_LINE}\n`);
+    process.exitCode = 0;
+  } else {
+    runSetupFeatureCrons().then((code) => {
+      // exitCode, not exit(): stdout to a pipe is asynchronous, and exit() cut
+      // the --json result off at 64 KiB. The bootstrap could not parse it and
+      // reported planCreateCount=1 after every gateway start (02.10.2026).
+      process.exitCode = code;
+    });
+  }
 }

@@ -2,16 +2,17 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.16.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.16.0 — OpenClaw 2026.8.1 or newer**
 
-Current source version: **7.16.0**, running in production on OpenClaw
-`2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
-API `>=2026.8.1`; the package is built against the immutable build baseline
-`openclaw@2026.8.2`. Each host release is checked against the full patch set
+Current source version: **7.16.0**. The declared compatibility floor is
+`openclaw@2026.8.1` and plugin API `>=2026.8.1` (`openclaw.compat` in
+`package.json`); that floor is the only compatibility claim. The package is
+built against the build baseline `openclaw@2026.8.2` (release metadata), and
+CI runs the packed plugin against the floor and against the latest published
+OpenClaw. Which version means what, and the dated evidence behind it, is in
+the [compatibility contract](docs/compatibility-openclaw.md). Each host release is checked against the full patch set
 before it is installed, so a host change that breaks an internal anchor is
-caught before the Gateway restarts rather than after. See the
-[compatibility contract](docs/compatibility-openclaw.md) for the runtime matrix
-and evidence. The upstream source base is the immutable official tag `v7.4.10`,
+caught before the Gateway restarts rather than after. The upstream source base is the immutable official tag `v7.4.10`,
 commit `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`. PLUR1BUS runs inside the
 Gateway process, so it requires the same Node as its host:
 `>=24.16.0 <25 || >=26.1.0`.
@@ -1105,7 +1106,7 @@ The two configuration views have separate roles: `sourceConfig` alone controls e
 
 Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
 
-- **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`).
+- **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`). It is skipped in a development checkout: when `npm ci`/`npm install` runs in the repository itself (`INIT_CWD` is the package root and a `.git` entry exists there, so also in worktrees) the script prints `[setup-feature-crons] skipped: development checkout` and never calls `openclaw`. It is also skipped when `CI=true`. Set `PLUR1BUS_SETUP_CRONS=1` to run it anyway (manual tests). Installs as a dependency or from the unpacked package are unaffected, as are gateway startup and `/plur1bus setup crons`. When working on the repo, still prefer `npm ci --ignore-scripts`.
 - **Gateway startup (deferred bootstrap)** — runtime registration verifies the
   public Gateway method, CLI, and command dispatcher exactly once. A
   `gateway_start` handler schedules a bounded reconciliation after the gateway

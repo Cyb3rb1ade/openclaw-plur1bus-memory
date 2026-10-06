@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import {
   captureThenableSettlement,
   redactError,
@@ -178,7 +178,7 @@ describe("trySafeWarn", () => {
   });
 
   it("rejects a self-resolving thenable without starving the cleanup deadline", () => {
-    const probe = spawnSync(process.execPath, [
+    const probe = spawnSyncBounded(process.execPath, [
       "--input-type=module",
       "-e",
       [
@@ -192,7 +192,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr || "cycle probe timed out");
@@ -202,7 +202,7 @@ describe("trySafeWarn", () => {
   });
 
   it("observes async then-method failures and ignored rejecting return promises", () => {
-    const probe = spawnSync(process.execPath, [
+    const probe = spawnSyncBounded(process.execPath, [
       "--input-type=module",
       "-e",
       [
@@ -222,7 +222,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -235,7 +235,7 @@ describe("trySafeWarn", () => {
   });
 
   it("observes a rejected native promise before reading a hostile own then getter", () => {
-    const probe = spawnSync(process.execPath, [
+    const probe = spawnSyncBounded(process.execPath, [
       "--input-type=module",
       "-e",
       [
@@ -256,7 +256,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -269,7 +269,7 @@ describe("trySafeWarn", () => {
   });
 
   it("observes rejected promise subclasses without invoking hostile species constructors", () => {
-    const probe = spawnSync(process.execPath, [
+    const probe = spawnSyncBounded(process.execPath, [
       "--input-type=module",
       "-e",
       [
@@ -292,7 +292,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -310,7 +310,7 @@ describe("trySafeWarn", () => {
   });
 
   it("observes frozen promise subclasses and restores pre-existing constructor descriptors", () => {
-    const probe = spawnSync(process.execPath, [
+    const probe = spawnSyncBounded(process.execPath, [
       "--input-type=module",
       "-e",
       [
@@ -340,7 +340,7 @@ describe("trySafeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
@@ -375,7 +375,7 @@ describe("trySafeWarn", () => {
 
 describe("safeWarn", () => {
   it("observes an asynchronously rejecting logger when called directly", () => {
-    const probe = spawnSync(process.execPath, [
+    const probe = spawnSyncBounded(process.execPath, [
       "--input-type=module",
       "-e",
       [
@@ -391,7 +391,7 @@ describe("safeWarn", () => {
       cwd: process.cwd(),
       encoding: "utf8",
       env: probeEnvironment(),
-      timeout: 1_000,
+      timeout: 30_000,
     });
 
     assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);

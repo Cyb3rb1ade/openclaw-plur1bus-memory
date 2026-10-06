@@ -4,7 +4,6 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
@@ -16,6 +15,7 @@ import { createEngine } from "../engine/create-engine.js";
 import { createStubHost } from "../lib/host-services.js";
 import { IpcScopedEmbeddingProvider } from "../lib/providers/scoped-embedding-ipc.js";
 import { createEmbeddingServing, validateIpcAddress } from "../engine/providers/embedding-service.js";
+import { spawnTracked, waitForOutput } from "./helpers/spawn-tracked.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const config = (baseDbPath) => ({
@@ -105,23 +105,15 @@ async function waitFor(predicate, timeoutMs = 1000) {
 
 // Same fixture as tests/scoped-embedding-ipc.test.js: a listener in a child
 // process that is SIGKILLed, leaving a socket file nobody accepts on.
-async function leaveStaleUnixSocket(socketPath) {
-  const child = spawn(process.execPath, [
+async function leaveStaleUnixSocket(t, socketPath) {
+  const child = spawnTracked(t, process.execPath, [
     "-e",
     "const {createServer}=require('node:net');const s=createServer();s.listen(process.argv[1],()=>process.stdout.write('ready'));",
     socketPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
-  const stderr = [];
-  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-  await Promise.race([
-    once(child.stdout, "data"),
-    once(child, "exit").then(([code]) => {
-      throw new Error(`stale socket fixture exited early (${code}): ${stderr.join("")}`);
-    }),
-  ]);
-  const exited = once(child, "exit");
+  await waitForOutput(child, { match: "ready", label: "stale socket fixture" });
   child.kill("SIGKILL");
-  await exited;
+  await child.exited;
   assert.equal(statSync(socketPath).isSocket(), true);
 }
 
@@ -209,7 +201,7 @@ describe("EmbeddingService.serve() (E3 Task 4)", () => {
     }
   });
 
-  it("(e) a live foreign listener is a conflict and keeps its socket; a dead stale socket is replaced", posixOnly, async () => {
+  it("(e) a live foreign listener is a conflict and keeps its socket; a dead stale socket is replaced", posixOnly, async (t) => {
     const { engine, baseDbPath } = setup("e3-serve-e-");
     const sockDir = privateSockDir();
     const foreignPath = join(sockDir, "foreign.sock");
@@ -225,7 +217,7 @@ describe("EmbeddingService.serve() (E3 Task 4)", () => {
       assert.equal(existsSync(tokenPathOf(baseDbPath)), false);
 
       const stalePath = join(sockDir, "stale.sock");
-      await leaveStaleUnixSocket(stalePath);
+      await leaveStaleUnixSocket(t, stalePath);
       const result = await engine.embedding.serve({ kind: "unix-socket", address: stalePath });
       assert.equal((await roundTrip(baseDbPath, result)).length, 384);
     } finally {

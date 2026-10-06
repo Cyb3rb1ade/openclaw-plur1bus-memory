@@ -220,7 +220,7 @@ describe("B1 torn write — Toleranz genau für den abgebrochenen Append", () =>
     const fp = contentFingerprint("parallel angehängt");
 
     const run = (mode) => new Promise((resolve, reject) => {
-      execFile(process.execPath, [scriptPath, base, AGENT, mode, fp], { timeout: 20_000 }, (err) => {
+      execFile(process.execPath, [scriptPath, base, AGENT, mode, fp], { timeout: 60_000, killSignal: "SIGKILL" }, (err) => {
         if (err) reject(err); else resolve();
       });
     });

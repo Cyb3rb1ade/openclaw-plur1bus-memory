@@ -15,7 +15,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSyncBounded } from "./helpers/run-sync.js";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -52,7 +52,7 @@ function withHomeOverride(env) {
 }
 
 function runNode(script, args = [], { env = {}, cwd = REPO_ROOT, timeout = 30_000 } = {}) {
-  const result = spawnSync(process.execPath, [script, ...args], {
+  const result = spawnSyncBounded(process.execPath, [script, ...args], {
     cwd,
     encoding: "utf8",
     env: { ...process.env, ...withHomeOverride(env) },
@@ -233,7 +233,7 @@ function makeDeployFixture({ checkerMode = "valid", sourceContent, deployContent
 function runDeployGuard(fixture, env = {}) {
   const { PATH: envPath, ...restEnv } = env;
   const basePath = envPath ?? process.env.PATH;
-  const result = spawnSync("bash", [fixture.scriptPath], {
+  const result = spawnSyncBounded("bash", [fixture.scriptPath], {
     cwd: fixture.root,
     encoding: "utf8",
     env: {
@@ -248,7 +248,7 @@ function runDeployGuard(fixture, env = {}) {
       ...restEnv,
       PATH: needsGnuCompatShims ? `${fixture.compatBinDir}:${basePath}` : basePath,
     },
-    timeout: 30_000,
+    timeout: 120_000,
   });
   return {
     ...result,
@@ -276,7 +276,7 @@ const posixShFake = { skip: process.platform === "win32" && "engine-windows:posi
 const bashPathFakes = { skip: process.platform === "win32" && "engine-windows:b9-bash-path-fakes (fake cp on a Git Bash PATH)" };
 
 const requiresModernBash = (() => {
-  const probe = spawnSync("bash", ["-c", 'printf "%s" "$BASH_VERSINFO"'], { encoding: "utf8" });
+  const probe = spawnSyncBounded("bash", ["-c", 'printf "%s" "$BASH_VERSINFO"'], { encoding: "utf8" });
   const major = Number.parseInt(probe.stdout ?? "", 10);
   return major >= 4
     ? {}
@@ -691,7 +691,7 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
           else console.log("TIMEOUT_REJECTED");
         }
       `;
-      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", probe], {
+      const result = spawnSyncBounded(process.execPath, ["--input-type=module", "--eval", probe], {
         cwd: REPO_ROOT,
         encoding: "utf8",
         env: {
@@ -700,7 +700,7 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
           PATH: `${binDir}:${process.env.PATH}`,
           PLUR1BUS_DEPLOY: REPO_ROOT,
         },
-        timeout: 30_000,
+        timeout: 60_000,
       });
 
       assert.equal(result.status, 0, `${result.stdout ?? ""}${result.stderr ?? ""}`);

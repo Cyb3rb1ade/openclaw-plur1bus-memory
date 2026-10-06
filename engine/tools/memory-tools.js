@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkAccess } from "../../lib/acl-middleware.js";
 import { categorizeMemoryWithReason, MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES } from "../../lib/categorize.js";
@@ -39,6 +39,7 @@ import { hasMeaningfulDifference, validateMergedTextPreservesFacts } from "../..
 import { resolveToolMemoryRequestContext } from "../../lib/memory-request-context.js";
 import { addTraceStoreDecision, createRecallDecisionTrace, summarizeTrace, textPreview } from "../../lib/recall-decision-trace.js";
 import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
+import { tryAcquireOwnedLock } from "../../lib/registry-lock.js";
 import { withAccessReadDbs } from "../../lib/shared-memory.js";
 import { safeUuidList, selectSafeUuids } from "../../lib/sql-safety.js";
 import { archiveCard } from "../../lib/telegram-commands/memory-edit.js";
@@ -46,6 +47,7 @@ import { generateSummary as libGenerateSummary } from "../../lib/text-utils.js";
 import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../../lib/valid-time.js";
 import { guardWorkspaceTools } from "../../lib/workspace-policy-guard.js";
+import { describeText } from "../../lib/log-redact.js";
 
 /**
  * Build the OpenClaw tool factory from an already-resolved engine context.
@@ -427,7 +429,7 @@ export function createMemoryTools(ctx) {
           // That is the conservative outcome, and the decision is already durable in the
           // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
           // routine store into an operator alarm -- 192 of them in one seeded run.
-          host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+          host.logger.info(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: ${describeText(params.text)}`);
                 addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
               } else {
                 if (toolCtx.workspaceDir) appendCurationLog(toolCtx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -465,7 +467,7 @@ export function createMemoryTools(ctx) {
                   prepareReplacement: async (authoritativeCandidate, replacementId) => {
                     let mergeResult = null;
                     if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
-                      host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                      host.logger.warn(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: new ${describeText(params.text)} vs existing ${describeText(authoritativeCandidate.text)}`);
                       addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
                     } else {
                       try {
@@ -489,7 +491,7 @@ export function createMemoryTools(ctx) {
                       return null;
                     }
                     if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
-                      host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                      host.logger.warn(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: merged ${describeText(mergeResult.mergedText)}`);
                       addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                       return null;
                     }
@@ -739,42 +741,22 @@ export function createMemoryTools(ctx) {
           const agentPending = pendingSnapshot.pending.filter(p => p.sourceAgent === agentId);
           const pendingIds = agentPending.map(p => p.memoryId);
 
-          // Mutex via lock file — atomic acquire with wx flag (exclusive create)
+          // Mutex via lock file, ownership protocol of lib/registry-lock.js (N1):
+          // the lock carries a nonce, release deletes it only while it is still
+          // ours, and a lock counts as stale only at age > 5 min AND (holder dead
+          // OR age > 50 min). Before N1 a failed acquire fell through to the
+          // `finally` below and unlinked the other holder's live lock, and a slow
+          // but live holder lost its lock to the mtime-only 5-minute check.
           const lockPath = join(toolCtx.workspaceDir, ".adaptive-learning", KNOWLEDGE_LOCK_FILE);
-          // Staleness check: remove lock files older than 5 minutes (crash recovery)
-          if (existsSync(lockPath)) {
+          let knowledgeLock = null;
+          try {
             try {
-              const lockAge = Date.now() - statSync(lockPath).mtimeMs;
-              if (lockAge > 5 * 60 * 1000) {
-                const { unlinkSync } = await import("node:fs");
-                unlinkSync(lockPath);
-                host.logger.warn("memory-lancedb-namespaced: removed stale knowledge lock file");
-              } else {
-                return { content: [{ type: "text", text: "knowledge_update: another update is already running (lock file exists). Try again in a moment." }] };
-              }
+              knowledgeLock = tryAcquireOwnedLock(lockPath, { staleMs: 5 * 60 * 1000 });
             } catch (_) {
               return { content: [{ type: "text", text: "knowledge_update: lock file check failed. Try again." }] };
             }
-          }
-          try {
-            // Atomic lock acquire with exponential backoff retry
-            const { closeSync } = await import("node:fs");
-            let acquired = false;
-            for (let attempt = 0; attempt < 5; attempt++) {
-              try {
-                const fd = openSync(lockPath, "wx");
-                writeFileSync(fd, new Date().toISOString());
-                closeSync(fd);
-                acquired = true;
-                break;
-              } catch (lockErr) {
-                if (lockErr.code !== "EEXIST") throw lockErr;
-                // Lock exists — wait with backoff and retry
-                await new Promise(r => setTimeout(r, Math.min(100 * 2 ** attempt, 2000)));
-              }
-            }
-            if (!acquired) {
-              return { content: [{ type: "text", text: "knowledge_update: could not acquire lock after 5 attempts. Try again later." }] };
+            if (!knowledgeLock) {
+              return { content: [{ type: "text", text: "knowledge_update: another update is already running (lock file exists). Try again in a moment." }] };
             }
 
             // Fetch pending memories from DB
@@ -964,8 +946,8 @@ export function createMemoryTools(ctx) {
             host.logger.warn(`memory-lancedb-namespaced: knowledge_update failed (class=${errorClass})`);
             return { content: [{ type: "text", text: `knowledge_update failed (${errorClass}).` }] };
           } finally {
-            // Release lock
-            try { if (existsSync(lockPath)) { const { unlinkSync } = await import("node:fs"); unlinkSync(lockPath); } } catch (_e) { dbg(_e); }
+            // Release lock — only our own (a refused acquire holds nothing).
+            try { knowledgeLock?.release(); } catch (_e) { dbg(_e); }
           }
           });
         },

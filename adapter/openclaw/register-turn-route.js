@@ -8,6 +8,8 @@
  * neither (engine-extraction.md §a.1).
  */
 
+import { describeSessionKey } from "../../lib/log-redact.js";
+
 /**
  * @param {{api: object, host: object, autoRecall: boolean,
  *          getMemoryTurnRoutes: () => Promise<object|null>,
@@ -23,7 +25,7 @@ export function registerTurnRouteHooks(ctx) {
   let replyDispatchInvocations = 0;
   const replyDispatchRegistration = api.on("reply_dispatch", async (event, hookCtx) => {
     replyDispatchInvocations += 1;
-    host.logger.info(`memory-turn-routes: reply_dispatch handler invoked #${replyDispatchInvocations} dispatchKind=${String(hookCtx?.dispatchKind || "")} hasCtx=${Boolean(event?.ctx)} sessionKey=${String(event?.sessionKey || event?.ctx?.SessionKey || "").slice(0, 96)}`);
+    host.logger.info(`memory-turn-routes: reply_dispatch handler invoked #${replyDispatchInvocations} dispatchKind=${String(hookCtx?.dispatchKind || "")} hasCtx=${Boolean(event?.ctx)} sessionKey=${describeSessionKey(event?.sessionKey || event?.ctx?.SessionKey || "")}`);
     const turnRoutes = await getMemoryTurnRoutes();
     turnRoutes?.observeReplyDispatch(event);
     // 7.12.33: Ausgang der Beobachtung (Debug); die Fallback-Warnung des
@@ -31,7 +33,7 @@ export function registerTurnRouteHooks(ctx) {
     try {
       const sessionKey = event?.sessionKey || event?.ctx?.SessionKey || "";
       const observed = turnRoutes?.lastObserve?.(sessionKey) || "none";
-      const line = `memory-turn-routes: dispatch observe:${observed} session=${String(sessionKey).slice(0, 96)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} eventKeys=${Object.keys(event || {}).filter((k) => k !== "ctx").slice(0, 24).join(",")} ctxKeys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|BodyForAgent|RawBody|SenderId|ChatId|Provider|Surface|AccountId|OriginatingTo|OriginatingChannel|OriginatingAccountId|SessionKey|RunId|isTailDispatch|MessageThreadId)$/.test(k)).join(",")}`;
+      const line = `memory-turn-routes: dispatch observe:${observed} session=${describeSessionKey(sessionKey)} runId=${String(event?.runId || event?.ctx?.RunId || "").slice(0, 40)} eventKeys=${Object.keys(event || {}).filter((k) => k !== "ctx").slice(0, 24).join(",")} ctxKeys=${Object.keys(event?.ctx || {}).filter((k) => /^(CommandTurn|CommandSource|CommandBody|Body|BodyForAgent|RawBody|SenderId|ChatId|Provider|Surface|AccountId|OriginatingTo|OriginatingChannel|OriginatingAccountId|SessionKey|RunId|isTailDispatch|MessageThreadId)$/.test(k)).join(",")}`;
       // 7.12.34: Nicht-Kommando-Ausstiege sichtbar machen (Info), Rest Debug.
       if (/^(registered|slash_command|command_turn:|command_source|is_command|tail_dispatch)/.test(observed)) host.logger.debug(line);
       else host.logger.info(line);

@@ -21,7 +21,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSyncBounded, spawnSyncBounded } from "./helpers/run-sync.js";
 
 import { validateDeployment, DEPLOY_FILES } from "../scripts/lib/deploy-integrity.mjs";
 import { run as runWorkspaceWriter } from "../scripts/verify-workspace-writer.mjs";
@@ -53,7 +53,7 @@ function writeStub(dir, relPath) {
 function runScript(scriptPath, args = [], env = {}, { timeoutMs = 30_000 } = {}) {
   // os.homedir() reads USERPROFILE on win32: mirror a HOME override there.
   const home = env.HOME !== undefined && env.USERPROFILE === undefined ? { USERPROFILE: env.HOME } : {};
-  const r = spawnSync(process.execPath, [scriptPath, ...args], {
+  const r = spawnSyncBounded(process.execPath, [scriptPath, ...args], {
     encoding: "utf8",
     env: { ...process.env, ...env, ...home },
     timeout: timeoutMs,

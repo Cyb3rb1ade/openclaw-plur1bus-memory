@@ -10,7 +10,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSyncBounded } from "./helpers/run-sync.js";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -384,7 +384,7 @@ describe("SharedMemoryPool verified-path mode (E4 Task 10, ADR 0001)", () => {
     const root = join(base, SHARED);
     mkdirSync(root);
     const user = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${userInfo().username}` : userInfo().username;
-    const icacls = (args) => execFileSync("icacls", args, { stdio: "ignore", windowsHide: true });
+    const icacls = (args) => execFileSyncBounded("icacls", args, { stdio: "ignore", windowsHide: true });
     icacls([base, "/setowner", user]);
     icacls([root, "/setowner", user]);
     icacls([root, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)(F)`]);

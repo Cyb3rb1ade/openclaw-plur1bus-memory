@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { execSync } from "node:child_process";
+import { execSyncBounded } from "./helpers/run-sync.js";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -40,7 +40,7 @@ function cleanup(dir) {
 
 function runShell(command, options = {}) {
   try {
-    return execSync(command, options);
+    return execSyncBounded(command, options);
   } catch (err) {
     if (err.code === "EPERM" && err.status === 0) {
       return err.stdout ?? "";

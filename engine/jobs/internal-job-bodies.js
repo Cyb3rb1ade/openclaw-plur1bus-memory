@@ -31,6 +31,7 @@ import { drainPostTurnWork } from "../../lib/post-turn-queue.js";
 import { createPostTurnWorkers } from "../capture/post-turn-work.js";
 import { readReplyOutcomeLog } from "../../lib/reply-outcome-tracking.js";
 import { activateSkillProposal } from "../../lib/telegram-commands/skill-commands.js";
+import { summarizeAfterthoughtResultForLog, summarizePersonaResultForLog, summarizeReminderResultForLog } from "../../lib/log-redact.js";
 
 /**
  * @param {Record<string, any>} ctx The command runner's context plus its factory-level helpers.
@@ -583,7 +584,7 @@ export function createInternalJobBodies(ctx) {
           timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
           logger: host.logger,
         });
-        host.logger.info(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
+        host.logger.info(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify(summarizeAfterthoughtResultForLog(result))}`);
         return cronInternal
           ? formatAfterthoughtCronReply(result)
           : formatJsonCommandResult({ job: "afterthought", ...result });
@@ -613,7 +614,7 @@ export function createInternalJobBodies(ctx) {
           ),
           callLlm: callCommandLlm,
         });
-        host.logger.info(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(summarizePersonaResultForLog(result))}`);
         return formatJsonCommandResult({ job: "persona-evolve", ...result });
       }
       if (subKey === "reminder-dispatch") {
@@ -628,7 +629,7 @@ export function createInternalJobBodies(ctx) {
             webhookUrl: remindersCfg.webhookUrl ? resolveEnvVars(remindersCfg.webhookUrl) : null,
           });
         });
-        host.logger.info(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
+        host.logger.info(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(summarizeReminderResultForLog(result))}`);
         return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
       }
       // 7.12.43: Nachmigration aelterer Episoden-Karten auf das aktuelle

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -24,6 +23,7 @@ import {
 } from "../lib/providers/scoped-embedding-ipc.js";
 import { ipcAddress, readDirectoryAcl } from "../lib/platform.js";
 import { makeClaimableStateRoot } from "./helpers/claimable-state-root.js";
+import { runTracked, spawnTracked, waitForOutput } from "./helpers/spawn-tracked.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
@@ -40,27 +40,19 @@ function defaultOwnerAddress(stateRoot) {
   return resolveScopedEmbeddingDefaultEndpoint(resolveScopedEmbeddingIpcPaths(stateRoot)).address;
 }
 
-async function leaveStaleUnixSocket(socketPath) {
-  const child = spawn(process.execPath, [
+async function leaveStaleUnixSocket(t, socketPath) {
+  const child = spawnTracked(t, process.execPath, [
     "-e",
     "const {createServer}=require('node:net');const s=createServer();s.listen(process.argv[1],()=>process.stdout.write('ready'));",
     socketPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
-  const stderr = [];
-  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-  await Promise.race([
-    once(child.stdout, "data"),
-    once(child, "exit").then(([code]) => {
-      throw new Error(`stale socket fixture exited early (${code}): ${stderr.join("")}`);
-    }),
-  ]);
-  const exited = once(child, "exit");
+  await waitForOutput(child, { match: "ready", label: "stale socket fixture" });
   child.kill("SIGKILL");
-  await exited;
+  await child.exited;
   assert.equal(statSync(socketPath).isSocket(), true);
 }
 
-async function startOwnerInChild(stateRoot) {
+async function startOwnerInChild(t, stateRoot) {
   const moduleUrl = new URL("../lib/providers/scoped-embedding-ipc.js", import.meta.url).href;
   const source = [
     "const {createScopedEmbeddingIpcServer}=await import(process.argv[1]);",
@@ -69,17 +61,10 @@ async function startOwnerInChild(stateRoot) {
     "const owner=createScopedEmbeddingIpcServer({stateRoot:process.argv[2],embeddings,fingerprintId});",
     "await owner.start();process.stdout.write('ready');setInterval(()=>{},1000);",
   ].join("");
-  const child = spawn(process.execPath, ["--input-type=module", "-e", source, moduleUrl, stateRoot], {
+  const child = spawnTracked(t, process.execPath, ["--input-type=module", "-e", source, moduleUrl, stateRoot], {
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const stderr = [];
-  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-  await Promise.race([
-    once(child.stdout, "data"),
-    once(child, "exit").then(([code]) => {
-      throw new Error(`owner child exited early (${code}): ${stderr.join("")}`);
-    }),
-  ]);
+  await waitForOutput(child, { match: "ready", label: "scoped embedding owner child" });
   return child;
 }
 
@@ -215,7 +200,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     assert.deepEqual(readdirSync(directory), [OWNER_PIPE_NONCE_FILE]);
   });
 
-  it("concurrent creators and readers in separate processes never see an empty or differing nonce (review N2)", async () => {
+  it("concurrent creators and readers in separate processes never see an empty or differing nonce (review N2)", async (t) => {
     const directory = makeTempDir("plur1bus-ipc-nonce-race-");
     const moduleUrl = new URL("../lib/providers/scoped-embedding-ipc.js", import.meta.url).href;
     const source = [
@@ -229,14 +214,14 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
       "}",
       "process.stdout.write([...seen].join(','));",
     ].join("\n");
-    const runs = await Promise.all(Array.from({ length: 4 }, () => new Promise((resolve) => {
-      const child = spawn(process.execPath, ["--input-type=module", "-e", source, moduleUrl, directory], { stdio: ["ignore", "pipe", "pipe"] });
-      let out = "";
-      child.stdout.on("data", (chunk) => { out += chunk; });
-      child.on("exit", (code) => resolve({ code, out }));
-    })));
-    for (const run of runs) assert.equal(run.code, 0, run.out);
-    const nonces = new Set(runs.flatMap((run) => run.out.split(",").filter(Boolean)));
+    const runs = await Promise.all(Array.from({ length: 4 }, () => runTracked(
+      t,
+      process.execPath,
+      ["--input-type=module", "-e", source, moduleUrl, directory],
+      { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 30_000 },
+    )));
+    for (const run of runs) assert.equal(run.code, 0, run.stdout + run.stderr);
+    const nonces = new Set(runs.flatMap((run) => run.stdout.split(",").filter(Boolean)));
     assert.equal(nonces.size, 1, [...nonces].join(" | "));
     assert.equal([...nonces][0], readScopedEmbeddingPipeNonce({ directory }));
     assert.deepEqual(readdirSync(directory), [OWNER_PIPE_NONCE_FILE]);
@@ -644,9 +629,9 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     }
   });
 
-  it("refuses a live cross-process owner and recovers after its crash", async () => {
+  it("refuses a live cross-process owner and recovers after its crash", async (t) => {
     const stateRoot = await createStateRoot("plur1bus-scoped-embedding-owner-crash-");
-    const child = await startOwnerInChild(stateRoot);
+    const child = await startOwnerInChild(t, stateRoot);
     const contender = createScopedEmbeddingIpcServer({
       stateRoot,
       embeddings: fixtureEmbeddings(),
@@ -683,7 +668,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
 
   // On win32 there is no stale socket file to plant; the concurrent election
   // itself (claim port, then the nonce pipe) is still asserted there.
-  it("atomically elects one owner when two starts recover the same stale socket", async () => {
+  it("atomically elects one owner when two starts recover the same stale socket", async (t) => {
     const stateRoot = await createStateRoot("plur1bus-scoped-embedding-owner-race-");
     const paths = resolveScopedEmbeddingIpcPaths(stateRoot);
     const embeddings = {
@@ -697,7 +682,7 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     const second = createScopedEmbeddingIpcServer({ stateRoot, embeddings, fingerprintId: ACTIVE_FINGERPRINT_ID });
     let provider = null;
     try {
-      if (!WIN32) await leaveStaleUnixSocket(paths.socketPath);
+      if (!WIN32) await leaveStaleUnixSocket(t, paths.socketPath);
       const outcomes = await Promise.allSettled([first.start(), second.start()]);
       assert.equal(outcomes.filter(({ status }) => status === "fulfilled").length, 1);
       const rejected = outcomes.find(({ status }) => status === "rejected");
@@ -934,10 +919,10 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
     assert.equal(existsSync(first.tokenPath), false);
   });
 
-  it("recovers a stale unix socket left at the explicit address", posixSocketFile, async () => {
+  it("recovers a stale unix socket left at the explicit address", posixSocketFile, async (t) => {
     const stateRoot = makeTempDir("e3-ipc-");
     const address = explicitUnixAddress();
-    await leaveStaleUnixSocket(address.address);
+    await leaveStaleUnixSocket(t, address.address);
     const server = createScopedEmbeddingIpcServer({
       stateRoot,
       embeddings: e3Embeddings(),
@@ -1039,7 +1024,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
     }
   });
 
-  it("refuses an unclaimed owner while a claimed legacy owner of the same stateRoot runs in another process", async () => {
+  it("refuses an unclaimed owner while a claimed legacy owner of the same stateRoot runs in another process", async (t) => {
     const stateRoot = await createStateRoot("e3-ipc-xproc-");
     const address = explicitUnixAddress();
     const tokenPath = resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath;
@@ -1052,7 +1037,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       claim: false,
     });
     try {
-      child = await startOwnerInChild(stateRoot);
+      child = await startOwnerInChild(t, stateRoot);
       const tokenBefore = readFileSync(tokenPath);
       await assert.rejects(unclaimed.start(), /owner is already active/);
       await unclaimed.shutdown();
