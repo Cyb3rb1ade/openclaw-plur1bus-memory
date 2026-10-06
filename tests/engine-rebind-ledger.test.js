@@ -4,11 +4,14 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, utimesSync, writeFileSync, writeSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 
 import { makeTempDir } from "./helpers/temp-dir.js";
-import { createRebindLedger, rebindLedgerPath, repairTornLastLine } from "../engine/memory-ops/rebind-ledger.js";
+import {
+  createRebindLedger, rebindLedgerPath, rebindLockPath, rebindsRoot, repairTornLastLine,
+} from "../engine/memory-ops/rebind-ledger.js";
 
 const TIMEOUT = { timeout: 10_000 };
 
@@ -158,5 +161,127 @@ describe("rebind ledger", () => {
       fromUpdatedAt: 1,
     });
     assert.equal(n, 1);
+  });
+
+  function deadPid() {
+    for (let pid = 4_000_000; pid > 100_000; pid -= 7919) {
+      try { process.kill(pid, 0); } catch (error) {
+        if (error?.code === "ESRCH") return pid;
+      }
+    }
+    throw new Error("no dead pid found");
+  }
+
+  function ageLock(path, ms) {
+    const when = new Date(Date.now() - ms);
+    utimesSync(path, when, when);
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  it("does not steal a live holder's lock after staleMs", TIMEOUT, async () => {
+    const baseDbPath = join(makeTempDir("rebind-lock-live-"), "store");
+    const l1 = createRebindLedger({ baseDbPath });
+    const l2 = createRebindLedger({ baseDbPath });
+    let current = 0;
+    let maxInside = 0;
+    const hold = (ledger, ms) => ledger.withLock({ exclusive: true }, async () => {
+      current += 1;
+      maxInside = Math.max(maxInside, current);
+      ageLock(rebindLockPath(baseDbPath), 120_000);
+      await sleep(ms);
+      current -= 1;
+    });
+    await Promise.all([hold(l1, 250), hold(l2, 50)]);
+    assert.equal(maxInside, 1);
+  });
+
+  it("release does not delete a foreign lock", TIMEOUT, async () => {
+    const baseDbPath = join(makeTempDir("rebind-lock-foreign-"), "store");
+    const l1 = createRebindLedger({ baseDbPath });
+    const lockPath = rebindLockPath(baseDbPath);
+    await l1.withLock({ exclusive: true }, async () => {
+      writeFileSync(lockPath, JSON.stringify({
+        nonce: "foreign-nonce",
+        pid: process.pid,
+        host: hostname(),
+        acquiredAt: new Date().toISOString(),
+      }));
+    });
+    assert.equal(existsSync(lockPath), true);
+    const raw = JSON.parse(readFileSync(lockPath, "utf8"));
+    assert.equal(raw.nonce, "foreign-nonce");
+  });
+
+  it("reaps a dead-pid lock older than staleMs", TIMEOUT, async () => {
+    const baseDbPath = join(makeTempDir("rebind-lock-dead-"), "store");
+    mkdirSync(rebindsRoot(baseDbPath), { recursive: true, mode: 0o700 });
+    const lockPath = rebindLockPath(baseDbPath);
+    writeFileSync(lockPath, JSON.stringify({
+      nonce: "dead-nonce",
+      pid: deadPid(),
+      host: hostname(),
+      acquiredAt: new Date().toISOString(),
+    }));
+    ageLock(lockPath, 70_000);
+    const ledger = createRebindLedger({ baseDbPath });
+    let entered = false;
+    await ledger.withLock({ exclusive: true }, async () => { entered = true; });
+    assert.equal(entered, true);
+  });
+
+  it("a clock 61s ahead does not grant entry while the holder is live", TIMEOUT, async () => {
+    const baseDbPath = join(makeTempDir("rebind-lock-skew-"), "store");
+    const l1 = createRebindLedger({ baseDbPath });
+    const l2 = createRebindLedger({ baseDbPath, clock: () => Date.now() + 61_000 });
+    let current = 0;
+    let maxInside = 0;
+    const hold = (ledger, ms) => ledger.withLock({ exclusive: true }, async () => {
+      current += 1;
+      maxInside = Math.max(maxInside, current);
+      await sleep(ms);
+      current -= 1;
+    });
+    await Promise.all([hold(l1, 250), hold(l2, 50)]);
+    assert.equal(maxInside, 1);
+  });
+
+  it("writeClaim refuses a different toOwner and keeps the existing claim", TIMEOUT, () => {
+    const baseDbPath = join(makeTempDir("rebind-claim-keep-"), "store");
+    const ledger = createRebindLedger({ baseDbPath });
+    const fromOwner = `user:v1:${"a".repeat(64)}`;
+    const u1 = `user:v2:${"b".repeat(64)}`;
+    const u2 = `user:v2:${"c".repeat(64)}`;
+    ledger.writeClaim(fromOwner, u1);
+    assert.throws(
+      () => ledger.writeClaim(fromOwner, u2),
+      (e) => e.code === "identity-already-bound",
+    );
+    assert.equal(ledger.readClaim(fromOwner).toOwner, u1);
+  });
+
+  it("a ledger write aborts with lock-lost when the nonce is gone", TIMEOUT, async () => {
+    const baseDbPath = join(makeTempDir("rebind-lock-lost-"), "store");
+    const ledger = createRebindLedger({ baseDbPath });
+    const rebindId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    await assert.rejects(
+      () => ledger.withLock({ exclusive: true }, async () => {
+        writeFileSync(rebindLockPath(baseDbPath), JSON.stringify({
+          nonce: "stolen",
+          pid: process.pid,
+          host: hostname(),
+          acquiredAt: new Date().toISOString(),
+        }));
+        ledger.writeHeader(rebindId, {
+          agentId: "agent-a",
+          fromOwner: `user:v1:${"a".repeat(64)}`,
+          toOwner: `user:v2:${"b".repeat(64)}`,
+          createdAt: 1,
+        });
+      }),
+      (e) => e.code === "lock-lost",
+    );
   });
 });

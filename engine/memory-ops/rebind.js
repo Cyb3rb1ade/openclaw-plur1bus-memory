@@ -122,6 +122,8 @@ export function createMemoryRebind({
       throw memoryOpError("identity-already-bound", "identity already bound");
     }
     if (applied.length > 0) return { applied, toOwner: applied[0].header.toOwner };
+    const claim = ledger.readClaim(fromOwner);
+    if (claim?.toOwner) return { applied, toOwner: claim.toOwner };
     return { applied, toOwner: null };
   }
 

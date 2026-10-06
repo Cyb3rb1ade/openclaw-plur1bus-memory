@@ -109,7 +109,7 @@ assertTrue<Exact<ContractVersion, "1.12.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
-assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt">>();
+assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost">>();
 // 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
 assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
 assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();
@@ -174,6 +174,7 @@ assertTrue<Exact<EngineStatus["journal"], import("./engine.js").JournalBacklog |
 assertTrue<Exact<EngineStatus["sharedMemory"]["mode"], "fd-capability" | "verified-path" | "unavailable">>();
 assertTrue<"unsupported" extends MemoryOpErrorCode ? true : false>();
 assertTrue<"ledger-corrupt" extends MemoryOpErrorCode ? true : false>();
+assertTrue<"lock-lost" extends MemoryOpErrorCode ? true : false>();
 assertTrue<Exact<AgentJobHealth["lastRuns"], Partial<Record<JobName, JobLastRun>>>>();
 
 // 1.9.0: engine config schema, warm-only recall (E5 Task 1).

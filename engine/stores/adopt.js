@@ -555,8 +555,7 @@ export function createStoreAdopt({
       });
     }
 
-    const probeN = Math.min(ADOPT_PROBE_MIN_ROWS, available.length);
-    const sample = available.slice(0, probeN);
+    const sample = available;
 
     for (const row of sample) {
       if (row.vector.length !== expectedIdentity.dimensions) {

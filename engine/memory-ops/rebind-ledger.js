@@ -8,20 +8,23 @@
  * no newline is quarantined, never truncated to empty.
  *
  * N:1 is engine-wide: `_rebinds/by-identity/<sha256(fromOwner)>.json` plus
- * applied sidecar headers. Writers take `_rebinds/.lock` (O_EXCL).
+ * applied sidecar headers. Writers take `_rebinds/.lock` through
+ * `tryAcquireOwnedLock` (nonce, rename-aside release, liveness-aware stale).
  */
 
 import { createHash } from "node:crypto";
 import {
   closeSync, existsSync, fstatSync, fsyncSync, ftruncateSync,
   mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync,
-  statSync, unlinkSync, writeFileSync, writeSync,
+  unlinkSync, writeFileSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { tryAcquireOwnedLock } from "../../lib/registry-lock.js";
 import { resolveInside, safeUuid } from "../../lib/sql-safety.js";
 import { memoryOpError } from "./errors.js";
 
 export const REBIND_LEDGER_VERSION = 1;
+/** Live holder is not reaped until age > staleMs AND (pid dead OR age > 10 × staleMs). */
 export const REBIND_LOCK_STALE_MS = 60_000;
 export const REBIND_LOCK_WAIT_MS = 20_000;
 
@@ -48,6 +51,14 @@ export function rebindLedgerPath(baseDbPath, rebindId) {
  */
 export function identityClaimFileName(fromOwner) {
   return `${createHash("sha256").update(String(fromOwner)).digest("hex")}.json`;
+}
+
+/**
+ * @param {string} baseDbPath
+ * @returns {string}
+ */
+export function rebindLockPath(baseDbPath) {
+  return join(rebindsRoot(baseDbPath), ".lock");
 }
 
 /**
@@ -139,8 +150,11 @@ export function createRebindLedger({
   logger,
   fsyncParent = fsyncParentDirectory,
   clock = Date.now,
+  tryAcquire = tryAcquireOwnedLock,
 } = {}) {
   let lockTail = Promise.resolve();
+  /** @type {{path: string, nonce: string, release: () => void} | null} */
+  let heldHandle = null;
 
   function ensureRoot() {
     const root = rebindsRoot(baseDbPath);
@@ -166,7 +180,24 @@ export function createRebindLedger({
     }
   }
 
+  function nonceStillOurs(lockPath, nonce) {
+    try {
+      const raw = JSON.parse(readFileSync(lockPath, "utf8"));
+      return Boolean(raw && raw.nonce === nonce);
+    } catch {
+      return false;
+    }
+  }
+
+  function assertLockHeld() {
+    if (!heldHandle) return;
+    if (!nonceStillOurs(heldHandle.path, heldHandle.nonce)) {
+      throw memoryOpError("lock-lost", "rebind lock was lost");
+    }
+  }
+
   function appendLine(path, row) {
+    assertLockHeld();
     const parent = dirname(path);
     mkdirSync(parent, { recursive: true, mode: 0o700 });
     const created = !existsSync(path);
@@ -292,6 +323,7 @@ export function createRebindLedger({
   }
 
   function writeClaim(fromOwner, toOwner) {
+    assertLockHeld();
     ensureRoot();
     const dir = join(rebindsRoot(baseDbPath), "by-identity");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -299,8 +331,7 @@ export function createRebindLedger({
     const existing = existsSync(path) ? readClaim(fromOwner) : null;
     if (existing && existing.toOwner === toOwner) return;
     if (existing && existing.toOwner !== toOwner) {
-      // Sidecars are truth. A leftover claim with no applied sidecar is stale.
-      try { unlinkSync(path); } catch { /* retry wx below */ }
+      throw memoryOpError("identity-already-bound", "identity already bound");
     }
     const body = `${JSON.stringify({
       v: REBIND_LEDGER_VERSION,
@@ -382,67 +413,45 @@ export function createRebindLedger({
     });
   }
 
-  function acquireFileLockSync() {
+  async function acquireOwnedLock() {
     const root = ensureRoot();
     const lockPath = join(root, ".lock");
-    const fd = openSync(lockPath, "wx", 0o600);
-    try {
-      writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: clock() }));
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    fsyncParent(root);
-    return lockPath;
-  }
-
-  async function acquireFileLock() {
-    const root = ensureRoot();
-    const lockPath = join(root, ".lock");
-    const deadline = clock() + REBIND_LOCK_WAIT_MS;
+    const deadline = Date.now() + REBIND_LOCK_WAIT_MS;
     for (;;) {
+      let handle;
       try {
-        return acquireFileLockSync();
+        handle = tryAcquire(lockPath, { staleMs: REBIND_LOCK_STALE_MS });
       } catch (err) {
-        if (err?.code !== "EEXIST") {
-          logger?.warn?.(`memory-ops.rebind.ledger: lock failed: ${err?.code || "error"}`);
-          throw memoryOpError("storage", "rebind lock failed");
-        }
-        try {
-          const age = clock() - statSync(lockPath).mtimeMs;
-          if (age > REBIND_LOCK_STALE_MS) unlinkSync(lockPath);
-        } catch {
-          // Lost the race to another waiter, or the file vanished.
-        }
-        if (clock() > deadline) throw memoryOpError("storage", "rebind lock timeout");
-        await sleep(15);
+        logger?.warn?.(`memory-ops.rebind.ledger: lock failed: ${err?.code || "error"}`);
+        throw memoryOpError("storage", "rebind lock failed");
       }
-    }
-  }
-
-  function releaseFileLock(lockPath) {
-    try {
-      if (lockPath && existsSync(lockPath)) unlinkSync(lockPath);
-    } catch (err) {
-      logger?.warn?.(`memory-ops.rebind.ledger: lock release failed: ${err?.code || "error"}`);
+      if (handle) {
+        fsyncParent(root);
+        return handle;
+      }
+      if (Date.now() >= deadline) throw memoryOpError("storage", "rebind lock timeout");
+      await sleep(15);
     }
   }
 
   /**
-   * In-process mutex, plus a cross-process O_EXCL lock when `exclusive` is
+   * In-process mutex, plus a cross-process owned lock when `exclusive` is
    * true (apply / unbind writes). dryRun skips the file lock so `_rebinds/`
-   * is not created.
+   * is not created. Lock age uses wall-clock (`Date.now` inside
+   * `tryAcquireOwnedLock`), never `host.clock`.
    * @param {{exclusive: boolean}} opts
    * @param {() => Promise<unknown>} fn
    */
   function withLock({ exclusive }, fn) {
     const run = lockTail.then(async () => {
-      let lockPath = null;
+      let handle = null;
       try {
-        if (exclusive) lockPath = await acquireFileLock();
+        if (exclusive) handle = await acquireOwnedLock();
+        heldHandle = handle;
         return await fn();
       } finally {
-        if (lockPath) releaseFileLock(lockPath);
+        heldHandle = null;
+        handle?.release();
       }
     });
     lockTail = run.then(() => {}, () => {});

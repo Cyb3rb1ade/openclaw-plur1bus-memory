@@ -226,6 +226,7 @@ carries card text or a raw storage error; `isMemoryOpError` in
 | `denied` | a destructive member (`forget`, `correct`, `share`) called with an origin other than `"user"` or with `background` not `false`; a principal whose workspace claim contradicts the agent's workspace; `share` without a proved principal carrying the target identity; `forget`/`correct`/`share` of a card that exists for the caller only as a shared (workspace or user) copy; `rebind`/`unbind`/`import` with an origin other than `"system"` or with `background` not `false` |
 | `identity-already-bound` | 1.12.0: `rebind` of a channel identity that already has an applied (not reversed) mapping to a **different** harness user, **anywhere in this engine** (not per agent). Nothing is written. |
 | `ledger-corrupt` | 1.12.0: a `_rebinds/<rebindId>.jsonl` sidecar has no complete line. The file is quarantined as `.corrupt-<ts>` and not truncated to empty. |
+| `lock-lost` | 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce before a ledger write. The caller retries later via the sidecar; the identity claim is left in place. |
 | `invalid-input` | a malformed id, principal or agent id, an empty or over-long `newText` (1–8 000 characters after trim), an unknown `share` target, an agent without a workspace directory for a destructive member; for `list` an empty or whitespace-only `topic`, `until` with `topic`, or `until` before `since` |
 | `approval-required` | `share` of a sensitive card without `allowSensitive: true` |
 | `conflict` | `correct` to a text that matches a forgotten memory in the same scope (tombstone guard), or a share source that changed while it was being copied |
@@ -376,30 +377,30 @@ manifest) a sample probe is mandatory: up to 16 rows with text and a
 finite, non-zero stored vector, spread across agent tables, re-embedded
 with the engine provider. The probe path also requires
 `engineIdentity.fingerprintId === expectedIdentity.fingerprintId`.
-Pass (positive gate, 1.12.0): probe `min(8, availableValidRows)` rows,
-spread across tables (deterministic round-robin), and every probed row
-must yield a finite score; min ≥ 0.999 and median ≥ 0.9995. Zero-norm or
-non-finite stored vectors are skipped when sampling. A non-finite
-re-embed of a probed row is skipped rather than aborting the loop; if
-that leaves fewer than `min(8, availableValidRows)` finite scores the
-verdict is `identity-unverifiable`. Below the cosine floor:
-`identity-mismatch`. A cosine of 0.99 is a mismatch (fail-closed).
+Pass (positive gate, 1.12.0): re-embed all `availableValidRows` (capped
+at `ADOPT_PROBE_SIZE` = 16), spread across tables (deterministic
+round-robin). Zero-norm or non-finite stored vectors are skipped when
+sampling. A non-finite re-embed is skipped rather than aborting the
+loop; at least `min(8, availableValidRows)` finite scores are required,
+then min ≥ 0.999 and median ≥ 0.9995. Fewer finite scores:
+`identity-unverifiable`. Below the cosine floor: `identity-mismatch`.
+A cosine of 0.99 is a mismatch (fail-closed).
 The result carries `identitySource: "manifest" | "probe"`. When a
 manifest matches and rows exist, the probe still runs.
 
 `dryRun` changes nothing on disk. Adopt does not write a second manifest (A8).
 A read-only `MemoryDB.init()` does not add columns or create tables.
 
-The sample-probe count floor (1.12.0) is `min(8, availableValidRows)`.
-`availableValidRows` is the number of collected rows that have text and a
-finite, non-zero stored vector of the expected dimension, capped at
-`ADOPT_PROBE_SIZE` (16). The cosine loop then probes exactly
-`min(8, availableValidRows)` of those rows, spread across tables. Every
-probed row must yield a finite score: a store with 3 valid rows probes 3;
-a store with 20 valid rows probes 8. Setting the floor to 1 would probe
-one row and is rejected by the tests. Zero valid rows on the probe path
-stays `identity-unverifiable`. Cosine floors (`min ≥ 0.999`,
-`median ≥ 0.9995`) and the positive gate are unchanged.
+The sample-probe count floor (1.12.0) is `min(8, availableValidRows)`
+finite scores. `availableValidRows` is the number of collected rows that
+have text and a finite, non-zero stored vector of the expected dimension,
+capped at `ADOPT_PROBE_SIZE` (16). All of those rows are re-embedded.
+A store with 3 valid rows probes 3 and needs 3 finite scores; a store
+with 20 valid rows probes 16 and needs 8 finite scores. Setting the
+floor to 1 would accept a single finite score and is rejected by the
+tests. Zero valid rows on the probe path stays `identity-unverifiable`.
+Cosine floors (`min ≥ 0.999`, `median ≥ 0.9995`) and the positive gate
+are unchanged.
 
 ### Single-writer precondition (A9)
 
@@ -582,21 +583,27 @@ principals (`user:v1:…` / `user:v2:…`). No card text.
 - Unbind appends `{ v, kind: "reversed", rebindId, reversedAt }`. Last
   status-bearing line wins.
 
-Append is atomic: open `a+` `0o600`, repair a torn last line by scanning
-backwards in 64 KiB chunks and truncating to the last complete newline,
-write one line, `fsync` the file, `fsync` the parent directory (where the
-platform allows it), close. A non-empty file with no newline is renamed
-to `<file>.corrupt-<ts>` and the call rejects `ledger-corrupt`; it is
-never truncated to empty. The sidecar is the source of truth for resume:
-a crash after append and before the row patch is closed by the next
-identical `rebind` (patch, no duplicate line). Duplicate `cardId` lines
-in one file are ignored (first wins).
+Append is atomic: open `r+` (existing) or `wx` (new) `0o600` — not `a+`,
+because Windows rejects `ftruncate` on an append handle — repair a torn
+last line by scanning backwards in 64 KiB chunks and truncating to the
+last complete newline, write one line at the new size, `fsync` the file,
+`fsync` the parent directory (where the platform allows it), close. A
+non-empty file with no newline is renamed to `<file>.corrupt-<ts>` and
+the call rejects `ledger-corrupt`; it is never truncated to empty. The
+sidecar is the source of truth for resume: a crash after append and
+before the row patch is closed by the next identical `rebind` (patch, no
+duplicate line). Duplicate `cardId` lines in one file are ignored (first
+wins).
 
 Check, header write, card patches and unbind run under one exclusive
-lock (`_rebinds/.lock` plus an in-process mutex). Two concurrent rebinds
-of one identity to two users: one succeeds, the other
-`identity-already-bound`. Two concurrent identical rebinds share one
-`rebindId`.
+lock: `_rebinds/.lock` via `tryAcquireOwnedLock` (nonce, rename-aside
+release, stale = age > 60 s AND (holder pid dead OR age > 10 min)) plus
+an in-process mutex. Lock age uses wall-clock, never `host.clock`. Before
+each ledger write the holder re-checks its nonce; a mismatch is
+`lock-lost`. A claim file for a different user is `identity-already-bound`
+and is never unlinked. Two concurrent rebinds of one identity to two
+users: one succeeds, the other `identity-already-bound`. Two concurrent
+identical rebinds share one `rebindId`.
 
 ### What logs and results contain
 

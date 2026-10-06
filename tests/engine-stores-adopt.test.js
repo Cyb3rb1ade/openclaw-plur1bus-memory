@@ -118,7 +118,7 @@ describe("Engine.stores.adopt", () => {
     const result = await engine.stores.adopt({ path: baseDbPath, expectedIdentity: identity });
     assert.equal(result.verdict, "ok");
     assert.equal(result.identitySource, "probe");
-    assert.equal(probed, 8, "MIN_ROWS=1 would probe 1 of 20; the floor must probe 8");
+    assert.equal(probed, 16, "all availableValidRows (capped at 16) are re-embedded; the floor still requires 8 finite scores");
     await engine.close({ budgetMs: 5_000 });
   });
 

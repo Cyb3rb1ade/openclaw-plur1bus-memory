@@ -772,4 +772,74 @@ describe("Engine.memory.rebind", () => {
     );
     await engine.close({ budgetMs: 5_000 });
   });
+
+  it("two engines on one store: exactly one winner and one binding", TIMEOUT_LONG, async () => {
+    const baseDbPath = freshBaseDbPath("rebind-2eng-");
+    const engine1 = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-2eng-1-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const engine2 = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-2eng-2-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const fromIdentity = { channel: "telegram", identityKey: PLAIN_KEY };
+    const cardId = await importUserCard(engine1, agentId, fromIdentity, "k-2eng", `${SECRET_TEXT} twoeng`);
+    const settled = await Promise.allSettled([
+      engine1.memory.rebind(
+        { agentId, fromIdentity, toUser: "U1-7F3A", dryRun: false },
+        operatorFor(agentId),
+        systemAgent,
+      ),
+      engine2.memory.rebind(
+        { agentId, fromIdentity, toUser: "U2-7F3A", dryRun: false },
+        operatorFor(agentId),
+        systemAgent,
+      ),
+    ]);
+    const ok = settled.filter((s) => s.status === "fulfilled");
+    const bound = settled.filter((s) => s.status === "rejected" && s.reason?.code === "identity-already-bound");
+    assert.equal(ok.length, 1, JSON.stringify(settled.map((s) => s.status === "rejected" ? s.reason?.code : "ok")));
+    assert.equal(bound.length, 1);
+    const fromOwner = channelIdentityUserPrincipal("telegram", PLAIN_KEY, "default");
+    const applied = internalsOf(engine1).memoryRebind.ledger.listApplied()
+      .filter((rec) => rec.header.fromOwner === fromOwner);
+    assert.equal(applied.length, 1);
+    const owners = new Set(applied.map((rec) => rec.header.toOwner));
+    assert.equal(owners.size, 1);
+    const row = await internalsOf(engine1).pool.withWriteDb(agentId, (db) => db.getById(cardId));
+    assert.equal(row.ownerUserId, applied[0].header.toOwner);
+    await engine1.close({ budgetMs: 5_000 });
+    await engine2.close({ budgetMs: 5_000 });
+  });
+
+  it("a leftover claim for another user is identity-already-bound and is not deleted", TIMEOUT, async () => {
+    const baseDbPath = freshBaseDbPath("rebind-keep-claim-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-keep-claim-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const fromIdentity = { channel: "telegram", identityKey: PLAIN_KEY };
+    await importUserCard(engine, agentId, fromIdentity, "k-keep", `${SECRET_TEXT} keep`);
+    const fromOwner = channelIdentityUserPrincipal("telegram", PLAIN_KEY, "default");
+    const other = harnessUserPrincipal("other-user-7F3A");
+    internalsOf(engine).memoryRebind.ledger.writeClaim(fromOwner, other);
+    await assert.rejects(
+      () => engine.memory.rebind(
+        { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+        operatorFor(agentId),
+        systemAgent,
+      ),
+      (e) => e.code === "identity-already-bound",
+    );
+    assert.equal(internalsOf(engine).memoryRebind.ledger.readClaim(fromOwner).toOwner, other);
+    const applied = internalsOf(engine).memoryRebind.ledger.listApplied();
+    assert.equal(applied.length, 0);
+    await engine.close({ budgetMs: 5_000 });
+  });
 });
