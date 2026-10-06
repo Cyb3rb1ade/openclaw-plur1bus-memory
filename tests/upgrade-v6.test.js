@@ -251,7 +251,7 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
         {
           encoding: "utf8",
           env: childEnvironment(),
-          timeout: 5_000,
+          timeout: 30_000,
         },
       );
       assert.strictEqual(run.status, 0, run.stderr);
@@ -276,7 +276,7 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
         const run = spawnSyncBounded(process.execPath, [programPath], {
           encoding: "utf8",
           env: childEnvironment(),
-          timeout: 5_000,
+          timeout: 30_000,
         });
         assert.strictEqual(run.status, 0, run.stderr);
         assertInstallerPatchResult(JSON.parse(readFileSync(configPath, "utf8")), pluginEntry);

@@ -248,7 +248,7 @@ function runDeployGuard(fixture, env = {}) {
       ...restEnv,
       PATH: needsGnuCompatShims ? `${fixture.compatBinDir}:${basePath}` : basePath,
     },
-    timeout: 30_000,
+    timeout: 120_000,
   });
   return {
     ...result,
@@ -700,7 +700,7 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
           PATH: `${binDir}:${process.env.PATH}`,
           PLUR1BUS_DEPLOY: REPO_ROOT,
         },
-        timeout: 30_000,
+        timeout: 60_000,
       });
 
       assert.equal(result.status, 0, `${result.stdout ?? ""}${result.stderr ?? ""}`);

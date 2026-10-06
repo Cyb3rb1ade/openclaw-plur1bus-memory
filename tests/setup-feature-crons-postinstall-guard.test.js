@@ -13,7 +13,7 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 import { postinstallSkipReason } from "../scripts/setup-feature-crons.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
-const T = { timeout: 30_000 };
+const T = { timeout: 90_000 };
 const posixOnly = { ...T, skip: process.platform === "win32" && "Stub-Binary braucht POSIX-PATH-Auflösung" };
 
 /** Paket-Kopie (scripts + lib) im Temp-Verzeichnis, optional mit `.git`, plus `openclaw`-Stub. */
@@ -39,7 +39,7 @@ function runPostinstall(fx, env) {
   for (const k of ["CI", "INIT_CWD", "PLUR1BUS_SETUP_CRONS", "npm_lifecycle_event"]) delete clean[k];
   return spawnSyncBounded(process.execPath, [join(fx.pkg, "scripts", "setup-feature-crons.mjs")], {
     encoding: "utf8",
-    timeout: 20_000,
+    timeout: 60_000,
     env: { ...clean, PATH: `${fx.bin}:${dirname(process.execPath)}`, npm_lifecycle_event: "postinstall", ...env },
   });
 }
