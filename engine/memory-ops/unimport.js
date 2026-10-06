@@ -43,7 +43,8 @@ export const UNIMPORT_DERIVATION_JOBS = Object.freeze([
  * Kept reasons `force` overrides (owner ruling b): edits to the card's own
  * content or metadata. Never `superseded` (a newer version exists that this
  * run did not create), `shared` / `rebound` / `binding-changed` (cross-user or
- * cross-agent), and never forgotten or missing cards.
+ * cross-agent), never `other-run` (the key's latest import belongs to another
+ * run), and never forgotten or missing cards.
  */
 export const UNIMPORT_FORCEABLE_REASONS = Object.freeze(["content-changed", "metadata-changed", "edited"]);
 
@@ -241,6 +242,11 @@ export function createMemoryUnimport({
   async function decide(card, row, ctx, { agentId, importRunId, sharedCtxs, force }) {
     const marker = sidecar.markerKey(card.cardId, card.importedAt);
     if (ctx.sidecar.done.has(marker)) return { kind: "done" };
+    // The card's latest ledger line belongs to another run (e.g. run B
+    // re-imported the key after a crashed unimport of this run freed it):
+    // the live row is B's card, never ours to delete — not even with force.
+    const latest = ctx.index.byCardId.get(card.cardId);
+    if (latest && latest.importRunId !== importRunId) return { kind: "kept", reason: "other-run" };
     const intent = ctx.sidecar.intents.has(marker);
     const unimportedLine = ctx.index.unimportedByCardId.get(card.cardId);
     const ourLedgerLine = unimportedLine && unimportedLine.importRunId === importRunId;

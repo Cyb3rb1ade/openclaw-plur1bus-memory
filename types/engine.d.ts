@@ -906,7 +906,7 @@ export interface MemoryUnimportRequest {
   idempotencyKeys?: string[];
   /** Defaults to true. Writes only when explicitly `false`. */
   dryRun?: boolean;
-  /** Also undo cards kept as `content-changed`, `metadata-changed` or `edited`. Never `superseded`, `shared`, `rebound`, `binding-changed`, forgotten or missing cards. */
+  /** Also undo cards kept as `content-changed`, `metadata-changed` or `edited`. Never `superseded`, `shared`, `rebound`, `binding-changed`, `other-run`, forgotten or missing cards. */
   force?: boolean;
   /** Optional card ACL binding used at import; its workspace/user pools are searched for shared copies too. Must share `agentId`. */
   principal?: Principal;
@@ -928,7 +928,9 @@ export type MemoryUnimportKeptReason =
   | "metadata-changed"
   | "edited"
   | "shared"
-  | "rebound";
+  | "rebound"
+  /** The key's latest import line belongs to another run (re-imported after this run's rollback); never forceable. */
+  | "other-run";
 
 export interface MemoryUnimportCardResult {
   idempotencyKey: string;

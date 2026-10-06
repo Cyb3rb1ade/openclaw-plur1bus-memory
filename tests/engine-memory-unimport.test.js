@@ -337,6 +337,26 @@ describe("Engine.memory.unimport (contract 1.13.0)", () => {
     await engine.close({ budgetMs: 5_000 });
   });
 
+  it("crash after the key is freed, run B re-imports the key: a forced rerun of A keeps B's card (other-run)", TIMEOUT, async () => {
+    const { baseDbPath, engine } = setup("unimp-otherrun-");
+    await importRun(engine, "runA1", ["o1"]);
+    const hooks = internalsOf(engine).memoryUnimport.hooks;
+    hooks.afterLedger = () => { throw new Error("simulated crash"); };
+    await assert.rejects(() => unimport(engine, "runA1"));
+    delete hooks.afterLedger;
+    const b = await importRun(engine, "runB1", ["o1"]);
+    assert.equal(b.cards[0].outcome, "created");
+    const before = JSON.stringify(await rowOf(engine, idOf("o1")));
+    const res = await unimport(engine, "runA1", { force: true });
+    assert.equal(res.keptModified, 1);
+    assert.equal(res.cards[0].reason, "other-run");
+    assert.equal(JSON.stringify(await rowOf(engine, idOf("o1"))), before, "run B's card was touched");
+    assert.equal(ledgerLines(baseDbPath).filter((l) => l.kind === "unimported").length, 1);
+    const undoB = await unimport(engine, "runB1");
+    assert.equal(undoB.unimported, 1);
+    await engine.close({ budgetMs: 5_000 });
+  });
+
   it("T11: a row gone without our intent is missing and its key stays blocked", TIMEOUT, async () => {
     const { engine } = setup("unimp-t11-");
     await importRun(engine, "runG", ["g1"]);

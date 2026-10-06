@@ -153,7 +153,7 @@ assertTrue<Exact<keyof MemoryUnbindResult, "rebindId" | "matched" | "unbound" | 
 // 1.13.0: memory.unimport (additive) and MemoryImportRequest.importRunId.
 assertTrue<Exact<MemoryOps["unimport"], (req: import("./engine.js").MemoryUnimportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryUnimportResult>>>();
 assertTrue<Exact<import("./engine.js").MemoryUnimportOutcome, "unimported" | "kept-modified" | "already-forgotten" | "already-unimported" | "missing" | "failed">>();
-assertTrue<Exact<import("./engine.js").MemoryUnimportKeptReason, "superseded" | "content-changed" | "binding-changed" | "metadata-changed" | "edited" | "shared" | "rebound">>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportKeptReason, "superseded" | "content-changed" | "binding-changed" | "metadata-changed" | "edited" | "shared" | "rebound" | "other-run">>();
 assertTrue<Exact<keyof import("./engine.js").MemoryUnimportResult, "agentId" | "importRunId" | "dryRun" | "selected" | "unimported" | "keptModified" | "alreadyForgotten" | "alreadyUnimported" | "missing" | "failed" | "remaining" | "cards" | "derived">>();
 assertTrue<Exact<import("./engine.js").MemoryImportRequest["importRunId"], string | undefined>>();
 assertTrue<Exact<MemoryImportOutcome, "created" | "matched-existing" | "rejected">>();

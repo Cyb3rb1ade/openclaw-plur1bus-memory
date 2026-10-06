@@ -689,6 +689,7 @@ Legacy lines without `importRunId` (1.11/1.12) are never selected.
 | Check | Outcome |
 |---|---|
 | sidecar `done` for this card and import | `already-unimported` |
+| the card's latest `_imports/` line belongs to another run (the key was re-imported after a crashed rollback of this run freed it) | kept / `other-run` |
 | no row, no intent | `missing` (key stays blocked) |
 | no row, intent | finish → `unimported` |
 | `status "deleted"` with a committed registry tombstone, or without our intent / `unimported` line | `already-forgotten` (untouched, key stays blocked) |
@@ -710,7 +711,8 @@ are never written (no marker, no `updatedAt` touch).
 
 **`force` (owner ruling b).** It overrides only `content-changed`,
 `metadata-changed` and `edited`, per card. It never undoes `superseded`,
-`shared`, `rebound` or `binding-changed` cards (cross-user or cross-agent),
+`shared`, `rebound`, `binding-changed` (cross-user or cross-agent) or
+`other-run` cards,
 never touches forgotten or missing cards, and never selects a card the run
 did not create.
 
