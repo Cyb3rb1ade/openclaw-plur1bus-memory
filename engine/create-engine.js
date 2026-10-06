@@ -78,6 +78,7 @@ import { createBackgroundMemoryScheduler } from "../lib/runtime-scheduler.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 import { safeDebug, safeWarn } from "../lib/safe-logging.js";
 import { describeError, describeText, redactUrl } from "../lib/log-redact.js";
+import { isUniqueTmpName } from "../lib/atomic-file.js";
 import { LLM_ROUTE_KINDS, isLlmRouteAvailable, resolveFeatureLlmRoute } from "../lib/llm-router.js";
 import { LLM_RESULT_CACHE_PURPOSES, createLlmResultCache, withLlmCallContext, withLlmResultCacheContext } from "../lib/llm-result-cache.js";
 import { createLlmFailureRecorder } from "../lib/health-watch.js";
@@ -340,7 +341,9 @@ export function createEngine(host, config, testOptions = {}) {
   // and writing a fresh marker must not change golden-prefix output (it
   // touches no LanceDB table).
   const baseDbPathIsFreshStore = !existsSync(baseDbPath)
-    || readdirSync(baseDbPath).length === 0;
+    // Orphaned unique temp files of a crashed marker writer do not make a store
+    // non-empty (otherwise it would look like a legacy "0" store forever).
+    || readdirSync(baseDbPath).every((name) => isUniqueTmpName(name, "_schema.json"));
   if (baseDbPathIsFreshStore) {
     writeStoreSchemaMarker(baseDbPath, STORE_SCHEMA_VERSION, { engineVersion: ENGINE_VERSION });
   }
@@ -2354,7 +2357,7 @@ export function createEngine(host, config, testOptions = {}) {
       const authoritativeCandidate = await db.getById(candidateId);
       if (!isExpectedMergeCandidate(authoritativeCandidate, selectedCandidate.entry, candidateId, accessCtx)) {
         const staleErr = new Error("merge candidate is stale, no longer active, or no longer authorized");
-        host.logger.warn(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${describeError(staleErr)}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: reason=stale-candidate`);
         throw staleErr;
       }
 
@@ -2372,7 +2375,7 @@ export function createEngine(host, config, testOptions = {}) {
       }
       if (!isExpectedMergeCandidate(candidateAfterPreparation, authoritativeCandidate, candidateId, accessCtx)) {
         const staleErr = new Error("stale merge candidate changed during replacement preparation");
-        host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${describeError(staleErr)}`);
+        host.logger.warn(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: reason=stale-candidate-post-prepare`);
         throw staleErr;
       }
 
@@ -2396,7 +2399,7 @@ export function createEngine(host, config, testOptions = {}) {
         }
         if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry, authoritativeCandidate)) {
           const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
-          host.logger.warn(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(verificationErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: reason=verification-failed`);
           throw verificationErr;
         }
 
@@ -2409,7 +2412,7 @@ export function createEngine(host, config, testOptions = {}) {
         }
         if (!isExpectedMergeCandidate(candidateBeforeDelete, authoritativeCandidate, candidateId, accessCtx)) {
           const staleErr = new Error("stale merge candidate changed before original deletion");
-          host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${describeError(staleErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: reason=stale-candidate-pre-delete`);
           throw staleErr;
         }
 
@@ -3510,7 +3513,9 @@ export function createEngine(host, config, testOptions = {}) {
   const getRecallTurn = () => (engineRecallTurn ??= createPromptContextAssembler(internals.recallContext));
 
   const clock = () => (typeof host.clock === "function" ? host.clock() : Date.now());
-  const detailOf = (error) => String(error?.message || error).slice(0, 200);
+  // Results reach callers and hosts: no raw message (paths, ids, memory text).
+  // Fixed internal codes stay readable; anything else is class + length + hash.
+  const detailOf = (error) => describeError(error);
   const notInM1b1 = (name) => async () => {
     throw new Error(`${name} is not available in M1b-1`);
   };
