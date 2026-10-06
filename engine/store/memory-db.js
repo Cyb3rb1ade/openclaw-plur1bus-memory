@@ -26,6 +26,7 @@ import { resolveHalfLifeDays } from "../../lib/memory-dynamics.js";
 import { PURGE_THROTTLE_MS, purgeThrottleMap } from "../runtime/debug-log.js";
 import { TABLE_NAME } from "../runtime/constants.js";
 import { getLanceDB } from "./lancedb-loader.js";
+import { describeError } from "../../lib/log-redact.js";
 
 // ============================================================================
 // MemoryDB — pro Agent eine Instanz
@@ -724,7 +725,7 @@ class MemoryDB {
               await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
             } catch (e) {
               if (e instanceof TimeoutError) throw e;
-              console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${e.message}`);
+              console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${describeError(e)}`);
             }
           }
         }
@@ -901,7 +902,7 @@ class MemoryDB {
     this._writeCounter++;
     if (this._writeCounter % REINDEX_WRITE_THRESHOLD === 0) {
       this._maybeReindex().catch((err) => {
-        this.logger?.warn?.(`memory-lancedb-namespaced: reindex scheduling failed: ${String(err)}`);
+        this.logger?.warn?.(`memory-lancedb-namespaced: reindex scheduling failed: ${describeError(err)}`);
       });
     }
   }
@@ -1002,7 +1003,7 @@ class MemoryDB {
       this._lastReindexAt = Date.now();
     } catch (err) {
       // Non-fatal: falls back to flat scan if reindex fails
-      this.logger?.warn?.(`memory-lancedb-namespaced: reindex failed; falling back to flat scan: ${String(err)}`);
+      this.logger?.warn?.(`memory-lancedb-namespaced: reindex failed; falling back to flat scan: ${describeError(err)}`);
     } finally {
       this._reindexing = false;
     }
@@ -1419,7 +1420,7 @@ class MemoryDB {
     }
     purgeThrottleMap.set(this.dbPath, Date.now());
     return this.purgeExpired().catch((e) => {
-      logger?.warn?.(`memory-lancedb-namespaced: purgeExpired failed: ${String(e)}`);
+      logger?.warn?.(`memory-lancedb-namespaced: purgeExpired failed: ${describeError(e)}`);
     });
   }
 }

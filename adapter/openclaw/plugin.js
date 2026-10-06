@@ -63,6 +63,7 @@ import {
   buildWorkspaceReviewCronJobs,
   printMorningReviewCronCommand,
 } from "./obsidian-review-cron-commands.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * The OpenClaw plugin's register(): validate the test-injection dependencies,
@@ -550,7 +551,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
           maxAssistantChars: replyOutcomeMaxAssistantChars,
         });
       } catch (err) {
-        host.logger.warn(`reply-outcome-tracking: recording agent reply failed: ${String(err)}`);
+        host.logger.warn(`reply-outcome-tracking: recording agent reply failed: ${describeError(err)}`);
       }
     });
   }
@@ -596,7 +597,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
           if (ms >= REPLY_OUTCOME_SYNC_LOG_MS) host.logger.info(line); else host.logger.debug(line);
         }
       } catch (err) {
-        host.logger.warn(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);
+        host.logger.warn(`reply-outcome-tracking: completing pending outcomes failed: ${describeError(err)}`);
       }
     });
   }

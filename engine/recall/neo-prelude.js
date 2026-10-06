@@ -10,6 +10,7 @@
  */
 
 import { routeNeoRecall } from "../../lib/neo-arch.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * Read the neo candidates for one prompt and route them into lanes. Fills
@@ -50,7 +51,7 @@ export async function readNeoPrelude({ neoStore, requester, prompt, embeddings, 
     } finally {
       if (embedTimer) clearTimeout(embedTimer);
     }
-  } catch (error) { logger.debug(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
+  } catch (error) { logger.debug(`plur1bus-neo: prompt query embedding unavailable: ${describeError(error)}`); }
   prelude.embedMs = Date.now() - embedStartedAt;
   let neoGlobalIds = null;
   const globalStartedAt = Date.now();
