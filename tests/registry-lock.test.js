@@ -91,7 +91,7 @@ describe("withRegistryLock", () => {
     // ECHT gleichzeitig starten — sequentielles execFileSync würde auch ohne
     // Lock bestehen und wäre damit kein Test.
     return Promise.all(["a", "b", "c"].map((id) => new Promise((resolve, reject) => {
-      execFile(process.execPath, [scriptPath, lockPath, outPath, id], { timeout: 20_000 }, (err) => {
+      execFile(process.execPath, [scriptPath, lockPath, outPath, id], { timeout: 20_000, killSignal: "SIGKILL" }, (err) => {
         if (err) reject(err); else resolve();
       });
     }))).then(() => {

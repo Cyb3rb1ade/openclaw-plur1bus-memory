@@ -64,7 +64,7 @@ describe("verify-workspace-writer.mjs", () => {
   });
 
   it("exists and is syntactically valid", async () => {
-    await execFileAsync("node", ["--check", scriptPath]);
+    await execFileAsync("node", ["--check", scriptPath], { timeout: 30_000, killSignal: "SIGKILL" });
   });
 
   it("returns exit 0 when workspace memory paths are writable", async () => {
