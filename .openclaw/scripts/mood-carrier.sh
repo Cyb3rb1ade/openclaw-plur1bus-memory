@@ -10,9 +10,29 @@
 MOOD_CARRIER_VERSION="1.0"
 
 _mood_carrier_python() {
-  # Args: state_path prev_path mood_file mood_tmp
+  # Args: state_path prev_path mood_file
   python3 - "$@" << 'PYEOF'
-import sys, json, os
+import sys, json, os, tempfile
+
+def write_atomic(path, text):
+    # Unique tmp sibling (mkstemp) + fsync + rename: a fixed "<path>.tmp" is shared
+    # by concurrent runs and the loser of the rename race fails.
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        # mkstemp makes 0600; restore what open() gave before: 0666 & ~umask
+        um = os.umask(0)
+        os.umask(um)
+        os.chmod(tmp, 0o666 & ~um)
+        os.replace(tmp, path)
+    except BaseException:
+        try: os.unlink(tmp)
+        except OSError: pass
+        raise
 
 def load_json(path):
     try:
@@ -22,7 +42,7 @@ def load_json(path):
         print(f"mood carrier: cannot read {path}: {e}", file=sys.stderr)
         return None
 
-state_path, prev_path, mood_file, mood_tmp = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+state_path, prev_path, mood_file = sys.argv[1], sys.argv[2], sys.argv[3]
 
 current = load_json(state_path)
 if not current:
@@ -32,10 +52,7 @@ prev = load_json(prev_path)  # None is OK — trend will be unknown
 
 # Persist current → prev (atomic)
 try:
-    tmp = prev_path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(current, f)
-    os.rename(tmp, prev_path)
+    write_atomic(prev_path, json.dumps(current))
 except Exception as e:
     print(f"mood carrier: cannot save prev state: {e}", file=sys.stderr)
 
@@ -101,9 +118,7 @@ mood_content = (
     f"updated: {current.get('ts', 'unknown')}\n"
 )
 try:
-    with open(mood_tmp, "w") as f:
-        f.write(mood_content)
-    os.rename(mood_tmp, mood_file)
+    write_atomic(mood_file, mood_content)
 except Exception as e:
     print(f"mood carrier: cannot write mood file: {e}", file=sys.stderr)
 
@@ -123,18 +138,22 @@ build_mood_block() {
   local state_file="$workspace_dir/.emotional-state.json"
   local prev_file="$workspace_dir/.emotional-state-prev.json"
   local mood_file="$workspace_dir/.current-mood.txt"
-  local mood_tmp="$workspace_dir/.current-mood.txt.tmp"
 
   if [ ! -f "$state_file" ]; then
     printf '[%s] mood carrier: state file missing, skip\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$log_file"
     # B-lite: write unknown marker atomically even when no state available
-    printf 'mood: unknown\nupdated: %s\n' "$(date -Iseconds)" > "$mood_tmp" \
-      && mv "$mood_tmp" "$mood_file" 2>/dev/null || true
+    local mood_tmp
+    # mktemp -u only picks a unique name; noclobber (`set -C`) then creates the
+    # file exclusively with the normal 0666 & ~umask mode, as the old `>` did.
+    mood_tmp=$(mktemp -u "$workspace_dir/.current-mood.txt.XXXXXX" 2>/dev/null) && {
+      ( set -C; printf 'mood: unknown\nupdated: %s\n' "$(date -Iseconds)" > "$mood_tmp" ) 2>/dev/null \
+        && mv "$mood_tmp" "$mood_file" 2>/dev/null || rm -f "$mood_tmp"
+    } || true
     return 0
   fi
 
   local result
-  result=$(_mood_carrier_python "$state_file" "$prev_file" "$mood_file" "$mood_tmp" 2>>"$log_file") || {
+  result=$(_mood_carrier_python "$state_file" "$prev_file" "$mood_file" 2>>"$log_file") || {
     printf '[%s] mood carrier: compute error, skip\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$log_file"
     return 0
   }

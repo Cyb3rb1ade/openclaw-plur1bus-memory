@@ -236,5 +236,6 @@ test("provider errors are not cached and cache persistence errors fail open", as
   ), "live despite cache failure");
   assert.equal(persistenceCalls.length, 1);
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0][0], /llm-result-cache.*chmod denied/);
+  assert.match(warnings[0][0], /llm-result-cache.*Error textLen=12 sha=[0-9a-f]{12}/);
+  assert.ok(!warnings[0][0].includes("chmod denied"), "the raw error message stays out of the log");
 });

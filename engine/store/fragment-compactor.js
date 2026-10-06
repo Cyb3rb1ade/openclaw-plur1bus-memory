@@ -21,6 +21,8 @@
  * .enabled` governs the nightly job only.
  */
 
+import { describeError } from "../../lib/log-redact.js";
+
 export const DEFAULT_LANCEDB_COMPACTION = Object.freeze({
   enabled: true,
   fragmentThreshold: 64,
@@ -182,7 +184,7 @@ export function createFragmentCompactor({
       }
     } else {
       consecutiveConflicts.set(agentId, 0);
-      logger?.warn?.(`plur1bus-compaction: optimize failed for '${agentId}': ${reason}`);
+      logger?.warn?.(`plur1bus-compaction: optimize failed for '${agentId}': ${describeError(reason)}`);
     }
     return outcome(agentId, "failed", reason, started, fragmentsBefore);
   }

@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkAccess } from "../../lib/acl-middleware.js";
 import { categorizeMemoryWithReason, MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES } from "../../lib/categorize.js";
@@ -47,7 +47,8 @@ import { generateSummary as libGenerateSummary } from "../../lib/text-utils.js";
 import { findBlockingTombstoneForCapture } from "../../lib/tombstone.js";
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../../lib/valid-time.js";
 import { guardWorkspaceTools } from "../../lib/workspace-policy-guard.js";
-import { describeText } from "../../lib/log-redact.js";
+import { describeError, describeText } from "../../lib/log-redact.js";
+import { writeFileAtomicSync } from "../../lib/atomic-file.js";
 
 /**
  * Build the OpenClaw tool factory from an already-resolved engine context.
@@ -623,7 +624,7 @@ export function createMemoryTools(ctx) {
                   archivePath,
                 });
               } catch (err) {
-                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${params.memoryId}: ${String(err)}`);
+                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${params.memoryId}: ${describeError(err)}`);
                 return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
               }
               return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (tombstoned).` }] };
@@ -670,7 +671,7 @@ export function createMemoryTools(ctx) {
                     archivePath: "",
                   });
                 } catch (err) {
-                  host.logger.warn(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedId}: ${String(err)}`);
+                  host.logger.warn(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedId}: ${describeError(err)}`);
                   return { content: [{ type: "text", text: `Memory forget failed for ${deletedId}: ${String(err)}` }] };
                 }
                 return { content: [{ type: "text", text: `Forgotten (audit recovered for ${deletedId}).` }] };
@@ -701,7 +702,7 @@ export function createMemoryTools(ctx) {
                   archivePath,
                 });
               } catch (err) {
-                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${String(err)}`);
+                host.logger.warn(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${describeError(err)}`);
                 return { content: [{ type: "text", text: `Memory forget failed for ${targetId}: ${String(err)}` }] };
               }
               return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (tombstoned).` }] };
@@ -912,9 +913,7 @@ export function createMemoryTools(ctx) {
 
             // Atomic write
             if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
-            const tmpPath = knowledgePath + ".tmp";
-            writeFileSync(tmpPath, finalContent, "utf8");
-            renameSync(tmpPath, knowledgePath);
+            writeFileAtomicSync(knowledgePath, finalContent);
 
             // Pending cleanup: under the KNOWLEDGE lock, briefly re-lock pending,
             // re-read current state, and subtract only successfully integrated keys.

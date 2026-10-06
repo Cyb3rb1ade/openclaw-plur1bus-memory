@@ -773,7 +773,7 @@ export function createEngine(host, config, testOptions = {}) {
           `memory-lancedb-namespaced: Modell '${model}' (Provider: ${baseUrl ? redactUrl(baseUrl) : "?"}) hat keine konfigurierten 'dimensions'. ` +
           `Setze plugins.entries.memory-lancedb-namespaced.config.embedding.dimensions explizit ` +
           `(z.B. 1024 für BAAI/Mistral, 2048 für NVIDIA-Nemotron, 3072 für Gemini). ` +
-          `Test-Call: curl -H "Authorization: Bearer KEY" -d '{"model":"${model}","input":"test","encoding_format":"float"}' ${baseUrl ? redactUrl(baseUrl) : "https://api.openai.com/v1"}/embeddings ` +
+          `Test-Call: curl -H "Authorization: Bearer KEY" -d '{"model":"${model}","input":"test","encoding_format":"float"}' <embedding.baseUrl>/embeddings ` +
           `→ data[0].embedding.length lesen.`
         );
       }

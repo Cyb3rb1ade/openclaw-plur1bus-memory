@@ -64,6 +64,7 @@ import { applyEpistemicStatusToLanceDb } from "../../engine/store/memory-db.js";
 import { principalFromMemoryContext } from "../../engine/identity/principal.js";
 import { isMemoryOpError } from "../../engine/memory-ops/errors.js";
 import { agentContextFromCommand } from "./turn-principal.js";
+import { describeError } from "../../lib/log-redact.js";
 
 /**
  * Register every PLUR1BUS chat command on the OpenClaw plugin api.
@@ -202,7 +203,7 @@ export function registerChatCommands(ctx) {
         });
       } catch (error) {
         // DB not available → cardCount stays null
-        host.logger.debug(`memory-lancedb-namespaced: status card count unavailable for agent=${agentId}: ${String(error)}`);
+        host.logger.debug(`memory-lancedb-namespaced: status card count unavailable for agent=${agentId}: ${describeError(error)}`);
       }
       const data = collectStatusData({
         memoryStats: { cardCount, lastUpdateMinutes: null },
@@ -1030,7 +1031,7 @@ export function registerChatCommands(ctx) {
         // abgedeckt (edit gab zuvor card.title aus, also echten Inhalt).
         pending = await memoryDbAdapter.findPendingCriticalReviews(agentId, { ctx: memoryCtx });
       } catch (err) {
-        host.logger.warn(`plur1bus critical[${agentId}]: findPendingCriticalReviews failed: ${err.message}`);
+        host.logger.warn(`plur1bus critical[${agentId}]: findPendingCriticalReviews failed: ${describeError(err)}`);
       }
       const refMap = assignShortRefs((pending || []).map((c) => c.id));
 

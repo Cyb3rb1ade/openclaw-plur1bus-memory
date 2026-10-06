@@ -271,7 +271,8 @@ describe("Skill Miner Workshop publication", () => {
     assert.equal(result.proposalsCreated, 0);
     assert.equal(result.workshopPublishFailed, 1);
     assert.equal(readProposals(dir).length, 0);
-    assert.ok(warnings.some((message) => /workshop unavailable/i.test(message)));
+    assert.ok(warnings.some((message) => /Error textLen=\d+ sha=[0-9a-f]{12}/.test(message)), "the failure is still reported (class, length, hash)");
+    assert.ok(warnings.every((message) => !/workshop unavailable/i.test(message)), "the raw error message stays out of the log");
   });
 
   it("rejects the exact Workshop revision when the local review binding cannot be persisted", async (t) => {

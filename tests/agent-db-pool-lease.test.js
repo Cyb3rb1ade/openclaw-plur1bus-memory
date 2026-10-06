@@ -356,7 +356,7 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     await shutdown;
 
     assert.ok(
-      api._warnings.some((line) => line.includes(agentId) && line.includes(closeError.message)),
+      api._warnings.some((line) => line.includes(agentId) && /Error textLen=\d+ sha=[0-9a-f]{12}/.test(line) && !line.includes(closeError.message)),
       `expected agent/namespace shutdown context, got: ${JSON.stringify(api._warnings)}`,
     );
   });
