@@ -291,7 +291,7 @@ export function createPromptContextAssembler(ctx) {
           recallPrelude.lanesMs += Date.now() - formatStartedAt;
         }
       } catch (neoErr) {
-        host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${String(neoErr)}`);
+        host.logger.warn(`plur1bus-neo: before_prompt_build recall failed: ${describeError(neoErr)}`);
       }
     }
     completed.neo = neoContext;
@@ -332,7 +332,7 @@ export function createPromptContextAssembler(ctx) {
     if (gcEnabled) {
       pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(host.logger))
         .catch((gcErr) => {
-          host.logger.warn(`memory-lancedb-namespaced: GC purge before recall failed: ${String(gcErr)}`);
+          host.logger.warn(`memory-lancedb-namespaced: GC purge before recall failed: ${describeError(gcErr)}`);
         });
     }
     try {
