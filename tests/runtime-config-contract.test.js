@@ -282,7 +282,10 @@ describe("runtime config contract", () => {
     });
     assert.equal(state.activeTableUses, 0, "no active namespace pipeline may run after init failure");
     assert.equal(state.result, undefined);
-    assert.match(JSON.stringify(state.logs), /recall failed.*hook legacy init failure/i);
+    // The log carries the redacted error (class, length, hash), never the raw message.
+    const logs = JSON.stringify(state.logs);
+    assert.match(logs, /recall failed for agent=.*Error textLen=\d+ sha=[0-9a-f]{12}/i);
+    assert.doesNotMatch(logs, /hook legacy init failure/);
     assert.equal(existsSync(join(state.baseDbPath, "legacy")), false, "failed read-only legacy route must stay absent");
   });
 

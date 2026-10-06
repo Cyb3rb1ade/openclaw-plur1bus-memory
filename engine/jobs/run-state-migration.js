@@ -11,6 +11,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import { sweepKey } from "./job-registry.js";
+import { describeError } from "../../lib/log-redact.js";
 
 export const MIGRATION_MARKER_KEY = "plur1busLedgerMigratedAt";
 const MIGRATED_SUFFIX = ".migrated";
@@ -40,7 +41,7 @@ export function migrateRunStateCompletions({ store, agentId, appendRow, clock, l
   try {
     state = JSON.parse(raw);
   } catch (error) {
-    logger.warn(`plur1bus jobs: ${path} is not valid JSON; REM completions not migrated (${String(error?.message || error)})`);
+    logger.warn(`plur1bus jobs: ${path} is not valid JSON; REM completions not migrated (${describeError(error)})`);
     keepCopy(path, raw);
     return { migrated: 0, status: "corrupt" };
   }

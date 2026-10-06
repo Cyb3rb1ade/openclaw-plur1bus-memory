@@ -19,6 +19,7 @@ import { appendDreamDiaryEntry } from "../../lib/dreaming/dream-diary.js";
 import { createJobLedger, LEDGER_VERSION } from "./job-ledger.js";
 import { JOB_SPECS } from "./job-specs.js";
 import { isSafeAgentId } from "../../lib/sql-safety.js";
+import { describeError } from "../../lib/log-redact.js";
 
 const EXIT = Symbol("plur1bus.job.exit");
 
@@ -402,7 +403,7 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
             host.logger.debug(`plur1bus job ${name}[${agentId}]: marker ${inflight.runId} could not be removed after the ledger failed (recovery records it at the next start): ${String(removeError?.message || removeError)}`);
           }
         }
-        const message = `plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${String(writeError?.message || writeError)}`;
+        const message = `plur1bus job ${name}[${agentId}]: ledger unwritable, not running: ${describeError(writeError)}`;
         // A broken ledger root is a standing condition, not a per-run event:
         // warn once per agent, then drop to debug so a repeatedly-firing
         // cron does not spam warn on every tick (fix round 2).

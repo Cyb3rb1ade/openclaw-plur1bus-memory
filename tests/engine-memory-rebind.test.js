@@ -1033,4 +1033,60 @@ describe("Engine.memory.rebind", () => {
     assert.equal(internalsOf(engine).memoryRebind.ledger.load(applied.rebindId).reversed, true);
     await engine.close({ budgetMs: 5_000 });
   });
+
+  it("unbind aborts with lock-lost before releasing the claim", TIMEOUT, async () => {
+    const baseDbPath = freshBaseDbPath("rebind-n5-claim-");
+    const engine = createEngine(
+      createStubHost({ stateDir: makeTempDir("rebind-n5-claim-state-") }),
+      config(baseDbPath),
+      { internals: { embeddings: flatEmbedder() } },
+    );
+    const agentId = "agent-a";
+    const fromIdentity = { channel: "telegram", identityKey: PLAIN_KEY };
+    const cardId = await importUserCard(engine, agentId, fromIdentity, "k-n5c", `${SECRET_TEXT} n5c`);
+    const applied = await engine.memory.rebind(
+      { agentId, fromIdentity, toUser: TO_USER, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    const fromOwner = channelIdentityUserPrincipal("telegram", PLAIN_KEY, "default");
+    const internals = internalsOf(engine);
+    const orig = internals.pool.withWriteDb.bind(internals.pool);
+    internals.pool.withWriteDb = async (id, fn) => {
+      const result = await orig(id, fn);
+      writeFileSync(rebindLockPath(baseDbPath), JSON.stringify({
+        nonce: "stolen",
+        pid: process.pid,
+        host: hostname(),
+        acquiredAt: new Date().toISOString(),
+      }));
+      return result;
+    };
+    try {
+      await assert.rejects(
+        () => engine.memory.unbind(
+          { rebindId: applied.rebindId, dryRun: false },
+          operatorFor(agentId),
+          systemAgent,
+        ),
+        (e) => e.code === "lock-lost",
+      );
+    } finally {
+      internals.pool.withWriteDb = orig;
+    }
+    const row = await internals.pool.withWriteDb(agentId, (db) => db.getById(cardId));
+    assert.equal(row.ownerUserId, fromOwner);
+    assert.equal(internals.memoryRebind.ledger.load(applied.rebindId).reversed, true);
+    assert.ok(internals.memoryRebind.ledger.readClaim(fromOwner));
+    unlinkStolenLock(baseDbPath);
+
+    const again = await engine.memory.unbind(
+      { rebindId: applied.rebindId, dryRun: false },
+      operatorFor(agentId),
+      systemAgent,
+    );
+    assert.equal(again.unbound, 0);
+    assert.equal(internals.memoryRebind.ledger.readClaim(fromOwner), null);
+    await engine.close({ budgetMs: 5_000 });
+  });
 });
