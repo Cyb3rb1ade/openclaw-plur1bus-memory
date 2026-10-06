@@ -468,6 +468,7 @@ export function createRebindLedger({
     readClaim,
     writeClaim,
     releaseClaimIfFree,
+    assertLockHeld,
     withLock,
   };
 }
