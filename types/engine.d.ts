@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.11.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended twelve times under the policy below — see the changelog at the end
+ * Contract version 1.12.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended thirteen times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -42,9 +42,10 @@
  *            1.9.0 — engine-config.schema.json with readAt/x-tier/x-sensitive and its types (EngineConfigSchema, EngineConfigKey, EngineConfigReadAt); RecallQuery.warmOnly; RecallTiming.totalMs covers queue wait and prelude (E5).
  *            1.10.0 — additive engine-config keys from the 7.18.5–7.18.20 port (runtime.deferPostTurnLlm, diaryFromUserChats, captureChunkingJev, recall.fullTextTopRecords/fullTextMaxChars) and JobName "post-turn-refine"; adapter-only keys stay on the OpenClaw manifest; no breaking change to existing callers.
  *            1.11.0 — MemoryOps.import (finished-card ingest with deterministic ids) and Engine.stores.adopt (copy-never-move store take-over with a sample cosine probe for legacy stores); MemoryCard.provenance/sourceRef optional; no breaking change to existing callers.
+ *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound" | "ledger-corrupt" | "lock-lost"; no breaking change to existing callers.
  */
 
-export type ContractVersion = "1.11.0";
+export type ContractVersion = "1.12.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -55,10 +56,11 @@ export type AgentId = string;
 
 export type WorkspacePrincipal = `workspace:v1:${string}` | `workspace-dir:v1:${string}`;
 
-/** `user:v1:` + sha256(JSON.stringify([channel, accountId, userId])).
- *  The hash is the on-disk pool directory name and must not change
- *  (memory-request-context.js:302-304). */
-export type UserPrincipal = `user:v1:${string}`;
+/** `user:v1:` + sha256(JSON.stringify([channel, accountId, userId])), or
+ *  from 1.12.0 `user:v2:` + sha256(harnessUserId). The v1 hash is the
+ *  on-disk pool directory name and must not change
+ *  (memory-request-context.js). */
+export type UserPrincipal = `user:v1:${string}` | `user:v2:${string}`;
 
 export type ChatKind = "direct" | "dm" | "group" | "channel";
 
@@ -632,7 +634,13 @@ export type MemoryOpErrorCode =
   | "not-found" | "denied" | "invalid-input" | "approval-required"
   | "conflict" | "storage"
   /** 1.8.0: the operation needs a capability this engine does not have on this platform (e.g. shared memory). */
-  | "unsupported";
+  | "unsupported"
+  /** 1.12.0: rebind of a channel identity that is already mapped to a different user. */
+  | "identity-already-bound"
+  /** 1.12.0: the `_rebinds/<id>.jsonl` sidecar has no complete line and was quarantined. */
+  | "ledger-corrupt"
+  /** 1.12.0: the exclusive `_rebinds/.lock` no longer carries our nonce; finish later via the sidecar. */
+  | "lock-lost";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
 export interface MemoryOpError extends Error {
@@ -763,6 +771,59 @@ export interface MemoryOps {
    * At most 500 cards per call.
    */
   import(req: MemoryImportRequest, p: Principal, a: AgentContext): Promise<MemoryImportResult>;
+  /**
+   * 1.12.0: attach user-scope cards of one channel identity to a harness user.
+   * `dryRun` defaults to true. Requires `a.origin === "system"` and
+   * `a.background === false`. Counters only; no card text or raw identity keys.
+   */
+  rebind(req: MemoryRebindRequest, p: Principal, a: AgentContext): Promise<MemoryRebindResult>;
+  /**
+   * 1.12.0: restore the owner bindings recorded under `req.rebindId`.
+   * Cards written after that rebind are left alone. `dryRun` defaults to false.
+   */
+  unbind(req: MemoryUnbindRequest, p: Principal, a: AgentContext): Promise<MemoryUnbindResult>;
+}
+
+export interface MemoryRebindFromIdentity {
+  /** Channel name, e.g. "telegram". */
+  channel: ChannelRef;
+  /** Opaque channel user id (the third v1-hash tuple member). */
+  identityKey: string;
+  /** Bot account id; omitted → `"default"`, matching live capture. */
+  accountId?: string;
+}
+
+export interface MemoryRebindRequest {
+  agentId: AgentId;
+  fromIdentity: MemoryRebindFromIdentity;
+  /** Harness user id; hashed to `user:v2:` by the engine. */
+  toUser: string;
+  /** Defaults to true. Writes only when explicitly `false`. */
+  dryRun?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface MemoryRebindResult {
+  rebindId: string;
+  matched: number;
+  rebound: number;
+  skipped: number;
+  dryRun: boolean;
+}
+
+export interface MemoryUnbindRequest {
+  rebindId: string;
+  dryRun?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface MemoryUnbindResult {
+  rebindId: string;
+  matched: number;
+  unbound: number;
+  skipped: number;
+  skippedModified: number;
+  dryRun: boolean;
 }
 
 export type MemoryImportProvenance = "imported";

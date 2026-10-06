@@ -7,6 +7,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock über `tryAcquireOwnedLock` (Nonce, Freigabe nur des eigenen Locks). Ein Claim für einen anderen Nutzer ist `identity-already-bound` und wird nicht gelöscht. `ADOPT_PROBE_MIN_ROWS` verlangt `min(8, vorhanden)` endliche Scores bei bis zu 16 Probe-Zeilen. Package bleibt 7.18.4.
+
 ### Fixed
 
 - `scripts/setup-feature-crons.mjs`: the npm `postinstall` no longer touches OpenClaw cron jobs in a development checkout (`INIT_CWD` = package root and `.git` present) or under `CI=true`; `PLUR1BUS_SETUP_CRONS=1` opts in. Real installs, the gateway bootstrap and `/plur1bus setup crons` are unchanged.
