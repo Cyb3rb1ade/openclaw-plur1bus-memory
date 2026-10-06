@@ -15,22 +15,11 @@ import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { tombstoneRegistryDir } from "../lib/tombstone.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
+import { sha256TextVector } from "./helpers/text-vector.js";
 
 const VECTOR_DIM = 384;
 
-function textVector(text) {
-  let hash = 2166136261;
-  for (const ch of String(text)) {
-    hash ^= ch.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  const raw = Array.from({ length: VECTOR_DIM }, (_, i) => {
-    const h = (hash + i * 2654435761) % 4294967296;
-    return ((h % 2000) / 1000) - 1;
-  });
-  const norm = Math.sqrt(raw.reduce((sum, v) => sum + v * v, 0)) || 1;
-  return raw.map((v) => v / norm);
-}
+const textVector = (text) => sha256TextVector(text, VECTOR_DIM);
 
 function makeMockApi(baseDbPath) {
   const noop = () => {};

@@ -17,8 +17,8 @@ import {
 } from "../lib/i18n.js";
 import { dictionary } from "../lib/i18n-dictionary.js";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 describe("resolveLocale", () => {
   it("uses config when provided", () => {
@@ -80,7 +80,7 @@ describe("detectLanguage", () => {
 });
 
 describe("readSoulTone", () => {
-  const tmpDir = join(tmpdir(), `i18n-test-${Date.now()}`);
+  const tmpDir = makeTempDir("i18n-test-");
 
   it("returns null when no SOUL/IDENTITY file exists", () => {
     assert.strictEqual(readSoulTone("/nonexistent/path"), null);
@@ -107,7 +107,7 @@ describe("readSoulTone", () => {
 });
 
 describe("readSoulToneCached", () => {
-  const tmpDir = join(tmpdir(), `i18n-cache-test-${Date.now()}`);
+  const tmpDir = makeTempDir("i18n-cache-test-");
 
   it("caches result and respects TTL", () => {
     mkdirSync(tmpDir, { recursive: true });
