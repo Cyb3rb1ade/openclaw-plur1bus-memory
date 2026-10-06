@@ -836,7 +836,16 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   }
 
   function e3Client(stateRoot, address, fingerprintId = ACTIVE_FINGERPRINT_ID) {
-    return new IpcScopedEmbeddingProvider({ stateRoot, model: "fixture/e5", dimensions: 2, fingerprintId, address });
+    return new IpcScopedEmbeddingProvider({
+      stateRoot,
+      model: "fixture/e5",
+      dimensions: 2,
+      fingerprintId,
+      address,
+      // Explicit abstract sockets fail closed without a peer uid; this suite's
+      // abstract cases are about owner exclusivity, not SO_PEERCRED.
+      ...(address?.kind === "abstract-socket" ? { readPeerUid: () => process.getuid() } : {}),
+    });
   }
 
   it("serves a round trip on an explicit unix socket and removes socket and token on shutdown", async () => {

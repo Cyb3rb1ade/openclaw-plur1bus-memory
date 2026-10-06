@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { createEngine } from "../engine/create-engine.js";
 import { createStubHost } from "../lib/host-services.js";
-import { IpcScopedEmbeddingProvider } from "../lib/providers/scoped-embedding-ipc.js";
+import { IpcScopedEmbeddingProvider, resolveScopedEmbeddingIpcPaths } from "../lib/providers/scoped-embedding-ipc.js";
 import { createEmbeddingServing, validateIpcAddress } from "../engine/providers/embedding-service.js";
 import { spawnTracked, waitForOutput } from "./helpers/spawn-tracked.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
@@ -164,12 +164,17 @@ describe("EmbeddingService.serve() (E3 Task 4)", () => {
     }
   });
 
-  it("(c) serve() without an address binds the platform default", { skip: process.platform !== "linux" && "platform default address is the Linux abstract socket" }, async () => {
+  it("(c) serve() without an address binds the platform default", posixOnly, async () => {
     const { engine, host, baseDbPath } = setup("e3-serve-c-");
     try {
       const result = await engine.embedding.serve();
-      assert.equal(result.address.kind, "abstract-socket");
-      assert.deepEqual(result.address, host.platform.ipcAddress(join(baseDbPath, "control", "embedding-ipc")));
+      assert.equal(result.address.kind, "unix-socket");
+      assert.deepEqual(
+        result.address,
+        host.platform.ipcAddress(resolveScopedEmbeddingIpcPaths(baseDbPath).directory),
+      );
+      assert.match(result.address.address, /owner\.sock$/);
+      assert.equal(result.address.address.includes("\0"), false);
       assert.equal((await roundTrip(baseDbPath, result)).length, 384);
     } finally {
       await engine.close();

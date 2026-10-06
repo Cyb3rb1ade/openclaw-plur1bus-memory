@@ -838,13 +838,14 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
   path it never opens the loopback claim listener (ADR-001 C1).
   - **Default address per platform** (omitted `address`, i.e. `undefined`;
     `host.platform.ipcAddress(resolveScopedEmbeddingIpcPaths(baseDbPath).
-    directory)`): Linux — an abstract socket (no filesystem entry, released
-    on process death); macOS and other POSIX — a filesystem socket at
-    `<baseDbPath>/control/embedding-ipc/owner.sock`; Windows — a named pipe
+    directory)`): Linux, macOS and other POSIX — a filesystem socket at
+    `<baseDbPath>/control/embedding-ipc/owner.sock` inside the private
+    `0700` embedding-ipc directory; Windows — a named pipe
     `\\.\pipe\plur1bus-embedding-<32 hex>` (the SHA-256 of the embedding-ipc
     directory path `<baseDbPath>/control/embedding-ipc`, truncated to 32 hex
-    characters; the Linux abstract-socket name uses the same digest). No
-    claim listener is opened for any of these.
+    characters). An abstract socket is Linux-only and used only when the
+    caller supplies one; it is never the default. No claim listener is
+    opened for any of these.
   - The token always lives at
     `<baseDbPath>/control/embedding-ipc/owner.token`, for every address kind
     — including an abstract socket or named pipe, neither of which has a
@@ -891,35 +892,41 @@ shared pool. 1.6.0 (spec decision D31, `engine/memory-ops/shared.js`,
 
 ### Security model
 
-- **POSIX filesystem sockets** (macOS/BSD `unix-socket` default, or any
-  caller-supplied `unix-socket` address): the socket's parent directory must
-  already be private (`0700`, not a symlink) before `serve` will use it, and
-  the socket file itself is secured to `0600` after the listener binds. The
-  token file is `0600` inside a `0700` directory.
-- **Abstract sockets (Linux) and named pipes (Windows) have no filesystem
-  permissions at all** — there is nothing to `chmod`. The guard for both is
-  the same as for a filesystem socket: every request's envelope token is
-  compared with `timingSafeEqual` against the private token file, plus the
-  model/dimensions/fingerprint identity binding baked into the envelope
-  (`{dimensions, fingerprintId, model, request, token}`) — a client with the
-  right token but the wrong model or fingerprint still gets an error frame,
-  never vectors. The address itself is not treated as a secret barrier, only
-  as a rendezvous point; the token is the actual credential.
+- **POSIX filesystem sockets** (the Linux/macOS/BSD `unix-socket` default, or
+  any caller-supplied `unix-socket` address): the socket's parent directory
+  must already be private (`0700`, not a symlink) before `serve` will use it,
+  and the socket file itself is secured to `0600` after the listener binds.
+  The token file is `0600` inside a `0700` directory. The client additionally
+  checks the server identity **before** writing the token or any memory text:
+  the socket and its parent must be owned by the effective uid, the parent
+  must be a real directory with mode `0700` (no group/other bits), and on
+  Linux a `SO_PEERCRED` peer uid is required to match when that check is
+  available (optional `koffi`, not a plugin dependency). A group-writable or
+  foreign-owned directory is refused.
+- **Abstract sockets (Linux, explicit address only) and named pipes
+  (Windows) have no filesystem permissions** — there is nothing to `chmod`.
+  An abstract socket is never the engine default. The client still
+  authenticates to the server with `timingSafeEqual` against the private
+  token file, plus the model/dimensions/fingerprint identity binding
+  (`{dimensions, fingerprintId, model, request, token}`). For an explicit
+  Linux abstract socket the client also requires a peer uid via
+  `SO_PEERCRED` before sending the token or text, and fails closed when that
+  uid cannot be read. Named-pipe ACLs stay out of scope (see below).
 - **Windows pipe ACLs are out of scope for 1.7.0** (PR-11): Node's `net`
   module cannot set a DACL on a named pipe, so an engine serving a named pipe
   today relies on the default pipe security descriptor rather than a
   user-SID-scoped ACL. Windows system tests for the pipe transport are
   deferred to the same PR-11.
-- **The token authenticates clients to the server, not the server to
-  clients.** Nothing lets a client verify that whoever listens on the address
-  is the real owner. Abstract-socket and named-pipe names are predictable
-  (derived from the SHA-256 of the embedding-ipc directory path, see above),
-  and after a crash a stale `owner.token` stays on disk (only a clean
-  shutdown removes it). A local user who binds the then-free abstract or pipe
-  name first therefore receives the tokens clients send and can answer with
-  forged vectors — or simply holds the name so the real owner's `serve()`
-  answers `conflict`. The legacy OpenClaw owner endpoint (no `address`) is
-  stronger on that point, per platform:
+- **Filesystem-socket clients verify the server before sending the token.**
+  The remaining gap is a Windows named pipe (and an explicit Linux abstract
+  socket when `SO_PEERCRED` is unavailable, which the client now refuses).
+  Named-pipe names are predictable (derived from the SHA-256 of the
+  embedding-ipc directory path, see above), and after a crash a stale
+  `owner.token` stays on disk (only a clean shutdown removes it). A local
+  user who binds the then-free pipe name first can still receive tokens
+  clients send. The Linux `serve()` default no longer uses an abstract
+  socket, so that squat is gone for the engine path. The legacy OpenClaw
+  owner endpoint (no `address`) remains:
   - **POSIX**: `owner.sock` inside the `0700` embedding-ipc directory; only
     the owning user can bind or reach it.
   - **Windows**: libuv cannot listen on a filesystem socket path there, so

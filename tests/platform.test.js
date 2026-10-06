@@ -137,10 +137,9 @@ describe("lib/platform securePath", () => {
 });
 
 describe("lib/platform ipcAddress", () => {
-  it("returns an abstract socket on linux", () => {
+  it("returns a filesystem socket on linux", () => {
     const address = ipcAddress("/var/lib/plur1bus", { platform: "linux" });
-    assert.equal(address.kind, "abstract-socket");
-    assert.match(address.address, /^\0plur1bus-embedding-[0-9a-f]{32}$/);
+    assert.deepEqual(address, { kind: "unix-socket", address: "/var/lib/plur1bus/owner.sock" });
   });
 
   it("returns a named pipe on win32", () => {
