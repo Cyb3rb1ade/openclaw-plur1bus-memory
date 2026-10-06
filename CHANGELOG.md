@@ -7,6 +7,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Engine-Vertrag 1.12.0** — `memory.rebind` / `memory.unbind`: manuelle N:1-Verknüpfung einer Kanal-Identität mit einem Harness-User, engine-weit. Nur Scope `user`, nur Owner-Metadaten; `updatedAt` bleibt stehen. Sidecar `_rebinds/<rebindId>.jsonl` mit fsync (Datei und Verzeichnis). Exklusives Lock über `tryAcquireOwnedLock` (Nonce, Freigabe nur des eigenen Locks). Ein Claim für einen anderen Nutzer ist `identity-already-bound` und wird nicht gelöscht. `ADOPT_PROBE_MIN_ROWS` verlangt `min(8, vorhanden)` endliche Scores bei bis zu 16 Probe-Zeilen. Package bleibt 7.18.4.
+
 ### Fixed
 
 - Error messages in logs: about 130 log lines in capture, recall, db-adapter, jobs, obsidian bridge, scheduler and engine paths now print `describeError` (class, code, message length and hash, URLs reduced to host plus path hash) instead of `String(err)` / `err.message`; `safeWarn`/`safeDebug`/`trySafeWarn` do the same via the new `describeErrorForLog`. `redactError` is unchanged for callers that need the message (rethrown, returned, CLI stderr). `reason`/`note` log values no longer keep `<platform>:<digits>`.
