@@ -9,7 +9,7 @@
  */
 
 import {
-  appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync,
+  appendFileSync, closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync,
   readFileSync, readSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,6 +17,26 @@ import { resolveInside, safeAgentId } from "../../lib/sql-safety.js";
 import { memoryOpError } from "./errors.js";
 
 export const IMPORT_LEDGER_VERSION = 1;
+
+/**
+ * fsync a directory so a newly created entry in it survives a power loss.
+ * No-op on win32 (directories cannot be opened for fsync there).
+ * @param {string} dir
+ * @param {{platform?: string, openSync?: Function, fsyncSync?: Function, closeSync?: Function}} [fsImpl] test seam
+ */
+export function fsyncDirectory(dir, fsImpl = {}) {
+  const platform = fsImpl.platform ?? process.platform;
+  if (platform === "win32") return;
+  const open = fsImpl.openSync ?? openSync;
+  const sync = fsImpl.fsyncSync ?? fsyncSync;
+  const close = fsImpl.closeSync ?? closeSync;
+  const fd = open(dir, "r");
+  try {
+    sync(fd);
+  } finally {
+    try { close(fd); } catch { /* already closed */ }
+  }
+}
 
 /**
  * @param {string} baseDbPath
@@ -44,9 +64,12 @@ function parseLine(line) {
 }
 
 /**
- * @param {{baseDbPath: string, logger?: object}} deps
+ * @param {{baseDbPath: string, logger?: object, syncFile?: Function, syncDir?: Function}} deps
+ *   `syncFile(fd)` / `syncDir(path)` are test seams (default `fsyncSync` / `fsyncDirectory`).
  */
-export function createImportLedger({ baseDbPath, logger } = {}) {
+export function createImportLedger({
+  baseDbPath, logger, syncFile = fsyncSync, syncDir = fsyncDirectory,
+} = {}) {
   function ensureRoot() {
     const root = importsRoot(baseDbPath);
     if (!existsSync(root)) mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -97,6 +120,7 @@ export function createImportLedger({ baseDbPath, logger } = {}) {
   function append(agentId, row) {
     const path = pathFor(agentId);
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const created = !existsSync(path);
     const line = `${JSON.stringify({
       v: IMPORT_LEDGER_VERSION,
       idempotencyKey: row.idempotencyKey,
@@ -109,11 +133,21 @@ export function createImportLedger({ baseDbPath, logger } = {}) {
       fd = openSync(path, "a+", 0o600);
       const { size } = fstatSync(fd);
       if (size > 0) {
+        // Torn last line (crash mid-append): terminate it so the new line stays parseable;
+        // `load` skips the torn fragment.
         const lastByte = Buffer.alloc(1);
         readSync(fd, lastByte, 0, 1, size - 1);
         if (lastByte[0] !== 0x0a) appendFileSync(fd, "\n");
       }
       appendFileSync(fd, line);
+      // K1: the line must survive a power loss before the caller reports `created`.
+      syncFile(fd);
+      if (created) {
+        // New file: make its entry durable in `_imports/`, and `_imports/` in baseDbPath
+        // (the root may have been created by the import lock, not by ensureRoot).
+        syncDir(dirname(path));
+        syncDir(dirname(dirname(path)));
+      }
     } catch (err) {
       logger?.warn?.(`memory-ops.import.ledger: append failed for agent '${safeAgentId(agentId)}': ${err?.code || "error"}`);
       throw memoryOpError("storage", "import ledger write failed");

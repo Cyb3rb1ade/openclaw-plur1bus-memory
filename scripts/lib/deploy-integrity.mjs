@@ -72,6 +72,7 @@ export const DEPLOY_FILES = [
   "engine/memory-ops/proposals.js",
   "engine/memory-ops/import-id.js",
   "engine/memory-ops/import-ledger.js",
+  "engine/memory-ops/import-lock.js",
   "engine/memory-ops/import.js",
   "engine/stores/adopt.js",
   "engine/providers/embedding-service.js",

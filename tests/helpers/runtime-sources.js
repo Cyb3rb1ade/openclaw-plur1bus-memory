@@ -50,6 +50,7 @@ const ENGINE_PATHS = Object.freeze({
   memoryOpsProposals: "engine/memory-ops/proposals.js",
   memoryOpsImportId: "engine/memory-ops/import-id.js",
   memoryOpsImportLedger: "engine/memory-ops/import-ledger.js",
+  memoryOpsImportLock: "engine/memory-ops/import-lock.js",
   memoryOpsImport: "engine/memory-ops/import.js",
   storeAdopt: "engine/stores/adopt.js",
   adminObsidian: "engine/admin/obsidian.js",
