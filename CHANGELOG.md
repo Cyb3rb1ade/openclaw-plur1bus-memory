@@ -13,6 +13,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Fixed
 
+- `memory.rebind` / `unbind`: die Nonce-Prüfung (`lock-lost`) läuft vor jedem Store-Patch, nicht nur vor Ledger-Schreiben. Ein verlorenes Lock bricht die Schleife sofort ab; ein erneuter Aufruf läuft über das Sidecar zu Ende.
 - `engine/create-engine.js`: Merge-Safety-Logs schreiben Memory-Text nur noch über `describeText()`, Fallback-`baseUrl` über `redactUrl()`, Fehler in Log-Zeilen über `describeError()`.
 - Error messages in logs: about 130 log lines in capture, recall, db-adapter, jobs, obsidian bridge, scheduler and engine paths now print `describeError` (class, code, message length and hash, URLs reduced to host plus path hash) instead of `String(err)` / `err.message`; `safeWarn`/`safeDebug`/`trySafeWarn` do the same via the new `describeErrorForLog`. `redactError` is unchanged for callers that need the message (rethrown, returned, CLI stderr). `reason`/`note` log values no longer keep `<platform>:<digits>`.
 - Leak audit, remaining items: whole-result job logs (`consolidate-daily`, `classify-recent`, `auto-accept-stale`, `rem-dream`, `skill-miner`, `episodes-rebuild`, `gc-run`, `embedding-drain`, `feedback-report`, `meta-reflect`) now go through the deny-by-default `summarizeJobResultForLog`; recall query refinement, the group-reasoning filter, chat-model session release, skill auto-apply and several error logs no longer print queries, session keys, skill names or raw error messages. Job return values and command replies are unchanged.

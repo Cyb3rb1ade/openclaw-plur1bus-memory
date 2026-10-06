@@ -105,6 +105,7 @@ export function createMemoryRebind({
   }
 
   async function patchOwner(db, cardId, ownerUserId) {
+    ledger.assertLockHeld();
     await db.update(cardId, { ownerUserId });
   }
 
@@ -203,6 +204,7 @@ export function createMemoryRebind({
               await patchOwner(db, card.cardId, toOwner);
               rebound += 1;
             } catch (err) {
+              if (err?.name === "MemoryOpError") throw err;
               if (isAbortError(err, signal)) throw memoryOpError("storage", "rebind aborted");
               logger?.warn?.(`memory-ops.rebind: update failed for agent '${agentId}': ${err?.code || "error"}`);
               throw memoryOpError("storage", "rebind update failed");
@@ -310,6 +312,7 @@ export function createMemoryRebind({
           await patchOwner(db, card.cardId, fromOwner);
           unbound += 1;
         } catch (err) {
+          if (err?.name === "MemoryOpError") throw err;
           if (isAbortError(err, signal)) throw memoryOpError("storage", "unbind aborted");
           logger?.warn?.(`memory-ops.unbind: update failed: ${err?.code || "error"}`);
           throw memoryOpError("storage", "unbind update failed");
