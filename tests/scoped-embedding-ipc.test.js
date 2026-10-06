@@ -22,7 +22,7 @@ import {
   resolveScopedEmbeddingOwnerClaimAddress,
 } from "../lib/providers/scoped-embedding-ipc.js";
 import { ipcAddress, readDirectoryAcl } from "../lib/platform.js";
-import { makeClaimableStateRoot } from "./helpers/claimable-state-root.js";
+import { claimAddressUnavailable, makeClaimableStateRoot } from "./helpers/claimable-state-root.js";
 import { runTracked, spawnTracked, waitForOutput } from "./helpers/spawn-tracked.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -835,12 +835,18 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
     });
   }
 
+  // Every unclaimed start() connect-probes the stateRoot's claim port (off
+  // Linux a loopback TCP port in the dynamic range) and refuses when anything
+  // answers. A random temp stateRoot whose port a foreign Windows listener
+  // holds failed `first.start()` with owner_already_active (windows-2025,
+  // run 37432579022), so these tests take a stateRoot whose claim port was
+  // bindable and connection-refused when it was rolled.
   function e3Client(stateRoot, address, fingerprintId = ACTIVE_FINGERPRINT_ID) {
     return new IpcScopedEmbeddingProvider({ stateRoot, model: "fixture/e5", dimensions: 2, fingerprintId, address });
   }
 
   it("serves a round trip on an explicit unix socket and removes socket and token on shutdown", async () => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const address = explicitUnixAddress();
     const server = createScopedEmbeddingIpcServer({
       stateRoot,
@@ -896,7 +902,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   it("serves an abstract socket and refuses a second owner on the same address", {
     skip: process.platform !== "linux" && "abstract sockets are Linux-only",
   }, async () => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const address = { kind: "abstract-socket", address: "\0plur1bus-e3-test-" + randomUUID() };
     const options = { stateRoot, embeddings: e3Embeddings(), fingerprintId: ACTIVE_FINGERPRINT_ID, address, claim: false };
     const first = createScopedEmbeddingIpcServer(options);
@@ -920,7 +926,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("recovers a stale unix socket left at the explicit address", posixSocketFile, async (t) => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const address = explicitUnixAddress();
     await leaveStaleUnixSocket(t, address.address);
     const server = createScopedEmbeddingIpcServer({
@@ -943,7 +949,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("rejects a client with a different fingerprint on the explicit address", async () => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const address = explicitUnixAddress();
     const server = createScopedEmbeddingIpcServer({
       stateRoot,
@@ -965,7 +971,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("refuses a second unclaimed owner on another address of the same stateRoot", async () => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const firstAddress = explicitUnixAddress();
     const secondAddress = explicitUnixAddress();
     const base = { stateRoot, embeddings: e3Embeddings(), fingerprintId: ACTIVE_FINGERPRINT_ID, claim: false };
@@ -986,6 +992,50 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
       await provider?.shutdown();
       await second.shutdown();
       await first.shutdown();
+    }
+  });
+
+  it("a foreign wildcard listener on the claim port refuses an unclaimed start, and the fixture rejects that stateRoot", {
+    skip: process.platform === "linux" && "Linux claims an abstract socket, not a TCP port",
+  }, async (t) => {
+    // The windows-2025 flake of the test above, made deterministic: another
+    // process's 0.0.0.0 listener on the derived claim port.
+    let stateRoot = null;
+    let port = null;
+    let foreign = null;
+    const listenErrors = [];
+    for (let attempt = 0; attempt < 5 && !foreign; attempt += 1) {
+      const candidateRoot = await makeClaimableStateRoot("e3-ipc-");
+      const candidatePort = resolveScopedEmbeddingOwnerClaimAddress(resolveScopedEmbeddingIpcPaths(candidateRoot).directory).port;
+      const candidate = createServer((socket) => socket.destroy());
+      candidate.listen({ host: "0.0.0.0", port: candidatePort });
+      const [listenError] = await Promise.race([once(candidate, "listening").then(() => [null]), once(candidate, "error")]);
+      if (listenError) {
+        listenErrors.push(`${candidatePort} ${listenError.code}`);
+        continue;
+      }
+      [stateRoot, port, foreign] = [candidateRoot, candidatePort, candidate];
+    }
+    if (!foreign) {
+      t.skip(`no claim port stayed free for the foreign wildcard listener: ${listenErrors.join(", ")}`);
+      return;
+    }
+    const server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings: e3Embeddings(),
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+      address: explicitUnixAddress(),
+      claim: false,
+    });
+    try {
+      // Usually connect-accepted; a bind refused beside the wildcard listener
+      // or a connect still pending after 1 s (a loaded host) re-rolls as well.
+      assert.match(await claimAddressUnavailable(stateRoot), new RegExp(`:${port} (connect-accepted|connect-timeout|EADDRINUSE|EACCES)$`));
+      await assert.rejects(server.start(), { code: "scoped_embedding_owner_already_active" });
+      assert.equal(existsSync(server.tokenPath), false);
+    } finally {
+      await server.shutdown();
+      if (foreign.listening) await new Promise((resolve) => foreign.close(resolve));
     }
   });
 
@@ -1077,7 +1127,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("refuses a live foreign listener at the explicit address without touching it or the token directory", async () => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const address = explicitUnixAddress();
     const directory = resolveScopedEmbeddingIpcPaths(stateRoot).directory;
     writeFileSync(join(directory, "sentinel"), "keep");
@@ -1107,7 +1157,7 @@ describe("scoped embedding IPC on an explicit address (E3)", () => {
   });
 
   it("refuses a dangling symlink or a regular file at the explicit address and leaves it untouched", async () => {
-    const stateRoot = makeTempDir("e3-ipc-");
+    const stateRoot = await makeClaimableStateRoot("e3-ipc-");
     const tokenPath = resolveScopedEmbeddingIpcPaths(stateRoot).tokenPath;
     const dangling = realUnixSocketAddress();
     symlinkSync(join(dangling.address, "..", "missing-target"), dangling.address);
