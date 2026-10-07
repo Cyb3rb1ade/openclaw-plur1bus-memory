@@ -29,6 +29,8 @@ function messageForCode(code) {
     case "storage": return "memory write failed";
     case "conflict": return "memory update conflicts with an existing tombstone";
     case "approval-required": return "sharing this memory requires explicit approval";
+    case "EMBEDDER_UNAVAILABLE": return "embedding provider for the destination identity is unavailable";
+    case "EMBEDDING_IDENTITY_MISMATCH": return "embedding identity differs; migration is required";
     case "unsupported": return "shared memory is not supported on this platform";
     default: return "memory operation failed";
   }

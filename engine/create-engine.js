@@ -1,3 +1,4 @@
+import { embeddingIdentity, identityId } from "../lib/providers/embedding-identity.js";
 /**
  * engine/create-engine.js — the one construction path (spec 3.1, owner decision A).
  *
@@ -788,8 +789,14 @@ export function createEngine(host, config, testOptions = {}) {
     dimensions: vectorDim,
   });
   const activeEmbeddingFingerprintId = embeddingFingerprintId(activeEmbeddingFingerprint);
+  const legacyFingerprint = { ...activeEmbeddingFingerprint };
+  delete legacyFingerprint.prefixScheme;
+  delete legacyFingerprint.tokenCap;
+  const legacyFingerprintId = embeddingFingerprintId(legacyFingerprint);
+  const legacyGenerationSelection = cfg.reembedding?.fingerprintId === legacyFingerprintId && legacyFingerprintId !== activeEmbeddingFingerprintId;
+  if (legacyGenerationSelection) host.logger.warn("embedding.identity.legacy: generation uses an older fingerprint; full store identity verification requires migration");
   if (cfg.reembedding && (
-    cfg.reembedding.fingerprintId !== activeEmbeddingFingerprintId
+    (cfg.reembedding.fingerprintId !== activeEmbeddingFingerprintId && !legacyGenerationSelection)
     || cfg.reembedding.dimensions !== vectorDim
   )) {
     throw new Error(
@@ -1280,7 +1287,19 @@ export function createEngine(host, config, testOptions = {}) {
 
   // MemoryDB.search() resolves a row's missing halfLifeDays against the
   // configured recall.halfLifeDaysMap; every pool this engine opens carries it.
-  const EngineAgentDbPool = AgentDbPool.withOptions({ halfLifeOverrides });
+  const defaultIdentity = embeddingIdentity(activeEmbeddingFingerprint);
+  const identityRoutes = (embeddingCfg.routes ?? []).map(route => {
+    if (!route || typeof route !== "object") throw new TypeError("invalid embedding route");
+    return { ...route, identity: embeddingIdentity(route.identity) };
+  });
+  const identityForStore = ({ basePath, agentId }) => {
+    const match = identityRoutes.find(route =>
+      (!route.agentId || route.agentId === agentId) &&
+      (!route.namespace || basePath.split(/[\\/]/).at(-1) === route.namespace) &&
+      (!route.scope || basePath.split(/[\\/]/).at(-1) === (route.scope === "workspace" ? "workspaces" : "users")));
+    return match?.identity ?? defaultIdentity;
+  };
+  const EngineAgentDbPool = AgentDbPool.withOptions({ halfLifeOverrides, identityForStore });
   const pool = new MultiNamespacePool(namespaceLayout, vectorDim, EngineAgentDbPool, host.logger);
   const sharedMemoryPool = new SharedMemoryPool(
     embeddingGenerationLayout.sharedBaseDir,
@@ -1410,7 +1429,7 @@ export function createEngine(host, config, testOptions = {}) {
   // consumer built below (the DB adapter, the store helper, the command
   // runner, the scoped IPC server, the resource closer) and the registration
   // views use the same object. No real provider is constructed then.
-  const embeddings = testOptions.internals?.embeddings ?? (normalizedEmbeddingCfg.provider === "local-transformers"
+  const defaultEmbeddings = testOptions.internals?.embeddings ?? (normalizedEmbeddingCfg.provider === "local-transformers"
     ? (requiresActiveSharedModelOwner
         ? new ReloadSafeIpcScopedEmbeddingProvider({
             stateRoot: baseDbPath,
@@ -1459,6 +1478,36 @@ export function createEngine(host, config, testOptions = {}) {
         cacheBasePath: baseDbPath,
         logger: host.logger,
       }));
+  const identityProviders = new Map([[identityId(defaultIdentity), defaultEmbeddings]]);
+  for (const route of identityRoutes) {
+    const id = identityId(route.identity);
+    if (identityProviders.has(id)) continue;
+    const injected = testOptions.internals?.identityProviders?.get(id);
+    if (injected) { identityProviders.set(id, injected); continue; }
+    if (!route.provider) continue; // Missing provider becomes a typed recall/share degradation.
+    const config = normalizeEmbeddingConfig(route.provider, { mode: "existing", acceptNonCommercialLicense: nonCommercialModelAccepted });
+    if (identityId(embeddingIdentity(embeddingFingerprintFromNormalizedConfig(config))) !== id) throw new Error("route provider does not match declared identity");
+    identityProviders.set(id, config.provider === "local-transformers"
+      ? new LocalTransformersEmbeddingProvider({ ...config.local, dimensions: route.identity.dimension, cacheDir: resolveLocalModelCacheDir(route.provider), acceptNonCommercialLicense: nonCommercialModelAccepted, logger: host.logger })
+      : new OpenAIEmbeddingProvider({ ...config, credentialResolver, logger: host.logger }));
+  }
+  const embeddings = identityRoutes.length ? new Proxy(defaultEmbeddings, {
+    get(target, key) {
+      if (key === "identity") return defaultIdentity;
+      if (key === "identityProviders") return identityProviders;
+      if (key === "shutdown") return async () => { await Promise.all([...new Set(identityProviders.values())].map(provider => provider.shutdown?.())); };
+      const value = Reflect.get(target, key);
+      if (["embed", "embedQuery", "embedPassage", "embedBatch"].includes(key) && typeof value === "function") return (text, options = {}) => {
+        const identity = identityForStore({ basePath: namespaceLayout.mode === "named" ? `${namespaceLayout.baseDir}/${namespaceLayout.activeWriteNamespace}` : namespaceLayout.baseDbPath, agentId: options.agentId });
+        const provider = identityProviders.get(identityId(identity));
+        if (!provider) throw Object.assign(new Error("no embedder for store identity"), { code: "EMBEDDER_UNAVAILABLE" });
+        return (provider[key] ?? provider.embed).call(provider, text, options);
+      };
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) : defaultEmbeddings;
+  Object.defineProperties(defaultEmbeddings, { identity: { value: defaultIdentity, configurable: true }, identityProviders: { value: identityProviders, configurable: true }, rrfK: { value: embeddingCfg.rrfK ?? 60, configurable: true } });
+  sharedMemoryPool.identityForScope = (scope, ctx) => identityForStore({ basePath: `${embeddingGenerationLayout.sharedBaseDir}/${scope === "workspace" ? "workspaces" : "users"}`, agentId: ctx.agentId });
   const scopedEmbeddingServer = coordinatesLocalModelGeneration
     && normalizedEmbeddingCfg.provider === "local-transformers"
     ? createScopedEmbeddingIpcServer({
@@ -1769,10 +1818,12 @@ export function createEngine(host, config, testOptions = {}) {
   const withTargetGenerationDb = async ({ generation, agentId, dimensions: targetDimensions }, operation) => {
     // EngineAgentDbPool, not AgentDbPool: re-embedding reads rank with the
     // same recall.halfLifeDaysMap as every other pool the engine opens.
+    const generationIdentity = (await reembeddingBackend.describeGeneration(generation)).identity ?? null;
     const targetPool = new EngineAgentDbPool(
       targetGenerationDataRoot(generation),
       targetDimensions,
       host.logger,
+      { identityForStore: null, identity: generationIdentity },
     );
     let operationError = null;
     let result;
@@ -3259,6 +3310,7 @@ export function createEngine(host, config, testOptions = {}) {
     // first post-store capture step (E4.1).
     runSpeakerProposalPipeline,
     ...(testOptions.internals ?? {}),
+    embeddings,
   };
 
   // Registration views (spec 3.1: views over EngineInternals are built once,
@@ -3538,7 +3590,10 @@ export function createEngine(host, config, testOptions = {}) {
   internals.embeddingServing = embeddingServing;
   const embeddingService = Object.freeze({
     async embed(texts, o = {}) {
-      const provider = internals.embeddings;
+      const requestedId = o.identity?.space ? identityId(o.identity.space) : o.identity?.fingerprintId;
+      const provider = !requestedId || requestedId === internals.activeEmbeddingFingerprintId || (legacyGenerationSelection && requestedId === legacyFingerprintId)
+        ? defaultEmbeddings : identityProviders.get(requestedId);
+      if (!provider) throw Object.assign(new Error("no embedder for requested identity"), { code: "EMBEDDER_UNAVAILABLE" });
       const method = o.kind === "query" ? "embedQuery" : "embedPassage";
       const vectors = await Promise.all(texts.map((text) => provider[method](text, { signal: o.signal })));
       return vectors.map((vector) => Float32Array.from(vector));
@@ -3552,7 +3607,10 @@ export function createEngine(host, config, testOptions = {}) {
       provider: internals.normalizedEmbeddingCfg.provider,
       model: internals.normalizedEmbeddingCfg.model || internals.model,
       dimensions: internals.vectorDim,
-    })],
+      space: defaultIdentity,
+    }), ...identityRoutes.filter((route, index, all) => identityId(route.identity) !== identityId(defaultIdentity) && all.findIndex(item => identityId(item.identity) === identityId(route.identity)) === index).map(route => Object.freeze({
+      fingerprintId: identityId(route.identity), provider: route.identity.provider, model: route.identity.model, dimensions: route.identity.dimension, space: route.identity,
+    }))],
     // Not tracked: embeddingServing.shutdown() (run by close) waits for the serve chain.
     serve: async (address) => { assertMemoryOpen(); return embeddingServing.serve(address); },
   });
@@ -3584,7 +3642,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.13.0",
+    contract: "1.14.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3655,7 +3713,7 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.13.0",
+    contract: "1.14.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());

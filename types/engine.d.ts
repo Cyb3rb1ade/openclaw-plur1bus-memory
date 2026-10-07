@@ -1,7 +1,7 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.13.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * Contract version 1.14.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
  * amended fourteen times under the policy below — see the changelog at the end
  * of this header).
  *
@@ -46,7 +46,8 @@
  *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
  */
 
-export type ContractVersion = "1.13.0";
+// 1.14.0: additive complete vector-space identities, routes and degraded notes.
+export type ContractVersion = "1.14.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -326,10 +327,26 @@ export interface RecallQuery {
   warmOnly?: boolean;
 }
 
+/** Canonical vector-space identity; credentials and transport are excluded. */
+export interface VectorSpaceIdentity {
+  provider: string;
+  model: string;
+  revision: string;
+  dimension: number;
+  normalization: string;
+  prefixScheme: string;
+  instruction: string;
+  dtype: string;
+  artifacts?: readonly { path: string; sha256: string }[];
+  tokenCap?: number | null;
+  pooling?: string;
+}
+
 export interface Degraded {
   reason: string;
   capability: string;
   detail?: string;
+  identities?: { identityId: string; code: string }[];
 }
 
 export interface DecisionTrace {
@@ -479,6 +496,8 @@ export interface EmbeddingIdentity {
   provider: string;
   model: string;
   dimensions: number;
+  /** 1.14.0: full vector-space identity for routing and cache isolation. */
+  space?: VectorSpaceIdentity;
 }
 
 export interface RerankHit {
@@ -644,7 +663,9 @@ export type MemoryOpErrorCode =
    *  1.13.0: also `unimport` when the per-agent import lock no longer carries our nonce; a rerun converges. */
   | "lock-lost"
   /** 1.13.0: `unimport` apply could not take the per-agent import lock in time (an import or unimport of that agent is running). Nothing was written. */
-  | "lock-busy";
+  | "lock-busy"
+  | "EMBEDDER_UNAVAILABLE"
+  | "EMBEDDING_IDENTITY_MISMATCH";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
 export interface MemoryOpError extends Error {

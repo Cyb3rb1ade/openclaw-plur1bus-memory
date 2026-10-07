@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "plur1bus-engine-config",
-  "x-contract": "1.13.0",
+  "x-contract": "1.14.0",
   "$defs": {
     "secretInput": {
       "type": [
@@ -120,6 +120,135 @@
               "type": "string"
             }
           }
+        },
+        "routes": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "identity"
+            ],
+            "properties": {
+              "agentId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,64}$"
+              },
+              "namespace": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "workspace",
+                  "user"
+                ]
+              },
+              "identity": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "provider",
+                  "model",
+                  "revision",
+                  "dimension",
+                  "normalization",
+                  "prefixScheme",
+                  "instruction",
+                  "dtype"
+                ],
+                "properties": {
+                  "provider": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "revision": {
+                    "type": "string"
+                  },
+                  "dimension": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "normalization": {
+                    "type": "string"
+                  },
+                  "prefixScheme": {
+                    "type": "string"
+                  },
+                  "instruction": {
+                    "type": "string"
+                  },
+                  "dtype": {
+                    "type": "string"
+                  },
+                  "artifacts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "sha256"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  },
+                  "pooling": {
+                    "type": "string"
+                  },
+                  "tokenCap": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1
+                  }
+                }
+              },
+              "provider": {
+                "type": "object",
+                "description": "Provider configuration for this exact identity; omission yields an explicit unavailable-identity result."
+              }
+            }
+          },
+          "description": "Ordered vector-space routes; selectors are conjunctive and the first match wins. Existing stores require migration before an identity changes.",
+          "x-sensitive": true
+        },
+        "rrfK": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "RRF rank-fusion constant across embedding identities."
+        },
+        "revision": {
+          "type": "string",
+          "description": "Vector-space identity component; changing it requires re-embedding."
+        },
+        "normalization": {
+          "type": "string",
+          "description": "Vector-space identity component; changing it requires re-embedding."
+        },
+        "dtype": {
+          "type": "string",
+          "description": "Vector-space identity component; changing it requires re-embedding."
+        },
+        "prefixScheme": {
+          "type": "string",
+          "description": "Vector-space identity component; changing it requires re-embedding."
+        },
+        "instruction": {
+          "type": "string",
+          "description": "Vector-space identity component; changing it requires re-embedding."
         }
       },
       "required": [],

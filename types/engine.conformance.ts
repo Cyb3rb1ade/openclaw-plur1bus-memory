@@ -105,11 +105,11 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.13.0">>();
+assertTrue<Exact<ContractVersion, "1.14.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
-assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost" | "lock-busy">>();
+assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost" | "lock-busy" | "EMBEDDER_UNAVAILABLE" | "EMBEDDING_IDENTITY_MISMATCH">>();
 // 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
 assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
 assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();

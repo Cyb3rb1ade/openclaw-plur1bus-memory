@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
  * add it here. Tests enforce this.
  */
 export const DEPLOY_FILES = [
+  "lib/providers/embedding-identity.js",
   "index.js",
   "openclaw.plugin.json",
   // package.json wurde bis 7.2.1 nur fuer die Versionspruefung GELESEN, aber

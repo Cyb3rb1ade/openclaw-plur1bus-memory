@@ -2,6 +2,7 @@ export const MEMORY_OP_ERROR_CODES = Object.freeze([
   "not-found", "denied", "invalid-input", "approval-required",
   "conflict", "storage", "unsupported", "identity-already-bound",
   "ledger-corrupt", "lock-lost", "lock-busy",
+  "EMBEDDER_UNAVAILABLE", "EMBEDDING_IDENTITY_MISMATCH",
 ]);
 
 /**

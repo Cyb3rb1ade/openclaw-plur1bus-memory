@@ -1,3 +1,4 @@
+import { embeddingIdentity, identityId, identityError } from "../../lib/providers/embedding-identity.js";
 /**
  * engine/store/memory-db.js — the per-agent LanceDB store (`MemoryDB`) and the epistemic-status / valid-time write helpers.
  *
@@ -103,6 +104,7 @@ class MemoryDB {
     beforeLanceOperation = null,
     lancedbProvider = null,
     halfLifeOverrides = {},
+    identity = null,
   } = {}) {
     if (pathGuard !== null && typeof pathGuard !== "function") {
       throw new TypeError("MemoryDB pathGuard must be a function");
@@ -122,7 +124,9 @@ class MemoryDB {
       throw new TypeError("MemoryDB lancedbProvider must be a function");
     }
     this.dbPath = dbPath;
-    this.vectorDim = vectorDim;
+    this.identity = identity ? embeddingIdentity(identity) : null;
+    this.vectorDim = this.identity?.dimension ?? vectorDim;
+    this.identityStatus = this.identity ? "configured" : "legacy";
     this.logger = logger;
     this.readOnly = readOnly === true;
     this.pathGuard = pathGuard;
@@ -610,6 +614,25 @@ class MemoryDB {
       this._assertTrustedPath();
       const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
+        if (tables.includes("_embedding_identity")) {
+          this._assertTrustedPath();
+          this._beforeLancePathOperation("openTable");
+          const metadata = await this._read(this.db.openTable("_embedding_identity"), "MemoryDB.identity.open");
+          try {
+            const rows = await this._read(metadata.query().limit(2).toArray(), "MemoryDB.identity.read");
+            if (rows.length !== 1) throw identityError("EMBEDDING_IDENTITY_MISMATCH", "invalid store identity record");
+            const storedIdentity = embeddingIdentity(JSON.parse(rows[0].identity));
+            if (this.identity && identityId(storedIdentity) !== identityId(this.identity)) throw identityError("EMBEDDING_IDENTITY_MISMATCH", "store identity differs; re-embedding migration required");
+            this.identity = storedIdentity;
+            this.vectorDim = storedIdentity.dimension;
+            this.identityStatus = "verified";
+          } finally { await metadata.close?.(); }
+        } else if (this.identity) {
+          this.identityStatus = "legacy";
+          this.logger?.warn?.("embedding.identity.legacy: store has no recorded identity; verify compatibility before migration");
+        }
+      }
+      if (tables.includes(TABLE_NAME)) {
         this._assertTrustedPath();
         this._beforeLancePathOperation("openTable");
         this.table = await this._acquireInitHandle(
@@ -618,6 +641,11 @@ class MemoryDB {
           "table",
         );
         this._assertTrustedPath();
+        if (this.identity) {
+          const existingSchema = await this._read(this.table.schema(), "MemoryDB.identity.dimension");
+          const dimension = existingSchema?.fields?.find(field => field.name === "vector")?.type?.listSize;
+          if (dimension !== this.vectorDim) throw identityError("EMBEDDING_IDENTITY_MISMATCH", "store vector dimension differs; migration required");
+        }
         if (this.readOnly) {
           await this.refreshSchemaFields();
           return true;
@@ -821,6 +849,11 @@ class MemoryDB {
             chunkGroupId: "",
           },
         ]), "MemoryDB.createTable", "created-table", false);
+        if (this.identity) {
+          const metadata = await this._write(this.db.createTable("_embedding_identity", [{ identity: JSON.stringify(this.identity), identityId: identityId(this.identity) }]), "MemoryDB.identity.create");
+          await metadata.close?.();
+          this.identityStatus = "verified";
+        }
       }
         if (!this.readOnly) {
           this._assertTrustedPath();
