@@ -786,7 +786,7 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, call
       },
     ], withLlmCallContext(
       withLlmResultCacheContext(
-        { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
+        { ...llmCfg, maxTokens: Math.round(maxChars / 2), temperature: 0 },
         agentId,
         LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       ),
@@ -823,7 +823,7 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
       },
     ], withLlmCallContext(
       withLlmResultCacheContext(
-        { ...llmCfg, maxTokens: 300, temperature: 0 },
+        { ...llmCfg, maxTokens: 450, temperature: 0 },
         agentId,
         LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
       ),
@@ -3929,7 +3929,7 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId, callContex
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
     // No temperature: providers like the Kimi coding endpoint allow exactly
     // one value per thinking mode and answer HTTP 400 for anything else.
-    { jsonMode: true, maxTokens: 300 },
+    { jsonMode: true, maxTokens: 450 },
     callContext,
   ));
   if (!content) return null;
@@ -4967,7 +4967,7 @@ const plugin = {
           const emotionLlmCfg = withLlmCallContext(
             {
               ...emotionT3LlmCfg,
-              maxTokens: 300,
+              maxTokens: 450,
               // No temperature: some providers (Kimi coding) reject anything
               // but one exact value per thinking mode and answer HTTP 400.
               // Letting the provider default apply keeps the call portable.
@@ -5277,7 +5277,8 @@ const plugin = {
     // aber keine schließende Klammer — die Zeile bleibt unbewertet, ohne
     // dass irgendetwas außer einem Zähler das meldet. Der
     // Tier-3-Emotionsaufruf (emotionT3CallLlm oben) bekommt kein längeres
-    // Antwortformat und bleibt deshalb unverändert bei 300 maxTokens.
+    // Antwortformat; seit 7.18.23 450 statt 300 maxTokens (Tokenizer von
+    // Haiku 5.5 zählt denselben Text rund 30 % länger).
     const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT = 1500;
     const emotionT3EncodingMaxTokensRaw = Number(emotionCfg.t3?.encodingMaxTokens);
     // Untergrenze VOR dem Runden prüfen (>= 1, nicht > 0): sonst würde ein
@@ -7758,7 +7759,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         };
                     const text = await callLlm([{ role: "user", content: prompt }], {
                       ...cpLlmCfg,
-                      maxTokens: 16,
+                      maxTokens: 24,
                       callContext,
                     });
                     return { text: text || "" };

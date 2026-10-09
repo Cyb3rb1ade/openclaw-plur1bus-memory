@@ -5,6 +5,13 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.23] — 2026-10-09
+
+### Geändert
+
+- **Haiku-Routen denken im Hintergrund nicht mehr mit.** Claude Haiku 5.5 denkt ohne Angabe adaptiv (Effort `medium`), und die Denk-Tokens zählen gegen `maxTokens`. Bei den knappen Limits der Hintergrundjobs bliebe die Antwort leer. Der Host-Weg schickt deshalb für Routen mit einem `anthropic/claude-haiku-*`-Modell `reasoning: "off"` mit (OpenClaw macht daraus `thinking: disabled`). `disableThinking: false` im Feature-Block schaltet das Denken wieder ein, `disableThinking: true` schaltet es jetzt auch auf Host-Routen für jedes Modell ab. Bei Haiku 4.5 ändert sich nichts, es dachte ohne Angabe ohnehin nie.
+- **Knappe Ausgabelimits rund 50 % höher.** Der Tokenizer von Haiku 5.5 zählt denselben Text etwa 30 % länger. Angehoben: Traum-Erzählungen 400/900 → 600/1200 (Zeichengrenze 1200/3000 → 1800/4000), Light-/REM-Dream 400/600 → 600/900, Emotion-T3 300 → 450, Critical-Push-Klassifikation 16 → 24, Episoden 500 → 750, Konfliktlöser 400 → 600, Kompaktierung 300 → 450, Skill-Miner 800 → 1200 und Nutzen-Nachtrag 200 → 300, Wiki 400 → 600, Capture-Zusammenfassung `maxChars/3` → `maxChars/2`, Standard des Direktwegs 300 → 450.
+
 ## [7.18.22] — 2026-10-06
 
 ### Behoben
