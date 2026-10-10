@@ -227,9 +227,13 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     const afterCli = after.cliCommands.filter((entry) => entry.name !== "plur1bus");
     // The release version moves with every release (HM1 Task 10); it must equal package.json, nothing else.
     assert.equal(after.version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+    // Allow-list of contracts additions: the EmbeddingGemma 2 adapter id, registered first; every other contract stays as it was.
+    const afterContracts = structuredClone(after.contracts);
+    assert.equal(afterContracts.embeddingProviders[0], "plur1bus-embeddinggemma-2");
+    afterContracts.embeddingProviders.shift();
     for (const key of Object.keys(before)) {
       if (key === "configSchema" || key === "uiHints" || key === "version") continue;
-      assert.deepStrictEqual(key === "cliCommands" ? afterCli : after[key], before[key], `manifest field ${key} changed`);
+      assert.deepStrictEqual(key === "cliCommands" ? afterCli : key === "contracts" ? afterContracts : after[key], before[key], `manifest field ${key} changed`);
     }
   });
 });
