@@ -2171,3 +2171,49 @@ several ranges into one call site would reorder the host's per-event handler
 lists), and `/wiki` stays registered from `index.js` because it goes through
 the local `registerPluginCommand` helper rather than the `registerChatCommands`
 command table `register-commands.js` owns.
+
+## Per-call recall and capture options
+
+The optional second arguments are exported as `RecallOptions` and
+`CaptureOptions` from `types/engine.d.ts`. Existing one-argument calls retain
+configured behavior and their result shape. Package and contract version
+numbers are unchanged in this additive change.
+
+```js
+const recalled = await engine.recall(query, { reranker: 'off' });
+const handle = engine.capture(turn, { deferPostTurnLlm: true });
+const captured = await handle.done;
+```
+
+`query` is the existing `RecallQuery` object, including its required signal,
+principal and agent context; `turn` is the existing `TurnRecord`. Options do
+not change identity, authorization, cancellation or capture replay rules.
+
+| Option | Omitted | Explicit value |
+|---|---|---|
+| `recall(query, opts).reranker` | configured provider | `off` skips ranking for this call, including warm-only recall; `on` uses the configured provider |
+| `capture(turn, opts).deferPostTurnLlm` | configured runtime setting | `false` uses direct post-turn work; `true` queues eligible light-dream/episode work when the host declares `capabilities.postTurnRefineScheduled === true` |
+
+Requesting `reranker: 'on'` without a configured provider does not instantiate
+or download a model. Recall continues unreranked and adds
+`diagnostics: [{ feature: 'reranker', reason: 'reranker-not-configured', fallback: 'unreranked' }]`.
+This is a non-fatal explanation, separate from `degraded`.
+
+Requesting `deferPostTurnLlm: true` without the scheduler capability continues
+on the existing direct path, without dropping refinement work, and adds
+`diagnostics: [{ feature: 'postTurnLlm', reason: 'post-turn-refine-unscheduled', fallback: 'inline' }]`
+to `CaptureHandle.done`. The direct path preserves the existing runtime's
+post-processing/detachment behavior; this option does not add a new queue or
+alter cancellation handling. The host must actually schedule the existing
+`post-turn-refine` job before advertising the capability; that job drains the
+persistent post-turn queue. Queue-write failure retains the existing logged
+direct fallback.
+
+Diagnostics use the exported `PerCallDiagnostic` closed-code union. They are
+absent when no new per-call fallback was requested. Options are snapshotted at
+invocation and never rewrite engine config, host config, providers or
+scheduler state. Parallel calls can request different settings. Bypassed
+recall uses the same scheduler limits, but a separate timeout fallback cache
+key, so its cached context cannot be exchanged with configured ranking.
+Capture's handle still returns immediately. Durable capture/replay semantics
+are unchanged: different options do not recapture an already committed turn.

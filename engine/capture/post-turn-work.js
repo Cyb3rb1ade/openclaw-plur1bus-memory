@@ -14,18 +14,20 @@ export const POST_TURN_REFINE_UNSCHEDULED_REASON = "post-turn-refine-unscheduled
 
 /**
  * Whether capture should enqueue light-dream and episode work.
- * Requires an explicit `runtime.deferPostTurnLlm === true` and a host that
+ * Requires a true configured default or call-local override, and a host that
  * has scheduled `post-turn-refine`. Otherwise the inline path runs.
  *
  * @param {object} [cfg]
  * @param {object} [host]
+ * @param {boolean} [override] Call-local choice; omitted keeps the configured default.
  * @returns {boolean}
  */
-export function shouldDeferPostTurnLlm(cfg, host) {
-  if (cfg?.runtime?.deferPostTurnLlm !== true) return false;
+export function shouldDeferPostTurnLlm(cfg, host, override) {
+  if ((typeof override === "boolean" ? override : cfg?.runtime?.deferPostTurnLlm) !== true) return false;
   if (host?.capabilities?.postTurnRefineScheduled === true) return true;
+  const source = typeof override === "boolean" ? "capture option deferPostTurnLlm" : "runtime.deferPostTurnLlm";
   host?.logger?.warn?.(
-    `memory-lancedb-namespaced: runtime.deferPostTurnLlm=true but post-turn-refine is not scheduled; running light dream and episodes inline (reason=${POST_TURN_REFINE_UNSCHEDULED_REASON})`,
+    `memory-lancedb-namespaced: ${source}=true but post-turn-refine is not scheduled; running light dream and episodes inline (reason=${POST_TURN_REFINE_UNSCHEDULED_REASON})`,
   );
   return false;
 }

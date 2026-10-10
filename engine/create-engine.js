@@ -3560,7 +3560,18 @@ export function createEngine(host, config, testOptions = {}) {
   internals.getToolFactory ??= () => (memoryToolFactory ??= createMemoryTools(internals.toolContext));
   // Engine.recall always passes its memoryCtx, so its assembler needs no turn
   // resolver; the adapter builds its own with the host's (register-recall-hook.js).
-  const getRecallTurn = () => (engineRecallTurn ??= createPromptContextAssembler(internals.recallContext));
+  const getRecallTurn = (rerankerMode) => {
+    if (rerankerMode !== "off") return (engineRecallTurn ??= createPromptContextAssembler(internals.recallContext));
+    // Own immutable context: neither the configured provider nor the scheduler is replaced.
+    // Timeout fallback caches must not cross between configured and bypassed ranking.
+    const scheduler = internals.recallContext.runtimeScheduler;
+    const context = { ...internals.recallContext, reranker: null, runtimeScheduler: {
+      ...scheduler,
+      runRecall: (request, work) => scheduler.runRecall({ ...request, cacheKey: request.cacheKey ? JSON.stringify(["reranker-off", request.cacheKey]) : "" }, work),
+    } };
+    context.warmRecallPath = createWarmRecallPath(context);
+    return createPromptContextAssembler(context);
+  };
 
   const clock = () => (typeof host.clock === "function" ? host.clock() : Date.now());
   // Results reach callers and hosts: no raw message (paths, ids, memory text).
@@ -3721,7 +3732,14 @@ export function createEngine(host, config, testOptions = {}) {
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
     status: () => statusReporter.status(),
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
-    async recall(q) {
+    /**
+     * Recall with an optional call-local reranker override; omission preserves configured behavior.
+     * @param {object} q Existing RecallQuery.
+     * @param {{reranker?: "on"|"off"}} [opts]
+     * @returns {Promise<object>} RecallResult.
+     */
+    async recall(q, opts) {
+      const rerankerMode = opts?.reranker;
       // The recall clock starts here (E5 Task 8): timing.totalMs and the soft
       // budget count from the call, not from the store read.
       const startedAt = Date.now();
@@ -3741,18 +3759,29 @@ export function createEngine(host, config, testOptions = {}) {
         // registered hook already produces through the same assembler.
         // warmOnly (E5 Task 9): the read-only heavy path, see
         // engine/recall/warm-recall-path.js.
-        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt, warmOnly: q.warmOnly === true })) ?? recallResult();
+        const result = (await getRecallTurn(rerankerMode)(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt, warmOnly: q.warmOnly === true })) ?? recallResult();
+        return rerankerMode === "on" && !internals.recallContext.reranker
+          ? { ...result, diagnostics: [{ feature: "reranker", reason: "reranker-not-configured", fallback: "unreranked" }] }
+          : result;
       } catch (error) {
         // An abort that lands before the assembler runs (e.g. during
         // host.workspaceDir) is still an abort, not a bad query.
         return recallResult({ degraded: { reason: q.signal.aborted ? "aborted" : "invalid-query", capability: "recall", detail: detailOf(error) } });
       }
     },
-    capture(t) {
+    /**
+     * Return a non-blocking capture handle with snapshotted call-local post-turn scheduling options.
+     * @param {object} t Existing TurnRecord.
+     * @param {{deferPostTurnLlm?: boolean}} [opts]
+     * @returns {object} Immediate CaptureHandle.
+     */
+    capture(t, opts) {
+      const deferPostTurnLlm = opts?.deferPostTurnLlm;
+      const deferFallback = deferPostTurnLlm === true && host.capabilities?.postTurnRefineScheduled !== true;
       const controller = new AbortController();
       const signal = t?.signal instanceof AbortSignal ? AbortSignal.any([t.signal, controller.signal]) : controller.signal;
       const acceptedAt = clock();
-      const done = (async () => {
+      const work = (async () => {
         if (closing) return { stored: 0, skipped: 1, reason: ENGINE_CLOSED.reason };
         if (t?.incognito !== false) return { stored: 0, skipped: 1, reason: "incognito" };
         const agentId = safeAgentId(t.agentId);
@@ -3773,7 +3802,7 @@ export function createEngine(host, config, testOptions = {}) {
           const outcome = await internals.getCaptureTurn()(
             { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
             { agentId, workspaceDir, sessionKey: t.sessionKey },
-            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report, onRowsSettled, staleRowIds, onRowsPlanned, onRowsKept },
+            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, ...(typeof deferPostTurnLlm === "boolean" ? { deferPostTurnLlm } : {}), report, onRowsSettled, staleRowIds, onRowsPlanned, onRowsKept },
           );
           if (outcome?.ok) {
             // The scheduler reports ok once the worker settled; the pipeline
@@ -3788,6 +3817,7 @@ export function createEngine(host, config, testOptions = {}) {
           return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
         }, { signal });
       })().catch((error) => ({ stored: 0, skipped: 1, reason: detailOf(error) }));
+      const done = deferFallback ? (async () => ({ ...await work, diagnostics: [{ feature: "postTurnLlm", reason: "post-turn-refine-unscheduled", fallback: "inline" }] }))() : work;
       return { id: randomUUID(), acceptedAt, done, abort: (reason) => controller.abort(reason) };
     },
     async checkpoint(agentId, reason) {
