@@ -75,7 +75,7 @@
     "openai": "^6.27.0"
   },
   "optionalDependencies": {
-    "@huggingface/transformers": "4.2.0",
+    "@huggingface/transformers": "4.3.1",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

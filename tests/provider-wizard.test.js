@@ -40,7 +40,7 @@ describe("provider-wizard i18n rendering", () => {
   // Bestandsoption.
   it("Jina v5 Text Nano ist Option 1, OpenAI Option 2 in der Embedding-Liste", () => {
     const options = buildWizardOptions("embedding", { lang: "de" });
-    assert.deepStrictEqual(options.map((o) => o.key), ["local-jina-v5-nano", "openai", "local-transformers", "local-jina"]);
+    assert.deepStrictEqual(options.map((o) => o.key), ["local-jina-v5-nano", "openai", "local-transformers", "local-jina", "local-embeddinggemma-2"]);
     assert.ok(formatWizardOption("embedding", "local-jina-v5-nano", { lang: "de" }).includes("empfohlen"));
     assert.ok(formatWizardOption("embedding", "local-jina-v5-nano", { lang: "en" }).includes("recommended"));
     assert.ok(!formatWizardOption("embedding", "openai", { lang: "de" }).includes("empfohlen"));
@@ -61,6 +61,21 @@ describe("provider-wizard i18n rendering", () => {
     assert.equal(options[3].key, "local-jina");
     const label = formatWizardOption("embedding", "local-jina", { lang: "de" });
     assert.match(label, /JinaAI.*mehrsprachig.*1024d/i);
+  });
+
+  it("bietet EmbeddingGemma 2 (Apache-2.0, 768d) als lokales Embedding an, ohne Nicht-Kommerziell-Hinweis", () => {
+    const de = formatWizardOption("embedding", "local-embeddinggemma-2", { lang: "de" });
+    const en = formatWizardOption("embedding", "local-embeddinggemma-2", { lang: "en" });
+    assert.equal(en, "Local: google/embeddinggemma-2 (Apache-2.0, 768d)");
+    assert.equal(de, "Lokal: google/embeddinggemma-2 (Apache-2.0, 768d)");
+    const option = buildWizardOptions("embedding", { lang: "en" }).find((o) => o.key === "local-embeddinggemma-2");
+    assert.ok(option.i18nHelp);
+    assert.ok(!/CC BY-NC/.test(formatWizardOption("embedding", "local-embeddinggemma-2", { lang: "en" })));
+  });
+
+  it("E5 bleibt wählbar", () => {
+    assert.ok(buildWizardOptions("embedding", { lang: "en" }).some((o) => o.key === "local-transformers"));
+    assert.match(formatWizardOption("embedding", "local-transformers", { lang: "en" }), /intfloat\/multilingual-e5-small/);
   });
 
   it("Embedding OpenAI-Label enthält 'paid' (en)", () => {

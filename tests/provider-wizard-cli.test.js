@@ -35,7 +35,7 @@ function runWizard(lines) {
     }, 5_000);
 
     function answerVisiblePrompts() {
-      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4|a\/b\/c|yes\/no)\]: |\[2\] literal: /g) || []).length;
+      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4\/5|1\/2\/3\/4|a\/b\/c|yes\/no)\]: |\[2\] literal: /g) || []).length;
       while (sentLines < lines.length && sentLines < promptCount) {
         child.stdin.write(`${lines[sentLines]}\n`);
         sentLines += 1;
@@ -183,6 +183,24 @@ describe("provider wizard CLI input validation", () => {
       },
     });
     assert.deepStrictEqual(parsed?.modelPreparation, { profile: "jina-v5-nano-768", acceptNonCommercialLicense: true });
+  });
+
+  it("returns the pinned EmbeddingGemma 2 local embedding as option 5, with no license question and no credential", async () => {
+    const result = await runWizard(["5", "3"]);
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.match(result.stderr, /\[5\] Local: google\/embeddinggemma-2 \(Apache-2\.0, 768d\)/);
+    assert.doesNotMatch(result.stderr, /CC BY-NC 4\.0 permits non-commercial use only/);
+    const parsed = parseWizardResult(result.stdout);
+    assert.deepStrictEqual(parsed?.embedding, {
+      provider: "local-transformers",
+      local: {
+        model: "google/embeddinggemma-2",
+        revision: "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+        dimensions: 768,
+      },
+    });
+    assert.deepStrictEqual(parsed?.modelPreparation, { profile: "embeddinggemma-2-768" });
   });
 
   it("refuses the v5 nano option without the license acknowledgement", async () => {

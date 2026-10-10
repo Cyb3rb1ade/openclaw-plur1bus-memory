@@ -305,7 +305,22 @@
                 "type": "integer",
                 "minimum": 32,
                 "maximum": 8192,
-                "description": "Per-text token cap for the pinned local Jina runtimes (default 512). Bounds the attention working set the ONNX runtime keeps for the longest text of a batch."
+                "description": "Per-text token cap for the pinned local Jina and EmbeddingGemma 2 runtimes (default 512, at most 8192). Bounds the attention working set the ONNX runtime keeps for the longest text of a batch."
+              },
+              "dtype": {
+                "type": "string",
+                "enum": [
+                  "q8",
+                  "q4",
+                  "fp32"
+                ],
+                "description": "Pinned ONNX precision of a model that offers several (EmbeddingGemma 2: q8 by default, q4 and fp32 as alternatives, each hash-verified). A different dtype is a different vector space: changing it on a store with data needs a re-embedding migration."
+              },
+              "maxBatchSize": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64,
+                "description": "Largest number of texts one EmbeddingGemma 2 inference call takes (default 16); bigger batches are split in order."
               },
               "cacheDir": {
                 "type": "string"
@@ -387,7 +402,11 @@
               "jina-v5-nano-128",
               "jina-v5-nano-256",
               "jina-v5-nano-512",
-              "jina-v5-nano-768"
+              "jina-v5-nano-768",
+              "embeddinggemma-2-128",
+              "embeddinggemma-2-256",
+              "embeddinggemma-2-512",
+              "embeddinggemma-2-768"
             ]
           },
           "acceptNonCommercialLicense": {

@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { describe, it } from "node:test";
 
-import { E5_EMBEDDING_PROFILE, BGE_RERANKER_PROFILE } from "../lib/providers/local-model-artifacts.js";
+import { EMBEDDINGGEMMA2_EMBEDDING_PROFILE, BGE_RERANKER_PROFILE } from "../lib/providers/local-model-artifacts.js";
 import { canonicalPath } from "../lib/setup/harness-coexistence.js";
 import { probeNativeAddons } from "../lib/selftest/addon-probes.js";
 import { SELFTEST_SCHEMA, SELFTEST_STEPS, runSelftest } from "../lib/selftest/run-selftest.js";
@@ -25,8 +25,8 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 // two memories and not duplicates of each other.
 function histogramEmbedder(calls = []) {
   const vector = (text) => {
-    const v = new Array(384).fill(0);
-    for (const ch of String(text)) v[ch.charCodeAt(0) % 384] += 1;
+    const v = new Array(768).fill(0);
+    for (const ch of String(text)) v[ch.charCodeAt(0) % 768] += 1;
     const norm = Math.hypot(...v) || 1;
     return v.map((x) => x / norm);
   };
@@ -123,7 +123,7 @@ describe("runSelftest", () => {
     }
     assert.equal(stepOf(report, "rerank").skipped, "reranker-disabled");
     assert.equal(report.ok, true, report.errors.join("; "));
-    assert.deepEqual(report.model, { profile: E5_EMBEDDING_PROFILE.model, revision: E5_EMBEDDING_PROFILE.revision, state: "present" });
+    assert.deepEqual(report.model, { profile: EMBEDDINGGEMMA2_EMBEDDING_PROFILE.model, revision: EMBEDDINGGEMMA2_EMBEDDING_PROFILE.revision, state: "present" });
     assert.ok(calls.includes("passage") && calls.includes("query"));
     assert.deepEqual(selftestDirs(box.stateDir), []);
     assert.deepEqual(readdirSync(box.stateDir), [], "nothing is left beside the temp store either");

@@ -763,7 +763,8 @@ info "  3) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Downl
 info "  4) Local JinaAI jina-embeddings-v3 — Bestandsoption; mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
 warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
 info "  5) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
-prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: jina5=JinaAI v5 Nano empfohlen, openai=remote, local=E5, jina=JinaAI v3, custom=OpenAI-kompatibel" "jina5" "jina5" "openai" "local" "jina" "custom"
+info "  6) Local google/embeddinggemma-2 — Apache 2.0 (auch kommerziell nutzbar), 768d/Matryoshka, 8K Kontext, verifizierter ~0,35-GB-Q8-Download."
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: jina5=JinaAI v5 Nano empfohlen, openai=remote, local=E5, jina=JinaAI v3, custom=OpenAI-kompatibel, gemma2=EmbeddingGemma 2" "jina5" "jina5" "openai" "local" "jina" "custom" "gemma2"
 
 # Nicht-interaktiv oder Probelauf: Die Nano-Vorgabe braucht die ausdrückliche
 # Lizenzzustimmung. Ohne PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1 fällt der
@@ -829,6 +830,18 @@ case "$EMBEDDING_PROVIDER_MODE" in
     EMBEDDING_DIMENSIONS=768
     info "Lokaler Provider nutzt $EMBEDDING_MODEL (768d; Matryoshka: 32/64/128/256/512/768; Präfixe Query:/Document:)."
     warn "CC BY-NC 4.0: Diese lokale Modelloption ist nur für nicht-kommerzielle Nutzung vorgesehen."
+    ;;
+  gemma2)
+    # Apache 2.0: keine Lizenzabfrage, kein modelPreparation-Block; der Provider lädt und prüft die gepinnten Artefakte beim ersten Aufruf.
+    EMBEDDING_PROVIDER="local-transformers"
+    EMBEDDING_LOCAL_MODEL="google/embeddinggemma-2"
+    EMBEDDING_LOCAL_REVISION="daa72c51243991dfcaf9f9137d2c573d8f7790c0"
+    EMBEDDING_LOCAL_QUERY_PREFIX="task: search result | query: "
+    EMBEDDING_LOCAL_PASSAGE_PREFIX="title: none | text: "
+    EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
+    EMBEDDING_DIMENSIONS=768
+    info "Lokaler Provider nutzt $EMBEDDING_MODEL (768d; Matryoshka: 128/256/512/768; Prompts task: search result | query: / title: none | text:)."
+    info "Der erste echte Aufruf lädt den gepinnten Q8-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
     ;;
   custom)
     EMBEDDING_PROVIDER="openai-compatible"

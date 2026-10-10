@@ -36,6 +36,8 @@ const EMBEDDING_OPTIONS = [
   { key: "openai",             i18nLabel: "setup.embedding.option.openai",   i18nHelp: "setup.embedding.option.openai_help" },
   { key: "local-transformers", i18nLabel: "setup.embedding.option.local_e5", i18nHelp: "setup.embedding.option.local_e5_help" },
   { key: "local-jina",         i18nLabel: "setup.embedding.option.local_jina", i18nHelp: "setup.embedding.option.local_jina_help" },
+  // Angehängt, damit die Nummern der bisherigen Optionen stabil bleiben. Apache 2.0: keine Lizenzabfrage.
+  { key: "local-embeddinggemma-2", i18nLabel: "setup.embedding.option.local_embeddinggemma2", i18nHelp: "setup.embedding.option.local_embeddinggemma2_help" },
 ];
 
 const ADVANCED_RERANKER_MODELS = [
@@ -96,8 +98,8 @@ async function main() {
     }
     let choice;
     while (true) {
-      choice = await askLine("[1/2/3/4]: ");
-      if (["1", "2", "3", "4"].includes(choice)) break;
+      choice = await askLine("[1/2/3/4/5]: ");
+      if (["1", "2", "3", "4", "5"].includes(choice)) break;
       console.error(t("setup.reranker.invalid_choice", { lang, tone }));
     }
     // Auswahl über den Schlüssel der Option, nicht über die Position.
@@ -112,6 +114,20 @@ async function main() {
       return { provider: "openai", apiKeyEnv: "OPENAI_API_KEY", model: "text-embedding-3-large", dimensions: 3072 };
     } else if (selected === "local-transformers") {
       return { provider: "local-transformers", model: "intfloat/multilingual-e5-small", dimensions: 384 };
+    }
+    if (selected === "local-embeddinggemma-2") {
+      // Apache 2.0: no non-commercial acknowledgement. The prompts and the revision come from the pinned profile.
+      return {
+        embedding: {
+          provider: "local-transformers",
+          local: {
+            model: "google/embeddinggemma-2",
+            revision: "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+            dimensions: 768,
+          },
+        },
+        modelPreparation: { profile: "embeddinggemma-2-768" },
+      };
     }
     console.error(t("setup.embedding.local_jina_license_confirm", { lang, tone }));
     const accepted = await askLine("[yes/no]: ");

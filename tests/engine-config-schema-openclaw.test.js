@@ -187,6 +187,17 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     afterSchema.properties.captureChunkingMode.description = "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.";
     assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
     delete afterSchema.properties.healthWatch;
+    // EmbeddingGemma 2 (pinned dtype variants, bounded sub-batches) added exactly these two local-model options.
+    const localEmbeddingProperties = afterSchema.properties.embedding.properties.local.properties;
+    assert.ok(Object.hasOwn(localEmbeddingProperties, "dtype"));
+    delete localEmbeddingProperties.dtype;
+    assert.ok(Object.hasOwn(localEmbeddingProperties, "maxBatchSize"));
+    delete localEmbeddingProperties.maxBatchSize;
+    // ... and the four EmbeddingGemma 2 preparation profiles at the end of the model-preparation enum.
+    const preparationProfiles = afterSchema.properties.modelPreparation.properties.profile.enum;
+    const egemma2Profiles = ["embeddinggemma-2-128", "embeddinggemma-2-256", "embeddinggemma-2-512", "embeddinggemma-2-768"];
+    assert.deepStrictEqual(preparationProfiles.slice(-4), egemma2Profiles);
+    preparationProfiles.length -= 4;
 
     assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
     assert.deepStrictEqual(Object.keys(afterSchema.properties), Object.keys(before.configSchema.properties));
