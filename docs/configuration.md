@@ -302,9 +302,24 @@ grosse Batches.
 }
 ```
 
+### OpenClaw Embedding-Adapter
+
+Das Plugin registriert über `registerEmbeddingProvider` und `contracts.embeddingProviders` vier
+Embedding-Adapter für OpenClaw:
+- `plur1bus-embeddinggemma-2`: Lokales EmbeddingGemma 2 (`google/embeddinggemma-2`, Apache-2.0, keine
+  Lizenzbestätigung). Standard-Präzision `q8` (alternativ `q4`, `fp32` über `local.dtype` wählbar),
+  Standard-Dimension 768d mit Matryoshka-Optionen 128, 256, 512, 768. Empfohlener lokaler Eintrag.
+- `plur1bus-openai`: Remote-Adapter für `text-embedding-3-large` (oder konfiguriertes Modell).
+- `plur1bus-openai-compatible`: Generischer OpenAI-kompatibler Remote-Adapter.
+- `plur1bus-e5-small`: Lokales E5-Small (`intfloat/multilingual-e5-small`, 384d).
+
+Bestehende Stores behalten ihren Adapter unverändert; ein Wechsel auf den neuen Adapter
+läuft über den bestehenden Re-Embedding-Pfad (Fingerprint) mit Hinweis auf Dauer und Speicherbedarf.
+
 Der opt-in Test mit dem echten Modell: `PLUR1BUS_REAL_EGEMMA2=1 node --test
 tests/embeddinggemma2-real-model.test.js` (laedt rund 346 MB, optional
-`PLUR1BUS_REAL_MODEL_CACHE=<dir>`).
+`PLUR1BUS_REAL_MODEL_CACHE=<dir>`). Alternativ über den Adapter:
+`PLUR1BUS_REAL_EGEMMA2=1 node --test tests/openclaw-memory-embedding-adapters.test.js`.
 
 Die Bestaetigung ist kein reiner UI-Hinweis: Ohne sie verweigern sowohl der
 aktive Provider als auch Re-Embedding-Probes und der zentrale Artefakt-

@@ -56,8 +56,9 @@ PLUR1BUS uses only public OpenClaw capabilities:
   make PLUR1BUS the exclusive memory owner and advertise `memory_recall` as
   the deterministic recall tool.
 - `registerEmbeddingProvider` plus `contracts.embeddingProviders` exposes the
-  three reusable PLUR1BUS embedding adapters through OpenClaw's generic
-  provider contract. The retired memory-specific registrar is not used.
+  four reusable PLUR1BUS embedding adapters (`plur1bus-embeddinggemma-2`,
+  `plur1bus-openai`, `plur1bus-openai-compatible`, `plur1bus-e5-small`) through
+  OpenClaw's generic provider contract. The retired memory-specific registrar is not used.
 - `registerGatewayMethod` registers the PLUR1BUS Gateway method.
 - `registerCli` registers the PLUR1BUS CLI.
 - `openclaw/plugin-sdk/gateway-runtime` submits exact, allowlisted feature

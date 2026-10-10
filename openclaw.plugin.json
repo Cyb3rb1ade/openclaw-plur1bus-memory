@@ -38,6 +38,7 @@
   ],
   "contracts": {
     "embeddingProviders": [
+      "plur1bus-embeddinggemma-2",
       "plur1bus-openai",
       "plur1bus-openai-compatible",
       "plur1bus-e5-small"

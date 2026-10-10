@@ -57,13 +57,14 @@ describe("OpenClaw memory embedding provider adapters", () => {
     const adapters = registerOpenClawMemoryEmbeddingProviders(api, {
       embedding: { dimensions: 3, model: "custom-embedding-model" },
     });
-    assert.equal(adapters.length, 3);
+    assert.equal(adapters.length, 4);
     assert.deepEqual(registered.map((adapter) => adapter.id), [
+      "plur1bus-embeddinggemma-2",
       "plur1bus-openai",
       "plur1bus-openai-compatible",
       "plur1bus-e5-small",
     ]);
-    const compatible = await registered[1].create({
+    const compatible = await registered[2].create({
       model: "custom-embedding-model",
       dimensions: 3,
       config: {},
@@ -193,5 +194,162 @@ describe("OpenClaw memory embedding provider adapters", () => {
       await provider.embed("dimension check", { inputType: "query" }),
       [0.1, 0.2, 0.3],
     );
+  });
+
+  describe("plur1bus-embeddinggemma-2 adapter", () => {
+    it("exposes the default configuration and properties of plur1bus-embeddinggemma-2", () => {
+      const adapters = createOpenClawMemoryEmbeddingProviderAdapters({});
+      const adapter = adapters.find((item) => item.id === "plur1bus-embeddinggemma-2");
+      assert.ok(adapter);
+      assert.equal(adapter.id, "plur1bus-embeddinggemma-2");
+      assert.equal(adapter.defaultModel, "google/embeddinggemma-2");
+      assert.equal(adapter.transport, "local");
+      assert.equal(typeof adapter.create, "function");
+      assert.equal(adapter.shouldContinueAutoSelection(), false);
+      assert.equal(adapter.formatSetupError(new Error("test")), "test");
+    });
+
+    it("creates an EmbeddingGemma 2 provider with default 768d and q8 dtype", async () => {
+      const adapters = createOpenClawMemoryEmbeddingProviderAdapters({});
+      const adapter = adapters.find((item) => item.id === "plur1bus-embeddinggemma-2");
+      const created = await adapter.create({ config: {}, local: {} });
+
+      assert.equal(created.runtime.id, "plur1bus-embeddinggemma-2");
+      assert.equal(created.runtime.cacheKeyData.provider, "plur1bus-embeddinggemma-2");
+      assert.equal(created.runtime.cacheKeyData.model, "google/embeddinggemma-2");
+      assert.equal(created.runtime.cacheKeyData.dimensions, 768);
+      assert.equal(created.runtime.cacheKeyData.dtype, "q8");
+
+      assert.equal(created.provider.id, "plur1bus-embeddinggemma-2");
+      assert.equal(created.provider.model, "google/embeddinggemma-2");
+      assert.equal(created.provider.dimensions, 768);
+      assert.equal(created.provider.maxInputTokens, 8192);
+      assert.equal(typeof created.provider.embed, "function");
+      assert.equal(typeof created.provider.embedBatch, "function");
+      assert.equal(typeof created.provider.close, "function");
+
+      await created.provider.close();
+    });
+
+    it("validates selectable Matryoshka dimensions (128, 256, 512, 768) and rejects unadvertised dimensions", async () => {
+      const adapters = createOpenClawMemoryEmbeddingProviderAdapters({});
+      const adapter = adapters.find((item) => item.id === "plur1bus-embeddinggemma-2");
+
+      for (const dim of [128, 256, 512, 768]) {
+        const created = await adapter.create({ dimensions: dim });
+        assert.equal(created.provider.dimensions, dim);
+        assert.equal(created.runtime.cacheKeyData.dimensions, dim);
+        await created.provider.close();
+      }
+
+      await assert.rejects(
+        () => adapter.create({ dimensions: 384 }),
+        /google\/embeddinggemma-2 supports only its declared dimensions: 128, 256, 512, 768; configured 384/,
+      );
+      await assert.rejects(
+        () => adapter.create({ dimensions: 1024 }),
+        /google\/embeddinggemma-2 supports only its declared dimensions: 128, 256, 512, 768; configured 1024/,
+      );
+    });
+
+    it("accepts selectable dtypes (q8, q4, fp32) and rejects unknown dtype", async () => {
+      const adapters = createOpenClawMemoryEmbeddingProviderAdapters({});
+      const adapter = adapters.find((item) => item.id === "plur1bus-embeddinggemma-2");
+
+      for (const dtype of ["q8", "q4", "fp32"]) {
+        const created = await adapter.create({ local: { dtype } });
+        assert.equal(created.runtime.cacheKeyData.dtype, dtype);
+        await created.provider.close();
+      }
+
+      await assert.rejects(
+        () => adapter.create({ local: { dtype: "int4" } }),
+        /dtype "int4" is not a pinned dtype of google\/embeddinggemma-2/,
+      );
+    });
+
+    it("does not require non-commercial license acknowledgement (Apache-2.0)", async () => {
+      const adapters = createOpenClawMemoryEmbeddingProviderAdapters({
+        modelPreparation: { acceptNonCommercialLicense: false },
+      });
+      const adapter = adapters.find((item) => item.id === "plur1bus-embeddinggemma-2");
+      const created = await adapter.create({ local: {} });
+      assert.ok(created.provider);
+      await created.provider.close();
+    });
+
+    it("routes embed and embedBatch with query and passage prompts using fake runtime", async () => {
+      const calls = [];
+      const fake = {
+        async embedQuery(text) { calls.push(["query", text]); return Array(768).fill(0.1); },
+        async embedPassage(text) { calls.push(["passage", text]); return Array(768).fill(0.2); },
+        async embedBatch(texts) { calls.push(["batch", texts]); return texts.map(() => Array(768).fill(0.2)); },
+        async shutdown() { calls.push(["shutdown"]); },
+      };
+
+      const stateRoot = await makeClaimableStateRoot("plur1bus-gemma2-ipc-", process.platform === "win32" ? tmpdir() : "/tmp");
+      const server = createScopedEmbeddingIpcServer({
+        stateRoot,
+        embeddings: {
+          model: "google/embeddinggemma-2",
+          dimensions: () => 768,
+          ...fake,
+        },
+        fingerprintId: ACTIVE_FINGERPRINT_ID,
+      });
+
+      let created = null;
+      try {
+        await server.start();
+        const adapter = createOpenClawMemoryEmbeddingProviderAdapters({}, {
+          scopedEmbeddingIpc: { stateRoot, fingerprintId: ACTIVE_FINGERPRINT_ID },
+        }).find((item) => item.id === "plur1bus-embeddinggemma-2");
+
+        created = await adapter.create({});
+        const qVec = await created.provider.embed("test query", { inputType: "query" });
+        assert.equal(qVec.length, 768);
+        assert.equal(qVec[0], 0.1);
+
+        const pVec = await created.provider.embed("test passage");
+        assert.equal(pVec.length, 768);
+        assert.equal(pVec[0], 0.2);
+
+        const bVecs = await created.provider.embedBatch(["b1", "b2"]);
+        assert.equal(bVecs.length, 2);
+
+        assert.deepEqual(calls.slice(0, 3), [
+          ["query", "test query"],
+          ["passage", "test passage"],
+          ["batch", ["b1", "b2"]],
+        ]);
+      } finally {
+        await created?.provider?.close();
+        await server.shutdown();
+        await rm(stateRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("opt-in real-model embedding test with q8 model (skipped by default)", {
+      skip: process.env.PLUR1BUS_REAL_EGEMMA2 !== "1" && "set PLUR1BUS_REAL_EGEMMA2=1 to run real-model test",
+      timeout: 20 * 60_000,
+    }, async () => {
+      const adapter = createOpenClawMemoryEmbeddingProviderAdapters({})
+        .find((item) => item.id === "plur1bus-embeddinggemma-2");
+      const created = await adapter.create({});
+      try {
+        const queryVec = await created.provider.embed("Which planet is known as the Red Planet?", { inputType: "query" });
+        assert.equal(queryVec.length, 768);
+        const norm = Math.hypot(...queryVec);
+        assert.ok(Math.abs(norm - 1) < 1e-3, "query vector is unit-normalized");
+
+        const batchVecs = await created.provider.embedBatch([
+          "Mars, known for its reddish appearance, is often referred to as the Red Planet.",
+        ]);
+        assert.equal(batchVecs.length, 1);
+        assert.equal(batchVecs[0].length, 768);
+      } finally {
+        await created.provider.close();
+      }
+    });
   });
 });
