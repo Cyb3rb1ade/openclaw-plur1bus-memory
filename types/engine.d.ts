@@ -306,6 +306,17 @@ export interface RecallBudget {
   capChars: number;
 }
 
+/** Call-local overrides. Omitted settings use the configured engine behavior. */
+export interface RecallOptions {
+  /** "on" uses the configured provider; if absent, recall continues with a diagnostic. */
+  reranker?: "on" | "off";
+}
+
+/** Non-fatal, closed-code explanation of an unavailable requested option. */
+export type PerCallDiagnostic =
+  | { feature: "reranker"; reason: "reranker-not-configured"; fallback: "unreranked" }
+  | { feature: "postTurnLlm"; reason: "post-turn-refine-unscheduled"; fallback: "inline" };
+
 export interface RecallQuery {
   query: string;
   principal: Principal;
@@ -371,6 +382,7 @@ export interface RecallTiming {
 }
 
 export interface RecallResult {
+  diagnostics?: PerCallDiagnostic[];
   blocks: ContextBlock[];
   /** Non-finite (Infinity) on the exits that inject an uncapped join. */
   capChars: number;
@@ -397,7 +409,13 @@ export interface TurnRecord {
   signal: AbortSignal;
 }
 
+/** Call-local refinement scheduling; true requires postTurnRefineScheduled, otherwise inline + diagnostic. */
+export interface CaptureOptions {
+  deferPostTurnLlm?: boolean;
+}
+
 export interface CaptureResult {
+  diagnostics?: PerCallDiagnostic[];
   stored: number;
   skipped: number;
   /** "duplicate-turn": the same turn was already captured (Q3, E4). */
@@ -1092,9 +1110,9 @@ export interface Engine {
   /** Stable, cached prefix (index.js:7073-7088). */
   systemSupplement(): string[];
   /** Never throws; a failure comes back as `degraded`. */
-  recall(q: RecallQuery): Promise<RecallResult>;
+  recall(q: RecallQuery, opts?: RecallOptions): Promise<RecallResult>;
   /** Non-blocking. */
-  capture(t: TurnRecord): CaptureHandle;
+  capture(t: TurnRecord, opts?: CaptureOptions): CaptureHandle;
   checkpoint(agentId: AgentId, reason: CheckpointReason): Promise<CheckpointResult>;
   memory: MemoryOps;
 

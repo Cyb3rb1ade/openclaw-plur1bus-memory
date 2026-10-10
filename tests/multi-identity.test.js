@@ -144,7 +144,8 @@ test('engine opens two agents in parallel with their own dimensions and exposes 
   const engine = createEngine(createStubHost({ stateDir: join(root, 'state') }), {
     baseDbPath: join(root, 'stores'), autoCapture: false, autoRecall: false,
     neo: { enabled: false }, gc: { enabled: false }, obsidianBridge: { enabled: false }, dreaming: { enabled: false }, skillMiner: { enabled: false },
-    embedding: { routes: [{ agentId: 'agent-b', identity: b }] },
+    // This fake supplies 384-wide E5 vectors; do not inherit the product's model default.
+    embedding: { provider: 'local-transformers', local: { model: 'intfloat/multilingual-e5-small', dimensions: 384 }, routes: [{ agentId: 'agent-b', identity: b }] },
   }, { internals: { embeddings: flat, identityProviders: new Map([[identityId(b), other]]) } });
   try {
     await Promise.all([engine.open('agent-a'), engine.open('agent-b')]);
