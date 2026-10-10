@@ -1325,6 +1325,12 @@ Unlike the reranker switch, every card is embedded again along the way, so
 it takes time and disk space, and the old generation stays available for
 rollback.
 
+The plugin exposes EmbeddingGemma 2 to OpenClaw hosts via the generic embedding provider contract
+under the ID `plur1bus-embeddinggemma-2` (`google/embeddinggemma-2`, Apache-2.0, default q8, 768d with Matryoshka
+options 128/256/512/768, 8K tokens context). It is the recommended local entry alongside `plur1bus-openai`,
+`plur1bus-openai-compatible`, and `plur1bus-e5-small`. Existing stores retain their configured adapter;
+switching to `plur1bus-embeddinggemma-2` triggers the copy-on-write re-embedding migration.
+
 *Which dimension.* Jina v3 is trained with Matryoshka representation learning,
 so the vector can be cut to 32, 64, 128, 256, 512, 768 or 1024 dimensions. The
 Jina paper (table 7) reports retrieval nDCG@10 of 63.35 at 1024, 63.30 at 768,
