@@ -27,8 +27,8 @@ import { makeTempDir } from "./helpers/temp-dir.js";
 
 function histogramEmbedder(calls = []) {
   const vector = (text) => {
-    const v = new Array(384).fill(0);
-    for (const ch of String(text)) v[ch.charCodeAt(0) % 384] += 1;
+    const v = new Array(768).fill(0);
+    for (const ch of String(text)) v[ch.charCodeAt(0) % 768] += 1;
     const norm = Math.hypot(...v) || 1;
     return v.map((x) => x / norm);
   };

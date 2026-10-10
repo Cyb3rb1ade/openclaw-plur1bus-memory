@@ -112,8 +112,9 @@ describe("legacy provider migration", () => {
 
     assert.equal(result.changed, true);
     assert.equal(result.config.embedding.provider, "local-transformers");
-    assert.equal(result.config.embedding.local.model, "intfloat/multilingual-e5-small");
-    assert.equal(result.config.embedding.local.dimensions, 384);
+    // The default of a store created now is the pinned EmbeddingGemma 2 (it was E5 before); see embeddinggemma2-defaults-and-migration.test.js.
+    assert.equal(result.config.embedding.local.model, "google/embeddinggemma-2");
+    assert.equal(result.config.embedding.local.dimensions, 768);
     assert.equal(result.config.reranker.enabled, false);
     assert.equal(Object.hasOwn(result.config.reranker, "provider"), false);
     assert.deepEqual(result.migrations, ["embedding"]);

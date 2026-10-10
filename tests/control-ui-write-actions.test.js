@@ -120,6 +120,19 @@ test("a planned target must match the fingerprint preparation verified", () => {
   assert.throws(() => embeddingPlanTarget("not-a-profile"), /unknown embedding preparation profile/);
 });
 
+test("EmbeddingGemma 2 preparation targets plan into the fingerprint of the pinned profile at their width", () => {
+  for (const dimensions of [768, 512, 256, 128]) {
+    const { fingerprint } = embeddingPlanTarget(`embeddinggemma-2-${dimensions}`);
+    assert.equal(fingerprint.provider, "local-transformers");
+    assert.equal(fingerprint.model, "google/embeddinggemma-2");
+    assert.equal(fingerprint.dimensions, dimensions);
+    assert.equal(fingerprint.dtype, "q8");
+    assert.equal(fingerprint.revision, "daa72c51243991dfcaf9f9137d2c573d8f7790c0");
+    assert.equal(fingerprint.queryPrefix, "task: search result | query:");
+  }
+  assert.throws(() => embeddingPlanTarget("embeddinggemma-2-1024"), /unknown embedding preparation profile/);
+});
+
 test("write actions respect the configured mode", async () => {
   const calls = [];
   const deps = {

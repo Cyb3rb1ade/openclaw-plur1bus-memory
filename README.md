@@ -1313,9 +1313,11 @@ exactly what the compatibility lab showed when it measured with E5 and no
 reranker. The recommended model spreads similarities much wider:
 `jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
 1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
-do their job. Since 7.12.0 the installer's first option is Jina v5 Text Nano
-(see the lab test below); OpenAI is the hosted alternative, Jina v3 stays
-selectable for existing installs, and E5 is only the small keyless fallback. The embedding model is switched from the PLUR1BUS tab
+do their job. The provider wizard and the installer now recommend EmbeddingGemma 2 (q8,
+Apache-2.0) as their first option, the uniform local default; Jina v5 Text Nano
+stays selectable (CC BY-NC 4.0 consent required, see the lab test below), OpenAI is
+the hosted alternative, Jina v3 stays selectable for existing installs, and E5
+is only the small keyless fallback. The embedding model is switched from the PLUR1BUS tab
 as well (`controlUi.writeActions: "all"`): the button picks the target model,
 model preparation downloads and verifies it, and the re-embedding migration
 then runs from the same page with a dry run, a copy, and a separate switch.

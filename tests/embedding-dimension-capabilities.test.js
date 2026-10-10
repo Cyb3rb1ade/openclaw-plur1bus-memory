@@ -78,6 +78,7 @@ describe("embedding dimension capabilities", () => {
       "text-embedding-3-small",
       "text-embedding-3-large",
       E5_EMBEDDING_PROFILE.model,
+      "google/embeddinggemma-2",
       JINA_EMBEDDING_PROFILE.model,
       "jinaai/jina-embeddings-v5-text-nano-retrieval",
       "runtime-probed-model",

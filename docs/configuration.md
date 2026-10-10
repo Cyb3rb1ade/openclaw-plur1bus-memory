@@ -265,6 +265,47 @@ bewusst an und rechnet mit dem entsprechenden Arbeitsspeicher.
 }
 ```
 
+Provider-Wizard und Installer empfehlen es als erste Option (einheitlicher lokaler
+Standard); Jina v5 Nano (CC BY-NC 4.0) und E5 bleiben waehlbar.
+
+Seit der naechsten Version ist `google/embeddinggemma-2` (Apache-2.0, 768
+Dimensionen, 8K Kontext, Mean-Pooling) als lokales Embedding gepinnt, ohne
+Lizenzbestaetigung. Es ist der Standard fuer **neu angelegte** Stores, die
+keinen Provider waehlen (kein `embedding.provider`, noch keine Speicherdaten);
+ein Store mit Daten und jede ausdrueckliche Provider-Wahl bleiben unveraendert,
+auch ein bloßes `"provider": "local-transformers"` nimmt weiter E5. Ein Wechsel
+eines bestehenden Stores laeuft nur ueber die Re-Embedding-Migration
+(plan/apply/resume/rollback). `dimensions` darf 768, 512, 256 oder 128 sein
+(Matryoshka: gekuerzt und neu normalisiert). Anfrage und Dokument werden ueber
+die Prompts `task: search result | query: ` und `title: none | text: `
+unterschieden; der Provider verweigert abweichende Prompts. `dtype` waehlt die
+gepinnte Praezision (`q8` Standard, `q4`, `fp32`; je eigene Artefakte mit
+SHA-256, ein anderer dtype ist ein anderer Vektorraum), `maxTokens` (32 bis 8192,
+Standard 512) kappt jeden Text, `maxBatchSize` (1 bis 64, Standard 16) teilt
+grosse Batches.
+
+```json
+{
+  "embedding": {
+    "provider": "local-transformers",
+    "dimensions": 768,
+    "local": {
+      "model": "google/embeddinggemma-2",
+      "revision": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+      "dimensions": 768,
+      "dtype": "q8",
+      "maxTokens": 512,
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
+    }
+  },
+  "modelPreparation": { "profile": "embeddinggemma-2-768" }
+}
+```
+
+Der opt-in Test mit dem echten Modell: `PLUR1BUS_REAL_EGEMMA2=1 node --test
+tests/embeddinggemma2-real-model.test.js` (laedt rund 346 MB, optional
+`PLUR1BUS_REAL_MODEL_CACHE=<dir>`).
+
 Die Bestaetigung ist kein reiner UI-Hinweis: Ohne sie verweigern sowohl der
 aktive Provider als auch Re-Embedding-Probes und der zentrale Artefakt-
 Downloader Jina vor Netzwerk- oder Modellzugriff. Vorbereitung, Zielprobe und
@@ -293,7 +334,7 @@ Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
 dafuer bewaehrte Presets und markiert die jeweilige Standardbreite. Das lokale
 `intfloat/multilingual-e5-small` liefert fest 384 Dimensionen. Das getrennte
 Jina-v3-Embedding unterstuetzt exakt 32/64/128/256/512/768/1024 Dimensionen,
-das Jina-v5-Nano-Embedding exakt 32/64/128/256/512/768.
+das Jina-v5-Nano-Embedding exakt 32/64/128/256/512/768 und EmbeddingGemma 2 exakt 128/256/512/768.
 Der Jina-v2-Reranker und BGE sind Reranker und besitzen keine Memory-
 Vektordimension.
 

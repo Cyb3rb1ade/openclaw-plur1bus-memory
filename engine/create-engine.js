@@ -33,7 +33,7 @@ import { createReembeddingSwitchRecovery, createReembeddingSwitchRuntime } from 
 import { createGenerationRuntimeProbe } from "../lib/reembedding/runtime-probe.js";
 import { createFailedModelPreparationCoordinator, createModelPreparationCoordinator } from "../lib/model-preparation/coordinator.js";
 import { embeddingFingerprintId } from "../lib/reembedding/fingerprint.js";
-import { embeddingFingerprintFromNormalizedConfig, redactedEmbeddingSecretRef } from "../lib/reembedding/runtime-config.js";
+import { embeddingFingerprintFromNormalizedConfig, localEmbeddingOptionsFromFingerprint, redactedEmbeddingSecretRef } from "../lib/reembedding/runtime-config.js";
 import { createControlPlaneHealthInspector, createControlPlaneHealthScan } from "../lib/control-plane-health.js";
 import { createWorkspacePolicyGuard } from "../lib/workspace-policy-guard.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "../lib/obsidian-bridge.js";
@@ -1750,19 +1750,17 @@ export function createEngine(host, config, testOptions = {}) {
       throw new Error("reembedding target fingerprint is required");
     }
     if (fingerprint.provider === "local-transformers") {
-      const profile = pinnedLocalModelProfile(fingerprint.model);
-      if (!profile || profile.revision !== fingerprint.revision) {
+      // The pinned model, revision, width, canonical prompts and (for a model that pins several) the dtype variant.
+      const localOptions = localEmbeddingOptionsFromFingerprint(fingerprint);
+      const profile = localOptions && pinnedLocalModelProfile(fingerprint.model, { dtype: fingerprint.dtype });
+      if (!localOptions || !profile || profile.revision !== fingerprint.revision) {
         throw new Error(`reembedding local model is not pinned: ${String(fingerprint.model)}`);
       }
       if (profile.role !== "embedding") {
         throw new Error(`reembedding local model is not an embedding model: ${profile.model}`);
       }
       return new LocalTransformersEmbeddingProvider({
-        model: fingerprint.model,
-        revision: fingerprint.revision,
-        dimensions: fingerprint.dimensions,
-        queryPrefix: fingerprint.queryPrefix,
-        passagePrefix: fingerprint.passagePrefix,
+        ...localOptions,
         cacheDir: localModelCacheDir,
         acceptNonCommercialLicense: nonCommercialModelAccepted,
         embeddingCacheEnabled: false,
@@ -1875,7 +1873,7 @@ export function createEngine(host, config, testOptions = {}) {
     plannerDependencies: {
       statDisk: readReembeddingDiskStatus,
       inspectTargetArtifacts: async ({ fingerprint }) => {
-        const profile = pinnedLocalModelProfile(fingerprint.model);
+        const profile = pinnedLocalModelProfile(fingerprint.model, fingerprint.dtype === undefined ? {} : { dtype: fingerprint.dtype });
         if (!profile || profile.revision !== fingerprint.revision) {
           return { ready: false, verified: false };
         }
