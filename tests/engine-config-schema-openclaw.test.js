@@ -50,6 +50,7 @@ const SECRET_INPUTS = [
 ];
 // x-sensitive but not a secret input (E5-R24 owner ruling): masked, plain values only.
 const SENSITIVE_PLAIN = [
+  "embedding.routes",
   "reminders.webhookUrl",
   "merging.headers",
   "schicht15.headers",
@@ -164,6 +165,11 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     // release line healthWatch (7.18.0) and runtime.detachPostTurnWork
     // (7.18.3). Anything else must still match.
     const afterSchema = structuredClone(after.configSchema);
+    // PR-10 adds vector-space routing only; the remaining adapter schema is frozen.
+    for (const key of ["routes", "rrfK", "revision", "normalization", "dtype", "prefixScheme", "instruction"]) {
+      assert.ok(Object.hasOwn(afterSchema.properties.embedding.properties, key));
+      delete afterSchema.properties.embedding.properties[key];
+    }
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "lancedbCompaction"));
     delete afterSchema.properties.runtime.properties.lancedbCompaction;
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "detachPostTurnWork"));

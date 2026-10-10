@@ -45,6 +45,7 @@ const SECRET_INPUTS = [
 ];
 // Owner ruling on E5-R24: also masked, but plain values only (no SecretRef surface).
 const SENSITIVE_PLAIN = [
+  "embedding.routes",
   "reminders.webhookUrl",
   "merging.headers",
   "schicht15.headers",
@@ -54,6 +55,7 @@ const SENSITIVE_PLAIN = [
 const SENSITIVE = [
   "embedding.apiKey",
   "embedding.fallback.apiKey",
+  "embedding.routes",
   "reminders.webhookUrl",
   "reranker.apiKey",
   "merging.apiKey",
@@ -84,7 +86,7 @@ describe("engine-config.schema.json", () => {
       assert.equal(k.tier, "advanced", k.key);
     }
     const schema = loadEngineConfigSchema();
-    assert.equal(schema["x-contract"], "1.13.0");
+    assert.equal(schema["x-contract"], "1.14.0");
     assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
     assert.equal(schema.$id, "plur1bus-engine-config");
     assert.equal(ENGINE_CONFIG_SCHEMA_FILE, "engine/config/engine-config.schema.json");
@@ -163,7 +165,7 @@ describe("engine-config.schema.json", () => {
   it("redactSensitiveConfig masks every x-sensitive value, including headers maps and the webhook URL", () => {
     const secretRef = { source: "env", provider: "default", id: "PLUR1BUS_OPENAI_API_KEY" };
     const config = {
-      embedding: { provider: "openai", apiKey: "sk-embed-secret-1234567890", fallback: { apiKey: secretRef } },
+      embedding: { provider: "openai", apiKey: "sk-embed-secret-1234567890", fallback: { apiKey: secretRef }, routes: [{ provider: { apiKey: "synthetic-route-secret" } }] },
       reminders: { deliveryMode: "webhook", webhookUrl: "https://hooks.example.test/T0/B0/tok-webhook-secret" },
       reranker: { apiKey: "" },
       merging: { model: "m", headers: { Authorization: "Bearer hdr-merging-secret", "X-Trace": "t" } },
@@ -181,6 +183,7 @@ describe("engine-config.schema.json", () => {
       assert.equal(value, REDACTED_CONFIG_VALUE, path);
     }
     assert.equal(out.embedding.apiKey, REDACTED_CONFIG_VALUE);
+    assert.equal(redactSensitiveConfig({ embedding: { routes: [{ provider: { apiKey: "synthetic-route-secret" } }] } }).embedding.routes, REDACTED_CONFIG_VALUE);
     assert.equal(out.embedding.fallback.apiKey, REDACTED_CONFIG_VALUE);
     assert.equal(out.criticalPush.apiKey, REDACTED_CONFIG_VALUE);
     // Absent and empty values stay as they are; everything else is untouched.

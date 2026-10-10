@@ -46,6 +46,8 @@ export class AgentDbPool {
     parentDirectoryCapability = null,
     baseSegment = null,
     halfLifeOverrides = {},
+    identity = null,
+    identityForStore = null,
   } = {}) {
     if (pathGuard !== null && typeof pathGuard !== "function") {
       throw new TypeError("AgentDbPool pathGuard must be a function");
@@ -71,6 +73,8 @@ export class AgentDbPool {
     this.basePath = basePin.absolutePath;
     this.canonicalBasePath = basePin.expectedTarget;
     this.vectorDim = vectorDim;
+    this.identity = identity;
+    this.identityForStore = identityForStore;
     this.logger = logger;
     this.readOnly = readOnly === true;
     this.pathGuard = pathGuard;
@@ -188,7 +192,9 @@ export class AgentDbPool {
     }
     let db;
     try {
-      db = new MemoryDB(dbPath, this.vectorDim, this.logger, {
+      const identity = this.identityForStore?.({ basePath: this.basePath, agentId: id }) ?? this.identity;
+      db = new MemoryDB(dbPath, identity?.dimension ?? this.vectorDim, this.logger, {
+        identity,
         readOnly: this.readOnly,
         halfLifeOverrides: this.halfLifeOverrides,
         pathGuard: this.secureRouting

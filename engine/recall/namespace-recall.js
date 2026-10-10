@@ -5,11 +5,12 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
+import { identityError, identityId, embedIdentityQueries, fuseIdentityResults } from "../../lib/providers/embedding-identity.js";
 import { emitRetrievalLedger, mergeNamespaceRecallResults, runRecallPipeline } from "../../lib/recall-pipeline.js";
 import { applyRecallBudget, resolveRecallBudget } from "../../lib/recall-budget.js";
 import { createRecallDecisionTrace } from "../../lib/recall-decision-trace.js";
 import { createRecallPhaseTimer } from "../../lib/recall-phase-timer.js";
-import { TimeoutError } from "../../lib/with-timeout.js";
+import { withTimeout, TimeoutError } from "../../lib/with-timeout.js";
 import { isAbortError } from "../../lib/abort.js";
 import { trySafeWarn } from "../../lib/safe-logging.js";
 
@@ -68,6 +69,20 @@ async function runMergedNamespaceRecall(
   if (!Array.isArray(readDbs) || readDbs.length === 0) {
     return { queryVector: undefined, canonical: [], memories: [], trace };
   }
+  const identityStartedAt = performance.now();
+  const knownIdentities = readDbs.map(({ db }) => db.identity).filter(Boolean);
+  const providers = baseParams.identityProviders ?? baseParams.embeddings.identityProviders;
+  const multiIdentity = new Set(knownIdentities.map(identityId)).size > 1;
+  const queryPromises = new Map();
+  let identityQueries = null;
+  if (multiIdentity) {
+    const available = new Map(providers ?? []);
+    if (baseParams.embeddings.identity) available.set(identityId(baseParams.embeddings.identity), baseParams.embeddings);
+    identityQueries = await embedIdentityQueries(baseParams.query, knownIdentities, available, {
+      signal: baseParams.signal, agentId: baseParams.agentId,
+      budgetMs: Math.max(1, Math.min(baseParams.identityBudgetMs ?? 400, 400 - (phaseTimer?.elapsedMs?.() ?? 0))),
+    });
+  }
   const providerEmbeddings = baseParams.embeddings;
   const embedOptions = baseParams.signal
     ? { agentId: baseParams.agentId, signal: baseParams.signal }
@@ -86,6 +101,20 @@ async function runMergedNamespaceRecall(
     const requestNow = Date.now();
     const canonicalSourceIndex = readDbs.findIndex((source) => source.sourceKind === "private");
     const settled = await Promise.allSettled(readDbs.map(async ({ namespace, sourceKind, optional, db }, index) => {
+      const id = db.identity ? identityId(db.identity) : null;
+      if (id && identityQueries && !identityQueries.vectors.has(id)) return { namespace, sourceKind, optional, identityId: id, result: { memories: [], canonical: [] } };
+      const provider = id && providers ? providers.get(id) : providerEmbeddings;
+      if (!provider) throw identityError("EMBEDDER_UNAVAILABLE", "no embedder for store identity");
+      const routedEmbeddings = id ? {
+        identity: db.identity,
+        embedQuery: text => {
+          if (text !== baseParams.query) return (provider.embedQuery ?? provider.embed).call(provider, text, embedOptions);
+          if (identityQueries) return identityQueries.vectors.get(id);
+          if (!queryPromises.has(id)) queryPromises.set(id, (provider.embedQuery ?? provider.embed).call(provider, text, embedOptions));
+          return queryPromises.get(id);
+        },
+        embed: text => provider.embed(text, embedOptions),
+      } : requestEmbeddings;
       const childTrace = trace
         ? createNamespaceChildRecallTrace(trace, baseParams.query)
         : undefined;
@@ -103,7 +132,8 @@ async function runMergedNamespaceRecall(
         : optional !== true;
       const result = await runRecallPipeline({
         ...baseParams,
-        embeddings: requestEmbeddings,
+        embeddings: routedEmbeddings,
+        ...(multiIdentity ? { reranker: null } : {}),
         dbTable: db.table,
         phaseTimer: childTimer,
         decisionTrace: childTrace,
@@ -117,7 +147,7 @@ async function runMergedNamespaceRecall(
       if (typeof onNamespacePhases === "function") {
         onNamespacePhases(namespace, childTimer.summary().completed);
       }
-      return { namespace, sourceKind, optional, result };
+      return { namespace, sourceKind, optional, identityId: id, result };
     }));
     const requiredSettled = settled.filter((result, index) => readDbs[index].optional !== true);
     const failure = combineNamespaceRecallFailures(requiredSettled);
@@ -133,16 +163,53 @@ async function runMergedNamespaceRecall(
       namespaceResults.push({
         namespace: result.value.namespace,
         sourceKind: result.value.sourceKind,
+        identityId: result.value.identityId,
         ...result.value.result,
       });
     }
-    let merged = mergeNamespaceRecallResults(namespaceResults, {
-      maxOut: baseParams.topN,
+    let fusionInput = namespaceResults;
+    if (multiIdentity) {
+      const groups = new Map();
+      for (const result of namespaceResults) {
+        const group = groups.get(result.identityId) ?? [];
+        group.push(result);
+        groups.set(result.identityId, group);
+      }
+      fusionInput = fuseIdentityResults([...groups].map(([id, results]) => ({
+        ...mergeNamespaceRecallResults(results, { maxOut: 100, canonicalMaxItems: baseParams.canonicalMaxItems, dedupEnabled: baseParams.dedupEnabled, dedupJaccard: baseParams.dedupJaccard }),
+        identityId: id,
+      })), { k: baseParams.rrfK ?? baseParams.embeddings.rrfK ?? 60 });
+      fusionInput.push(...namespaceResults.map(({ namespace, sourceKind, trace }) => ({ namespace, sourceKind, trace })));
+    }
+    let merged = mergeNamespaceRecallResults(fusionInput, {
+      maxOut: multiIdentity && baseParams.reranker ? 100 : baseParams.topN,
       canonicalMaxItems: baseParams.canonicalMaxItems,
       dedupEnabled: baseParams.dedupEnabled,
       dedupJaccard: baseParams.dedupJaccard,
       trace,
     });
+    if (multiIdentity && baseParams.reranker && merged.memories.length > 1) {
+      const controller = new AbortController();
+      const remaining = Math.max(1, Math.min(baseParams.rerankerTimeoutMs ?? 200, 600 - (phaseTimer?.elapsedMs?.() ?? (performance.now() - identityStartedAt))));
+      const rerankSignal = AbortSignal.any([controller.signal, ...(baseParams.signal ? [baseParams.signal] : [])]);
+      try {
+        const original = merged.memories;
+        const ranking = await withTimeout(baseParams.reranker.rerank(baseParams.query, merged.memories.map(item => item.entry.text), merged.memories.length, { signal: rerankSignal }), remaining, "multi-identity rerank");
+        const used = new Set();
+        const ranked = ranking.filter(item => Number.isInteger(item.index) && item.index >= 0 && item.index < original.length && !used.has(item.index) && used.add(item.index)).map(item => original[item.index]);
+        if (!used.size) throw new Error("reranker returned no valid indices");
+        merged.memories = [...ranked, ...original.filter((_, index) => !used.has(index))];
+      } catch (error) {
+        if (baseParams.signal?.aborted || baseParams.rerankerFallbackOnError === false) throw error;
+        merged.degraded = { reason: "reranker-unavailable", capability: "recall", detail: "rank fusion used after reranker failure" };
+        trySafeWarn(baseParams.logger, "namespace-recall.reranker", error);
+      } finally { controller.abort(); }
+    }
+    if (multiIdentity && baseParams.reranker) merged.memories = merged.memories.slice(0, Math.max(0, (baseParams.topN ?? 12) - merged.canonical.length));
+    if (identityQueries?.failures.length) {
+      merged.degraded = { reason: "embedding-unavailable", capability: "recall", identities: identityQueries.failures };
+      trySafeWarn(baseParams.logger, "namespace-recall.embedding-unavailable", new Error(JSON.stringify(identityQueries.failures)));
+    }
     if (baseParams.adaptiveBudget?.enabled !== false) {
       merged = applyMergedRecallBudget(merged, baseParams.budget);
     }
