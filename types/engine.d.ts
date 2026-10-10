@@ -211,6 +211,9 @@ export interface CriticalButtonPushResult { sent: number; unsentTexts: string[];
 export interface JournalBacklog { entries: number; oldestAt: number | null }
 
 export interface HostCapabilities {
+  mediaPorts?: MediaPorts;
+  mediaSourceRoot?: string;
+  mediaBudget?(): Promise<boolean> | boolean;
   resolvePath?(path: string): string;
   registrationMode?: string;
   /** 1.5.0: where MemoryOps forget/correct write archive-first backups; read per call. Default `<stateDir>/memory/_archive`. */
@@ -1076,6 +1079,7 @@ export interface Engine {
   capture(t: TurnRecord): CaptureHandle;
   checkpoint(agentId: AgentId, reason: CheckpointReason): Promise<CheckpointResult>;
   memory: MemoryOps;
+  media: MediaService;
 
   tools: ToolSpec[];
   commands: CommandSpec[];
@@ -1097,3 +1101,21 @@ export interface Engine {
 /** `testOptions` is test-only: `internals` overrides members of the engine's
  *  internal object after construction (e.g. a stub embedder). */
 export declare function createEngine(host: HostServices, config: EngineConfig, testOptions?: { internals?: Record<string, unknown> }): Engine;
+
+/** Trusted host-derived ownership context, never raw user input. */
+export interface MediaScope { agentId: string; scope?: "agent-private" | "workspace" | "user"; workspaceId?: string; workspaceIdentity?: string; ownerUserId?: string; userPrincipal?: string }
+export type MediaKind = "image" | "video" | "audio";
+export interface MediaSearchHit { mediaId: string; kind: MediaKind; score: number; segment?: { idx: number; startMs: number; endMs: number }; captionMemoryId?: string }
+export interface MediaStatus { enabled: boolean; provider: string | null; model: string | null; variant: string; dim: number | null; fingerprint: string; counts: { indexed: number; pending: number; failed: number; unsupported: number }; backfill: { state: string; done: number; total: number; startedAt?: number; pausedReason?: string } }
+export interface MediaService {
+  index(req: { mediaId: string; kind: MediaKind; mime: string; source: { path: string } | { bytes: Uint8Array }; caption?: string; captionSource?: string; scope: MediaScope }): Promise<{ segments: number; state: string }>;
+  search(req: { text?: string; likeMediaId?: string; kinds?: MediaKind[]; limit?: number; scope: MediaScope; minScore?: number; fuseCaptions?: boolean }): Promise<MediaSearchHit[]>;
+  remove(mediaId: string): Promise<void>;
+  setCaption(mediaId: string, text: string, source: string): Promise<void>;
+  status(): MediaStatus;
+  backfill: { start(options: { reason: "enable" | "model-change" | "manual" }): Promise<void>; pause(): Promise<void>; resume(): Promise<void>; cancel(): Promise<void> };
+}
+export interface MediaPorts {
+  frameExtractor?: { extract(req: { bytes: Uint8Array; mime: string; intervalMs: number; sceneChanges: boolean }): Promise<Iterable<{ timestampMs: number; bytes?: Uint8Array; rgb?: Uint8Array; width?: number; height?: number; sceneChange?: boolean }> | AsyncIterable<{ timestampMs: number; bytes?: Uint8Array; rgb?: Uint8Array; width?: number; height?: number; sceneChange?: boolean }>> };
+  audioDecoder?: { decode(req: { bytes: Uint8Array; mime: string; sampleRate: number; channels: number; maxSeconds: number; segmentMs: number }): Promise<Iterable<{ pcm: Float32Array; startMs?: number; sampleRate?: number }> | AsyncIterable<{ pcm: Float32Array; startMs?: number; sampleRate?: number }>> };
+}

@@ -56,7 +56,8 @@
           "enum": [
             "openai",
             "openai-compatible",
-            "local-transformers"
+            "local-transformers",
+            "jina"
           ]
         },
         "model": {
@@ -117,6 +118,16 @@
             },
             "cacheDir": {
               "type": "string"
+            },
+            "variant": {
+              "type": "string",
+              "enum": [
+                "text",
+                "vision",
+                "audio",
+                "full"
+              ],
+              "description": "Explicit modular EmbeddingGemma 2 fp32 runtime; variant changes require text re-embedding."
             }
           }
         },
@@ -135,6 +146,30 @@
               "type": "string"
             }
           }
+        },
+        "licenseAccepted": {
+          "type": "boolean",
+          "description": "Model-specific non-commercial acceptance for Jina text encoders."
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "local",
+            "api"
+          ],
+          "description": "Jina text transport, independent of media transport."
+        },
+        "privacyPin": {
+          "type": "string",
+          "enum": [
+            "local",
+            "any"
+          ],
+          "description": "Reject a cloud Jina text encoder when pinned local."
+        },
+        "cacheDir": {
+          "type": "string",
+          "description": "Verified Jina CLIP local artifact cache."
         }
       },
       "required": [],
@@ -3050,6 +3085,132 @@
       "readAt": "construction",
       "x-tier": "advanced",
       "description": "Memory dynamics switches, currently flashbulb encoding for memories with high emotional intensity and importance."
+    },
+    "media": {
+      "type": "object",
+      "readAt": "construction",
+      "x-tier": "advanced",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "local-transformers",
+            "jina",
+            "openai"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "modalities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "image",
+              "video",
+              "audio"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "precision": {
+          "type": "string",
+          "enum": [
+            "fp32"
+          ]
+        },
+        "backfill": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "manual"
+          ]
+        },
+        "privacyPin": {
+          "type": "string",
+          "enum": [
+            "local",
+            "any"
+          ]
+        },
+        "licenseAccepted": {
+          "type": "boolean"
+        },
+        "cacheDir": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "local",
+            "api",
+            "sidecar"
+          ]
+        },
+        "allowRemoteSidecar": {
+          "type": "boolean"
+        },
+        "apiKey": {
+          "type": "string",
+          "x-sensitive": true
+        },
+        "segmentMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxFrames": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "maxAudioSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "batchSize": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "vad": {
+          "type": "boolean"
+        },
+        "vadThreshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
+        }
+      },
+      "additionalProperties": false,
+      "description": "Independent media index. Fresh unconfigured stores use local fp32 EmbeddingGemma 2 full; existing text stores stay unchanged. Caption generation belongs to the host."
     }
   }
 }

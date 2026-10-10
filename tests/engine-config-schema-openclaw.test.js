@@ -78,7 +78,7 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       assert.ok(!text.includes(word), `configSchema must not contain ${word}`);
     }
     for (const key of ENGINE_ONLY_ROOT_KEYS) assert.ok(!Object.hasOwn(manifest.configSchema, key), key);
-    assert.equal(Object.keys(manifest.configSchema.properties).length, 58);
+    assert.equal(Object.keys(manifest.configSchema.properties).length, 59);
   });
 
   it("adapter-only keys stay off the engine schema and on the OpenClaw manifest", () => {
@@ -199,6 +199,14 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     assert.deepStrictEqual(preparationProfiles.slice(-4), egemma2Profiles);
     preparationProfiles.length -= 4;
 
+    assert.ok(afterSchema.properties.media);
+    delete afterSchema.properties.media;
+    delete localEmbeddingProperties.variant;
+    delete afterSchema.properties.embedding.properties.licenseAccepted;
+    delete afterSchema.properties.embedding.properties.transport;
+    delete afterSchema.properties.embedding.properties.privacyPin;
+    delete afterSchema.properties.embedding.properties.cacheDir;
+    afterSchema.properties.embedding.properties.provider.enum = afterSchema.properties.embedding.properties.provider.enum.filter(value => value !== "jina");
     assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
     assert.deepStrictEqual(Object.keys(afterSchema.properties), Object.keys(before.configSchema.properties));
 
@@ -206,6 +214,7 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     // Allow-list of uiHints additions since 72b6697f (E5-R24 owner ruling):
     // exactly the five plain-only sensitive paths, each sensitive and advanced.
     const afterHints = structuredClone(after.uiHints);
+    delete afterHints["media.apiKey"];
     for (const path of SENSITIVE_PLAIN) {
       assert.ok(!Object.hasOwn(before.uiHints, path), `${path} was not hinted before`);
       assert.equal(afterHints[path]?.sensitive, true, path);

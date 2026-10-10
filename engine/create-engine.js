@@ -15,6 +15,7 @@
  * default, so a stub host constructs an engine too.
  */
 
+import { createMediaService } from "./media/service.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -3027,8 +3028,10 @@ export function createEngine(host, config, testOptions = {}) {
   // The engine's close path. The OpenClaw adapter registers the same closer as
   // the host's runtime-lifecycle cleanup and gateway_stop handler
   // (registerGatewayShutdownServices), so every caller shares one promise.
+  let mediaService;
   const closeResources = createResourceCloser({
     logger: host.logger,
+    mediaService: { close: async () => mediaService?.close() },
     memoryDbAdapter,
     pool: {
       shutdown: async () => {
@@ -3063,6 +3066,7 @@ export function createEngine(host, config, testOptions = {}) {
     closing = Promise.race([
       Promise.resolve()
         .then(() => memoryOpsContext.drain())
+        .then(() => mediaService?.close())
         .then(() => internals.closeResources())
         .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${describeError(error)}`); }),
       new Promise((resolve) => {
@@ -3555,6 +3559,48 @@ export function createEngine(host, config, testOptions = {}) {
     serve: async (address) => { assertMemoryOpen(); return embeddingServing.serve(address); },
   });
 
+  mediaService = createMediaService({
+    root: baseDbPath,
+    config: cfg.media || {},
+    provider: testOptions.internals?.mediaEmbeddingProvider,
+    sourceRoot: host.capabilities?.mediaSourceRoot || host.stateDir,
+    ports: host.capabilities?.mediaPorts || {},
+    budget: host.capabilities?.mediaBudget || (async () => true),
+    logger: host.logger,
+    captions: {
+      async set(item, text, source) {
+        const id = randomUUID();
+        const vector = await internals.embeddings.embedPassage(text, { scopeId: item.ownership.agentId });
+        await internals.pool.withDb(item.ownership.agentId, async db => {
+          await db.store({ ...item.ownership, id, text, summary: text, vector, kind: "media-caption", mediaRef: item.mediaId,
+            memoryKind: "memory", category: "other", importance: 0.5, createdAt: Date.now(), updateSource: String(source || "host"), origin: "dm", status: "active" });
+          if (item.captionMemoryId) await db.delete(item.captionMemoryId);
+        });
+        return id;
+      },
+      async remove(item) {
+        if (item.captionMemoryId) await internals.pool.withDb(item.ownership.agentId, db => db.delete(item.captionMemoryId));
+      },
+      async search(text, scope, limit) {
+        const vector = await internals.embeddings.embedQuery(text, { scopeId: scope.agentId });
+        return await internals.pool.withDb(scope.agentId, async db => (await db.search(vector, limit, 0)).map(hit => ({ id: hit.entry.id })));
+      },
+    },
+  });
+  const mediaApi = Object.freeze({
+    index: req => { assertMemoryOpen(); return memoryOpsContext.track(() => mediaService.index({ ...req, scope: { ...req.scope, workspaceAliases: internals.memoryWorkspaceAliases } })); },
+    search: req => { assertMemoryOpen(); return memoryOpsContext.track(() => mediaService.search({ ...req, scope: { ...req.scope, workspaceAliases: internals.memoryWorkspaceAliases } })); },
+    remove: id => { assertMemoryOpen(); return memoryOpsContext.track(() => mediaService.remove(id)); },
+    setCaption: (id, text, source) => { assertMemoryOpen(); return memoryOpsContext.track(() => mediaService.setCaption(id, text, source)); },
+    status: () => { assertMemoryOpen(); return mediaService.status(); },
+    backfill: Object.freeze({
+      start: options => { assertMemoryOpen(); return mediaService.backfill.start(options); },
+      pause: () => { assertMemoryOpen(); return mediaService.backfill.pause(); },
+      resume: () => { assertMemoryOpen(); return mediaService.backfill.resume(); },
+      cancel: () => { assertMemoryOpen(); return mediaService.backfill.cancel(); },
+    }),
+  });
+
   // ModelsService (1.8.0, E4 Task 3): embedder and reranker readiness, and
   // Engine.models.warm() as the warm-up entry point.
   const getReranker = () => internals.reranker ?? null;
@@ -3786,6 +3832,7 @@ export function createEngine(host, config, testOptions = {}) {
       },
       history: (agentId, opts = {}) => internals.jobs.history(agentId, opts),
     }),
+    media: mediaApi,
     embedding: embeddingService,
     models: Object.freeze({
       status: () => modelsService.status(),

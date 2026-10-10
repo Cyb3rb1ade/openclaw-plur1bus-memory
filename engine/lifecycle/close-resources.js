@@ -22,6 +22,7 @@ import { describeError } from "../../lib/log-redact.js";
  * @param {{close: () => Promise<void>}} options.llmResultCache
  * @param {{shutdown: () => Promise<void>}|null} [options.embeddingServer] EmbeddingService.serve()'s server; stopped first.
  * @param {{shutdown: () => Promise<void>}|null} [options.scopedEmbeddingServer]
+ * @param {{close: () => Promise<void>}|null} [options.mediaService] Drain media inference before text providers/stores.
  * @param {{shutdown: () => Promise<void>}|null} [options.embeddings]
  * @param {{shutdown: () => Promise<void>}|null} [options.reranker]
  * @param {{shutdown: () => Promise<void>}|null} [options.modelPreparationCoordinator]
@@ -41,6 +42,7 @@ export function createResourceCloser({
   llmResultCache,
   embeddingServer = null,
   scopedEmbeddingServer = null,
+  mediaService = null,
   embeddings = null,
   reranker = null,
   modelPreparationCoordinator = null,
@@ -57,6 +59,9 @@ export function createResourceCloser({
       const cleanup = async (label, operation) => {
         try { await operation(); } catch (err) { logger.warn?.(`${label}: ${describeError(err)}`); }
       };
+      if (typeof mediaService?.close === "function") {
+        await cleanup("plur1bus-media: shutdown failed", () => mediaService.close());
+      }
       const localModelResources = (async () => {
         if (typeof embeddingServer?.shutdown === "function") {
           await cleanup(

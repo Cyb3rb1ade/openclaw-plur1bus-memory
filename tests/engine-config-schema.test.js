@@ -50,6 +50,7 @@ const SENSITIVE_PLAIN = [
   "schicht15.headers",
   "skillMiner.headers",
   "criticalPush.headers",
+  "media.apiKey",
 ];
 const SENSITIVE = [
   "embedding.apiKey",
@@ -65,13 +66,14 @@ const SENSITIVE = [
   "criticalPush.apiKey",
   "criticalPush.headers",
   "emotion.t3.apiKey",
+  "media.apiKey",
 ];
 
 describe("engine-config.schema.json", () => {
   it("the schema carries every manifest key with type, description, readAt and x-tier", () => {
     const keys = engineConfigKeys();
     const manifestKeys = Object.keys(manifest.configSchema.properties);
-    assert.equal(keys.length, 57);
+    assert.equal(keys.length, 58);
     for (const key of ADAPTER_ONLY_TOP_LEVEL_KEYS) {
       assert.ok(manifestKeys.includes(key), `OpenClaw adapter-only key ${key}`);
     }
@@ -140,7 +142,7 @@ describe("engine-config.schema.json", () => {
     assert.deepEqual([...SENSITIVE].sort(), [...SECRET_INPUTS, ...SENSITIVE_PLAIN].sort());
     assert.deepEqual(
       engineConfigKeys().filter((k) => k.sensitive).map((k) => k.key),
-      ["embedding", "reminders", "reranker", "merging", "schicht15", "skillMiner", "criticalPush", "emotion"],
+      ["embedding", "reminders", "reranker", "merging", "schicht15", "skillMiner", "criticalPush", "emotion", "media"],
     );
   });
 
@@ -171,6 +173,7 @@ describe("engine-config.schema.json", () => {
       skillMiner: { enabled: true, headers: { Authorization: "Bearer hdr-skillminer-secret" } },
       criticalPush: { apiKey: "sk-critical-secret-1234567890", headers: { Cookie: "hdr-criticalpush-secret" } },
       emotion: { t3: { apiKey: null } },
+      media: { apiKey: String.fromCharCode(109,101,100,105,97) },
       gc: { enabled: true },
     };
     const before = structuredClone(config);

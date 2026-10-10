@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 // A specifier relative to this module, not a filesystem path: on win32 an
 // absolute Windows path is no valid ESM specifier (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+import { validateMediaConfig } from "../lib/providers/media-registry.js";
 const { t, resolveLocale } = await import("../lib/i18n.js");
 
 const lang = resolveLocale();
@@ -46,14 +47,32 @@ const ADVANCED_RERANKER_MODELS = [
   "mixedbread-ai/mxbai-rerank-base-v2",
 ];
 
+const MEDIA_OPTIONS = [
+  { key: "local-transformers", i18nLabel: "setup.media.gemma" },
+  { key: "jina-embeddings-v4", i18nLabel: "setup.media.jina_v4" },
+  { key: "jina-clip-v2", i18nLabel: "setup.media.jina_clip" },
+  { key: "disabled", i18nLabel: "setup.media.disabled" },
+];
+/** Build independent media selection with the same capability/license validation as the engine. */
+export function buildMediaWizardConfig(key = "local-transformers", modalities = ["image", "video", "audio"], licenseAccepted = false) {
+  if (key === "disabled") return { enabled: false };
+  const config = { enabled: true, provider: key === "local-transformers" ? key : "jina",
+    model: key === "local-transformers" ? "google/embeddinggemma-2" : key,
+    modalities, precision: "fp32", backfill: "auto", ...(licenseAccepted ? { licenseAccepted: true } : {}),
+    ...(key === "local-transformers" ? {} : { apiKey: "${JINA_API_KEY}" }) };
+  const { modelInfo, ...validated } = validateMediaConfig(config);
+  return validated;
+}
+
 export function buildWizardOptions(type, { lang: _l = "en" } = {}) {
+  if (type === "media") return MEDIA_OPTIONS;
   if (type === "reranker") return RERANKER_OPTIONS;
   if (type === "embedding") return EMBEDDING_OPTIONS;
   return [];
 }
 
 export function formatWizardOption(type, key, { lang: l = "en" } = {}) {
-  const options = type === "reranker" ? RERANKER_OPTIONS : EMBEDDING_OPTIONS;
+  const options = type === "media" ? MEDIA_OPTIONS : type === "reranker" ? RERANKER_OPTIONS : EMBEDDING_OPTIONS;
   const opt = options.find(o => o.key === key);
   if (!opt?.i18nLabel) return key;
   return t(opt.i18nLabel, { lang: l, tone: "default" });
@@ -230,12 +249,40 @@ async function main() {
     }
   }
 
+  async function wizardMedia() {
+    console.error(t("setup.media.title", { lang, tone }));
+    console.error(t("setup.media.caption_hint", { lang, tone }));
+    for (const [i, option] of MEDIA_OPTIONS.entries()) console.error(`[${i + 1}] ${formatWizardOption("media", option.key, { lang })}`);
+    let choice;
+    do { choice = await askLine("[1/2/3/4]: ") || "1"; } while (!["1", "2", "3", "4"].includes(choice));
+    const key = MEDIA_OPTIONS[Number(choice) - 1].key;
+    if (key === "disabled") return buildMediaWizardConfig(key);
+    let modalities = ["image", "video", "audio"];
+    if (key === "local-transformers") {
+      console.error(t("setup.media.modalities", { lang, tone }));
+      let selection;
+      do { selection = await askLine("[1/2/3]: ") || "1"; } while (!["1", "2", "3"].includes(selection));
+      modalities = selection === "2" ? ["image", "video"] : selection === "3" ? ["audio"] : modalities;
+    } else {
+      modalities = ["image", "video"];
+      console.error(t("setup.media.license", { lang, tone }));
+      if (await askLine("[yes/no]: ") !== "yes") throw new Error(t("setup.embedding.local_jina_license_required", { lang, tone }));
+    }
+    return buildMediaWizardConfig(key, modalities, key !== "local-transformers");
+  }
+
   try {
     const embeddingChoice = await wizardEmbedding();
     const embedding = embeddingChoice.embedding || embeddingChoice;
     const reranker = await wizardReranker();
+    const media = await wizardMedia();
+    if (embedding.provider === "local-transformers" && embedding.local?.model === "google/embeddinggemma-2") {
+      embedding.local.dtype = "fp32";
+      embedding.local.variant = media.provider === "local-transformers" ? media.variant : "text";
+    }
     process.stdout.write(JSON.stringify({
       embedding,
+      media,
       reranker,
       ...(embeddingChoice.modelPreparation
         ? { modelPreparation: embeddingChoice.modelPreparation }

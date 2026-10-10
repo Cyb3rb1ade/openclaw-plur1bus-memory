@@ -117,7 +117,7 @@ describe("legacy provider migration", () => {
     assert.equal(result.config.embedding.local.dimensions, 768);
     assert.equal(result.config.reranker.enabled, false);
     assert.equal(Object.hasOwn(result.config.reranker, "provider"), false);
-    assert.deepEqual(result.migrations, ["embedding"]);
+    assert.deepEqual(result.migrations, ["media", "embedding"]);
   });
 
   it("does not switch providers once a memory table has data", () => {
@@ -229,7 +229,7 @@ describe("legacy provider migration", () => {
     const result = applyLegacyProviderDefaults({}, { baseDbPath: root });
 
     assert.equal(result.changed, true);
-    assert.deepEqual(result.migrations, ["embedding", "reranker"]);
+    assert.deepEqual(result.migrations, ["media", "embedding", "reranker"]);
     assert.equal(result.config.embedding.provider, "local-transformers");
     assert.equal(result.config.reranker.provider, "local-transformers");
   });
