@@ -47,8 +47,13 @@ describe("installer feature config policy", () => {
     assert.match(choice, /EMBEDDING_DIMENSIONS=768/);
     assert.doesNotMatch(choice, /confirm\s|JINA_LICENSE_ACCEPTED|MODEL_PREPARATION_PROFILE=|exit 1/);
     assert.match(installerSource, /prompt_choice EMBEDDING_PROVIDER_MODE [^\n]*"gemma2"/);
-    // The existing defaults and the E5 / Jina choices are untouched.
-    assert.match(installerSource, /prompt_choice EMBEDDING_PROVIDER_MODE [^\n]* "jina5" "jina5" "openai" "local" "jina" "custom"/);
+    // EmbeddingGemma 2 is the recommendation and the default; the other choices stay available.
+    assert.match(installerSource, /prompt_choice EMBEDDING_PROVIDER_MODE [^\n]* "gemma2" "gemma2" "jina5" "openai" "local" "jina" "custom"/);
+    const list = installerSource.slice(installerSource.indexOf('info "Embedding-Provider-Auswahl:"'), installerSource.indexOf("prompt_choice EMBEDDING_PROVIDER_MODE"));
+    assert.match(list, /1\) Local google\/embeddinggemma-2 — empfohlen/);
+    assert.match(list, /2\) Local JinaAI jina-embeddings-v5-text-nano — wählbar/);
+    assert.match(list, /4\) Local multilingual-e5-small/);
+    assert.equal((list.match(/empfohlen/g) ?? []).length, 1, "only one option is recommended");
   });
 
   it("leaves chat model selection to OpenClaw and never copies the merging route into Schicht 1.5", () => {

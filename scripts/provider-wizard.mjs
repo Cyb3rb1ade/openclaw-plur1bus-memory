@@ -28,16 +28,16 @@ const RERANKER_OPTIONS = [
   { key: "advanced",           i18nLabel: "setup.reranker.option.advanced",  i18nHelp: "setup.reranker.option.advanced_help" },
 ];
 
-// Reihenfolge = Empfehlung (seit 7.12.0, nach dem Labortest vom 05.09.2026):
-// Jina v5 Text Nano steht vorn, OpenAI ist die gehostete Alternative, E5 der
-// schlüssellose Notnagel, Jina v3 bleibt für Bestandsinstallationen wählbar.
+// Reihenfolge = Empfehlung (seit 7.13.0): Der Owner hat EmbeddingGemma 2 (Apache 2.0,
+// q8) zum einheitlichen lokalen Standard erklärt, es steht vorn. Jina v5 Text Nano
+// bleibt wählbar (CC BY-NC 4.0, mit Lizenzabfrage), OpenAI ist die gehostete
+// Alternative, E5 der schlüssellose Notnagel, Jina v3 bleibt für Bestandsinstallationen.
 const EMBEDDING_OPTIONS = [
+  { key: "local-embeddinggemma-2", i18nLabel: "setup.embedding.option.local_embeddinggemma2", i18nHelp: "setup.embedding.option.local_embeddinggemma2_help" },
   { key: "local-jina-v5-nano", i18nLabel: "setup.embedding.option.local_jina_v5_nano", i18nHelp: "setup.embedding.option.local_jina_v5_nano_help" },
   { key: "openai",             i18nLabel: "setup.embedding.option.openai",   i18nHelp: "setup.embedding.option.openai_help" },
   { key: "local-transformers", i18nLabel: "setup.embedding.option.local_e5", i18nHelp: "setup.embedding.option.local_e5_help" },
   { key: "local-jina",         i18nLabel: "setup.embedding.option.local_jina", i18nHelp: "setup.embedding.option.local_jina_help" },
-  // Angehängt, damit die Nummern der bisherigen Optionen stabil bleiben. Apache 2.0: keine Lizenzabfrage.
-  { key: "local-embeddinggemma-2", i18nLabel: "setup.embedding.option.local_embeddinggemma2", i18nHelp: "setup.embedding.option.local_embeddinggemma2_help" },
 ];
 
 const ADVANCED_RERANKER_MODELS = [

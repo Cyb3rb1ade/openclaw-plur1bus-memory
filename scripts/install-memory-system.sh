@@ -756,17 +756,17 @@ RERANKER_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
 if [[ "$KEEP_EXISTING_MEMORY_CONFIG" != "1" ]]; then
 echo ""
 info "Embedding-Provider-Auswahl:"
-info "  1) Local JinaAI jina-embeddings-v5-text-nano — empfohlen: 15 europäische Sprachen, Matryoshka, verifizierter ~0,26-GB-Q8-Download, im Labortest gleichauf mit v3 bei dreifacher Migrationsgeschwindigkeit."
+info "  1) Local google/embeddinggemma-2 — empfohlen: einheitlicher lokaler Standard, Apache 2.0 (auch kommerziell nutzbar), 768d/Matryoshka, 8K Kontext, verifizierter ~0,35-GB-Q8-Download."
+info "  2) Local JinaAI jina-embeddings-v5-text-nano — wählbar: 15 europäische Sprachen, Matryoshka, verifizierter ~0,26-GB-Q8-Download."
 warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
-info "  2) OpenAI text-embedding-3-large — remote, API-Key erforderlich."
-info "  3) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
-info "  4) Local JinaAI jina-embeddings-v3 — Bestandsoption; mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
+info "  3) OpenAI text-embedding-3-large — remote, API-Key erforderlich."
+info "  4) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
+info "  5) Local JinaAI jina-embeddings-v3 — Bestandsoption; mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
 warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
-info "  5) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
-info "  6) Local google/embeddinggemma-2 — Apache 2.0 (auch kommerziell nutzbar), 768d/Matryoshka, 8K Kontext, verifizierter ~0,35-GB-Q8-Download."
-prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: jina5=JinaAI v5 Nano empfohlen, openai=remote, local=E5, jina=JinaAI v3, custom=OpenAI-kompatibel, gemma2=EmbeddingGemma 2" "jina5" "jina5" "openai" "local" "jina" "custom" "gemma2"
+info "  6) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: gemma2=EmbeddingGemma 2 empfohlen, jina5=JinaAI v5 Nano, openai=remote, local=E5, jina=JinaAI v3, custom=OpenAI-kompatibel" "gemma2" "gemma2" "jina5" "openai" "local" "jina" "custom"
 
-# Nicht-interaktiv oder Probelauf: Die Nano-Vorgabe braucht die ausdrückliche
+# Nicht-interaktiv oder Probelauf: Die (nicht mehr voreingestellte) Nano-Wahl braucht die ausdrückliche
 # Lizenzzustimmung. Ohne PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1 fällt der
 # Installer auf E5 zurück, statt abzubrechen oder eine Lizenz stillschweigend
 # zu bejahen.

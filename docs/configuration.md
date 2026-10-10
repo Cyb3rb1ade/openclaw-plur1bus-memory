@@ -265,6 +265,9 @@ bewusst an und rechnet mit dem entsprechenden Arbeitsspeicher.
 }
 ```
 
+Provider-Wizard und Installer empfehlen es als erste Option (einheitlicher lokaler
+Standard); Jina v5 Nano (CC BY-NC 4.0) und E5 bleiben waehlbar.
+
 Seit der naechsten Version ist `google/embeddinggemma-2` (Apache-2.0, 768
 Dimensionen, 8K Kontext, Mean-Pooling) als lokales Embedding gepinnt, ohne
 Lizenzbestaetigung. Es ist der Standard fuer **neu angelegte** Stores, die
