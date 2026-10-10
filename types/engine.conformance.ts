@@ -8,12 +8,12 @@
  */
 
 import type {
-  AdminOps, AgentContext, AgentJobHealth, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
+  AdminOps, AgentContext, AgentJobHealth, CaptureOptions, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   CriticalButtonPushArgs, CriticalButtonPushResult, Deferral, Degraded, Disposable, Engine, EngineConfig,
   EngineConfigKey, EngineConfigReadAt, EngineConfigSchema,
   EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostServices,
   HostCapabilities, IpcAddress, JobLastRun, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
-  MemoryImportOutcome, MemoryImportRejectReason, MemoryProposalStatus, MemoryRebindResult, MemoryUnbindResult, ModelsStatus, ModelState, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
+  MemoryImportOutcome, MemoryImportRejectReason, MemoryProposalStatus, MemoryRebindResult, MemoryUnbindResult, ModelsStatus, ModelState, ObsidianOps, Principal, RecallOptions, RecallQuery, RecallResult, RecallTiming,
   SchemaVersion, StoreAdoptIdentitySource, StoreAdoptIncompatibleReason, StoreOps, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
@@ -223,3 +223,9 @@ const hostWithButtons: HostServices = { ...minimalHost, capabilities: { pushCrit
 void hostWithButtons;
 const hostWithJournal: HostServices = { ...minimalHost, capabilities: { journalBacklog: () => ({ entries: 0, oldestAt: null }) } };
 void hostWithJournal;
+
+// Per-call options are additive, optional and keep capture's non-blocking handle.
+assertTrue<Exact<Parameters<Engine["recall"]>[1], RecallOptions | undefined>>();
+assertTrue<Exact<Parameters<Engine["capture"]>[1], CaptureOptions | undefined>>();
+assertTrue<Exact<RecallOptions["reranker"], "on" | "off" | undefined>>();
+assertTrue<Exact<CaptureOptions["deferPostTurnLlm"], boolean | undefined>>();
