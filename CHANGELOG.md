@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.18.24] — 2026-10-13
+
+### Behoben
+
+- **Ein Session-Reset legte das Gedächtnis aller Agenten lahm.** OpenClaw ruft bei jedem Reset oder Löschen einer Session (`/new`, `/reset`, gelöschte Sessions) die Runtime-Lifecycle-Cleanups aller Plugins auf. PLUR1BUS baute daraufhin Pool, Shared Pool, Embeddings und Caches ab, ohne sie neu zu öffnen. Bis zum nächsten Gateway-Neustart scheiterten Recall, Capture und Feature-Crons mit „MultiNamespacePool is shutdown“. Session-bezogene Cleanups (`reason` `reset`/`delete` oder mit `sessionKey`) lassen die Ressourcen jetzt stehen. Bei `restart`, `disable` und `gateway_stop` wird weiter alles abgebaut.
+
 ## [7.18.23] — 2026-10-09
 
 ### Geändert
