@@ -5,11 +5,8 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { LEGACY_DEFAULT_MODEL } from "../../lib/providers/dimensions.js";
 
-const DEFAULT_BASE_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
 const DEFAULT_MODEL = LEGACY_DEFAULT_MODEL;
 const MAX_PROMPT_REPLY_OUTCOME_READ_BYTES = 2 * 1024 * 1024;
 // Wie viele bereits episodierte Turn-IDs im Hook-State vorgehalten werden.
@@ -29,4 +26,4 @@ const CORRECTION_PREVIEW_CHARS = 300;
 
 const TABLE_NAME = "memories";
 
-export { DEFAULT_BASE_DB_PATH, DEFAULT_MODEL, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, CORRECTION_PREVIEW_CHARS, TABLE_NAME };
+export { DEFAULT_MODEL, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, CORRECTION_PREVIEW_CHARS, TABLE_NAME };

@@ -19,6 +19,8 @@
  * captureContext, toolContext), spread here with `api`.
  */
 
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { handleObsidianBridgeCommand } from "../../lib/obsidian-control-room.js";
 import { resolveDefaultArchiveDir, shareCard } from "../../lib/telegram-commands/memory-edit.js";
 import { setHostSdkLoader } from "../../lib/host-sdk-loader.js";
@@ -146,6 +148,9 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     events: hostEvents,
     ...(importRouting ? { routing: importRouting } : {}),
     capabilities: {
+      // Retain the plugin's historical default independently of OPENCLAW_HOME.
+      // Other hosts derive their default from HostServices.stateDir.
+      defaultMemoryPath: join(homedir(), ".openclaw", "memory", "lancedb-namespaced"),
       registrationMode: api.registrationMode,
       coordinatesLocalModelGeneration: shouldCoordinateLocalModelGeneration(api),
       resolvePath: (value) => api.resolvePath(value),

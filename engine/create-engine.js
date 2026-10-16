@@ -105,7 +105,7 @@ import { createCheckpointStore } from "./checkpoint/checkpoint-store.js";
 import { createJobRegistry } from "./jobs/job-registry.js";
 import { createStatusReporter } from "./status/status-reporter.js";
 import { dbg, getPluginLogger, runSpeakerProposalPipeline, setPluginLogger } from "./runtime/debug-log.js";
-import { DEFAULT_BASE_DB_PATH, DEFAULT_MODEL, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES } from "./runtime/constants.js";
+import { DEFAULT_MODEL, EPISODED_TURN_ID_MEMORY, MAX_POSTPROCESSING_RETRIES, MAX_PROMPT_REPLY_OUTCOME_READ_BYTES } from "./runtime/constants.js";
 import { runSemanticDiscoveryBatches, selectSemanticDiscoveryWorkspaces } from "./runtime/semantic-discovery.js";
 import { callLlm, callMergeCheck, withDeterministicLlmContext } from "./runtime/llm-calls.js";
 import { commandOption, generateSummary, makeQuerySummarizer, normalizedLlmErrorClass, resolveConfiguredApiKey, resolveEnvVars, resolveOptionalEnvVars, summarizeForCapture } from "./runtime/env-config.js";
@@ -206,12 +206,12 @@ export function createEngine(host, config, testOptions = {}) {
   const credentialResolver = createConfiguredSecretInputResolver({
     getConfig: () => host.runtime?.config?.current?.() || host.config(),
   });
-  bindHostPaths(host.pathOverrides);
+  bindHostPaths(host.pathOverrides, host.pathOverrides ? null : { stateDir: host.stateDir, configPath: () => host.configPath() });
   setPluginLogger(host.logger);
   const cronDirectDispatchReady = capabilities.cronDirectDispatchReady === true;
   const openClawSkillWorkshop = capabilities.skillWorkshop ?? null;
   const detectReactionsCapabilityCached = capabilities.detectReactions ?? (async () => false);
-  const baseDbPath = resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
+  const baseDbPath = resolvePath(cfg.baseDbPath || capabilities.defaultMemoryPath || join(host.stateDir, "memory", "lancedb-namespaced"));
   const epistemicCutoffBoot = ensureEpistemicCutoff(baseDbPath);
   if (!epistemicCutoffBoot.ok) {
     host.logger.warn(`memory-lancedb-namespaced: epistemic cutoff unavailable (${epistemicCutoffBoot.reason})`);
