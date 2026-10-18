@@ -27,7 +27,7 @@ import { createJobLedger } from "../jobs/job-ledger.js";
 import { memoryOpError } from "./errors.js";
 import { importCardId } from "./import-id.js";
 import { importRowDigest, isImportDigest } from "./import-digest.js";
-import { IMPORT_IDEMPOTENCY_KEY_MAX, IMPORT_RUN_ID_RE } from "./import.js";
+import { IMPORT_IDEMPOTENCY_KEY_MAX, IMPORT_RUN_ID_RE, ledgerLineRunId } from "./import.js";
 import { withImportLock } from "./import-lock.js";
 import { createRebindLedger } from "./rebind-ledger.js";
 import { createUnimportLedger } from "./unimport-ledger.js";
@@ -76,6 +76,9 @@ function sameNumber(a, b) {
 /**
  * @param {object} deps
  * @param {object} deps.importLedger the `memory.import` ledger instance (shared with import)
+ * @param {Function} [deps.derivedCleanup] 1.15.0: `({agentId, workspaceDir, archiveDir, ids}) =>
+ *   {graphEdgesRemoved, mirrorsArchived, cleanupErrors}` — drops graph edges and archives
+ *   Obsidian mirrors of the undone cards; best-effort, never throws into the call.
  * @param {object} [deps.hooks] test seam: `afterIntent(cardId)`, `afterTombstone(cardId)`,
  *   `afterLedger(cardId)`; a throw there simulates a crash at that point.
  */
@@ -90,6 +93,7 @@ export function createMemoryUnimport({
   importLedger,
   importLock = {},
   hooks = {},
+  derivedCleanup = null,
 } = {}) {
   const sidecar = createUnimportLedger({ baseDbPath, logger, clock });
   // Read-only use: `listApplied()` for the `rebound` reason.
@@ -114,15 +118,16 @@ export function createMemoryUnimport({
 
   /**
    * The ledger lines this run wrote, one per card (the last one wins, so a
-   * re-import under the same run id is the line that counts). Legacy lines
-   * without `importRunId` are never selected. A line whose card id is not the
-   * deterministic id of (agentId, key) is ignored.
+   * re-import under the same run id is the line that counts). A line belongs
+   * to the run of its `importRunId`, else (1.15.0) to the run its `sourceRef`
+   * names (`;run=<id>`); a line with neither is never selected. A line whose
+   * card id is not the deterministic id of (agentId, key) is ignored.
    */
   function select(agentId, importRunId, keyFilter) {
     const byCard = new Map();
     for (const row of importLedger.readLines(agentId)) {
       if (row.kind != null) continue;
-      if (row.importRunId !== importRunId) continue;
+      if (ledgerLineRunId(row) !== importRunId) continue;
       if (keyFilter && !keyFilter.has(row.idempotencyKey)) continue;
       let expected;
       try {
@@ -246,7 +251,7 @@ export function createMemoryUnimport({
     // re-imported the key after a crashed unimport of this run freed it):
     // the live row is B's card, never ours to delete — not even with force.
     const latest = ctx.index.byCardId.get(card.cardId);
-    if (latest && latest.importRunId !== importRunId) return { kind: "kept", reason: "other-run" };
+    if (latest && ledgerLineRunId(latest) !== importRunId) return { kind: "kept", reason: "other-run" };
     const intent = ctx.sidecar.intents.has(marker);
     const unimportedLine = ctx.index.unimportedByCardId.get(card.cardId);
     const ourLedgerLine = unimportedLine && unimportedLine.importRunId === importRunId;
@@ -373,6 +378,11 @@ export function createMemoryUnimport({
       return result;
     }
 
+    // 1.15.0: cards whose derived data (graph edges, Obsidian mirrors) is
+    // cleaned after the loop: the ones undone now, and ones an earlier call
+    // undid whose row is still soft-deleted (a crash between store write and
+    // cleanup converges on the rerun).
+    const cleanupIds = [];
     let entered = false;
     try {
       await withImportLock(baseDbPath, agentId, async ({ heartbeat, assertHeld }) => {
@@ -407,6 +417,7 @@ export function createMemoryUnimport({
               continue;
             }
             if (decision.kind !== "eligible" && decision.kind !== "finish") {
+              if (decision.kind === "done" && String(row?.status || "") === "deleted") cleanupIds.push(card.cardId);
               recordDecision(card, decision, push);
               continue;
             }
@@ -478,8 +489,22 @@ export function createMemoryUnimport({
             sidecar.appendDone(agentId, importRunId, card, fence);
             logSafe(logger, `memory-ops.unimport: unimported agent='${agentId}' run='${importRunId}' id='${card.cardId}'${decision.forced ? ` forced=${decision.forced}` : ""}`);
             push(card, "unimported");
+            cleanupIds.push(card.cardId);
           }
         });
+        if (cleanupIds.length > 0 && typeof derivedCleanup === "function") {
+          fence();
+          let cleaned = null;
+          try {
+            cleaned = await derivedCleanup({ agentId, workspaceDir, archiveDir, ids: [...cleanupIds] });
+          } catch (err) {
+            logger?.warn?.(`memory-ops.unimport: derived cleanup failed for agent '${agentId}': ${err?.code || "error"}`);
+            cleaned = { graphEdgesRemoved: 0, mirrorsArchived: 0, cleanupErrors: 1 };
+          }
+          result.derived.graphEdgesRemoved = Number(cleaned?.graphEdgesRemoved) || 0;
+          result.derived.mirrorsArchived = Number(cleaned?.mirrorsArchived) || 0;
+          result.derived.cleanupErrors = Number(cleaned?.cleanupErrors) || 0;
+        }
       }, { ...importLock, signal });
     } catch (err) {
       if (entered) {

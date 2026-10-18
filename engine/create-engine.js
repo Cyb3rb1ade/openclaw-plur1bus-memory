@@ -37,6 +37,7 @@ import { embeddingFingerprintFromNormalizedConfig, localEmbeddingOptionsFromFing
 import { createControlPlaneHealthInspector, createControlPlaneHealthScan } from "../lib/control-plane-health.js";
 import { createWorkspacePolicyGuard } from "../lib/workspace-policy-guard.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "../lib/obsidian-bridge.js";
+import { archiveMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
 import { handleObsidianBridgeCommand } from "../lib/obsidian-control-room.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 import { isOwnedVaultConfirmed } from "../lib/obsidian-vault-authority.js";
@@ -1610,6 +1611,47 @@ export function createEngine(host, config, testOptions = {}) {
     logger: host.logger,
     clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
   });
+  // 1.15.0: what unimport pulls along with the cards it undoes — their graph
+  // edges (canonical neo journal, one locked rewrite) and their Obsidian
+  // mirror notes (moved into the archive, never deleted outright; only in
+  // vaults of this agent that allow vault_write). Best-effort: a failure is
+  // counted and logged, never undoes the unimport.
+  const unimportDerivedCleanup = ({ agentId, workspaceDir, archiveDir, ids }) => {
+    const out = { graphEdgesRemoved: 0, mirrorsArchived: 0, cleanupErrors: 0 };
+    if (!Array.isArray(ids) || ids.length === 0) return out;
+    try {
+      const neoStore = getNeoStore({ agentId, workspaceDir }, {}, "unimport");
+      if (typeof neoStore?.removeGraphEdgesTouching === "function") {
+        out.graphEdgesRemoved = Number(neoStore.removeGraphEdgesTouching(ids)?.removed) || 0;
+      }
+    } catch (err) {
+      out.cleanupErrors += 1;
+      host.logger?.warn?.(`memory-ops.unimport: graph edge cleanup failed for agent '${agentId}': ${err?.code || err?.name || "error"}`);
+    }
+    for (const workspace of configuredObsidianWorkspaces) {
+      if (workspace?.agentId !== agentId) continue;
+      try {
+        const vaultCfg = {
+          ...obsidianBridgeCfg,
+          vaultPath: workspace.path,
+          reviewRoot: obsidianBridgeCfg.reviewRoot || "plur1bus",
+          agentId: workspace.agentId,
+          workspaceKey: workspace.workspaceId,
+        };
+        const moved = archiveMemoryNotes(vaultCfg, ids, {
+          archiveDir,
+          mutationPolicy: obsidianServiceMutationPolicy(workspace),
+          logger: host.logger,
+        });
+        out.mirrorsArchived += moved.archived;
+        out.cleanupErrors += moved.errors;
+      } catch (err) {
+        out.cleanupErrors += 1;
+        host.logger?.warn?.(`memory-ops.unimport: mirror cleanup failed for agent '${agentId}': ${err?.code || err?.name || "error"}`);
+      }
+    }
+    return out;
+  };
   const memoryUnimport = createMemoryUnimport({
     opsContext: memoryOpsContext,
     pool,
@@ -1619,6 +1661,7 @@ export function createEngine(host, config, testOptions = {}) {
     logger: host.logger,
     clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
     importLedger: memoryImport.ledger,
+    derivedCleanup: unimportDerivedCleanup,
   });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,

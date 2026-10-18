@@ -152,7 +152,12 @@ own changelog:
   `SecretStore` becomes `resolve(ref, purpose)` (the never-called `lease()`
   stays optional and deprecated) and backs the provider option `apiKeyRef`;
   `ProviderCredentialConfig`, `RemoteRerankerConfig`, `RerankProtocol`. See
-  [Network ports in 1.15.0](#network-ports-in-1150) below.
+  [Network ports in 1.15.0](#network-ports-in-1150) below. Also: import
+  attributes a card to the run its `sourceRef` names (`;run=<id>`) when no
+  `importRunId` is given, unimport selects such lines too, and unimport drops
+  the undone cards' graph edges and archives their Obsidian mirrors
+  (`derived.graphEdgesRemoved` / `mirrorsArchived` / `cleanupErrors`). See
+  [Unimport in 1.13.0](#unimport-in-1130).
 
 ## The two halves
 
@@ -398,7 +403,11 @@ ledger.
 with three 16-hex group digests of the stored row (`content`, `binding`,
 `meta`; hashes only). A backfilled line (crash between `store()` and the
 ledger) carries `importRunId` plus `backfilled: true` and the digest of the
-row it found. `memory.unimport` selects by `importRunId`. The ledger stays
+row it found. `memory.unimport` selects by `importRunId`. 1.15.0: without
+`importRunId` a card whose `sourceRef` carries exactly one segment
+`;run=<id>` (same regex; not the first segment; the sourceRef shorter than
+the 500-character cap, so the id cannot have been cut) is recorded under that
+run with its digest — the Harness importers stamp the run there. The ledger stays
 `v: 1`: an engine before 1.13 ignores the extra fields. A soft-deleted row
 whose last ledger line is `unimported` (and that has no committed registry
 tombstone) is imported again: the old row is replaced and the result is
@@ -744,7 +753,11 @@ the last-line-wins index) with `importRunId === req.importRunId` whose
 `cardId` is the deterministic id of `(agentId, idempotencyKey)`. One entry
 per card; the last such line counts. A card that run B only saw as
 `matched-existing` has no B line and is never touched by rolling back B.
-Legacy lines without `importRunId` (1.11/1.12) are never selected.
+1.15.0: a line without `importRunId` belongs to the run its `sourceRef` names
+(`;run=<id>`, rules as for import above), so lines written by an engine
+before 1.13 for a Harness import are selectable too; a digest-less line is
+judged by `updatedAt` (`edited`). A line with neither is never selected. The
+`other-run` check compares runs the same way.
 
 ### Decision per card (first hit wins; the row is read inside the lock)
 
@@ -838,6 +851,21 @@ after an abort), `cards` (`idempotencyKey`, `id`, `outcome`, `reason`) and
 `importedAt`. Dreams, promotions and episodes carry no lineage and are not
 cascaded; the caller warns. One call visits every selected card (no page
 limit).
+
+1.15.0, apply only (absent on `dryRun` and when nothing was undone): after
+the loop, still under the import lock, the cards undone now — plus cards an
+earlier call undid whose row is still soft-deleted, so a crash before the
+cleanup converges on the rerun — have their derived data pulled along:
+`derived.graphEdgesRemoved` (edges with that `source` or `target` dropped from
+the canonical neo graph journal in one read-and-rewrite under the workspace
+lock; legacy-path edges stay, readers skip edges to non-live memories and the
+daily prune removes them), `derived.mirrorsArchived` (Obsidian mirror notes
+`{reviewRoot}/memories/<id>.md` in this agent's vaults that allow
+`vault_write`, moved to `{archiveDir}/obsidian-mirrors/<workspace>/` — never
+deleted outright; a note naming another `memory_id` is left alone) and
+`derived.cleanupErrors` (best-effort: counted and logged, the cards stay
+undone). A re-import writes the mirror again on the next bridge sync. Recall
+needs no cache flush: soft-deleted rows are filtered at read time.
 
 `dryRun` takes no lock, writes nothing (no `_unimports/`, no lock dir) and
 reports exactly what apply would do, from the authoritative write namespace.

@@ -45,7 +45,7 @@
  *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound" | "ledger-corrupt" | "lock-lost"; no breaking change to existing callers.
  *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
  *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
- *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0).
+ *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0). Also: MemoryImportRequest without importRunId attributes each card to the run its sourceRef names (`;run=<id>`); MemoryUnimportRequest.importRunId also selects such lines; MemoryUnimportResult.derived.graphEdgesRemoved? / mirrorsArchived? / cleanupErrors? (unimport drops the undone cards' graph edges and archives their Obsidian mirrors).
  */
 
 // 1.15.0: HostServices.fetch?, SecretStore.resolve(ref, purpose), configurable remote reranker.
@@ -966,7 +966,9 @@ export interface MemoryImportRequest {
   cards: MemoryImportCardInput[];
   dryRun?: boolean;
   signal?: AbortSignal;
-  /** 1.13.0: `/^[A-Za-z0-9_-]{1,64}$/`. Recorded on every ledger line this call writes; `unimport` selects by it. */
+  /** 1.13.0: `/^[A-Za-z0-9_-]{1,64}$/`. Recorded on every ledger line this call writes; `unimport` selects by it.
+   *  1.15.0: when absent, a card whose `sourceRef` carries exactly one segment `;run=<id>` (same pattern,
+   *  sourceRef shorter than the 500-char cap) is recorded under that run, with its digest. */
   importRunId?: string;
 }
 
@@ -1007,7 +1009,8 @@ export interface MemoryImportResult {
 
 export interface MemoryUnimportRequest {
   agentId: AgentId;
-  /** Required; selects the `_imports/` ledger lines written with this `importRunId`. */
+  /** Required; selects the `_imports/` ledger lines of this run: written with this `importRunId`, or
+   *  (1.15.0) without one but with a `sourceRef` carrying the segment `;run=<importRunId>`. */
   importRunId: string;
   /** Optional narrowing filter (≤ 500); never widens the selection. */
   idempotencyKeys?: string[];
@@ -1062,8 +1065,12 @@ export interface MemoryUnimportResult {
   /** Selected cards not visited in this call (abort). A rerun visits them. */
   remaining: number;
   cards: MemoryUnimportCardResult[];
-  /** Derivation-capable jobs with a run that finished after the earliest selected import. */
-  derived: { jobsSinceImport: JobName[] };
+  /** Derivation-capable jobs with a run that finished after the earliest selected import.
+   *  1.15.0, apply only (absent on dryRun or when nothing was undone): graph edges of the undone
+   *  cards removed from the canonical neo journal, their Obsidian mirror notes moved into the
+   *  archive (`{archiveDir}/obsidian-mirrors/`), and best-effort cleanup failures (logged, the
+   *  cards stay undone; a rerun retries the cleanup). */
+  derived: { jobsSinceImport: JobName[]; graphEdgesRemoved?: number; mirrorsArchived?: number; cleanupErrors?: number };
 }
 
 /* ------------------------------------------------------------------ */
