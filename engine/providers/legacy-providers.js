@@ -5,6 +5,7 @@
  * imports what the host registration still uses and re-exports the public names.
  */
 
+import { hostFetch, sdkFetchOptions } from "../../lib/host-network.js";
 import { createEmbeddingCache } from "../../lib/embedding-cache.js";
 import { getOpenAI } from "../store/lancedb-loader.js";
 import { createProviderHttpError, sanitizeProviderSdkError } from "../../lib/provider-error.js";
@@ -22,7 +23,7 @@ class Reranker {
   async rerank(query, documents, topN) {
     if (!documents || documents.length === 0) return [];
 
-    const response = await fetch("https://api.cohere.com/v2/rerank", {
+    const response = await hostFetch("https://api.cohere.com/v2/rerank", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${this.apiKey}`,
@@ -113,6 +114,7 @@ class Embeddings {
       this._client = new OpenAI({
         apiKey: this.apiKey,
         baseURL: this.baseUrl,
+        ...sdkFetchOptions(),
       });
     }
     return this._client;
@@ -127,6 +129,7 @@ class Embeddings {
       this._fallbackClient = new OpenAI({
         apiKey: this._fallbackCfg.apiKey,
         baseURL: this._fallbackCfg.baseUrl,
+        ...sdkFetchOptions(),
       });
     }
     return this._fallbackClient;

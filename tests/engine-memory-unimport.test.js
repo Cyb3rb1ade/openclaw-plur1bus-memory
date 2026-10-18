@@ -147,7 +147,17 @@ describe("Engine.memory.unimport (contract 1.13.0)", () => {
     assert.equal(existsSync(join(baseDbPath, "_unimports")), false);
     assert.equal((await rowOf(engine, idOf("d1"))).status, "active");
     const applied = await unimport(engine, "runD");
-    const strip = (r) => ({ ...r, dryRun: null });
+    // 1.15.0: the cleanup counters exist only after an apply that undid something.
+    assert.deepEqual(
+      { e: applied.derived.graphEdgesRemoved, m: applied.derived.mirrorsArchived, x: applied.derived.cleanupErrors },
+      { e: 0, m: 0, x: 0 },
+    );
+    assert.equal("graphEdgesRemoved" in dry.derived, false);
+    const strip = (r) => ({
+      ...r,
+      dryRun: null,
+      derived: { jobsSinceImport: r.derived.jobsSinceImport },
+    });
     assert.deepEqual(strip(dry), strip(applied));
     assert.equal(applied.unimported, 1);
     assert.equal(applied.keptModified, 1);

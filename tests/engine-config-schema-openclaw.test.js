@@ -170,6 +170,27 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       assert.ok(Object.hasOwn(afterSchema.properties.embedding.properties, key));
       delete afterSchema.properties.embedding.properties[key];
     }
+    // Contract 1.15.0 adds exactly the host secret references (apiKeyRef) and the
+    // configurable HTTP reranker (baseUrl, protocol, size limits, three presets).
+    for (const node of [
+      afterSchema.properties.embedding,
+      afterSchema.properties.merging,
+      afterSchema.properties.schicht15,
+      afterSchema.properties.skillMiner,
+      afterSchema.properties.criticalPush,
+      afterSchema.properties.emotion.properties.t3,
+      afterSchema.properties.reranker,
+    ]) {
+      assert.ok(Object.hasOwn(node.properties, "apiKeyRef"));
+      delete node.properties.apiKeyRef;
+    }
+    for (const key of ["baseUrl", "protocol", "maxDocuments", "maxRequestBytes", "maxResponseBytes"]) {
+      assert.ok(Object.hasOwn(afterSchema.properties.reranker.properties, key));
+      delete afterSchema.properties.reranker.properties[key];
+    }
+    assert.deepStrictEqual(afterSchema.properties.reranker.properties.provider.enum,
+      ["cohere", "jina", "voyage", "remote", "local-transformers", "disabled"]);
+    afterSchema.properties.reranker.properties.provider.enum = ["cohere", "local-transformers", "disabled"];
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "lancedbCompaction"));
     delete afterSchema.properties.runtime.properties.lancedbCompaction;
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "detachPostTurnWork"));

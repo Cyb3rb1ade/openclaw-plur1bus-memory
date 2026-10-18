@@ -1432,6 +1432,62 @@ Settings for both stages are described in
 [docs/configuration.md](docs/configuration.md); the installer offers the
 preparation profiles for the local models.
 
+### Cloud and self-hosted providers, host egress and secret store (contract 1.15.0)
+
+No vendor is preferred. Embeddings run against any OpenAI-compatible
+`/embeddings` endpoint (`provider: "openai-compatible"` with `baseUrl`):
+OpenAI itself, OpenRouter (for example `qwen/qwen3-embedding-8b`), Gemini's
+OpenAI endpoint, Cohere's compatibility API, vLLM, TEI, Ollama, LiteLLM and
+so on. `dimensions` must match what the model returns.
+
+The reranker is an HTTP provider with presets and a free `baseUrl`:
+
+| `reranker.provider` | default `baseUrl` | `protocol` | default `model` | default key variable |
+|---|---|---|---|---|
+| `cohere` | `https://api.cohere.com/v2` | `cohere` | `rerank-v3.5` | `COHERE_API_KEY` |
+| `jina` | `https://api.jina.ai/v1` | `jina` | `jina-reranker-v2-base-multilingual` | `JINA_API_KEY` |
+| `voyage` | `https://api.voyageai.com/v1` | `voyage` | `rerank-2.5` | `VOYAGE_API_KEY` |
+| `remote` | required | `cohere` | none (server default) | none (keyless allowed) |
+
+Requests go to `{baseUrl}/rerank` (or to `baseUrl` itself when it already ends
+in `/rerank`). `protocol: "cohere"` (same as `"jina"`) is the
+`{model, query, documents, top_n}` → `results` format that Cohere, Jina, vLLM,
+Infinity and LocalAI speak; `"voyage"` uses `top_k` → `data`; `"tei"` is
+Hugging Face text-embeddings-inference (`{query, texts}` → `[{index, score}]`).
+Every answer is validated and normalised. `maxDocuments` (1000),
+`maxRequestBytes` (4 MiB) and `maxResponseBytes` (1 MiB) bound a call, and
+`timeoutMs` applies as before. A failed rerank never switches to another
+model: without `fallbackProvider: "local-transformers"` the recall simply runs
+unreranked.
+
+```json
+{
+  "embedding": { "provider": "openai-compatible", "baseUrl": "https://openrouter.ai/api/v1",
+                 "model": "qwen/qwen3-embedding-8b", "dimensions": 4096, "apiKeyRef": "openrouter" },
+  "reranker":  { "enabled": true, "provider": "voyage", "apiKeyRef": "voyage" }
+}
+```
+
+```json
+{ "reranker": { "enabled": true, "provider": "remote", "baseUrl": "http://127.0.0.1:8081", "protocol": "tei" } }
+```
+
+**Keys.** Every remote provider config (`embedding`, `embedding.routes[].provider`,
+`reranker`, and the feature LLM overrides `merging`, `schicht15`, `skillMiner`,
+`criticalPush`, `emotion.t3`) accepts `apiKeyRef`: the name of a key in the
+host's secret store (`HostServices.secrets.resolve(ref, purpose)`). Order:
+`apiKeyRef`, then `apiKeyEnv`, then `apiKey`, then the provider's default
+variable. With `apiKeyRef` set and no store, or a failed lookup, the provider
+fails closed and sends nothing. Embedding and reranker keep a resolved key at
+most 60 seconds and drop it on HTTP 401/403, LLM calls resolve it on every
+call, so a rotated key takes effect without a restart. Keys are never logged.
+OpenClaw has no such store; there `apiKeyEnv`/`apiKey` stay the way to go.
+
+**Egress.** A host can pass `HostServices.fetch` (WHATWG `fetch` signature).
+Then every outbound request of the engine goes through it: embedding clients,
+rerankers, the engine's own LLM calls, webhooks and model downloads. Without
+it the global `fetch` is used, as before. Details: [docs/engine-api.md](docs/engine-api.md#network-ports-in-1150).
+
 ### Named storage namespaces
 
 Omitting `namespaces` preserves the legacy-flat layout exactly:

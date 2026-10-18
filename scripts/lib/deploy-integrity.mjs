@@ -244,6 +244,7 @@ export const DEPLOY_FILES = [
   "lib/providers/reranker-chained.js",
   "lib/providers/reranker-cohere.js",
   "lib/providers/reranker-local-transformers.js",
+  "lib/providers/reranker-remote.js",
   "lib/providers/secret-input.js",
   // ── local model preparation (v7.5.0) ────────────────────────────────────
   "lib/model-preparation/coordinator.js",
@@ -425,6 +426,7 @@ export const DEPLOY_FILES = [
   // coverage tests.
   "lib/host-services.js",
   "lib/host-paths.js",
+  "lib/host-network.js",
   "lib/host-sdk-loader.js",
   "lib/plugin-meta.js",
   "lib/feature-crons-hint.js",
