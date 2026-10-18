@@ -134,7 +134,12 @@ import { createMemoryProposals } from "./memory-ops/proposals.js";
 import { createMemoryImport } from "./memory-ops/import.js";
 import { createMemoryRebind } from "./memory-ops/rebind.js";
 import { createMemoryUnimport } from "./memory-ops/unimport.js";
+import { createMemoryLink } from "./memory-ops/link.js";
+import { createLinkLedger } from "./memory-ops/link-ledger.js";
 import { memoryOpError } from "./memory-ops/errors.js";
+
+/** 1.16.0: `Engine.capabilities` — additive feature flags, frozen. */
+const ENGINE_CAPABILITIES = Object.freeze({ memoryLink: true });
 import { createStoreAdopt } from "./stores/adopt.js";
 import { createObsidianOps } from "./admin/obsidian.js";
 
@@ -1652,6 +1657,18 @@ export function createEngine(host, config, testOptions = {}) {
     }
     return out;
   };
+  // 1.16.0: one link ledger shared by link, unimport (unlink by run) and show/list.
+  const memoryLinkLedger = createLinkLedger({ baseDbPath, logger: host.logger });
+  const memoryLink = createMemoryLink({
+    opsContext: memoryOpsContext,
+    pool,
+    sharedMemoryPool,
+    baseDbPath,
+    logger: host.logger,
+    clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
+    importLedger: memoryImport.ledger,
+    linkLedger: memoryLinkLedger,
+  });
   const memoryUnimport = createMemoryUnimport({
     opsContext: memoryOpsContext,
     pool,
@@ -1662,6 +1679,7 @@ export function createEngine(host, config, testOptions = {}) {
     clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
     importLedger: memoryImport.ledger,
     derivedCleanup: unimportDerivedCleanup,
+    linkLedger: memoryLinkLedger,
   });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,
@@ -1672,6 +1690,7 @@ export function createEngine(host, config, testOptions = {}) {
     baseDbPath,
     logger: host.logger,
     importLedger: memoryImport.ledger,
+    linkLedger: memoryLinkLedger,
   });
   const memoryWrite = createMemoryWrite({
     opsContext: memoryOpsContext,
@@ -3255,6 +3274,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryImport,
     memoryRebind,
     memoryUnimport,
+    memoryLink,
     memoryRead,
     memoryWrite,
     memoryTextContradictionLlmCfg,
@@ -3698,7 +3718,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.15.0",
+    contract: "1.16.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3755,7 +3775,7 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.13.0).
+  // The Engine (types/engine.d.ts, contract 1.16.0).
   const storeAdopt = createStoreAdopt({
     baseDbPath,
     pool,
@@ -3769,7 +3789,9 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.15.0",
+    contract: "1.16.0",
+    // 1.16.0: feature flags a harness can test instead of parsing the contract version.
+    capabilities: ENGINE_CAPABILITIES,
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3947,6 +3969,8 @@ export function createEngine(host, config, testOptions = {}) {
       rebind: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRebind.rebind(req, p, a)); },
       unbind: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRebind.unbind(req, p, a)); },
       unimport: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryUnimport.unimport(req, p, a)); },
+      // 1.16.0: attach an imported duplicate to an existing card (sidecar link, card row untouched).
+      link: async (id, req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryLink.link(id, req, p, a)); },
       proposals: Object.freeze({
         list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.list(q, p, a)); },
         accept: async (proposalId, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.accept(proposalId, p, a)); },

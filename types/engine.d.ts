@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.15.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended fifteen times under the policy below — see the changelog at the end
+ * Contract version 1.16.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended sixteen times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -46,10 +46,11 @@
  *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
  *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
  *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0). Also: MemoryImportRequest without importRunId attributes each card to the run its sourceRef names (`;run=<id>`); MemoryUnimportRequest.importRunId also selects such lines; MemoryUnimportResult.derived.graphEdgesRemoved? / mirrorsArchived? / cleanupErrors? (unimport drops the undone cards' graph edges and archives their Obsidian mirrors).
+ *            1.16.0 — MemoryOps.link(id, req, p, a) (owner decision 2026-10-19: attach an imported duplicate to an existing card as an additional source instead of storing a duplicate; sidecar `_links/`, the card row is never written; idempotent per sourceRef); MemoryCard.links? (show/list); MemoryUnimportResult.links? (unimport of a run unlinks that run's links, the card stays); Engine.capabilities (EngineCapabilities, `memoryLink: true`); no breaking change to existing callers.
  */
 
-// 1.15.0: HostServices.fetch?, SecretStore.resolve(ref, purpose), configurable remote reranker.
-export type ContractVersion = "1.15.0";
+// 1.16.0: MemoryOps.link, MemoryCard.links?, MemoryUnimportResult.links?, Engine.capabilities.
+export type ContractVersion = "1.16.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -779,6 +780,46 @@ export interface MemoryCard {
   provenance?: "imported";
   /** 1.11.0: import source reference, truncated to ≤ 500 characters before store. */
   sourceRef?: string;
+  /** 1.16.0: additional sources attached by `memory.link` (oldest first); absent when there are none.
+   *  Recorded per agent: only the linking agent's show/list report them. */
+  links?: MemoryLink[];
+}
+
+/** 1.16.0: one additional source of a card, attached by `memory.link`. */
+export interface MemoryLink {
+  /** Deterministic over (agentId, card id, sourceRef); 32 hex characters. */
+  linkId: string;
+  sourceRef: string;
+  provenance: MemoryImportProvenance;
+  /** The import run the link belongs to (explicit, or named in the sourceRef as `;run=<id>`); null when none. */
+  importRunId: string | null;
+  /** Epoch ms. */
+  linkedAt: number;
+}
+
+/** 1.16.0: argument of `MemoryOps.link`. */
+export interface MemoryLinkRequest {
+  /** 1–500 characters after trim (longer is `invalid-input`, never truncated: it is the idempotency key). */
+  sourceRef: string;
+  provenance: MemoryImportProvenance;
+  /** `/^[A-Za-z0-9_-]{1,64}$/`. Absent: the run named in `sourceRef` (`;run=<id>`, rules as for import), else none. */
+  importRunId?: string;
+  /** The importer's key for the duplicate card (1–256); `unimport`'s `idempotencyKeys` filter matches it. */
+  idempotencyKey?: string;
+  /** Default false. True: checks and classifies, writes nothing, takes no lock. */
+  dryRun?: boolean;
+}
+
+/** `linked`: a new link was written. `already-linked`: this sourceRef is already linked (no-op; `importRunId` is the
+ *  existing link's run). `already-source`: the card was itself imported from this sourceRef (no-op, `importRunId` null). */
+export type MemoryLinkOutcome = "linked" | "already-linked" | "already-source";
+
+export interface MemoryLinkResult {
+  id: string;
+  linkId: string;
+  outcome: MemoryLinkOutcome;
+  importRunId: string | null;
+  dryRun: boolean;
 }
 
 export interface MemoryListQuery {
@@ -899,6 +940,16 @@ export interface MemoryOps {
    * and `a.background === false`. Ids, keys, counters and reason codes only.
    */
   unimport(req: MemoryUnimportRequest, p: Principal, a: AgentContext): Promise<MemoryUnimportResult>;
+  /**
+   * 1.16.0: attach an additional source to the existing card `id` (an imported
+   * card that duplicates it) without changing its text, vector or row.
+   * Requires `a.origin === "system"` and `a.background === false` (`denied`).
+   * The card must be one the caller can `show`; otherwise `not-found` (also
+   * for an unknown id). Idempotent per sourceRef. Apply takes the per-agent
+   * import lock (`lock-busy` / `lock-lost`); more than 100 links on one card is
+   * `conflict`. Audit line `memory.linked`.
+   */
+  link(id: string, req: MemoryLinkRequest, p: Principal, a: AgentContext): Promise<MemoryLinkResult>;
 }
 
 export interface MemoryRebindFromIdentity {
@@ -1071,6 +1122,19 @@ export interface MemoryUnimportResult {
    *  archive (`{archiveDir}/obsidian-mirrors/`), and best-effort cleanup failures (logged, the
    *  cards stay undone; a rerun retries the cleanup). */
   derived: { jobsSinceImport: JobName[]; graphEdgesRemoved?: number; mirrorsArchived?: number; cleanupErrors?: number };
+  /** 1.16.0: present when the run made links (`memory.link`). Unlinking never writes the linked card. */
+  links?: MemoryUnimportLinksResult;
+}
+
+export type MemoryUnimportLinkOutcome = "unlinked" | "already-unlinked";
+
+export interface MemoryUnimportLinksResult {
+  /** Links this run made (after the key filter; a link without a key is not selected when a filter is set). */
+  selected: number;
+  unlinked: number;
+  alreadyUnlinked: number;
+  /** One entry per handled link; empty after an abort (a rerun handles them). */
+  items: Array<{ linkId: string; id: string; outcome: MemoryUnimportLinkOutcome }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1173,8 +1237,16 @@ export interface AgentStore {
 /* The engine                                                          */
 /* ------------------------------------------------------------------ */
 
+/** 1.16.0: additive feature flags a host can test before calling an optional surface. */
+export interface EngineCapabilities {
+  /** `MemoryOps.link`, `MemoryCard.links`, unimport unlinks by run. */
+  readonly memoryLink: boolean;
+}
+
 export interface Engine {
   readonly contract: ContractVersion;
+  /** 1.16.0: frozen. */
+  readonly capabilities: EngineCapabilities;
 
   open(agentId: AgentId): Promise<AgentStore>;
   /** Idempotent: every call returns the same promise. Resolves within

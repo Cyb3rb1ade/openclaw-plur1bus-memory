@@ -105,7 +105,7 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.15.0">>();
+assertTrue<Exact<ContractVersion, "1.16.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
@@ -154,7 +154,17 @@ assertTrue<Exact<keyof MemoryUnbindResult, "rebindId" | "matched" | "unbound" | 
 assertTrue<Exact<MemoryOps["unimport"], (req: import("./engine.js").MemoryUnimportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryUnimportResult>>>();
 assertTrue<Exact<import("./engine.js").MemoryUnimportOutcome, "unimported" | "kept-modified" | "already-forgotten" | "already-unimported" | "missing" | "failed">>();
 assertTrue<Exact<import("./engine.js").MemoryUnimportKeptReason, "superseded" | "content-changed" | "binding-changed" | "metadata-changed" | "edited" | "shared" | "rebound" | "other-run">>();
-assertTrue<Exact<keyof import("./engine.js").MemoryUnimportResult, "agentId" | "importRunId" | "dryRun" | "selected" | "unimported" | "keptModified" | "alreadyForgotten" | "alreadyUnimported" | "missing" | "failed" | "remaining" | "cards" | "derived">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryUnimportResult, "agentId" | "importRunId" | "dryRun" | "selected" | "unimported" | "keptModified" | "alreadyForgotten" | "alreadyUnimported" | "missing" | "failed" | "remaining" | "cards" | "derived" | "links">>();
+// 1.16.0: memory.link, MemoryCard.links, unimport links, Engine.capabilities (additive).
+assertTrue<Exact<MemoryOps["link"], (id: string, req: import("./engine.js").MemoryLinkRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryLinkResult>>>();
+assertTrue<Exact<import("./engine.js").MemoryLinkOutcome, "linked" | "already-linked" | "already-source">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryLinkResult, "id" | "linkId" | "outcome" | "importRunId" | "dryRun">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryLink, "linkId" | "sourceRef" | "provenance" | "importRunId" | "linkedAt">>();
+assertTrue<Exact<import("./engine.js").MemoryCard["links"], import("./engine.js").MemoryLink[] | undefined>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportResult["links"], import("./engine.js").MemoryUnimportLinksResult | undefined>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportLinkOutcome, "unlinked" | "already-unlinked">>();
+assertTrue<Exact<Engine["capabilities"], import("./engine.js").EngineCapabilities>>();
+assertTrue<Exact<import("./engine.js").EngineCapabilities["memoryLink"], boolean>>();
 assertTrue<Exact<import("./engine.js").MemoryImportRequest["importRunId"], string | undefined>>();
 assertTrue<Exact<MemoryImportOutcome, "created" | "matched-existing" | "rejected">>();
 assertTrue<Exact<MemoryImportRejectReason, "invalid-input" | "tombstone-blocked" | "principal-unresolved" | "empty-text" | "provenance-not-imported" | "previously-imported-deleted" | "aborted" | "storage">>();

@@ -46,11 +46,11 @@ const agent = { origin: "user", background: false };
 describe("Engine", () => {
   it("reports contract 1.13.0, 19 jobs, the tools and a status", async () => {
     const engine = createEngine(createStubHost({ stateDir: makeTempDir("ec-state-") }), config(makeTempDir("ec-db-")));
-    assert.equal(engine.contract, "1.15.0");
+    assert.equal(engine.contract, "1.16.0");
     assert.equal(engine.jobs.list().length, 19);
     assert.deepEqual(engine.tools.map((t) => t.name).sort(), ["knowledge_update", "memory_forget", "memory_recall", "memory_search", "memory_store"]);
     const status = await engine.status();
-    assert.equal(status.contract, "1.15.0");
+    assert.equal(status.contract, "1.16.0");
     assert.deepEqual(status.jobs, { ledger: "ok", agents: [] });
     assert.equal(status.models.embedder.state, "loading");
     assert.equal(status.models.reranker.state, "disabled");
@@ -452,11 +452,14 @@ describe("Engine", () => {
 
   it("contract 1.13.0 exposes a typed MemoryOps surface", async () => {
     const engine = createEngine(createStubHost(), {});
-    assert.equal(engine.contract, "1.15.0");
-    assert.equal((await engine.status()).contract, "1.15.0");
-    for (const m of ["list", "show", "forget", "correct", "share", "state", "propose", "import", "rebind", "unbind", "unimport"]) {
+    assert.equal(engine.contract, "1.16.0");
+    assert.equal((await engine.status()).contract, "1.16.0");
+    for (const m of ["list", "show", "forget", "correct", "share", "state", "propose", "import", "rebind", "unbind", "unimport", "link"]) {
       assert.equal(typeof engine.memory[m], "function", `engine.memory.${m}`);
     }
+    // 1.16.0: feature flags.
+    assert.deepEqual({ ...engine.capabilities }, { memoryLink: true });
+    assert.ok(Object.isFrozen(engine.capabilities));
     assert.equal(typeof engine.stores.adopt, "function", "engine.stores.adopt");
     assert.ok(Object.isFrozen(engine.stores));
     assert.equal(typeof engine.memory.proposals.list, "function", "engine.memory.proposals.list");
