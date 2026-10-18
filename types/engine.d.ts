@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.14.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended fourteen times under the policy below — see the changelog at the end
+ * Contract version 1.15.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended fifteen times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -44,10 +44,12 @@
  *            1.11.0 — MemoryOps.import (finished-card ingest with deterministic ids) and Engine.stores.adopt (copy-never-move store take-over with a sample cosine probe for legacy stores); MemoryCard.provenance/sourceRef optional; no breaking change to existing callers.
  *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound" | "ledger-corrupt" | "lock-lost"; no breaking change to existing callers.
  *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
+ *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
+ *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0).
  */
 
-// 1.14.0: additive complete vector-space identities, routes and degraded notes.
-export type ContractVersion = "1.14.0";
+// 1.15.0: HostServices.fetch?, SecretStore.resolve(ref, purpose), configurable remote reranker.
+export type ContractVersion = "1.15.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -120,9 +122,70 @@ export interface AgentContext {
 /* What the host gives the engine                                      */
 /* ------------------------------------------------------------------ */
 
+/** 1.15.0: what a resolved secret is for; passed as `purpose` to SecretStore.resolve. */
+export type SecretPurpose = "embedding" | "reranker" | "llm" | (string & {});
+
+/** 1.15.0: the host's secret store. The engine calls `resolve` for every provider config that
+ *  sets `apiKeyRef` — before `apiKeyEnv`/`apiKey`; with `apiKeyRef` set and no store (or a failed /
+ *  empty resolution) the provider fails closed, it never falls back to the environment. The value
+ *  is never logged, persisted or put into a cache key in clear (only hashed, as before); providers
+ *  keep it at most 60 s (embedding, reranker) or not at all (LLM: per call) and drop it on HTTP
+ *  401/403, so a rotated key applies without a restart. */
 export interface SecretStore {
-  /** Short-lived; the engine never persists the value. */
-  lease(ref: string): Promise<string>;
+  /** Resolve `ref` (the configured `apiKeyRef`, a name, never the value). Reject or return "" when unknown. */
+  resolve(ref: string, purpose: SecretPurpose): Promise<string>;
+  /** @deprecated 1.15.0 — never called before 1.15.0; still honoured when `resolve` is absent. */
+  lease?(ref: string): Promise<string>;
+}
+
+/** 1.15.0: WHATWG-fetch-compatible function. The engine passes `input` as a URL string and `init` with
+ *  at least method, headers (plain object), body (string) and signal; it reads `ok`, `status`,
+ *  `headers.get()`, `text()`/`json()` and `body` (ReadableStream, for size-capped reads) of the result. */
+export type HostFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/** 1.15.0: credential fields every remote provider config (embedding, embedding.routes[].provider,
+ *  reranker, feature LLM overrides) accepts. Order: apiKeyRef → apiKeyEnv → apiKey → provider default env. */
+export interface ProviderCredentialConfig {
+  /** Name in the host's secret store (HostServices.secrets). 1–256 chars of [A-Za-z0-9._:/@-]. */
+  apiKeyRef?: string;
+  /** Name of an environment variable holding the key. */
+  apiKeyEnv?: string;
+  /** Literal key, `${ENV}` reference or OpenClaw SecretInput (legacy; prefer apiKeyRef). */
+  apiKey?: string | { source: "env" | "store" | "file" | "exec"; provider: string; id: string };
+}
+
+/** 1.15.0: reranker wire formats. "cohere"/"jina": {model, query, documents, top_n} → {results}; "voyage":
+ *  {model, query, documents, top_k} → {data}; "tei": {query, texts} → [{index, score}]. All are normalised
+ *  to `[{index, relevance_score}]`. */
+export type RerankProtocol = "cohere" | "jina" | "voyage" | "tei";
+
+/** 1.15.0: `config.reranker` for the HTTP providers. Presets (default baseUrl / protocol / model / env):
+ *  cohere — https://api.cohere.com/v2, cohere, rerank-v3.5, COHERE_API_KEY;
+ *  jina — https://api.jina.ai/v1, jina, jina-reranker-v2-base-multilingual, JINA_API_KEY;
+ *  voyage — https://api.voyageai.com/v1, voyage, rerank-2.5, VOYAGE_API_KEY;
+ *  remote — no defaults: baseUrl required, protocol "cohere", key optional (keyless self-hosted servers).
+ *  The endpoint is `{baseUrl}/rerank` unless baseUrl already ends in /rerank. A failed rerank never switches
+ *  to another model unless `fallbackProvider: "local-transformers"` is set; otherwise recall runs unreranked. */
+export interface RemoteRerankerConfig extends ProviderCredentialConfig {
+  enabled?: boolean;
+  provider: "cohere" | "jina" | "voyage" | "remote";
+  baseUrl?: string;
+  protocol?: RerankProtocol;
+  model?: string;
+  candidates?: number;
+  /** Own timer only when the caller passes no signal (the recall pipeline always does). Default 5000. */
+  timeoutMs?: number;
+  /** Refuse requests with more documents. Default 1000. */
+  maxDocuments?: number;
+  /** Refuse request bodies above this size. Default 4 MiB. */
+  maxRequestBytes?: number;
+  /** Abort and fail on response bodies above this size. Default 1 MiB. */
+  maxResponseBytes?: number;
+  fallbackOnError?: boolean;
+  fallbackProvider?: "local-transformers" | "disabled";
+  fallbackModel?: string;
+  fallbackRevision?: string;
+  fallbackCacheDir?: string;
 }
 
 export interface LlmParams {
@@ -179,7 +242,12 @@ export interface HostServices {
   config(): EngineConfig;
   mutateConfig?(patch: Record<string, unknown>): Promise<void>;
   llm?: { complete(params: LlmParams): Promise<LlmResult> };
+  /** 1.15.0: provider keys named by `apiKeyRef`. Absent: `apiKeyRef` fails closed. */
   secrets?: SecretStore;
+  /** 1.15.0: carries every outbound HTTP request of the engine (embedding clients, rerankers, the engine's
+   *  own LLM calls, webhooks, model downloads). Absent: the global fetch, as before. Bound once per process
+   *  by createEngine (last engine wins, like pathOverrides). */
+  fetch?: HostFetch;
   events?: { emit(name: string, payload: unknown): void };
   /** Test seam; defaults to Date.now. */
   clock?: () => number;

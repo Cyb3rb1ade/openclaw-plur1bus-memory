@@ -8,6 +8,7 @@
 import { normalizeRerankerConfig } from "../../lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL } from "../../lib/providers/dimensions.js";
 import { CohereRerankerProvider } from "../../lib/providers/reranker-cohere.js";
+import { RemoteRerankerProvider, isRemoteRerankProvider } from "../../lib/providers/reranker-remote.js";
 import { LocalTransformersRerankerProvider } from "../../lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "../../lib/providers/reranker-chained.js";
 
@@ -28,8 +29,12 @@ function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, {
 } = {}) {
   const rerankerCfg = normalizeRerankerConfig(rawRerankerCfg || {});
   let reranker = null;
-  if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
-    const primary = new CohereRerankerProvider({ ...rerankerCfg, credentialResolver });
+  if (isRemoteRerankProvider(rerankerCfg.provider) && rerankerCfg.enabled) {
+    // cohere | jina | voyage | remote: one HTTP provider, protocol/baseUrl from config.
+    // No silent switch to another model: only an explicit fallbackProvider adds one.
+    const primary = rerankerCfg.provider === "cohere"
+      ? new CohereRerankerProvider({ ...rerankerCfg, credentialResolver })
+      : new RemoteRerankerProvider({ ...rerankerCfg, credentialResolver });
     if ((rerankerCfg.fallbackProvider ?? "disabled") === "local-transformers") {
       const fallback = new LocalTransformersRerankerProvider({
         ...(rerankerCfg.local || {}),

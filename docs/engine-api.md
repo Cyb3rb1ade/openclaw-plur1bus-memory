@@ -36,7 +36,7 @@ against one shape.
 > adapters move together in a single PR, so the contract, its gate and its two
 > consumers are never in disagreement at any commit.
 
-Seven amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
+Fifteen amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
 own changelog:
 
 - **1.1.0** — `SecurePathResult.reason` gains `"acl-tool-unavailable"` (Task 5).
@@ -145,6 +145,14 @@ own changelog:
   run created) and the optional `MemoryImportRequest.importRunId`.
   `MemoryOpErrorCode` gains `"lock-busy"`. Additive members only. See
   [Unimport in 1.13.0](#unimport-in-1130) below.
+- **1.14.0** — complete vector-space identities, routes and degraded notes
+  (PR-10, see `docs/embedding-identity.md`).
+- **1.15.0** — network ports: optional `HostServices.fetch` (`HostFetch`,
+  WHATWG-compatible) carries every outbound HTTP request of the engine;
+  `SecretStore` becomes `resolve(ref, purpose)` (the never-called `lease()`
+  stays optional and deprecated) and backs the provider option `apiKeyRef`;
+  `ProviderCredentialConfig`, `RemoteRerankerConfig`, `RerankProtocol`. See
+  [Network ports in 1.15.0](#network-ports-in-1150) below.
 
 ## The two halves
 
@@ -160,6 +168,51 @@ inert default), `mutateConfig`, `llm`, `secrets`, `events` (`emit(name,
 payload)`, read by every `emitEngineEvent` call in `engine/**`), `clock`
 (defaults to `Date.now`). `lib/host-services.js` implements it for OpenClaw
 (`createHostServices(api)`) and for tests (`createStubHost()`).
+
+### Network ports in 1.15.0
+
+**`HostServices.fetch?: HostFetch`** — when set, every outbound HTTP request
+of the engine goes through it: the OpenAI-SDK embedding clients (OpenAI and
+every OpenAI-compatible endpoint), the OpenClaw remote embedding adapter, the
+HTTP rerankers, the engine's own direct LLM calls (consolidation,
+classification, dreaming, merge checks, tier-3 emotion, JEV chunking),
+reminder webhooks, pinned model downloads and the downloads of
+`@huggingface/transformers` (`env.fetch`). The engine calls it as
+`fetch(url: string, { method, headers, body, signal })` and reads `ok`,
+`status`, `headers.get()`, `text()`/`json()` and `body` (size-capped reads).
+Absent: the global `fetch`, resolved per call, exactly as before. `createEngine`
+binds it once per process (`lib/host-network.js`, last engine wins, like
+`pathOverrides`); a non-function value is a `TypeError` at construction.
+`tests/host-fetch-port.test.js` replaces the global fetch with a throwing one
+and scans the sources so no call site bypasses the port.
+
+**`HostServices.secrets?: SecretStore`** — `resolve(ref, purpose)` with
+`purpose` `"embedding" | "reranker" | "llm"`. Every provider config that sets
+`apiKeyRef` (`embedding`, `embedding.routes[].provider`, `reranker`, the
+feature LLM overrides `merging`, `schicht15`, `skillMiner`, `criticalPush`,
+`emotion.t3`) asks the store first; order `apiKeyRef` → `apiKeyEnv` →
+`apiKey` → the provider's default variable. With `apiKeyRef` set and no store,
+or an empty or failed resolution, the provider fails closed
+(`PLUR1BUS_SECRET_STORE_UNAVAILABLE` / `PLUR1BUS_SECRET_REF_UNRESOLVED`; the
+message names the ref, never a value) and no request leaves. Caching:
+embedding and reranker keep a resolved key at most 60 s
+(`SECRET_REF_TTL_MS`) and drop it on HTTP 401/403, the embedding client is
+rebuilt when the key changes; LLM calls resolve on every call. The value is
+never logged; the LLM result cache sees it only as part of its hashed key.
+
+**HTTP reranker** — `reranker.provider` `cohere | jina | voyage | remote`
+with `baseUrl`, `protocol` (`cohere`/`jina`: `{model, query, documents,
+top_n}` → `results`; `voyage`: `top_k` → `data`; `tei`: `{query, texts}` →
+`[{index, score}]`), `model`, `apiKeyRef | apiKeyEnv | apiKey`,
+`maxDocuments` (1000), `maxRequestBytes` (4 MiB), `maxResponseBytes` (1 MiB).
+Presets supply default `baseUrl`/`protocol`/`model`/key variable (Cohere
+`https://api.cohere.com/v2`, `rerank-v3.5`, `COHERE_API_KEY`; Jina
+`https://api.jina.ai/v1`, `jina-reranker-v2-base-multilingual`,
+`JINA_API_KEY`; Voyage `https://api.voyageai.com/v1`, `rerank-2.5`,
+`VOYAGE_API_KEY`); `remote` has none (baseUrl required, key optional for a
+keyless local server). Every response is validated and normalised to
+`[{index, relevance_score}]`. A failure never switches models: without
+`fallbackProvider: "local-transformers"` recall continues unreranked.
 
 **`Engine`** — what the engine gives a host. Lifecycle (`open`, `close`,
 `status`), the turn path (`systemSupplement`, `recall`, `capture`,

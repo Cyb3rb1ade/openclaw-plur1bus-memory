@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "plur1bus-engine-config",
-  "x-contract": "1.14.0",
+  "x-contract": "1.15.0",
   "$defs": {
     "secretInput": {
       "type": [
@@ -47,6 +47,13 @@
         "apiKey": {
           "$ref": "#/$defs/secretInput",
           "x-sensitive": true
+        },
+        "apiKeyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+          "description": "Name of the embedding API key in the host's secret store (HostServices.secrets, contract 1.15.0). Preferred over apiKeyEnv and apiKey; re-resolved at most every 60 s and after HTTP 401/403. Without a host secret store the provider fails closed."
         },
         "apiKeyEnv": {
           "type": "string"
@@ -1018,9 +1025,13 @@
           "type": "string",
           "enum": [
             "cohere",
+            "jina",
+            "voyage",
+            "remote",
             "local-transformers",
             "disabled"
-          ]
+          ],
+          "description": "cohere, jina and voyage are presets of the HTTP reranker (default baseUrl, protocol, model and key variable, all overridable); remote is a generic HTTP reranker that needs baseUrl and may run keyless; local-transformers runs a pinned local model."
         },
         "apiKey": {
           "$ref": "#/$defs/secretInput",
@@ -1028,6 +1039,28 @@
         },
         "apiKeyEnv": {
           "type": "string"
+        },
+        "apiKeyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+          "description": "Name of the reranker API key in the host's secret store (HostServices.secrets, contract 1.15.0). Preferred over apiKeyEnv and apiKey; re-resolved at most every 60 s and after HTTP 401/403. Without a host secret store the reranker fails closed."
+        },
+        "baseUrl": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base URL of the HTTP reranker; requests go to {baseUrl}/rerank unless it already ends in /rerank. Defaults: cohere https://api.cohere.com/v2, jina https://api.jina.ai/v1, voyage https://api.voyageai.com/v1; required for remote. Must not carry credentials."
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "cohere",
+            "jina",
+            "voyage",
+            "tei"
+          ],
+          "description": "Wire format: cohere/jina {model, query, documents, top_n} → results (Cohere, Jina, vLLM, Infinity, LocalAI), voyage {model, query, documents, top_k} → data, tei {query, texts} → [{index, score}] (Hugging Face text-embeddings-inference). Default from the provider preset (remote: cohere)."
         },
         "model": {
           "type": "string"
@@ -1038,6 +1071,24 @@
         "timeoutMs": {
           "type": "number",
           "default": 5000
+        },
+        "maxDocuments": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1000,
+          "description": "HTTP reranker: refuse a rerank with more documents than this."
+        },
+        "maxRequestBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4194304,
+          "description": "HTTP reranker: refuse a request body larger than this many bytes."
+        },
+        "maxResponseBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1048576,
+          "description": "HTTP reranker: abort and fail when the response body exceeds this many bytes."
         },
         "fallbackOnError": {
           "type": "boolean",
@@ -1108,6 +1159,13 @@
           "x-sensitive": true,
           "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
         },
+        "apiKeyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+          "description": "Name of the direct-transport key in the host's secret store (HostServices.secrets, contract 1.15.0). Resolved on every call and preferred over apiKey; without a host secret store the route fails closed."
+        },
         "disableThinking": {
           "type": "boolean"
         },
@@ -1165,6 +1223,13 @@
           "$ref": "#/$defs/secretInput",
           "x-sensitive": true,
           "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "apiKeyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+          "description": "Name of the direct-transport key in the host's secret store (HostServices.secrets, contract 1.15.0). Resolved on every call and preferred over apiKey; without a host secret store the route fails closed."
         },
         "disableThinking": {
           "type": "boolean"
@@ -1413,6 +1478,13 @@
           "$ref": "#/$defs/secretInput",
           "x-sensitive": true,
           "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+        },
+        "apiKeyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+          "description": "Name of the direct-transport key in the host's secret store (HostServices.secrets, contract 1.15.0). Resolved on every call and preferred over apiKey; without a host secret store the route fails closed."
         },
         "disableThinking": {
           "type": "boolean"
@@ -2592,6 +2664,13 @@
           "x-sensitive": true,
           "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
         },
+        "apiKeyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+          "description": "Name of the direct-transport key in the host's secret store (HostServices.secrets, contract 1.15.0). Resolved on every call and preferred over apiKey; without a host secret store the route fails closed."
+        },
         "disableThinking": {
           "type": "boolean"
         },
@@ -3011,6 +3090,13 @@
               "$ref": "#/$defs/secretInput",
               "x-sensitive": true,
               "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
+            },
+            "apiKeyRef": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$",
+              "description": "Name of the direct-transport key in the host's secret store (HostServices.secrets, contract 1.15.0). Resolved on every call and preferred over apiKey; without a host secret store the route fails closed."
             },
             "baseUrl": {
               "type": "string",

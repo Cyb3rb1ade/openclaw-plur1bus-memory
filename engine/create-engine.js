@@ -48,6 +48,7 @@ import { combineEpistemicStatusForMerge, normalizeEpistemicStatus } from "../lib
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../lib/valid-time.js";
 import { createLocalModelGenerationLifecycle } from "../lib/local-model-generation.js";
 import { bindHostPaths } from "../lib/host-paths.js";
+import { bindHostNetwork } from "../lib/host-network.js";
 import { PLUGIN_ROOT } from "../lib/plugin-meta.js";
 import { getFeatureCronsSetupHint } from "../lib/feature-crons-hint.js";
 import { findProposalWorkspace } from "../lib/telegram-commands/skill-commands.js";
@@ -207,6 +208,9 @@ export function createEngine(host, config, testOptions = {}) {
     getConfig: () => host.runtime?.config?.current?.() || host.config(),
   });
   bindHostPaths(host.pathOverrides);
+  // 1.15.0: every outbound request goes through host.fetch when given, and
+  // apiKeyRef keys come from host.secrets. Absent: global fetch, no store.
+  bindHostNetwork({ fetch: host.fetch, secrets: host.secrets });
   setPluginLogger(host.logger);
   const cronDirectDispatchReady = capabilities.cronDirectDispatchReady === true;
   const openClawSkillWorkshop = capabilities.skillWorkshop ?? null;
@@ -254,7 +258,7 @@ export function createEngine(host, config, testOptions = {}) {
     : "";
   const createFeatureRoute = (feature, featureConfig = {}) => {
     const routeConfig = { ...featureConfig };
-    const hasOwnTransport = Boolean(routeConfig.baseUrl || routeConfig.apiKey || routeConfig.headers);
+    const hasOwnTransport = Boolean(routeConfig.baseUrl || routeConfig.apiKey || routeConfig.apiKeyRef || routeConfig.headers);
     if (featureDefaultModel && !hasOwnTransport
       && !(typeof routeConfig.model === "string" && routeConfig.model.trim())) {
       routeConfig.model = featureDefaultModel;
@@ -3651,7 +3655,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.14.0",
+    contract: "1.15.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3722,7 +3726,7 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.14.0",
+    contract: "1.15.0",
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());

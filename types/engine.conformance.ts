@@ -11,10 +11,10 @@ import type {
   AdminOps, AgentContext, AgentJobHealth, CaptureOptions, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   CriticalButtonPushArgs, CriticalButtonPushResult, Deferral, Degraded, Disposable, Engine, EngineConfig,
   EngineConfigKey, EngineConfigReadAt, EngineConfigSchema,
-  EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostServices,
+  EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostFetch, HostServices,
   HostCapabilities, IpcAddress, JobLastRun, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
   MemoryImportOutcome, MemoryImportRejectReason, MemoryProposalStatus, MemoryRebindResult, MemoryUnbindResult, ModelsStatus, ModelState, ObsidianOps, Principal, RecallOptions, RecallQuery, RecallResult, RecallTiming,
-  SchemaVersion, StoreAdoptIdentitySource, StoreAdoptIncompatibleReason, StoreOps, TurnOrigin, TurnRecord,
+  ProviderCredentialConfig, RemoteRerankerConfig, RerankProtocol, SchemaVersion, SecretPurpose, SecretStore, StoreAdoptIdentitySource, StoreAdoptIncompatibleReason, StoreOps, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
 
@@ -105,7 +105,7 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.14.0">>();
+assertTrue<Exact<ContractVersion, "1.15.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
@@ -229,3 +229,14 @@ assertTrue<Exact<Parameters<Engine["recall"]>[1], RecallOptions | undefined>>();
 assertTrue<Exact<Parameters<Engine["capture"]>[1], CaptureOptions | undefined>>();
 assertTrue<Exact<RecallOptions["reranker"], "on" | "off" | undefined>>();
 assertTrue<Exact<CaptureOptions["deferPostTurnLlm"], boolean | undefined>>();
+
+// 1.15.0: optional network ports. fetch is WHATWG-compatible; the secret store resolves (ref, purpose).
+assertTrue<Exact<HostServices["fetch"], HostFetch | undefined>>();
+assertTrue<Exact<HostServices["secrets"], SecretStore | undefined>>();
+assertTrue<Exact<Parameters<SecretStore["resolve"]>, [ref: string, purpose: SecretPurpose]>>();
+assertTrue<Exact<ReturnType<SecretStore["resolve"]>, Promise<string>>>();
+const hostWithPorts: HostServices = { ...minimalHost, fetch: (input, init) => fetch(input, init), secrets: { resolve: async () => "k" } };
+void hostWithPorts;
+assertTrue<Exact<ProviderCredentialConfig["apiKeyRef"], string | undefined>>();
+assertTrue<Exact<RemoteRerankerConfig["provider"], "cohere" | "jina" | "voyage" | "remote">>();
+assertTrue<Exact<RerankProtocol, "cohere" | "jina" | "voyage" | "tei">>();
