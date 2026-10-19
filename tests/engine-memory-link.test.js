@@ -12,7 +12,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { internalsOf } from "../engine/internals.js";
@@ -292,7 +292,8 @@ describe("Engine.memory.unimport removes links of its run (contract 1.16.0)", ()
 
 describe("link ledger location", () => {
   it("lives under _links/<agentId>.jsonl inside baseDbPath", () => {
-    const base = join(makeTempDir("link-path-"), "db");
+    // realpath: on macOS the temp dir is /var/... while the ledger resolves /private/var/...
+    const base = join(realpathSync(makeTempDir("link-path-")), "db");
     mkdirSync(base, { recursive: true });
     assert.equal(linkLedgerPath(base, "anna"), join(base, "_links", "anna.jsonl"));
     assert.throws(() => linkLedgerPath(base, "../evil"));
