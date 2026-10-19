@@ -80,6 +80,8 @@ export const DEPLOY_FILES = [
   "engine/memory-ops/rebind.js",
   "engine/memory-ops/unimport-ledger.js",
   "engine/memory-ops/unimport.js",
+  "engine/memory-ops/link-ledger.js",
+  "engine/memory-ops/link.js",
   "engine/stores/adopt.js",
   "engine/providers/embedding-service.js",
   "engine/providers/model-readiness.js",

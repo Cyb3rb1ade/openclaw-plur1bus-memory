@@ -158,6 +158,13 @@ own changelog:
   the undone cards' graph edges and archives their Obsidian mirrors
   (`derived.graphEdgesRemoved` / `mirrorsArchived` / `cleanupErrors`). See
   [Unimport in 1.13.0](#unimport-in-1130).
+- **1.16.0** — `MemoryOps.link(id, req, p, a)`: an importer attaches an
+  imported card that duplicates an existing memory to that memory as an
+  additional source instead of storing a duplicate (owner decision
+  2026-10-19). `MemoryCard.links?` on show/list, `MemoryUnimportResult.links?`
+  (unimport of a run unlinks that run's links, the card stays) and
+  `Engine.capabilities` (`{ memoryLink: true }`). Additive members only. See
+  [Link in 1.16.0](#link-in-1160) below.
 
 ## The two halves
 
@@ -880,6 +887,97 @@ text or `sourceRef`; the sidecar holds ids, keys and timestamps only.
 - Concurrency with `rebind`/`unbind` and live writers (capture, correct,
   forget, jobs) is governed by the host single-writer precondition A9, as
   for `stores.adopt`; unimport does not take `_rebinds/.lock`.
+- Package version stays 7.18.4.
+
+## Link in 1.16.0
+
+`Engine.memory.link(id, req, p, a)` attaches an additional source to an
+existing card. It closes the Harness gap "engine-side linking"
+(Harness PR #593, `docs/import.md` §11.3 there): an importer that finds an
+imported card duplicating an existing memory (via `memory.list` and its
+`duplicateThreshold` rule) links it instead of importing a duplicate row.
+Source: `engine/memory-ops/link.js`, `link-ledger.js`.
+
+Feature test: `engine.capabilities.memoryLink === true` (frozen object,
+1.16.0), or `engine.contract >= "1.16.0"`.
+
+### Request and guards
+
+- `id`: the existing card (memory id; else `invalid-input`).
+- `req.sourceRef` (required, 1–500 characters after trim; longer is
+  `invalid-input` — it is the idempotency key, so it is never truncated),
+  `req.provenance` (must be `"imported"`), optional `req.importRunId` (same
+  regex as import; absent → the run named in `sourceRef` as `;run=<id>`,
+  rules as for import, else none), optional `req.idempotencyKey` (the
+  importer's key for the duplicate card, 1–256; unimport's `idempotencyKeys`
+  filter matches it), `req.dryRun` (default **false**: classifies and
+  returns the outcome, writes nothing, takes no lock).
+- `a.origin === "system"` and `a.background === false`, else `denied`.
+- The card must be one the caller can `show`: same access pools, ACL and
+  liveness test (`findMemoryAcrossAccessPools`). An unknown id, a card of
+  another agent, a pool the principal cannot reach, a forgotten, archived or
+  superseded card are all `not-found` (anti-oracle).
+
+### What it writes
+
+Never the card row: text, vector, `updatedAt`, the import digest and every
+other column stay as they are, so a link neither changes recall nor makes
+an imported card look modified to `memory.unimport`. The link is one line in
+the per-agent sidecar `{baseDbPath}/_links/<agentId>.jsonl` (dir 0700, file
+0600, fsynced, the new file's directories fsynced best-effort):
+
+```json
+{"v":1,"kind":"linked","linkId":"<32 hex>","cardId":"<id>","sourceRef":"…","provenance":"imported","importRunId":"R1","idempotencyKey":"k7","at":1760870400000}
+```
+
+`linkId` is SHA-256 over (agentId, card id, sourceRef), so the same source
+always maps to the same link. Apply runs under the per-agent import lock
+(the one `import` and `unimport` take; `lock-busy` after 120 s, `lock-lost`
+when the nonce fence fails before the write); the card is looked up again
+under the lock. A `memory.linked` line (agentId, memoryId, linkId,
+importRunId — no sourceRef) goes to the workspace destructive-ops log.
+
+### Outcomes (`MemoryLinkResult`)
+
+| Outcome | When | Writes |
+|---|---|---|
+| `linked` | new source for this card | ledger line + audit |
+| `already-linked` | this sourceRef is already linked to the card (any run); `importRunId` is the existing link's | nothing |
+| `already-source` | the card was itself imported from this sourceRef (`_imports/` line); `importRunId` null | nothing |
+
+More than 100 active links on one card is `conflict`. The result carries
+`id`, `linkId`, `outcome`, `importRunId` and `dryRun`.
+
+### Reading
+
+`show` and `list` add `links` to a card that has any (oldest first):
+`{ linkId, sourceRef, provenance: "imported", importRunId | null, linkedAt }`.
+The card's own `provenance`/`sourceRef` (from `_imports/`) are unchanged; a
+captured card that gains links stays without `provenance`. Links are
+recorded per agent: only the linking agent's show/list report them (a link
+onto a workspace/user copy is not visible to other agents of that pool). An
+unreadable link ledger hides the links, never the card.
+
+### Rollback through `memory.unimport`
+
+`unimport({importRunId})` also selects the links whose latest `linked` line
+belongs to that run (explicit `importRunId`, else the sourceRef run). Apply
+appends `{"kind":"unlinked","linkId",…,"importRunId"}` under the same lock
+and fence and writes a `memory.unlinked` audit line; the linked card is
+never touched. `MemoryUnimportResult.links` (present only when the run made
+links): `selected`, `unlinked`, `alreadyUnlinked`, `items` (`linkId`, `id`,
+`outcome`). A rerun reports `already-unlinked`. With `idempotencyKeys` set,
+only links recorded with one of those keys are selected (never widens). A
+run that only linked (no cards) rolls back the same way. Once unlinked, the
+same source may be linked again by a later run; rolling back the earlier run
+does not touch that new link. `dryRun` reports, writes nothing. An abort
+after the lock leaves links for the rerun (`items` empty).
+
+### What 1.16.0 does not do
+
+- No merge of text or vector from the duplicate into the card.
+- No link from `memory.import` itself; the importer calls `link` for the
+  duplicates it found.
 - Package version stays 7.18.4.
 
 ## Shared copies and change proposals (1.6.0, D31)

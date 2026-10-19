@@ -57,6 +57,8 @@ const ENGINE_PATHS = Object.freeze({
   memoryOpsImportDigest: "engine/memory-ops/import-digest.js",
   memoryOpsUnimportLedger: "engine/memory-ops/unimport-ledger.js",
   memoryOpsUnimport: "engine/memory-ops/unimport.js",
+  memoryOpsLinkLedger: "engine/memory-ops/link-ledger.js",
+  memoryOpsLink: "engine/memory-ops/link.js",
   storeAdopt: "engine/stores/adopt.js",
   adminObsidian: "engine/admin/obsidian.js",
   internalJobBodies: "engine/jobs/internal-job-bodies.js",
