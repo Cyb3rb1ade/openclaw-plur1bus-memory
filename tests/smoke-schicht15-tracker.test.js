@@ -16,13 +16,13 @@ import {
 import { makeTempDir } from "./helpers/temp-dir.js";
 
 describe("schicht15-tracker", () => {
-  it("tracks promoted knowledge per workspace+agent", () => {
+  it("tracks promoted knowledge per workspace+agent", async () => {
     const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
 
     assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-1", null), false);
-    recordKnowledgePromotion(dir, ws, agent, "mem-1", "hash-a");
+    await recordKnowledgePromotion(dir, ws, agent, "mem-1", "hash-a");
     assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-1", null), true);
     assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-1", "hash-a"), true);
     assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-2", null), false);
@@ -34,7 +34,7 @@ describe("schicht15-tracker", () => {
     assert.strictEqual(isKnowledgePromoted(dir, "ws-b", agent, "mem-1", null), false);
   });
 
-  it("enforces maxPromotionsPerRun inside a 24-hour window, not for life", () => {
+  it("enforces maxPromotionsPerRun inside a 24-hour window, not for life", async () => {
     const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
@@ -43,12 +43,12 @@ describe("schicht15-tracker", () => {
     assert.strictEqual(check1.allowed, true);
     assert.strictEqual(check1.current, 0);
 
-    recordKnowledgePromotion(dir, ws, agent, "mem-1", null);
+    await recordKnowledgePromotion(dir, ws, agent, "mem-1", null);
     const check2 = checkMaxPromotions(dir, ws, agent, 2);
     assert.strictEqual(check2.allowed, true);
     assert.strictEqual(check2.current, 1);
 
-    recordKnowledgePromotion(dir, ws, agent, "mem-2", null);
+    await recordKnowledgePromotion(dir, ws, agent, "mem-2", null);
     const check3 = checkMaxPromotions(dir, ws, agent, 2);
     assert.strictEqual(check3.allowed, false);
     assert.strictEqual(check3.current, 2);
@@ -74,9 +74,9 @@ describe("schicht15-tracker", () => {
     assert.strictEqual(isKnowledgePromoted(dir, "ws-a", "agent-1", "a", null), true, "dedup keeps the old ids");
   });
 
-  it("persists in run-state.json", () => {
+  it("persists in run-state.json", async () => {
     const dir = makeTempDir("plur1bus-s15-");
-    recordKnowledgePromotion(dir, "ws", "agent", "mem-x", "hash-x");
+    await recordKnowledgePromotion(dir, "ws", "agent", "mem-x", "hash-x");
     const statePath = join(dir, "run-state.json");
     assert.ok(existsSync(statePath));
     const state = JSON.parse(readFileSync(statePath, "utf8"));
@@ -128,7 +128,7 @@ describe("schicht15-tracker", () => {
     assert.strictEqual(computeContentHash("   \n\t  "), null);
   });
 
-  it("deduplicates by contentHash even with different memoryId (Option A+)", () => {
+  it("deduplicates by contentHash even with different memoryId (Option A+)", async () => {
     const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
@@ -136,7 +136,7 @@ describe("schicht15-tracker", () => {
     const hash = computeContentHash(text);
 
     // First promotion with mem-1
-    recordKnowledgePromotion(dir, ws, agent, "mem-1", hash);
+    await recordKnowledgePromotion(dir, ws, agent, "mem-1", hash);
     assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-1", hash), true);
 
     // Same content, different memoryId → should be detected as duplicate via hash
@@ -152,13 +152,13 @@ describe("schicht15-tracker", () => {
     assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-3", otherHash), false, "unknown id + unknown hash is new");
   });
 
-  it("safely handles broken/missing contentHash without silent double-promotion", () => {
+  it("safely handles broken/missing contentHash without silent double-promotion", async () => {
     const dir = makeTempDir("plur1bus-s15-");
     const ws = "ws-a";
     const agent = "agent-1";
 
     // Promotion with valid hash
-    recordKnowledgePromotion(dir, ws, agent, "mem-1", computeContentHash("Some knowledge"));
+    await recordKnowledgePromotion(dir, ws, agent, "mem-1", computeContentHash("Some knowledge"));
     assert.strictEqual(isKnowledgePromoted(dir, ws, agent, "mem-1", null), true);
 
     // Re-promotion with null hash → memoryId still catches it
