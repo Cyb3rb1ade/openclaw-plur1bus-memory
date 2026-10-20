@@ -929,6 +929,9 @@ class MemoryDB {
       const error = new Error("tombstone_blocked");
       error.action = "tombstone_blocked";
       error.reason = "tombstone_blocked";
+      // Lets a caller tell a real tombstone match from a fail-closed registry
+      // error (`blocking._blockReason`); fingerprints only, never content.
+      error.blocking = guard.blocking;
       throw error;
     }
     await this._write(this.table.add([this.normalizeEntryForTable(entry)]), "MemoryDB.store");

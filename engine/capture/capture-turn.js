@@ -16,7 +16,7 @@ import { categorizeMemoryWithReason } from "../../lib/categorize.js";
 import { lightDream, writeLightDreamToVault } from "../../lib/dreaming/light-dream.js";
 import { recordLightDreamRun } from "../../lib/dreaming/dreaming-status-provider.js";
 import { serializeEmotionalValence } from "../../lib/emotion.js";
-import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "../../lib/episode-watermark.js";
+import { filterAlreadyEpisoded, mergeEpisodedTurnIds, planLegacyWatermarkClaim, planWatermarkAdvance, planWatermarkFailure, readSessionWatermark, resolveWatermarkAdvance } from "../../lib/episode-watermark.js";
 import { extractEpisodesWithState, writeEpisodeToVault } from "../../lib/episodes.js";
 import { decideEpistemicStatusForCapture } from "../../lib/epistemic-capture.js";
 import { IMPORTANCE_STATUS } from "../../lib/importance-status.js";
@@ -37,7 +37,7 @@ import { trySafeWarn } from "../../lib/safe-logging.js";
 import { appendDestructiveOpLog } from "../../lib/sql-safety.js";
 import { extractMediaOutputIds, stripMediaOutputIdToken } from "../../lib/speaker-segment-schema.js";
 import { enqueuePostTurnWork } from "../../lib/post-turn-queue.js";
-import { createPostTurnWorkers, postTurnContext, shouldDeferPostTurnLlm } from "./post-turn-work.js";
+import { createPostTurnWorkers, lightDreamIdentity, postTurnContext, shouldDeferPostTurnLlm } from "./post-turn-work.js";
 import { describeError } from "../../lib/log-redact.js";
 
 /**
@@ -69,31 +69,7 @@ export function classifyLightDreamOutcome(dreamRun) {
  * @param {{warn?: (m: string) => void}} logger
  * @returns {(agentId: string) => void}
  */
-/**
- * The request context and ACL bindings a light dream writes its insights
- * under. A caller-resolved memory context (Engine.capture's Principal) is
- * used as is; only without one does the hook context get re-resolved
- * (`resolveFallback`, the adapter path — unchanged).
- * @param {object|null|undefined} memoryCtx
- * @param {() => object} resolveFallback
- * @returns {{requestContext: object|null, aclBindings: object|null}}
- */
-export function lightDreamIdentity(memoryCtx, resolveFallback) {
-  let requestContext = memoryCtx ?? null;
-  if (!requestContext) {
-    try {
-      requestContext = resolveFallback();
-    } catch (_) {
-      requestContext = null;
-    }
-  }
-  const aclBindings = requestContext
-    ? (requestContext.userPrincipal
-      ? { scope: "user", agentId: requestContext.agentId, workspaceIdentity: "", ownerUserId: requestContext.userPrincipal }
-      : { scope: "workspace", agentId: requestContext.agentId, workspaceIdentity: requestContext.workspaceIdentity, ownerUserId: "" })
-    : null;
-  return { requestContext, aclBindings };
-}
+export { lightDreamIdentity };
 
 export function createLightDreamLedgerWarnOnce(logger) {
   const warned = new Set();
@@ -670,6 +646,7 @@ export function createTurnCapture(ctx) {
         // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
         const storedMemoryRows = [];
         let storeFailed = 0;
+        let tombstoneBlocked = 0;
         // E4.3: the row ids are fixed here and announced before the first row
         // is written, so a process killed anywhere from here on leaves the
         // turn pending with these ids and its replay removes them first.
@@ -755,11 +732,22 @@ export function createTurnCapture(ctx) {
             // steht und der Rest beim naechsten Turn drankommt. Einmal
             // abbrechen, der aeussere Block meldet den Zaehlstand.
             if (isAbortError(err)) throw err;
+            // A tombstone match is the owner's decision to forget this
+            // content, not a processing failure: the item is skipped and the
+            // turn stays complete (a replay would only rerun the pipeline).
+            // A fail-closed registry error (`_blockReason`) is an
+            // infrastructure fault and stays a failure so a replay retries.
+            if (err?.reason === "tombstone_blocked" && err.blocking && !err.blocking._blockReason) {
+              tombstoneBlocked++;
+              host.logger.info(`memory-lancedb-namespaced: capture skipped, content is tombstoned (agent=${agentId})`);
+              continue;
+            }
             storeFailed++;
             host.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${describeError(err)}`);
           }
         }
         throwIfCaptureAborted();
+        skipped += tombstoneBlocked;
 
         host.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
         rowsSettled = true;
@@ -888,10 +876,20 @@ export function createTurnCapture(ctx) {
 
         throwIfCaptureAborted();
 
-        // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
+        // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten.
+        // Je Session, nicht je Workspace-Store: mehrere Sessions eines Agenten
+        // (DM, Gruppe, Kanal) teilen den Store, ihre Verlaufslaengen sind aber
+        // nicht vergleichbar.
         const neoStore = getNeoStore(hookCtx, event);
-        const hooks = neoStore.readHooks();
-        const recordedCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
+        let hooks = neoStore.readHooks();
+        const watermarkSession = turnIdentityParams(event, hookCtx, "").sessionKey;
+        if (!readSessionWatermark(hooks?.agent_end, watermarkSession).known) {
+          // Einmalige Migration des alten Workspace-Zaehlers (siehe planLegacyWatermarkClaim).
+          const claimed = neoStore.recordHook("agent_end", (prev) => planLegacyWatermarkClaim(prev, watermarkSession));
+          if (claimed) hooks = { ...hooks, agent_end: claimed };
+        }
+        const sessionWatermark = readSessionWatermark(hooks?.agent_end, watermarkSession);
+        const recordedCount = sessionWatermark.count;
         const currentCount = event.messages?.length || 0;
         // 7.12.24: Nach einer Kompaktierung ist der Verlauf kuerzer als die
         // Marke (z. B. 274 → 221); ohne Reset blieb dieser Block stumm, bis
@@ -1065,7 +1063,7 @@ export function createTurnCapture(ctx) {
             try {
               const queued = enqueuePostTurnWork(baseDbPath, agentId, {
                 neoWorkspaceKey: rememberNeoWorkspace(hookCtx, event),
-                ctx: postTurnContext(hookCtx),
+                ctx: postTurnContext(hookCtx, opts.memoryCtx),
                 sessionKey: event?.sessionKey || hookCtx?.sessionKey || "",
                 digestHash,
                 turns: normalizedTurns,
@@ -1080,6 +1078,7 @@ export function createTurnCapture(ctx) {
                 postProcessing.push(runLightDreamPostTurn({
                   agentId,
                   ctx: hookCtx,
+                  memoryCtx: opts.memoryCtx,
                   neoStore,
                   db,
                   normalizedTurns,
@@ -1107,16 +1106,16 @@ export function createTurnCapture(ctx) {
           // fire-and-forget-Nachverarbeitung durch ist. Wird es wie
           // frueher synchron hochgezaehlt, sind die Turns eines
           // fehlgeschlagenen Laufs dauerhaft verloren.
+          // Compare-and-set unter dem Store-Lock: ein spaeter fertig werdender
+          // aelterer Lauf (fire-and-forget) darf das Watermark nie
+          // zurueckschreiben, das ein juengerer Turn schon weiterbewegt hat.
           const advanceWatermark = () => {
-            neoStore.recordHook("agent_end", {
-              lastProcessedMessageCount: currentCount,
-              postProcessingFailures: 0,
-            });
+            neoStore.recordHook("agent_end", (prev) => planWatermarkAdvance(prev, watermarkSession, { baseline: recordedCount, to: currentCount }));
           };
           if (postProcessing.length === 0) {
             advanceWatermark();
           } else {
-            const failures = Number(hooks?.agent_end?.postProcessingFailures) || 0;
+            const failures = sessionWatermark.failures;
             Promise.all(postProcessing).then((results) => {
               const decision = resolveWatermarkAdvance({
                 results,
@@ -1131,7 +1130,7 @@ export function createTurnCapture(ctx) {
                 return;
               }
               host.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung unvollstaendig — Watermark bleibt bei ${lastCount}, Bereich wird erneut versucht (${decision.nextFailures}/${MAX_POSTPROCESSING_RETRIES}, agent=${agentId})`);
-              neoStore.recordHook("agent_end", { postProcessingFailures: decision.nextFailures });
+              neoStore.recordHook("agent_end", (prev) => planWatermarkFailure(prev, watermarkSession, { baseline: recordedCount, failures: decision.nextFailures }));
             }).catch((aggErr) => {
               host.logger.warn?.(`memory-lancedb-namespaced: Watermark-Nachlauf fehlgeschlagen: ${String(aggErr)}`);
             });
