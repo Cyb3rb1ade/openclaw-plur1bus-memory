@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { embeddingFingerprintId } from "../lib/reembedding/fingerprint.js";
 import {
   createOpenClawEmbeddingSelectionMutator,
   embeddingConfigFromSelection,
@@ -200,5 +201,60 @@ describe("reembedding runtime configuration", () => {
       fingerprintId: `embedding:v1:sha256:${"b".repeat(64)}`,
       dimensions: 768,
     });
+  });
+
+  it("round-trips a local target with an explicit maxTokens cap through the switch projection", () => {
+    const fingerprint = embeddingFingerprintFromNormalizedConfig(normalizeEmbeddingConfig({
+      provider: "local-transformers",
+      local: {
+        model: JINA_EMBEDDING_PROFILE.model,
+        revision: JINA_EMBEDDING_PROFILE.revision,
+        dimensions: 256,
+        maxTokens: 1024,
+      },
+    }, { acceptNonCommercialLicense: true }));
+    assert.equal(fingerprint.tokenCap, 1024);
+
+    const projected = embeddingConfigFromSelection({ fingerprint });
+    assert.equal(projected.local.maxTokens, 1024);
+    const restarted = embeddingFingerprintFromNormalizedConfig(normalizeEmbeddingConfig(projected, {
+      acceptNonCommercialLicense: true,
+    }));
+    assert.deepStrictEqual(restarted, fingerprint);
+    assert.equal(embeddingFingerprintId(restarted), embeddingFingerprintId(fingerprint));
+  });
+
+  it("does not invent a maxTokens cap for a local target that never set one", () => {
+    const fingerprint = embeddingFingerprintFromNormalizedConfig(normalizeEmbeddingConfig({
+      provider: "local-transformers",
+      local: { model: JINA_EMBEDDING_PROFILE.model, revision: JINA_EMBEDDING_PROFILE.revision, dimensions: 256 },
+    }, { acceptNonCommercialLicense: true }));
+    assert.equal(Object.hasOwn(fingerprint, "tokenCap"), false);
+    assert.equal(Object.hasOwn(embeddingConfigFromSelection({ fingerprint }).local, "maxTokens"), false);
+  });
+
+  it("round-trips the vector-space identity fields of a remote target through the switch projection", () => {
+    const fingerprint = embeddingFingerprintFromNormalizedConfig({
+      provider: "openai-compatible",
+      model: "provider/model",
+      dimensions: 768,
+      baseUrl: "https://embed.example/v1/",
+      revision: "2026-01",
+      normalization: "l2",
+      dtype: "fp16",
+      prefixScheme: "e5",
+      instruction: "Represent this memory for retrieval",
+    });
+    const projected = embeddingConfigFromSelection({
+      fingerprint,
+      secretRef: { source: "env", provider: "default", id: "LAB_KEY" },
+    });
+    assert.equal(projected.revision, "2026-01");
+    assert.equal(projected.normalization, "l2");
+    assert.equal(projected.dtype, "fp16");
+    assert.equal(projected.prefixScheme, "e5");
+    assert.equal(projected.instruction, "Represent this memory for retrieval");
+    const restarted = embeddingFingerprintFromNormalizedConfig({ ...normalizeEmbeddingConfig(projected), dimensions: 768 });
+    assert.equal(embeddingFingerprintId(restarted), embeddingFingerprintId(fingerprint));
   });
 });

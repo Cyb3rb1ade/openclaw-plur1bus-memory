@@ -145,4 +145,43 @@ describe("read-only reembedding planner", () => {
       /source table dimension mismatch/,
     );
   });
+
+  describe("generation and migration identifier limits shared with the Lance backend and maintenance gate", () => {
+    const GENERATION_LIMIT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+    const deps = {
+      now: () => 1_000,
+      randomBytes: () => Buffer.alloc(32, 9),
+      inventoryActiveGeneration: async () => inventory(),
+      statDisk: async () => ({ freeBytes: 1_000_000 }),
+      probeTargetProvider: async () => new Array(1536).fill(0.1),
+    };
+    const plan = (request) => createReembeddingPlan({ target: { fingerprint: targetFingerprint }, ...request }, deps);
+
+    it("keeps generation-<id> for ids that fit the backend generation limit", async () => {
+      const id = "m".repeat(53);
+      const result = await plan({ id });
+      assert.equal(result.plan.target.generation, `generation-${id}`);
+      assert.equal(result.plan.target.generation.length, 64);
+    });
+
+    it("derives a backend-valid, collision-free default generation for longer migration ids", async () => {
+      const first = await plan({ id: `${"m".repeat(60)}-a` });
+      const second = await plan({ id: `${"m".repeat(60)}-b` });
+      for (const result of [first, second]) {
+        assert.match(result.plan.target.generation, GENERATION_LIMIT_RE);
+        assert.deepStrictEqual(result.plan.target.selection, { mode: "generation", generation: result.plan.target.generation });
+      }
+      assert.notEqual(first.plan.target.generation, second.plan.target.generation);
+      assert.equal((await plan({ id: `${"m".repeat(60)}-a` })).plan.target.generation, first.plan.target.generation);
+    });
+
+    it("rejects an explicit target generation the backend would refuse", async () => {
+      await assert.rejects(plan({ id: "migration-0001", targetGeneration: "g".repeat(65) }), /invalid reembedding target generation/);
+    });
+
+    it("rejects a migration id the maintenance gate would refuse at switch time", async () => {
+      await assert.rejects(plan({ id: "m".repeat(65) }), /invalid reembedding migration id/);
+      assert.equal((await plan({ id: "m".repeat(64) })).plan.id.length, 64);
+    });
+  });
 });
