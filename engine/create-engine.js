@@ -2017,6 +2017,7 @@ export function createEngine(host, config, testOptions = {}) {
     ? createReembeddingSwitchRuntime({
         stateStore: reembeddingStateStore,
         maintenanceGate: memoryMaintenanceGate,
+        assertSourceCurrent: (record) => reembeddingCoordinator.assertSourceCurrent(record.id),
         mutateSelection: reembeddingSelectionMutator,
       })
     : Object.freeze({

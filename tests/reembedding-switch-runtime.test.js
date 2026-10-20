@@ -93,6 +93,67 @@ describe("maintenance-gated generation switch", () => {
     await recovery.shutdown();
   });
 
+  it("rechecks the source under the maintenance gate and rejects a drifted source without touching config", async () => {
+    const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+    const { token } = await readyRecord(stateStore);
+    const events = [];
+    const runtime = createReembeddingSwitchRuntime({
+      stateStore,
+      now: () => 1_000,
+      maintenanceGate: {
+        enter: async () => events.push("gate:enter"),
+        exit: async () => events.push("gate:exit"),
+      },
+      assertSourceCurrent: async (record) => {
+        events.push(`check:${record.id}`);
+        throw new Error("reembedding source version drift: agent-a/memories");
+      },
+      mutateSelection: async () => events.push("mutate"),
+    });
+
+    await assert.rejects(
+      runtime.switchGeneration({ id: "migration-0001", token }),
+      /source version drift/,
+    );
+    assert.deepStrictEqual(events, ["gate:enter", "check:migration-0001", "gate:exit"]);
+    assert.equal((await runtime.status("migration-0001")).state, "ready_to_switch");
+  });
+
+  it("switches after the under-gate source recheck passes", async () => {
+    const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+    const { token } = await readyRecord(stateStore);
+    const events = [];
+    const runtime = createReembeddingSwitchRuntime({
+      stateStore,
+      now: () => 1_000,
+      maintenanceGate: {
+        enter: async () => events.push("gate:enter"),
+        exit: async () => events.push("gate:exit"),
+      },
+      assertSourceCurrent: async (record) => { events.push(`check:${record.id}`); },
+      mutateSelection: async (selection) => events.push(`mutate:${selection.generation}`),
+    });
+
+    const handedOff = await runtime.switchGeneration({ id: "migration-0001", token });
+    assert.equal(handedOff.state, "switching");
+    assert.deepStrictEqual(events, [
+      "gate:enter",
+      "check:migration-0001",
+      "mutate:generation-target",
+      "gate:exit",
+    ]);
+  });
+
+  it("rejects a non-function source recheck capability", () => {
+    const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+    assert.throws(() => createReembeddingSwitchRuntime({
+      stateStore,
+      maintenanceGate: { enter: async () => {}, exit: async () => {} },
+      mutateSelection: async () => {},
+      assertSourceCurrent: "yes",
+    }), /source recheck/);
+  });
+
   it("accepts the originally bound token after expiry but rejects a different token", async () => {
     const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
     const { token } = await readyRecord(stateStore);
