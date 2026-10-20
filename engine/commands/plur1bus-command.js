@@ -417,7 +417,7 @@ export function createPlur1busCommandRunner(ctx) {
       const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
       if (denied) return denied;
     } else if (isSensitiveChatRead(actionKey, subKey)) {
-      const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+      const denied = await checkAuth(memoryCtx, { sensitiveRead: true, chatKind: memoryCtx.chatKind }, commandCtx);
       if (denied) return denied;
     }
     // Denselben Neo-Store wie die Hooks: nur der vom Host aufgeloeste
