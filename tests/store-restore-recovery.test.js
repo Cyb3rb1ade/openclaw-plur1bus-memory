@@ -4,7 +4,7 @@
  * Audit store #6: restoreSnapshot moves the store to `<store>.pre-restore-<ts>`
  * and then the staged copy into place. A crash between the two renames left
  * no store at all and nothing that said so. A journal next to the store
- * (`<store>.restore-journal`, written before the first rename) lets the next
+ * (`<store>.pending-restore`, written before the first rename) lets the next
  * restore or engine start put the previous store back — and only then: a
  * missing store with an old pre-restore copy from an earlier, finished restore
  * is never "recovered". The crash is a real SIGKILL of a child process.
@@ -87,7 +87,7 @@ describe("restore crash between the two renames (audit store #6)", () => {
     assert.deepEqual(await ids(baseDbPath), ["m1", "m2"], "restored from the snapshot");
     const left = siblings(baseDbPath);
     assert.equal(left.filter((n) => n.includes(".pre-restore-")).length, 1, `exactly the pre-restore copy of the second restore: ${left}`);
-    assert.ok(!left.some((n) => n.endsWith(".restore-journal") || /\.restore-\d+$/.test(n)), left.join(","));
+    assert.ok(!left.some((n) => n.endsWith(".pending-restore") || /\.restore-\d+$/.test(n)), left.join(","));
   });
 
   it("a missing store with an old pre-restore copy but no journal is never touched", async () => {
@@ -107,7 +107,7 @@ describe("restore crash between the two renames (audit store #6)", () => {
     const snap = await createSnapshot({ stateDir, baseDbPath, label: "t" });
     await restoreSnapshot({ stateDir, baseDbPath, id: snap.id });
     // Crash after the swap, before the re-apply: the journal is still there.
-    writeFileSync(`${baseDbPath}.restore-journal`, JSON.stringify({
+    writeFileSync(`${baseDbPath}.pending-restore`, JSON.stringify({
       schema: "plur1bus.restore-journal/1", id: snap.id, target: baseDbPath,
       preRestorePath: `${baseDbPath}.pre-restore-20260101T000000Z`, staging: `${baseDbPath}.restore-4242`, startedAt: "2026-01-01T00:00:00.000Z",
     }));
@@ -121,13 +121,13 @@ describe("restore crash between the two renames (audit store #6)", () => {
 
   it("an unreadable or foreign journal is set aside and never acted on", async () => {
     const { baseDbPath } = await makeStore();
-    writeFileSync(`${baseDbPath}.restore-journal`, JSON.stringify({
+    writeFileSync(`${baseDbPath}.pending-restore`, JSON.stringify({
       schema: "plur1bus.restore-journal/1", target: baseDbPath,
       preRestorePath: "/etc/somewhere-else.pre-restore-1", staging: `${baseDbPath}.restore-1`,
     }));
     const r = recoverInterruptedRestoreSync(baseDbPath);
     assert.equal(r.action, "none");
-    assert.ok(readdirSync(dirname(baseDbPath)).some((n) => n.startsWith("lancedb-namespaced.restore-journal.corrupt-")));
+    assert.ok(readdirSync(dirname(baseDbPath)).some((n) => n.startsWith("lancedb-namespaced.pending-restore.corrupt-")));
     assert.deepEqual(await ids(baseDbPath), ["m1", "m2"]);
   });
 
