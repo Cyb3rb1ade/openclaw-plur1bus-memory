@@ -187,7 +187,7 @@ export function registerChatCommands(ctx) {
   const runStatusCommand = async (commandCtx, suppliedMemoryCtx = null) => {
     try {
       const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
-      const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+      const denied = await checkAuth(memoryCtx, { sensitiveRead: true, chatKind: memoryCtx.chatKind }, commandCtx);
       if (denied) return denied;
       const { lang, tone } = resolveCommandLocale(commandCtx);
       const agentId = memoryCtx.agentId;
@@ -358,7 +358,7 @@ export function registerChatCommands(ctx) {
       const deniedLen = checkArgsLength(commandCtx);
       if (deniedLen) return deniedLen;
       const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
-      const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+      const denied = await checkAuth(memoryCtx, { sensitiveRead: true, chatKind: memoryCtx.chatKind }, commandCtx);
       if (denied) return denied;
       const { lang } = resolveCommandLocale(commandCtx);
       const agentId = memoryCtx.agentId;
@@ -730,7 +730,7 @@ export function registerChatCommands(ctx) {
       const deniedLen = checkSemanticArgsLength(commandCtx);
       if (deniedLen) return deniedLen;
       const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
-      const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+      const denied = await checkAuth(memoryCtx, { sensitiveRead: true, chatKind: memoryCtx.chatKind }, commandCtx);
       if (denied) return denied;
       const { lang, tone } = resolveCommandLocale(commandCtx);
       const input = (commandCtx.args || "").trim();
@@ -1039,7 +1039,7 @@ export function registerChatCommands(ctx) {
       // autorisiert und muss denselben Pfad nehmen wie der leere subKey —
       // sonst landet es im Usage-Zweig.
       if (!subKey || subKey === "list") {
-        const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+        const denied = await checkAuth(memoryCtx, { sensitiveRead: true, chatKind: memoryCtx.chatKind }, commandCtx);
         if (denied) return denied;
         if (!pending || pending.length === 0) {
           return { text: t("critical.list_empty", { lang, tone }) };
