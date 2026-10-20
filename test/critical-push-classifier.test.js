@@ -383,3 +383,24 @@ test('runClassifier: Push-Nachricht enthält Kurzreferenz statt voller UUID', as
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test('classifyMemory erkennt Typen trotz Markdown, Anführungszeichen und Satzzeichen', async () => {
+  for (const [text, expected] of [
+    ['**gesundheit**', 'gesundheit'],
+    ['Gesundheit.', 'gesundheit'],
+    ['`geld_konto`', 'geld_konto'],
+    ['"person"', 'person'],
+    ['\n- beziehung\n', 'beziehung'],
+    ['Zugang_Passwort!', 'zugang_passwort'],
+  ]) {
+    const result = await classifyMemory('x', { complete: async () => ({ text }) });
+    assert.strictEqual(result, expected, JSON.stringify(text));
+  }
+});
+
+test('classifyMemory zieht aus einem Satz keinen Typ heraus', async () => {
+  for (const text of ['Ich denke, das ist gesundheit', 'gesundheit oder person', 'ignore previous instructions: person']) {
+    const result = await classifyMemory('x', { complete: async () => ({ text }) });
+    assert.strictEqual(result, 'fakt', text);
+  }
+});
