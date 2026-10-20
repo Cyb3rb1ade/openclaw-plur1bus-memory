@@ -235,6 +235,7 @@ describe("storeDreamAsMemory", () => {
       importance: 0.38,
       agentId: "main",
       workspaceKey: "ws1",
+      aclBindings: { scope: "agent-private", agentId: "main", workspaceIdentity: "", ownerUserId: "" },
     });
     assert.ok(id, "Memory-ID erwartet");
     assert.strictEqual(stored.length, 1);
@@ -243,7 +244,13 @@ describe("storeDreamAsMemory", () => {
     assert.strictEqual(row.halfLifeDays, DREAM_HALF_LIFE_DAYS);
     assert.strictEqual(row.importance, 0.38);
     assert.strictEqual(row.origin, "dream");
-    assert.strictEqual(row.storedBy, "dream-engine");
+    // Audit F4 (20.10.2026): bis 7.18.4 stand hier "dream-engine" -- ein Owner,
+    // den kein Request-Kontext hat; die Zeile war nie abrufbar. Jetzt gehoert
+    // sie dem gebundenen Agenten, und ohne Bindung wird gar nichts geschrieben
+    // (siehe tests/dreaming-audit-fixes.test.js).
+    assert.strictEqual(row.storedBy, "main");
+    assert.strictEqual(row.agentId, "main");
+    assert.strictEqual(row.scope, "agent-private");
     assert.match(row.summary, /^Traum: /);
   });
 
