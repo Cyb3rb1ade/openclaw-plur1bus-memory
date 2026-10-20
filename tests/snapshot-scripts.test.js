@@ -261,3 +261,83 @@ test("restore rejects snapshot without manifest", SKIP, () => {
     cleanup(home);
   }
 });
+
+// Engine audit snapshot 2: run-state.json and merge-proposals.jsonl live in the
+// workspace (lib/metrics.js, lib/jobs/memory-compaction.js), not under memory/.
+function writeWorkspaceFiles(workspace, runState, proposals) {
+  mkdirSync(join(workspace, ".adaptive-learning"), { recursive: true });
+  writeFileSync(join(workspace, "run-state.json"), runState);
+  writeFileSync(join(workspace, ".adaptive-learning", "merge-proposals.jsonl"), proposals);
+}
+
+function backupOnce(home, extraEnv = {}) {
+  runShell(`"${SCRIPT_DIR}/backup-snapshot.sh"`, { env: { ...process.env, OPENCLAW_HOME: home, ...extraEnv }, encoding: "utf8" });
+  const snapshotsDir = join(home, ".snapshots");
+  return join(snapshotsDir, readdirSync(snapshotsDir).find((e) => e.startsWith("plur1bus-")));
+}
+
+test("backup saves the workspace run-state and merge proposals, not the wrong memory/ copies", SKIP, () => {
+  const home = makeTempOpenclawHome();
+  try {
+    mkdirSync(join(home, "memory", "lancedb-namespaced"), { recursive: true });
+    writeFileSync(join(home, "memory", "lancedb-namespaced", "test.db"), "data");
+    writeFileSync(join(home, "memory", "run-state.json"), "{\"stale\":true}");
+    writeWorkspaceFiles(join(home, "workspace"), "{\"real\":1}", "{\"p\":1}\n");
+
+    const snapshotPath = backupOnce(home);
+    assert.equal(readFileSync(join(snapshotPath, "workspace", "run-state.json"), "utf8"), "{\"real\":1}");
+    assert.equal(readFileSync(join(snapshotPath, "workspace", ".adaptive-learning", "merge-proposals.jsonl"), "utf8"), "{\"p\":1}\n");
+    assert.ok(!existsSync(join(snapshotPath, "memory", "run-state.json")), "the memory/ lookalike is not what the engine writes");
+  } finally {
+    cleanup(home);
+  }
+});
+
+test("restore --confirm puts the workspace files back", SKIP, () => {
+  const home = makeTempOpenclawHome();
+  try {
+    mkdirSync(join(home, "memory", "lancedb-namespaced"), { recursive: true });
+    writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "original");
+    const workspace = join(home, "workspace");
+    writeWorkspaceFiles(workspace, "{\"gen\":1}", "{\"gen\":1}\n");
+    const snapshotPath = backupOnce(home);
+
+    writeWorkspaceFiles(workspace, "{\"gen\":2}", "{\"gen\":2}\n");
+    const out = runShell(`"${SCRIPT_DIR}/restore-snapshot.sh" --confirm "${snapshotPath}"`, {
+      env: { ...process.env, OPENCLAW_HOME: home },
+      encoding: "utf8",
+    });
+    assert.ok(out.includes("[RESTORED] workspace/run-state.json"), out);
+    assert.equal(readFileSync(join(workspace, "run-state.json"), "utf8"), "{\"gen\":1}");
+    assert.equal(readFileSync(join(workspace, ".adaptive-learning", "merge-proposals.jsonl"), "utf8"), "{\"gen\":1}\n");
+
+    // the safety copy holds what was there before the restore
+    const safety = readdirSync(join(home, ".snapshots")).find((e) => e.startsWith("pre-restore-safety-"));
+    assert.equal(readFileSync(join(home, ".snapshots", safety, "workspace", "run-state.json"), "utf8"), "{\"gen\":2}");
+  } finally {
+    cleanup(home);
+  }
+});
+
+test("a workspace outside OPENCLAW_HOME is saved and restored through OPENCLAW_WORKSPACE_DIR, and only its own files", SKIP, () => {
+  const home = makeTempOpenclawHome();
+  const outside = makeTempDir("plur1bus-snapshot-ws-");
+  try {
+    mkdirSync(join(home, "memory", "lancedb-namespaced"), { recursive: true });
+    writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "original");
+    writeWorkspaceFiles(outside, "{\"ws\":1}", "{\"ws\":1}\n");
+    writeFileSync(join(outside, "SECRET.md"), "never copied");
+    const env = { ...process.env, OPENCLAW_HOME: home, OPENCLAW_WORKSPACE_DIR: outside };
+    const snapshotPath = backupOnce(home, { OPENCLAW_WORKSPACE_DIR: outside });
+    assert.equal(readFileSync(join(snapshotPath, "workspace", "run-state.json"), "utf8"), "{\"ws\":1}");
+    assert.ok(!existsSync(join(snapshotPath, "workspace", "SECRET.md")));
+
+    writeWorkspaceFiles(outside, "{\"ws\":2}", "{\"ws\":2}\n");
+    runShell(`"${SCRIPT_DIR}/restore-snapshot.sh" --confirm "${snapshotPath}"`, { env, encoding: "utf8" });
+    assert.equal(readFileSync(join(outside, "run-state.json"), "utf8"), "{\"ws\":1}");
+    assert.equal(readFileSync(join(outside, ".adaptive-learning", "merge-proposals.jsonl"), "utf8"), "{\"ws\":1}\n");
+  } finally {
+    cleanup(home);
+    cleanup(outside);
+  }
+});

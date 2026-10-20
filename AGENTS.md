@@ -286,4 +286,14 @@ Restore from a snapshot (dry-run by default):
 ./scripts/restore-snapshot.sh --confirm ~/.openclaw/.snapshots/plur1bus-YYYYMMDD-HHMMSS
 ```
 
+The snapshot also saves the workspace files the engine writes (`run-state.json`,
+`.adaptive-learning/merge-proposals.jsonl`). The workspace is
+`$OPENCLAW_HOME/workspace` unless `OPENCLAW_WORKSPACE_DIR` is set (Node CLI:
+`--workspace-dir`).
+
+A Node restore (`node scripts/snapshot-store.mjs restore`) keeps the previous store as
+`<store>.pre-restore-<ts>`. Remove old copies with
+`node scripts/snapshot-store.mjs purge-pre-restore --state-dir <d> --base-db-path <p> [--keep 2]`,
+or pass `--keep-pre-restore <n>` to `restore`.
+
 The plugin writes archives before every deletion (`/forget`, `/correct`). The archive path is reported in the command response.
