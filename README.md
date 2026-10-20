@@ -313,6 +313,20 @@ negative excerpts (question, answer, the user's reaction) and answers with
 directive cap follows from that (lines × 130 + 80, default 3200 characters).
 Existing weekly jobs are migrated to the daily slot on the next setup run.
 
+**Guard against injected directives (Unreleased).** The excerpts come from real
+chat messages, and the line the model returns becomes a permanent "follow this"
+directive, so both sides are fenced. The excerpts are passed inside
+`<evidence>` blocks that the system prompt declares to be data, never
+instructions (angle brackets inside them are neutralised). Every line the model
+returns (evolution and seed) must pass `validatePersonaMarker`: a single line of
+at most 280 characters, no markers, comments, tags or code blocks, no role or
+safety instructions, no tool or permission directives, no URLs or e-mail
+addresses, no secrets. A rejected reply changes nothing, consumes the evidence
+(`lastAction: "rejected"` in the state file, `reason: "marker_rejected"` in the
+job result) and does not start the time brake. Evolutions are still applied
+directly; `/plur1bus persona accept` remains the path for legacy proposals and
+now only reads the proposal section itself.
+
 
 Twenty-five releases in three days, all live-tested on a three-agent
 installation. The [changelog](CHANGELOG.md) has the details per version; the

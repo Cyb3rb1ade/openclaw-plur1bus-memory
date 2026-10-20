@@ -569,6 +569,11 @@ export function createPlur1busCommandRunner(ctx) {
         const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
         if (denied) return denied;
         const result = acceptPersonaProposal(commandCtx.workspaceDir);
+        if (!result.accepted && result.reason === "marker_rejected") {
+          return { text: de
+            ? `❌ Der Alt-Vorschlag enthält Inhalt, der nicht in die Persona-Direktive gehört (${result.rejection}). Datei \`persona-voice.md\` prüfen und die Sektion „Vorschlag (nicht aktiv)“ anpassen oder löschen.`
+            : `❌ The legacy proposal contains content that does not belong in the persona directive (${result.rejection}). Review \`persona-voice.md\` and edit or delete the "Vorschlag (nicht aktiv)" section.` };
+        }
         if (!result.accepted) {
           return { text: de
             ? "❌ Kein Alt-Vorschlag zum Übernehmen verfügbar (neue Evolutionen wenden sich automatisch an)."
