@@ -30,6 +30,24 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### Unreleased — a provider key stays with its endpoint
+
+- **`OPENAI_API_KEY` is the implicit embedding key for the OpenAI host only.**
+  For any other endpoint (`openai-compatible` with a foreign `baseUrl`) the
+  implicit key is `OPENAI_COMPATIBLE_API_KEY`, or there is none and startup
+  fails with a clear message. An explicit `apiKey`, `apiKeyEnv` or `apiKeyRef`
+  is used as written. This replaces the v7.5.5 note below, which described the
+  old fallback for every endpoint.
+- **An unknown `embedding.provider` is a configuration error** (allowed:
+  `openai`, `openai-compatible`, `local-transformers`), never a silent call to
+  the OpenAI cloud.
+- **A key travels over https, or over http to localhost, `127.0.0.0/8` and
+  `::1` only.** Embedding and reranker refuse any other `http://` endpoint that
+  would carry a key; a keyless `remote` reranker is unaffected.
+- **A store created now keeps a deliberate remote choice.** A `baseUrl`,
+  `apiKey`, `apiKeyRef` or `apiKeyEnv` in `embedding` or `reranker` is never
+  replaced by the local default, even without `provider`.
+
 ### New in v7.16.0 — recall width is an operator setting
 
 Two number fields on the Recall card. `recall.candidateTopK` sets how many rows
