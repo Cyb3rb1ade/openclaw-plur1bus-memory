@@ -140,7 +140,7 @@ import { createLinkLedger } from "./memory-ops/link-ledger.js";
 import { memoryOpError } from "./memory-ops/errors.js";
 
 /** 1.16.0: `Engine.capabilities` — additive feature flags, frozen. */
-const ENGINE_CAPABILITIES = Object.freeze({ memoryLink: true });
+const ENGINE_CAPABILITIES = Object.freeze({ memoryLink: true, mediaIndex: true });
 import { createStoreAdopt } from "./stores/adopt.js";
 import { createObsidianOps } from "./admin/obsidian.js";
 
@@ -3764,7 +3764,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.16.0",
+    contract: "1.19.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3821,7 +3821,7 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.16.0).
+  // The Engine (types/engine.d.ts, contract 1.19.0).
   const storeAdopt = createStoreAdopt({
     baseDbPath,
     pool,
@@ -3835,7 +3835,7 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.16.0",
+    contract: "1.19.0",
     // 1.16.0: feature flags a harness can test instead of parsing the contract version.
     capabilities: ENGINE_CAPABILITIES,
     async open(agentId) {

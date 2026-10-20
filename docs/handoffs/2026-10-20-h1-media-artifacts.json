@@ -1,0 +1,128 @@
+[
+  {
+    "model": "google/embeddinggemma-2",
+    "artifactRepository": "onnx-community/embeddinggemma-2-ONNX",
+    "revision": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+    "license": "apache-2.0",
+    "source": "https://huggingface.co/api/models/onnx-community/embeddinggemma-2-ONNX/revision/daa72c51243991dfcaf9f9137d2c573d8f7790c0?blobs=true",
+    "files": [
+      {
+        "path": "config.json",
+        "sha256": "8d011bfe08b5e345bbe0b81e5c6fd02c381920b345b986047bc2a33ce7b90d1d",
+        "size": 5031,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "sha256": "9344893f8d0573a46ebb2ca54c03f56d044cea194c8dcfb1f4d652240ac21daa",
+        "size": 560,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "processor_config.json",
+        "sha256": "168f6a08522f3ce5dea596d94d003af2fd691742d4f41fe1f9d8cce76bfbf69c",
+        "size": 1788,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "tokenizer.json",
+        "sha256": "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4",
+        "size": 32170510,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "sha256": "17bd5d6e9364ca49a534e1502076593317c298d4a663623091ed45388f004874",
+        "size": 1599,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "onnx/audio_encoder.onnx",
+        "sha256": "e0a62590c49949fe0b1410f5dc52c92a185abb4c4e69e2c50a4e316103fdbc09",
+        "size": 204577,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "onnx/audio_encoder.onnx_data",
+        "sha256": "6943b910d1d1e9b5dffd4ccad63f61aa308ad10b70ed128bb61886b119da1e3a",
+        "size": 1172750848,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "onnx/model.onnx",
+        "sha256": "bc47de15f81208a5c99e5ab10f746d5e33b51ea228b7dc0bef9c133a94f1c1c3",
+        "size": 421421,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "onnx/model.onnx_data",
+        "sha256": "9fd452bfc6916e5a92f080f8dada35598ca4512b21c65897d4c5974d5f9630a2",
+        "size": 1084170240,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "onnx/vision_encoder.onnx",
+        "sha256": "a3fb44f8b5b152cfee6afe16e2cd69e774b7e1d3b822d1db1190ddf7b08b575e",
+        "size": 121253,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "onnx/vision_encoder.onnx_data",
+        "sha256": "ca8d28c99feb8129618f141978a27adae25090e0dadb68a30c235e191c01e37e",
+        "size": 671026176,
+        "verification": "upstream-lfs-sha256"
+      }
+    ]
+  },
+  {
+    "model": "jinaai/jina-clip-v2",
+    "artifactRepository": "jinaai/jina-clip-v2",
+    "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+    "license": "cc-by-nc-4.0",
+    "source": "https://huggingface.co/api/models/jinaai/jina-clip-v2/revision/e10d47f5691d0454a0fb5d13f46f2199b74cb436?blobs=true",
+    "files": [
+      {
+        "path": "config.json",
+        "sha256": "b5466de03392479d778745bbdb1905e297cd07ca76694703bd7d7b84d58aa853",
+        "size": 2152,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "sha256": "920bc482e3dad0de2bffe4e534181a1f61a4a6baefa1aee53b75849557786301",
+        "size": 584,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835",
+        "size": 964,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "tokenizer.json",
+        "sha256": "6601c4120779a1a3863897ba332fe3481d548e363bec2c91eba10ef8640a5e93",
+        "size": 17082997,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "sha256": "e1bc77da5b90ba65b47aa8bd776c6317f47d50dc6717e92b10177686b3b8f161",
+        "size": 1148,
+        "verification": "download-sha256"
+      },
+      {
+        "path": "onnx/model.onnx",
+        "sha256": "e8bdc8a8124e10305fa97140ba11902e06b91f8a4dcf13a1664da521cdc155ed",
+        "size": 2090152,
+        "verification": "upstream-lfs-sha256"
+      },
+      {
+        "path": "onnx/model.onnx_data",
+        "sha256": "0ec73a3b6f33c472249f7b058c3cbfb9586483b88ee5930b3b3749dff7acd873",
+        "size": 3453550848,
+        "verification": "upstream-lfs-sha256"
+      }
+    ]
+  }
+]

@@ -1,5 +1,9 @@
 # Media embeddings
 
+Engine contract **1.19.0** (`Engine.capabilities.mediaIndex === true`).
+Versions 1.17.0 (A1) and 1.18.0 (C1) are reserved in parallel branches; this
+branch includes main through 1.16.0 and adds 1.19.0 without claiming those APIs.
+
 The engine exposes `engine.media` independently of its primary LanceDB text index. Text provider, dimension and fingerprint do not change when media is enabled or rebuilt. Each medium has a normal text memory with `kind: "media-caption"` and `mediaRef: mediaId`. The host supplies the caption; without one the engine stores a factual kind/MIME description. Caption generation is a host responsibility.
 
 ## Configuration and provider properties
@@ -38,13 +42,13 @@ The common catalogue in `lib/providers/media-registry.js` declares capabilities,
 
 `licenseAccepted: true` acknowledges the selected Jina model. A model change requires reviewing that model's license. The wizard and installer display the license and ask before selecting either Jina model. The registry rejects unsupported modalities, unpinned local revisions, unavailable runtimes and dimensions before model loading or source processing.
 
-A local privacy pin blocks cloud inference before a request. Local ONNX model preparation can download verified public weights: its declared egress is Hugging Face and its CDN/Xet artifact hosts. Jina cloud inference sends inputs to `api.jina.ai`; existing OpenAI text inference uses `api.openai.com`. OpenAI-compatible text endpoints declare their configured host rather than a fixed egress hostname. Offline deployment requires preparing the exact pinned artifacts in the configured cache. No token or model credential is saved in the media database.
+All outgoing media HTTP requests and pinned model downloads use `HostServices.fetch` when bound (contract 1.15+); HTTP tests run against a loopback server with global fetch disabled. A Jina `sidecar` uses the configured local endpoint without a Jina API credential. The local sidecar is distinct from the Jina API transport. A local privacy pin blocks cloud inference before a request. Local ONNX model preparation can download verified public weights: its declared egress is Hugging Face and its CDN/Xet artifact hosts. Jina cloud inference sends inputs to `api.jina.ai`; existing OpenAI text inference uses `api.openai.com`. OpenAI-compatible text endpoints declare their configured host rather than a fixed egress hostname. Offline deployment requires preparing the exact pinned artifacts in the configured cache. No token or model credential is saved in the media database.
 
 ## ONNX compatibility and footprints
 
-The repository's Transformers.js 4.2.0 implements `EmbeddingGemma2Model`, `EmbeddingGemma2Processor`, modular vision/audio sessions and `JinaCLIPModel`/`JinaCLIPProcessor`. Gemma uses `AutoConfig`, `AutoProcessor`, `AutoModel` on CPU; removed encoder configurations prevent unused graph loading. Video uses already-decoded `RawVideo` frames with the model's video processor, rather than browser video decoding. Jina CLIP uses its tokenizer and image processor and the built-in model class; no Hugging Face remote Python code executes.
+The repository's Transformers.js 4.3.1 implements `EmbeddingGemma2Model`, `EmbeddingGemma2Processor`, modular vision/audio sessions and `JinaCLIPModel`/`JinaCLIPProcessor`. Gemma uses `AutoConfig`, `AutoProcessor`, `AutoModel` on CPU; removed encoder configurations prevent unused graph loading. Video uses already-decoded `RawVideo` frames with the model's video processor, rather than browser video decoding. Jina CLIP uses its tokenizer and image processor and the built-in model class; no Hugging Face remote Python code executes.
 
-Gemma pins ONNX revision `daa72c51243991dfcaf9f9137d2c573d8f7790c0` and a SHA-256 for every selected file in `media-gemma-artifacts.json`. CLIP pins `e10d47f5691d0454a0fb5d13f46f2199b74cb436` in `media-jina-artifacts.json`. The existing artifact verifier downloads, hashes and rechecks these files before `local_files_only` loading. No fp16 graph is selected. The available verified ONNX precision is fp32; bf16 is not advertised without a corresponding verified export.
+Gemma pins ONNX revision `daa72c51243991dfcaf9f9137d2c573d8f7790c0` and a SHA-256 for every selected file in `media-gemma-artifacts.json`. CLIP pins `e10d47f5691d0454a0fb5d13f46f2199b74cb436` in `media-jina-artifacts.json`. All 18 file sizes and hashes were reverified against public upstream metadata on 2026-10-20; [verification receipt](handoffs/2026-10-20-h1-media-artifacts.json) distinguishes LFS SHA-256 metadata from small-file download/hash checks. The existing artifact verifier downloads, hashes and rechecks these files before `local_files_only` loading. No fp16 graph is selected. The available verified ONNX precision is fp32; bf16 is not advertised without a corresponding verified export.
 
 Gemma variants derive from requested modalities: no media → text; image/video → vision; audio → audio; both families → full. All share the text tower. Fingerprints conservatively distinguish variants until real-model identity has been established. Shared leases coalesce matching model/revision/precision/effective-variant/cache identities, independent of index dimension. The new default uses the same full identity in both indices; explicitly different variants use separate runtimes. Disposal waits for active inference and the last lease.
 
@@ -59,7 +63,7 @@ Approximate decimal disk bytes below are sums of pinned file sizes. Weight-only 
 
 CLIP v2 has 865M parameters and approximately 3.46 GB of pinned fp32 graph/data before tokenizer/config overhead. Jina v4 has 3.8B parameters; its API path does not load those weights into this process.
 
-Compatibility evidence here is source/export inspection and offline adapter tests. A full Gemma download was attempted locally but stopped before completion (roughly 370 MB downloaded in five minutes). **No real Gemma image/audio inference, Jina local inference or cloud/sidecar request was validated in this change.** Those results must not be inferred from the fake runtime tests.
+On 2026-10-20 the full fp32 Gemma artifacts were prepared through a bound Host Fetch port in 43.279 seconds. Real local Sharp image decoding and ONNX image/text/audio inference passed with strict full/text agreement enabled: description cosine 0.88122 versus distractor 0.73042; maximum text-vector delta 0. The CC0 1-second WAV fixture produced a finite 128d unit vector. Cold image including verified-cache loading took 3781.3 ms, warm audio 145.6 ms, process maxRSS 5,091,088 KiB (macOS arm64, Node 24.21.0, Transformers.js 4.3.1). These are single-run measurements, not p50/p95 or audio semantic-quality evidence. [H1 handoff](handoffs/2026-10-20-h1-media.md) records commands and limits. Local Jina inference and hosted API inference remain unverified; HTTP transport tests use loopback/recorded responses only.
 
 For a compatible local embedding service, set `media.transport: "sidecar"` and `endpoint`. Endpoint admission defaults to loopback HTTP(S); remote hosts additionally require `allowRemoteSidecar: true` and a permitting privacy pin. Requests do not follow redirects. The service must accept the documented embeddings payload used by `HttpMediaEmbeddingProvider`: `model`, `input`, `dimensions`, `task`, `variant`, `precision`, `revision`, and return `data[0].embedding` or `embeddings[0]`. A native Ollama/LiteRT service with a different protocol needs a host-side adapter. There is no automatic failover that could silently send local media to a cloud.
 
@@ -104,7 +108,7 @@ The media namespace reuses the text re-embedding fingerprint codec, with provide
 
 A media fingerprint change invalidates only media segments and resets pending items. Captions remain searchable. `backfill: "auto"` resumes persisted running work and starts pending/model-change work on construction. `media.backfill.start({reason: "enable" | "model-change" | "manual"})`, `pause()`, `resume()` and `cancel()` manage a persisted worker cursor/status. Manual start reindexes the collection; cancellation leaves captions and pending items intact. Completed/failed items persist across restarts. Each batch yields to the event loop and each item writes durable status before progress is counted.
 
-Inject `host.capabilities.mediaBudget(): boolean | Promise<boolean>`. False pauses with `pausedReason: "budget"`; resume consults the hook again. Per-item failures are counted and retried up to `maxAttempts`, then skipped so other items finish. A stopped process may redo its last uncommitted item, never an unbounded failed-item loop. Decoding/loading an item already in flight finishes before pause/cancel/close settles.
+Inject `host.capabilities.mediaBudget(): boolean | Promise<boolean>`. This is a coarse backfill gate: false pauses with `pausedReason: "budget"`; resume consults the hook again. It carries no image/video-second units and direct `index()` does not consult it. The Harness must reserve/settle units around each direct request before enabling a cloud encoder. Cloud encoding must remain disabled until the host supplies its Secret lease, privacy/localOnly admission and metered budget enforcement; this Engine surface alone does not provide that admission. Per-item failures are counted and retried up to `maxAttempts`, then skipped so other items finish. A stopped process may redo its last uncommitted item, never an unbounded failed-item loop. Decoding/loading an item already in flight finishes before pause/cancel/close settles.
 
 Status returns `enabled`, provider/model/variant/dim/fingerprint, `counts: {indexed,pending,failed,unsupported}`, and `backfill: {state,done,total,startedAt?,pausedReason?}`.
 
@@ -128,8 +132,9 @@ npm run typecheck
 npm test
 # Optional real download/inference, skipped in the normal suite:
 PLUR1BUS_MEDIA_REAL_MODELS=1 \
+PLUR1BUS_MEDIA_REQUIRE_IDENTICAL=1 \
 PLUR1BUS_MEDIA_MODEL_CACHE=/path/to/prepared/cache \
 node --test tests/media-real-model.test.js
 ```
 
-The opt-in test compares full/text embeddings and reports maximum absolute error while fingerprints remain variant-specific. Set `PLUR1BUS_MEDIA_REQUIRE_IDENTICAL=1` to require agreement below 1e-4. It also checks that a generated green image ranks its description above a distractor. No license-gated Jina weights are downloaded by the default suite.
+The opt-in test decodes the checked-in CC0 PCM16 WAV fixture (`tests/fixtures/media/tone-440hz.wav`) and checks a real audio embedding for dimension, finiteness and normalization. It compares full/text embeddings and reports maximum absolute error while fingerprints remain variant-specific. Set `PLUR1BUS_MEDIA_REQUIRE_IDENTICAL=1` to require agreement below 1e-4. It also checks that a generated green image ranks its description above a distractor. No license-gated Jina weights are downloaded by the default suite.

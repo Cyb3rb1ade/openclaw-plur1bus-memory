@@ -1,0 +1,13 @@
+✔ real full Gemma: image/text retrieval sanity and variant text identity (6023.921709ms)
+ℹ cold image inference including verified-cache load: 3781.3 ms
+ℹ full/text maximum absolute difference: 0; fingerprints remain variant-specific regardless
+ℹ image query cosine: 0.8812216302921961; distractor cosine: 0.7304246699133102
+ℹ warm audio inference: 145.6 ms; vector norm: 1; process maxRSS: 5091088 KiB
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 6690.152166

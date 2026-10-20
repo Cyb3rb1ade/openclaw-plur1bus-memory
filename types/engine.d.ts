@@ -1,9 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.16.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended sixteen times under the policy below — see the changelog at the end
- * of this header).
+ * Contract version 1.19.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended under the policy below — see the changelog at the end of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
  * differently (review-report finding S4). Where ADR-002 and
@@ -47,10 +46,11 @@
  *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
  *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0). Also: MemoryImportRequest without importRunId attributes each card to the run its sourceRef names (`;run=<id>`); MemoryUnimportRequest.importRunId also selects such lines; MemoryUnimportResult.derived.graphEdgesRemoved? / mirrorsArchived? / cleanupErrors? (unimport drops the undone cards' graph edges and archives their Obsidian mirrors).
  *            1.16.0 — MemoryOps.link(id, req, p, a) (owner decision 2026-10-19: attach an imported duplicate to an existing card as an additional source instead of storing a duplicate; sidecar `_links/`, the card row is never written; idempotent per sourceRef); MemoryCard.links? (show/list); MemoryUnimportResult.links? (unimport of a run unlinks that run's links, the card stays); Engine.capabilities (EngineCapabilities, `memoryLink: true`); no breaking change to existing callers.
+ *            1.19.0 — Engine.media, EngineCapabilities.mediaIndex, host media codec/budget ports; pinned local Gemma 2 / Jina CLIP with HostServices.fetch routing. 1.17.0/1.18.0 remain reserved by parallel A1/C1 PRs; their APIs are not included here.
  */
 
-// 1.16.0: MemoryOps.link, MemoryCard.links?, MemoryUnimportResult.links?, Engine.capabilities.
-export type ContractVersion = "1.16.0";
+// 1.19.0: independent Engine.media and host media ports (also includes main through 1.16.0).
+export type ContractVersion = "1.19.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -1244,6 +1244,8 @@ export interface AgentStore {
 export interface EngineCapabilities {
   /** `MemoryOps.link`, `MemoryCard.links`, unimport unlinks by run. */
   readonly memoryLink: boolean;
+  /** 1.19.0: independent media index, captions and host-driven decoding. */
+  readonly mediaIndex: boolean;
 }
 
 export interface Engine {
@@ -1265,6 +1267,7 @@ export interface Engine {
   capture(t: TurnRecord, opts?: CaptureOptions): CaptureHandle;
   checkpoint(agentId: AgentId, reason: CheckpointReason): Promise<CheckpointResult>;
   memory: MemoryOps;
+  /** 1.19.0: trusted host API; the host derives scope and authorizes all calls. */
   media: MediaService;
 
   tools: ToolSpec[];
