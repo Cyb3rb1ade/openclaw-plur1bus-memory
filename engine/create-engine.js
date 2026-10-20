@@ -64,6 +64,7 @@ import { buildMemoryAccountTopology, buildMemoryWorkspaceAliases, createHostInco
 import { appendDestructiveOpLog, resolveInside, safeAgentId, safeUuid } from "../lib/sql-safety.js";
 import { measureControlHealthStorage } from "../lib/control-plane-storage.js";
 import { appendTombstoneToRegistry, backfillCommittedTombstone, buildTombstone, findBlockingTombstoneForCapture } from "../lib/tombstone.js";
+import { reconcileAttemptedTombstones } from "../lib/tombstone-reapply.js";
 import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
 import { ensureEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { addTraceStoreDecision, createRecallDecisionTrace, textPreview } from "../lib/recall-decision-trace.js";
@@ -1570,6 +1571,20 @@ export function createEngine(host, config, testOptions = {}) {
     },
     logger: host.logger,
   });
+
+  // Startup reconcile of interrupted /forget runs: an `attempted` tombstone
+  // whose row is already soft-deleted (crash before the committed line) is
+  // committed, so it blocks re-capture of the forgotten text. Background and
+  // never throwing; close() waits for it before the adapter is shut down.
+  const tombstoneReconcile = reconcileAttemptedTombstones({ baseDbPath, storeRoot: embeddingGenerationLayout.activeRoot, adapter: memoryDbAdapter, logger: host.logger })
+    .then((report) => {
+      if (report.errors.length > 0 || report.registryErrors.length > 0) {
+        host.logger.warn(`memory-lancedb-namespaced: tombstone reconcile incomplete: ${report.errors.length} row error(s), ${report.registryErrors.length} registry error(s)`);
+      }
+    })
+    .catch((error) => {
+      host.logger.warn(`memory-lancedb-namespaced: tombstone reconcile failed: ${describeError(error)}`);
+    });
 
   // Bounded LanceDB fragment compaction between consolidate-daily runs
   // (E5 Task 6). Capture notes every stored row through noteTableWrite; the
@@ -3180,6 +3195,7 @@ export function createEngine(host, config, testOptions = {}) {
     closing = Promise.race([
       Promise.resolve()
         .then(() => memoryOpsContext.drain())
+        .then(() => tombstoneReconcile)
         .then(() => internals.closeResources())
         .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${describeError(error)}`); }),
       new Promise((resolve) => {
