@@ -1,0 +1,44 @@
+{
+  "model": "jinaai/jina-clip-v2",
+  "revision": "e10d47f5691d0454a0fb5d13f46f2199b74cb436",
+  "license": "CC-BY-NC-4.0",
+  "commercialUse": false,
+  "dtype": "fp32",
+  "artifacts": [
+    {
+      "path": "config.json",
+      "size": 2152,
+      "sha256": "b5466de03392479d778745bbdb1905e297cd07ca76694703bd7d7b84d58aa853"
+    },
+    {
+      "path": "preprocessor_config.json",
+      "size": 584,
+      "sha256": "920bc482e3dad0de2bffe4e534181a1f61a4a6baefa1aee53b75849557786301"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "size": 964,
+      "sha256": "8c785abebea9ae3257b61681b4e6fd8365ceafde980c21970d001e834cf10835"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 17082997,
+      "sha256": "6601c4120779a1a3863897ba332fe3481d548e363bec2c91eba10ef8640a5e93"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size": 1148,
+      "sha256": "e1bc77da5b90ba65b47aa8bd776c6317f47d50dc6717e92b10177686b3b8f161"
+    },
+    {
+      "path": "onnx/model.onnx",
+      "size": 2090152,
+      "sha256": "e8bdc8a8124e10305fa97140ba11902e06b91f8a4dcf13a1664da521cdc155ed"
+    },
+    {
+      "path": "onnx/model.onnx_data",
+      "size": 3453550848,
+      "sha256": "0ec73a3b6f33c472249f7b058c3cbfb9586483b88ee5930b3b3749dff7acd873"
+    }
+  ]
+}

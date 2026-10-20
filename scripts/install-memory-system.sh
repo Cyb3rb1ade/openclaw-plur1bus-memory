@@ -810,7 +810,7 @@ case "$EMBEDDING_PROVIDER_MODE" in
     EMBEDDING_DIMENSIONS=1024
     info "Lokaler Provider nutzt $EMBEDDING_MODEL (1024d; Matryoshka: 32/64/128/256/512/768/1024)."
     warn "CC BY-NC 4.0: Diese lokale Modelloption ist nur für nicht-kommerzielle Nutzung vorgesehen."
-    info "Der erste echte Aufruf lädt den gepinnten Q8-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
+    info "Der erste echte Aufruf lädt die gepinnten fp32-ONNX-Gewichte nach $EMBEDDING_LOCAL_CACHE_DIR."
     ;;
   jina5)
     if [[ "${PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE:-0}" == "1" ]]; then
@@ -860,6 +860,37 @@ case "$EMBEDDING_PROVIDER_MODE" in
     prompt_input EMBEDDING_DIMENSIONS "Embedding-Dimension (muss zur DB passen)" "$EMBEDDING_DIMENSIONS"
     ;;
 esac
+
+# The media selection is independent; keep mode preserves the original config verbatim.
+MEDIA_BLOCK='{"enabled":false}'
+if [[ "$KEEP_EXISTING_MEMORY_CONFIG" != "1" ]]; then
+  info "Medienindex: separater Provider, Captions liefert der Host (kein Engine-Captioning)."
+  prompt_choice MEDIA_PROVIDER_MODE "Medien-Provider: gemma2=lokal Apache-2.0 empfohlen, jina4=Qwen Research API, clip2=CC-BY-NC API, disabled=aus" "gemma2" "gemma2" "jina4" "clip2" "disabled"
+  case "$MEDIA_PROVIDER_MODE" in
+    gemma2)
+      prompt_choice MEDIA_MODALITIES "Modalitäten: full=Bild/Video/Audio, vision=Bild/Video, audio=Audio" "full" "full" "vision" "audio"
+      case "$MEDIA_MODALITIES" in
+        vision) MEDIA_KINDS='["image","video"]' ;;
+        audio) MEDIA_KINDS='["audio"]' ;;
+        *) MEDIA_KINDS='["image","video","audio"]' ;;
+      esac
+      MEDIA_BLOCK=$(jq -n --argjson kinds "$MEDIA_KINDS" '{enabled:true,provider:"local-transformers",model:"google/embeddinggemma-2",modalities:$kinds,dimensions:768,precision:"fp32",backfill:"auto"}')
+      info "fp32-Download: text ~1,12 GB, vision ~1,79 GB, audio ~2,29 GB, full ~2,96 GB (keine fp16-Gewichte)."
+      ;;
+    jina4|clip2)
+      MEDIA_MODEL="jina-embeddings-v4"
+      [[ "$MEDIA_PROVIDER_MODE" == "clip2" ]] && MEDIA_MODEL="jina-clip-v2"
+      if ! confirm "Nicht-kommerzielle Lizenz von $MEDIA_MODEL ausdrücklich akzeptieren?" "n"; then
+        error "Medien-Lizenzbestätigung fehlt."
+        exit 1
+      fi
+      prompt_secret MEDIA_JINA_KEY "Jina API Key" '${JINA_API_KEY}'
+      MEDIA_DIM=2048
+      [[ "$MEDIA_PROVIDER_MODE" == "clip2" ]] && MEDIA_DIM=1024
+      MEDIA_BLOCK=$(jq -n --arg model "$MEDIA_MODEL" --arg key "$MEDIA_JINA_KEY" --argjson dim "$MEDIA_DIM" '{enabled:true,provider:"jina",model:$model,apiKey:$key,modalities:["image","video"],dimensions:$dim,precision:"fp32",backfill:"auto",licenseAccepted:true}')
+      ;;
+  esac
+fi
 
 echo ""
 info "Reranker-Auswahl:"
@@ -1236,6 +1267,7 @@ else
     --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
     --argjson obsidian_workspaces "$OBSIDIAN_WORKSPACES_JSON" \
     --argjson obsidian_enabled "$OBSIDIAN_BRIDGE_ENABLED" \
+    --argjson media "$MEDIA_BLOCK" \
     --argjson reranker "$RERANKER_BLOCK" \
     --argjson merging "$MERGING_BLOCK" \
     --argjson schicht15 "$SCHICHT15_BLOCK" \
@@ -1265,9 +1297,15 @@ else
               "dimensions": $embedding_dims
             }
           end
+          | if $embedding_local_model == "google/embeddinggemma-2" and $embedding_provider == "local-transformers" then
+              .local += {"dtype":"fp32", "variant": (if $media.provider == "local-transformers" then
+                (if ($media.modalities | index("audio")) != null then (if ($media.modalities | index("image")) != null then "full" else "audio" end) else "vision" end)
+                else "text" end)}
+            else . end
           | if $embedding_base_url != "" then . + {"baseUrl": $embedding_base_url} else . end
           | if $embedding_fallback != null then . + {"fallback": $embedding_fallback} else . end
         ),
+        "media": $media,
         "baseDbPath": $db_path,
         "autoCapture": true,
         "autoRecall": true,

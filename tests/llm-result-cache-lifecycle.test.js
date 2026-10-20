@@ -256,7 +256,7 @@ describe("LLM result cache lifecycle", () => {
     const { adapter, engine } = readRuntimeSources();
     assert.match(adapter.gateway, /registerGatewayShutdown\(api,\s*\{\s*closeResources\s*\}\);/);
     const source = engine.createEngine;
-    assert.match(source, /createResourceCloser\(\{\s*logger:\s*host\.logger,\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*scopedEmbeddingServer,\s*embeddingServer:\s*embeddingServing,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,\s*localModelGeneration,\s*neoWorker:\s*neoWorkerLease,\s*fragmentCompactor,?\s*\}\);/s);
+    assert.match(source, /createResourceCloser\(\{\s*logger:\s*host\.logger,\s*mediaService:\s*\{\s*close:\s*async\s*\(\)\s*=>\s*mediaService\?\.close\(\)\s*\},\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*scopedEmbeddingServer,\s*embeddingServer:\s*embeddingServing,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,\s*localModelGeneration,\s*neoWorker:\s*neoWorkerLease,\s*fragmentCompactor,?\s*\}\);/s);
   });
 
   it("starts optional model preparation only after shutdown ownership and hook registration", () => {

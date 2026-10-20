@@ -1,6 +1,6 @@
 # The PLUR1BUS engine API
 
-**Contract version 1.13.0** · frozen at 1.0.0 on 2026-09-22, amended fourteen times
+**Contract version 1.19.0** · frozen at 1.0.0 on 2026-09-22, amended
 under the amendment policy · source of truth: `types/engine.d.ts`
 
 This document explains the contract; `types/engine.d.ts` *is* the contract, and
@@ -36,8 +36,9 @@ against one shape.
 > adapters move together in a single PR, so the contract, its gate and its two
 > consumers are never in disagreement at any commit.
 
-Fifteen amendments have landed since the 1.0.0 freeze, per the `.d.ts` header's
-own changelog:
+The amendments since the 1.0.0 freeze follow the `.d.ts` header's changelog.
+Versions 1.17.0 and 1.18.0 are reserved for the parallel A1/C1 branches;
+those APIs are not included by this media branch:
 
 - **1.1.0** — `SecurePathResult.reason` gains `"acl-tool-unavailable"` (Task 5).
 - **1.2.0** — `HostServices.workspaceDir` becomes async (Task 6).
@@ -165,6 +166,11 @@ own changelog:
   (unimport of a run unlinks that run's links, the card stays) and
   `Engine.capabilities` (`{ memoryLink: true }`). Additive members only. See
   [Link in 1.16.0](#link-in-1160) below.
+
+- **1.19.0** — independent `Engine.media`, `EngineCapabilities.mediaIndex` and
+  trusted host media decoding/budget ports. Exact local artifact pins and the existing
+  Host Fetch port (1.15+) apply to media. [Media host contract](media-embeddings.md)
+  covers scope derivation, provider selection, captions, query and rebuild semantics.
 
 ## The two halves
 
