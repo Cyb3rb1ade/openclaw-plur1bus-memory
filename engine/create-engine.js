@@ -77,6 +77,7 @@ import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-l
 import { ReloadSafeIpcScopedEmbeddingProvider, createScopedEmbeddingIpcServer, resolveScopedEmbeddingIpcPaths } from "../lib/providers/scoped-embedding-ipc.js";
 import { pinnedLocalModelProfile, validatePinnedModelArtifacts } from "../lib/providers/local-model-artifacts.js";
 import { createConfiguredSecretInputResolver } from "../lib/providers/secret-input.js";
+import { defaultEmbeddingKeyEnv } from "../lib/providers/credential-scope.js";
 import { createBackgroundMemoryScheduler } from "../lib/runtime-scheduler.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 import { safeDebug, safeWarn } from "../lib/safe-logging.js";
@@ -371,7 +372,7 @@ export function createEngine(host, config, testOptions = {}) {
   });
   const apiKey = normalizedEmbeddingCfg.provider === "local-transformers"
     ? undefined
-    : resolveConfiguredApiKey(normalizedEmbeddingCfg, "${OPENAI_API_KEY}");
+    : resolveConfiguredApiKey(normalizedEmbeddingCfg, `\${${defaultEmbeddingKeyEnv(normalizedEmbeddingCfg.baseUrl)}}`);
   const model = normalizedEmbeddingCfg.model || DEFAULT_MODEL;
   const baseUrl = normalizedEmbeddingCfg.baseUrl;
   const dimensions = normalizedEmbeddingCfg.dimensions;
