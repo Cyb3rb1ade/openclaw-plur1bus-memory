@@ -1,7 +1,7 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.16.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * Contract version 1.17.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
  * amended sixteen times under the policy below — see the changelog at the end
  * of this header).
  *
@@ -46,11 +46,12 @@
  *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
  *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
  *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0). Also: MemoryImportRequest without importRunId attributes each card to the run its sourceRef names (`;run=<id>`); MemoryUnimportRequest.importRunId also selects such lines; MemoryUnimportResult.derived.graphEdgesRemoved? / mirrorsArchived? / cleanupErrors? (unimport drops the undone cards' graph edges and archives their Obsidian mirrors).
+ *            1.17.0 — persistent ACL-filtered recall stats; deterministic knowledge-update job and host promotion receipts; public human curation keep/drop.
  *            1.16.0 — MemoryOps.link(id, req, p, a) (owner decision 2026-10-19: attach an imported duplicate to an existing card as an additional source instead of storing a duplicate; sidecar `_links/`, the card row is never written; idempotent per sourceRef); MemoryCard.links? (show/list); MemoryUnimportResult.links? (unimport of a run unlinks that run's links, the card stays); Engine.capabilities (EngineCapabilities, `memoryLink: true`); no breaking change to existing callers.
  */
 
 // 1.16.0: MemoryOps.link, MemoryCard.links?, MemoryUnimportResult.links?, Engine.capabilities.
-export type ContractVersion = "1.16.0";
+export type ContractVersion = "1.17.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -520,7 +521,7 @@ export type JobName =
   | "skill-miner" | "discover-semantic-links" | "gc-run"
   | "reminder-dispatch" | "feedback-report" | "proactive-check" | "meta-reflect"
   | "skill-benefit-backfill" | "episodes-rebuild"
-  | "light-dream";
+  | "light-dream" | "knowledge-update";
 
 export interface JobSpec {
   name: JobName;
@@ -900,7 +901,32 @@ export interface MemoryProposalEvent {
  * reach it only through a principal that can reach that pool (otherwise `list` omits it and `accept`/`reject`
  * answer `not-found`).
  */
+export interface MemoryRecallStat {
+  id: string;
+  recalls: number;
+  distinctQueries: number;
+  /** Epoch milliseconds, null when this card has not been recalled. */
+  lastRecalledAt: number | null;
+}
+export interface MemoryStatsResult { agentId: AgentId; items: MemoryRecallStat[]; }
+export type MemoryPromotionReason = "integrated" | "disabled" | "lock-busy" | "not-found" | "not-live" | "scope-not-publishable" | "already-promoted" | "cap-reached";
+export interface MemoryPromotionResult {
+  agentId: AgentId;
+  items: Array<{ id: string; outcome: "promoted" | "skipped"; reason: MemoryPromotionReason }>;
+}
+export interface MemoryCurationRecord { id: string; status: string; text: string; category: string | null; }
+export interface MemoryCurationListResult { agentId: AgentId; items: MemoryCurationRecord[]; truncated: boolean; }
+
 export interface MemoryOps {
+  /** 1.17.0: per-agent counters for visible cards only, at most 500 ids. Undefined ids reads persisted counters; unseen requested visible ids return zero. */
+  stats(ids: readonly string[] | undefined, p: Principal, a: AgentContext): Promise<MemoryStatsResult>;
+  /** 1.17.0: foreground system/user host only. Uses schicht15 cap per invocation (0 unlimited), never invokes providers; only agent-private source rows. */
+  promote(req: { ids: readonly string[] }, p: Principal, a: AgentContext): Promise<MemoryPromotionResult>;
+  /** 1.17.0: human foreground only. Separate from D31 change proposals. */
+  curation: {
+    list(q: { limit?: number }, p: Principal, a: AgentContext): Promise<MemoryCurationListResult>;
+    resolve(id: string, action: "keep" | "drop", p: Principal, a: AgentContext): Promise<{ id: string; ok: boolean; status?: string; reason?: string }>;
+  };
   list(q: MemoryListQuery, p: Principal, a: AgentContext): Promise<MemoryListResult>;
   show(id: string, p: Principal, a: AgentContext): Promise<MemoryCard>;
   forget(id: string, p: Principal, a: AgentContext): Promise<MemoryForgetResult>;
@@ -1241,6 +1267,9 @@ export interface AgentStore {
 export interface EngineCapabilities {
   /** `MemoryOps.link`, `MemoryCard.links`, unimport unlinks by run. */
   readonly memoryLink: boolean;
+  readonly recallStats: boolean;
+  readonly knowledgePromotion: boolean;
+  readonly memoryCuration: boolean;
 }
 
 export interface Engine {

@@ -192,7 +192,7 @@ describe("Engine.status() (E4 Task 4)", () => {
     const { engine } = setupEngine("e4-status-e-");
     await engine.close();
     const s = await engine.status();
-    assert.equal(s.contract, "1.16.0");
+    assert.equal(s.contract, "1.17.0");
   });
 
   it("a throwing models.status() falls back to a real, non-null embedder identity (M2)", async () => {

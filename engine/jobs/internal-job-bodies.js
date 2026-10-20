@@ -67,6 +67,7 @@ export function createInternalJobBodies(ctx) {
     getNeoStore,
     host,
     memoryCompactionLlmCfg,
+    knowledgePromotion,
     memoryDbAdapter,
     memoryWorkspaceAliases,
     mergingEnabled,
@@ -105,6 +106,12 @@ export function createInternalJobBodies(ctx) {
   return async function runInternalJob(name, jobCtx) {
     const { commandCtx, memoryCtx, cronInternal, commandStore, id, tokens } = jobCtx.input;
     const subKey = name;
+    if (name === "knowledge-update") {
+      if (!commandCtx.workspaceDir) return jobCtx.skip("no_workspace", formatJsonCommandResult({ job: name, skipped: true, reason: "no_workspace" }));
+      if (cfg.schicht15?.enabled === false) return jobCtx.skip("schicht15_disabled", formatJsonCommandResult({ job: name, skipped: true, reason: "schicht15_disabled" }));
+      const result = await knowledgePromotion.run({ agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, memoryCtx });
+      return formatJsonCommandResult({ job: name, ...result });
+    }
     const internalAgent = commandCtx.agentId || "default";
       if (subKey === "consolidate-daily") {
         const dcCfg = cfg.dailyConsolidation || {};

@@ -7,11 +7,8 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { stripFrontmatter, withFrontmatter } from "../../lib/frontmatter.js";
-import { LLM_RESULT_CACHE_PURPOSES } from "../../lib/llm-result-cache.js";
 import { tryAcquireOwnedLock } from "../../lib/registry-lock.js";
 import { dbg } from "../runtime/debug-log.js";
-import { callLlm, withDeterministicLlmContext } from "../runtime/llm-calls.js";
 import { writeFileAtomicSync } from "../../lib/atomic-file.js";
 
 // ============================================================================
@@ -33,7 +30,6 @@ function appendCurationLog(workspaceDir, agentId, entry) {
 const KNOWLEDGE_PENDING_FILE = "knowledge-pending.json";
 const KNOWLEDGE_PENDING_LOCK_FILE = "knowledge-pending.lock";
 const KNOWLEDGE_LOCK_FILE    = "knowledge-update.lock";
-const KNOWLEDGE_MD_FILE      = "memory/KNOWLEDGE.md";
 const KNOWLEDGE_PENDING_CAP  = 200;
 
 function pendingKey(sourceAgent, memoryId) {
@@ -187,95 +183,6 @@ function removeKnowledgePending(workspaceDir, removeKeys, removeLegacyIds = []) 
     writeKnowledgePendingUnlocked(workspaceDir, state);
   } catch (_e) { dbg(_e); }
   finally { releaseKnowledgePendingLock(pendingLock); }
-}
-
-// ============================================================================
-// Schicht 1.5 — KNOWLEDGE.md
-// ============================================================================
-
-/**
- * Integrate one memory into KNOWLEDGE.md with deterministic agent-scoped LLM calls.
- * @param {string} workspaceDir
- * @param {string} text
- * @param {string} category
- * @param {number} importance
- * @param {object} llmCfg
- * @param {object} logger
- * @param {string} agentId
- * @param {Array<string>} sourceMemoryIds
- * @returns {Promise<void>}
- */
-async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCfg, logger, agentId, sourceMemoryIds) {
-  if (!workspaceDir || !llmCfg) return;
-  const memDir = join(workspaceDir, "memory");
-  const knowledgePath = join(memDir, "KNOWLEDGE.md");
-
-  let currentContent = "";
-  try {
-    if (existsSync(knowledgePath)) currentContent = readFileSync(knowledgePath, "utf8");
-  } catch (_e) { dbg(_e); }
-
-  // Strip frontmatter before sending to LLM (LLM should not touch it)
-  const { frontmatter: existingFm, body: currentBody } = stripFrontmatter(currentContent);
-  let mergedSources = sourceMemoryIds || [];
-  if (existingFm) {
-    const m = existingFm.match(/source_memories:\s*\n((?:\s+-\s+.+\n?)*)/);
-    if (m) {
-      const oldIds = m[1].split("\n").map(l => l.replace(/^\s+-\s+/, "").trim()).filter(Boolean);
-      mergedSources = [...new Set([...oldIds, ...mergedSources])];
-    }
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-
-  const updated = await callLlm([
-    {
-      role: "user",
-      content: `Here is the current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memory (category=${category}, importance=${importance.toFixed(1)}, date=${today}):\n${text}\n\nIntegrate this information into the KNOWLEDGE.md body.\n- Add a new entry under the appropriate section with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.`,
-    },
-  ], withDeterministicLlmContext(
-    llmCfg,
-    agentId,
-    LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-    // No temperature: providers like the Kimi coding endpoint allow exactly
-    // one value per thinking mode and answer HTTP 400 for anything else.
-    { maxTokens: 3000 },
-    llmCfg?.callContext,
-  ));
-
-  if (!updated) return;
-
-  let finalBody = updated;
-
-  if (finalBody.split("\n").length > 200) {
-    const compacted = await callLlm([
-      {
-        role: "user",
-        content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
-      },
-    ], withDeterministicLlmContext(
-      llmCfg,
-      agentId,
-      LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-      // No temperature: providers like the Kimi coding endpoint allow exactly
-      // one value per thinking mode and answer HTTP 400 for anything else.
-      { maxTokens: 4000 },
-      llmCfg?.callContext,
-    ));
-
-    const compactedLines = compacted?.split("\n").length ?? Infinity;
-    if (compacted && compactedLines <= 150) {
-      finalBody = compacted;
-    } else {
-      logger?.warn?.(`memory-lancedb-namespaced: KNOWLEDGE.md compaction skipped: result (${compactedLines} lines) not ≤150`);
-    }
-  }
-
-  // Re-attach frontmatter
-  const finalContent = withFrontmatter(finalBody, { agentId, sourceMemoryIds: mergedSources, today });
-
-  if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
-  writeFileAtomicSync(knowledgePath, finalContent);
 }
 
 export { appendCurationLog, KNOWLEDGE_LOCK_FILE, readKnowledgePending, readKnowledgePendingSnapshot, trackKnowledgePending, removeKnowledgePending };
