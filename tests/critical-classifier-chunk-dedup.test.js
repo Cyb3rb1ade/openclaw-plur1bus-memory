@@ -74,7 +74,9 @@ describe("runClassifier mit Ganzem und Teilen", () => {
     assert.strictEqual(res.pushed, 1);
     assert.deepStrictEqual(res.pushMessages.map((m) => m.id), ["whole"]);
     assert.strictEqual(res.skippedChunks, 3);
-    assert.deepStrictEqual(r.typed, [["whole", "gesundheit"], ["part-0", "fakt"], ["part-1", "fakt"], ["part-2", "fakt"]]);
+    // Teile zuerst, dann das Ganze: das Ganze verlässt die Kandidatenliste erst,
+    // wenn alle seine Teile getypt sind (siehe critical-classifier-chunk-integrity).
+    assert.deepStrictEqual(r.typed, [["part-0", "fakt"], ["part-1", "fakt"], ["part-2", "fakt"], ["whole", "gesundheit"]]);
   });
 
   it("klassifiziert Teile ohne Ganzes wie bisher", async () => {
