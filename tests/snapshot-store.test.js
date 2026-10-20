@@ -24,6 +24,7 @@ import {
   createSnapshot,
   listSnapshots,
   pruneSnapshots,
+  purgePreRestore,
   restoreSnapshot,
   verifySnapshot,
 } from "../lib/snapshot/store-snapshot.js";
@@ -51,8 +52,10 @@ async function makeState(root = makeTempDir("plur1bus-snap-")) {
   writeFileSync(join(baseDbPath, "registry.json"), "{\"agents\":[\"main\",\"work\"]}\n");
   mkdirSync(join(stateDir, "memory", "_archive"), { recursive: true });
   writeFileSync(join(stateDir, "memory", "_archive", "old.jsonl"), "{\"id\":\"x\"}\n");
-  writeFileSync(join(stateDir, "memory", "run-state.json"), "{\"lastRun\":1}\n");
-  writeFileSync(join(stateDir, "memory", "merge-proposals.jsonl"), "{\"p\":1}\n");
+  // the engine writes both files in the workspace, not under memory/ (lib/metrics.js, lib/jobs/memory-compaction.js)
+  mkdirSync(join(stateDir, "workspace", ".adaptive-learning"), { recursive: true });
+  writeFileSync(join(stateDir, "workspace", "run-state.json"), "{\"lastRun\":1}\n");
+  writeFileSync(join(stateDir, "workspace", ".adaptive-learning", "merge-proposals.jsonl"), "{\"p\":1}\n");
   mkdirSync(join(stateDir, "vault", "Notes"), { recursive: true });
   writeFileSync(join(stateDir, "vault", "Notes", "a.md"), "# vault note\n");
   writeFileSync(join(stateDir, "openclaw.json"), JSON.stringify({ apiKey: SECRET_MARKER }));
@@ -123,7 +126,7 @@ describe("store snapshot (HM1-R8)", () => {
     for (const f of manifest.files) {
       assert.equal(f.sha256, sha256(join(snap.dir, ...f.path.split("/"))), f.path);
     }
-    for (const want of ["store/registry.json", "memory/_archive/old.jsonl", "memory/run-state.json", "memory/merge-proposals.jsonl"]) {
+    for (const want of ["store/registry.json", "memory/_archive/old.jsonl", "workspace/run-state.json", "workspace/.adaptive-learning/merge-proposals.jsonl"]) {
       assert.ok(listed.includes(want), want);
     }
     for (const agent of ["main", "work"]) {
@@ -426,7 +429,7 @@ describe("store snapshot: compare the live store (HM1-R-F2)", () => {
     assert.equal(cmp.unchanged, true, cmp.detail);
     assert.ok(cmp.files > 5);
     // side files outside the store are not part of the comparison
-    writeFileSync(join(stateDir, "memory", "run-state.json"), "{\"lastRun\":2}\n");
+    writeFileSync(join(stateDir, "workspace", "run-state.json"), "{\"lastRun\":2}\n");
     assert.equal((await compareStoreWithSnapshot({ stateDir, baseDbPath, id: snap.id })).unchanged, true);
   });
 
@@ -532,5 +535,202 @@ describe("store snapshot: a custom snapshotsDir (ruling F18)", () => {
     await assert.rejects(createSnapshot({ stateDir, baseDbPath: inside, snapshotsDir }), (e) => e instanceof SnapshotError && e.reason === "unsafe-path");
     await assert.rejects(restoreSnapshot({ stateDir, baseDbPath: inside, snapshotsDir, id: b.id }), (e) => e.reason === "unsafe-path");
     await assert.rejects(createSnapshot({ stateDir, baseDbPath, snapshotsDir: join(baseDbPath, "snaps") }), (e) => e.reason === "unsafe-path");
+  });
+});
+
+describe("store snapshot: workspace side files (engine audit snapshot 2)", () => {
+  it("saves run-state.json and merge-proposals.jsonl from the workspace, not from memory/", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    // stale lookalikes at the old, wrong location must not be what is saved
+    writeFileSync(join(stateDir, "memory", "run-state.json"), "{\"stale\":true}\n");
+    writeFileSync(join(stateDir, "memory", "merge-proposals.jsonl"), "{\"stale\":true}\n");
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "ws" });
+    const files = walkFiles(snap.dir);
+    assert.ok(files.includes("workspace/run-state.json"), files.join("\n"));
+    assert.ok(files.includes("workspace/.adaptive-learning/merge-proposals.jsonl"));
+    assert.ok(!files.includes("memory/run-state.json"));
+    assert.ok(!files.includes("memory/merge-proposals.jsonl"));
+    assert.equal(readFileSync(join(snap.dir, "workspace", "run-state.json"), "utf8"), "{\"lastRun\":1}\n");
+    assert.equal(readFileSync(join(snap.dir, "workspace", ".adaptive-learning", "merge-proposals.jsonl"), "utf8"), "{\"p\":1}\n");
+    await verifySnapshot({ dir: snap.dir });
+  });
+
+  it("takes an explicit workspaceDir outside the state dir, and copes with a missing workspace", async () => {
+    const { root, stateDir, baseDbPath } = await makeState();
+    const workspaceDir = join(root, "agent-workspace");
+    mkdirSync(join(workspaceDir, ".adaptive-learning"), { recursive: true });
+    writeFileSync(join(workspaceDir, "run-state.json"), "{\"custom\":1}\n");
+    writeFileSync(join(workspaceDir, ".adaptive-learning", "merge-proposals.jsonl"), "{\"custom\":2}\n");
+    const snap = await createSnapshot({ stateDir, baseDbPath, workspaceDir, label: "custom" });
+    assert.equal(readFileSync(join(snap.dir, "workspace", "run-state.json"), "utf8"), "{\"custom\":1}\n");
+    assert.equal(readFileSync(join(snap.dir, "workspace", ".adaptive-learning", "merge-proposals.jsonl"), "utf8"), "{\"custom\":2}\n");
+
+    const none = await createSnapshot({ stateDir, baseDbPath, workspaceDir: join(root, "no-such-workspace"), label: "none", now: () => Date.UTC(2030, 0, 1) });
+    assert.ok(!walkFiles(none.dir).some((p) => p.startsWith("workspace/")));
+    await verifySnapshot({ dir: none.dir });
+  });
+});
+
+describe("store snapshot: pre-restore copies (engine audit snapshot 1)", () => {
+  const preRestoreCopies = (baseDbPath) =>
+    readdirSync(dirname(baseDbPath)).filter((n) => n.startsWith("lancedb-namespaced.pre-restore-")).sort();
+
+  async function restoreN(stateDir, baseDbPath, id, n, extra = {}) {
+    const results = [];
+    for (let i = 0; i < n; i++) {
+      writeFileSync(join(baseDbPath, "registry.json"), `{"gen":${i}}\n`);
+      results.push(await restoreSnapshot({ stateDir, baseDbPath, id, ...extra }));
+    }
+    return results;
+  }
+
+  it("keeps every copy by default (unchanged behaviour)", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "p" });
+    const results = await restoreN(stateDir, baseDbPath, snap.id, 4);
+    assert.equal(preRestoreCopies(baseDbPath).length, 4);
+    assert.deepEqual(results[3].purgedPreRestore, []);
+    assert.deepEqual(results[3].warnings, []);
+  });
+
+  it("keepPreRestore: N removes the older copies after a successful restore and keeps the new one", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "p" });
+    await restoreN(stateDir, baseDbPath, snap.id, 3);
+    assert.equal(preRestoreCopies(baseDbPath).length, 3);
+    writeFileSync(join(baseDbPath, "registry.json"), "{\"gen\":99}\n");
+    const last = await restoreSnapshot({ stateDir, baseDbPath, id: snap.id, keepPreRestore: 2 });
+    const left = preRestoreCopies(baseDbPath);
+    assert.equal(left.length, 2, left.join(","));
+    assert.ok(left.includes(last.preRestorePath.split(sep).pop()), "the copy of this restore is kept");
+    assert.equal(last.purgedPreRestore.length, 2);
+    assert.equal(readFileSync(join(last.preRestorePath, "registry.json"), "utf8"), "{\"gen\":99}\n");
+    assert.deepEqual(last.warnings, []);
+    assert.deepEqual(await rowsOf(baseDbPath, "main"), await rowsOf(join(snap.dir, "store"), "main"));
+  });
+
+  it("a failed restore purges nothing", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "p" });
+    await restoreN(stateDir, baseDbPath, snap.id, 3);
+    const before = preRestoreCopies(baseDbPath);
+    await assert.rejects(restoreSnapshot({ stateDir, baseDbPath, id: "plur1bus-20990101T000000Z-none", keepPreRestore: 1 }), (e) => e.reason === "not-found");
+    assert.deepEqual(preRestoreCopies(baseDbPath), before);
+    await assert.rejects(restoreSnapshot({ stateDir, baseDbPath, id: snap.id, keepPreRestore: -1 }), RangeError);
+    assert.deepEqual(preRestoreCopies(baseDbPath), before);
+  });
+
+  it("purgePreRestore keeps the newest N, ignores lookalikes, and honours a pending restore journal", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "p" });
+    await restoreN(stateDir, baseDbPath, snap.id, 4);
+    const lookalikes = [
+      `${baseDbPath}.pre-restore-old`, // wrong suffix
+      `${baseDbPath}.bak.20260101`,
+      `${baseDbPath}-x.pre-restore-20260101T000000Z`, // another store's copy
+    ];
+    for (const l of lookalikes) mkdirSync(l);
+    writeFileSync(`${baseDbPath}.pre-restore-20260102T000000Z`, "a file, not a directory");
+    const realCopies = () => readdirSync(dirname(baseDbPath), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && /^lancedb-namespaced\.pre-restore-\d{8}T\d{6}Z(-\d+)?$/.test(e.name)).map((e) => e.name);
+    assert.equal(realCopies().length, 4);
+
+    writeFileSync(`${baseDbPath}.pending-restore`, "{}");
+    const skipped = await purgePreRestore({ stateDir, baseDbPath, keep: 1 });
+    assert.equal(skipped.skipped, "restore-pending");
+    assert.deepEqual(skipped.removed, []);
+    assert.equal(realCopies().length, 4);
+    rmSync(`${baseDbPath}.pending-restore`);
+
+    const purged = await purgePreRestore({ stateDir, baseDbPath, keep: 2 });
+    assert.equal(purged.removed.length, 2);
+    assert.equal(purged.kept.length, 2);
+    assert.equal(realCopies().length, 2);
+    for (const l of lookalikes) assert.ok(existsSync(l), l);
+    assert.ok(existsSync(`${baseDbPath}.pre-restore-20260102T000000Z`));
+    // the live store is untouched
+    assert.deepEqual(await rowsOf(baseDbPath, "main"), await rowsOf(join(snap.dir, "store"), "main"));
+    assert.deepEqual((await purgePreRestore({ stateDir, baseDbPath, keep: 2 })).removed, []);
+    await assert.rejects(purgePreRestore({ stateDir, baseDbPath, keep: 1.5 }), RangeError);
+    await assert.rejects(purgePreRestore({ stateDir, baseDbPath: stateDir, keep: 1 }), (e) => e.reason === "unsafe-path");
+  });
+
+  it("the CLI offers purge-pre-restore and restore --keep-pre-restore", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "cli" });
+    await restoreN(stateDir, baseDbPath, snap.id, 3);
+    const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", timeout: CLI_TIMEOUT_MS, killSignal: "SIGKILL" });
+    const purge = run("purge-pre-restore", "--state-dir", stateDir, "--base-db-path", baseDbPath, "--keep", "1", "--json");
+    assert.equal(purge.status, 0, purge.stderr);
+    assert.equal(JSON.parse(purge.stdout).result.removed.length, 2);
+    assert.equal(preRestoreCopies(baseDbPath).length, 1);
+    writeFileSync(join(baseDbPath, "registry.json"), "{\"gen\":7}\n");
+    const restored = run("restore", "--state-dir", stateDir, "--base-db-path", baseDbPath, "--id", snap.id, "--keep-pre-restore", "1", "--json");
+    assert.equal(restored.status, 0, restored.stderr);
+    assert.equal(JSON.parse(restored.stdout).result.purgedPreRestore.length, 1);
+    assert.equal(preRestoreCopies(baseDbPath).length, 1);
+    assert.equal(run("purge-pre-restore", "--state-dir", stateDir).status, 2);
+    assert.equal(run("purge-pre-restore", "--state-dir", stateDir, "--base-db-path", baseDbPath, "--keep", "x").status, 2);
+  });
+});
+
+describe("store snapshot: restore after the swap, path containment (engine audit snapshot 3, 4)", () => {
+  const POSIX = process.platform === "win32" ? { skip: "directory fsync and symlinks are POSIX-only" } : {};
+
+  it("a directory fsync failure after the swap is a warning, not a failed restore", POSIX, async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "f" });
+    writeFileSync(join(baseDbPath, "registry.json"), "{\"gen\":1}\n");
+    const parent = dirname(baseDbPath);
+    const fsImpl = {
+      ...nodeFs,
+      async open(p, ...rest) {
+        if (p === parent) throw Object.assign(new Error("fsync boom"), { code: "EIO" });
+        return nodeFs.open(p, ...rest);
+      },
+    };
+    const result = await restoreSnapshot({ stateDir, baseDbPath, id: snap.id, fsImpl });
+    assert.equal(readFileSync(join(baseDbPath, "registry.json"), "utf8"), "{\"agents\":[\"main\",\"work\"]}\n");
+    assert.ok(result.preRestorePath && existsSync(result.preRestorePath));
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /fsync of .* failed after the swap: fsync boom/);
+    assert.ok(result.warnings[0].includes(result.preRestorePath), "the warning names the previous store");
+  });
+
+  it("a failure before the swap (staging fsync) still fails the restore and leaves the store alone", POSIX, async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "f" });
+    writeFileSync(join(baseDbPath, "registry.json"), "{\"gen\":1}\n");
+    const fsImpl = {
+      ...nodeFs,
+      async open(p, ...rest) {
+        if (String(p).startsWith(`${baseDbPath}.restore-`)) throw Object.assign(new Error("staging boom"), { code: "EIO" });
+        return nodeFs.open(p, ...rest);
+      },
+    };
+    await assert.rejects(restoreSnapshot({ stateDir, baseDbPath, id: snap.id, fsImpl }), /staging boom/);
+    assert.equal(readFileSync(join(baseDbPath, "registry.json"), "utf8"), "{\"gen\":1}\n");
+  });
+
+  it("a store reached through a symlink to a sibling named ..name is not refused as an escape", POSIX, async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const real = join(dirname(baseDbPath), "..lancedb-real");
+    await nodeFs.rename(baseDbPath, real);
+    symlinkSync(real, baseDbPath);
+    const snap = await createSnapshot({ stateDir, baseDbPath, label: "dots" });
+    assert.ok(walkFiles(snap.dir).includes("store/registry.json"));
+  });
+
+  it("a store named ..x inside the snapshots directory is refused, a ..x sibling next to it is not", async () => {
+    const { stateDir, baseDbPath } = await makeState();
+    const inside = join(snapshotsDir(stateDir), "..store");
+    mkdirSync(inside, { recursive: true });
+    await assert.rejects(createSnapshot({ stateDir, baseDbPath: inside }), (e) => e instanceof SnapshotError && e.reason === "unsafe-path");
+    const sibling = join(stateDir, "memory", "..store");
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, "registry.json"), "{}\n");
+    const snap = await createSnapshot({ stateDir, baseDbPath: sibling, label: "sibling" });
+    assert.ok(walkFiles(snap.dir).includes("store/registry.json"));
+    void baseDbPath;
   });
 });

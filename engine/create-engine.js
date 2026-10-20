@@ -19,7 +19,7 @@ import { embeddingIdentity, identityId } from "../lib/providers/embedding-identi
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemoryWithReason } from "../lib/categorize.js";
+import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemoryWithReason } from "../lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "../lib/memory-fact-quality.js";
 import { hasMeaningfulDifference, isSafeDuplicate, validateMergedTextPreservesFacts } from "../lib/memory-merge-safety.js";
 import { featureModelOverrides } from "../lib/featureModels.js";
@@ -43,7 +43,7 @@ import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 import { isOwnedVaultConfirmed } from "../lib/obsidian-vault-authority.js";
 import { getSharedDeferredDynamicsQueue } from "../lib/deferred-dynamics-queue.js";
 import { archiveCard } from "../lib/telegram-commands/memory-edit.js";
-import { validateMemoryText } from "../lib/input-limits.js";
+import { resolveTtlMs, validateMemoryStoreParams } from "../lib/input-limits.js";
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { combineEpistemicStatusForMerge, normalizeEpistemicStatus } from "../lib/epistemic-status.js";
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../lib/valid-time.js";
@@ -88,7 +88,7 @@ import { createLlmFailureRecorder } from "../lib/health-watch.js";
 import { createPostTurnDetacher } from "../lib/post-turn-detach.js";
 import { inferEmotionalValenceAsync, setEmotionConfig } from "../lib/emotion.js";
 import { createEmotionalStatePool } from "../lib/emotional-state.js";
-import { applyDynamicsDefaults } from "../lib/memory-dynamics.js";
+import { applyDynamicsDefaults, isManualCoreMarker, mergedExpiresAt } from "../lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "../lib/retroactive-interference.js";
 import { buildRemPartitions } from "../lib/dreaming/rem-dream.js";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
@@ -2606,10 +2606,11 @@ export function createEngine(host, config, testOptions = {}) {
     if (!scopeAccess.ok) return { error: scopeAccess.error };
     const { scope, ownerUserId, ownershipFields } = scopeAccess;
     const storeWorkspaceKey = ownershipFields.workspaceKey;
-    // v6.2.1 — Input-Validierung für Memory-Text (P0-Fix)
-    const textValidation = validateMemoryText(params.text);
-    if (!textValidation.ok) {
-      return { error: textValidation.error };
+    // v6.2.1 — Input-Validierung für Memory-Text (P0-Fix); category
+    // gegen die Kategorienliste, leerer Text wird abgelehnt (Audit memory-tools).
+    const paramValidation = validateMemoryStoreParams(params, { categories: MEMORY_CATEGORIES });
+    if (!paramValidation.ok) {
+      return { error: paramValidation.error };
     }
     const validTimeValidation = validateValidTimeInputFields(params, ["validFrom", "validUntil"]);
     if (!validTimeValidation.ok) return { error: validTimeValidation.error };
@@ -2641,7 +2642,16 @@ export function createEngine(host, config, testOptions = {}) {
         memoryId: null,
         reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
       });
-      const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
+      const ttlMs = resolveTtlMs(TTL_MAP, params.ttl);
+      const expiresAt = ttlMs > 0 ? Date.now() + ttlMs : 0;
+      // Core band (importance >= 0.95) is permanent; a ttl would be overwritten
+      // by applyDynamicsDefaults, so refuse loudly (same rule as memory_store).
+      if (expiresAt > 0 && isManualCoreMarker({ importance })) {
+        return {
+          content: [{ type: "text", text: `Memory store rejected: ttl "${params.ttl}" cannot be combined with importance ${importance.toFixed(2)}; importance 0.95 and above is permanent core memory. Omit ttl, or use importance below 0.95.` }],
+          details: { action: "rejected", reason: "ttl_conflicts_with_core_importance" },
+        };
+      }
       const storeAccessCtx = memoryCtx;
       const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
       const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
@@ -2715,7 +2725,7 @@ export function createEngine(host, config, testOptions = {}) {
               category,
               origin,
               importance,
-              ttl: params.ttl && TTL_MAP[params.ttl] ? params.ttl : "",
+              ttl: ttlMs > 0 ? params.ttl : "",
               sourceUrl,
               evidenceQuote,
               scope,
@@ -2767,7 +2777,7 @@ export function createEngine(host, config, testOptions = {}) {
               const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
               const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
               const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
-              const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
+              const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt: mergedExpiresAt(authoritativeCandidate.expiresAt, expiresAt), ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides, { flashbulbEncodingEnabled });
               return { mergedEntry, mergeResult, mergedImportance };
             },
           });

@@ -279,7 +279,9 @@ strength — which is what makes a painful or often-revisited memory stay presen
 instead of decaying on schedule. The per-recall bonus no longer shrinks with the
 number of recalls. Rows at 0.95 and above form an explicit **agent band** that
 carries core protection, so a memory deliberately raised by the agent and the
-user together is not quietly decayed away.
+user together is not quietly decayed away. The band is permanent, so `memory_store`
+rejects a `ttl` together with importance 0.95 or above instead of dropping the
+expiry silently.
 
 **The retrieval budget moved behind the reranker** (7.12.68). The pipeline used
 to cut the candidate list to its final size *before* reranking, so the reranker
