@@ -909,7 +909,7 @@ export interface MemoryRecallStat {
   lastRecalledAt: number | null;
 }
 export interface MemoryStatsResult { agentId: AgentId; items: MemoryRecallStat[]; }
-export type MemoryPromotionReason = "integrated" | "disabled" | "lock-busy" | "not-found" | "not-live" | "scope-not-publishable" | "already-promoted" | "cap-reached";
+export type MemoryPromotionReason = "integrated" | "disabled" | "lock-busy" | "not-found" | "not-live" | "scope-not-publishable" | "importance-pending" | "importance-below-threshold" | "already-promoted" | "cap-reached";
 export interface MemoryPromotionResult {
   agentId: AgentId;
   items: Array<{ id: string; outcome: "promoted" | "skipped"; reason: MemoryPromotionReason }>;

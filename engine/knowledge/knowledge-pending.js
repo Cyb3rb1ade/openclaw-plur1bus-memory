@@ -136,10 +136,15 @@ function readKnowledgePendingSnapshot(workspaceDir) {
   return readKnowledgePending(workspaceDir);
 }
 
+/** Persist one deduplicated work item; false leaves a producer free to retry.
+ * @param {string} workspaceDir
+ * @param {object} memory
+ * @returns {boolean} Whether the queue write committed.
+ */
 function trackKnowledgePending(workspaceDir, memory) {
   let pendingLock = null;
   try {
-    if (!memory?.sourceAgent || !memory?.memoryId) return;
+    if (!memory?.sourceAgent || !memory?.memoryId) return false;
     pendingLock = acquireKnowledgePendingLock(workspaceDir);
     const state = readKnowledgePendingUnlocked(workspaceDir);
     const entry = {
@@ -167,7 +172,8 @@ function trackKnowledgePending(workspaceDir, memory) {
         relatedId: null,
       });
     }
-  } catch (_e) { dbg(_e); }
+    return written.pending.some(item => item.key === entry.key);
+  } catch (_e) { dbg(_e); return false; }
   finally { releaseKnowledgePendingLock(pendingLock); }
 }
 

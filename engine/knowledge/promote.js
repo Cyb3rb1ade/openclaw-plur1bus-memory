@@ -49,6 +49,9 @@ export function createKnowledgePromotion({ pool, cfg }) {
             else if (!isRecallEntryLive(row, Date.now())) reason = 'not-live';
             else if (row.scope && row.scope !== 'agent-private') reason = 'scope-not-publishable';
             else if (row.agentId && row.agentId !== agentId) reason = 'not-found';
+            else if (['pending', 'pending_backfill'].includes(row.importanceStatus)) reason = 'importance-pending';
+            else if (pending.some(item => item.memoryId === id && item.reason === 'importance-refinement')
+              && !(Number(row.importance) >= (cfg.schicht15?.minImportance ?? 0.7))) reason = 'importance-below-threshold';
             const digest = row ? createHash('sha256').update(`${agentId}\0${id}\0${row.text}`).digest('hex') : '';
             const marker = `<!-- plur1bus-promotion:${digest} -->`;
             if (!reason && content.includes(marker)) reason = 'already-promoted';
@@ -60,7 +63,7 @@ export function createKnowledgePromotion({ pool, cfg }) {
               promoted++;
               items.push({ id, outcome: 'promoted', reason: 'integrated' });
             } else items.push({ id, outcome: 'skipped', reason });
-            if (!reason || ['already-promoted', 'not-found', 'not-live'].includes(reason)) {
+            if (!reason || ['already-promoted', 'not-found', 'not-live', 'importance-below-threshold'].includes(reason)) {
               removeKeys.push(...pending.filter(item => item.memoryId === id).map(item => item.key));
             }
           }

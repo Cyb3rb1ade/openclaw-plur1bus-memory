@@ -2451,7 +2451,9 @@ runs via the existing host job registry and respects the disabled-workspace gate
 
 The receipt reasons are `integrated` (outcome `promoted`), or `disabled`,
 `lock-busy`, `not-found`, `not-live`, `scope-not-publishable`, `already-promoted`,
-`cap-reached` (outcome `skipped`). A source hash marker is written atomically with
+`cap-reached`, `importance-pending`, `importance-below-threshold` (outcome `skipped`).
+Unresolved classification keeps its staged queue entry for a later retry; a final
+verdict below the configured threshold discards that staged entry. A source hash marker is written atomically with
 the evidence before queue cleanup. A crash between writing and cleanup replays
 as `already-promoted`; failed writes leave the source pending. The existing
 LLM-backed `knowledge_update` tool remains explicit; its former unreachable

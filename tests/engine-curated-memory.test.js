@@ -56,6 +56,7 @@ describe('curated memory contract 1.17.0', () => {
   it('knowledge job consumes only own pending queue, enforces per-run cap and supports unlimited/idempotent host promotion', { timeout: 90_000 }, async () => {
     const stateDir = makeTempDir('curated-job-state-');
     const { host, workspaceDir } = twoWorkspaceHost(stateDir);
+    host.runtime = { llm: { complete: async () => ({ text: '{"importance":0.9,"intensity":0,"dominant":"neutral","emotions":{}}', provider: 'fixture', model: 'fixture' }) } };
     const engine = createEngine(host, { ...config(makeTempDir('curated-job-db-')), schicht15: { enabled: true, maxPromotionsPerRun: 3 } }, { internals: { embeddings: flatEmbedder() } });
     const ids = [];
     for (let i = 0; i < 4; i++) {
@@ -63,6 +64,7 @@ describe('curated memory contract 1.17.0', () => {
       ids.push(id); trackKnowledgePending(workspaceDir, { sourceAgent: 'anna', memoryId: id, importance: 0.95 });
     }
     trackKnowledgePending(workspaceDir, { sourceAgent: 'bernd', memoryId: ids[0] });
+    await engine.jobs.run('emotion-refine', 'anna');
     const spec = engine.jobs.list().find(j => j.name === 'knowledge-update');
     assert.ok(spec); assert.equal(spec.needsLlm, false);
     const run = await engine.jobs.run('knowledge-update', 'anna');
@@ -114,11 +116,13 @@ describe('curation, migration and promotion failure guards', () => {
   it('knowledge-update cap 0 really processes more than the default cap and preserves existing content', { timeout: 90_000 }, async () => {
     const stateDir = makeTempDir('unlimited-state-');
     const { host, workspaceDir } = twoWorkspaceHost(stateDir);
+    host.runtime = { llm: { complete: async () => ({ text: '{"importance":0.9,"intensity":0,"dominant":"neutral","emotions":{}}', provider: 'fixture', model: 'fixture' }) } };
     const engine = createEngine(host, { ...config(makeTempDir('unlimited-db-')), schicht15: { enabled: true, maxPromotionsPerRun: 0 } }, { internals: { embeddings: flatEmbedder() } });
     for (let i = 0; i < 5; i++) {
       const id = await seedAndGetId(engine, 'anna', `Lighthouse ${i} unlimited decision must be kept.`, 'lighthouse');
       trackKnowledgePending(workspaceDir, { sourceAgent: 'anna', memoryId: id });
     }
+    await engine.jobs.run('emotion-refine', 'anna');
     assert.equal((await engine.jobs.run('knowledge-update', 'anna')).outcome, 'completed');
     const path = join(workspaceDir, 'memory', 'KNOWLEDGE.md');
     const body = readFileSync(path, 'utf8');
