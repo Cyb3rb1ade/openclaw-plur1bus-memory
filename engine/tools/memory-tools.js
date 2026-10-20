@@ -27,13 +27,13 @@ import { serializeEmotionalValence } from "../../lib/emotion.js";
 import { decideEpistemicStatusForCapture } from "../../lib/epistemic-capture.js";
 import { normalizeEpistemicStatus } from "../../lib/epistemic-status.js";
 import { stripFrontmatter, withFrontmatter } from "../../lib/frontmatter.js";
-import { validateMemoryText } from "../../lib/input-limits.js";
+import { resolveTtlMs, validateMemoryStoreParams } from "../../lib/input-limits.js";
 import { checkMaxPromotions, computeContentHash, isKnowledgePromoted, recordKnowledgePromotion } from "../../lib/jobs/schicht15-tracker.js";
 import { selectStalePendingKeys } from "../../lib/knowledge-pending-prune.js";
 import { isTruncatedKnowledgeBody, resolveKnowledgeUpdateMaxTokens, resolveKnowledgeUpdateTimeoutMs } from "../../lib/knowledge-update-budget.js";
 import { LLM_RESULT_CACHE_PURPOSES } from "../../lib/llm-result-cache.js";
 import { DISPLAY_SOURCES } from "../../lib/memory-context-sanitize.js";
-import { applyDynamicsDefaults, createRetrievalLedgerEntry } from "../../lib/memory-dynamics.js";
+import { applyDynamicsDefaults, createRetrievalLedgerEntry, isManualCoreMarker, mergedExpiresAt } from "../../lib/memory-dynamics.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "../../lib/memory-fact-quality.js";
 import { hasMeaningfulDifference, validateMergedTextPreservesFacts } from "../../lib/memory-merge-safety.js";
 import { resolveToolMemoryRequestContext } from "../../lib/memory-request-context.js";
@@ -49,6 +49,18 @@ import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCaptured
 import { guardWorkspaceTools } from "../../lib/workspace-policy-guard.js";
 import { describeError, describeText } from "../../lib/log-redact.js";
 import { writeFileAtomicSync } from "../../lib/atomic-file.js";
+
+/**
+ * Lowest similarity (`1 / (1 + distance)`, see lib/score.js) at which a lone
+ * query hit of `memory_forget` is archived and tombstoned without the model
+ * naming the id. `forgetThreshold` (default 0.3) cannot do this job: for unit
+ * vectors the score never drops below 1/3, so it filters nothing and an
+ * unrelated memory was forgotten whenever it was the only one the agent could
+ * see. 0.75 is a cosine of about 0.83 on unit vectors. A higher configured
+ * `forgetThreshold` still wins. Below it the hit is listed with its id and the
+ * model confirms with `memoryId`.
+ */
+export const FORGET_BY_QUERY_MIN_SCORE = 0.75;
 
 /**
  * Build the OpenClaw tool factory from an already-resolved engine context.
@@ -318,9 +330,9 @@ export function createMemoryTools(ctx) {
           properties: {
             text: { type: "string", description: "Information to remember" },
             category: { type: "string", enum: MEMORY_CATEGORIES, description: "Memory category" },
-            importance: { type: "number", description: "Importance 0-1 (default 0.5). Reserve exactly 1.0 for something you decide you must never forget — it marks the memory as permanent and exempt from garbage collection, compaction and merging. Use it sparingly and only on your own judgement; anything merely very important belongs at 0.85-0.95." },
+            importance: { type: "number", description: "Importance 0-1 (default 0.5). Importance 0.95 and above marks the memory as permanent core memory, exempt from garbage collection and decay, so it cannot be combined with ttl (the call is rejected). Reserve that band, and above all exactly 1.0, for something you decide you must never forget; use it sparingly and only on your own judgement. Anything merely very important belongs at 0.85-0.94." },
             origin: { type: "string", enum: MEMORY_ORIGINS, description: "Origin context: 'dm' = direct message (default), 'group' = Telegram group chat, 'cron' = background job, 'internal' = agent-generated. ALWAYS set 'group' when storing from a group chat!" },
-            ttl: { type: "string", enum: ["session", "short"], description: "Memory lifetime: 'session' = until tomorrow, 'short' = 14 days. Omit for permanent storage." },
+            ttl: { type: "string", enum: ["session", "short"], description: "Memory lifetime: 'session' = until tomorrow, 'short' = 14 days. Omit for permanent storage. Not allowed together with importance >= 0.95 (that band is permanent)." },
             sourceUrl: { type: "string", description: "Optional URL this memory is derived from (provenance)" },
             evidenceQuote: { type: "string", description: "Optional original quote (≤200 chars) that backs this memory" },
             scope: { type: "string", enum: MEMORY_SCOPES, description: "Visibility scope: 'agent-private' (default), 'workspace' (shared within workspace), 'user' (shared across all agents of one user)" },
@@ -332,12 +344,12 @@ export function createMemoryTools(ctx) {
         async execute(_toolCallId, params) {
           try {
             // Keep the agent-facing store path aligned with storeMemoryFromToolParams:
-            // reject invalid text before embedding or writing it.
-            const textValidation = validateMemoryText(params.text);
-            if (!textValidation.ok) {
+            // reject blank text and unknown categories before embedding or writing.
+            const paramValidation = validateMemoryStoreParams(params, { categories: MEMORY_CATEGORIES });
+            if (!paramValidation.ok) {
               return {
-                content: [{ type: "text", text: `Memory store rejected: ${textValidation.error}` }],
-                details: { action: "rejected", reason: "invalid_text" },
+                content: [{ type: "text", text: `Memory store rejected: ${paramValidation.error}` }],
+                details: { action: "rejected", reason: paramValidation.reason },
               };
             }
             const validTimeValidation = validateValidTimeInputFields(params, ["validFrom", "validUntil"]);
@@ -383,7 +395,16 @@ export function createMemoryTools(ctx) {
               memoryId: null,
               reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
             });
-            const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
+            const ttlMs = resolveTtlMs(TTL_MAP, params.ttl);
+            const expiresAt = ttlMs > 0 ? Date.now() + ttlMs : 0;
+            // The core band (importance >= 0.95) is permanent: applyDynamicsDefaults
+            // would overwrite the requested expiry with 0. Refuse loudly instead.
+            if (expiresAt > 0 && isManualCoreMarker({ importance })) {
+              return {
+                content: [{ type: "text", text: `Memory store rejected: ttl "${params.ttl}" cannot be combined with importance ${importance.toFixed(2)}; importance 0.95 and above is permanent core memory. Omit ttl, or use importance below 0.95.` }],
+                details: { action: "rejected", reason: "ttl_conflicts_with_core_importance" },
+              };
+            }
             const storeAccessCtx = memoryCtx;
             const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
             const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
@@ -457,7 +478,7 @@ export function createMemoryTools(ctx) {
                     category,
                     origin,
                     importance,
-                    ttl: params.ttl && TTL_MAP[params.ttl] ? params.ttl : "",
+                    ttl: ttlMs > 0 ? params.ttl : "",
                     sourceUrl,
                     evidenceQuote,
                     scope,
@@ -509,7 +530,7 @@ export function createMemoryTools(ctx) {
                     const mergedEntry = applyDynamicsDefaults({
                       id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
                       importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)),
-                      expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                      expiresAt: mergedExpiresAt(authoritativeCandidate.expiresAt, expiresAt), ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                       ...durableMergeEpistemicMetadata(authoritativeCandidate),
                       emotionalValence: serializeEmotionalValence(mergedEmotion),
                       emotionalIntensity: mergedEmotion.emotionalIntensity,
@@ -574,7 +595,7 @@ export function createMemoryTools(ctx) {
       {
         name: "memory_forget",
         label: "Memory Forget",
-        description: "Remove a memory from long-term storage.",
+        description: "Remove a memory from long-term storage. By memoryId, or by query: a query only forgets a single clearly matching memory, otherwise it returns candidates and you confirm with memoryId.",
         parameters: {
           type: "object",
           properties: {
@@ -630,6 +651,7 @@ export function createMemoryTools(ctx) {
               return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (tombstoned).` }] };
             }
             if (params.query) {
+              const forgetAutoMinScore = Math.max(FORGET_BY_QUERY_MIN_SCORE, Number.isFinite(forgetThreshold) ? forgetThreshold : 0);
               const vector = typeof embeddings.embedQuery === "function"
                 ? await embeddings.embedQuery(params.query, { agentId })
                 : await embeddings.embed(params.query, { agentId });
@@ -645,9 +667,13 @@ export function createMemoryTools(ctx) {
                 // gelöschter Inhalte in Kandidatenlisten oder Erfolgsmeldungen.
                 const deleted = await db.searchDeleted(vector, 5, forgetThreshold);
                 const accessibleIds = [];
+                const accessibleScores = new Map();
                 for (const deletedRow of deleted) {
                   const deletedCard = await db.getById(deletedRow.id);
-                  if (cardAllowedForForget(deletedCard)) accessibleIds.push(deletedRow.id);
+                  if (cardAllowedForForget(deletedCard)) {
+                    accessibleIds.push(deletedRow.id);
+                    accessibleScores.set(deletedRow.id, deletedRow.score);
+                  }
                 }
                 if (accessibleIds.length === 0) {
                   return { content: [{ type: "text", text: "No matching memory found." }] };
@@ -656,6 +682,9 @@ export function createMemoryTools(ctx) {
                   return { content: [{ type: "text", text: `Found ${accessibleIds.length} already-forgotten candidates. Specify memoryId:\n${accessibleIds.join("\n")}` }] };
                 }
                 const deletedId = accessibleIds[0];
+                if (!(accessibleScores.get(deletedId) >= forgetAutoMinScore)) {
+                  return { content: [{ type: "text", text: `Found 1 already-forgotten candidate, but it is not similar enough to the query. Specify memoryId:\n${deletedId}` }] };
+                }
                 const deletedCard = await db.getById(deletedId);
                 if (!deletedCard) {
                   return { content: [{ type: "text", text: "No matching memory found." }] };
@@ -679,6 +708,9 @@ export function createMemoryTools(ctx) {
               if (results.length > 1) {
                 const list = results.map((r) => `${r.entry.id}: ${r.entry.text}`).join("\n");
                 return { content: [{ type: "text", text: `Found ${results.length} candidates. Specify memoryId:\n${list}` }] };
+              }
+              if (!(results[0].score >= forgetAutoMinScore)) {
+                return { content: [{ type: "text", text: `Found 1 candidate, but it is not similar enough to forget by query alone (similarity ${Number(results[0].score).toFixed(2)}, needs ${forgetAutoMinScore.toFixed(2)}). If this is the memory to forget, call again with its memoryId:\n${results[0].entry.id}: ${results[0].entry.text}` }] };
               }
               const targetId = results[0].entry.id;
               let archivePath = "";
@@ -921,7 +953,7 @@ export function createMemoryTools(ctx) {
 
             // Track promoted memories for dedupe (memoryId + contentHash)
             for (const m of pendingTexts) {
-              recordKnowledgePromotion(toolCtx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m));
+              await recordKnowledgePromotion(toolCtx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m));
             }
 
             const lineCount = finalContent.split("\n").length;
