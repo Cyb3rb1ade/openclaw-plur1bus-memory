@@ -199,7 +199,7 @@ export function createMemoryImport({
     const signal = req.signal;
     const importedAt = clock();
 
-    const cardResults = req.cards.map((card, index) => ({ index, card, result: null, plan: null, backfill: null }));
+    const cardResults = req.cards.map((card, index) => ({ index, card, result: null, plan: null, backfill: null, dupOf: null, dupId: "" }));
 
     function reject(entry, reason) {
       const key = typeof entry.card?.idempotencyKey === "string" ? entry.card.idempotencyKey : "";
@@ -228,12 +228,10 @@ export function createMemoryImport({
 
         const priorInBatch = seenKeys.get(key);
         if (priorInBatch) {
-          entry.result = {
-            idempotencyKey: key,
-            outcome: "matched-existing",
-            id: priorInBatch.id,
-            reason: "duplicate-in-batch",
-          };
+          // Resolved from the first entry's final outcome once the batch is
+          // done (`resolveBatchDuplicates`): the first entry may still fail.
+          entry.dupOf = priorInBatch.entry;
+          entry.dupId = priorInBatch.id;
           entry.plan = null;
           continue;
         }
@@ -285,9 +283,9 @@ export function createMemoryImport({
               || (typeof existing.sourceUrl === "string" ? existing.sourceUrl : "");
             entry.result = { idempotencyKey: key, outcome: "matched-existing", id: cardId, reason: "already-imported" };
             entry.plan = null;
-            seenKeys.set(key, { id: cardId });
+            seenKeys.set(key, { id: cardId, entry });
             if (!index.byCardId.has(cardId)) {
-              entry.backfill = { cardId, key, sourceRef, digest: safeDigest(existing) };
+              entry.backfill = backfillFor(existing, { cardId, key, sourceRef, text });
             }
             continue;
           }
@@ -330,23 +328,53 @@ export function createMemoryImport({
         const category = card.kind
           ? card.kind
           : categorizeMemoryWithReason(text).category;
-        seenKeys.set(key, { id: cardId });
+        seenKeys.set(key, { id: cardId, entry });
         entry.plan = { cardId, key, text, scope, ownerUserId, workspaceIdentity, sourceRef, createdAt, category, replaceUnimported };
       }
+    }
+
+    /**
+     * Describes a live row that has no ledger line (crash between store and
+     * ledger, torn line, lost file, a failed ledger write). The row may have
+     * been edited since it was created, so the state found now is only a
+     * valid unimport baseline when it still looks as it did at import: the
+     * store stamps `updatedAt` = `sourceTimestamp` = the import time and the
+     * text is the card's text. Otherwise no digest is recorded and the line's
+     * `importedAt` is the backfill time, so `memory.unimport` judges the card
+     * `edited` (kept; `force` can still undo it) instead of freezing the
+     * user's change as the baseline.
+     */
+    function backfillFor(existing, { cardId, key, sourceRef, text }) {
+      const createdAt = Number(existing?.sourceTimestamp);
+      const untouched = Number.isFinite(createdAt) && createdAt > 0
+        && Number(existing?.updatedAt) === createdAt
+        && String(existing?.text ?? "") === text;
+      return {
+        cardId,
+        key,
+        sourceRef,
+        // The row's own sourceRef names the run that wrote it, if any; that
+        // run, not this retry, owns the card.
+        ownRunId: sourceRefRunId(existing?.sourceUrl),
+        untouched,
+        importedAt: untouched ? createdAt : null,
+        digest: untouched ? safeDigest(existing) : null,
+      };
     }
 
     function backfillLedger(index, entry, now) {
       const row = entry.backfill;
       if (!row || index.byCardId.has(row.cardId)) return;
+      const runId = row.ownRunId || runIdFor(row.sourceRef);
       try {
         ledger.append(agentId, {
           idempotencyKey: row.key,
           cardId: row.cardId,
-          importedAt: now,
+          importedAt: row.importedAt ?? now,
           sourceRef: row.sourceRef,
-          // 1.13.0: attributed to this run only as a backfill; the digest is
-          // taken from the row found, so unimport can still judge it.
-          ...(runIdFor(row.sourceRef) ? { importRunId: runIdFor(row.sourceRef), backfilled: true } : {}),
+          // 1.13.0: attributed to the run only as a backfill, with the digest
+          // of the row found when it still looks untouched (see backfillFor).
+          ...(runId ? { importRunId: runId, backfilled: true } : {}),
           ...(row.digest ? { digest: row.digest } : {}),
         });
         index.byKey.set(row.key, { cardId: row.cardId });
@@ -440,12 +468,12 @@ export function createMemoryImport({
               };
               entry.plan = null;
               if (!index.byCardId.has(plan.cardId)) {
-                entry.backfill = {
+                entry.backfill = backfillFor(existing, {
                   cardId: plan.cardId,
                   key: plan.key,
                   sourceRef: plan.sourceRef || (typeof existing.sourceUrl === "string" ? existing.sourceUrl : ""),
-                  digest: safeDigest(existing),
-                };
+                  text: plan.text,
+                });
                 backfillLedger(index, entry, clock());
               }
               continue;
@@ -557,7 +585,19 @@ export function createMemoryImport({
             index.byCardId.set(plan.cardId, { idempotencyKey: plan.key, sourceRef: plan.sourceRef });
             index.unimportedByCardId?.delete(plan.cardId);
           } catch (err) {
+            // Without its ledger line the card would be reported `created` but
+            // stay invisible to `memory.unimport`. Take it back (we just wrote
+            // it under the import lock) and report a storage failure, so the
+            // caller retries. If the take-back fails too, the live row is
+            // healed by the retry (matched-existing + backfill).
             logger?.warn?.(`memory-ops.import: ledger append failed for agent '${agentId}' id='${plan.cardId}': ${err?.code || "error"}`);
+            try {
+              await db.delete(plan.cardId);
+            } catch (rollbackErr) {
+              logger?.warn?.(`memory-ops.import: rollback after ledger failure failed for agent '${agentId}' id='${plan.cardId}': ${rollbackErr?.code || "error"}`);
+            }
+            reject(entry, "storage");
+            continue;
           }
           entry.result = { idempotencyKey: plan.key, outcome: "created", id: plan.cardId };
           logSafe(logger, `memory-ops.import: created agent='${agentId}' id='${plan.cardId}'`);
@@ -581,6 +621,18 @@ export function createMemoryImport({
           if (!entry.result) reject(entry, aborted ? "aborted" : "storage");
         }
       }
+    }
+
+    // A batch duplicate shares the fate of the first entry with its key: it is
+    // `matched-existing` only when that card exists now (created, or already
+    // there); when the first entry was rejected, so is the duplicate.
+    for (const entry of cardResults) {
+      if (!entry.dupOf || entry.result) continue;
+      const key = typeof entry.card?.idempotencyKey === "string" ? entry.card.idempotencyKey : "";
+      const first = entry.dupOf.result;
+      entry.result = first && first.outcome !== "rejected"
+        ? { idempotencyKey: key, outcome: "matched-existing", id: entry.dupId, reason: "duplicate-in-batch" }
+        : { idempotencyKey: key, outcome: "rejected", reason: first?.reason || "storage" };
     }
 
     const cards = cardResults.map((entry) => {
