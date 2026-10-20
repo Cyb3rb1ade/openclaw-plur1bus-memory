@@ -50,6 +50,7 @@ const SECRET_INPUTS = [
 ];
 // x-sensitive but not a secret input (E5-R24 owner ruling): masked, plain values only.
 const SENSITIVE_PLAIN = [
+  "embedding.routes",
   "reminders.webhookUrl",
   "merging.headers",
   "schicht15.headers",
@@ -164,6 +165,32 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     // release line healthWatch (7.18.0) and runtime.detachPostTurnWork
     // (7.18.3). Anything else must still match.
     const afterSchema = structuredClone(after.configSchema);
+    // PR-10 adds vector-space routing only; the remaining adapter schema is frozen.
+    for (const key of ["routes", "rrfK", "revision", "normalization", "dtype", "prefixScheme", "instruction"]) {
+      assert.ok(Object.hasOwn(afterSchema.properties.embedding.properties, key));
+      delete afterSchema.properties.embedding.properties[key];
+    }
+    // Contract 1.15.0 adds exactly the host secret references (apiKeyRef) and the
+    // configurable HTTP reranker (baseUrl, protocol, size limits, three presets).
+    for (const node of [
+      afterSchema.properties.embedding,
+      afterSchema.properties.merging,
+      afterSchema.properties.schicht15,
+      afterSchema.properties.skillMiner,
+      afterSchema.properties.criticalPush,
+      afterSchema.properties.emotion.properties.t3,
+      afterSchema.properties.reranker,
+    ]) {
+      assert.ok(Object.hasOwn(node.properties, "apiKeyRef"));
+      delete node.properties.apiKeyRef;
+    }
+    for (const key of ["baseUrl", "protocol", "maxDocuments", "maxRequestBytes", "maxResponseBytes"]) {
+      assert.ok(Object.hasOwn(afterSchema.properties.reranker.properties, key));
+      delete afterSchema.properties.reranker.properties[key];
+    }
+    assert.deepStrictEqual(afterSchema.properties.reranker.properties.provider.enum,
+      ["cohere", "jina", "voyage", "remote", "local-transformers", "disabled"]);
+    afterSchema.properties.reranker.properties.provider.enum = ["cohere", "local-transformers", "disabled"];
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "lancedbCompaction"));
     delete afterSchema.properties.runtime.properties.lancedbCompaction;
     assert.ok(Object.hasOwn(afterSchema.properties.runtime.properties, "detachPostTurnWork"));
@@ -230,9 +257,13 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     const afterCli = after.cliCommands.filter((entry) => entry.name !== "plur1bus");
     // The release version moves with every release (HM1 Task 10); it must equal package.json, nothing else.
     assert.equal(after.version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+    // Allow-list of contracts additions: the EmbeddingGemma 2 adapter id, registered first; every other contract stays as it was.
+    const afterContracts = structuredClone(after.contracts);
+    assert.equal(afterContracts.embeddingProviders[0], "plur1bus-embeddinggemma-2");
+    afterContracts.embeddingProviders.shift();
     for (const key of Object.keys(before)) {
       if (key === "configSchema" || key === "uiHints" || key === "version") continue;
-      assert.deepStrictEqual(key === "cliCommands" ? afterCli : after[key], before[key], `manifest field ${key} changed`);
+      assert.deepStrictEqual(key === "cliCommands" ? afterCli : key === "contracts" ? afterContracts : after[key], before[key], `manifest field ${key} changed`);
     }
   });
 });

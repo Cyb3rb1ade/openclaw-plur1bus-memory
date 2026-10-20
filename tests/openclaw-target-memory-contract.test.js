@@ -43,6 +43,7 @@ describe("OpenClaw target release exclusive memory contract", () => {
     const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url)));
     assert.equal(manifest.kind, "memory");
     assert.deepEqual(manifest.contracts.embeddingProviders, [
+      "plur1bus-embeddinggemma-2",
       "plur1bus-openai",
       "plur1bus-openai-compatible",
       "plur1bus-e5-small",
@@ -97,6 +98,7 @@ describe("OpenClaw target release exclusive memory contract", () => {
     // without it ignore the field.
     assert.equal(typeof api._memoryCapabilities[0].dreaming?.getStatus, "function");
     assert.deepEqual(api._embeddingProviders.map((adapter) => adapter.id), [
+      "plur1bus-embeddinggemma-2",
       "plur1bus-openai",
       "plur1bus-openai-compatible",
       "plur1bus-e5-small",

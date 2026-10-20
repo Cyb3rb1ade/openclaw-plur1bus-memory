@@ -8,13 +8,13 @@
  */
 
 import type {
-  AdminOps, AgentContext, AgentJobHealth, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
+  AdminOps, AgentContext, AgentJobHealth, CaptureOptions, CaptureHandle, CheckpointReason, ContextBlock, ContractVersion,
   CriticalButtonPushArgs, CriticalButtonPushResult, Deferral, Degraded, Disposable, Engine, EngineConfig,
   EngineConfigKey, EngineConfigReadAt, EngineConfigSchema,
-  EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostServices,
+  EngineEventName, EngineStatus, EmbeddingProbeError, EmbeddingServeResult, HostFetch, HostServices,
   HostCapabilities, IpcAddress, JobLastRun, JobName, JobRegistry, JobRun, JobTrigger, MemoryOps, MemoryOpError, MemoryOpErrorCode,
-  MemoryImportOutcome, MemoryImportRejectReason, MemoryProposalStatus, MemoryRebindResult, MemoryUnbindResult, ModelsStatus, ModelState, ObsidianOps, Principal, RecallQuery, RecallResult, RecallTiming,
-  SchemaVersion, StoreAdoptIdentitySource, StoreAdoptIncompatibleReason, StoreOps, TurnOrigin, TurnRecord,
+  MemoryImportOutcome, MemoryImportRejectReason, MemoryProposalStatus, MemoryRebindResult, MemoryUnbindResult, ModelsStatus, ModelState, ObsidianOps, Principal, RecallOptions, RecallQuery, RecallResult, RecallTiming,
+  ProviderCredentialConfig, RemoteRerankerConfig, RerankProtocol, SchemaVersion, SecretPurpose, SecretStore, StoreAdoptIdentitySource, StoreAdoptIncompatibleReason, StoreOps, TurnOrigin, TurnRecord,
 } from "./engine.js";
 import type { createEngine } from "./engine.js";
 
@@ -105,11 +105,11 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.13.0">>();
+assertTrue<Exact<ContractVersion, "1.16.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
-assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost" | "lock-busy">>();
+assertTrue<Exact<MemoryOpErrorCode, "not-found" | "denied" | "invalid-input" | "approval-required" | "conflict" | "storage" | "unsupported" | "identity-already-bound" | "ledger-corrupt" | "lock-lost" | "lock-busy" | "EMBEDDER_UNAVAILABLE" | "EMBEDDING_IDENTITY_MISMATCH">>();
 // 1.6.0: MemoryOpError.detail — optional (a MemoryOpError without it is valid), string values only.
 assertTrue<Exact<MemoryOpError["detail"], Readonly<Record<string, string>> | undefined>>();
 assertTrue<{} extends Pick<MemoryOpError, "detail"> ? true : false>();
@@ -154,7 +154,17 @@ assertTrue<Exact<keyof MemoryUnbindResult, "rebindId" | "matched" | "unbound" | 
 assertTrue<Exact<MemoryOps["unimport"], (req: import("./engine.js").MemoryUnimportRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryUnimportResult>>>();
 assertTrue<Exact<import("./engine.js").MemoryUnimportOutcome, "unimported" | "kept-modified" | "already-forgotten" | "already-unimported" | "missing" | "failed">>();
 assertTrue<Exact<import("./engine.js").MemoryUnimportKeptReason, "superseded" | "content-changed" | "binding-changed" | "metadata-changed" | "edited" | "shared" | "rebound" | "other-run">>();
-assertTrue<Exact<keyof import("./engine.js").MemoryUnimportResult, "agentId" | "importRunId" | "dryRun" | "selected" | "unimported" | "keptModified" | "alreadyForgotten" | "alreadyUnimported" | "missing" | "failed" | "remaining" | "cards" | "derived">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryUnimportResult, "agentId" | "importRunId" | "dryRun" | "selected" | "unimported" | "keptModified" | "alreadyForgotten" | "alreadyUnimported" | "missing" | "failed" | "remaining" | "cards" | "derived" | "links">>();
+// 1.16.0: memory.link, MemoryCard.links, unimport links, Engine.capabilities (additive).
+assertTrue<Exact<MemoryOps["link"], (id: string, req: import("./engine.js").MemoryLinkRequest, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryLinkResult>>>();
+assertTrue<Exact<import("./engine.js").MemoryLinkOutcome, "linked" | "already-linked" | "already-source">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryLinkResult, "id" | "linkId" | "outcome" | "importRunId" | "dryRun">>();
+assertTrue<Exact<keyof import("./engine.js").MemoryLink, "linkId" | "sourceRef" | "provenance" | "importRunId" | "linkedAt">>();
+assertTrue<Exact<import("./engine.js").MemoryCard["links"], import("./engine.js").MemoryLink[] | undefined>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportResult["links"], import("./engine.js").MemoryUnimportLinksResult | undefined>>();
+assertTrue<Exact<import("./engine.js").MemoryUnimportLinkOutcome, "unlinked" | "already-unlinked">>();
+assertTrue<Exact<Engine["capabilities"], import("./engine.js").EngineCapabilities>>();
+assertTrue<Exact<import("./engine.js").EngineCapabilities["memoryLink"], boolean>>();
 assertTrue<Exact<import("./engine.js").MemoryImportRequest["importRunId"], string | undefined>>();
 assertTrue<Exact<MemoryImportOutcome, "created" | "matched-existing" | "rejected">>();
 assertTrue<Exact<MemoryImportRejectReason, "invalid-input" | "tombstone-blocked" | "principal-unresolved" | "empty-text" | "provenance-not-imported" | "previously-imported-deleted" | "aborted" | "storage">>();
@@ -223,3 +233,20 @@ const hostWithButtons: HostServices = { ...minimalHost, capabilities: { pushCrit
 void hostWithButtons;
 const hostWithJournal: HostServices = { ...minimalHost, capabilities: { journalBacklog: () => ({ entries: 0, oldestAt: null }) } };
 void hostWithJournal;
+
+// Per-call options are additive, optional and keep capture's non-blocking handle.
+assertTrue<Exact<Parameters<Engine["recall"]>[1], RecallOptions | undefined>>();
+assertTrue<Exact<Parameters<Engine["capture"]>[1], CaptureOptions | undefined>>();
+assertTrue<Exact<RecallOptions["reranker"], "on" | "off" | undefined>>();
+assertTrue<Exact<CaptureOptions["deferPostTurnLlm"], boolean | undefined>>();
+
+// 1.15.0: optional network ports. fetch is WHATWG-compatible; the secret store resolves (ref, purpose).
+assertTrue<Exact<HostServices["fetch"], HostFetch | undefined>>();
+assertTrue<Exact<HostServices["secrets"], SecretStore | undefined>>();
+assertTrue<Exact<Parameters<SecretStore["resolve"]>, [ref: string, purpose: SecretPurpose]>>();
+assertTrue<Exact<ReturnType<SecretStore["resolve"]>, Promise<string>>>();
+const hostWithPorts: HostServices = { ...minimalHost, fetch: (input, init) => fetch(input, init), secrets: { resolve: async () => "k" } };
+void hostWithPorts;
+assertTrue<Exact<ProviderCredentialConfig["apiKeyRef"], string | undefined>>();
+assertTrue<Exact<RemoteRerankerConfig["provider"], "cohere" | "jina" | "voyage" | "remote">>();
+assertTrue<Exact<RerankProtocol, "cohere" | "jina" | "voyage" | "tei">>();

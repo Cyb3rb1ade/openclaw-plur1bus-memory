@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.13.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended fourteen times under the policy below — see the changelog at the end
+ * Contract version 1.16.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended sixteen times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -44,9 +44,13 @@
  *            1.11.0 — MemoryOps.import (finished-card ingest with deterministic ids) and Engine.stores.adopt (copy-never-move store take-over with a sample cosine probe for legacy stores); MemoryCard.provenance/sourceRef optional; no breaking change to existing callers.
  *            1.12.0 — MemoryOps.rebind / MemoryOps.unbind (manual N:1 channel-identity link; user-scope owner metadata only) and ADOPT_PROBE_MIN_ROWS = min(8, available); UserPrincipal accepts user:v1 and user:v2; MemoryOpErrorCode "identity-already-bound" | "ledger-corrupt" | "lock-lost"; no breaking change to existing callers.
  *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
+ *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
+ *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0). Also: MemoryImportRequest without importRunId attributes each card to the run its sourceRef names (`;run=<id>`); MemoryUnimportRequest.importRunId also selects such lines; MemoryUnimportResult.derived.graphEdgesRemoved? / mirrorsArchived? / cleanupErrors? (unimport drops the undone cards' graph edges and archives their Obsidian mirrors).
+ *            1.16.0 — MemoryOps.link(id, req, p, a) (owner decision 2026-10-19: attach an imported duplicate to an existing card as an additional source instead of storing a duplicate; sidecar `_links/`, the card row is never written; idempotent per sourceRef); MemoryCard.links? (show/list); MemoryUnimportResult.links? (unimport of a run unlinks that run's links, the card stays); Engine.capabilities (EngineCapabilities, `memoryLink: true`); no breaking change to existing callers.
  */
 
-export type ContractVersion = "1.13.0";
+// 1.16.0: MemoryOps.link, MemoryCard.links?, MemoryUnimportResult.links?, Engine.capabilities.
+export type ContractVersion = "1.16.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -119,9 +123,70 @@ export interface AgentContext {
 /* What the host gives the engine                                      */
 /* ------------------------------------------------------------------ */
 
+/** 1.15.0: what a resolved secret is for; passed as `purpose` to SecretStore.resolve. */
+export type SecretPurpose = "embedding" | "reranker" | "llm" | (string & {});
+
+/** 1.15.0: the host's secret store. The engine calls `resolve` for every provider config that
+ *  sets `apiKeyRef` — before `apiKeyEnv`/`apiKey`; with `apiKeyRef` set and no store (or a failed /
+ *  empty resolution) the provider fails closed, it never falls back to the environment. The value
+ *  is never logged, persisted or put into a cache key in clear (only hashed, as before); providers
+ *  keep it at most 60 s (embedding, reranker) or not at all (LLM: per call) and drop it on HTTP
+ *  401/403, so a rotated key applies without a restart. */
 export interface SecretStore {
-  /** Short-lived; the engine never persists the value. */
-  lease(ref: string): Promise<string>;
+  /** Resolve `ref` (the configured `apiKeyRef`, a name, never the value). Reject or return "" when unknown. */
+  resolve(ref: string, purpose: SecretPurpose): Promise<string>;
+  /** @deprecated 1.15.0 — never called before 1.15.0; still honoured when `resolve` is absent. */
+  lease?(ref: string): Promise<string>;
+}
+
+/** 1.15.0: WHATWG-fetch-compatible function. The engine passes `input` as a URL string and `init` with
+ *  at least method, headers (plain object), body (string) and signal; it reads `ok`, `status`,
+ *  `headers.get()`, `text()`/`json()` and `body` (ReadableStream, for size-capped reads) of the result. */
+export type HostFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/** 1.15.0: credential fields every remote provider config (embedding, embedding.routes[].provider,
+ *  reranker, feature LLM overrides) accepts. Order: apiKeyRef → apiKeyEnv → apiKey → provider default env. */
+export interface ProviderCredentialConfig {
+  /** Name in the host's secret store (HostServices.secrets). 1–256 chars of [A-Za-z0-9._:/@-]. */
+  apiKeyRef?: string;
+  /** Name of an environment variable holding the key. */
+  apiKeyEnv?: string;
+  /** Literal key, `${ENV}` reference or OpenClaw SecretInput (legacy; prefer apiKeyRef). */
+  apiKey?: string | { source: "env" | "store" | "file" | "exec"; provider: string; id: string };
+}
+
+/** 1.15.0: reranker wire formats. "cohere"/"jina": {model, query, documents, top_n} → {results}; "voyage":
+ *  {model, query, documents, top_k} → {data}; "tei": {query, texts} → [{index, score}]. All are normalised
+ *  to `[{index, relevance_score}]`. */
+export type RerankProtocol = "cohere" | "jina" | "voyage" | "tei";
+
+/** 1.15.0: `config.reranker` for the HTTP providers. Presets (default baseUrl / protocol / model / env):
+ *  cohere — https://api.cohere.com/v2, cohere, rerank-v3.5, COHERE_API_KEY;
+ *  jina — https://api.jina.ai/v1, jina, jina-reranker-v2-base-multilingual, JINA_API_KEY;
+ *  voyage — https://api.voyageai.com/v1, voyage, rerank-2.5, VOYAGE_API_KEY;
+ *  remote — no defaults: baseUrl required, protocol "cohere", key optional (keyless self-hosted servers).
+ *  The endpoint is `{baseUrl}/rerank` unless baseUrl already ends in /rerank. A failed rerank never switches
+ *  to another model unless `fallbackProvider: "local-transformers"` is set; otherwise recall runs unreranked. */
+export interface RemoteRerankerConfig extends ProviderCredentialConfig {
+  enabled?: boolean;
+  provider: "cohere" | "jina" | "voyage" | "remote";
+  baseUrl?: string;
+  protocol?: RerankProtocol;
+  model?: string;
+  candidates?: number;
+  /** Own timer only when the caller passes no signal (the recall pipeline always does). Default 5000. */
+  timeoutMs?: number;
+  /** Refuse requests with more documents. Default 1000. */
+  maxDocuments?: number;
+  /** Refuse request bodies above this size. Default 4 MiB. */
+  maxRequestBytes?: number;
+  /** Abort and fail on response bodies above this size. Default 1 MiB. */
+  maxResponseBytes?: number;
+  fallbackOnError?: boolean;
+  fallbackProvider?: "local-transformers" | "disabled";
+  fallbackModel?: string;
+  fallbackRevision?: string;
+  fallbackCacheDir?: string;
 }
 
 export interface LlmParams {
@@ -178,7 +243,12 @@ export interface HostServices {
   config(): EngineConfig;
   mutateConfig?(patch: Record<string, unknown>): Promise<void>;
   llm?: { complete(params: LlmParams): Promise<LlmResult> };
+  /** 1.15.0: provider keys named by `apiKeyRef`. Absent: `apiKeyRef` fails closed. */
   secrets?: SecretStore;
+  /** 1.15.0: carries every outbound HTTP request of the engine (embedding clients, rerankers, the engine's
+   *  own LLM calls, webhooks, model downloads). Absent: the global fetch, as before. Bound once per process
+   *  by createEngine (last engine wins, like pathOverrides). */
+  fetch?: HostFetch;
   events?: { emit(name: string, payload: unknown): void };
   /** Test seam; defaults to Date.now. */
   clock?: () => number;
@@ -308,6 +378,17 @@ export interface RecallBudget {
   capChars: number;
 }
 
+/** Call-local overrides. Omitted settings use the configured engine behavior. */
+export interface RecallOptions {
+  /** "on" uses the configured provider; if absent, recall continues with a diagnostic. */
+  reranker?: "on" | "off";
+}
+
+/** Non-fatal, closed-code explanation of an unavailable requested option. */
+export type PerCallDiagnostic =
+  | { feature: "reranker"; reason: "reranker-not-configured"; fallback: "unreranked" }
+  | { feature: "postTurnLlm"; reason: "post-turn-refine-unscheduled"; fallback: "inline" };
+
 export interface RecallQuery {
   query: string;
   principal: Principal;
@@ -329,10 +410,26 @@ export interface RecallQuery {
   warmOnly?: boolean;
 }
 
+/** Canonical vector-space identity; credentials and transport are excluded. */
+export interface VectorSpaceIdentity {
+  provider: string;
+  model: string;
+  revision: string;
+  dimension: number;
+  normalization: string;
+  prefixScheme: string;
+  instruction: string;
+  dtype: string;
+  artifacts?: readonly { path: string; sha256: string }[];
+  tokenCap?: number | null;
+  pooling?: string;
+}
+
 export interface Degraded {
   reason: string;
   capability: string;
   detail?: string;
+  identities?: { identityId: string; code: string }[];
 }
 
 export interface DecisionTrace {
@@ -357,6 +454,7 @@ export interface RecallTiming {
 }
 
 export interface RecallResult {
+  diagnostics?: PerCallDiagnostic[];
   blocks: ContextBlock[];
   /** Non-finite (Infinity) on the exits that inject an uncapped join. */
   capChars: number;
@@ -383,7 +481,13 @@ export interface TurnRecord {
   signal: AbortSignal;
 }
 
+/** Call-local refinement scheduling; true requires postTurnRefineScheduled, otherwise inline + diagnostic. */
+export interface CaptureOptions {
+  deferPostTurnLlm?: boolean;
+}
+
 export interface CaptureResult {
+  diagnostics?: PerCallDiagnostic[];
   stored: number;
   skipped: number;
   /** "duplicate-turn": the same turn was already captured (Q3, E4). */
@@ -482,6 +586,8 @@ export interface EmbeddingIdentity {
   provider: string;
   model: string;
   dimensions: number;
+  /** 1.14.0: full vector-space identity for routing and cache isolation. */
+  space?: VectorSpaceIdentity;
 }
 
 export interface RerankHit {
@@ -647,7 +753,9 @@ export type MemoryOpErrorCode =
    *  1.13.0: also `unimport` when the per-agent import lock no longer carries our nonce; a rerun converges. */
   | "lock-lost"
   /** 1.13.0: `unimport` apply could not take the per-agent import lock in time (an import or unimport of that agent is running). Nothing was written. */
-  | "lock-busy";
+  | "lock-busy"
+  | "EMBEDDER_UNAVAILABLE"
+  | "EMBEDDING_IDENTITY_MISMATCH";
 
 /** Thrown by every MemoryOps member on failure; `code` is stable, `message` is English and log-safe. */
 export interface MemoryOpError extends Error {
@@ -675,6 +783,46 @@ export interface MemoryCard {
   provenance?: "imported";
   /** 1.11.0: import source reference, truncated to ≤ 500 characters before store. */
   sourceRef?: string;
+  /** 1.16.0: additional sources attached by `memory.link` (oldest first); absent when there are none.
+   *  Recorded per agent: only the linking agent's show/list report them. */
+  links?: MemoryLink[];
+}
+
+/** 1.16.0: one additional source of a card, attached by `memory.link`. */
+export interface MemoryLink {
+  /** Deterministic over (agentId, card id, sourceRef); 32 hex characters. */
+  linkId: string;
+  sourceRef: string;
+  provenance: MemoryImportProvenance;
+  /** The import run the link belongs to (explicit, or named in the sourceRef as `;run=<id>`); null when none. */
+  importRunId: string | null;
+  /** Epoch ms. */
+  linkedAt: number;
+}
+
+/** 1.16.0: argument of `MemoryOps.link`. */
+export interface MemoryLinkRequest {
+  /** 1–500 characters after trim (longer is `invalid-input`, never truncated: it is the idempotency key). */
+  sourceRef: string;
+  provenance: MemoryImportProvenance;
+  /** `/^[A-Za-z0-9_-]{1,64}$/`. Absent: the run named in `sourceRef` (`;run=<id>`, rules as for import), else none. */
+  importRunId?: string;
+  /** The importer's key for the duplicate card (1–256); `unimport`'s `idempotencyKeys` filter matches it. */
+  idempotencyKey?: string;
+  /** Default false. True: checks and classifies, writes nothing, takes no lock. */
+  dryRun?: boolean;
+}
+
+/** `linked`: a new link was written. `already-linked`: this sourceRef is already linked (no-op; `importRunId` is the
+ *  existing link's run). `already-source`: the card was itself imported from this sourceRef (no-op, `importRunId` null). */
+export type MemoryLinkOutcome = "linked" | "already-linked" | "already-source";
+
+export interface MemoryLinkResult {
+  id: string;
+  linkId: string;
+  outcome: MemoryLinkOutcome;
+  importRunId: string | null;
+  dryRun: boolean;
 }
 
 export interface MemoryListQuery {
@@ -795,6 +943,16 @@ export interface MemoryOps {
    * and `a.background === false`. Ids, keys, counters and reason codes only.
    */
   unimport(req: MemoryUnimportRequest, p: Principal, a: AgentContext): Promise<MemoryUnimportResult>;
+  /**
+   * 1.16.0: attach an additional source to the existing card `id` (an imported
+   * card that duplicates it) without changing its text, vector or row.
+   * Requires `a.origin === "system"` and `a.background === false` (`denied`).
+   * The card must be one the caller can `show`; otherwise `not-found` (also
+   * for an unknown id). Idempotent per sourceRef. Apply takes the per-agent
+   * import lock (`lock-busy` / `lock-lost`); more than 100 links on one card is
+   * `conflict`. Audit line `memory.linked`.
+   */
+  link(id: string, req: MemoryLinkRequest, p: Principal, a: AgentContext): Promise<MemoryLinkResult>;
 }
 
 export interface MemoryRebindFromIdentity {
@@ -862,7 +1020,9 @@ export interface MemoryImportRequest {
   cards: MemoryImportCardInput[];
   dryRun?: boolean;
   signal?: AbortSignal;
-  /** 1.13.0: `/^[A-Za-z0-9_-]{1,64}$/`. Recorded on every ledger line this call writes; `unimport` selects by it. */
+  /** 1.13.0: `/^[A-Za-z0-9_-]{1,64}$/`. Recorded on every ledger line this call writes; `unimport` selects by it.
+   *  1.15.0: when absent, a card whose `sourceRef` carries exactly one segment `;run=<id>` (same pattern,
+   *  sourceRef shorter than the 500-char cap) is recorded under that run, with its digest. */
   importRunId?: string;
 }
 
@@ -903,7 +1063,8 @@ export interface MemoryImportResult {
 
 export interface MemoryUnimportRequest {
   agentId: AgentId;
-  /** Required; selects the `_imports/` ledger lines written with this `importRunId`. */
+  /** Required; selects the `_imports/` ledger lines of this run: written with this `importRunId`, or
+   *  (1.15.0) without one but with a `sourceRef` carrying the segment `;run=<importRunId>`. */
   importRunId: string;
   /** Optional narrowing filter (≤ 500); never widens the selection. */
   idempotencyKeys?: string[];
@@ -958,8 +1119,25 @@ export interface MemoryUnimportResult {
   /** Selected cards not visited in this call (abort). A rerun visits them. */
   remaining: number;
   cards: MemoryUnimportCardResult[];
-  /** Derivation-capable jobs with a run that finished after the earliest selected import. */
-  derived: { jobsSinceImport: JobName[] };
+  /** Derivation-capable jobs with a run that finished after the earliest selected import.
+   *  1.15.0, apply only (absent on dryRun or when nothing was undone): graph edges of the undone
+   *  cards removed from the canonical neo journal, their Obsidian mirror notes moved into the
+   *  archive (`{archiveDir}/obsidian-mirrors/`), and best-effort cleanup failures (logged, the
+   *  cards stay undone; a rerun retries the cleanup). */
+  derived: { jobsSinceImport: JobName[]; graphEdgesRemoved?: number; mirrorsArchived?: number; cleanupErrors?: number };
+  /** 1.16.0: present when the run made links (`memory.link`). Unlinking never writes the linked card. */
+  links?: MemoryUnimportLinksResult;
+}
+
+export type MemoryUnimportLinkOutcome = "unlinked" | "already-unlinked";
+
+export interface MemoryUnimportLinksResult {
+  /** Links this run made (after the key filter; a link without a key is not selected when a filter is set). */
+  selected: number;
+  unlinked: number;
+  alreadyUnlinked: number;
+  /** One entry per handled link; empty after an abort (a rerun handles them). */
+  items: Array<{ linkId: string; id: string; outcome: MemoryUnimportLinkOutcome }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1062,8 +1240,16 @@ export interface AgentStore {
 /* The engine                                                          */
 /* ------------------------------------------------------------------ */
 
+/** 1.16.0: additive feature flags a host can test before calling an optional surface. */
+export interface EngineCapabilities {
+  /** `MemoryOps.link`, `MemoryCard.links`, unimport unlinks by run. */
+  readonly memoryLink: boolean;
+}
+
 export interface Engine {
   readonly contract: ContractVersion;
+  /** 1.16.0: frozen. */
+  readonly capabilities: EngineCapabilities;
 
   open(agentId: AgentId): Promise<AgentStore>;
   /** Idempotent: every call returns the same promise. Resolves within
@@ -1074,9 +1260,9 @@ export interface Engine {
   /** Stable, cached prefix (index.js:7073-7088). */
   systemSupplement(): string[];
   /** Never throws; a failure comes back as `degraded`. */
-  recall(q: RecallQuery): Promise<RecallResult>;
+  recall(q: RecallQuery, opts?: RecallOptions): Promise<RecallResult>;
   /** Non-blocking. */
-  capture(t: TurnRecord): CaptureHandle;
+  capture(t: TurnRecord, opts?: CaptureOptions): CaptureHandle;
   checkpoint(agentId: AgentId, reason: CheckpointReason): Promise<CheckpointResult>;
   memory: MemoryOps;
   media: MediaService;

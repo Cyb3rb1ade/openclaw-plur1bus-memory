@@ -302,9 +302,24 @@ grosse Batches.
 }
 ```
 
+### OpenClaw Embedding-Adapter
+
+Das Plugin registriert über `registerEmbeddingProvider` und `contracts.embeddingProviders` vier
+Embedding-Adapter für OpenClaw:
+- `plur1bus-embeddinggemma-2`: Lokales EmbeddingGemma 2 (`google/embeddinggemma-2`, Apache-2.0, keine
+  Lizenzbestätigung). Standard-Präzision `q8` (alternativ `q4`, `fp32` über `local.dtype` wählbar),
+  Standard-Dimension 768d mit Matryoshka-Optionen 128, 256, 512, 768. Empfohlener lokaler Eintrag.
+- `plur1bus-openai`: Remote-Adapter für `text-embedding-3-large` (oder konfiguriertes Modell).
+- `plur1bus-openai-compatible`: Generischer OpenAI-kompatibler Remote-Adapter.
+- `plur1bus-e5-small`: Lokales E5-Small (`intfloat/multilingual-e5-small`, 384d).
+
+Bestehende Stores behalten ihren Adapter unverändert; ein Wechsel auf den neuen Adapter
+läuft über den bestehenden Re-Embedding-Pfad (Fingerprint) mit Hinweis auf Dauer und Speicherbedarf.
+
 Der opt-in Test mit dem echten Modell: `PLUR1BUS_REAL_EGEMMA2=1 node --test
 tests/embeddinggemma2-real-model.test.js` (laedt rund 346 MB, optional
-`PLUR1BUS_REAL_MODEL_CACHE=<dir>`).
+`PLUR1BUS_REAL_MODEL_CACHE=<dir>`). Alternativ über den Adapter:
+`PLUR1BUS_REAL_EGEMMA2=1 node --test tests/openclaw-memory-embedding-adapters.test.js`.
 
 Die Bestaetigung ist kein reiner UI-Hinweis: Ohne sie verweigern sowohl der
 aktive Provider als auch Re-Embedding-Probes und der zentrale Artefakt-
@@ -373,6 +388,40 @@ Platzbedarf. Eine Abweichung erzeugt nur die Empfehlung fuer
 `plur1bus.reembedding.plan`; sie startet weder Kopieren noch Umschalten. Apply
 und `ready_to_switch` bleiben zwei getrennte explizite Bestaetigungen. Bei
 Fehler, Abbruch oder zu wenig Platz bleibt die aktive Generation unveraendert.
+
+---
+
+## HTTP-Reranker, `apiKeyRef` und Host-Egress (Vertrag 1.15.0)
+
+`reranker.provider` kennt neben `local-transformers` die HTTP-Varianten
+`cohere`, `jina`, `voyage` und `remote`. Die drei ersten sind Presets mit
+Vorgaben, die alle überschreibbar sind; `remote` hat keine Vorgaben.
+
+| Option | Bedeutung |
+|---|---|
+| `baseUrl` | Basis-URL; Ziel ist `{baseUrl}/rerank`, außer die URL endet schon auf `/rerank`. Vorgaben: `https://api.cohere.com/v2`, `https://api.jina.ai/v1`, `https://api.voyageai.com/v1`; bei `remote` Pflicht. Keine Zugangsdaten in der URL. |
+| `protocol` | `cohere`/`jina` (`{model, query, documents, top_n}` → `results`; Cohere, Jina, vLLM, Infinity, LocalAI), `voyage` (`top_k` → `data`), `tei` (`{query, texts}` → `[{index, score}]`). Vorgabe aus dem Preset, bei `remote` `cohere`. |
+| `model` | Vorgaben `rerank-v3.5`, `jina-reranker-v2-base-multilingual`, `rerank-2.5`; bei `remote` ohne Vorgabe (Server-Standard). |
+| `apiKeyRef` / `apiKeyEnv` / `apiKey` | Schlüsselquelle, Reihenfolge wie genannt, danach `COHERE_API_KEY`/`JINA_API_KEY`/`VOYAGE_API_KEY`. `remote` darf ohne Schlüssel laufen. |
+| `maxDocuments` / `maxRequestBytes` / `maxResponseBytes` | Grenzen pro Aufruf, Vorgaben 1000 / 4 MiB / 1 MiB. |
+
+`enabled: true` bleibt nötig. Antworten werden geprüft und auf
+`[{index, relevance_score}]` normalisiert. Ein Fehler führt nie still zu einem
+anderen Modell: ohne `fallbackProvider: "local-transformers"` läuft der Recall
+ungerankt weiter.
+
+`apiKeyRef` gibt es zusätzlich bei `embedding`, `embedding.routes[].provider`
+und den Feature-LLM-Overrides (`merging`, `schicht15`, `skillMiner`,
+`criticalPush`, `emotion.t3`). Der Wert ist ein Name im Secret-Store des Hosts
+(`HostServices.secrets.resolve(ref, purpose)`), nie der Schlüssel selbst. Ohne
+Store oder bei fehlgeschlagener Auflösung bricht der Provider ab, ohne eine
+Anfrage zu senden. Embedding und Reranker halten einen aufgelösten Schlüssel
+höchstens 60 s und verwerfen ihn bei HTTP 401/403; LLM-Aufrufe lösen ihn bei
+jedem Aufruf neu auf. OpenClaw bietet keinen solchen Store.
+
+Übergibt der Host `HostServices.fetch`, laufen alle ausgehenden Anfragen der
+Engine darüber (Embedding, Reranker, eigene LLM-Aufrufe, Webhooks,
+Modell-Downloads); sonst gilt das globale `fetch` wie bisher.
 
 ---
 

@@ -489,7 +489,7 @@ export function createPromptContextAssembler(ctx) {
           } catch (_e) { dbg(_e); }
         },
       });
-      const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runMergedNamespaceRecall(
+      const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace, degraded: identityDegraded } = await runMergedNamespaceRecall(
         readDbs,
         _autoRecallBaseParams,
         trace,
@@ -502,6 +502,7 @@ export function createPromptContextAssembler(ctx) {
         },
       );
       trace = pipelineTrace || trace;
+      if (identityDegraded) innerFailure = identityDegraded;
 
       host.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
 
@@ -1241,12 +1242,18 @@ export function createPromptContextAssembler(ctx) {
         contextBlock("temporal", temporalContinuityContext, false),
         contextBlock("reminder", reminderNudge, false),
       ];
+      if (innerFailure?.identities) {
+        const hint = `\n<memory-degraded>Recall omitted ${innerFailure.identities.length} embedding identities because their providers were unavailable.</memory-degraded>`;
+        const block = blocks.find(item => item.name === "memories");
+        block.text += hint;
+        block.chars = block.text.length;
+      }
       const capChars = cfg.recall?.globalInjectMaxChars ?? 17_000;
       const deferrals = [...memoryDeferrals, ...planGlobalInjectBudget({ blocks, maxChars: capChars }).deferrals];
       for (const deferral of deferrals) {
         emit(`recall.block-${deferral.kind}`, { agentId, ...deferral });
       }
-      return recallResult({ blocks, capChars, deferrals });
+      return recallResult({ blocks, capChars, deferrals, degraded: innerFailure });
     } catch (err) {
       throwIfAborted(signal, "recall aborted");
       innerFailure = { reason: "error", capability: "recall", detail: String(err?.message || err).slice(0, 200) };

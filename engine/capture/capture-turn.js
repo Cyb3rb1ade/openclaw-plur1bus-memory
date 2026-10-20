@@ -183,7 +183,7 @@ export function createTurnCapture(ctx) {
     return { dreamed: await work() };
   });
 
-  const deferPostTurnLlm = shouldDeferPostTurnLlm(cfg, host);
+  const configuredDeferPostTurnLlm = shouldDeferPostTurnLlm(cfg, host);
   // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
   // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
   // unsicher -> beides. Ohne Schluessel verhaelt es sich wie "beides".
@@ -227,6 +227,9 @@ export function createTurnCapture(ctx) {
   const warnLightDreamLedgerUnwritable = createLightDreamLedgerWarnOnce(host.logger);
 
   return async function captureTurn(event, hookCtx, opts = {}) {
+    const deferPostTurnLlm = typeof opts.deferPostTurnLlm === "boolean"
+      ? shouldDeferPostTurnLlm(cfg, host, opts.deferPostTurnLlm)
+      : configuredDeferPostTurnLlm;
     const sessionKey = hookCtx?.sessionKey ?? event?.sessionKey;
     // A turn without a session key cannot be an incognito session: the host
     // identifies incognito *by* that key. Both the host types and every

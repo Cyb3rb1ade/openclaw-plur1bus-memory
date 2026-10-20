@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
  * add it here. Tests enforce this.
  */
 export const DEPLOY_FILES = [
+  "lib/providers/embedding-identity.js",
   "index.js",
   "openclaw.plugin.json",
   // package.json wurde bis 7.2.1 nur fuer die Versionspruefung GELESEN, aber
@@ -82,6 +83,8 @@ export const DEPLOY_FILES = [
   "engine/memory-ops/rebind.js",
   "engine/memory-ops/unimport-ledger.js",
   "engine/memory-ops/unimport.js",
+  "engine/memory-ops/link-ledger.js",
+  "engine/memory-ops/link.js",
   "engine/stores/adopt.js",
   "engine/providers/embedding-service.js",
   "engine/providers/model-readiness.js",
@@ -251,6 +254,7 @@ export const DEPLOY_FILES = [
   "lib/providers/reranker-chained.js",
   "lib/providers/reranker-cohere.js",
   "lib/providers/reranker-local-transformers.js",
+  "lib/providers/reranker-remote.js",
   "lib/providers/secret-input.js",
   // ── local model preparation (v7.5.0) ────────────────────────────────────
   "lib/model-preparation/coordinator.js",
@@ -432,6 +436,7 @@ export const DEPLOY_FILES = [
   // coverage tests.
   "lib/host-services.js",
   "lib/host-paths.js",
+  "lib/host-network.js",
   "lib/host-sdk-loader.js",
   "lib/plugin-meta.js",
   "lib/feature-crons-hint.js",

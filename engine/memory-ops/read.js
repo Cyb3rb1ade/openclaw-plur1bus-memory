@@ -24,7 +24,7 @@ function toEpochMsOrNull(value) {
 }
 
 /** Maps a projected card (memory-query.js/recall-pipeline.js shape) onto the typed MemoryCard. */
-function toMemoryCard(card, { includeScore, imported }) {
+function toMemoryCard(card, { includeScore, imported, links }) {
   const scope = KNOWN_SCOPES.has(card?.scope) ? card.scope : "agent-private";
   const out = {
     id: card.id,
@@ -43,6 +43,18 @@ function toMemoryCard(card, { includeScore, imported }) {
   if (imported) {
     out.provenance = "imported";
     if (imported.sourceRef) out.sourceRef = imported.sourceRef;
+  }
+  // 1.16.0: additional sources attached by memory.link, oldest first.
+  if (Array.isArray(links) && links.length > 0) {
+    out.links = [...links]
+      .sort((x, y) => (Number(x.at) || 0) - (Number(y.at) || 0))
+      .map((row) => ({
+        linkId: row.linkId,
+        sourceRef: row.sourceRef,
+        provenance: "imported",
+        importRunId: typeof row.importRunId === "string" && row.importRunId ? row.importRunId : null,
+        linkedAt: Number(row.at) || 0,
+      }));
   }
   if (includeScore && typeof card.score === "number") out.score = card.score;
   return out;
@@ -152,10 +164,20 @@ async function countSharedLiveCards(leaseFn, memoryCtx, now, scope, agentId, log
 }
 
 /**
- * @param {{opsContext: object, pool: object, sharedMemoryPool: object, embeddings: object, memoryDbAdapter: object, baseDbPath: string, logger?: object}} deps
+ * @param {{opsContext: object, pool: object, sharedMemoryPool: object, embeddings: object, memoryDbAdapter: object, baseDbPath: string, logger?: object, importLedger?: object, linkLedger?: object}} deps
  * @returns {{list: Function, show: Function, state: Function}}
  */
-export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embeddings, memoryDbAdapter, baseDbPath, logger, importLedger }) {
+export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embeddings, memoryDbAdapter, baseDbPath, logger, importLedger, linkLedger }) {
+  // 1.16.0: links are read per call; an unreadable link ledger hides links, never the card.
+  function loadLinkIndex(agentId) {
+    if (!linkLedger || typeof linkLedger.load !== "function") return null;
+    try {
+      return linkLedger.load(agentId).byCardId;
+    } catch (err) {
+      logger?.warn?.(`memory-ops.read: link ledger unreadable for agent '${agentId}': ${err?.code || "error"}`);
+      return null;
+    }
+  }
   function loadImportedIndex(agentId) {
     if (!importLedger || typeof importLedger.load !== "function") return null;
     try {
@@ -219,9 +241,14 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     const truncated = items.length > limit;
     const sliced = items.slice(0, limit);
     const importedIndex = loadImportedIndex(agentId);
+    const linkIndex = loadLinkIndex(agentId);
     return {
       agentId,
-      items: sliced.map((card) => toMemoryCard(card, { includeScore: hasTopic, imported: importedOf(importedIndex, card.id) })),
+      items: sliced.map((card) => toMemoryCard(card, {
+        includeScore: hasTopic,
+        imported: importedOf(importedIndex, card.id),
+        links: linkIndex?.get(card.id),
+      })),
       truncated,
     };
   }
@@ -260,7 +287,11 @@ export function createMemoryRead({ opsContext, pool, sharedMemoryPool, embedding
     if (!found) {
       throw memoryOpError("not-found", "memory not found");
     }
-    return toMemoryCard(found.card, { includeScore: false, imported: importedOf(loadImportedIndex(agentId), found.card.id) });
+    return toMemoryCard(found.card, {
+      includeScore: false,
+      imported: importedOf(loadImportedIndex(agentId), found.card.id),
+      links: loadLinkIndex(agentId)?.get(found.card.id),
+    });
   }
 
   async function state(p, a) {

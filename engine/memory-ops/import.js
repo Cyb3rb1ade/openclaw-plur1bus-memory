@@ -25,6 +25,42 @@ export const IMPORT_IDEMPOTENCY_KEY_MAX = 256;
 /** 1.13.0: same shape as the Harness RUN_ID_RE. */
 export const IMPORT_RUN_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+/**
+ * 1.15.0: the import run named inside a `sourceRef` — a `run=<id>` segment
+ * (`hermes:default:memories/MEMORY.md#3;run=20261018-ab12`, Harness PR #547).
+ * Exactly one well-formed segment counts; none, a malformed one or several
+ * conflicting ones give "" (never a guess), as does a sourceRef at the
+ * IMPORT_SOURCE_REF_MAX cap (it may have been truncated).
+ * @param {unknown} sourceRef
+ * @returns {string}
+ */
+export function sourceRefRunId(sourceRef) {
+  if (typeof sourceRef !== "string" || !sourceRef.includes("run=")) return "";
+  // A sourceRef at the length cap may have been cut inside the run id.
+  if (sourceRef.length >= IMPORT_SOURCE_REF_MAX) return "";
+  let found = "";
+  for (const segment of sourceRef.split(";").slice(1)) {
+    if (!segment.startsWith("run=")) continue;
+    const id = segment.slice(4);
+    if (!IMPORT_RUN_ID_RE.test(id)) return "";
+    if (found && found !== id) return "";
+    found = id;
+  }
+  return found;
+}
+
+/**
+ * 1.15.0: the run a ledger line belongs to — its own `importRunId`, else the
+ * run named in its `sourceRef` (lines written without `importRunId`, by an
+ * engine before 1.13.0 or by a caller that only stamps the sourceRef).
+ * @param {{importRunId?: unknown, sourceRef?: unknown}|null|undefined} line
+ * @returns {string}
+ */
+export function ledgerLineRunId(line) {
+  if (typeof line?.importRunId === "string" && line.importRunId) return line.importRunId;
+  return sourceRefRunId(line?.sourceRef);
+}
+
 const LIVE_STATUS = new Set(["active", "", null, undefined]);
 
 function isLiveStatus(status) {
@@ -152,6 +188,9 @@ export function createMemoryImport({
       }
       importRunId = req.importRunId;
     }
+    // 1.15.0: without an explicit importRunId a card is attributed to the run
+    // its sourceRef names (`;run=<id>`), with a digest, so unimport can judge it.
+    const runIdFor = (sourceRef) => importRunId || sourceRefRunId(sourceRef);
 
     const binding = await opsContext.resolve(req.principal, a);
     const agentId = binding.agentId;
@@ -307,7 +346,7 @@ export function createMemoryImport({
           sourceRef: row.sourceRef,
           // 1.13.0: attributed to this run only as a backfill; the digest is
           // taken from the row found, so unimport can still judge it.
-          ...(importRunId ? { importRunId, backfilled: true } : {}),
+          ...(runIdFor(row.sourceRef) ? { importRunId: runIdFor(row.sourceRef), backfilled: true } : {}),
           ...(row.digest ? { digest: row.digest } : {}),
         });
         index.byKey.set(row.key, { cardId: row.cardId });
@@ -496,7 +535,8 @@ export function createMemoryImport({
           // 1.13.0: digest of the row as stored (read back, so column
           // coercion cannot make an untouched card look modified later).
           let digest = null;
-          if (importRunId) {
+          const cardRunId = runIdFor(plan.sourceRef);
+          if (cardRunId) {
             try {
               digest = safeDigest((await db.getById(plan.cardId)) || entryRow);
             } catch {
@@ -510,7 +550,7 @@ export function createMemoryImport({
               cardId: plan.cardId,
               importedAt: now,
               sourceRef: plan.sourceRef,
-              ...(importRunId ? { importRunId } : {}),
+              ...(cardRunId ? { importRunId: cardRunId } : {}),
               ...(digest ? { digest } : {}),
             });
             index.byKey.set(plan.key, { cardId: plan.cardId });

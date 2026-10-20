@@ -1,3 +1,4 @@
+import { embeddingIdentity, identityId } from "../lib/providers/embedding-identity.js";
 /**
  * engine/create-engine.js — the one construction path (spec 3.1, owner decision A).
  *
@@ -37,6 +38,7 @@ import { embeddingFingerprintFromNormalizedConfig, localEmbeddingOptionsFromFing
 import { createControlPlaneHealthInspector, createControlPlaneHealthScan } from "../lib/control-plane-health.js";
 import { createWorkspacePolicyGuard } from "../lib/workspace-policy-guard.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "../lib/obsidian-bridge.js";
+import { archiveMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
 import { handleObsidianBridgeCommand } from "../lib/obsidian-control-room.js";
 import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 import { isOwnedVaultConfirmed } from "../lib/obsidian-vault-authority.js";
@@ -48,6 +50,7 @@ import { combineEpistemicStatusForMerge, normalizeEpistemicStatus } from "../lib
 import { combineValidTimeForMerge, hasDisjointValidityWindows, normalizeCapturedValidityWindow, validateValidTimeInputFields } from "../lib/valid-time.js";
 import { createLocalModelGenerationLifecycle } from "../lib/local-model-generation.js";
 import { bindHostPaths } from "../lib/host-paths.js";
+import { bindHostNetwork } from "../lib/host-network.js";
 import { PLUGIN_ROOT } from "../lib/plugin-meta.js";
 import { getFeatureCronsSetupHint } from "../lib/feature-crons-hint.js";
 import { findProposalWorkspace } from "../lib/telegram-commands/skill-commands.js";
@@ -132,7 +135,12 @@ import { createMemoryProposals } from "./memory-ops/proposals.js";
 import { createMemoryImport } from "./memory-ops/import.js";
 import { createMemoryRebind } from "./memory-ops/rebind.js";
 import { createMemoryUnimport } from "./memory-ops/unimport.js";
+import { createMemoryLink } from "./memory-ops/link.js";
+import { createLinkLedger } from "./memory-ops/link-ledger.js";
 import { memoryOpError } from "./memory-ops/errors.js";
+
+/** 1.16.0: `Engine.capabilities` — additive feature flags, frozen. */
+const ENGINE_CAPABILITIES = Object.freeze({ memoryLink: true });
 import { createStoreAdopt } from "./stores/adopt.js";
 import { createObsidianOps } from "./admin/obsidian.js";
 
@@ -207,6 +215,9 @@ export function createEngine(host, config, testOptions = {}) {
     getConfig: () => host.runtime?.config?.current?.() || host.config(),
   });
   bindHostPaths(host.pathOverrides);
+  // 1.15.0: every outbound request goes through host.fetch when given, and
+  // apiKeyRef keys come from host.secrets. Absent: global fetch, no store.
+  bindHostNetwork({ fetch: host.fetch, secrets: host.secrets });
   setPluginLogger(host.logger);
   const cronDirectDispatchReady = capabilities.cronDirectDispatchReady === true;
   const openClawSkillWorkshop = capabilities.skillWorkshop ?? null;
@@ -254,7 +265,7 @@ export function createEngine(host, config, testOptions = {}) {
     : "";
   const createFeatureRoute = (feature, featureConfig = {}) => {
     const routeConfig = { ...featureConfig };
-    const hasOwnTransport = Boolean(routeConfig.baseUrl || routeConfig.apiKey || routeConfig.headers);
+    const hasOwnTransport = Boolean(routeConfig.baseUrl || routeConfig.apiKey || routeConfig.apiKeyRef || routeConfig.headers);
     if (featureDefaultModel && !hasOwnTransport
       && !(typeof routeConfig.model === "string" && routeConfig.model.trim())) {
       routeConfig.model = featureDefaultModel;
@@ -789,8 +800,14 @@ export function createEngine(host, config, testOptions = {}) {
     dimensions: vectorDim,
   });
   const activeEmbeddingFingerprintId = embeddingFingerprintId(activeEmbeddingFingerprint);
+  const legacyFingerprint = { ...activeEmbeddingFingerprint };
+  delete legacyFingerprint.prefixScheme;
+  delete legacyFingerprint.tokenCap;
+  const legacyFingerprintId = embeddingFingerprintId(legacyFingerprint);
+  const legacyGenerationSelection = cfg.reembedding?.fingerprintId === legacyFingerprintId && legacyFingerprintId !== activeEmbeddingFingerprintId;
+  if (legacyGenerationSelection) host.logger.warn("embedding.identity.legacy: generation uses an older fingerprint; full store identity verification requires migration");
   if (cfg.reembedding && (
-    cfg.reembedding.fingerprintId !== activeEmbeddingFingerprintId
+    (cfg.reembedding.fingerprintId !== activeEmbeddingFingerprintId && !legacyGenerationSelection)
     || cfg.reembedding.dimensions !== vectorDim
   )) {
     throw new Error(
@@ -1281,7 +1298,19 @@ export function createEngine(host, config, testOptions = {}) {
 
   // MemoryDB.search() resolves a row's missing halfLifeDays against the
   // configured recall.halfLifeDaysMap; every pool this engine opens carries it.
-  const EngineAgentDbPool = AgentDbPool.withOptions({ halfLifeOverrides });
+  const defaultIdentity = embeddingIdentity(activeEmbeddingFingerprint);
+  const identityRoutes = (embeddingCfg.routes ?? []).map(route => {
+    if (!route || typeof route !== "object") throw new TypeError("invalid embedding route");
+    return { ...route, identity: embeddingIdentity(route.identity) };
+  });
+  const identityForStore = ({ basePath, agentId }) => {
+    const match = identityRoutes.find(route =>
+      (!route.agentId || route.agentId === agentId) &&
+      (!route.namespace || basePath.split(/[\\/]/).at(-1) === route.namespace) &&
+      (!route.scope || basePath.split(/[\\/]/).at(-1) === (route.scope === "workspace" ? "workspaces" : "users")));
+    return match?.identity ?? defaultIdentity;
+  };
+  const EngineAgentDbPool = AgentDbPool.withOptions({ halfLifeOverrides, identityForStore });
   const pool = new MultiNamespacePool(namespaceLayout, vectorDim, EngineAgentDbPool, host.logger);
   const sharedMemoryPool = new SharedMemoryPool(
     embeddingGenerationLayout.sharedBaseDir,
@@ -1411,7 +1440,7 @@ export function createEngine(host, config, testOptions = {}) {
   // consumer built below (the DB adapter, the store helper, the command
   // runner, the scoped IPC server, the resource closer) and the registration
   // views use the same object. No real provider is constructed then.
-  const embeddings = testOptions.internals?.embeddings ?? (normalizedEmbeddingCfg.provider === "local-transformers"
+  const defaultEmbeddings = testOptions.internals?.embeddings ?? (normalizedEmbeddingCfg.provider === "local-transformers"
     ? (requiresActiveSharedModelOwner
         ? new ReloadSafeIpcScopedEmbeddingProvider({
             stateRoot: baseDbPath,
@@ -1460,6 +1489,36 @@ export function createEngine(host, config, testOptions = {}) {
         cacheBasePath: baseDbPath,
         logger: host.logger,
       }));
+  const identityProviders = new Map([[identityId(defaultIdentity), defaultEmbeddings]]);
+  for (const route of identityRoutes) {
+    const id = identityId(route.identity);
+    if (identityProviders.has(id)) continue;
+    const injected = testOptions.internals?.identityProviders?.get(id);
+    if (injected) { identityProviders.set(id, injected); continue; }
+    if (!route.provider) continue; // Missing provider becomes a typed recall/share degradation.
+    const config = normalizeEmbeddingConfig(route.provider, { mode: "existing", acceptNonCommercialLicense: nonCommercialModelAccepted });
+    if (identityId(embeddingIdentity(embeddingFingerprintFromNormalizedConfig(config))) !== id) throw new Error("route provider does not match declared identity");
+    identityProviders.set(id, config.provider === "local-transformers"
+      ? new LocalTransformersEmbeddingProvider({ ...config.local, dimensions: route.identity.dimension, cacheDir: resolveLocalModelCacheDir(route.provider), acceptNonCommercialLicense: nonCommercialModelAccepted, logger: host.logger })
+      : new OpenAIEmbeddingProvider({ ...config, credentialResolver, logger: host.logger }));
+  }
+  const embeddings = identityRoutes.length ? new Proxy(defaultEmbeddings, {
+    get(target, key) {
+      if (key === "identity") return defaultIdentity;
+      if (key === "identityProviders") return identityProviders;
+      if (key === "shutdown") return async () => { await Promise.all([...new Set(identityProviders.values())].map(provider => provider.shutdown?.())); };
+      const value = Reflect.get(target, key);
+      if (["embed", "embedQuery", "embedPassage", "embedBatch"].includes(key) && typeof value === "function") return (text, options = {}) => {
+        const identity = identityForStore({ basePath: namespaceLayout.mode === "named" ? `${namespaceLayout.baseDir}/${namespaceLayout.activeWriteNamespace}` : namespaceLayout.baseDbPath, agentId: options.agentId });
+        const provider = identityProviders.get(identityId(identity));
+        if (!provider) throw Object.assign(new Error("no embedder for store identity"), { code: "EMBEDDER_UNAVAILABLE" });
+        return (provider[key] ?? provider.embed).call(provider, text, options);
+      };
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) : defaultEmbeddings;
+  Object.defineProperties(defaultEmbeddings, { identity: { value: defaultIdentity, configurable: true }, identityProviders: { value: identityProviders, configurable: true }, rrfK: { value: embeddingCfg.rrfK ?? 60, configurable: true } });
+  sharedMemoryPool.identityForScope = (scope, ctx) => identityForStore({ basePath: `${embeddingGenerationLayout.sharedBaseDir}/${scope === "workspace" ? "workspaces" : "users"}`, agentId: ctx.agentId });
   const scopedEmbeddingServer = coordinatesLocalModelGeneration
     && normalizedEmbeddingCfg.provider === "local-transformers"
     ? createScopedEmbeddingIpcServer({
@@ -1558,6 +1617,59 @@ export function createEngine(host, config, testOptions = {}) {
     logger: host.logger,
     clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
   });
+  // 1.15.0: what unimport pulls along with the cards it undoes — their graph
+  // edges (canonical neo journal, one locked rewrite) and their Obsidian
+  // mirror notes (moved into the archive, never deleted outright; only in
+  // vaults of this agent that allow vault_write). Best-effort: a failure is
+  // counted and logged, never undoes the unimport.
+  const unimportDerivedCleanup = ({ agentId, workspaceDir, archiveDir, ids }) => {
+    const out = { graphEdgesRemoved: 0, mirrorsArchived: 0, cleanupErrors: 0 };
+    if (!Array.isArray(ids) || ids.length === 0) return out;
+    try {
+      const neoStore = getNeoStore({ agentId, workspaceDir }, {}, "unimport");
+      if (typeof neoStore?.removeGraphEdgesTouching === "function") {
+        out.graphEdgesRemoved = Number(neoStore.removeGraphEdgesTouching(ids)?.removed) || 0;
+      }
+    } catch (err) {
+      out.cleanupErrors += 1;
+      host.logger?.warn?.(`memory-ops.unimport: graph edge cleanup failed for agent '${agentId}': ${err?.code || err?.name || "error"}`);
+    }
+    for (const workspace of configuredObsidianWorkspaces) {
+      if (workspace?.agentId !== agentId) continue;
+      try {
+        const vaultCfg = {
+          ...obsidianBridgeCfg,
+          vaultPath: workspace.path,
+          reviewRoot: obsidianBridgeCfg.reviewRoot || "plur1bus",
+          agentId: workspace.agentId,
+          workspaceKey: workspace.workspaceId,
+        };
+        const moved = archiveMemoryNotes(vaultCfg, ids, {
+          archiveDir,
+          mutationPolicy: obsidianServiceMutationPolicy(workspace),
+          logger: host.logger,
+        });
+        out.mirrorsArchived += moved.archived;
+        out.cleanupErrors += moved.errors;
+      } catch (err) {
+        out.cleanupErrors += 1;
+        host.logger?.warn?.(`memory-ops.unimport: mirror cleanup failed for agent '${agentId}': ${err?.code || err?.name || "error"}`);
+      }
+    }
+    return out;
+  };
+  // 1.16.0: one link ledger shared by link, unimport (unlink by run) and show/list.
+  const memoryLinkLedger = createLinkLedger({ baseDbPath, logger: host.logger });
+  const memoryLink = createMemoryLink({
+    opsContext: memoryOpsContext,
+    pool,
+    sharedMemoryPool,
+    baseDbPath,
+    logger: host.logger,
+    clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
+    importLedger: memoryImport.ledger,
+    linkLedger: memoryLinkLedger,
+  });
   const memoryUnimport = createMemoryUnimport({
     opsContext: memoryOpsContext,
     pool,
@@ -1567,6 +1679,8 @@ export function createEngine(host, config, testOptions = {}) {
     logger: host.logger,
     clock: () => (typeof host.clock === "function" ? host.clock() : Date.now()),
     importLedger: memoryImport.ledger,
+    derivedCleanup: unimportDerivedCleanup,
+    linkLedger: memoryLinkLedger,
   });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,
@@ -1577,6 +1691,7 @@ export function createEngine(host, config, testOptions = {}) {
     baseDbPath,
     logger: host.logger,
     importLedger: memoryImport.ledger,
+    linkLedger: memoryLinkLedger,
   });
   const memoryWrite = createMemoryWrite({
     opsContext: memoryOpsContext,
@@ -1768,10 +1883,12 @@ export function createEngine(host, config, testOptions = {}) {
   const withTargetGenerationDb = async ({ generation, agentId, dimensions: targetDimensions }, operation) => {
     // EngineAgentDbPool, not AgentDbPool: re-embedding reads rank with the
     // same recall.halfLifeDaysMap as every other pool the engine opens.
+    const generationIdentity = (await reembeddingBackend.describeGeneration(generation)).identity ?? null;
     const targetPool = new EngineAgentDbPool(
       targetGenerationDataRoot(generation),
       targetDimensions,
       host.logger,
+      { identityForStore: null, identity: generationIdentity },
     );
     let operationError = null;
     let result;
@@ -3161,6 +3278,7 @@ export function createEngine(host, config, testOptions = {}) {
     memoryImport,
     memoryRebind,
     memoryUnimport,
+    memoryLink,
     memoryRead,
     memoryWrite,
     memoryTextContradictionLlmCfg,
@@ -3261,6 +3379,7 @@ export function createEngine(host, config, testOptions = {}) {
     // first post-store capture step (E4.1).
     runSpeakerProposalPipeline,
     ...(testOptions.internals ?? {}),
+    embeddings,
   };
 
   // Registration views (spec 3.1: views over EngineInternals are built once,
@@ -3512,7 +3631,18 @@ export function createEngine(host, config, testOptions = {}) {
   internals.getToolFactory ??= () => (memoryToolFactory ??= createMemoryTools(internals.toolContext));
   // Engine.recall always passes its memoryCtx, so its assembler needs no turn
   // resolver; the adapter builds its own with the host's (register-recall-hook.js).
-  const getRecallTurn = () => (engineRecallTurn ??= createPromptContextAssembler(internals.recallContext));
+  const getRecallTurn = (rerankerMode) => {
+    if (rerankerMode !== "off") return (engineRecallTurn ??= createPromptContextAssembler(internals.recallContext));
+    // Own immutable context: neither the configured provider nor the scheduler is replaced.
+    // Timeout fallback caches must not cross between configured and bypassed ranking.
+    const scheduler = internals.recallContext.runtimeScheduler;
+    const context = { ...internals.recallContext, reranker: null, runtimeScheduler: {
+      ...scheduler,
+      runRecall: (request, work) => scheduler.runRecall({ ...request, cacheKey: request.cacheKey ? JSON.stringify(["reranker-off", request.cacheKey]) : "" }, work),
+    } };
+    context.warmRecallPath = createWarmRecallPath(context);
+    return createPromptContextAssembler(context);
+  };
 
   const clock = () => (typeof host.clock === "function" ? host.clock() : Date.now());
   // Results reach callers and hosts: no raw message (paths, ids, memory text).
@@ -3540,7 +3670,10 @@ export function createEngine(host, config, testOptions = {}) {
   internals.embeddingServing = embeddingServing;
   const embeddingService = Object.freeze({
     async embed(texts, o = {}) {
-      const provider = internals.embeddings;
+      const requestedId = o.identity?.space ? identityId(o.identity.space) : o.identity?.fingerprintId;
+      const provider = !requestedId || requestedId === internals.activeEmbeddingFingerprintId || (legacyGenerationSelection && requestedId === legacyFingerprintId)
+        ? defaultEmbeddings : identityProviders.get(requestedId);
+      if (!provider) throw Object.assign(new Error("no embedder for requested identity"), { code: "EMBEDDER_UNAVAILABLE" });
       const method = o.kind === "query" ? "embedQuery" : "embedPassage";
       const vectors = await Promise.all(texts.map((text) => provider[method](text, { signal: o.signal })));
       return vectors.map((vector) => Float32Array.from(vector));
@@ -3554,7 +3687,10 @@ export function createEngine(host, config, testOptions = {}) {
       provider: internals.normalizedEmbeddingCfg.provider,
       model: internals.normalizedEmbeddingCfg.model || internals.model,
       dimensions: internals.vectorDim,
-    })],
+      space: defaultIdentity,
+    }), ...identityRoutes.filter((route, index, all) => identityId(route.identity) !== identityId(defaultIdentity) && all.findIndex(item => identityId(item.identity) === identityId(route.identity)) === index).map(route => Object.freeze({
+      fingerprintId: identityId(route.identity), provider: route.identity.provider, model: route.identity.model, dimensions: route.identity.dimension, space: route.identity,
+    }))],
     // Not tracked: embeddingServing.shutdown() (run by close) waits for the serve chain.
     serve: async (address) => { assertMemoryOpen(); return embeddingServing.serve(address); },
   });
@@ -3628,7 +3764,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.13.0",
+    contract: "1.16.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3685,7 +3821,7 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.13.0).
+  // The Engine (types/engine.d.ts, contract 1.16.0).
   const storeAdopt = createStoreAdopt({
     baseDbPath,
     pool,
@@ -3699,7 +3835,9 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.13.0",
+    contract: "1.16.0",
+    // 1.16.0: feature flags a harness can test instead of parsing the contract version.
+    capabilities: ENGINE_CAPABILITIES,
     async open(agentId) {
       const id = safeAgentId(agentId);
       await internals.pool.withDb(id, (db) => db.init());
@@ -3709,7 +3847,14 @@ export function createEngine(host, config, testOptions = {}) {
     close: ({ budgetMs } = {}) => internals.closeEngine(budgetMs),
     status: () => statusReporter.status(),
     systemSupplement: () => buildSystemSupplement({ neoEnabled: internals.neoEnabled }),
-    async recall(q) {
+    /**
+     * Recall with an optional call-local reranker override; omission preserves configured behavior.
+     * @param {object} q Existing RecallQuery.
+     * @param {{reranker?: "on"|"off"}} [opts]
+     * @returns {Promise<object>} RecallResult.
+     */
+    async recall(q, opts) {
+      const rerankerMode = opts?.reranker;
       // The recall clock starts here (E5 Task 8): timing.totalMs and the soft
       // budget count from the call, not from the store read.
       const startedAt = Date.now();
@@ -3729,18 +3874,29 @@ export function createEngine(host, config, testOptions = {}) {
         // registered hook already produces through the same assembler.
         // warmOnly (E5 Task 9): the read-only heavy path, see
         // engine/recall/warm-recall-path.js.
-        return (await getRecallTurn()(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt, warmOnly: q.warmOnly === true })) ?? recallResult();
+        const result = (await getRecallTurn(rerankerMode)(event, { agentId, workspaceDir }, { signal: q.signal, memoryCtx, agentContext: q.agent, startedAt, warmOnly: q.warmOnly === true })) ?? recallResult();
+        return rerankerMode === "on" && !internals.recallContext.reranker
+          ? { ...result, diagnostics: [{ feature: "reranker", reason: "reranker-not-configured", fallback: "unreranked" }] }
+          : result;
       } catch (error) {
         // An abort that lands before the assembler runs (e.g. during
         // host.workspaceDir) is still an abort, not a bad query.
         return recallResult({ degraded: { reason: q.signal.aborted ? "aborted" : "invalid-query", capability: "recall", detail: detailOf(error) } });
       }
     },
-    capture(t) {
+    /**
+     * Return a non-blocking capture handle with snapshotted call-local post-turn scheduling options.
+     * @param {object} t Existing TurnRecord.
+     * @param {{deferPostTurnLlm?: boolean}} [opts]
+     * @returns {object} Immediate CaptureHandle.
+     */
+    capture(t, opts) {
+      const deferPostTurnLlm = opts?.deferPostTurnLlm;
+      const deferFallback = deferPostTurnLlm === true && host.capabilities?.postTurnRefineScheduled !== true;
       const controller = new AbortController();
       const signal = t?.signal instanceof AbortSignal ? AbortSignal.any([t.signal, controller.signal]) : controller.signal;
       const acceptedAt = clock();
-      const done = (async () => {
+      const work = (async () => {
         if (closing) return { stored: 0, skipped: 1, reason: ENGINE_CLOSED.reason };
         if (t?.incognito !== false) return { stored: 0, skipped: 1, reason: "incognito" };
         const agentId = safeAgentId(t.agentId);
@@ -3761,7 +3917,7 @@ export function createEngine(host, config, testOptions = {}) {
           const outcome = await internals.getCaptureTurn()(
             { messages: t.messages, success: true, runId: t.runId, sessionKey: t.sessionKey },
             { agentId, workspaceDir, sessionKey: t.sessionKey },
-            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, report, onRowsSettled, staleRowIds, onRowsPlanned, onRowsKept },
+            { memoryCtx, agentContext: t.agent, signal, incognitoClassified: true, ...(typeof deferPostTurnLlm === "boolean" ? { deferPostTurnLlm } : {}), report, onRowsSettled, staleRowIds, onRowsPlanned, onRowsKept },
           );
           if (outcome?.ok) {
             // The scheduler reports ok once the worker settled; the pipeline
@@ -3776,6 +3932,7 @@ export function createEngine(host, config, testOptions = {}) {
           return { stored: 0, skipped: 1, reason: outcome?.reason ?? (outcome?.aborted ? "aborted" : "not_captured") };
         }, { signal });
       })().catch((error) => ({ stored: 0, skipped: 1, reason: detailOf(error) }));
+      const done = deferFallback ? (async () => ({ ...await work, diagnostics: [{ feature: "postTurnLlm", reason: "post-turn-refine-unscheduled", fallback: "inline" }] }))() : work;
       return { id: randomUUID(), acceptedAt, done, abort: (reason) => controller.abort(reason) };
     },
     async checkpoint(agentId, reason) {
@@ -3859,6 +4016,8 @@ export function createEngine(host, config, testOptions = {}) {
       rebind: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRebind.rebind(req, p, a)); },
       unbind: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRebind.unbind(req, p, a)); },
       unimport: async (req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryUnimport.unimport(req, p, a)); },
+      // 1.16.0: attach an imported duplicate to an existing card (sidecar link, card row untouched).
+      link: async (id, req, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryLink.link(id, req, p, a)); },
       proposals: Object.freeze({
         list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.list(q, p, a)); },
         accept: async (proposalId, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryProposals.accept(proposalId, p, a)); },

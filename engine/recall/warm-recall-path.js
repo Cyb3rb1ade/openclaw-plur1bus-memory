@@ -42,6 +42,15 @@ export function memoryOnlyEmbeddings(provider) {
       wrapped[name] = (text, options) => provider[name](text, { ...options, persist: false });
     }
   }
+  if (provider.identity) wrapped.identity = provider.identity;
+  if (provider.rrfK) wrapped.rrfK = provider.rrfK;
+  if (provider.identityProviders) {
+    wrapped.identityProviders = new Map([...provider.identityProviders].map(([id, entry]) => {
+      const single = {};
+      for (const method of ["embedQuery", "embed", "embedPassage"]) if (typeof entry[method] === "function") single[method] = (text, options) => entry[method](text, { ...options, persist: false });
+      return [id, Object.freeze(single)];
+    }));
+  }
   return Object.freeze(wrapped);
 }
 
