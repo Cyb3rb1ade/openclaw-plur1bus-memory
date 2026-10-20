@@ -82,8 +82,9 @@ function sameNumber(a, b) {
  * @param {Function} [deps.derivedCleanup] 1.15.0: `({agentId, workspaceDir, archiveDir, ids}) =>
  *   {graphEdgesRemoved, mirrorsArchived, cleanupErrors}` — drops graph edges and archives
  *   Obsidian mirrors of the undone cards; best-effort, never throws into the call.
- * @param {object} [deps.hooks] test seam: `afterIntent(cardId)`, `afterTombstone(cardId)`,
- *   `afterLedger(cardId)`; a throw there simulates a crash at that point.
+ * @param {object} [deps.hooks] test seam: `afterArchive(cardId, db)` (awaited; may edit the row),
+ *   `afterIntent(cardId)`, `afterTombstone(cardId)`, `afterLedger(cardId)`; a throw there
+ *   simulates a crash at that point.
  */
 export function createMemoryUnimport({
   opsContext,
@@ -260,6 +261,19 @@ export function createMemoryUnimport({
       }
     }
     return false;
+  }
+
+  /**
+   * True when the row differs from the snapshot a decision was made on in
+   * anything the decision reads: status, supersession, or any digest group.
+   */
+  function rowMoved(before, after) {
+    if (!before || !after) return before !== after;
+    if (String(before.status || "") !== String(after.status || "")) return true;
+    if ((before.supersededBy || "") !== (after.supersededBy || "")) return true;
+    const a = importRowDigest(before);
+    const b = importRowDigest(after);
+    return a.content !== b.content || a.binding !== b.binding || a.meta !== b.meta;
   }
 
   async function readRow(db, cardId) {
@@ -477,6 +491,33 @@ export function createMemoryUnimport({
               if (!headerWritten) {
                 sidecar.ensureHeader(agentId, importRunId, fence);
                 headerWritten = true;
+              }
+              // The decision above is a snapshot from before the archive write
+              // (and the header fsync). The edit and forget paths do not take
+              // the import lock, so re-read the row once more before the intent
+              // line and the soft delete and keep the card when anything the
+              // decision looks at has moved. Nothing is written for a kept
+              // card, so no orphan intent can later turn a forget into "done".
+              await hooks.afterArchive?.(card.cardId, db);
+              try {
+                fence();
+                const current = await readRow(db, card.cardId);
+                if (rowMoved(row, current)) {
+                  const again = await decide(card, current, ctx, decideOpts);
+                  // A forced card that moved again is not undone from a stale
+                  // archive: keep it; the next run (with force) judges it. A
+                  // row that went away under us is the user's doing, not ours.
+                  let next = again;
+                  if (again.kind === "eligible") next = { kind: "kept", reason: "edited" };
+                  else if (again.kind === "finish") next = { kind: "forgotten" };
+                  recordDecision(card, next, push);
+                  continue;
+                }
+              } catch (err) {
+                if (isFatal(err) || err?.name === "MemoryOpError") throw err;
+                logger?.warn?.(`memory-ops.unimport: re-check failed for agent '${agentId}' id='${card.cardId}': ${err?.code || "error"}`);
+                push(card, "failed", isAbortError(err, signal) ? "aborted" : "storage");
+                continue;
               }
               sidecar.appendIntent(agentId, importRunId, card, fence);
               ctx.sidecar.intents.add(sidecar.markerKey(card.cardId, card.importedAt));
