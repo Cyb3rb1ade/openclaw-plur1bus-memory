@@ -31,6 +31,20 @@ const JOB_TABLE = Object.freeze([
   ["light-dream", true, "light"],
 ]);
 
+// Jobs whose body reads, decides and writes state with no lock of its own
+// (classify-recent's per-run maxPerDay budget and candidate list, the brake
+// state files of persona-evolve and afterthought, ...). A second run for the
+// same agent while one is in flight is skipped `already_running`, like a
+// singleton's. Not `singleton`: that stays the cron-planning notion (one cron
+// job for all agents), and it is per agent here.
+const EXCLUSIVE_JOBS = new Set([
+  "classify-recent",
+  "afterthought",
+  "persona-evolve",
+  "auto-accept-stale",
+  "emotion-refine",
+]);
+
 const CRON_BY_FEATURE = new Map(REQUIRED_FEATURE_CRONS.map((spec) => [spec.feature, spec]));
 
 function defaultScheduleOf(cron) {
@@ -52,6 +66,7 @@ export const JOB_SPECS = Object.freeze(JOB_TABLE.map(([name, needsLlm, phase]) =
     name,
     needsLlm,
     singleton: cron?.singleton === true,
+    exclusive: EXCLUSIVE_JOBS.has(name),
     ...(phase ? { phase } : {}),
     ...(cron ? { defaultSchedule: defaultScheduleOf(cron) } : {}),
   });
