@@ -19,7 +19,7 @@ import { createInternalJobBodies } from "../jobs/internal-job-bodies.js";
 import { INTERNAL_JOB_NAMES } from "../jobs/job-specs.js";
 import { withLlmCallContext } from "../../lib/llm-result-cache.js";
 import { isLlmRouteAvailable } from "../../lib/llm-router.js";
-import { buildNeoDoctorReport, migrateNeoWorkspaces, transitionRecordStatus } from "../../lib/neo-arch.js";
+import { buildNeoDoctorReport, isNeoRecordAccessible, migrateNeoWorkspaces, transitionRecordStatus } from "../../lib/neo-arch.js";
 import { resolveCommandVaultPath } from "../../lib/obsidian-control-room.js";
 import { describeOwnedVaultConfirmation, isOwnedVaultConfirmed } from "../../lib/obsidian-vault-authority.js";
 import { runOverlayAuditCommand } from "../../lib/overlay-commands.js";
@@ -1129,15 +1129,30 @@ export function createPlur1busCommandRunner(ctx) {
         const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
         if (denied) return denied;
       }
-      const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
+      const requester = neoRequester(commandCtx, {});
+      const record = findNeoRecord(commandStore, id, requester);
       if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
       if (sub === "origin" || sub === "explain") return formatJsonCommandResult(record);
       if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
         const next = sub === "tombstone" ? "tombstoned" : `${sub}d`;
-        const updated = transitionRecordStatus(record, next);
-        commandStore.appendCandidates([updated]);
-        commandStore.appendEmbeddingQueue([updated]);
-        return formatJsonCommandResult(updated);
+        // Re-read and revise in the originating store under its write lock.
+        // Use the ID instead of a stale record hint: a disappeared row must
+        // not be recreated, and a changed owner must pass ACL again.
+        const revised = commandStore.reviseRecord(id, (current) =>
+          isNeoRecordAccessible(current, requester) ? transitionRecordStatus(current, next) : null);
+        if (!revised) return { text: `No PLUR1BUS neo record found for ${id}` };
+        appendDestructiveOpLog(memoryCtx.workspaceDir || commandCtx?.workspaceDir, {
+          event: "neo.status_transition",
+          source: "plur1bus_memory",
+          agentId: memoryCtx.agentId || commandCtx.agentId || "command",
+          recordId: id,
+          action: sub,
+          status: revised.record.status,
+          store: revised.store,
+          timestamp: new Date().toISOString(),
+        });
+        commandStore.appendEmbeddingQueue([revised.record]);
+        return formatJsonCommandResult(revised.record);
       }
     }
     if (action === "recall" && sub === "why") {
