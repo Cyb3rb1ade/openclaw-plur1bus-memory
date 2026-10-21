@@ -2442,7 +2442,13 @@ owned knowledge lock. Only live, ACL-visible agent-private source cards may ente
 the workspace Markdown; user/workspace copies require a future publication policy.
 The operation is deterministic, quotes source evidence, preserves prior Markdown
 verbatim, and performs no provider/network calls. The cap comes exclusively from
-`schicht15.maxPromotionsPerRun` for each invocation; zero means unlimited.
+`schicht15.maxPromotionsPerRun` for each invocation; zero or omission means
+unlimited for this deterministic primitive and the `knowledge-update` job.
+The LLM-backed `knowledge_update` tool applies the same key across a rolling
+24-hour window per workspace and agent instead. Omission preserves that tool's
+legacy limit of 3; explicit `0` disables its limit. The schema/manifest default
+remains `0`: hosts that materialize that default explicitly opt into unlimited
+promotion, while raw configurations with the key absent retain the tool limit.
 Foreground `system` or `user` origin is mandatory for the host primitive.
 An authorized host scheduler may use `{origin:"system",background:false}` for
 this explicit transaction, just as import does; this does not authorize a

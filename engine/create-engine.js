@@ -506,7 +506,10 @@ export function createEngine(host, config, testOptions = {}) {
   const schicht15Cfg = cfg.schicht15 || {};
   const schicht15Enabled = schicht15Cfg.enabled !== false;
   const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
-  const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 0;
+  // Preserve the legacy tool's rolling-24h default when the key is absent.
+  // The deterministic job/host primitive has its own per-invocation default.
+  // Read raw input: resolveEffectiveConfig materializes the schema's 0 default.
+  const schicht15MaxPromotions = rawPluginConfig.schicht15?.maxPromotionsPerRun ?? 3;
   const schicht15LlmCfg = schicht15Enabled
     ? createFeatureRoute("schicht15", schicht15Cfg)
     : null;
