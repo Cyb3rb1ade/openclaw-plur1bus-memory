@@ -307,6 +307,7 @@ export const DEPLOY_FILES = [
   "lib/reaction-directive.js",
   // ── background jobs ────────────────────────────────────────────────────────
   "lib/dreaming/dream-narrative.js",
+  "lib/dreaming/dream-safety.js",
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
   "lib/dreaming/dream-diary.js",
