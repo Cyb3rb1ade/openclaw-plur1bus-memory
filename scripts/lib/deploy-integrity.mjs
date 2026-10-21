@@ -471,6 +471,7 @@ export const DEPLOY_FILES = [
   "scripts/run-semantic-link-index-phase43c.mjs",
   "scripts/typecheck.mjs",
   "scripts/gen-openclaw-config-schema.mjs",
+  "scripts/bench-recall-stats.mjs",
   "scripts/verify-plugin-deploy.mjs",
   "scripts/verify-workspace-writer.mjs",
   "scripts/lib/deploy-integrity.mjs",
