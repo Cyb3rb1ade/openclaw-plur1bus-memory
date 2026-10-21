@@ -104,6 +104,7 @@ export function createPromptContextAssembler(ctx) {
     personaVoiceLlmCfg,
     pool,
     recallQueryLlmCfg,
+    recallStats,
     replyOutcomeDynamics,
     replyOutcomeEnabled,
     replyOutcomeMaxAssistantChars,
@@ -1271,7 +1272,17 @@ export function createPromptContextAssembler(ctx) {
     // separately, via `onNamespacePhases`, and is never folded into
     // `phaseTimer` itself.
     const timing = { phases: phaseTimer.summary(), totalMs: phaseTimer.elapsedMs(), namespacePhases };
-    const withTiming = (result) => ({ ...result, timing });
+    const withTiming = (result) => {
+      // Inspect the same boundary-preserving render the host receives, including
+      // cache hits. Dropped/clipped-away records and warm/aborted calls do not count.
+      if (!warmOnly && !result.degraded && recallStats) {
+        const rendered = planGlobalInjectBudget({ blocks: result.blocks, maxChars: result.capChars }).text;
+        const ids = [...rendered.matchAll(/<memory-record\b[^>]*\sid="([0-9a-f-]{36})"[^>]*>[\s\S]*?<\/memory-record>/gi)].map(match => match[1]);
+        try { recallStats.record(agentIdForCache, ids, event.prompt, Date.now()); }
+        catch (error) { host.logger.warn(`recall statistics unavailable: ${error?.name || "error"}`); }
+      }
+      return { ...result, timing };
+    };
     // 7.12.30: Der Recall des Turns ist durch; jetzt darf die verschobene
     // Reply-Outcome-Dynamik die Tabelle anfassen. Not after a warm recall:
     // the kick applies queued table updates (R14).

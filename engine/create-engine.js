@@ -1,3 +1,6 @@
+import { createRecallStats } from "./recall/recall-stats.js";
+import { createKnowledgePromotion } from "./knowledge/promote.js";
+import { createMemoryCuration } from "./memory-ops/curation.js";
 import { embeddingIdentity, identityId } from "../lib/providers/embedding-identity.js";
 /**
  * engine/create-engine.js — the one construction path (spec 3.1, owner decision A).
@@ -139,7 +142,7 @@ import { createLinkLedger } from "./memory-ops/link-ledger.js";
 import { memoryOpError } from "./memory-ops/errors.js";
 
 /** 1.16.0: `Engine.capabilities` — additive feature flags, frozen. */
-const ENGINE_CAPABILITIES = Object.freeze({ memoryLink: true });
+const ENGINE_CAPABILITIES = Object.freeze({ memoryLink: true, recallStats: true, knowledgePromotion: true, memoryCuration: true });
 import { createStoreAdopt } from "./stores/adopt.js";
 import { createObsidianOps } from "./admin/obsidian.js";
 
@@ -503,7 +506,10 @@ export function createEngine(host, config, testOptions = {}) {
   const schicht15Cfg = cfg.schicht15 || {};
   const schicht15Enabled = schicht15Cfg.enabled !== false;
   const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
-  const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 3;
+  // Preserve the legacy tool's rolling-24h default when the key is absent.
+  // The deterministic job/host primitive has its own per-invocation default.
+  // Read raw input: resolveEffectiveConfig materializes the schema's 0 default.
+  const schicht15MaxPromotions = rawPluginConfig.schicht15?.maxPromotionsPerRun ?? 3;
   const schicht15LlmCfg = schicht15Enabled
     ? createFeatureRoute("schicht15", schicht15Cfg)
     : null;
@@ -1681,6 +1687,9 @@ export function createEngine(host, config, testOptions = {}) {
     derivedCleanup: unimportDerivedCleanup,
     linkLedger: memoryLinkLedger,
   });
+  const recallStats = createRecallStats({ baseDbPath });
+  const knowledgePromotion = createKnowledgePromotion({ pool, cfg });
+  const memoryCuration = createMemoryCuration({ opsContext: memoryOpsContext, getNeoStore });
   const memoryRead = createMemoryRead({
     opsContext: memoryOpsContext,
     pool,
@@ -3037,6 +3046,7 @@ export function createEngine(host, config, testOptions = {}) {
     isSensitiveChatRead,
     jobs,
     knownPlur1busActions,
+    knowledgePromotion,
     legacyMigrationShutdown,
     memoryCompactionLlmCfg,
     memoryDbAdapter,
@@ -3276,6 +3286,9 @@ export function createEngine(host, config, testOptions = {}) {
     memoryUnimport,
     memoryLink,
     memoryRead,
+    recallStats,
+    knowledgePromotion,
+    memoryCuration,
     memoryWrite,
     memoryTextContradictionLlmCfg,
     memoryWorkspaceAliases,
@@ -3420,6 +3433,7 @@ export function createEngine(host, config, testOptions = {}) {
     "memoryAccountTopology",
     "memoryTextContradictionLlmCfg",
     "memoryWorkspaceAliases",
+    "recallStats",
     "mergingEnabled",
     "namespaceLayout",
     "neoEnabled",
@@ -3500,6 +3514,7 @@ export function createEngine(host, config, testOptions = {}) {
     "host",
     "jobs",
     "memoryWorkspaceAliases",
+    "recallStats",
     "mergingEnabled",
     "metaCognitionEnabled",
     "metaCognitionIntervalMs",
@@ -3567,6 +3582,7 @@ export function createEngine(host, config, testOptions = {}) {
     "host",
     "maxPromptMemories",
     "memoryWorkspaceAliases",
+    "recallStats",
     "mergingAutoApply",
     "mergingEnabled",
     "mergingLlmCfg",
@@ -3718,7 +3734,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.16.0",
+    contract: "1.17.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3775,7 +3791,7 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.16.0).
+  // The Engine (types/engine.d.ts, contract 1.17.0).
   const storeAdopt = createStoreAdopt({
     baseDbPath,
     pool,
@@ -3789,7 +3805,7 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.16.0",
+    contract: "1.17.0",
     // 1.16.0: feature flags a harness can test instead of parsing the contract version.
     capabilities: ENGINE_CAPABILITIES,
     async open(agentId) {
@@ -3957,6 +3973,40 @@ export function createEngine(host, config, testOptions = {}) {
     // late call can neither reopen LanceDB nor write an archive or tombstone.
     // A call already running is tracked, and close() drains it first (E2 Task 3).
     memory: Object.freeze({
+      stats: async (ids, p, a) => {
+        assertMemoryOpen();
+        return memoryOpsContext.track(async () => {
+          const { agentId } = await memoryOpsContext.resolve(p, a);
+          if (ids != null && (!Array.isArray(ids) || ids.length > 500)) throw memoryOpError("invalid-input", "stats accepts at most 500 ids");
+          if (ids) {
+            try { ids.forEach(safeUuid); } catch { throw memoryOpError("invalid-input", "stats ids must be valid memory ids"); }
+          }
+          let rows;
+          try { rows = recallStats.read(agentId, ids); }
+          catch { throw memoryOpError("storage", "recall stats unavailable"); }
+          const items = [];
+          for (const row of rows) {
+            try { await memoryRead.show(row.id, p, a); items.push(row); }
+            catch (error) { if (error?.code !== "not-found") throw error; }
+          }
+          return { agentId, items };
+        });
+      },
+      promote: async (req, p, a) => {
+        assertMemoryOpen();
+        return memoryOpsContext.track(async () => {
+          if (!["system", "user"].includes(a?.origin) || a.background !== false) throw memoryOpError("denied", "promotion requires a foreground host or human");
+          const { agentId, workspaceDir, memoryCtx } = await memoryOpsContext.resolve(p, a);
+          if (!Array.isArray(req?.ids)) throw memoryOpError("invalid-input", "promotion ids are required");
+          try { req.ids.forEach(safeUuid); } catch { throw memoryOpError("invalid-input", "promotion ids must be valid memory ids"); }
+          try { return await knowledgePromotion.run({ agentId, workspaceDir, ids: req.ids, memoryCtx, assertOpen: memoryOpsContext.assertOpen }); }
+          catch (error) { if (error?.name === "MemoryOpError") throw error; throw memoryOpError("storage", "knowledge promotion failed"); }
+        });
+      },
+      curation: Object.freeze({
+        list: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => memoryCuration.list(...args)); },
+        resolve: async (...args) => { assertMemoryOpen(); return memoryOpsContext.track(() => memoryCuration.resolve(...args)); },
+      }),
       list: async (q, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.list(q, p, a)); },
       show: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryRead.show(id, p, a)); },
       forget: async (id, p, a) => { assertMemoryOpen(); return memoryOpsContext.track(() => internals.memoryWrite.forget(id, p, a)); },

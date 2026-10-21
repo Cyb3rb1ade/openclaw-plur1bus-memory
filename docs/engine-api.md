@@ -2307,7 +2307,7 @@ reference `api.` at all) and `scripts/typecheck.mjs` (`tsc --noEmit` over
 | `engine/admin/obsidian.js` | `createObsidianOps` — `AdminOps.obsidian.{detect,prepare,confirm}` |
 | `engine/store/schema-version.js` | `createStoreMigrator` — `AdminOps.migrate`, the `_schema.json` marker |
 | `engine/identity/principal.js` | `memoryContextFromPrincipal` — `Principal`/`AgentContext` as explicit inputs, the channel registry |
-| `engine/jobs/job-registry.js` | `createJobRegistry` — the 19 engine-owned jobs, retry/abandon/breaker, `MAX_ATTEMPTS`, `BREAKER_LIMIT`, `sweepKey` |
+| `engine/jobs/job-registry.js` | `createJobRegistry` — the 20 engine-owned jobs, retry/abandon/breaker, `MAX_ATTEMPTS`, `BREAKER_LIMIT`, `sweepKey` |
 | `engine/jobs/job-ledger.js` | the append-only `ledger.jsonl` + started-markers, crash detection |
 | `engine/jobs/job-specs.js` | the `JobSpec` table (name, `needsLlm`, `singleton`, `defaultSchedule`, `phase`) |
 | `engine/jobs/internal-job-bodies.js` | the job bodies themselves |
@@ -2396,3 +2396,80 @@ recall uses the same scheduler limits, but a separate timeout fallback cache
 key, so its cached context cannot be exchanged with configured ranking.
 Capture's handle still returns immediately. Durable capture/replay semantics
 are unchanged: different options do not recapture an already committed turn.
+
+## Curated memory in 1.17.0 (Großpaket 3 A1)
+
+The public contract is **1.17.0**; the npm package remains 7.18.4. The controller
+must pin the reviewed Engine commit before dependent Harness phases use this
+surface. Feature flags are `recallStats`, `knowledgePromotion`, `memoryCuration`.
+The subsequent D116 C1 contract is 1.18.0: its original 1.17.0 plan number is
+superseded by A1's required preceding minor release.
+
+```ts
+await engine.memory.stats(idsOrUndefined, principal, agentContext);
+// { agentId, items: [{ id, recalls, distinctQueries, lastRecalledAt }] }
+await engine.memory.promote({ ids }, principal, { origin: "system", background: false });
+// { agentId, items: [{ id, outcome: "promoted" | "skipped", reason }] }
+await engine.jobs.run("knowledge-update", agentId);
+await engine.memory.curation.list({ limit: 100 }, principal, { origin: "user", background: false });
+await engine.memory.curation.resolve(id, "keep", principal, { origin: "user", background: false });
+```
+
+`stats` accepts at most 500 UUIDs. Omission returns persisted counter IDs only;
+explicitly requested live, visible cards without prior recalls return zero and
+`lastRecalledAt: null`. Inaccessible, deleted, invalidated or expired cards are
+omitted, preserving the same anti-oracle boundary as `memory.show`. Statistics
+are per requesting agent, including that agent's recall of shared visible cards.
+The assembler counts each complete rendered `<memory-record>` once per successful
+recall, after the same clipping plan the host applies. Cache-served successful
+recalls count; warm-only, aborted and degraded calls do not. Explicit
+`memory_recall` and its `memory_search` alias update the same counters from
+returned card IDs. A host applying a
+stricter custom cap must treat these as Engine-rendered recalls, not proof the
+host actually delivered a record to a model.
+
+Counters live under `<baseDbPath>/_recall-stats/<agentId>.sqlite` (private directory,
+0600 file). No query or memory text is retained: exact query equality uses a
+random per-agent HMAC key and digest. The first access transaction migrates
+schema 0 to 1 idempotently, adding the query set and key metadata while preserving
+existing counters. Existing LanceDB stores require no table rewrite; historical
+counts before this API existed are unknown and begin at zero. Database errors
+warn during recall without blocking recall; explicit API reads reject with
+`MemoryOpError("storage")` rather than claiming zero statistics.
+
+Promotion reads authoritative rows under the existing pool write lease and
+owned knowledge lock. Only live, ACL-visible agent-private source cards may enter
+the workspace Markdown; user/workspace copies require a future publication policy.
+The operation is deterministic, quotes source evidence, preserves prior Markdown
+verbatim, and performs no provider/network calls. The cap comes exclusively from
+`schicht15.maxPromotionsPerRun` for each invocation; zero or omission means
+unlimited for this deterministic primitive and the `knowledge-update` job.
+The LLM-backed `knowledge_update` tool applies the same key across a rolling
+24-hour window per workspace and agent instead. Omission preserves that tool's
+legacy limit of 3; explicit `0` disables its limit. The schema/manifest default
+remains `0`: hosts that materialize that default explicitly opt into unlimited
+promotion, while raw configurations with the key absent retain the tool limit.
+Foreground `system` or `user` origin is mandatory for the host primitive.
+An authorized host scheduler may use `{origin:"system",background:false}` for
+this explicit transaction, just as import does; this does not authorize a
+model-generated write. The job
+runs via the existing host job registry and respects the disabled-workspace gate.
+
+The receipt reasons are `integrated` (outcome `promoted`), or `disabled`,
+`lock-busy`, `not-found`, `not-live`, `scope-not-publishable`, `already-promoted`,
+`cap-reached`, `importance-pending`, `importance-below-threshold` (outcome `skipped`).
+Unresolved classification keeps its staged queue entry for a later retry; a final
+verdict below the configured threshold discards that staged entry. A source hash marker is written atomically with
+the evidence before queue cleanup. A crash between writing and cleanup replays
+as `already-promoted`; failed writes leave the source pending. The existing
+LLM-backed `knowledge_update` tool remains explicit; its former unreachable
+single-memory helper has been removed. Semantic synthesis and retiring old
+curated statements belong to later tree/curation phases.
+
+`curation` lists latest visible unresolved candidate/conflict/stale records from
+both candidate and behavior journals; max 100 per page, `truncated` signals more.
+Curation IDs are opaque bounded strings, including real Neo `mem_<hash>` and
+`behavior_<hash>` keys; they are not LanceDB UUIDs. Keep/drop require foreground
+human origin and a mandatory audit receipt. The
+host still enforces its own Owner/Admin/own-human RBAC before calling the Engine.
+`memory.proposals` is D31 shared-card change proposals, **not** this curation queue.

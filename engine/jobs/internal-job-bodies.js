@@ -9,6 +9,10 @@
 
 import { IMPORTANCE_STATUS } from "../../lib/importance-status.js";
 import { buildRefinePatch, classifyEncoding } from "../../lib/encoding-llm.js";
+import { checkAccess } from "../../lib/acl-middleware.js";
+import { computeMemoryImportance, shouldPromoteMemory } from "../../lib/memory-fact-quality.js";
+import { isRecallEntryLive } from "../../lib/recall-pipeline.js";
+import { trackKnowledgePending } from "../knowledge/knowledge-pending.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "../../lib/dreaming/rem-dream.js";
 import { ledgerBackedCompletion, remJobOutcome } from "./rem-outcome.js";
 import { findEpisodeCardPath, rebuildEpisode, writeEpisodeToVault } from "../../lib/episodes.js";
@@ -67,6 +71,7 @@ export function createInternalJobBodies(ctx) {
     getNeoStore,
     host,
     memoryCompactionLlmCfg,
+    knowledgePromotion,
     memoryDbAdapter,
     memoryWorkspaceAliases,
     mergingEnabled,
@@ -105,6 +110,12 @@ export function createInternalJobBodies(ctx) {
   return async function runInternalJob(name, jobCtx) {
     const { commandCtx, memoryCtx, cronInternal, commandStore, id, tokens } = jobCtx.input;
     const subKey = name;
+    if (name === "knowledge-update") {
+      if (!commandCtx.workspaceDir) return jobCtx.skip("no_workspace", formatJsonCommandResult({ job: name, skipped: true, reason: "no_workspace" }));
+      if (cfg.schicht15?.enabled === false) return jobCtx.skip("schicht15_disabled", formatJsonCommandResult({ job: name, skipped: true, reason: "schicht15_disabled" }));
+      const result = await knowledgePromotion.run({ agentId: commandCtx.agentId, workspaceDir: commandCtx.workspaceDir, memoryCtx });
+      return formatJsonCommandResult({ job: name, ...result });
+    }
     const internalAgent = commandCtx.agentId || "default";
       if (subKey === "consolidate-daily") {
         const dcCfg = cfg.dailyConsolidation || {};
@@ -891,6 +902,23 @@ export function createInternalJobBodies(ctx) {
               continue;
             }
             consecutiveFailures = 0;
+            // Auto-capture intentionally starts at unresolved importance 0.5.
+            // Persist eligible work before finalizing the verdict. A queue lock
+            // or I/O failure leaves importance pending for a later retry; a
+            // promotion racing this write must wait for importanceStatus=final.
+            const importance = patch.importance ?? row.importance;
+            if (commandCtx.workspaceDir && cfg.schicht15?.enabled !== false
+              && (!row.scope || row.scope === "agent-private")
+              && checkAccess(memoryCtx, row).allowed && isRecallEntryLive(row, Date.now())
+              && shouldPromoteMemory(row.category, importance,
+                computeMemoryImportance({ text: row.text, category: row.category }).factQuality,
+                cfg.schicht15?.minImportance ?? 0.7)) {
+              if (!trackKnowledgePending(commandCtx.workspaceDir, { sourceAgent: internalAgent,
+                memoryId: row.id, category: row.category, importance, reason: 'importance-refinement' })) {
+                counts.failed++;
+                continue;
+              }
+            }
             await agentDb.update(row.id, patch);
             counts.refined++;
           }
