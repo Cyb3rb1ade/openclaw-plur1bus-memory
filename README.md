@@ -47,6 +47,17 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 - **A store created now keeps a deliberate remote choice.** A `baseUrl`,
   `apiKey`, `apiKeyRef` or `apiKeyEnv` in `embedding` or `reranker` is never
   replaced by the local default, even without `provider`.
+- **A stalled response body now times out.** `fetchWithTimeout` keeps its
+  deadline running while the body is read (`json()`, `text()`, a stream): one
+  budget for headers plus body, an `AbortError` that names only the host.
+- **The OpenClaw remote embedding adapters (`plur1bus-openai`,
+  `plur1bus-openai-compatible`) read the plugin's `embedding.apiKeyRef` (host
+  secret store, purpose `embedding`, dropped after a 401/403) and
+  `embedding.apiKeyEnv`.** Order: the host's `remote.apiKey`, then `apiKeyRef`,
+  `apiKeyEnv`, `apiKey`. A configured source that yields no key fails before
+  any request. Before, both fields were ignored.
+- **A 401/403 makes the remote reranker resolve its key again,** also a key from
+  `apiKeyEnv` or the credential resolver, so a rotated key needs no restart.
 
 ### New in v7.16.0 — recall width is an operator setting
 
