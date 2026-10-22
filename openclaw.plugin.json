@@ -2,8 +2,11 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.18.24",
+  "version": "7.18.25",
   "kind": "memory",
+  "controlUi": {
+    "entry": "dist/control-ui/jev-key/index.js"
+  },
   "cliCommands": [
     {
       "name": "plur1bus-command",
@@ -79,11 +82,21 @@
         {
           "path": "emotion.t3.apiKey",
           "expected": "string"
+        },
+        {
+          "path": "captureChunkingJev.apiKey",
+          "expected": "string"
         }
       ]
     }
   },
   "uiHints": {
+    "captureChunkingJev.apiKey": {
+      "label": "Jev API Key",
+      "sensitive": true,
+      "advanced": true,
+      "help": "Optional TypeSafe credential. A nonempty key overrides apiKeyEnv; remove it explicitly to use the environment fallback."
+    },
     "embedding.apiKey": {
       "label": "Embedding API Key",
       "sensitive": true,
@@ -734,6 +747,11 @@
         "additionalProperties": false,
         "description": "7.18.18: Einstellungen für captureChunkingMode \"automatisch\". Jev (TypeSafe) entscheidet je Nachricht, die die Regel teilen würde: zusammenhängend mit hoher Sicherheit → nur das Ganze, unabhängige Einzelpunkte mit hoher Sicherheit → nur die Teile, sonst Ganzes und Teile. Die Nachricht geht dafür an api.typesafe.ai. Ohne Schlüssel gilt \"beides\".",
         "properties": {
+          "apiKey": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Optional TypeSafe API key. A nonempty value takes precedence over apiKeyEnv."
+          },
           "apiKeyEnv": {
             "type": "string",
             "default": "TYPESAFE_API_KEY",

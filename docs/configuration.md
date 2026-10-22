@@ -1010,3 +1010,16 @@ Diese Optionen steuern die wikilink-basierten Graph-Blöcke in Record-Notes und 
 | `topK` | `number` | `20` | Kandidaten-Fenster für die ANN-Suche |
 
 > Der semantische Link-Index wird nur geschrieben, wenn er explizit bestätigt (`confirm: true`) oder über einen internen Befehl mit Bestätigung angestoßen wird. Er wird nicht automatisch beim Recall angewendet.
+
+
+### Conversation Afterthoughts (7.18.25)
+
+Afterthoughts observe eligible interactivity through the OpenClaw hooks. A completed user exchange arms one persisted random deadline between 15 and 120 minutes. New user activity cancels it; the next completed exchange draws a new deadline. Heartbeats, cron tasks, incognito sessions and denied workspaces do not arm reflection. The original live session is read only when the deadline is due. Its retained conversation and compaction summaries are used, without a fixed recent-message or wall-clock cutoff. Long context is compressed in a separate model request; the active session is never compacted for this feature.
+
+Choose its model with the existing per-agent `llmRouter.agentModels.<agent>.afterthought` override. This installation uses `anthropic/claude-sonnet-5-5`; global background defaults and other explicit task choices remain independent. The job checks once per minute and calls the model only for due work. Quiet hours remain 22:00–08:00 in the configured timezone, with at most one proactive afterthought per UTC day and the existing governor budget. Missed windows are not replayed after two hours. State lives in `.afterthought-reflection.json` in each workspace; it holds session metadata and cursors, not a copy of the conversation. Uncertain delivery is not automatically retried, to avoid duplicate messages.
+
+A useful follow-up is sent to the original conversation, not a cron fallback recipient. It is recorded in the transcript and supplied to later conversation context. Optional documents are written under `.plur1bus/afterthoughts/`. Current OpenClaw public session/transcript APIs are required; unsupported hosts skip safely. Freshness checks and cancellation narrow the arrival/send race, but an external channel send cannot be atomic with receipt of a new user message.
+
+### Jev key in the dashboard (7.18.25)
+
+With `controlUi.writeActions: "all"` and `gateway.controlUi.experimental.customPlugins: true`, the existing capture-mode card includes Jev API key save/replace/remove controls. The native UI bridge uses a fixed authenticated Gateway method; the key never enters the URL. A blank input keeps the current value. Removing the configured value leaves the environment fallback in effect. `captureChunkingJev.apiKey` takes priority over the variable named by `captureChunkingJev.apiKeyEnv` (default `TYPESAFE_API_KEY`). The page displays only whether a key is configured and whether it comes from config or environment. Existing non-Jev storage and reranker choices are unchanged.

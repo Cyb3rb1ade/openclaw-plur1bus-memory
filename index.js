@@ -59,9 +59,13 @@ import { readPluginConfigFile, largestKnownAgentCount } from "./lib/dashboard-se
 import { checkRuntimePressure } from "./lib/runtime-pressure-gate.js";
 import { resolveAgentWorkspaceDir } from "./lib/setup/memory-host-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
+import { registerAfterthoughtActivityHooks } from "./lib/afterthought-hooks.js";
+import { observeAfterthoughtActivity, runConversationAfterthoughtJob } from "./lib/afterthought-reflection.js";
+import { createAfterthoughtHost } from "./lib/afterthought-host.js";
 import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
 import {
   createCaptureChunkingMutator,
+  createJevApiKeyMutator,
   createConfirmationStore,
   createSettingMutator,
   createEmbeddingProfileMutator,
@@ -434,7 +438,7 @@ import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THRE
 import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
 import { drainPostTurnWork, enqueuePostTurnWork } from "./lib/post-turn-queue.js";
-import { createJevChunkDecider } from "./lib/jev-chunk-decider.js";
+import { createJevChunkDecider, resolveJevApiKey } from "./lib/jev-chunk-decider.js";
 import { createGroupReasoningFilter } from "./lib/group-reasoning-filter.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
@@ -4910,7 +4914,7 @@ const plugin = {
     const dreamNarrativeLlmCfg = createFeatureRoute("dream-narrative", {});
     const dreamEchoLlmCfg = createFeatureRoute("dream-echo", {});
     const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
-    const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
+    const afterthoughtLlmCfg = createFeatureRoute("afterthought", { maxTokens: 8192, ...(cfg.afterthought || {}) });
     const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
     // 7.12.38: Obergrenze des verwalteten Blocks (Seed + Gelerntes, Default 24)
     // und daraus abgeleiteter Deckel der injizierten Stimm-Direktive
@@ -8045,11 +8049,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     ? formatAfterthoughtCronReply(disabledResult)
                     : formatJsonCommandResult(disabledResult);
                 }
-                const { runAfterthoughtJob } = await import("./lib/afterthought.js");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
-                const result = await runAfterthoughtJob({
+                const conversationHost = createAfterthoughtHost({ api, agentId: internalAgent, workspaceDir: commandCtx.workspaceDir });
+                const result = await runConversationAfterthoughtJob({
                   workspaceDir: commandCtx.workspaceDir,
                   agentId: internalAgent,
+                  ...conversationHost,
                   llmCfg: withLlmCallContext(
                     afterthoughtLlmCfg,
                     internalAgent,
@@ -8060,9 +8065,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
                   logger: api.logger,
                 });
-                api.logger?.info?.(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
+                api.logger?.info?.(`plur1bus internal afterthought: ${JSON.stringify({ sent: result.sent === true, skipped: result.skipped === true, reason: result.reason })}`);
                 return cronInternal
-                  ? formatAfterthoughtCronReply(result)
+                  ? formatAfterthoughtCronReply({ ...result, text: undefined })
                   : formatJsonCommandResult({ job: "afterthought", ...result });
               }
               if (subKey === "persona-evolve") {
@@ -9554,6 +9559,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
           });
           const setCaptureChunking = createCaptureChunkingMutator({ api });
+          const setJevApiKey = createJevApiKeyMutator({ api });
           const setSetting = createSettingMutator({
             api,
             validate: resolveEffectiveConfig,
@@ -9605,6 +9611,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 setFeatureModel,
                 setChatModel,
                 setCaptureChunking,
+                setJevApiKey,
                 setSetting,
                 setEmbeddingProfile,
                 rerankerKeyConfigured: keyConfigured,
@@ -10689,6 +10696,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     // (openclaw/openclaw#162941). runtime.deferPostTurnLlm=false ruft sie wie
     // zuvor direkt aus agent_end auf.
     // ========================================================================
+    registerAfterthoughtActivityHooks({
+      api,
+      phases: ["start"],
+      enabled: cfg.afterthought?.enabled !== false,
+      observe: observeAfterthoughtActivity,
+      classifyIncognito: classifyHostIncognitoSession,
+      isAllowed: (event, ctx) => automaticWorkspacePolicyDecision(event, ctx).allowed,
+      resolveSession: ({ agentId, sessionKey }) => runtimeIfUsable(api)?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
+    });
     const deferPostTurnLlm = cfg.runtime?.deferPostTurnLlm !== false;
     // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
     // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
@@ -10696,7 +10712,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     const jevChunkCfg = cfg.captureChunkingJev || {};
     const jevChunkDecider = cfg.captureChunkingMode === "automatisch"
       ? createJevChunkDecider({
-        apiKey: process.env[typeof jevChunkCfg.apiKeyEnv === "string" && jevChunkCfg.apiKeyEnv.trim() ? jevChunkCfg.apiKeyEnv.trim() : "TYPESAFE_API_KEY"],
+        apiKey: resolveJevApiKey(jevChunkCfg, process.env),
         model: jevChunkCfg.model,
         minConfidence: jevChunkCfg.minConfidence,
         timeoutMs: jevChunkCfg.timeoutMs,
@@ -13950,6 +13966,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
       });
     }
+
+    registerAfterthoughtActivityHooks({
+      api,
+      phases: ["end"],
+      enabled: cfg.afterthought?.enabled !== false,
+      observe: observeAfterthoughtActivity,
+      classifyIncognito: classifyHostIncognitoSession,
+      isAllowed: (event, ctx) => automaticWorkspacePolicyDecision(event, ctx).allowed,
+      resolveSession: ({ agentId, sessionKey }) => runtimeIfUsable(api)?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
+    });
 
     // Manual tools remain available regardless of autoCapture/autoRecall:
     // memory_store, memory_recall, memory_forget and knowledge_update are not

@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+
+## [7.18.25] — 2026-10-22
+
+### Changed
+
+- Afterthoughts reflect on the original conversation after one persisted random idle delay of 15–120 minutes. New interaction invalidates pending work. Full retained history, compaction summaries, tool results, identity and Persona Voice are available; only the context copy is compressed when needed. A model decision may produce no message, a useful short follow-up, or an optional document. Original channel/account/thread and session generation stay pinned. A durable send intent prevents automatic retries after an uncertain transport result.
+- The afterthought cron checks deadlines every minute, without a model call before work is due. Previously shipped 30-minute and three-hour intervals migrate to this cadence; custom intervals remain unchanged.
+- Jev credentials can be saved or removed from the PLUR1BUS dashboard using a dedicated authenticated native UI bridge. Values remain out of URLs, status responses and logs. Explicit config keys take priority over the existing environment fallback. Custom plugin UI must be enabled on the host for credential editing.
+- Persona learning and proactive feedback exclude current heartbeat templates and explicit internal execution while retaining ordinary user discussions of those topics.
+
 ## [7.18.24] — 2026-10-13
 
 ### Behoben
