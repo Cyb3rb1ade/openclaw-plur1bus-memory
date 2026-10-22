@@ -330,3 +330,54 @@ test('upgrade preserves the legacy same-day cap before a new reflection state ex
   assert.equal(result.reason, 'daily_cap'); assert.equal(reads, 0);
   assert.ok(!readFileSync(join(dir, '.afterthought-reflection.json'), 'utf8').includes('PRIVATE HISTORICAL TOPIC'));
 });
+
+test('changing conversation preserves the cacheable instructions and persona prefix', async () => {
+  const requests = [];
+  for (const topic of ['OFFLINE_BACKUP_TOPIC', 'ENCRYPTION_KEY_TOPIC']) {
+    const dir = makeTempDir('reflection-cache-prefix-'); schedule(dir);
+    writeFileSync(join(dir, 'SOUL.md'), 'Speak plainly and carefully.');
+    writeFileSync(join(dir, 'IDENTITY.md'), 'You are Bernd.');
+    writeFileSync(join(dir, 'persona-voice.md'), '<!-- persona:begin -->\n- Prefer short clear sentences.\n<!-- persona:end -->');
+    const llmCfg = Object.freeze({ model: 'anthropic/claude-sonnet-5-5', maxTokens: 8192 });
+    const result = await job(dir, {
+      llmCfg,
+      readConversation: async () => ({ priorSummary: `SUMMARY_${topic}`, messages: [{ role: 'user', content: topic, id: 'm1' }] }),
+      callLlm: async (messages, receivedCfg) => {
+        assert.equal(receivedCfg, llmCfg, 'prompt layout must preserve the selected model configuration');
+        requests.push(messages);
+        return '{"send":false,"text":""}';
+      },
+    });
+    assert.equal(result.reason, 'no_new_contribution');
+    const stable = requests.at(-1).filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+    const conversation = requests.at(-1).filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    assert.match(stable, /Speak plainly and carefully/);
+    assert.match(stable, /You are Bernd/);
+    assert.match(stable, /short clear sentences/);
+    assert.ok(!stable.includes(topic), 'variable history must not invalidate the system cache breakpoint');
+    assert.ok(conversation.includes(topic));
+    assert.ok(conversation.includes(`SUMMARY_${topic}`));
+    assert.match(conversation, /<untrusted-conversation>[\s\S]*<\/untrusted-conversation>/);
+    assert.match(conversation, /Return the JSON decision/);
+  }
+  assert.deepEqual(requests[0].filter((m) => m.role === 'system'), requests[1].filter((m) => m.role === 'system'));
+  assert.notDeepEqual(requests[0].filter((m) => m.role === 'user'), requests[1].filter((m) => m.role === 'user'));
+});
+
+test('persona changes invalidate the stable reflection prefix while history stays data', async () => {
+  const prefixes = [];
+  for (const voice of ['Use concise German.', 'Use detailed German.']) {
+    const dir = makeTempDir('reflection-cache-persona-'); schedule(dir);
+    writeFileSync(join(dir, 'SOUL.md'), voice);
+    await job(dir, {
+      callLlm: async (messages) => {
+        prefixes.push(messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n'));
+        assert.ok(messages.filter((m) => m.role === 'user').some((m) => m.content.includes('Use the offline backup.')));
+        return '{"send":false,"text":""}';
+      },
+    });
+  }
+  assert.match(prefixes[0], /Use concise German/);
+  assert.match(prefixes[1], /Use detailed German/);
+  assert.notEqual(prefixes[0], prefixes[1]);
+});

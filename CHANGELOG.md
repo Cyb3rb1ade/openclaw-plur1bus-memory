@@ -6,6 +6,12 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.18.26] — 2026-10-23
+
+### Changed
+
+- Afterthought prompts keep stable reflection instructions, identity and Persona Voice in the system prefix, with the untrusted conversation and the decision request in a separate user message. The native OpenClaw Anthropic transport can cache the stable prefix independently of changing conversation history. Existing provider cache lifetimes, per-agent task model overrides and full-context reflection remain unchanged; a cache hit is not guaranteed after the idle delay.
+
 ## [7.18.25] — 2026-10-22
 
 ### Changed
