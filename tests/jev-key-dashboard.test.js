@@ -65,6 +65,31 @@ test("Jev projection reports only presence and the winning source", () => {
   }
 });
 
+// A hidden/incorrect effective source or rendering any credential must fail these
+// HTTP-output regressions; fixtures exercise the real projection and page renderer.
+for (const { name, config, env, present, source, mode = "all" } of [
+  { name: "environment", config: {}, env: { TYPESAFE_API_KEY: SECRET }, present: true, source: "Umgebung" },
+  { name: "configuration wins over environment", config: { captureChunkingJev: { apiKey: SECRET } }, env: { TYPESAFE_API_KEY: "shadowed-environment-secret" }, present: true, source: "Konfiguration" },
+  { name: "blank configuration uses custom environment", config: { captureChunkingJev: { apiKey: "  ", apiKeyEnv: "CUSTOM_JEV" } }, env: { CUSTOM_JEV: SECRET }, present: true, source: "Umgebung" },
+  { name: "missing", config: {}, env: {}, present: false },
+  { name: "read-only environment", config: {}, env: { TYPESAFE_API_KEY: SECRET }, present: true, source: "Umgebung", mode: "off" },
+]) {
+  test(`Jev status is visible and secret-free: ${name}`, async () => {
+    const state = setup(config, env, mode);
+    const res = response();
+    await state.handler({ method: "GET", url: PATH }, res);
+    assert.equal(res.statusCode, 200);
+    const html = String(res.body);
+    const status = html.match(/<p\b[^>]*id="jev-key-status"[^>]*role="status"[^>]*>([\s\S]*?)<\/p>/)?.[1];
+    assert.ok(status, "effective credential status is exposed beside the key editor");
+    assert.match(status, present ? /Schlüssel vorhanden/ : /Kein Schlüssel hinterlegt/);
+    if (source) assert.ok(status.includes(`Quelle: ${source}`));
+    else assert.doesNotMatch(status, /Quelle:/);
+    assert.doesNotMatch(html, /jev-test-secret|shadowed-environment-secret/);
+    if (mode === "all") assert.match(html, /type="password"[^>]*value=""/);
+  });
+}
+
 test("Jev key mutator saves and replaces only the key, leaving the running object unchanged", async () => {
   assert.equal(typeof writes.createJevApiKeyMutator, "function");
   const running = { autoCapture: true, captureChunkingJev: { model: "custom-model", apiKeyEnv: "CUSTOM_JEV", minConfidence: 0.9 } };
@@ -194,7 +219,6 @@ test("Jev editor renders an empty password and passes the key through the native
   await state.handler({ method: "GET", url: PATH, headers: { host: "127.0.0.1:18789" } }, res);
   const html = String(res.body);
   assert.match(html, /type="password"[^>]*name="api_key"/);
-  assert.match(html, /Jev key: configured[^<]*\(config\)/);
   assert.doesNotMatch(html, /jev-test-secret/);
   const script = dashboardScript(html);
   assert.equal(script.messages.length, 1, "the page probes without sending credentials");

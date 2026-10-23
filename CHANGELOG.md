@@ -6,6 +6,13 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.18.29] — 2026-10-23
+
+### Changed
+
+- Make the Jev credential status prominent beside the key editor: show whether a key is present and whether the effective source is the environment or plugin configuration. The key value stays hidden, including in read-only views.
+- Explain that the credential is shared by all agents in this PLUR1BUS installation and that an explicit plugin configuration key takes precedence over the environment fallback. Credential resolution and saved configuration remain unchanged.
+
 ## [7.18.28] — 2026-10-23
 
 ### Fixed
