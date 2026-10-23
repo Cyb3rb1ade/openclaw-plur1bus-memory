@@ -6,6 +6,14 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.18.28] — 2026-10-23
+
+### Fixed
+
+- Selectively backport upstream `432313664242fc6c29c0b9bf3bcea8b9e5ad93c0` to the OpenClaw plugin: keep the reranker verdict through namespace merging and tier-budget selection, bound reranker inputs, retry incomplete KNOWLEDGE embeddings, and exclude graph-only hits whose relevance check failed. The standalone harness/engine is not imported.
+- Preserve provider order on equal or inconsistent scores instead of restoring vector order on ties. Omitted reranker caps retain the configured recall candidate pool; explicit caps remain effective. Existing ACL checks and intentional empty Jev shortlists remain intact.
+- The operator recall comparison now uses the same namespace merge and global budget as production. Model assignments, permissions, provider cache boundaries and output limits are unchanged.
+
 ## [7.18.27] — 2026-10-23
 
 ### Changed

@@ -864,7 +864,9 @@ function applyMergedRecallBudget(merged, budget) {
   const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
   const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
   const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
-  const memories = applyRecallBudget(merged.memories || [], { budget: remainingBudget }).selected;
+  const candidates = merged.memories || [];
+  const preserveOrder = candidates.some((item) => Number.isFinite(item?.rerankScore));
+  const memories = applyRecallBudget(candidates, { budget: remainingBudget, preserveOrder }).selected;
   return { ...merged, canonical, memories };
 }
 
@@ -879,7 +881,7 @@ function applyMergedRecallBudget(merged, budget) {
  * @param {{strictReadErrors?: boolean}} [options]
  * @returns {Promise<{queryVector: Array|undefined, canonical: Array, memories: Array, trace: Object|undefined}>}
  */
-async function runMergedNamespaceRecall(
+export async function runMergedNamespaceRecall(
   readDbs,
   baseParams,
   trace,
@@ -6275,7 +6277,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       { credentialResolver, localModelGeneration },
     );
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
-    const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
+    // Provider normalization supplies its own default; only explicit caps should
+    // override the candidate pool selected for recall.
+    const rerankCandidates = rawPluginConfig.reranker?.candidates == null
+      ? candidateTopK
+      : rerankerCfg.candidates;
 
     if (reranker) {
       const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
