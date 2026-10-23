@@ -6,6 +6,15 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.18.27] — 2026-10-23
+
+### Changed
+
+- PLUR1BUS model selections share provider groups and natural sorting across chat, subagents, background defaults and task overrides. Options show safe configured catalog names, concrete IDs and aliases; existing agent allowlists, permissions and saved model IDs remain authoritative.
+- Model-catalog reconciliation distinguishes complete verified inventories from partial/error results, preserves referenced models and never rewrites routing or permissions. ID-only API responses preserve human-readable names.
+- Read-only recall comparison evaluates 40/50/100 ANN candidates and an optional conservative Jev relevance prefilter with the same pipeline and scoped snapshot. Uncertain, missing or invalid Jev decisions retain candidates. Provider ACL is checked immediately before reranking; adapters can explicitly distinguish an empty relevance shortlist from a malformed provider response.
+- Live comparison: 30 questions across three agents, 23/27 known source anchors found by every variant. Jev adds latency and token use without reducing Cohere billing units; production retains 40 candidates, at most 15 prompt memories and the existing direct reranker. See `docs/audits/2026-10-23-recall-comparison.md`.
+
 ## [7.18.26] — 2026-10-23
 
 ### Changed
