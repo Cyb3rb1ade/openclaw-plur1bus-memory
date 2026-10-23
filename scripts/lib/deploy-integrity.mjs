@@ -295,6 +295,7 @@ export const DEPLOY_FILES = [
   "lib/jobs/memory-compaction.js",
   "lib/jobs/memory-dynamics-maintenance.js",
   "lib/jobs/skill-miner/evidence-aggregator.js",
+  "lib/jobs/skill-miner/candidate-matching.js",
   "lib/jobs/skill-miner/llm-extractor.js",
   "lib/jobs/skill-miner/skill-md-renderer.js",
   "lib/metrics-debounce.js",

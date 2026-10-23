@@ -463,6 +463,34 @@ Mit `true` läuft diese Arbeit in einem Snapshot, der bei der Plugin-Registrieru
 
 `runtime.traceRegistrations` (Standard `false`) ist eine Diagnose für openclaw/openclaw#163029. OpenClaw 2026.9.7 lädt das Plugin nach einem Gateway-Start in Wellen mitten im Turn neu, jede Neuladung blockiert den Gateway 40–70 s. Mit `true` schreibt jede Registrierung eine Warnung `register trace #N (uptime …, … after previous)` mit dem Aufruf-Stack ins Gateway-Log. Die Nummer zählt je Prozess, auch über Neuladungen hinweg. Der Stack enthält Dateipfade des Hosts; vor dem Teilen kürzen. Wirkt nach einem Gateway-Neustart; nach dem Einfangen wieder ausschalten.
 
+## Skill Miner: Lernen und Erweiterungen (7.18.31)
+
+Der Miner vergleicht neue Vorschläge mit den Skills desselben Agenten und
+Besitzbereichs. Ein vorhandener Arbeitsablauf kann eine versionierte Erweiterung
+erhalten. Die Erweiterung wird an den aktuellen Inhalt angehängt; manuelle
+Ergänzungen bleiben erhalten. Der OpenClaw Workshop prüft den Stand der Zieldatei
+und die freigegebene Entwurfsversion. Bei gleichzeitigen Änderungen wird die
+Übernahme abgebrochen. Der Workshop kann dabei Frontmatter und Zeilenumbrüche
+normalisieren.
+
+Erweiterungen folgen denselben Freigaberegeln wie neue Skills. Erst nach einer
+erfolgreichen Aktivierung wird die frühere Version als ersetzt markiert; sie
+bleibt im lokalen Verlauf. Eine abgelehnte Erweiterung sperrt nicht den gesamten
+aktiven Skill. Ausdrücklich abgelehnte neue Skills bleiben gesperrt.
+
+Technische Modellfehler und ungültige Antworten zählen als `extractionFailures`
+und werden nicht als Ablehnung gespeichert. Echte negative Entscheidungen gelten
+höchstens sieben Tage. Geänderte Evidenz, Modelle, Regeln oder Skills führen zu
+einer neuen Prüfung. Pro Lauf und Besitzbereich sind höchstens
+`min(8, max(1, maxPerRun))` Extraktionsaufrufe erlaubt. Das bestehende
+Vorschlagslimit `maxPerRun` bleibt zusätzlich wirksam. Der Bericht enthält
+`llmCalls`, `extractionBudgetExhausted` und `skippedKnownCluster`.
+
+Fokussierte Themengruppen ergänzen die bisherige Bündelung, damit große gemischte
+Gruppen kleinere Fachthemen nicht verdecken. Die Vertrauens- und Zugriffsfilter
+bleiben bestehen. Historische Rechtsgespräche können einen Recherche- und
+Prüfablauf begründen; sie ersetzen keine Prüfung der aktuellen Rechtslage.
+
 ## Skill Miner: Auto-Apply und Freigabe im Dashboard (7.12.48)
 
 Der Skill Miner läuft wöchentlich je Agent, bündelt belastbare Erinnerungen

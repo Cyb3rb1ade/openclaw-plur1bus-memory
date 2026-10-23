@@ -6,6 +6,19 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.18.31] — 2026-10-23
+
+### Fixed
+
+- Skill Miner distinguishes real low-confidence decisions from technical/invalid responses. Only genuine decisions are reused for seven days; versioned fingerprints include evidence content/trust, prompt, effective model/policy and the authorized skill catalogue. Existing legacy cache entries remain stored but no longer block reconsideration. Semantic extraction validation also rejects invalid responses from the transport result cache, including older persisted entries, while valid results remain cacheable.
+- Compare same-owner workflows as well as names. Shared evidence alone does not merge different workflows; explicit rejections remain binding. Repeated instructions are duplicates even with new supporting evidence.
+
+### Changed
+
+- Focused, bounded topic cohorts supplement mixed evidence clusters. Grouping ignores conversational filler and attachment error metadata; admission and ACL gates stay unchanged. Extraction uses stable system instructions, at most 12 evidence excerpts and eight same-owner catalogue entries, with bounded model attempts.
+- Extend existing mined skills through public OpenClaw Workshop update proposals. Drafts append to the currently installed content, including manual additions; bound base-content hashes and reviewed proposal revisions protect concurrent edits. The Workshop may normalize frontmatter/newlines during application. Previous versions remain in the ledger, becoming superseded only after successful activation. Rejecting an extension retains its active base.
+- Existing approval/auto-apply rules, model overrides, schedules and installed skills are preserved. No OpenClaw upgrade or Harness import.
+
 ## [7.18.30] — 2026-10-23
 
 ### Fixed
