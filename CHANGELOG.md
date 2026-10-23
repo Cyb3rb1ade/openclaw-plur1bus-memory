@@ -6,6 +6,13 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.18.30] — 2026-10-23
+
+### Fixed
+
+- Feature cron clients retry only the exact Gateway `UNAVAILABLE` rejection for the retired PLUR1BUS instance. Three fresh RPC attempts after 5/10/15 seconds resolve the current registration, covering brief hot-reload gaps without calling the old instance again.
+- Intermediate rejections produce no cron stdout/stderr; successful `NO_REPLY` suppression is preserved. Exhaustion remains a visible error. Business errors, permission failures, timeouts, malformed replies and mutation-policy denials are not retried.
+
 ## [7.18.29] — 2026-10-23
 
 ### Changed
