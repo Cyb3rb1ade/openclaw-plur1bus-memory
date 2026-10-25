@@ -283,3 +283,14 @@ test('session_start during initial policy await rejects the old admission withou
   assert.equal(JSON.parse(readFileSync(replacementEnv.PLUR1BUS_SPEECH_CONTEXT_FILE)).sessionId, 'replacement-session');
   await f.runtime.endRun({}, replacement);
 });
+
+test('runtime admits only known reaction dimensions and mentions only them in current guidance', async t => {
+  const f = await fixture(t, { assessor: async () => ({ ...accepted(), reactionDimensions: ['joy'] }) });
+  const result = await f.runtime.beforePrompt(f.event, f.ctx);
+  const saved = JSON.parse(readFileSync(join(f.root, '.emotional-state.json'), 'utf8')).state;
+  assert.equal(saved.timedMood.expiresAtByDimension.trust, 0);
+  assert.ok(saved.timedMood.expiresAtByDimension.joy > 0);
+  const reactionLine = result.prependContext.split('\n').find(line => line.includes('Independent current reaction'));
+  assert.match(reactionLine, /"joy":0.8/);
+  assert.doesNotMatch(reactionLine, /trust|anticipation|surprise/);
+});

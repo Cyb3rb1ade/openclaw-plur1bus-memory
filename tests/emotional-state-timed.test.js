@@ -319,3 +319,92 @@ test("explicit disabled configuration never resumes a persisted active target", 
   near(disabled.snapshot().anger, 0.02);
   assert.equal(evidence(disabled, "disabled"), false);
 });
+
+test("selective evidence preserves unrelated targets through their original expiry and restart", t => {
+  const at = clock(t);
+  const state = timed();
+  const control = timed();
+  evidence(state, "first", START, { anger: .8 });
+  evidence(control, "first", START, { anger: .8 });
+  at(MINUTE);
+  assert.equal(state.applyTimedEvidence(reaction({ joy: .5, anger: 1 }), { eventId: "joy", observedAt: Date.now(), dimensions: ["joy"] }), true);
+  const saved = state.serializeState();
+  assert.equal(saved.timedMood.expiresAtByDimension.anger, START + 2 * MINUTE);
+  assert.equal(saved.timedMood.expiresAtByDimension.joy, START + 3 * MINUTE);
+  const restarted = timed();
+  assert.equal(restarted.hydrateOnce(persisted(t, saved)), true);
+  for (const seconds of [90, 120, 150, 180, 240, 900]) {
+    at(seconds * 1000);
+    near(state.snapshot().anger, control.snapshot().anger);
+    near(restarted.snapshot().anger, control.snapshot().anger);
+    near(restarted.snapshot().joy, state.snapshot().joy);
+  }
+});
+
+test("invalid masks reject atomically without consuming the message id", t => {
+  clock(t);
+  const state = timed();
+  const before = state.serializeState();
+  for (const dimensions of [[], Array(1), ["joy", "joy"], ["unknown"], null, "joy", ["joy", 1]]) {
+    assert.equal(state.applyTimedEvidence(reaction({ joy: 1 }), { eventId: "same", observedAt: START, dimensions }), false);
+    assert.deepEqual(state.serializeState(), before);
+  }
+  assert.equal(state.applyTimedEvidence(reaction({ joy: 1 }), { eventId: "same", observedAt: START, dimensions: ["joy"] }), true);
+  assert.equal(state.applyTimedEvidence(reaction({ anger: 1 }), { eventId: "same", observedAt: START, dimensions: ["anger"] }), false);
+});
+
+test("unknown dimensions are rate independent even after active expiry", t => {
+  const at = clock(t);
+  const frequent = timed();
+  const sparse = timed();
+  evidence(frequent, "first");
+  evidence(sparse, "first");
+  for (let second = 1; second <= 300; second++) {
+    at(second * 1000);
+    frequent.applyTimedEvidence(reaction({ joy: .5 }), { eventId: `f${second}`, observedAt: Date.now(), dimensions: ["joy"] });
+    if (second % 60 === 0) sparse.applyTimedEvidence(reaction({ joy: .5 }), { eventId: `s${second}`, observedAt: Date.now(), dimensions: ["joy"] });
+    near(frequent.snapshot().anger, sparse.snapshot().anger);
+  }
+  near(frequent.snapshot().anger, .02 + .8 * (1 - 2 ** -.4) * 2 ** (-3 / 15));
+});
+
+test("old v3 single expiry hydrates as all eight dimensions", t => {
+  const at = clock(t);
+  const source = timed();
+  evidence(source, "old-v3");
+  const saved = source.serializeState();
+  delete saved.timedMood.expiresAtByDimension;
+  at(MINUTE);
+  const restored = timed();
+  assert.equal(restored.hydrateOnce(persisted(t, saved)), true);
+  near(restored.snapshot().anger, source.snapshot().anger);
+  assert.equal(restored.serializeState().timedMood.expiresAtByDimension.anger, START + 2 * MINUTE);
+});
+
+test("malformed per-dimension expiry additions never partially install metadata", t => {
+  clock(t);
+  for (const patch of [{ anger: "1" }, { anger: START + 9999999 }, { anger: -1 }, { anger: START - 1 }, { bad: START }]) {
+    const source = timed();
+    evidence(source, "source");
+    const saved = source.serializeState();
+    saved.current.anger = .6;
+    saved.timedMood.expiresAtByDimension = { ...Object.fromEntries(dimensions.map(d => [d, START + 2 * MINUTE])), ...patch };
+    const restored = timed();
+    assert.equal(restored.hydrateOnce(persisted(t, saved)), true);
+    near(restored.snapshot().anger, .6);
+    assert.equal(restored.serializeState().timedMood.target, null);
+    assert.equal(evidence(restored, "source"), true);
+  }
+});
+
+test("enabling timed mode after hydration cannot resurrect an unconfigured persisted target", t => {
+  const at = clock(t);
+  const source = timed();
+  evidence(source, "original");
+  const restored = new EmotionalState();
+  assert.equal(restored.hydrateOnce(persisted(t, source.serializeState())), true);
+  restored.configureTimedMood();
+  at(MINUTE);
+  near(restored.snapshot().anger, .02);
+  assert.equal(restored.serializeState().timedMood.target, null);
+});

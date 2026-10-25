@@ -76,7 +76,6 @@ test("section cap merges rather than losing the tail and keeps Unicode codepoint
 for (const [name, overrides] of [
   ["uncertain actor", { s0_source: choice("uncertain") }],
   ["low actor confidence", { s0_source: choice("own", 0.69) }],
-  ["low reaction confidence", { s0_reaction_joy: score(1, 0.69) }],
   ["numeric coercion", { s0_reaction_joy: score("4") }],
   ["infinite score", { s0_reaction_joy: score(Infinity) }],
   ["out of range score", { s0_reaction_joy: score(4.01) }],
@@ -248,7 +247,7 @@ for (const correspondence of [choice("uncertain"), choice("different"), choice("
 test("low confidence or unknown delivery fails open to exact neutral speech", async () => {
   for (const answer of [choice("[arbitrary tag]"), choice("warm", 0.5)]) {
     const result = await createPlanner({ apiKey: "test", fetchImpl: transport({ v0_s0_delivery: answer }) })({ versions: [{ id: "de", text: "Exact 😀 words." }] });
-    assert.equal(result.ok, false);
+    assert.equal(result.ok, answer.choice === "warm");
     assert.equal(render(result.versions[0]), "Exact 😀 words.");
   }
 });
@@ -264,4 +263,90 @@ test("renderer validates every Unicode span and closed classification before ins
 
 test("cheerful metadata uses a fixed happy provider tag and resets the next neutral segment", () => {
   assert.equal(render({ text: "Gut. Ernst.", segments: [segment(0, 5, "celebration", "cheerful"), segment(5, 11)] }), "[happy]Gut. [neutral]Ernst.");
+});
+
+test("known joy survives uncertain trust and diagnostic observed affect", async () => {
+  const result = await createAssessor({ apiKey: "test", fetchImpl: transport({ s0_source: choice("own", .97), s0_reaction_joy: score(1.98, .97), s0_reaction_trust: score(2, .46), s0_observed_joy: score(2, .57) }) })({ text: "Thank you for your excellent help." });
+  assert.equal(result.ok, true);
+  assert.equal(result.reaction.joy, .495);
+  assert.equal(result.reactionDimensions.includes("trust"), false);
+  assert.equal(result.reactionDimensions.includes("joy"), true);
+  assert.equal(result.confidence, .97);
+  assert.equal(result.sections[0].observedConfidence.joy, .57);
+  assert.equal(result.sections[0].reactionConfidence.trust, .46);
+});
+
+test("a reaction dimension must be known in every contributing section", async () => {
+  const result = await createAssessor({ apiKey: "test", fetchImpl: transport({ s0_reaction_joy: score(4), s1_reaction_joy: score(0, .69), s1_reaction_sadness: score(2, .9) }) })({ text: "Gut. Schade." });
+  assert.equal(result.ok, true);
+  assert.equal(result.reactionDimensions.includes("joy"), false);
+  assert.equal(result.reaction.joy, 0);
+  assert.equal(result.reaction.sadness, .5 * 7 / 12);
+});
+
+test("no known reaction dimensions cannot supply evidence", async () => {
+  const overrides = Object.fromEntries(["joy", "sadness", "anger", "fear", "disgust", "surprise", "trust", "anticipation"].map(d => [`s0_reaction_${d}`, score(1, .69)]));
+  const result = await createAssessor({ apiKey: "test", fetchImpl: transport(overrides) })({ text: "Unknown." });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.reactionDimensions, []);
+});
+
+for (const bad of ["0.8", NaN, Infinity, -1, 1.01, undefined]) {
+  test(`malformed score confidence ${String(bad)} rejects the complete assessment`, async () => {
+    const result = await createAssessor({ apiKey: "test", fetchImpl: transport({ s0_observed_trust: { type: "score", score: 0, confidence: bad } }) })({ text: "Hi." });
+    assert.equal(result.ok, false);
+  });
+}
+
+test("uncertain optional action preserves confident playful delivery", async () => {
+  const result = await createPlanner({ apiKey: "test", fetchImpl: transport({ v0_s0_intent: choice("humor", .95), v0_s0_delivery: choice("playful", .9), v0_s0_action: choice("chuckle", .3) }) })({ versions: [{ id: "de", text: "Ein Witz." }] });
+  assert.equal(result.ok, true);
+  assert.equal(render(result.versions[0]), "[playful]Ein Witz.");
+});
+
+test("uncertain middle section resets but preserves expressive neighbors", async () => {
+  const result = await createPlanner({ apiKey: "test", fetchImpl: transport({ v0_s0_intent: choice("praise"), v0_s0_delivery: choice("warm"), v0_s1_intent: choice("humor", .3), v0_s1_delivery: choice("playful"), v0_s2_intent: choice("empathy"), v0_s2_delivery: choice("soft") }) })({ versions: [{ id: "de", text: "Danke. Vielleicht. Schade." }] });
+  assert.equal(result.ok, true);
+  assert.equal(render(result.versions[0]), "[warm]Danke. [neutral]Vielleicht. [soft]Schade.");
+});
+
+test("renderer accepts low-confidence neutral spans but never low-confidence expression", () => {
+  const text = "Gut. Hm. Ja.";
+  const spans = [segment(0, 5, "praise", "warm"), segment(5, 9, "neutral", "neutral", "none", .1), segment(9, 12, "praise", "warm")];
+  assert.equal(render({ text, segments: spans }), "[warm]Gut. [neutral]Hm. [warm]Ja.");
+  for (const change of [{ delivery: "playful" }, { action: "chuckle", intent: "humor" }]) {
+    assert.equal(render({ text, segments: [spans[0], { ...spans[1], ...change }, spans[2]] }), text);
+  }
+});
+
+test("bilingual uncertainty neutralizes only its corresponding pair", async () => {
+  const overrides = { pair_1: choice("equivalent", .3) };
+  for (const v of [0, 1]) for (const s of [0, 1]) Object.assign(overrides, { [`v${v}_s${s}_intent`]: choice("praise"), [`v${v}_s${s}_delivery`]: choice("warm") });
+  const result = await createPlanner({ apiKey: "test", fetchImpl: transport(overrides) })({ versions: [{ id: "de", text: "Danke. Gut." }, { id: "pl", text: "Dzięki. Dobrze." }] });
+  assert.deepEqual(result.versions.map(render), ["[warm]Danke. [neutral]Gut.", "[warm]Dzięki. [neutral]Dobrze."]);
+});
+
+test("explicit boundary supports firm delivery against cheerful background mood", async () => {
+  const result = await createPlanner({ apiKey: "test", fetchImpl: transport({ v0_s0_intent: choice("boundary"), v0_s0_delivery: choice("firm") }) })({ versions: [{ id: "de", text: "Bitte unterlasse solche Beleidigungen." }], mood: { joy: 1 } });
+  assert.equal(result.ok, true);
+  assert.equal(render(result.versions[0]), "[firm]Bitte unterlasse solche Beleidigungen.");
+});
+
+test("sympathetic sadness survives unknown surprise without treating it as zero evidence", async () => {
+  const result = await createAssessor({ apiKey: "test", fetchImpl: transport({ s0_reaction_sadness: score(1.88, .90), s0_reaction_surprise: score(1, .05) }) })({ text: "My father died yesterday." });
+  assert.equal(result.ok, true);
+  assert.equal(result.reaction.sadness, .47);
+  assert.equal(result.confidence, .90);
+  assert.equal(result.reactionDimensions.includes("surprise"), false);
+  assert.equal(result.sections[0].reaction.surprise, .25);
+  assert.equal(result.sections[0].reactionConfidence.surprise, .05);
+});
+
+test("dimension confidence threshold stays at .70 inclusive and is separate from strength", async () => {
+  const result = await createAssessor({ apiKey: "test", fetchImpl: transport({ s0_source: choice("own", .70), s0_reaction_joy: score(.1, .70), s0_reaction_trust: score(4, .6999) }) })({ text: "Thanks." });
+  assert.equal(result.ok, true);
+  assert.equal(result.reactionDimensions.includes("joy"), true);
+  assert.equal(result.reactionDimensions.includes("trust"), false);
+  assert.equal(result.reaction.joy, .025);
+  assert.equal(result.confidence, .70);
 });
