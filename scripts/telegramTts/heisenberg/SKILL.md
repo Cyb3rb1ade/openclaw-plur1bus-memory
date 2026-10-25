@@ -150,9 +150,9 @@ Wenn User `/sabbel <command>` sendet:
 
 | Command | Bash |
 |---------|------|
-| `/sabbel on` | `tts-manager.sh enable main` → "✅ TTS aktiviert!" |
-| `/sabbel off` | `tts-manager.sh disable main` → "✅ TTS deaktiviert." |
-| `/sabbel <stimme>` | `tts-manager.sh set-voice main <stimme>` → "✅ Stimme: {name}" |
+| `/sabbel on` | `tts-manager.sh enable heisenberg` → "✅ TTS aktiviert!" |
+| `/sabbel off` | `tts-manager.sh disable heisenberg` → "✅ TTS deaktiviert." |
+| `/sabbel <stimme>` | `tts-manager.sh set-voice heisenberg <stimme>` → "✅ Stimme: {name}" |
 | `/sabbel list` | `tts-manager.sh list-voices` → Liste ausgeben |
 | `/sabbel status` | `tts-manager.sh status heisenberg` |
 

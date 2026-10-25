@@ -37,3 +37,13 @@ test('real planner uses one combined request and selected key only; timeout degr
 test('context accepts full existing authored-text bound rather than imposing a second short limit',async()=>{
  const {readSpeechContext}=await load();const workspace=mkdtempSync(join(tmpdir(),'speech-context-bound-'));const privateDir=join(workspace,'.plur1bus');mkdirSync(privateDir,{mode:0o700});const directory=join(privateDir,'speech-context');mkdirSync(directory,{mode:0o700});const file=join(directory,'b'.repeat(64)+'.json');const now=Date.now();const value={version:1,agentId:'main',runId:'r',sessionId:'s',createdAt:now-10,expiresAt:now+1000,mood:{},persona:'',context:[{role:'user',content:'🐈'.repeat(5000)}]};writeFileSync(file,JSON.stringify(value),{mode:0o600});assert.equal(readSpeechContext({workspace,agentId:'main',runId:'r',file,now})?.context[0].content,value.context[0].content);
 });
+
+test('shadow exposes distinct bounded closed section decisions while provider words stay neutral',async()=>{
+ const {planTelegramSpeech}=await load();
+ for (const [intent,delivery] of [['praise','warm'],['boundary','firm'],['neutral','neutral']]) {
+  const result=await planTelegramSpeech({agentId:'main',versions:[{id:'default',text:'Confidential final words.'}]},{config:config('shadow'),planner:async({versions})=>({ok:true,versions:versions.map(v=>({...v,secret:'never expose',segments:[{start:0,end:[...v.text].length,intent,delivery,action:'none',confidence:1,text:v.text,apiKey:'never expose'}]}))})});
+  assert.equal(result.versions[0].speech,'Confidential final words.');assert.deepEqual(result.versions[0].proposed,[{section:0,intent,delivery,action:'none'}]);
+  const metadata=JSON.stringify(result.versions[0].proposed);assert.ok(!metadata.includes('Confidential'));assert.ok(!metadata.includes('never expose'));
+ }
+ const invalid=await planTelegramSpeech({agentId:'main',versions:[{id:'default',text:'Words'}]},{config:config('shadow'),planner:async({versions})=>({ok:true,versions:versions.map(v=>({...v,segments:[{start:0,end:5,intent:'SECRET',delivery:'warm',action:'none',confidence:1}]}))})});assert.deepEqual(invalid.versions[0].proposed,[]);
+});

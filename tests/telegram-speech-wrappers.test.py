@@ -1,5 +1,5 @@
 """Real copied wrappers/manager/bridge/helper, only provider and ffmpeg doubled."""
-import json,os,pathlib,shutil,subprocess,tempfile,unittest
+import json,os,pathlib,re,shutil,subprocess,tempfile,unittest
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 AGENTS={'main':'workspace','bernhardine':'workspace-bernhardine','heisenberg':'workspace-heisenberg'}
 def assert_fixture_safe(base):
@@ -14,6 +14,14 @@ class FixtureGuardTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    base=pathlib.Path(d);(base/'manager.sh').write_text('STATE_DIR="/root/.openclaw/settings/tts-toggle"')
    with self.assertRaises(AssertionError):assert_fixture_safe(base)
+
+class SkillInstructionsTests(unittest.TestCase):
+ def test_operational_skill_commands_target_their_own_agent(self):
+  for agent in AGENTS:
+   text=(ROOT/'scripts/telegramTts'/agent/'SKILL.md').read_text()
+   commands=re.findall(r'tts-manager\.sh (enable|disable|set-voice|status) ([a-z]+)',text)
+   self.assertEqual({command for command,_ in commands},{'enable','disable','set-voice','status'})
+   for command,target in commands:self.assertEqual(target,agent,agent+' '+command)
 
 class WrapperTests(unittest.TestCase):
  def setUp(self):
@@ -31,6 +39,21 @@ def send(req,**kwargs):
  if os.getenv('FAIL_SYNTH') or body['text']=='FAIL':raise TimeoutError()
  return Response()
 urllib.request.urlopen=send
+# Only the external helper invocation is doubled on selected failure paths.
+import subprocess,pathlib
+original_run=subprocess.run
+def run(args,*pos,**kw):
+ if len(args)>2 and args[2]=='say-prepared':
+  out=args[args.index('--out')+1];language='de' if out.endswith('-de.ogg') else 'pl'
+  if os.getenv('HELPER_ATTEMPT_LOG'):
+   with open(os.environ['HELPER_ATTEMPT_LOG'],'a') as f:f.write(json.dumps({'language':language,'output':out})+'\\n')
+  failure=os.getenv('HELPER_FAILURE','')
+  if failure.startswith(language+'-'):
+   pathlib.Path(out).write_bytes(b'partial')
+   if failure.endswith('-timeout'):raise subprocess.TimeoutExpired(args,100,output='DO_NOT_LOG_SECRET')
+   raise OSError('DO_NOT_LOG_SECRET')
+ return original_run(args,*pos,**kw)
+subprocess.run=run
 ''')
   for agent,ws in AGENTS.items():
    dest=self.base/ws/'skills/telegram-tts-toggle';shutil.copytree(ROOT/'scripts/telegramTts'/agent,dest)
@@ -61,7 +84,7 @@ urllib.request.urlopen=send
  def expressive_config(self,mode):
   p=self.base/'config.json';c=json.loads(p.read_text());c['plugins']['entries']['memory-lancedb-namespaced']['config']={'emotion':{'jev':{'enabled':True,'agents':{a:True for a in AGENTS},'mode':mode}},'captureChunkingJev':{'apiKey':'synthetic-jev-key'}};p.write_text(json.dumps(c))
   preload=self.base/'fetch.mjs';preload.write_text("""import fs from 'node:fs';
-  globalThis.fetch=async(url,request)=>{const body=JSON.parse(request.body);fs.appendFileSync(process.env.JEV_LOG,JSON.stringify({questions:Object.keys(body.questions),context:JSON.parse(body.state).context})+'\\n');const answers=Object.fromEntries(Object.keys(body.questions).map(k=>[k,{type:'choice',choice:k.startsWith('pair_')?'equivalent':k.endsWith('_action')?'none':k.endsWith('_intent')?'praise':'warm',confidence:1}]));return {ok:true,json:async()=>({answers})};};
+  globalThis.fetch=async(url,request)=>{const body=JSON.parse(request.body);fs.appendFileSync(process.env.JEV_LOG,JSON.stringify({questions:Object.keys(body.questions),context:JSON.parse(body.state).context})+'\\n');const answers=Object.fromEntries(Object.keys(body.questions).map(k=>[k,{type:'choice',choice:k.startsWith('pair_')?'equivalent':k.endsWith('_action')?'none':k.endsWith('_intent')?(process.env.JEV_DELIVERY==='firm'?'boundary':process.env.JEV_DELIVERY==='neutral'?'neutral':'praise'):(process.env.JEV_DELIVERY||'warm'),confidence:1}]));return {ok:true,json:async()=>({answers})};};
   """)
   self.env['NODE_OPTIONS']='--import '+str(preload);self.env['JEV_LOG']=str(self.base/'jev-calls')
  def test_bilingual_active_batches_once_and_shadow_sends_neutral(self):
@@ -70,6 +93,32 @@ urllib.request.urlopen=send
    r=self.run_script('bernhardine','tts-bilingual.sh','Danke 🐈','Dziękuję 🐈');self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(len(r.stdout.splitlines()),2)
   calls=self.calls();self.assertEqual([c['body']['text'] for c in calls],['[warm]Danke 🐈','[warm]Dziękuję 🐈','Danke 🐈','Dziękuję 🐈']);self.assertEqual(len(set(c['url'] for c in calls)),1)
   jev=[json.loads(l) for l in (self.base/'jev-calls').read_text().splitlines()];self.assertEqual(len(jev),2);self.assertTrue(all('v0_s0_intent' in j['questions'] and 'v1_s0_intent' in j['questions'] for j in jev))
+ def test_shadow_logs_distinct_closed_proposals_without_speaking_them(self):
+  self.expressive_config('shadow');summaries=[]
+  for delivery in ['warm','firm','neutral']:
+   self.env['JEV_DELIVERY']=delivery
+   r=self.run_script('bernhardine','tts-bilingual.sh','Confidential DE words','Confidential PL words');self.assertEqual(r.returncode,0,r.stderr)
+   line=next(line for line in r.stderr.splitlines() if line.startswith('speech_shadow_decision:'))
+   self.assertTrue(line.split(':',1)[1].startswith('{'),'missing structured shadow proposal summary')
+   summary=json.loads(line.split(':',1)[1]);summaries.append(summary)
+   self.assertEqual(summary['versions'][0]['proposed'][0]['delivery'],delivery)
+   for forbidden in ['Confidential','test-secret','synthetic-jev-key']:self.assertNotIn(forbidden,r.stderr)
+   self.assertTrue(all(line.startswith(('OK_DE:','OK_PL:')) for line in r.stdout.splitlines()))
+  self.assertNotEqual(summaries[0],summaries[1]);self.assertNotEqual(summaries[1],summaries[2])
+  self.assertEqual([c['body']['text'] for c in self.calls()],['Confidential DE words','Confidential PL words']*3)
+ def test_each_language_timeout_or_spawn_failure_preserves_the_other_success(self):
+  self.env['HELPER_ATTEMPT_LOG']=str(self.base/'helper-attempts')
+  for failure in ['de-timeout','pl-timeout','de-spawn','pl-spawn']:
+   with self.subTest(failure=failure):
+    self.env['HELPER_FAILURE']=failure
+    before=len((self.base/'helper-attempts').read_text().splitlines()) if (self.base/'helper-attempts').exists() else 0
+    r=self.run_script('bernhardine','tts-bilingual.sh','Hallo','Cześć');self.assertNotEqual(r.returncode,0)
+    failed_language=failure.split('-')[0];other='pl' if failed_language=='de' else 'de'
+    self.assertIn('OK_'+other.upper()+':',r.stdout);self.assertNotIn('OK_'+failed_language.upper()+':',r.stdout)
+    success=pathlib.Path(r.stdout.strip().split(':',1)[1]);self.assertTrue(success.is_file());self.assertGreater(success.stat().st_size,0)
+    self.assertIn('ERR_'+failed_language.upper()+':'+('timeout' if failure.endswith('timeout') else 'spawn_failed'),r.stderr);self.assertNotIn('DO_NOT_LOG_SECRET',r.stderr)
+    attempts=[json.loads(line) for line in (self.base/'helper-attempts').read_text().splitlines()[before:]];self.assertEqual([a['language'] for a in attempts],['de','pl'])
+    self.assertFalse(pathlib.Path(next(a['output'] for a in attempts if a['language']==failed_language)).exists())
  def test_bound_run_context_is_used_and_stale_or_forged_context_is_not_borrowed(self):
   import time
   self.expressive_config('active');private=self.base/'workspace'/'.plur1bus';private.mkdir(mode=0o700);directory=private/'speech-context';directory.mkdir(mode=0o700);file=directory/('a'*64+'.json');now=int(time.time()*1000)
