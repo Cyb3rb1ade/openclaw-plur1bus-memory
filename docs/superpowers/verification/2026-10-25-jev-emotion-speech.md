@@ -1,6 +1,6 @@
 # Jev emotion / speech verification record
 
-Status: implementation and independent reviews complete; full suite and final focused checks executed. Controlled deployment/shadow/activation still pending. Runtime bytes are1189feb6; subsequent commits change tests only.
+Status: reviewed core runtime and test checks complete; local.1 is installed in shadow. Actual native Gateway testing found a host typed-user-input forwarding gap; compatibility correction.2 is in progress. No active rollout yet. Core runtime bytes remain1189feb6.
 
 Source: `feat/jev-emotion-speech`, based on `6419a60e` / version7.18.31 in the existing isolated `/root/plur1bus-dev-afterthought-jev` worktree. No work started from the older7.13.0 main checkout.
 
@@ -61,3 +61,7 @@ An initial copied wrapper-manager fixture retained its live STATE_DIR and change
 User confirmed the provided voice/pronunciation/tone auditions for activation. After fixture correction, the final111-case aggregate and6 copied routing cases passed. All3 live toggle files still matched the original backup byte-for-byte.
 
 Review and decision records: [whole-branch review](2026-10-25-jev-emotion-speech/final-review.md), [fix evidence](2026-10-25-jev-emotion-speech/final-fix-report.md), [scoped approval](2026-10-25-jev-emotion-speech/final-fix-review.md), [test-only triage](2026-10-25-jev-emotion-speech/suite-triage-report.md), [execution decisions and costs](2026-10-25-jev-emotion-speech/decisions.md).
+
+Live shadow rollout.1: local tag v7.18.32-jev.1 points to4514a1ec. Fresh scoped snapshot `/root/.openclaw/.snapshots/jev-activation-20261025-180524`; Telegram artifact snapshot `/root/.openclaw/.snapshots/telegram-speech-20261025-180531`. Both pins and detached release match. Installed integrity passes;35 original TTS files match predeployment snapshots, with no overwritten operator drift. Unrelated config and toggle/model bytes are preserved. One controlled restart completed; a premature RPC probe failed during cold startup, so the same deployment lock stayed held for recovery. Gateway subsequently reported ready and authenticated healthRPC succeeded. Five ancillary database-admission failures already occur in pre-rollout journals; the three target agents are not failing admission. No database repair or secrets change was attempted.
+
+Three direct installed shadow probes accepted warm/praise proposals and rendered neutral words. Three actual native Gateway diagnostic runs completed but lacked run context. Native prompt producer/helper omitted currentUserMessage/currentUserMessageId; the typed helper inspected earlier serves AgentsAPI. Correct incoming code refuses assembled prompt fallback. Gateway effective config and workspace paths are correct. Task6 now repairs only the trusted admitted recorder forwarding seam, with copied native-call integration tests and multi-bundle backup/rollback. CLI runs may separately remain excluded; no provenance or policy is weakened to manufacture success. User hearing approval remains cleared. Active state and new-adapter audio gates remain pending.

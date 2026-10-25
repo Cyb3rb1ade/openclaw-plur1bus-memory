@@ -102,6 +102,12 @@ Own lib/jevEmotion.js, lib/speechRegie.js, lib/emotional-state.js, the narrow ru
 - [ ] RED/GREEN regressions: strong known joy + unknown trust; uncertain observed affect + independently known reaction; no known reaction; malformed numeric metadata; selective targets do not refresh other active dimensions; rate independence/restart/v2/old-v3 metadata; uncertain action preserving playful delivery; neutral middle span resets neighboring expression; paired-language span uncertainty; word preservation/typed tags/opposite mood/boundary.
 - [ ] Run focused existing assessor/state/runtime tests. Commit only owned files, ignored task-5-report.md with actual evidence. Separate task review required; then rerun real acceptance set plus independent holdout before activation. No claims based solely on model confidence.
 
+### Task 6: Live-discovered native admitted-user forwarding compatibility
+
+Native OpenClaw2026.10.4 omits typed currentUserMessage/currentUserMessageId in its prompt phase, despite the AgentsAPI helper exposing them. Actual native Gateway tests correctly fell back to final-text-only; no speech-context directory was created. Preserve strict input admission. Extend the existing host compatibility patch to forward the already admitted preparedUserTurnMessage through native prompt phase, assembly and the shared hook helper, projecting only authored text plus stable idempotencyKey. Never infer from effectivePrompt, previous messages, modelPromptProjection or generated identities. Preserve missing/skip/excludeFromContext/nonuser/provenance cases and existing runtime policies.
+
+Preflight all supported host bundles before any mutation, retain exact-shape/idempotent behavior, and back up/roll back all affected bundles. Tests must execute copied actual native producer→helper→real runtime→adapter, including missing/excluded/structured/adversarial/duplicate cases. Preserve the existing trusted exec projection and per-run bridge. No new credentials, dependencies or stores. Source artifacts and targeted regressions receive an independent task review. Use immutable local prerelease7.18.32-jev.2, leaving tag.1 intact; controller updates both existing pins and performs the required additional controlled restart under the retained deploy lock. Recheck contextual shadow, real audio and preservation before activation.
+
 ## Controller final verification and deployment
 
 - Full npm test, lint, independent whole-branch review; fix confirmed findings.
