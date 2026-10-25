@@ -1815,6 +1815,9 @@ export function createEngine(host, config, testOptions = {}) {
     if (!fingerprint || typeof fingerprint !== "object") {
       throw new Error("reembedding target fingerprint is required");
     }
+    // Test-only, like testOptions.internals.embeddings: a stub target provider, so a migration runs without a model load.
+    const injectedTargetProvider = testOptions.internals?.reembeddingTargetProvider;
+    if (typeof injectedTargetProvider === "function") return injectedTargetProvider({ fingerprint, secretRef });
     if (fingerprint.provider === "local-transformers") {
       // The pinned model, revision, width, canonical prompts and (for a model that pins several) the dtype variant.
       const localOptions = localEmbeddingOptionsFromFingerprint(fingerprint);
@@ -1976,7 +1979,9 @@ export function createEngine(host, config, testOptions = {}) {
     readPolicySnapshot: async () => workspacePolicyStore.list(),
     runValidationProbes: async ({ record, backend, provider }) => {
       const table = record.source.tables.find((candidate) => candidate.rowCount > 0);
-      if (!table) throw new Error("reembedding semantic validation requires at least one source memory");
+      // A source without memories (an agent's table that exists but is empty) has nothing to recall: the generation
+      // check before this probe is the whole validation. Rows written since the plan are source drift, refused earlier.
+      if (!table) return { semanticRecall: true, validationMemoryId: null, validationTable: null };
       const [sourceRow] = await backend.readSourceBatch(table.tableId, { offset: 0, limit: 1 });
       if (!sourceRow || typeof sourceRow.text !== "string" || !sourceRow.text.trim()) {
         throw new Error("reembedding semantic validation source memory is invalid");
@@ -3718,7 +3723,7 @@ export function createEngine(host, config, testOptions = {}) {
     expectedSchema: STORE_SCHEMA_VERSION,
     openedAgents,
     host,
-    contract: "1.16.0",
+    contract: "1.17.0",
   });
   internals.statusReporter = statusReporter;
 
@@ -3746,6 +3751,8 @@ export function createEngine(host, config, testOptions = {}) {
       plan: (...args) => internals.reembeddingCoordinator.plan(...args),
       apply: (...args) => internals.reembeddingCoordinator.apply(...args),
       resume: (...args) => internals.reembeddingCoordinator.resume(...args),
+      // 1.17.0: validating → ready_to_switch (generation check and semantic recall probe); the switch stays the host's.
+      validate: (...args) => internals.reembeddingCoordinator.validate(...args),
       status: (...args) => internals.reembeddingCoordinator.status(...args),
       rollback: (...args) => (internals.reembeddingSwitchRuntime
         ? internals.reembeddingSwitchRuntime.planManualRollback(...args)
@@ -3775,7 +3782,7 @@ export function createEngine(host, config, testOptions = {}) {
     if (closing) throw memoryOpError("storage", "engine is closed");
   };
 
-  // The Engine (types/engine.d.ts, contract 1.16.0).
+  // The Engine (types/engine.d.ts, contract 1.17.0).
   const storeAdopt = createStoreAdopt({
     baseDbPath,
     pool,
@@ -3789,7 +3796,7 @@ export function createEngine(host, config, testOptions = {}) {
   });
   internals.storeAdopt = storeAdopt;
   const engine = {
-    contract: "1.16.0",
+    contract: "1.17.0",
     // 1.16.0: feature flags a harness can test instead of parsing the contract version.
     capabilities: ENGINE_CAPABILITIES,
     async open(agentId) {
