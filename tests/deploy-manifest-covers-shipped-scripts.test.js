@@ -28,7 +28,7 @@ function walkScripts(dir = "scripts", out = []) {
   for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
     const rel = `${dir}/${entry.name}`;
     if (entry.isDirectory()) walkScripts(rel, out);
-    else if (/\.(mjs|js)$/.test(entry.name)) out.push(rel);
+    else if (/\.(mjs|js)$/.test(entry.name) || (rel.startsWith("scripts/telegramTts/") && /\.(py|sh|md)$/.test(entry.name))) out.push(rel);
   }
   return out;
 }
