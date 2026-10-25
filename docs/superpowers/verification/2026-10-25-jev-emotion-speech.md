@@ -1,12 +1,12 @@
 # Jev emotion / speech verification record
 
-Status: implementation in progress; no feature deployment or activation yet.
+Status: implementation and independent reviews complete; full suite and final focused checks executed. Controlled deployment/shadow/activation still pending. Runtime bytes are1189feb6; subsequent commits change tests only.
 
 Source: `feat/jev-emotion-speech`, based on `6419a60e` / version7.18.31 in the existing isolated `/root/plur1bus-dev-afterthought-jev` worktree. No work started from the older7.13.0 main checkout.
 
 ## Baseline and offline evidence
 
-- Unchanged `npm test`:542 file suites,525 passed,17 generic failures. Focused triage:16 pass directly or with required subprocess/socket permissions; failures arose from sandbox EPERM. One existing assertion derives a nonexistent lockfile key through the linked `node_modules` path (`local-inference-dependency.test.js`). Final full-suite run remains required.
+- Unchanged `npm test`:542 file suites,525 passed,17 generic failures. Focused triage:16 pass directly or with required subprocess/socket permissions; failures arose from sandbox EPERM. One existing assertion derives a nonexistent lockfile key through the linked `node_modules` path (`local-inference-dependency.test.js`). Final full-suite results are recorded below.
 - Task1:44 new pure assessment/preparation/rendering tests; comparison-prose preservation added after review,45 focused tests passing. Existing Jev and input-safety regressions also passed.
 - Task2:20 time/persistence tests plus existing dynamics/pool/recall/directive tests:80 passed. Independent review caught implicit enabled hydration; fixed so mode is explicit before catchup. Configured v3 restart retains trajectory/dedupe; v2 current mood is preserved.
 - Task3:184 targeted tests passed; independent review exposed a session-start race during the initial policy await. Fixed and scoped rereview approved;22 runtime/plugin regressions passed.
@@ -43,13 +43,14 @@ The assistant backend explicitly does not support audio input, so no subjective 
 - Installed OpenClaw2026.10.4 carries stable currentUserMessage/currentUserMessageId and run/session/workspace hook identity.
 - Actual exec hook caller omits runId/workspaceDir despite trusted wrapper/default values being available. A minimal tested forwarding patch is needed for the approved private per-run context; absent proof continues to return no context environment.
 - Live15-minute deploy guard restores from its pinned Git tag. Planned deployment uses a local prerelease version/tag and matching clean release checkout/pin, under one deployment lock. No remote publish, tag rewrite, merge or push.
+- Both updater and existing startup independently pin the plugin version; prepared rollout updates both. The shared guard/deployment lock is held across installation and retained by a transient recovery owner if a post-lock stage fails. Inventory, model settings, all three state/mood files, persona/reference files and actual host bundle are included in the fresh backup. Unrelated host settings and toggle/model bytes are checked before and after restart.
 - Initial affected-file backup: `/root/.openclaw/.snapshots/jev-emotion-20261025-151700`. Fresh pre-deployment backup still required.
 
 ## Remaining acceptance gates
 
-- Task4 implementation e10283d2 passes111 targeted tests, including24 actual Python cases, and all6 copied routing regressions. Host-patch/deployment dry-run passes. Independent Task4 review is in progress; earlier task reviews and selective confidence propagation are complete.
-- A focused pre-final check reproduced a cross-generation legacy-owner race: pending old inference mutated/persisted mood after the active owner committed. It must be fixed and regression-tested before deployment. The adjacent initial-policy generation guard is correct. Evidence: `/tmp/jev-legacy-owner-race.md`.
-- Run full suite and lint on the final source. Separate preexisting environment/assertion failures.
+- Task4 and its three corrections received independent spec/quality approval. Final broad review identified legacy-generation ownership, contextual shadow visibility, boolean HTML attributes and direct-executable reference-fixture issues; all four fixed1189feb6 and scoped rereview approved. Covering118, state26, routing8, wrappers13 and affected25 checks passed.
+- Full standard escalated npmtest on final runtime1189feb6 completed in805317ms:5580 tests,932 suites,5571 passed,6 failed,3 skipped. Three failures were a mock capture-result position assumption after added no-result lifecycle hooks; fixedbb5c1e19 with stronger exact singleton assertions, standard isolated rerun9/9. Two were release-version expectation and six new fixtures bypassing the existing temp-directory helper; fixed4d4ce775, focused8-file rerun91/91 with normal child-process permissions. Runtime bytes remain identical1189feb6.
+- The remaining failure is the independently reproduced baseline `local-inference-dependency.test.js` lock-key assertion through linked node_modules. Dependencies were not changed. The original full run is not relabeled green; focused amended-test results supplement it. Final npmrunlint exits0. Logs: `/tmp/plur1bus-jev-final-suite.log`, `/tmp/plur1bus-jev-capture-standard-final.log`, `/tmp/plur1bus-jev-housekeeping-escalated-green.log`, `/tmp/plur1bus-jev-final-lint.log`.
 - Real Jev holdouts, shadow comparison and separate DE/PL audio samples; inspect actual output, speech words and available audible evidence honestly.
 - Fresh backup, validated deployment, host adoption, shadow then active flags for the three approved agents, preserving /sabbel toggles and fixed speakers. No unrelated native TTS/STT/Discord changes.
 
@@ -58,3 +59,5 @@ The assistant backend explicitly does not support audio input, so no subjective 
 An initial copied wrapper-manager fixture retained its live STATE_DIR and changed the three /sabbel toggle JSONs. The test provider was doubled and audio outputs were private fixtures; no test provider call occurred. Tests were stopped. The accidental JSONs were archived under `/root/.openclaw/.snapshots/jev-emotion-test-toggle-recovery-20261025`; the original snapshot bytes were atomically restored and compared exactly: main disabled/Felix, Bernhardine disabled/Lucy, Heisenberg enabled/Simon. The user was informed. A fail-fast path scan and post-test live-byte comparison are required before further wrapper tests. No feature activation occurred.
 
 User confirmed the provided voice/pronunciation/tone auditions for activation. After fixture correction, the final111-case aggregate and6 copied routing cases passed. All3 live toggle files still matched the original backup byte-for-byte.
+
+Review and decision records: [whole-branch review](2026-10-25-jev-emotion-speech/final-review.md), [fix evidence](2026-10-25-jev-emotion-speech/final-fix-report.md), [scoped approval](2026-10-25-jev-emotion-speech/final-fix-review.md), [test-only triage](2026-10-25-jev-emotion-speech/suite-triage-report.md), [execution decisions and costs](2026-10-25-jev-emotion-speech/decisions.md).
