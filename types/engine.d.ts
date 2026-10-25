@@ -1,8 +1,8 @@
 /**
  * types/engine.d.ts — the frozen PLUR1BUS engine contract.
  *
- * Contract version 1.16.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
- * amended sixteen times under the policy below — see the changelog at the end
+ * Contract version 1.17.0 (frozen at 1.0.0 on 2026-09-22, owner decision B8;
+ * amended seventeen times under the policy below — see the changelog at the end
  * of this header).
  *
  * This file reconciles the four places Phase 0 sketched the same API
@@ -46,11 +46,12 @@
  *            1.13.0 — MemoryOps.unimport (roll back the cards one import run created; archive-first soft delete without a registry tombstone, key freed for re-import); MemoryImportRequest.importRunId optional; MemoryOpErrorCode "lock-busy"; no breaking change to existing callers.
  *            1.14.0 — additive complete vector-space identities, routes and degraded notes.
  *            1.15.0 — HostServices.fetch? (HostFetch: every outbound engine HTTP request goes through it when set); SecretStore becomes resolve(ref, purpose) (lease() kept optional and deprecated; it was never called) for provider `apiKeyRef`; ProviderCredentialConfig, RemoteRerankerConfig and the reranker providers jina | voyage | remote with baseUrl/protocol; no breaking change to existing callers (the engine called no SecretStore member before 1.15.0). Also: MemoryImportRequest without importRunId attributes each card to the run its sourceRef names (`;run=<id>`); MemoryUnimportRequest.importRunId also selects such lines; MemoryUnimportResult.derived.graphEdgesRemoved? / mirrorsArchived? / cleanupErrors? (unimport drops the undone cards' graph edges and archives their Obsidian mirrors).
+ *            1.17.0 — AdminOps.reembedding.validate({ id }) (the coordinator's validating → ready_to_switch step: target generation check and semantic recall probe, so a host that owns its switch can finish a migration); a failed validation rejects and leaves the record in validating; no breaking change to existing callers.
  *            1.16.0 — MemoryOps.link(id, req, p, a) (owner decision 2026-10-19: attach an imported duplicate to an existing card as an additional source instead of storing a duplicate; sidecar `_links/`, the card row is never written; idempotent per sourceRef); MemoryCard.links? (show/list); MemoryUnimportResult.links? (unimport of a run unlinks that run's links, the card stays); Engine.capabilities (EngineCapabilities, `memoryLink: true`); no breaking change to existing callers.
  */
 
-// 1.16.0: MemoryOps.link, MemoryCard.links?, MemoryUnimportResult.links?, Engine.capabilities.
-export type ContractVersion = "1.16.0";
+// 1.17.0: AdminOps.reembedding.validate.
+export type ContractVersion = "1.17.0";
 
 /* ------------------------------------------------------------------ */
 /* Primitives                                                          */
@@ -726,6 +727,9 @@ export interface AdminOps {
   forget(id: string, p: Principal, a: AgentContext): Promise<MemoryForgetResult>;
   reembedding: {
     plan(): Promise<unknown>; apply(): Promise<unknown>; resume(): Promise<unknown>;
+    /** 1.17.0: `validate({ id })` moves a fully copied migration from `validating` to `ready_to_switch` after the
+     *  target generation check and the semantic recall probe; on failure it rejects and the record stays `validating`. */
+    validate(): Promise<unknown>;
     rollback(): Promise<unknown>; status(): Promise<unknown>; switch(): Promise<unknown>;
   };
   workspacePolicy: { get(): Promise<unknown>; list(): Promise<unknown>; set(patch: unknown): Promise<unknown> };
