@@ -253,3 +253,33 @@ test('custom timed configuration is applied before persisted-state hydration', a
   await f.runtime.beforePrompt(f.event, f.ctx);
   assert.ok(Math.abs(f.emotionalPool.snapshot('main').joy - (serialized.current.joy + serialized.timedMood.target.joy) / 2) < 1e-9);
 });
+
+test('session_start during initial policy await rejects the old admission without retiring its replacement', async t => {
+  const gate = defer(); let policyCalls = 0;
+  const f = await fixture(t, { isEligible: () => ++policyCalls === 1 ? gate.promise : true });
+  const pending = f.runtime.beforePrompt(f.event, f.ctx);
+  await new Promise(r => setImmediate(r));
+  const replacement = { ...f.ctx, sessionId: 'replacement-session', runId: 'replacement-run' };
+  await f.hooks.get('session_start')({ sessionKey: replacement.sessionKey, sessionId: replacement.sessionId }, { agentId: replacement.agentId });
+  gate.resolve(true);
+  const oldResult = await pending;
+  const oldEnv = await f.runtime.resolveExecEnv({}, f.ctx);
+  assert.deepEqual({
+    assessed: f.inputs.length,
+    returnedDirective: Boolean(oldResult?.prependContext),
+    persistedState: existsSync(join(f.root, '.emotional-state.json')),
+    publishedContext: Object.keys(oldEnv).length > 0,
+    committedEvidence: f.emotionalPool.get('main').serializeState().timedMood.eventIds.length,
+  }, { assessed: 0, returnedDirective: false, persistedState: false, publishedContext: false, committedEvidence: 0 });
+  // A replay of the superseded hook must not revoke the replacement either.
+  assert.equal(await f.runtime.beforePrompt(f.event, f.ctx), undefined);
+  assert.equal(f.inputs.length, 0);
+  const replacementResult = await f.runtime.beforePrompt({ ...f.event, currentUserMessageId: 'replacement-message' }, replacement);
+  assert.ok(replacementResult?.prependContext);
+  assert.equal(f.inputs.length, 1);
+  assert.equal(f.emotionalPool.get('main').serializeState().timedMood.eventIds.length, 1);
+  const replacementEnv = await f.runtime.resolveExecEnv({}, replacement);
+  assert.equal(replacementEnv.PLUR1BUS_SPEECH_RUN_ID, 'replacement-run');
+  assert.equal(JSON.parse(readFileSync(replacementEnv.PLUR1BUS_SPEECH_CONTEXT_FILE)).sessionId, 'replacement-session');
+  await f.runtime.endRun({}, replacement);
+});
