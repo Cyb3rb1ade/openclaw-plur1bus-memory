@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, statSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync, statSync, rmSync } from 'node:fs';
+import { makeTempDir } from './helpers/temp-dir.js';
 import { join } from 'node:path';
 import { resolveEffectiveConfig } from '../lib/setup/config-contract.js';
 
@@ -9,7 +9,7 @@ const vector = (joy = 0.8) => ({ joy, sadness: 0, anger: 0, fear: 0, disgust: 0,
 const accepted = (joy) => ({ ok: true, reaction: vector(joy), confidence: 0.9, sections: [] });
 const defer = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 async function fixture(t, options = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'jev-runtime-'));
+  const root = makeTempDir('jev-runtime-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const mod = await import('../lib/jevEmotionRuntime.js');
   const config = { baseDbPath: root, emotion: { jev: { enabled: true, agents: { main: true }, mode: 'active', ...options.jev } } };

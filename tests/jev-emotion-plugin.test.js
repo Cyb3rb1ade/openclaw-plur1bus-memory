@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTempDir } from './helpers/temp-dir.js';
 import { createRequire } from 'node:module';
 import plugin from '../index.js';
 import { EMOTION_DIMENSIONS } from '../lib/jevEmotion.js';
 
 async function fixture(t, overrides = {}, routing = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'jev-plugin-'));
+  const root = makeTempDir('jev-plugin-');
   const hooks = new Map();
   const fetchOriginal = globalThis.fetch;
   const requests = [];
@@ -75,7 +75,7 @@ test('real recall path cannot prevent independent state when DB open fails', asy
 });
 
 test('standalone injector suppresses active enabled agent but retains shadow/other agents', async t => {
-  const root = mkdtempSync(join(tmpdir(), 'jev-injector-'));
+  const root = makeTempDir('jev-injector-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   writeFileSync(join(root, '.emotional-state.json'), JSON.stringify({ label: 'ruhig', details: Object.fromEntries(EMOTION_DIMENSIONS.map(key => [key, 0.1])) }));
   const register = createRequire(import.meta.url)('../.openclaw/extensions/emotional-state-injector/index.js');
@@ -98,7 +98,7 @@ test('actual legacy block skips inference, fallback and file writer in active mo
   const begin = source.indexOf('          const emoState = emotionalPool.get(agentId);', source.indexOf('api.on("before_prompt_build"'));
   const end = source.indexOf('          // v5.4.0 — Graph-Edges', begin);
   const block = compileFunction(`return (async () => { ${source.slice(begin, end)} })();`, ['emotionalPool', 'agentId', 'jevEmotionRuntime', 'ctx', 'event', 'voiceMessages', 'signal', 'inferEmotionalValenceAsync', 'throwIfAborted', 'dbg', 'writeFileSync', 'join', 'formatMoodFile', 'extractMessageText', 'resolveInside']);
-  const root = mkdtempSync(join(tmpdir(), 'jev-legacy-'));
+  const root = makeTempDir('jev-legacy-');
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const config = { baseDbPath: root, emotion: { jev: { enabled: true, mode: 'active', agents: { main: true } } } };
   const pool = createSharedJevEmotionalPool(config);

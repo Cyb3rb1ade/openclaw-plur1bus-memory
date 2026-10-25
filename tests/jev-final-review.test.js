@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTempDir } from './helpers/temp-dir.js';
 import { compileFunction } from 'node:vm';
 import { createJevEmotionRuntime, createSharedJevEmotionalPool } from '../lib/jevEmotionRuntime.js';
 import { formatMoodFile, extractMessageText } from '../lib/emotional-state.js';
@@ -19,7 +19,7 @@ assert.ok(begin >= 0 && end > begin);
 const legacy = compileFunction(`return (async () => { ${source.slice(begin, end)} })();`, ['emotionalPool', 'agentId', 'jevEmotionRuntime', 'ctx', 'event', 'voiceMessages', 'signal', 'inferEmotionalValenceAsync', 'throwIfAborted', 'dbg', 'writeFileSync', 'join', 'formatMoodFile', 'extractMessageText', 'resolveInside']);
 const reaction = joy => ({ ok: true, reaction: { joy, sadness: 0, anger: 0, fear: 0, disgust: 0, surprise: 0, trust: 0, anticipation: 0 }, reactionDimensions: ['joy'], elapsedMs: 12, confidence: 1, sections: [] });
 function fixture(t, mode = 'shadow', options = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'jev-final-'));
+  const root = makeTempDir('jev-final-');
   const config = { baseDbPath: root, emotion: { jev: { enabled: mode !== 'disabled', mode: mode === 'disabled' ? 'shadow' : mode, agents: { main: true } } } };
   const pool = createSharedJevEmotionalPool(config);
   const runtimes = [];

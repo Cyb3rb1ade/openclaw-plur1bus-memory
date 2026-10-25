@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { makeTempDir } from './helpers/temp-dir.js';
 import { readFileSync } from 'node:fs';
 const source=readFileSync(new URL('./fixtures/telegramSpeech/bash-tools-host.mjs',import.meta.url),'utf8');
 test('trusted host projection ignores model env/workdir; wrapper wins and missing workspace stays absent',async()=>{
@@ -19,15 +20,15 @@ test('unsupported and ambiguous caller shapes refuse without changing source',as
 });
 
 test('copied bundle applies atomically once, passes syntax, and ambiguous targets remain unchanged',async()=>{
- const {mkdtempSync,writeFileSync,readFileSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');const {spawnSync}=await import('node:child_process');
- const {patchExecContextDirectory}=await import('../scripts/telegramTts/patch-exec-speech-context.mjs');const dir=mkdtempSync(join(tmpdir(),'speech-host-'));const file=join(dir,'bash-tools-fixture.mjs');writeFileSync(file,source);
+ const {writeFileSync,readFileSync}=await import('node:fs');const {join}=await import('node:path');const {spawnSync}=await import('node:child_process');
+ const {patchExecContextDirectory}=await import('../scripts/telegramTts/patch-exec-speech-context.mjs');const dir=makeTempDir('speech-host-');const file=join(dir,'bash-tools-fixture.mjs');writeFileSync(file,source);
  assert.equal(patchExecContextDirectory(dir).changed,true);assert.equal(readFileSync(file,'utf8'),source);assert.equal(patchExecContextDirectory(dir,true).changed,true);const once=readFileSync(file,'utf8');assert.equal(patchExecContextDirectory(dir,true).changed,false);assert.equal(readFileSync(file,'utf8'),once);assert.equal(spawnSync('node',['--check',file]).status,0);
  writeFileSync(join(dir,'bash-tools-ambiguous.mjs'),source);assert.throws(()=>patchExecContextDirectory(dir,true));assert.equal(readFileSync(file,'utf8'),once);
 });
 
 test('patched copied caller reaches actual runtime with two distinct run-bound speech files',async t=>{
- const {mkdtempSync,rmSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');const {createJevEmotionRuntime,createSharedJevEmotionalPool}=await import('../lib/jevEmotionRuntime.js');const {patchExecContextSource}=await import('../scripts/telegramTts/patch-exec-speech-context.mjs');
- const root=mkdtempSync(join(tmpdir(),'speech-seam-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const {rmSync}=await import('node:fs');const {join}=await import('node:path');const {createJevEmotionRuntime,createSharedJevEmotionalPool}=await import('../lib/jevEmotionRuntime.js');const {patchExecContextSource}=await import('../scripts/telegramTts/patch-exec-speech-context.mjs');
+ const root=makeTempDir('speech-seam-');t.after(()=>rmSync(root,{recursive:true,force:true}));
  const config={baseDbPath:root,emotion:{jev:{enabled:true,agents:{main:true},mode:'active'}}};const runtime=createJevEmotionRuntime({api:{on(){}},config,emotionalPool:createSharedJevEmotionalPool(config),isEligible:()=>true,assessor:async()=>({ok:true,reaction:{joy:.5,sadness:0,anger:0,fear:0,disgust:0,surprise:0,trust:.5,anticipation:0},confidence:1,sections:[]})});t.after(()=>runtime.endRun({},{}));
  const base={agentId:'main',sessionKey:'agent:main:telegram:fixture',sessionId:'session',workspaceDir:root};
  for(const runId of ['one','two']) await runtime.beforePrompt({currentUserMessage:'Synthetic authored request',currentUserMessageId:'current'}, {...base,runId});

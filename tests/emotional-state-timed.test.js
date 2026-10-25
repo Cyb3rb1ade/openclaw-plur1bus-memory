@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, rmSync } from "node:fs";
+import { makeTempDir } from "./helpers/temp-dir.js";
 import { join } from "node:path";
 import { EmotionalState, createEmotionalStatePool } from "../lib/emotional-state.js";
 
@@ -23,7 +23,7 @@ function evidence(state, eventId, observedAt = Date.now(), values = { anger: 0.8
   return state.applyTimedEvidence(reaction(values), { eventId, observedAt });
 }
 function persisted(t, state) {
-  const directory = mkdtempSync(join(tmpdir(), "timed-mood-"));
+  const directory = makeTempDir("timed-mood-");
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const file = join(directory, "state.json");
   writeFileSync(file, JSON.stringify({ state }));
