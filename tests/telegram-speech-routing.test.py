@@ -2,12 +2,25 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+import runpy
 ROOT=Path(__file__).resolve().parent
 
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);result=importlib.util.module_from_spec(spec);spec.loader.exec_module(result);return result
 fixture=module('speech_fixture',ROOT/'telegram-speech-wrappers.test.py')
 original=module('installed_cases',ROOT/'fixtures/telegramSpeech/installed-tts-routing.py')
+
+
+class CapturedReferenceSafety(unittest.TestCase):
+ def test_direct_entry_refuses_before_unittest_or_external_execution(self):
+  with patch('unittest.main',side_effect=AssertionError('unsafe direct test runner reached')), patch('subprocess.run',side_effect=AssertionError('external execution forbidden')):
+   with self.assertRaisesRegex(SystemExit,'import-only'):
+    runpy.run_path(str(ROOT/'fixtures/telegramSpeech/installed-tts-routing.py'),run_name='__main__')
+ def test_original_setup_refuses_before_any_live_fixture_access(self):
+  with patch('tempfile.TemporaryDirectory',side_effect=AssertionError('unsafe live fixture setup reached')), patch('subprocess.run',side_effect=AssertionError('external execution forbidden')):
+   with self.assertRaisesRegex(RuntimeError,'import-only'):
+    original.TtsRoutingTest().setUp()
 
 class InstalledRoutingCases(unittest.TestCase):
  manager=fixture.WrapperTests.manager

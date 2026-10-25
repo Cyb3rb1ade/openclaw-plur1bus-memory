@@ -1,58 +1,21 @@
-"""Offline regression checks for the /sabbel scripts; never mutate live state."""
-import json
+"""Import-only captured assertions; use telegram-speech-routing.test.py guarded fixtures."""
 import os
 from pathlib import Path
-import subprocess
-import tempfile
 import unittest
 
-ROOT = Path('/root/.openclaw')
 WORKSPACES = ['workspace', 'workspace-bernhardine', 'workspace-heisenberg']
 LUCY = 'el:KXxZd16DiBqt82nbarJx'
 
 
 class TtsRoutingTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='tts-regression-')
-        self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
-        self.env = dict(os.environ, TEST_VOICE=LUCY, TEST_ENABLED='true',
-                        TEST_LOG=str(self.base / 'calls.jsonl'))
-        for workspace in WORKSPACES:
-            source = ROOT / workspace / 'skills/telegram-tts-toggle/bin'
-            dest = self.base / workspace / 'skills/telegram-tts-toggle/bin'
-            dest.mkdir(parents=True)
-            for name in ['tts-auto.sh', 'tts-bilingual.sh']:
-                if (source / name).exists():
-                    text = (source / name).read_text()
-                    for ws in sorted(WORKSPACES, key=len, reverse=True):
-                        text = text.replace(str(ROOT / ws) + '"', str(self.base / ws) + '"')
-                    text = text.replace('/tmp/openclaw', str(self.base / 'audio'))
-                    (dest / name).write_text(text)
-            manager = dest / 'tts-manager.sh'
-            manager.write_text('#!/bin/bash\ncase "$1" in\nis-enabled) [ "$TEST_ENABLED" = true ];;\nget-voice) echo "$TEST_VOICE";;\nesac\n')
-            generator = dest / 'tts-generate.sh'
-            generator.write_text('''#!/usr/bin/env python3
-import json, os, sys, wave
-with open(os.environ['TEST_LOG'], 'a') as f:
-    f.write(json.dumps(sys.argv[1:]) + '\\n')
-if os.environ.get('TEST_FAIL_GENERATION') == 'true' or sys.argv[1] == 'FAIL':
-    sys.exit(1)
-with wave.open(sys.argv[3], 'wb') as f:
-    f.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
-    f.writeframes(b'\\0\\0' * 2400)
-''')
-            manager.chmod(0o755)
-            generator.chmod(0o755)
+        raise RuntimeError('import-only reference: use the guarded routing adapter')
 
     def run_script(self, workspace, name, *args):
-        path = self.base / workspace / 'skills/telegram-tts-toggle/bin' / name
-        return subprocess.run(['bash', str(path), *args], env=self.env,
-                              capture_output=True, text=True, timeout=15)
+        raise RuntimeError('import-only reference: use the guarded routing adapter')
 
     def calls(self):
-        path = self.base / 'calls.jsonl'
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        raise RuntimeError('import-only reference: use the guarded routing adapter')
 
     def test_bilingual_keeps_lucy_for_german_and_polish(self):
         result = self.run_script('workspace-bernhardine', 'tts-bilingual.sh',
@@ -115,4 +78,4 @@ with wave.open(sys.argv[3], 'wb') as f:
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    raise SystemExit('import-only reference: run tests/telegram-speech-routing.test.py')

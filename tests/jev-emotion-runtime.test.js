@@ -85,7 +85,9 @@ test('shadow assesses without changing state/persistence or competing guidance',
   assert.equal(f.inputs.length, 1);
   assert.deepEqual(f.emotionalPool.get('main').serializeState().current, before.current);
   assert.equal(existsSync(join(f.root, '.emotional-state.json')), false);
-  assert.deepEqual(await f.runtime.resolveExecEnv({}, f.ctx), {});
+  const env = await f.runtime.resolveExecEnv({}, f.ctx);
+  assert.ok(env.PLUR1BUS_SPEECH_CONTEXT_FILE);
+  assert.equal(JSON.parse(readFileSync(env.PLUR1BUS_SPEECH_CONTEXT_FILE)).context.at(-1).content, 'Ja!');
 });
 
 test('internal/subagent/provenance/denied inputs are excluded before external assessment', async t => {

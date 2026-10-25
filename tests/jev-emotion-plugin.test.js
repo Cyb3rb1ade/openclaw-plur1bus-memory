@@ -90,7 +90,8 @@ test('standalone injector suppresses active enabled agent but retains shadow/oth
 
 test('actual legacy block skips inference, fallback and file writer in active mode', async t => {
   const { compileFunction } = await import('node:vm');
-  const { createEmotionalStatePool, formatMoodFile, extractMessageText } = await import('../lib/emotional-state.js');
+  const { formatMoodFile, extractMessageText } = await import('../lib/emotional-state.js');
+  const { createSharedJevEmotionalPool, createJevEmotionRuntime } = await import('../lib/jevEmotionRuntime.js');
   const { resolveInside } = await import('../lib/sql-safety.js');
   const { throwIfAborted } = await import('../lib/abort.js');
   const source = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
@@ -99,14 +100,16 @@ test('actual legacy block skips inference, fallback and file writer in active mo
   const block = compileFunction(`return (async () => { ${source.slice(begin, end)} })();`, ['emotionalPool', 'agentId', 'jevEmotionRuntime', 'ctx', 'event', 'voiceMessages', 'signal', 'inferEmotionalValenceAsync', 'throwIfAborted', 'dbg', 'writeFileSync', 'join', 'formatMoodFile', 'extractMessageText', 'resolveInside']);
   const root = mkdtempSync(join(tmpdir(), 'jev-legacy-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const pool = createEmotionalStatePool();
+  const config = { baseDbPath: root, emotion: { jev: { enabled: true, mode: 'active', agents: { main: true } } } };
+  const pool = createSharedJevEmotionalPool(config);
+  const active = createJevEmotionRuntime({ config, emotionalPool: pool });
   const before = pool.snapshot('main');
   const offlineInference = async () => { throw new Error('offline external model failure'); };
-  const args = [pool, 'main', { isEnabled: () => true }, { workspaceDir: root }, { prompt: 'Ich bin traurig und einsam.' }, [{ role: 'user', content: 'Ich bin traurig und einsam.' }], undefined, offlineInference, throwIfAborted, () => {}, writeFileSync, join, formatMoodFile, extractMessageText, resolveInside];
+  const args = [pool, 'main', active, { workspaceDir: root }, { prompt: 'Ich bin traurig und einsam.' }, [{ role: 'user', content: 'Ich bin traurig und einsam.' }], undefined, offlineInference, throwIfAborted, () => {}, writeFileSync, join, formatMoodFile, extractMessageText, resolveInside];
   await block(...args);
   assert.deepEqual(pool.snapshot('main'), before);
   assert.equal(existsSync(join(root, '.emotional-state.json')), false);
-  args[2] = { isEnabled: () => false };
+  args[2] = createJevEmotionRuntime({ config: { ...config, emotion: { jev: { ...config.emotion.jev, mode: 'shadow' } } }, emotionalPool: pool });
   await block(...args);
   assert.ok(existsSync(join(root, '.emotional-state.json')));
   assert.ok(existsSync(join(root, '.current-mood.txt')));

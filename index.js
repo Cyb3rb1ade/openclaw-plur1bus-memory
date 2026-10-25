@@ -12956,7 +12956,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             }
           }
           const emoState = emotionalPool.get(agentId);
-          if (!jevEmotionRuntime.isEnabled(agentId)) {
+          const ownsLegacyMood = jevEmotionRuntime.captureLegacyOwnership(agentId);
+          legacyMood: if (ownsLegacyMood()) {
             emoState.configureTimedMood({ enabled: false });
             // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
             // Decay rechnet ab persistiertem lastUpdateAt weiter.
@@ -12972,23 +12973,32 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               if (lastUserText.length >= 3) {
                 const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
                 throwIfAborted(signal, "recall aborted");
+                if (!ownsLegacyMood()) break legacyMood;
                 emoState.applyEmotionScore(turnEmotion);
               } else {
+                if (!ownsLegacyMood()) break legacyMood;
                 emoState.updateFromMessages(voiceMessages);
               }
             } catch (e) {
               throwIfAborted(signal, "recall aborted");
+              if (!ownsLegacyMood()) {
+                dbg("legacy_mood_owner_changed");
+                break legacyMood;
+              }
               dbg(e);
               emoState.updateFromMessages(voiceMessages);
             }
             if (ctx?.workspaceDir) {
               try {
                 throwIfAborted(signal, "recall aborted");
+                if (!ownsLegacyMood()) break legacyMood;
                 const moodNow = emoState.describeMood();
                 throwIfAborted(signal, "recall aborted");
-                writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
+                if (!ownsLegacyMood()) break legacyMood;
+                writeFileSync(resolveInside(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
                 throwIfAborted(signal, "recall aborted");
-                writeFileSync(join(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
+                if (!ownsLegacyMood()) break legacyMood;
+                writeFileSync(resolveInside(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
               } catch (e) {
                 throwIfAborted(signal, "recall aborted");
                 dbg(e);
