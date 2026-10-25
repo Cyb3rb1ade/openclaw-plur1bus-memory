@@ -147,6 +147,13 @@ test("speech preparation removes private reasoning, transport metadata and marku
   assert.equal(prepare("Visible <analysis>hidden forever").text, "Visible");
 });
 
+test("HTML cleanup preserves comparison prose and only strips recognized markup", () => {
+  const comparison = "Für x < 5 und y > 2 gilt das.";
+  assert.deepEqual(prepare(comparison), { text: comparison, blocked: false });
+  assert.deepEqual(prepare('<strong>Für x < 5</strong> und <span title="y > 2">y > 2</span> gilt das.'), { text: comparison, blocked: false });
+  assert.deepEqual(prepare("x<5 und y>2; x<limit und y>minimum."), { text: "x<5 und y>2; x<limit und y>minimum.", blocked: false });
+});
+
 test("canonical preparation clips once at a word boundary including Unicode ellipsis", () => {
   assert.deepEqual(prepare("😀 Hallo Welt!", { maxChars: 9 }), { text: "😀 Hallo…", blocked: false });
   assert.equal(prepare("abcdef", { maxChars: 4 }).text, "…");
