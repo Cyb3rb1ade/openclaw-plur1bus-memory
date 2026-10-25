@@ -350,3 +350,18 @@ test("dimension confidence threshold stays at .70 inclusive and is separate from
   assert.equal(result.reaction.joy, .025);
   assert.equal(result.confidence, .70);
 });
+
+for (const uncertainVersion of [0, 1]) {
+  test(`bilingual optional-action uncertainty in version ${uncertainVersion} preserves matching playful delivery`, async () => {
+    const overrides = { pair_0: choice("equivalent", .95) };
+    for (const version of [0, 1]) Object.assign(overrides, {
+      [`v${version}_s0_intent`]: choice("humor", .95),
+      [`v${version}_s0_delivery`]: choice("playful", .95),
+      [`v${version}_s0_action`]: choice("chuckle", version === uncertainVersion ? .3 : .95),
+    });
+    const result = await createPlanner({ apiKey: "test", fetchImpl: transport(overrides) })({ versions: [{ id: "de", text: "Ein Witz." }, { id: "pl", text: "Żart." }] });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.versions.map(render), ["[playful]Ein Witz.", "[playful]Żart."]);
+    assert.deepEqual(result.versions.map(version => version.segments[0].action), ["none", "none"]);
+  });
+}
