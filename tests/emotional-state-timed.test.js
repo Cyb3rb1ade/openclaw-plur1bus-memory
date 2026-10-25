@@ -242,19 +242,57 @@ test("existing pool and recall readers see the same lazily advanced timed state"
   near(pool.get("heisenberg").snapshot().anger, 0.02);
 });
 
-test("v3 hydrate before configure resumes elapsed target and keeps dedupe on configure", (t) => {
+test("explicitly configured v3 restart resumes its configured timing and dedupe", (t) => {
   const at = clock(t);
-  const source = timed();
+  const timing = { approachHalfLifeMs: MINUTE, passiveHalfLivesMs: { anger: 3 * MINUTE } };
+  const source = new EmotionalState();
+  source.configureTimedMood(timing);
   evidence(source, "before-restart");
   const file = persisted(t, source.serializeState());
   at(MINUTE);
   const restored = new EmotionalState();
+  restored.configureTimedMood(timing);
   assert.equal(restored.hydrateOnce(file), true);
-  restored.configureTimedMood();
-  near(restored.snapshot().anger, 0.1235595493631007);
+  near(restored.snapshot().anger, 0.42);
   assert.equal(evidence(restored, "before-restart"), false);
   at(2 * MINUTE);
+  near(restored.snapshot().anger, 0.62);
   near(restored.snapshot().anger, source.snapshot().anger);
+  at(5 * MINUTE);
+  near(restored.snapshot().anger, 0.32);
+});
+
+test("unconfigured v3 hydration keeps legacy behavior without integrating its timed target", (t) => {
+  const at = clock(t);
+  const source = timed();
+  evidence(source, "persisted-active-target");
+  const file = persisted(t, source.serializeState());
+  at(MINUTE);
+  const restored = new EmotionalState();
+  assert.equal(restored.hydrateOnce(file), true);
+  near(restored.snapshot().anger, 0.02);
+  near(restored.describeMood().details.anger, 0.02);
+  near(restored.serializeState().current.anger, 0.02);
+  assert.equal(evidence(restored, "not-enabled"), false);
+  at(2 * MINUTE);
+  near(restored.snapshot().anger, 0.02);
+});
+
+test("hydrating v3 then disabling retains persisted mood with legacy passive decay", (t) => {
+  const at = clock(t);
+  const source = timed();
+  source.current.anger = 0.42;
+  evidence(source, "persisted-target");
+  const file = persisted(t, source.serializeState());
+  at(MINUTE);
+  const restored = new EmotionalState();
+  assert.equal(restored.hydrateOnce(file), true);
+  restored.configureTimedMood({ enabled: false });
+  near(restored.snapshot().anger, 0.02 + 0.4 * 2 ** (-1 / 120));
+  assert.equal(evidence(restored, "disabled"), false);
+  assert.equal(restored.serializeState().timedMood.target, null);
+  at(120 * MINUTE);
+  near(restored.snapshot().anger, 0.22);
 });
 
 test("v2 hydrate before enabling retains its existing mood and can accept evidence without jump", (t) => {
