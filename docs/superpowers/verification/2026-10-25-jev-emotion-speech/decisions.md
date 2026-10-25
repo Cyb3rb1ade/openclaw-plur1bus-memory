@@ -28,3 +28,8 @@ Decisions made while executing the approved plan, in chronological order. The co
 
 14. preserve and separately report the existing linked-node_modules lockfile fixture failure rather than changing unrelated dependencies — user explicitly permits separate pre-existing failures; cost if wrong: a new related regression could be misclassified, so final full-source suite and failure-specific evidence remain mandatory.
 
+
+
+Ruling: extend host compatibility patch to native admitted-user forwarding, rather than relaxing strict authored-input policy — actual native producer/helper omit typed fields while AgentsAPI provides them; current hook correctly refuses assembledprompt. Forward existing admitted recorder object/id through exactnative seams, retaining source/provenance/exclusions. Cost if wrong: unsupported hostshape mustfailclosed; actualcopiedproducer/helper→runtime→adapter tests and live native run acceptance gate deployment.
+
+Ruling: issue local prerelease7.18.32-jev.2 for the native host compatibility correction, preserving immutablev7.18.32-jev.1 — never rewrite deployed tag; cost if wrong: both ops pins/release/testmetadata could diverge, so update/check all under held common lock. No remote publish/push.
