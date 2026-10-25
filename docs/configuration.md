@@ -1053,3 +1053,42 @@ A useful follow-up is sent to the original conversation, not a cron fallback rec
 ### Jev key in the dashboard (7.18.25)
 
 With `controlUi.writeActions: "all"` and `gateway.controlUi.experimental.customPlugins: true`, the existing capture-mode card includes Jev API key save/replace/remove controls. The native UI bridge uses a fixed authenticated Gateway method; the key never enters the URL. A blank input keeps the current value. Removing the configured value leaves the environment fallback in effect. `captureChunkingJev.apiKey` takes priority over the variable named by `captureChunkingJev.apiKeyEnv` (default `TYPESAFE_API_KEY`). The page displays only whether a key is configured and whether it comes from config or environment. Existing non-Jev storage and reranker choices are unchanged.
+
+### Independent incoming Jev emotion (`emotion.jev`)
+
+This opt-in owner runs before memory recall, including when `autoRecall` is disabled or its database fails. It uses the existing `captureChunkingJev` credential resolution and model. It makes one batched incoming assessment with a deadline of at most 1,000 ms and no retries. Stored memory emotion classification and recall scoring formulas remain unchanged.
+
+```json
+{
+  "emotion": {
+    "jev": {
+      "enabled": false,
+      "agents": { "main": false, "bernhardine": false, "heisenberg": false },
+      "mode": "shadow",
+      "timeoutMs": 1000,
+      "approachHalfLifeMs": 300000,
+      "evidenceHoldMs": 120000,
+      "passiveHalfLivesMs": {
+        "surprise": 120000,
+        "fear": 900000,
+        "anger": 900000,
+        "joy": 1800000,
+        "anticipation": 1800000,
+        "sadness": 2700000,
+        "disgust": 2700000,
+        "trust": 3600000
+      }
+    }
+  }
+}
+```
+
+Both the global switch and the agent switch must be true. `shadow` assesses and logs only a content-free accepted/rejected decision; the legacy mood writer remains authoritative. `active` applies independent agent reaction evidence to the shared per-agent EmotionalState using elapsed time. Existing temperament sensitivity, baseline and decay multiplier still apply. Active agents skip the full legacy turn update/fallback/writer and the standalone emotional-state injector; other agents retain their behavior. Configure the timing mode before loading persisted state; persisted metadata cannot enable it.
+
+The runtime accepts only the host's authored `currentUserMessage`, never an assembled prompt fallback. Persistent changes require stable agent, session key, session ID, run ID and `currentUserMessageId`; repeated admissions share an assessment. Workspace, incognito, internal/background and subagent exclusions apply before assessment and again before commit. Missing or rejected assessments fail open. Current meaning and intent take priority over compatible delivery, persona and background mood.
+
+Accepted updates atomically replace `.emotional-state.json` and `.current-mood.txt` with private files (0600). Neither file contains source conversation text. At most two prior authored contributions are kept in ephemeral memory for assessment; arbitrary historical prompt/tool/system messages are excluded. Terminal assistant text supplies the next turn's authored reply context.
+
+For a live active run, `.plur1bus/speech-context/<hashed-run>.json` is a private 0600 snapshot in a 0700 directory. Its version-1 fields are `agentId`, `runId`, `sessionId`, `createdAt`, `expiresAt` (15 minutes after creation), `mood` (eight-vector), `persona`, and `context` (last two authored contributions, including the current user). The exec hook exports only `PLUR1BUS_SPEECH_CONTEXT_FILE` and `PLUR1BUS_SPEECH_RUN_ID` for an exact agent/session/run/workspace match. Missing host run or workspace identity returns no context environment; there is no latest-run lookup. Agent termination, session replacement/reset/end and gateway shutdown invalidate matching runs and remove their files. Snapshot context is ephemeral and never written to memory cards or evidence logs.
+
+The installed OpenClaw exec caller needs the separately maintained trusted run/workspace forwarding compatibility patch to supply this full context. Without it, outgoing speech must use its final-text-only fallback. The shipped standalone injector at `.openclaw/extensions/emotional-state-injector/index.js` must be deployed with the plugin so active agents receive only one mood directive.

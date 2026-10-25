@@ -2836,6 +2836,106 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "jev": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Independent incoming Jev emotion assessment; uses captureChunkingJev credentials/model. Active mode owns timed mood, shadow preserves legacy updates.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "agents": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "main": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "bernhardine": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "heisenberg": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "shadow",
+                  "active"
+                ],
+                "default": "shadow"
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "default": 1000
+              },
+              "approachHalfLifeMs": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 300000
+              },
+              "evidenceHoldMs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 120000,
+                "default": 120000
+              },
+              "passiveHalfLivesMs": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "surprise": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 120000
+                  },
+                  "fear": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 900000
+                  },
+                  "anger": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 900000
+                  },
+                  "joy": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1800000
+                  },
+                  "anticipation": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1800000
+                  },
+                  "sadness": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 2700000
+                  },
+                  "disgust": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 2700000
+                  },
+                  "trust": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 3600000
+                  }
+                }
+              }
+            }
+          },
           "tier": {
             "type": "string",
             "enum": [

@@ -388,7 +388,7 @@ import {
   emotionEmoji,
   setEmotionConfig,
 } from "./lib/emotion.js";
-import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessageText, DEFAULT_TEMPERAMENTS } from "./lib/emotional-state.js";
+import { formatMoodLine, formatMoodFile, extractMessageText, DEFAULT_TEMPERAMENTS } from "./lib/emotional-state.js";
 import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
@@ -439,6 +439,7 @@ import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
 import { drainPostTurnWork, enqueuePostTurnWork } from "./lib/post-turn-queue.js";
 import { createJevChunkDecider, resolveJevApiKey } from "./lib/jev-chunk-decider.js";
+import { createSharedJevEmotionalPool, createJevEmotionRuntime } from "./lib/jevEmotionRuntime.js";
 import { createGroupReasoningFilter } from "./lib/group-reasoning-filter.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
@@ -5794,9 +5795,20 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
       }, ...args);
     }
-    const emotionalPool = createEmotionalStatePool({
-      temperaments: emotionCfg.temperaments || {},
-      moodInfluence: emotionMoodInfluence,
+    const jevRuntimeConfig = { ...cfg, baseDbPath };
+    const emotionalPool = createSharedJevEmotionalPool(jevRuntimeConfig);
+    // Independent of DB recall and its short-input gate; shares the exact pool
+    // consumed by recall, with a single process-wide incoming mood owner.
+    const jevEmotionRuntime = createJevEmotionRuntime({
+      api,
+      config: jevRuntimeConfig,
+      emotionalPool,
+      isEligible: async (event, ctx) => {
+        if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return false;
+        const sessionKey = ctx?.sessionKey;
+        if (typeof sessionKey !== "string" || !sessionKey.trim()) return false;
+        return !(await classifyHostIncognitoSession(sessionKey));
+      },
     });
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? (requiresActiveSharedModelOwner
@@ -12944,40 +12956,43 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             }
           }
           const emoState = emotionalPool.get(agentId);
-          // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
-          // Decay rechnet ab persistiertem lastUpdateAt weiter.
-          if (ctx?.workspaceDir) {
-            try { emoState.hydrateOnce(join(ctx.workspaceDir, ".emotional-state.json")); } catch (e) { dbg(e); }
-          }
-          // Stimmung aus dem aktuellen Turn via EmotionEngine (T1→T2→T3)
-          // statt der alten Regex-Heuristik ableiten.
-          try {
-            const promptText = typeof event.prompt === "string" ? event.prompt.trim() : "";
-            const lastUserText = promptText
-              || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
-            if (lastUserText.length >= 3) {
-              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
-              throwIfAborted(signal, "recall aborted");
-              emoState.applyEmotionScore(turnEmotion);
-            } else {
-              emoState.updateFromMessages(voiceMessages);
+          if (!jevEmotionRuntime.isEnabled(agentId)) {
+            emoState.configureTimedMood({ enabled: false });
+            // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
+            // Decay rechnet ab persistiertem lastUpdateAt weiter.
+            if (ctx?.workspaceDir) {
+              try { emoState.hydrateOnce(resolveInside(ctx.workspaceDir, ".emotional-state.json")); } catch (e) { dbg(e); }
             }
-          } catch (e) {
-            throwIfAborted(signal, "recall aborted");
-            dbg(e);
-            emoState.updateFromMessages(voiceMessages);
-          }
-          if (ctx?.workspaceDir) {
+            // Stimmung aus dem aktuellen Turn via EmotionEngine (T1→T2→T3)
+            // statt der alten Regex-Heuristik ableiten.
             try {
-              throwIfAborted(signal, "recall aborted");
-              const moodNow = emoState.describeMood();
-              throwIfAborted(signal, "recall aborted");
-              writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
-              throwIfAborted(signal, "recall aborted");
-              writeFileSync(join(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
+              const promptText = typeof event.prompt === "string" ? event.prompt.trim() : "";
+              const lastUserText = promptText
+                || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
+              if (lastUserText.length >= 3) {
+                const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
+                throwIfAborted(signal, "recall aborted");
+                emoState.applyEmotionScore(turnEmotion);
+              } else {
+                emoState.updateFromMessages(voiceMessages);
+              }
             } catch (e) {
               throwIfAborted(signal, "recall aborted");
               dbg(e);
+              emoState.updateFromMessages(voiceMessages);
+            }
+            if (ctx?.workspaceDir) {
+              try {
+                throwIfAborted(signal, "recall aborted");
+                const moodNow = emoState.describeMood();
+                throwIfAborted(signal, "recall aborted");
+                writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
+                throwIfAborted(signal, "recall aborted");
+                writeFileSync(join(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
+              } catch (e) {
+                throwIfAborted(signal, "recall aborted");
+                dbg(e);
+              }
             }
           }
           // v5.4.0 — Graph-Edges für assoziativen Spread laden
@@ -13597,7 +13612,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }
 
           const styleCfg = cfg.styleDirective || {};
-          const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId), {
+          const moodStyleDirective = buildMoodStyleDirective(jevEmotionRuntime.isEnabled(agentId) ? null : emotionalPool.describe(agentId), {
             hour: styleCfg.timeOfDay !== false ? hourInTimeZone(nowMs, styleCfg.timezone ?? cfg.timezone ?? null) : null,
             temperamentName: cfg.emotion?.temperaments?.[agentId]?.preset ?? null,
             opinion: styleCfg.opinion !== false,

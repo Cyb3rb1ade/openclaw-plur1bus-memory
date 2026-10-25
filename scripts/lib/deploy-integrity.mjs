@@ -42,6 +42,8 @@ export const DEPLOY_FILES = [
   "lib/featureModels.js",
   "lib/model-catalog-reconcile.js",
   "lib/jev-recall-filter.js",
+  "lib/jevEmotion.js",
+  "lib/jevEmotionRuntime.js",
   "lib/recall-comparison.js",
   "scripts/compare-recall.mjs",
   "lib/feature-definitions.js",
