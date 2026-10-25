@@ -64,7 +64,7 @@ def rollback(snapshot, apply):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--apply',action='store_true')
-    parser.add_argument('--host-patch',action='store_true',help='also back up/patch exact host bundle and startup entrypoint')
+    parser.add_argument('--host-patch',action='store_true',help='also back up/patch all supported host bundles and startup entrypoint')
     parser.add_argument('--rollback',type=Path)
     args=parser.parse_args()
     if args.rollback:
@@ -81,10 +81,31 @@ def main():
     patcher=SOURCE/'patch-exec-speech-context.mjs'
     if args.host_patch:
         inspected=subprocess.run(['node',str(patcher),str(DIST)],check=True,capture_output=True,text=True)
-        bundle=Path(json.loads(inspected.stdout)['file'])
+        report=json.loads(inspected.stdout)
+        paths=report.get('files')
+        if not isinstance(paths,list) or len(paths)!=3 or len(set(paths))!=3 or report.get('file') not in paths:
+            raise ValueError('unsupported host bundle inventory')
+        bundles=[]
+        for path in paths:
+            bundle=Path(path)
+            if not bundle.is_relative_to(DIST):
+                raise ValueError('unsafe host bundle target')
+            bundles.append(inside(DIST,str(bundle.relative_to(DIST))))
+        projections={item['file']:item for item in report.get('targets',[])}
+        if set(projections)!=set(paths):
+            raise ValueError('unsupported host bundle projections')
+        for bundle in bundles:
+            projection=projections[str(bundle)]
+            for key in ['originalSha256','patchedSha256']:
+                value=projection.get(key)
+                if not isinstance(value,str) or len(value)!=64 or any(char not in '0123456789abcdef' for char in value):
+                    raise ValueError('invalid host bundle digest')
+            if digest(bundle)!=projection['originalSha256']:
+                raise ValueError('host bundle changed during preflight')
         entry=inside(RUNTIME,'patches/apply-media-patch.sh')
         generated.append((entry,startup_source(entry.read_text())))
-        print('HOST '+str(bundle));print('STARTUP '+str(entry))
+        for bundle in bundles:print('HOST '+str(bundle))
+        print('STARTUP '+str(entry))
     if not args.apply:
         print('DRY RUN: no files changed; existing toggle JSON/config remain untouched.');return
     snapshot=RUNTIME/'.snapshots'/('telegram-speech-'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S'))
@@ -106,10 +127,22 @@ def main():
     for target,content in generated:
         record=backup(target);target.write_text(content);record['installed']=digest(target);save()
     if args.host_patch:
-        record=backup(bundle)
-        subprocess.run(['node',str(patcher),str(DIST),'--apply'],check=True)
-        record['installed']=digest(bundle);save()
-        subprocess.run(['node','--check',str(bundle)],check=True)
+        # Every host original is recorded before the patch subprocess can mutate any bundle.
+        host_records=[(bundle,backup(bundle)) for bundle in bundles]
+        if any(record['installed']!=projections[str(bundle)]['originalSha256'] for bundle,record in host_records):
+            raise ValueError('host bundle changed after preflight')
+        try:
+            subprocess.run(['node',str(patcher),str(DIST),'--apply'],check=True)
+        finally:
+            # Attribute only exact preflight originals/outputs, never unknown concurrent edits.
+            for bundle,record in host_records:
+                projection=projections[str(bundle)]
+                current=digest(bundle)
+                record['installed']=current if current==projection['originalSha256'] else projection['patchedSha256']
+            save()
+        if any(digest(bundle)!=record['installed'] for bundle,record in host_records):
+            raise ValueError('host bundle changed during patch')
+        for bundle in bundles:subprocess.run(['node','--check',str(bundle)],check=True)
     print('SNAPSHOT '+str(snapshot))
     print('ROLLBACK dry-run: python3 '+str(SOURCE/'deploy.py')+' --rollback '+str(snapshot))
 

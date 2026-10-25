@@ -296,3 +296,27 @@ test('runtime admits only known reaction dimensions and mentions only them in cu
   assert.match(reactionLine, /"joy":0.8/);
   assert.doesNotMatch(reactionLine, /trust|anticipation|surprise/);
 });
+
+for (const accepted of [true, false]) test(`fresh shadow with persisted v2 mood and recall off assesses current mood, ${accepted ? 'accepted' : 'unknown'} result never writes`, async t => {
+  const { writeFileSync } = await import('node:fs');
+  t.mock.timers.enable({ apis: ['Date'], now: 1800000000000 });
+  const persistedMood = { joy: .91, sadness: .04, anger: .07, fear: .03, disgust: .02, surprise: .61, trust: .87, anticipation: .72 };
+  const observed = [];
+  const f = await fixture(t, { jev: { mode: 'shadow' }, assessor: async input => {
+    observed.push(input.mood);
+    return accepted ? { ok: true, reaction: vector(), confidence: 1, sections: [] } : { ok: false, reason: 'invalid_or_uncertain_answer' };
+  } });
+  f.config.autoRecall = false;
+  const statePath = join(f.root, '.emotional-state.json');
+  const persisted = JSON.stringify({ agentId: 'main', state: { version: 2, current: persistedMood, nuanceState: {}, lastUpdateAt: Date.now() } });
+  writeFileSync(statePath, persisted, { mode: 0o600 });
+  assert.equal(await f.runtime.beforePrompt(f.event, f.ctx), undefined);
+  assert.deepEqual(Object.fromEntries(Object.keys(persistedMood).map(key => [key, observed[0][key]])), persistedMood);
+  assert.equal(readFileSync(statePath, 'utf8'), persisted);
+  assert.equal(existsSync(join(f.root, '.current-mood.txt')), false);
+  const env = await f.runtime.resolveExecEnv({}, f.ctx);
+  const snapshot = JSON.parse(readFileSync(env.PLUR1BUS_SPEECH_CONTEXT_FILE, 'utf8'));
+  assert.deepEqual(Object.fromEntries(Object.keys(persistedMood).map(key => [key, snapshot.mood[key]])), persistedMood);
+  assert.equal(f.emotionalPool.get('main').serializeState().timedMood.target, null);
+  assert.deepEqual(f.emotionalPool.get('main').serializeState().timedMood.eventIds, []);
+});

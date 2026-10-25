@@ -22,6 +22,7 @@ test('unsupported and ambiguous caller shapes refuse without changing source',as
 test('copied bundle applies atomically once, passes syntax, and ambiguous targets remain unchanged',async()=>{
  const {writeFileSync,readFileSync}=await import('node:fs');const {join}=await import('node:path');const {spawnSync}=await import('node:child_process');
  const {patchExecContextDirectory}=await import('../scripts/telegramTts/patch-exec-speech-context.mjs');const dir=makeTempDir('speech-host-');const file=join(dir,'bash-tools-fixture.mjs');writeFileSync(file,source);
+ for (const name of ['builtin-openclaw','context-engine-maintenance']) writeFileSync(join(dir,name+'-fixture.mjs'),readFileSync(new URL('./fixtures/telegramSpeech/'+name+'-host.mjs',import.meta.url),'utf8'));
  assert.equal(patchExecContextDirectory(dir).changed,true);assert.equal(readFileSync(file,'utf8'),source);assert.equal(patchExecContextDirectory(dir,true).changed,true);const once=readFileSync(file,'utf8');assert.equal(patchExecContextDirectory(dir,true).changed,false);assert.equal(readFileSync(file,'utf8'),once);assert.equal(spawnSync('node',['--check',file]).status,0);
  writeFileSync(join(dir,'bash-tools-ambiguous.mjs'),source);assert.throws(()=>patchExecContextDirectory(dir,true));assert.equal(readFileSync(file,'utf8'),once);
 });
