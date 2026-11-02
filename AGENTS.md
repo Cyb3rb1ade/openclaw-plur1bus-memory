@@ -227,13 +227,14 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
-- Current baseline: 5,205 tests (5,202 passing, 0 failing, 3 skipped).
+- Current baseline: 5,603 tests (5,600 passing, 0 failing, 3 skipped).
 
 ## Dependency Audit
 
-Last audit run: 2026-06-05
+Last audit run: 2026-11-03
 
-- `npm audit`: **0 vulnerabilities**
+- `npm audit --omit=dev`: **0 vulnerabilities**
+- `npm audit` (incl. devDependencies): 7 (4 moderate, 3 high) — all in `c8`/`openclaw` devDependencies, none shipped. The `c8` fix path is a major-version downgrade (9.1.0); the `openclaw` devDependency fix path (`2026.10.9`) regresses the total count on this host. Both left as-is deliberately.
 - `npm ci --ignore-scripts`: passes
 
 ### Runtime Dependencies
@@ -241,13 +242,20 @@ Last audit run: 2026-06-05
 | Package | Spec | Resolved | Pinned? |
 |---------|------|----------|---------|
 | `@lancedb/lancedb` | `^0.26.2` | `0.26.2` | No (`^`) — version fixed by `package-lock.json` |
-| `openai` | `^6.27.0` | `6.42.0` | No (`^`) — version fixed by `package-lock.json` |
+| `openai` | `^6.27.0` | `6.49.0` | No (`^`) — version fixed by `package-lock.json` |
 
 ### Optional Dependencies
 
 | Package | Spec | Resolved | Pinned? |
 |---------|------|----------|---------|
-| `@huggingface/transformers` | `4.2.0` | `4.2.0` | Yes |
+| `@huggingface/transformers` | `4.3.2` | `4.3.2` | Yes |
+
+### Overrides
+
+| Package | Forced to | Why |
+|---------|-----------|-----|
+| `@huggingface/transformers` → `sharp` | `0.35.5` | Closes CVE-2026-96889 (librsvg) |
+| `zod` | `4.6.7` | Closes a high-severity memory-exhaustion advisory (`openai`/`openclaw` dependency chain) |
 
 All versions are effectively pinned at install time by `package-lock.json`. No critical CVEs were reported at the time of the last audit. Major upgrades require a separate plan.
 

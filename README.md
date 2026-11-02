@@ -2,10 +2,10 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.16.0 — verified on OpenClaw 2026.8.x through 2026.9.5**
+**PLUR1BUS 7.19.0 — verified on OpenClaw 2026.8.x through 2026.10.4**
 
-Current source version: **7.16.0**, running in production on OpenClaw
-`2026.9.5`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
+Current source version: **7.19.0**, running in production on OpenClaw
+`2026.10.4`. The declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`; the package is built against the immutable build baseline
 `openclaw@2026.8.2`. Each host release is checked against the full patch set
 before it is installed, so a host change that breaks an internal anchor is
@@ -28,6 +28,12 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.19.0 — independent emotion and bilingual Telegram speech
+
+An opt-in `emotion.jev` owner can assess incoming messages independently of the legacy mood writer (`shadow` logs proposals only, `active` drives the shared per-agent mood by elapsed time) and a new outgoing speech adapter (`scripts/plan-speech.mjs`) plans bilingual (`de`/`pl`) ElevenLabs delivery from canonical semantic intent rather than raw mood text. Both default to off; see [Configuration](docs/configuration.md#independent-incoming-jev-emotion-emotionjev) for the rollout contract and `scripts/telegramTts/README.md` for deployment.
+
+Also in this release: `@huggingface/transformers` moved to 4.3.2 and `zod` is pinned to 4.6.7, closing the high-severity advisories in both — `npm audit --omit=dev` is back to 0.
 
 ### New in v7.16.0 — recall width is an operator setting
 

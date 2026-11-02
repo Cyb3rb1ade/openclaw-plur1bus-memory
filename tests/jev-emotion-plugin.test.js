@@ -103,11 +103,15 @@ test('actual legacy block skips inference, fallback and file writer in active mo
   const config = { baseDbPath: root, emotion: { jev: { enabled: true, mode: 'active', agents: { main: true } } } };
   const pool = createSharedJevEmotionalPool(config);
   const active = createJevEmotionRuntime({ config, emotionalPool: pool });
-  const before = pool.snapshot('main');
+  // snapshot() always stamps a fresh `timestamp` (now), so two calls never
+  // deep-equal on that field alone even with no state change — compare
+  // everything else.
+  const { timestamp: _beforeTimestamp, ...before } = pool.snapshot('main');
   const offlineInference = async () => { throw new Error('offline external model failure'); };
   const args = [pool, 'main', active, { workspaceDir: root }, { prompt: 'Ich bin traurig und einsam.' }, [{ role: 'user', content: 'Ich bin traurig und einsam.' }], undefined, offlineInference, throwIfAborted, () => {}, writeFileSync, join, formatMoodFile, extractMessageText, resolveInside];
   await block(...args);
-  assert.deepEqual(pool.snapshot('main'), before);
+  const { timestamp: _afterTimestamp, ...after } = pool.snapshot('main');
+  assert.deepEqual(after, before);
   assert.equal(existsSync(join(root, '.emotional-state.json')), false);
   args[2] = createJevEmotionRuntime({ config: { ...config, emotion: { jev: { ...config.emotion.jev, mode: 'shadow' } } }, emotionalPool: pool });
   await block(...args);

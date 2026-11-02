@@ -6,6 +6,19 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.19.0] — 2026-11-03
+
+### Added
+
+- Independent incoming Jev emotion assessment (`emotion.jev`), opt-in per global and per-agent switch. `shadow` mode assesses and logs bounded proposal metadata without touching the legacy mood writer; `active` mode applies independent reaction evidence to the shared per-agent EmotionalState by elapsed time, skipping the legacy turn update/fallback/writer and the standalone emotional-state injector for active agents. Runs before memory recall, including when `autoRecall` is disabled or its database fails, on the existing `captureChunkingJev` credential and model with a 1,000 ms deadline and no retries. Stored memory emotion classification and recall scoring are unchanged.
+- Telegram outgoing speech adapter (`scripts/plan-speech.mjs` plus rollout tooling in `scripts/telegramTts/`): bilingual (`de`/`pl`) ElevenLabs delivery for `main`, `bernhardine`, `heisenberg` driven by canonical semantic intent/delivery planning, not raw mood text. Shadow mode synthesizes neutral canonical text and exposes content-free proposals; active mode renders validated metadata. Run context is read only from a private, time-bounded `.plur1bus/speech-context/<hashed-run>.json` snapshot scoped to an exact agent/session/run/workspace match; missing or invalid context falls back to final-text-only planning. Preview/rollback via `scripts/telegramTts/deploy.py`.
+
+### Security
+
+- `@huggingface/transformers` 4.2.0 → 4.3.2, closing the high-severity `sharp` advisory (CVE-2026-96889, librsvg) pulled in transitively; the `sharp` override is raised to `0.35.5` to match.
+- Added a `zod` override (`4.6.7`) closing a high-severity memory-exhaustion advisory in the `openai` dependency chain.
+- `npm audit --omit=dev`: 0 vulnerabilities (previously 3 high). Remaining findings are exclusively in `devDependencies` (`c8`, `openclaw`); none ship in the published package. The `c8` fix path is a major-version downgrade and the `openclaw` devDependency fix path regresses the total count on this host — both left unresolved deliberately rather than forced.
+
 ## [7.18.31] — 2026-10-23
 
 ### Fixed

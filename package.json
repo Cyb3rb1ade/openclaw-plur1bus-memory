@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.18.32-jev.2",
+  "version": "7.19.0",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -69,7 +69,7 @@
     "openai": "^6.27.0"
   },
   "optionalDependencies": {
-    "@huggingface/transformers": "4.2.0",
+    "@huggingface/transformers": "4.3.2",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
@@ -78,11 +78,12 @@
   },
   "overrides": {
     "@huggingface/transformers": {
-      "sharp": "0.35.4",
+      "sharp": "0.35.5",
       "onnxruntime-node": {
         "adm-zip": "0.6.1"
       },
       "onnxruntime-web": "1.26.0"
-    }
+    },
+    "zod": "4.6.7"
   }
 }
