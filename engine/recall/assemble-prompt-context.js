@@ -572,7 +572,12 @@ export function createPromptContextAssembler(ctx) {
         : await applySemanticLensToRecall(ordered, {
           semanticLens: semanticLensCfg,
           workspaceDir: hookCtx?.workspaceDir,
-          getMemoryById: async (memoryId) => db.getById(memoryId),
+          getMemoryById: async (memoryId) => {
+            const memory = await db.getById(memoryId);
+            // Authorize the raw ownership tuple before Lens projection or quotas.
+            if (!memory || !checkAccess(memoryCtx, memory).allowed) return null;
+            return memory;
+          },
         });
       const semanticLensItems = semanticLensResult.lensMemories.map((r) => ({
         id: r.entry.id,
