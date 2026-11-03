@@ -9,7 +9,7 @@
 
 import { IMPORTANCE_STATUS } from "../../lib/importance-status.js";
 import { buildRefinePatch, classifyEncoding } from "../../lib/encoding-llm.js";
-import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "../../lib/dreaming/rem-dream.js";
+import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, persistRemDreamToVault, runRemDream } from "../../lib/dreaming/rem-dream.js";
 import { ledgerBackedCompletion, remJobOutcome } from "./rem-outcome.js";
 import { findEpisodeCardPath, rebuildEpisode, writeEpisodeToVault } from "../../lib/episodes.js";
 import { classifierPartialFailureWarning, formatAfterthoughtCronReply, formatClassifierCronReply } from "../../lib/internal-cron-reply.js";
@@ -404,7 +404,7 @@ export function createInternalJobBodies(ctx) {
               ? await sharedMemoryPool.withUserDb(memoryCtx, runRemPartition)
               : await pool.withDb(internalAgent, runRemPartition);
           if (partitionResult.report) {
-            writeRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget);
+            persistRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget, host.logger);
           }
           host.logger.info(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(summarizeJobResultForLog(partitionResult.report || partitionResult))}`);
           remRuns.push({ scope: remAclPartition.scope, result: partitionResult });

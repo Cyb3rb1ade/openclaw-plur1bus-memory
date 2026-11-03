@@ -377,6 +377,7 @@ export const DEPLOY_FILES = [
   "lib/graph-index.js",
   "lib/i18n-dictionary.js",
   "lib/install/soul-patcher.js",
+  "lib/iso-week.js",
   "lib/job-lock.js",
   "lib/job-rate-limit.js",
   "lib/jobs/conflict-resolver.js",
