@@ -32,6 +32,11 @@ describe("engine/tools/memory-tools", () => {
     }
   });
 
+  it("awaits recordKnowledgePromotion (async in the dreaming/obsidian line, never throws)", () => {
+    assert.match(source, /await recordKnowledgePromotion\(/);
+    assert.doesNotMatch(source, /(?<!await )recordKnowledgePromotion\(/);
+  });
+
   it("keeps the destructive-op gate and its default", () => {
     assert.match(source, /allowModelDestructiveMemoryOps !== false/);
     assert.match(source, /do not carry a user-bound authorization context/);

@@ -6,13 +6,18 @@ SNAPSHOT_DIR="$OPENCLAW_HOME/.snapshots"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 SNAPSHOT_PATH="$SNAPSHOT_DIR/plur1bus-$TIMESTAMP"
 
-# Paths to back up (all relative to OPENCLAW_HOME)
-BACKUP_PATHS=(
-  "memory/lancedb-namespaced"
-  "memory/_archive"
-  "memory/run-state.json"
-  "vault"
-  "memory/merge-proposals.jsonl"
+# The engine writes run-state.json and .adaptive-learning/merge-proposals.jsonl in
+# the workspace, not under memory/. Default <OPENCLAW_HOME>/workspace; set
+# OPENCLAW_WORKSPACE_DIR for a different workspace.
+WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$OPENCLAW_HOME/workspace}"
+
+# Items to back up as "<source>|<path inside the snapshot>"
+BACKUP_ITEMS=(
+  "$OPENCLAW_HOME/memory/lancedb-namespaced|memory/lancedb-namespaced"
+  "$OPENCLAW_HOME/memory/_archive|memory/_archive"
+  "$WORKSPACE_DIR/run-state.json|workspace/run-state.json"
+  "$OPENCLAW_HOME/vault|vault"
+  "$WORKSPACE_DIR/.adaptive-learning/merge-proposals.jsonl|workspace/.adaptive-learning/merge-proposals.jsonl"
 )
 
 mkdir -p "$SNAPSHOT_PATH"
@@ -22,9 +27,12 @@ SKIPPED_COUNT=0
 TOTAL_SIZE=0
 
 home_real="$(realpath "$OPENCLAW_HOME")"
+# A workspace outside OPENCLAW_HOME is allowed as its own root, nothing else is.
+workspace_real="$(realpath "$WORKSPACE_DIR" 2>/dev/null || true)"
 
-for rel in "${BACKUP_PATHS[@]}"; do
-  src="$OPENCLAW_HOME/$rel"
+for item in "${BACKUP_ITEMS[@]}"; do
+  src="${item%%|*}"
+  rel="${item#*|}"
   dest="$SNAPSHOT_PATH/$rel"
 
   if [[ ! -e "$src" ]]; then
@@ -33,14 +41,18 @@ for rel in "${BACKUP_PATHS[@]}"; do
     continue
   fi
 
-  # Validate source is inside OPENCLAW_HOME (resolve symlinks for validation)
+  # Validate source is inside OPENCLAW_HOME or the workspace (resolve symlinks for validation)
   src_real="$(realpath "$src")"
   case "$src_real" in
     "$home_real"/*) ;;
     *)
-      echo "[SKIP] Outside OPENCLAW_HOME: $rel"
-      SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-      continue
+      if [[ -n "$workspace_real" && "$rel" == workspace/* && "$src_real" == "$workspace_real"/* ]]; then
+        :
+      else
+        echo "[SKIP] Outside OPENCLAW_HOME: $rel"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        continue
+      fi
       ;;
   esac
 

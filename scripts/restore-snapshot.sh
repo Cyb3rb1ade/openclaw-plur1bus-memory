@@ -73,13 +73,33 @@ echo "Snapshot:    $SNAPSHOT_REAL"
 echo "Mode:        $(if $DRY_RUN; then echo "DRY-RUN (use --confirm to restore)"; else echo "LIVE"; fi)"
 echo ""
 
-# Paths to restore (same as backup)
-RESTORE_PATHS=(
-  "memory/lancedb-namespaced"
-  "memory/_archive"
-  "memory/run-state.json"
-  "vault"
-  "memory/merge-proposals.jsonl"
+# The engine keeps run-state.json and .adaptive-learning/merge-proposals.jsonl in the
+# workspace (default <OPENCLAW_HOME>/workspace, override with OPENCLAW_WORKSPACE_DIR).
+WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$OPENCLAW_HOME/workspace}"
+workspace_real="$(realpath "$WORKSPACE_DIR" 2>/dev/null || true)"
+
+# realpath of the nearest existing ancestor plus the not yet existing tail, so a
+# destination below a directory that is created on restore still resolves.
+resolve_existing_prefix() {
+  local p="$1" tail=""
+  while [[ ! -d "$p" && "$p" != "/" && "$p" != "." ]]; do
+    tail="/$(basename "$p")$tail"
+    p="$(dirname "$p")"
+  done
+  echo "$(realpath "$p" 2>/dev/null || echo "$p")$tail"
+}
+
+# Items to restore as "<path inside the snapshot>|<destination>" (same as backup).
+# The two memory/ entries at the end only exist in snapshots made before the
+# workspace fix; they go back where they were saved from.
+RESTORE_ITEMS=(
+  "memory/lancedb-namespaced|$OPENCLAW_HOME/memory/lancedb-namespaced"
+  "memory/_archive|$OPENCLAW_HOME/memory/_archive"
+  "workspace/run-state.json|$WORKSPACE_DIR/run-state.json"
+  "vault|$OPENCLAW_HOME/vault"
+  "workspace/.adaptive-learning/merge-proposals.jsonl|$WORKSPACE_DIR/.adaptive-learning/merge-proposals.jsonl"
+  "memory/run-state.json|$OPENCLAW_HOME/memory/run-state.json"
+  "memory/merge-proposals.jsonl|$OPENCLAW_HOME/memory/merge-proposals.jsonl"
 )
 
 # Tombstone-Registry: wird NICHT aus dem Snapshot restauriert (der Snapshot ist
@@ -93,8 +113,9 @@ if ! $DRY_RUN; then
   mkdir -p "$SAFETY_PATH"
   echo "Creating safety backup: $SAFETY_PATH"
 
-  for rel in "${RESTORE_PATHS[@]}" "$TOMBSTONE_REGISTRY"; do
-    src="$OPENCLAW_HOME/$rel"
+  for item in "${RESTORE_ITEMS[@]}" "$TOMBSTONE_REGISTRY|$OPENCLAW_HOME/$TOMBSTONE_REGISTRY"; do
+    rel="${item%%|*}"
+    src="${item#*|}"
     dest="$SAFETY_PATH/$rel"
     if [[ -e "$src" ]]; then
       mkdir -p "$(dirname "$dest")"
@@ -120,9 +141,10 @@ fi
 RESTORED_COUNT=0
 SKIPPED_COUNT=0
 
-for rel in "${RESTORE_PATHS[@]}"; do
+for item in "${RESTORE_ITEMS[@]}"; do
+  rel="${item%%|*}"
   src="$SNAPSHOT_PATH/$rel"
-  dest="$OPENCLAW_HOME/$rel"
+  dest="${item#*|}"
 
   if [[ ! -e "$src" ]]; then
     echo "[SKIP] Missing in snapshot: $rel"
@@ -130,16 +152,20 @@ for rel in "${RESTORE_PATHS[@]}"; do
     continue
   fi
 
-  # Validate destination would be inside OPENCLAW_HOME
+  # Validate destination would be inside OPENCLAW_HOME (or, for workspace files, the workspace)
   dest_parent="$(dirname "$dest")"
-  dest_parent_real="$(realpath "$dest_parent" 2>/dev/null || echo "$dest_parent")"
+  dest_parent_real="$(resolve_existing_prefix "$dest_parent")"
   case "$dest_parent_real" in
     "$home_real"/*|"$home_real")
       ;;
     *)
-      echo "[SKIP] Would write outside OPENCLAW_HOME: $rel"
-      SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-      continue
+      if [[ -n "$workspace_real" && "$rel" == workspace/* && ( "$dest_parent_real" == "$workspace_real" || "$dest_parent_real" == "$workspace_real"/* ) ]]; then
+        :
+      else
+        echo "[SKIP] Would write outside OPENCLAW_HOME: $rel"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        continue
+      fi
       ;;
   esac
 

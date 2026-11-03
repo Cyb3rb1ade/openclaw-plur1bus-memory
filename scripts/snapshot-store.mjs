@@ -2,8 +2,14 @@
 /**
  * scripts/snapshot-store.mjs — CLI for the store snapshot step (HM1-R8).
  *
- *   node scripts/snapshot-store.mjs <create|list|verify|restore|prune>
- *     --state-dir <d> [--base-db-path <p>] [--label <l>] [--id <id>] [--json]
+ *   node scripts/snapshot-store.mjs <create|list|verify|restore|prune|purge-pre-restore>
+ *     --state-dir <d> [--base-db-path <p>] [--label <l>] [--id <id>]
+ *     [--workspace-dir <w>] [--keep-pre-restore <n>] [--keep <n>] [--json]
+ *
+ * `create` also saves run-state.json and .adaptive-learning/merge-proposals.jsonl of
+ * the workspace (--workspace-dir, default <state-dir>/workspace). `restore` keeps every
+ * <store>.pre-restore-<ts> copy unless --keep-pre-restore <n> removes the older ones;
+ * `purge-pre-restore` removes them explicitly (--keep <n>, default 2).
  *
  * Exit 0 ok, 1 SnapshotError (reason printed) or other failure, 2 usage.
  * With --json one document (schema plur1bus.snapshot/1) goes to stdout and
@@ -18,25 +24,31 @@ import {
   createSnapshot,
   listSnapshots,
   pruneSnapshots,
+  purgePreRestore,
   restoreSnapshot,
   verifySnapshot,
 } from "../lib/snapshot/store-snapshot.js";
 
-const COMMANDS = new Set(["create", "list", "verify", "restore", "prune"]);
+const COMMANDS = new Set(["create", "list", "verify", "restore", "prune", "purge-pre-restore"]);
 const VALUE_OPTS = new Map([
   ["--state-dir", "stateDir"],
   ["--base-db-path", "baseDbPath"],
   ["--label", "label"],
   ["--id", "id"],
+  ["--workspace-dir", "workspaceDir"],
+  ["--keep-pre-restore", "keepPreRestore"],
+  ["--keep", "keep"],
 ]);
+const COUNT_OPTS = new Set(["keepPreRestore", "keep"]);
 const REQUIRED = {
   create: ["stateDir", "baseDbPath"],
   list: ["stateDir"],
   verify: ["stateDir", "id"],
   restore: ["stateDir", "baseDbPath", "id"],
   prune: ["stateDir"],
+  "purge-pre-restore": ["stateDir", "baseDbPath"],
 };
-const USAGE = "usage: snapshot-store.mjs <create|list|verify|restore|prune> --state-dir <d> [--base-db-path <p>] [--label <l>] [--id <id>] [--json]";
+const USAGE = "usage: snapshot-store.mjs <create|list|verify|restore|prune|purge-pre-restore> --state-dir <d> [--base-db-path <p>] [--label <l>] [--id <id>] [--workspace-dir <w>] [--keep-pre-restore <n>] [--keep <n>] [--json]";
 
 class UsageError extends Error {}
 
@@ -50,7 +62,11 @@ function parseArgs(argv) {
     else if (VALUE_OPTS.has(arg)) {
       const value = rest[++i];
       if (value === undefined || value.startsWith("--")) throw new UsageError(`${arg} needs a value`);
-      opts[VALUE_OPTS.get(arg)] = value;
+      const key = VALUE_OPTS.get(arg);
+      if (COUNT_OPTS.has(key)) {
+        if (!/^\d+$/.test(value)) throw new UsageError(`${arg} needs a non-negative integer`);
+        opts[key] = Number(value);
+      } else opts[key] = value;
     } else throw new UsageError(`unknown option ${arg}`);
   }
   for (const key of REQUIRED[command]) {
@@ -71,14 +87,16 @@ function pluginVersion() {
 async function run(command, o) {
   switch (command) {
     case "create":
-      return createSnapshot({ stateDir: o.stateDir, baseDbPath: o.baseDbPath, label: o.label, pluginVersion: pluginVersion() });
+      return createSnapshot({ stateDir: o.stateDir, baseDbPath: o.baseDbPath, label: o.label, pluginVersion: pluginVersion(), workspaceDir: o.workspaceDir });
     case "list":
       return listSnapshots({ stateDir: o.stateDir });
     case "verify":
       if (!/^plur1bus-[A-Za-z0-9._-]+$/.test(o.id) || o.id.includes("..")) throw new SnapshotError("unsafe-path", `invalid snapshot id ${JSON.stringify(o.id)}`);
       return verifySnapshot({ dir: join(o.stateDir, "memory", ".snapshots", o.id) });
     case "restore":
-      return restoreSnapshot({ stateDir: o.stateDir, baseDbPath: o.baseDbPath, id: o.id });
+      return restoreSnapshot({ stateDir: o.stateDir, baseDbPath: o.baseDbPath, id: o.id, keepPreRestore: o.keepPreRestore });
+    case "purge-pre-restore":
+      return purgePreRestore({ stateDir: o.stateDir, baseDbPath: o.baseDbPath, keep: o.keep });
     case "prune":
       return { removed: await pruneSnapshots({ stateDir: o.stateDir }) };
     default:
@@ -98,7 +116,14 @@ function describe(command, result) {
     case "verify":
       return `snapshot ${result.id} verified: ${result.files} files`;
     case "restore":
-      return `store restored from ${result.id}${result.preRestorePath ? `; previous store kept at ${result.preRestorePath}` : ""}`;
+      return [
+        `store restored from ${result.id}${result.preRestorePath ? `; previous store kept at ${result.preRestorePath}` : ""}`,
+        ...(result.purgedPreRestore?.length ? [`removed older pre-restore copies: ${result.purgedPreRestore.join(", ")}`] : []),
+      ].join("\n");
+    case "purge-pre-restore":
+      return result.skipped
+        ? `nothing removed: ${result.skipped}`
+        : result.removed.length ? `removed ${result.removed.join(", ")}` : "no pre-restore copies to remove";
     case "prune":
       return result.removed.length ? `removed ${result.removed.join(", ")}` : "nothing to prune";
     default:
