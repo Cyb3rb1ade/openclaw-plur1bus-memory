@@ -658,4 +658,260 @@ describe("resumable reembedding coordinator", () => {
     assert.equal(staleShutdowns, 2);
     assert.deepStrictEqual(factoryModels, ["target-model"]);
   });
+
+  describe("audit follow-ups", () => {
+    const manyRows = Array.from({ length: 17 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      text: `audit row ${index + 1}`,
+      status: "active",
+      vector: [1, 0, 0],
+    }));
+
+    function build({ backend = fakeBackend(), readPolicySnapshot, clock = () => 1_000 } = {}) {
+      const stateStore = createMigrationStateStore({ stateRoot, now: clock });
+      const coordinator = createReembeddingCoordinator({
+        stateStore,
+        backend,
+        createTargetProvider: async () => ({
+          async embedBatch(texts) { return texts.map((text) => [text.length, 1, 2, 3]); },
+          async shutdown() {},
+        }),
+        plannerDependencies: {
+          now: clock,
+          randomBytes: () => Buffer.alloc(32, 8),
+          statDisk: async () => ({ freeBytes: 1_000_000 }),
+          probeTargetProvider: async () => [0, 1, 2, 3],
+        },
+        ...(readPolicySnapshot ? { readPolicySnapshot } : {}),
+        runValidationProbes: async () => ({ semanticRecall: true }),
+      });
+      return { stateStore, coordinator, backend };
+    }
+
+    async function readyToSwitch(coordinator, id = "migration-ready") {
+      const planned = await coordinator.plan({
+        id,
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      await coordinator.apply({ id, token: planned.confirmation.token });
+      const ready = await coordinator.validate({ id });
+      assert.equal(ready.state, "ready_to_switch");
+      return { planned, ready };
+    }
+
+    it("rechecks source table versions for a validated migration before the switch", async () => {
+      const { coordinator, backend } = build({ backend: fakeBackend([sourceRows[0]]) });
+      const { ready } = await readyToSwitch(coordinator);
+      await coordinator.assertSourceCurrent(ready.id);
+
+      backend.setVersion("source-version-written-after-validation");
+      await assert.rejects(coordinator.assertSourceCurrent(ready.id), /source version drift/);
+      assert.equal((await coordinator.status(ready.id)).state, "ready_to_switch");
+      await coordinator.shutdown();
+    });
+
+    it("rechecks the config revision before the switch", async () => {
+      const backend = fakeBackend([sourceRows[0]]);
+      const { coordinator } = build({ backend });
+      const { ready } = await readyToSwitch(coordinator);
+      const inventory = backend.inventoryActiveGeneration.bind(backend);
+      backend.inventoryActiveGeneration = async () => (await inventory()).map((entry) => ({ ...entry, configRevision: "config-b" }));
+      await assert.rejects(coordinator.assertSourceCurrent(ready.id), /config revision drift/);
+      await coordinator.shutdown();
+    });
+
+    it("does not treat a workspace policy change as source drift at switch time", async () => {
+      let policy = [{ workspace: "a", enabled: true }];
+      const { coordinator } = build({
+        backend: fakeBackend([sourceRows[0]]),
+        readPolicySnapshot: async () => policy,
+      });
+      const { ready } = await readyToSwitch(coordinator);
+      policy = [{ workspace: "a", enabled: false }];
+      await coordinator.assertSourceCurrent(ready.id);
+      await coordinator.shutdown();
+    });
+
+    it("rejects an unknown migration in the switch recheck", async () => {
+      const { coordinator } = build();
+      await assert.rejects(coordinator.assertSourceCurrent("missing"), /not found/);
+      await coordinator.shutdown();
+    });
+
+    it("resumes after a workspace policy change and persists the acknowledged snapshot", async () => {
+      let policy = [{ workspace: "a", enabled: true }];
+      const backend = fakeBackend(manyRows);
+      const { coordinator, stateStore } = build({ backend, readPolicySnapshot: async () => policy });
+      const planned = await coordinator.plan({
+        id: "migration-policy",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      const partial = await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+      assert.equal(partial.state, "running");
+      assert.equal(partial.cursor.completedRows, 8);
+
+      policy = [{ workspace: "a", enabled: false }];
+      const resumed = await coordinator.resume({ id: planned.record.id, token: planned.confirmation.token });
+      assert.equal(resumed.cursor.completedRows, 16);
+      assert.equal(resumed.policyRevision, JSON.stringify(policy));
+      assert.equal(stateStore.get(planned.record.id).policyRevision, JSON.stringify(policy));
+
+      // The acknowledged snapshot is the new baseline: the next resume must not demand another acknowledgement.
+      const finished = await coordinator.resume({ id: planned.record.id, token: planned.confirmation.token });
+      assert.equal(finished.state, "validating");
+      assert.equal(backend.target.size, manyRows.length);
+      await coordinator.shutdown();
+    });
+
+    it("still requires the bound confirmation token to resume after a policy change", async () => {
+      let policy = [{ workspace: "a", enabled: true }];
+      const { coordinator, stateStore } = build({
+        backend: fakeBackend(manyRows),
+        readPolicySnapshot: async () => policy,
+      });
+      const planned = await coordinator.plan({
+        id: "migration-policy-token",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+      policy = [];
+      await assert.rejects(
+        coordinator.resume({ id: planned.record.id, token: "reemb_v1_invalid" }),
+        /invalid or expired reembedding confirmation/,
+      );
+      assert.equal(stateStore.get(planned.record.id).policyRevision, JSON.stringify([{ workspace: "a", enabled: true }]));
+      await coordinator.shutdown();
+    });
+
+    it("keeps source-version drift fatal for a resume that also follows a policy change", async () => {
+      let policy = [];
+      const backend = fakeBackend(manyRows);
+      const { coordinator } = build({ backend, readPolicySnapshot: async () => policy });
+      const planned = await coordinator.plan({
+        id: "migration-policy-drift",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+      policy = [{ workspace: "a", enabled: false }];
+      backend.setVersion("source-version-drifted");
+      await assert.rejects(
+        coordinator.resume({ id: planned.record.id, token: planned.confirmation.token }),
+        /source version drift/,
+      );
+      await coordinator.shutdown();
+    });
+
+    it("validates a fully copied migration after a workspace policy change", async () => {
+      let policy = [{ workspace: "a", enabled: true }];
+      const { coordinator } = build({
+        backend: fakeBackend([sourceRows[0]]),
+        readPolicySnapshot: async () => policy,
+      });
+      const planned = await coordinator.plan({
+        id: "migration-validate-policy",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      const copied = await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+      assert.equal(copied.state, "validating");
+      policy = [{ workspace: "a", enabled: false }];
+      assert.equal((await coordinator.validate({ id: planned.record.id })).state, "ready_to_switch");
+      await coordinator.shutdown();
+    });
+
+    it("refuses a target generation that a completed migration owns (rollback baseline)", async () => {
+      const { coordinator, stateStore } = build({ backend: fakeBackend([sourceRows[0]]) });
+      const { ready } = await readyToSwitch(coordinator, "migration-first");
+      let record = await stateStore.transition(ready.id, "ready_to_switch", "switching", { expectedRevision: ready.revision });
+      record = await stateStore.transition(ready.id, "switching", "completed", { expectedRevision: record.revision });
+      assert.equal(record.state, "completed");
+
+      const otherFingerprint = normalizeEmbeddingFingerprint({ provider: "openai", model: "other-model", dimensions: 4 }, []);
+      await assert.rejects(
+        coordinator.plan({
+          id: "migration-second",
+          targetGeneration: "generation-target",
+          target: { fingerprint: otherFingerprint },
+        }),
+        /target generation .* already belongs to migration migration-first/,
+      );
+      assert.equal(stateStore.get("migration-second"), null);
+      const fresh = await coordinator.plan({
+        id: "migration-third",
+        targetGeneration: "generation-fresh",
+        target: { fingerprint: otherFingerprint },
+      });
+      assert.equal(fresh.record.target.generation, "generation-fresh");
+      await coordinator.shutdown();
+    });
+
+    it("still lets a re-plan reuse the quarantined target of a failed (expired) migration", async () => {
+      let clock = 1_000;
+      const { coordinator, stateStore } = build({
+        backend: fakeBackend([sourceRows[0]]),
+        clock: () => clock,
+      });
+      const first = await coordinator.plan({
+        id: "migration-expired",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+        confirmationTtlMs: 1_000,
+      });
+      clock = 5_000;
+      const second = await coordinator.plan({
+        id: "migration-replan",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      assert.equal(stateStore.get(first.record.id).state, "failed");
+      assert.equal(second.record.target.generation, "generation-target");
+      await coordinator.shutdown();
+    });
+
+    it("refuses an existing target generation whose manifest was built from another source", async () => {
+      const backend = fakeBackend([sourceRows[0]]);
+      backend.createQuarantinedGeneration = async () => { throw new Error("target generation already exists: generation-target"); };
+      backend.describeGeneration = async () => ({
+        generation: "generation-target",
+        dimensions: 4,
+        tables: { "agent-a/memories": { sourceVersion: "someone-elses-version", sourceRows: 1, writtenRows: 1 } },
+      });
+      const { coordinator } = build({ backend });
+      const planned = await coordinator.plan({
+        id: "migration-foreign-target",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      await assert.rejects(
+        coordinator.apply({ id: planned.record.id, token: planned.confirmation.token }),
+        /existing target generation does not match the migration plan/,
+      );
+      assert.equal(backend.target.size, 0);
+      await coordinator.shutdown();
+    });
+
+    it("accepts an existing target generation whose manifest matches this migration's source", async () => {
+      const backend = fakeBackend([sourceRows[0]]);
+      backend.createQuarantinedGeneration = async () => { throw new Error("target generation already exists: generation-target"); };
+      backend.describeGeneration = async () => ({
+        generation: "generation-target",
+        dimensions: 4,
+        tables: { "agent-a/memories": { sourceVersion: "source-version-1", sourceRows: 1, writtenRows: 0 } },
+      });
+      const { coordinator } = build({ backend });
+      const planned = await coordinator.plan({
+        id: "migration-own-target",
+        targetGeneration: "generation-target",
+        target: { fingerprint: targetFingerprint },
+      });
+      const applied = await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+      assert.equal(applied.state, "validating");
+      assert.equal(backend.target.size, 1);
+      await coordinator.shutdown();
+    });
+  });
 });

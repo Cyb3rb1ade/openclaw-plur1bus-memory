@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -242,6 +242,125 @@ describe("quarantined LanceDB reembedding generations", () => {
     } finally {
       await backend.close();
     }
+  });
+
+  describe("retrying an interrupted generation creation", () => {
+    const fingerprintId = `embedding:v1:sha256:${"b".repeat(64)}`;
+    const identity = {
+      provider: "openai",
+      model: "target-model",
+      revision: "rev-1",
+      dimension: 4,
+      normalization: "l2",
+      prefixScheme: "none",
+      instruction: "",
+      dtype: "fp32",
+    };
+    const newBackend = (extra = {}) => createLanceGenerationBackend({
+      stateRoot,
+      activeRoot,
+      activeGeneration: "generation-active",
+      activeFingerprint: { dimensions: 3, fingerprintId: "embedding:v1:sha256:source" },
+      ...extra,
+    });
+    const create = (backend, tables) => backend.createQuarantinedGeneration({
+      generation: "generation-target",
+      fingerprintId,
+      dimensions: 4,
+      identity,
+      tables,
+    });
+
+    it("completes a generation directory that crashed before any table or manifest existed", async () => {
+      mkdirSync(join(stateRoot, "generations", "generation-target"), { recursive: true });
+      const backend = newBackend();
+      try {
+        const tables = (await backend.inventoryActiveGeneration())[0].tables;
+        const manifest = await create(backend, tables);
+        assert.equal(manifest.generation, "generation-target");
+        assert.deepStrictEqual((await backend.describeGeneration("generation-target")).tables["agent-a/memories"].sourceRows, 2);
+        await assert.rejects(create(backend, tables), /already exists/);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    it("completes a generation whose table was created but whose manifest was never written", async () => {
+      let failIdentityOnce = true;
+      const flaky = newBackend({
+        connect: async (path) => {
+          const db = await connect(path);
+          return new Proxy(db, {
+            get(target, property, receiver) {
+              if (property === "createTable") {
+                return async (name, ...args) => {
+                  if (name === "_embedding_identity" && failIdentityOnce) {
+                    failIdentityOnce = false;
+                    throw new Error("simulated crash while creating the identity table");
+                  }
+                  return target.createTable(name, ...args);
+                };
+              }
+              const value = Reflect.get(target, property, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        },
+      });
+      let tables;
+      try {
+        tables = (await flaky.inventoryActiveGeneration())[0].tables;
+        await assert.rejects(create(flaky, tables), /simulated crash/);
+      } finally {
+        await flaky.close();
+      }
+      assert.equal(existsSync(join(stateRoot, "generations", "generation-target", "generation.json")), false);
+
+      const backend = newBackend();
+      try {
+        await create(backend, tables);
+        const migrated = (await backend.readSourceBatch("agent-a/memories", { offset: 0, limit: 10 }))
+          .map((row, index) => ({ ...row, vector: [index, 1, 2, 3] }));
+        await backend.writeTargetBatch("generation-target", "agent-a/memories", migrated);
+        assert.deepStrictEqual(await backend.validateGeneration("generation-target"), { tables: 1, rows: 2, dimensions: 4 });
+      } finally {
+        await backend.close();
+      }
+    });
+
+    it("refuses to adopt a manifest-less directory that already holds target rows", async () => {
+      const first = newBackend();
+      let tables;
+      try {
+        tables = (await first.inventoryActiveGeneration())[0].tables;
+        await create(first, tables);
+        const migrated = (await first.readSourceBatch("agent-a/memories", { offset: 0, limit: 10 }))
+          .map((row, index) => ({ ...row, vector: [index, 1, 2, 3] }));
+        await first.writeTargetBatch("generation-target", "agent-a/memories", migrated);
+      } finally {
+        await first.close();
+      }
+      rmSync(join(stateRoot, "generations", "generation-target", "generation.json"));
+      const backend = newBackend();
+      try {
+        await assert.rejects(create(backend, tables), /not empty|already exists/);
+      } finally {
+        await backend.close();
+      }
+    });
+
+    it("refuses a generation path that is a symlink", async () => {
+      const elsewhere = join(root, "elsewhere");
+      mkdirSync(elsewhere, { recursive: true });
+      const backend = newBackend();
+      symlinkSync(elsewhere, join(stateRoot, "generations", "generation-target"));
+      try {
+        const tables = (await backend.inventoryActiveGeneration())[0].tables;
+        await assert.rejects(create(backend, tables), /Path traversal blocked|already exists|unsafe/);
+      } finally {
+        await backend.close();
+      }
+    });
   });
 
   it("preserves the configured writer namespace inside a target generation", async () => {
