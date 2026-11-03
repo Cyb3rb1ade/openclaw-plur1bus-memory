@@ -145,6 +145,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Capture: Principal und Watermark.** Der verzögerte Light-Traum (`deferPostTurnLlm`) behält das Principal des Turns (serialisiert, Hash statt roher userId); user-scope-Insights landen nicht mehr in workspace, ein nicht rekonstruierbares Principal schreibt agent-private. Das Capture-Watermark gilt pro Session (`agent_end.sessionWatermarks`, höchstens 500), wird per Compare-and-set unter dem Store-Lock nur vorwärts geschrieben (`lastProcessedMessageCount` bleibt als Spiegel; die erste Session nach dem Update übernimmt den alten Wert). Tombstone-blockierte Items zählen als `skipped` und machen den Turn nicht mehr `capture-incomplete`. Tests: `tests/capture-principal-watermark.test.js`.
+
 - **Windows (engine-windows):** Die Link-Prüfung `isUnsafeLink()` verglich
   unter Windows den `realpathSync.native` eines Pfads mit seiner Schreibweise.
   Ein Vorfahr in 8.3-Kurzschreibweise (etwa `C:\Users\RUNNER~1\…\Temp`) oder
