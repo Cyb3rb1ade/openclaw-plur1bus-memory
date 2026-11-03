@@ -38,7 +38,12 @@ function applyMergedRecallBudget(merged, budget) {
   const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
   const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
   const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
-  const memories = applyRecallBudget(merged.memories || [], { budget: remainingBudget }).selected;
+  const candidates = merged.memories || [];
+  // A reranker's verdict (`rerankScore`, set by the pipeline or by the
+  // multi-identity rerank below) fixes the result order; the budget tiers only
+  // pick which candidates fit and must not re-order them.
+  const preserveOrder = candidates.some(item => Number.isFinite(item?.rerankScore));
+  const memories = applyRecallBudget(candidates, { budget: remainingBudget, preserveOrder }).selected;
   return { ...merged, canonical, memories };
 }
 
@@ -196,8 +201,15 @@ async function runMergedNamespaceRecall(
         const original = merged.memories;
         const ranking = await withTimeout(baseParams.reranker.rerank(baseParams.query, merged.memories.map(item => item.entry.text), merged.memories.length, { signal: rerankSignal }), remaining, "multi-identity rerank");
         const used = new Set();
-        const ranked = ranking.filter(item => Number.isInteger(item.index) && item.index >= 0 && item.index < original.length && !used.has(item.index) && used.add(item.index)).map(item => original[item.index]);
+        const valid = ranking.filter(item => Number.isInteger(item.index) && item.index >= 0 && item.index < original.length && !used.has(item.index) && used.add(item.index));
         if (!used.size) throw new Error("reranker returned no valid indices");
+        // Tag the verdict on the candidate so the budget below keeps this order.
+        let ceiling = Infinity;
+        const ranked = valid.map((item, position) => {
+          const provided = item.relevance_score ?? item.score;
+          ceiling = Math.min(ceiling, Number.isFinite(provided) ? provided : (valid.length - position) / valid.length);
+          return { ...original[item.index], rerankScore: ceiling };
+        });
         merged.memories = [...ranked, ...original.filter((_, index) => !used.has(index))];
       } catch (error) {
         if (baseParams.signal?.aborted || baseParams.rerankerFallbackOnError === false) throw error;

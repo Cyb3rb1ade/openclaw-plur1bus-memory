@@ -155,7 +155,9 @@ describe("hydrateGraphResults query-relevance revalidation", () => {
     assert.strictEqual(out[0].entry.id, "m-close");
   });
 
-  it("does not crash when embedding fails and keeps the candidate", async () => {
+  // F4 (recall audit): the relevance check used to fail OPEN on a non-timeout
+  // error (the timeout case already returned relevance 0 and dropped the row).
+  it("does not crash when embedding fails and drops the unverifiable candidate (fail closed)", async () => {
     const rows = [
       { id: "m-error", text: "some memory", summary: "", status: "active" },
     ];
@@ -175,7 +177,7 @@ describe("hydrateGraphResults query-relevance revalidation", () => {
       aclCtx,
       embeddingContext,
     });
-    assert.strictEqual(out.length, 1, "candidate should be kept on embedding error");
+    assert.strictEqual(out.length, 0, "unverifiable candidate must be dropped on embedding error");
     assert.strictEqual(logger.warnings.length, 1, "warning should be logged");
   });
 
