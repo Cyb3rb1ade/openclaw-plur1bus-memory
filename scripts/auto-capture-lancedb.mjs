@@ -31,6 +31,7 @@ import { resolveInside, safeAgentId, safeUuid, sqlString } from "../lib/sql-safe
 import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
 import { readEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { assertCardWriteAllowed } from "../lib/tombstone-write-guard.js";
+import { defaultEmbeddingKeyEnv } from "../lib/providers/credential-scope.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 // Operator-local fallback agents. Keep personal IDs out of the public repo.
@@ -155,7 +156,8 @@ export function buildEmbeddingConfig(pluginConfig = {}, env = process.env) {
     }
   }
   if (raw.provider !== "local-transformers" && !raw.apiKey && !raw.apiKeyEnv) {
-    raw.apiKeyEnv = "OPENAI_API_KEY";
+    // OPENAI_API_KEY only for the OpenAI host; a gateway gets OPENAI_COMPATIBLE_API_KEY.
+    raw.apiKeyEnv = defaultEmbeddingKeyEnv(raw.baseUrl, env);
   }
   return raw;
 }
