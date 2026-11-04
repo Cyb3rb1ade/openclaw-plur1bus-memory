@@ -430,12 +430,17 @@ export function createJobRegistry({ host, jobsRoot = null, idFactory = () => ran
     // is skipped (and recorded like any other skip) rather than run twice.
     // Everything from run() entry to here is synchronous, so the check and
     // the reservation cannot interleave with another start.
-    if (spec.singleton || BREAKER_PHASES.has(spec.phase)) {
+    // `exclusive` jobs (job-specs.js) take the same guard, except that a
+    // preSkip run never executes a body and so neither needs nor displaces it.
+    if (spec.singleton || BREAKER_PHASES.has(spec.phase) || (spec.exclusive && !preSkip)) {
       const jobKey = `${agentId}\u0000${name}`;
       if (inflightJobs.has(jobKey)) {
-        return finish(inflight, jobExit("skipped", "already_running", {
-          text: JSON.stringify({ job: name, skipped: true, reason: "already_running" }, null, 2),
-        }), null, ledger, snapshot);
+        // An exclusive job's cron run may be delivered (classify-recent): the
+        // skip must not reach a chat as a JSON notice.
+        const skipOutput = spec.exclusive && trigger === "cron"
+          ? { text: "NO_REPLY", metadata: { skipped: true, reason: "already_running" } }
+          : { text: JSON.stringify({ job: name, skipped: true, reason: "already_running" }, null, 2) };
+        return finish(inflight, jobExit("skipped", "already_running", skipOutput), null, ledger, snapshot);
       }
       inflightJobs.add(jobKey);
       inflight.jobKey = jobKey;

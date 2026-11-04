@@ -7,6 +7,7 @@
  * so the registry records why the job did not run.
  */
 
+import { resolve as resolvePath } from "node:path";
 import { IMPORTANCE_STATUS } from "../../lib/importance-status.js";
 import { buildRefinePatch, classifyEncoding } from "../../lib/encoding-llm.js";
 import { buildRemPartitions, describeRemPartitionRun, resolveRemOutputRoot, runRemDream, writeRemDreamToVault } from "../../lib/dreaming/rem-dream.js";
@@ -176,7 +177,24 @@ export function createInternalJobBodies(ctx) {
                 .map((row) => String(row.id)));
               const episodeIds = new Set(commandStore.readEpisodes(100_000).map((episode) => String(episode.id)));
               const pruned = pruneGraphEdges(graphEdges, { liveMemoryIds, episodeIds });
-              if (pruned.after !== pruned.before) commandStore.rewriteGraphEdges(pruned.kept);
+              if (pruned.after !== pruned.before) {
+                // Die Kanten wurden vor dem (langen) LanceDB-Scan gelesen; Capture
+                // haengt waehrenddessen neue an, und deren Endpunkte kennt der
+                // Scan evtl. nicht. Ersetzen wir die Datei mit der alten kept-Liste,
+                // gehen sie verloren. Deshalb: nur die beurteilten und verworfenen
+                // Kanten (als Multimenge ihrer Zeilen) unter dem Lock entfernen.
+                const dropCounts = new Map();
+                const rowKey = (record) => JSON.stringify(record);
+                for (const record of graphEdges) dropCounts.set(rowKey(record), (dropCounts.get(rowKey(record)) || 0) + 1);
+                for (const record of pruned.kept) dropCounts.set(rowKey(record), (dropCounts.get(rowKey(record)) || 0) - 1);
+                commandStore.updateGraphEdges((current) => current.filter((record) => {
+                  const k = rowKey(record);
+                  const n = dropCounts.get(k) || 0;
+                  if (n <= 0) return true;
+                  dropCounts.set(k, n - 1);
+                  return false;
+                }));
+              }
               const { kept: _kept, ...graphPruneCounts } = pruned;
               graphPrune = graphPruneCounts;
             }
@@ -413,18 +431,43 @@ export function createInternalJobBodies(ctx) {
         // Der erste Lauf mit Report gewinnt für die Antwort; sonst der erste.
         const result = (remRuns.find((run) => run.result?.report) || remRuns[0]).result;
         const semanticCfg = obsidianBridgeCfg?.graphLinks?.semanticDiscovery;
-        if (semanticCfg?.enabled && commandCtx.workspaceDir) {
-          const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
-          pool.withDb(internalAgent, (semDb) =>
-            runSemanticDiscoveryBatches({
-                db: semDb,
-                semVaultCfg,
-                pool,
-                logger: host.logger,
-                defaultAgentId: internalAgent,
-              }))
-            .then((r) => host.logger.info(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
-            .catch((err) => host.logger.warn(`plur1bus-semantic: discovery failed: ${describeError(err)}`));
+        if (obsidianBridgeCfg?.enabled !== false && semanticCfg?.enabled && commandCtx.workspaceDir) {
+          // Ohne Mutation-Policy ist der Discoverer per Design blockiert (der
+          // Zweig war bisher tot). Wie im Cron-Pfad (discover-semantic-links)
+          // gilt der Lauf als stehende Bestaetigung der Aktion; Receipt, Apply-
+          // Modus und allowWrite verlangt die Policy weiter. Sie gehoert zu dem
+          // konfigurierten Obsidian-Workspace dieses Agenten, dessen Pfad der
+          // Arbeitsordner ist; ein anderer Ordner hat keine bestaetigte Vault.
+          let semPolicy = null;
+          let semWorkspace = null;
+          try {
+            const workspaceDirKey = resolvePath(commandCtx.workspaceDir);
+            semWorkspace = selectSemanticDiscoveryWorkspaces(obsidianBridgeCfg || {}, internalAgent)
+              .find((ws) => ws.path && resolvePath(ws.path) === workspaceDirKey) || null;
+            if (semWorkspace) {
+              semPolicy = obsidianServiceMutationPolicy(
+                { ...semWorkspace, agentId: semWorkspace.agentId || internalAgent },
+                { plan: ["semantic-discovery", "confirm"], actionConfirmed: true },
+              );
+            }
+          } catch (policyErr) {
+            semPolicy = null;
+            host.logger.warn(`plur1bus-semantic: no mutation policy for the rem-dream discovery: ${describeError(policyErr)}`);
+          }
+          if (semPolicy) {
+            const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
+            pool.withDb(internalAgent, (semDb) =>
+              runSemanticDiscoveryBatches({
+                  db: semDb,
+                  semVaultCfg,
+                  pool,
+                  logger: host.logger,
+                  defaultAgentId: internalAgent,
+                  mutationPolicy: semPolicy,
+                }))
+              .then((r) => host.logger.info(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
+              .catch((err) => host.logger.warn(`plur1bus-semantic: discovery failed: ${describeError(err)}`));
+          }
         }
         const remReply = formatJsonCommandResult({
           job: "rem-dream",
@@ -919,6 +962,15 @@ export function createInternalJobBodies(ctx) {
       }
       if (subKey === "discover-semantic-links") {
         const semBridgeCfg = obsidianBridgeCfg || {};
+        // Feature-Gate zur Laufzeit: obsidianBridge.enabled && graphLinks.
+        // semanticDiscovery.enabled. Der Cron wird nur bei der Installation
+        // geprueft; wurde ein Schalter spaeter ausgeschaltet, darf der
+        // vorhandene Cron nichts mehr schreiben. Gelesen wie bei der Cron-
+        // Planung (`!== false`), damit bestehende Installationen ohne explizite
+        // Schalter unveraendert weiterlaufen.
+        if (semBridgeCfg.enabled === false || semBridgeCfg.graphLinks?.semanticDiscovery?.enabled === false) {
+          return jobCtx.skip("semantic_discovery_disabled", formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "semantic_discovery_disabled" }));
+        }
         const workspaces = selectSemanticDiscoveryWorkspaces(semBridgeCfg, internalAgent);
         if (!workspaces.length) {
           return jobCtx.skip("no_workspace_for_agent", formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspace_for_agent" }));
