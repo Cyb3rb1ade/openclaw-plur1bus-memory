@@ -221,3 +221,70 @@ describe("dictionary coverage", () => {
     assert.strictEqual(missing.length, 0, `Missing en.default for keys: ${missing.join(", ")}`);
   });
 });
+
+describe("detectLanguage: englische Homographen (am/an/so/hi)", () => {
+  const user = (content) => [{ role: "user", content }];
+
+  it("erkennt englische Sätze mit am/an/so/hi nicht als Deutsch", () => {
+    for (const text of [
+      "I am so happy, thanks for an answer",
+      "Hi, I am going to be late so I will call an Uber",
+      "Hi, am I on time for an appointment so far?",
+      "so, I am an engineer",
+    ]) {
+      assert.strictEqual(detectLanguage(user(text)), "en", text);
+    }
+  });
+
+  it("zählt Homographen auch über mehrere Nachrichten nicht zusammen", () => {
+    const messages = [
+      { role: "user", content: "hi" },
+      { role: "user", content: "I am here" },
+      { role: "user", content: "so what is an option?" },
+    ];
+    assert.strictEqual(detectLanguage(messages), "en");
+  });
+
+  it("Gegen-Test: deutsche Sätze (auch mit Satzzeichen) bleiben Deutsch", () => {
+    for (const text of [
+      "Hallo, ich habe eine Frage.",
+      "Das ist gut, danke!",
+      "Ich bin am Bahnhof und warte auf den Zug",
+      "Moin, wie geht es dir?",
+      "Ja, bitte.",
+    ]) {
+      assert.strictEqual(detectLanguage(user(text)), "de", text);
+    }
+  });
+
+  it("Gegen-Test: deutsche Wörter gewinnen gegen einzelne englische Treffer, nicht umgekehrt", () => {
+    assert.strictEqual(detectLanguage(user("Das ist ein guter Plan for the team")), "de");
+    assert.strictEqual(detectLanguage(user("this is the plan, the die, the hat for you and me")), "en");
+  });
+});
+
+describe("Sprach-Tags mit Region (de-DE)", () => {
+  it("resolveLocale normalisiert auf den Primär-Tag", () => {
+    assert.strictEqual(resolveLocale({ config: "de-DE" }), "de");
+    assert.strictEqual(resolveLocale({ ctx: { lang: "de-AT" } }), "de");
+    assert.strictEqual(resolveLocale({ ctx: { lang: "de_CH" } }), "de");
+    assert.strictEqual(resolveLocale({ config: " EN-us " }), "en");
+  });
+
+  it("resolveLocale: Gegen-Test — Prioritäten und einfache Tags bleiben", () => {
+    assert.strictEqual(resolveLocale({ config: "en-US", ctx: { lang: "de" } }), "en");
+    assert.strictEqual(resolveLocale({ config: "de" }), "de");
+    assert.strictEqual(resolveLocale({ config: "", ctx: { lang: "de-DE" } }), "de");
+    assert.strictEqual(resolveLocale({ config: "fr-CA" }), "fr");
+  });
+
+  it("t() löst de-DE wie de auf und fällt für unbekannte Sprachen weiter auf en zurück", () => {
+    const de = t("status.unknown", { lang: "de" });
+    const en = t("status.unknown", { lang: "en" });
+    assert.notStrictEqual(de, en);
+    assert.strictEqual(t("status.unknown", { lang: "de-DE" }), de);
+    assert.strictEqual(t("status.unknown", { lang: "DE_de" }), de);
+    assert.strictEqual(t("status.unknown", { lang: "fr-CA" }), en);
+    assert.strictEqual(t("status.unknown", {}), en);
+  });
+});
