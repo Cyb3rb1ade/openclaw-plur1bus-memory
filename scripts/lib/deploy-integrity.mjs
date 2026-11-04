@@ -370,6 +370,7 @@ export const DEPLOY_FILES = [
   "lib/voice-mode.js",
   "lib/voice-mode-switch.js",
   "lib/tombstone.js",
+  "lib/tombstone-reapply.js",
   "lib/registry-lock.js",
   "lib/fetch-with-timeout.js",
   "lib/filter-parser.js",

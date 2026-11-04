@@ -64,6 +64,8 @@ import { buildMemoryAccountTopology, buildMemoryWorkspaceAliases, createHostInco
 import { appendDestructiveOpLog, resolveInside, safeAgentId, safeUuid } from "../lib/sql-safety.js";
 import { measureControlHealthStorage } from "../lib/control-plane-storage.js";
 import { appendTombstoneToRegistry, backfillCommittedTombstone, buildTombstone, findBlockingTombstoneForCapture } from "../lib/tombstone.js";
+import { reapplyCommittedTombstones, reapplyFailed, reconcileAttemptedTombstones } from "../lib/tombstone-reapply.js";
+import { finishRestoreJournalSync, recoverInterruptedRestoreSync } from "../lib/snapshot/store-snapshot.js";
 import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
 import { ensureEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { addTraceStoreDecision, createRecallDecisionTrace, textPreview } from "../lib/recall-decision-trace.js";
@@ -222,6 +224,35 @@ export function createEngine(host, config, testOptions = {}) {
   const openClawSkillWorkshop = capabilities.skillWorkshop ?? null;
   const detectReactionsCapabilityCached = capabilities.detectReactions ?? (async () => false);
   const baseDbPath = resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
+  // A snapshot restore that was killed while the store was moved aside leaves no
+  // store at baseDbPath: put the previous one back before anything creates a fresh
+  // one there. A restore that finished its swap but not its tombstone re-apply gets
+  // the re-apply here (background; close() waits). Never throws.
+  let restoreRecovery = Promise.resolve();
+  try {
+    const recovery = recoverInterruptedRestoreSync(baseDbPath);
+    if (recovery.action === "rolled-back") {
+      host.logger.warn(`memory-lancedb-namespaced: an interrupted snapshot restore was rolled back; the previous store is back at ${recovery.target}`);
+    } else if (recovery.action === "unrecoverable") {
+      host.logger.warn(`memory-lancedb-namespaced: an interrupted snapshot restore left no store and no pre-restore copy (${recovery.preRestorePath}); restore from a snapshot`);
+    } else if (recovery.action === "needs-reapply") {
+      restoreRecovery = reapplyCommittedTombstones({ baseDbPath, apply: true })
+        .then((report) => {
+          if (reapplyFailed(report)) {
+            host.logger.warn(`memory-lancedb-namespaced: re-applying tombstones after an interrupted snapshot restore is incomplete (${report.errors.length + report.registryErrors.length + report.activeAfterReapply.length} problem(s)); run scripts/reapply-tombstones.mjs --apply`);
+          } else {
+            finishRestoreJournalSync(baseDbPath);
+          }
+        })
+        .catch((error) => {
+          host.logger.warn(`memory-lancedb-namespaced: re-applying tombstones after an interrupted snapshot restore failed: ${describeError(error)}`);
+        });
+    } else if (recovery.note) {
+      host.logger.warn(`memory-lancedb-namespaced: ${recovery.note}`);
+    }
+  } catch (error) {
+    host.logger.warn(`memory-lancedb-namespaced: snapshot restore recovery failed: ${describeError(error)}`);
+  }
   const epistemicCutoffBoot = ensureEpistemicCutoff(baseDbPath);
   if (!epistemicCutoffBoot.ok) {
     host.logger.warn(`memory-lancedb-namespaced: epistemic cutoff unavailable (${epistemicCutoffBoot.reason})`);
@@ -1570,6 +1601,20 @@ export function createEngine(host, config, testOptions = {}) {
     },
     logger: host.logger,
   });
+
+  // Startup reconcile of interrupted /forget runs: an `attempted` tombstone
+  // whose row is already soft-deleted (crash before the committed line) is
+  // committed, so it blocks re-capture of the forgotten text. Background and
+  // never throwing; close() waits for it before the adapter is shut down.
+  const tombstoneReconcile = reconcileAttemptedTombstones({ baseDbPath, storeRoot: embeddingGenerationLayout.activeRoot, adapter: memoryDbAdapter, logger: host.logger })
+    .then((report) => {
+      if (report.errors.length > 0 || report.registryErrors.length > 0) {
+        host.logger.warn(`memory-lancedb-namespaced: tombstone reconcile incomplete: ${report.errors.length} row error(s), ${report.registryErrors.length} registry error(s)`);
+      }
+    })
+    .catch((error) => {
+      host.logger.warn(`memory-lancedb-namespaced: tombstone reconcile failed: ${describeError(error)}`);
+    });
 
   // Bounded LanceDB fragment compaction between consolidate-daily runs
   // (E5 Task 6). Capture notes every stored row through noteTableWrite; the
@@ -3180,6 +3225,8 @@ export function createEngine(host, config, testOptions = {}) {
     closing = Promise.race([
       Promise.resolve()
         .then(() => memoryOpsContext.drain())
+        .then(() => tombstoneReconcile)
+        .then(() => restoreRecovery)
         .then(() => internals.closeResources())
         .catch((error) => { host.logger.warn(`plur1bus engine: close failed; the engine is closed anyway: ${describeError(error)}`); }),
       new Promise((resolve) => {
