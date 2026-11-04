@@ -372,14 +372,20 @@ callers are unchanged. The OpenClaw adapter does not have to call them.
   `idempotencyKey` for the same agent is `matched-existing` /
   `already-imported`. A second card with the same key **inside one batch**
   is `matched-existing` / `duplicate-in-batch` (first card counts; no
-  second store).
+  second store) only when the first card exists after the call (`created` or
+  already there); when the first card is `rejected`, the duplicate is
+  `rejected` with the same reason.
 - Card id is `H(agentId, idempotencyKey)`: UUID v5 of `${agentId}\0${key}`
   in the RFC 4122 URL namespace `6ba7b811-9dad-11d1-80b4-00c04fd430c8`
   (`safeAgentId` forbids NUL, so the name is unambiguous). The store row
   is the source of truth. The sidecar ledger
   `{baseDbPath}/_imports/<agentId>.jsonl` is provenance display and a cache.
   A crash after `store()` and before the ledger line resumes as
-  `matched-existing` and backfills the missing ledger line.
+  `matched-existing` and backfills the missing ledger line. If the ledger
+  append itself fails after `store()`, the card is deleted again and reported
+  `rejected` / `storage` (never `created` without a ledger line, which
+  `memory.unimport` could not see); should that delete fail too, the row stays
+  and the retry heals it by the backfill.
 - Concurrent imports (same process, two engines, or two processes on one
   store) are serialised per agent around re-check → `store()` → ledger by
   `{baseDbPath}/_imports/.locks/<agentId>.lock` (in-process mutex plus the
@@ -409,8 +415,13 @@ ledger.
 `invalid-input`) is recorded on every ledger line the call writes, together
 with three 16-hex group digests of the stored row (`content`, `binding`,
 `meta`; hashes only). A backfilled line (crash between `store()` and the
-ledger) carries `importRunId` plus `backfilled: true` and the digest of the
-row it found. `memory.unimport` selects by `importRunId`. 1.15.0: without
+ledger) carries `importRunId` (the run named in the row's own `sourceRef`, else
+the call's) plus `backfilled: true`. It carries the row's digest and the
+card's creation time as `importedAt` only while the row still looks untouched
+(`updatedAt` equals `sourceTimestamp` and the text equals the card's text);
+otherwise it has no digest and `importedAt` is the backfill time, so
+`memory.unimport` keeps the card as `edited` (`force` still undoes it) instead of
+taking the user's change as the baseline. `memory.unimport` selects by `importRunId`. 1.15.0: without
 `importRunId` a card whose `sourceRef` carries exactly one segment
 `;run=<id>` (same regex; not the first segment; the sourceRef shorter than
 the 500-character cap, so the id cannot have been cut) is recorded under that
