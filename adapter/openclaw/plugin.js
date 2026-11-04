@@ -501,6 +501,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
           const sessionRuntime = ctx?.runtimeContext?.llm;
           return runWikiCommand({ ...ctx, args: parsed.args }, {
             pool,
+            sharedPool: sharedMemoryPool,
             embeddings,
             reranker,
             callLlm,
