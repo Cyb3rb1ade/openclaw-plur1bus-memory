@@ -6,6 +6,19 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.19.2] — 2026-11-07
+
+### Fixed
+
+- `autoApplyLowRisk` never applied note proposals: the auto-approval set only `status`/`approvedAt`/`approvedBy` and skipped `approvedPayloadHash` and `approvalMetadata`, so revalidation rejected every `note_import_candidate`, `memory_promotion` and `knowledge_update` item as "Missing approvedPayloadHash." (status `invalid`). Auto-approval now goes through the same approval record as a human review, with `approvalSource: "auto_low_risk"`. Payload drift is still rejected.
+- The morning review command passes `memoryStore` and `knowledgeUpdate` to the bundle run, so auto-approved items can actually be written instead of ending up `blocked`.
+- A failing auto-apply is logged via `safeWarn` instead of being swallowed.
+
+### Changed
+
+- Note import skips files whose content is already in the prompt or in memory: workspace prompt files (`SOUL.md`, `USER.md`, `IDENTITY.md`, `AGENTS.md`, `HEARTBEAT.md`, `TOOLS.md`, `MEMORY.md`, `BOOTSTRAP.md`, `persona-voice.md`), notes derived from stored memories (`memory/episodes/**`, `memory/dream-diary/**`, `DREAMS.md`, `memory/consolidation/**`, `memory/graph/**`) and continuously appended reports and logs (`reports/routines/**`, `**/logbuch.md`, `**/gesehen.md`). Daily notes, `memory/eigenzeit.md`, research reports and other documents stay importable. Extend the list with `noteImportExclude`, or replace it with `noteImportExcludeReplaceDefaults: true`.
+- The morning review message reports automatically applied and failed items, and drops the preview wording and the next-step hint when nothing is left to approve.
+
 ## [7.19.1] — 2026-11-07
 
 ### Changed
