@@ -1,7 +1,7 @@
 /**
- * engine/jobs/job-specs.js — the 19 engine-owned jobs (spec 3.3, contract JobName).
+ * engine/jobs/job-specs.js — the 20 engine-owned jobs (spec 3.3, contract JobName).
  *
- * Twelve carry a host cron default from lib/feature-cron-specs.js; six are
+ * Twelve carry a host cron default from lib/feature-cron-specs.js; seven are
  * RPC/CLI features with no default schedule; light-dream runs from capture.
  * `phase` marks the dreaming phases the per-sweep breaker counts (Task 8).
  * `needsLlm` is informational: whether the job can reach an LLM route at all.
@@ -29,6 +29,7 @@ const JOB_TABLE = Object.freeze([
   ["skill-benefit-backfill", true, null],
   ["episodes-rebuild", true, null],
   ["light-dream", true, "light"],
+  ["knowledge-update", false, null],
 ]);
 
 const CRON_BY_FEATURE = new Map(REQUIRED_FEATURE_CRONS.map((spec) => [spec.feature, spec]));
@@ -51,7 +52,7 @@ export const JOB_SPECS = Object.freeze(JOB_TABLE.map(([name, needsLlm, phase]) =
   return Object.freeze({
     name,
     needsLlm,
-    singleton: cron?.singleton === true,
+    singleton: name === "knowledge-update" || cron?.singleton === true,
     ...(phase ? { phase } : {}),
     ...(cron ? { defaultSchedule: defaultScheduleOf(cron) } : {}),
   });

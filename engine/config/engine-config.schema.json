@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "plur1bus-engine-config",
-  "x-contract": "1.16.0",
+  "x-contract": "1.17.0",
   "$defs": {
     "secretInput": {
       "type": [
@@ -1246,7 +1246,7 @@
         "maxPromotionsPerRun": {
           "type": "number",
           "default": 0,
-          "description": "Maximum KNOWLEDGE.md promotions per 24-hour window (0 = unlimited). Before 7.12.3 the lifetime count was compared, which blocked a workspace forever once it had promoted that many cards."
+          "description": "Maximum KNOWLEDGE.md promotions: the deterministic knowledge-update job and memory.promote host primitive apply this cap per invocation; the LLM-backed knowledge_update tool applies it across a rolling 24-hour window per workspace and agent. Explicit 0 means unlimited in both paths. When omitted, the tool preserves its legacy limit of 3, while the job/host primitive is unlimited. The schema default 0 applies when a host explicitly materializes schema defaults. Before 7.12.3 the tool compared the lifetime count, which could block a workspace forever."
         }
       },
       "readAt": "construction",

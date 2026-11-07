@@ -1,7 +1,7 @@
 /**
  * tests/engine-jobs-registry.test.js — PR-07.
  *
- * The registry holds the contract's 19 names with one owner each, and every
+ * The registry holds the contract's 20 names with one owner each, and every
  * run — completed, skipped, incomplete, thrown — comes back as a JobRun.
  */
 
@@ -22,7 +22,7 @@ const CONTRACT_JOB_NAMES = [
   "skill-miner", "discover-semantic-links", "gc-run",
   "reminder-dispatch", "feedback-report", "proactive-check", "meta-reflect",
   "skill-benefit-backfill", "episodes-rebuild",
-  "light-dream",
+  "light-dream", "knowledge-update",
 ];
 
 function stubHost(events = []) {
@@ -31,9 +31,9 @@ function stubHost(events = []) {
 }
 
 describe("job specs", () => {
-  it("are exactly the contract's 19 names", () => {
+  it("are exactly the contract's 20 names", () => {
     assert.deepEqual(JOB_NAMES, CONTRACT_JOB_NAMES);
-    assert.equal(INTERNAL_JOB_NAMES.length, 18);
+    assert.equal(INTERNAL_JOB_NAMES.length, 19);
     assert.ok(!INTERNAL_JOB_NAMES.includes("light-dream"));
     assert.ok(INTERNAL_JOB_NAMES.includes("post-turn-refine"));
   });
@@ -52,7 +52,7 @@ describe("job specs", () => {
 });
 
 describe("createJobRegistry", () => {
-  it("returns a JobRun for all 19 names, including the skip path", async () => {
+  it("returns a JobRun for all 20 names, including the skip path", async () => {
     const events = [];
     const jobs = createJobRegistry({ host: stubHost(events), idFactory: (() => { let n = 0; return () => `run-${++n}`; })() });
     for (const name of JOB_NAMES) jobs.bind(name, async (_n, ctx) => ctx.skip("test_skip", { text: name }));
@@ -66,7 +66,7 @@ describe("createJobRegistry", () => {
       assert.equal(run.attempt, 1);
       assert.ok(run.finishedAt >= run.startedAt);
     }
-    assert.equal(events.filter((e) => e.name === "job.run").length, 19);
+    assert.equal(events.filter((e) => e.name === "job.run").length, 20);
   });
 
   it("maps completed, incomplete and thrown bodies", async () => {
@@ -144,6 +144,7 @@ describe("/plur1bus internal goes through jobs.run", () => {
     });
     const command = commands.find((c) => c.name === "plur1bus");
     const expectedSkips = {
+      "knowledge-update": "no_workspace",
       "consolidate-daily": "dailyConsolidation_disabled",
       "classify-recent": "criticalPush_disabled",
       "rem-dream": "no_llm_config",

@@ -105,7 +105,7 @@ assertTrue<Exact<Parameters<Engine["close"]>, [opts?: { budgetMs?: number }]>>()
 assertTrue<Exact<Parameters<typeof createEngine>[2], { internals?: Record<string, unknown> } | undefined>>();
 assertTrue<Exact<ReturnType<typeof createEngine>, Engine>>();
 assertTrue<Exact<Engine["contract"], ContractVersion>>();
-assertTrue<Exact<ContractVersion, "1.16.0">>();
+assertTrue<Exact<ContractVersion, "1.17.0">>();
 
 // 1.5.0: typed MemoryOps surface (E1 Task 2).
 assertTrue<Exact<Engine["memory"], MemoryOps>>();
@@ -250,3 +250,9 @@ void hostWithPorts;
 assertTrue<Exact<ProviderCredentialConfig["apiKeyRef"], string | undefined>>();
 assertTrue<Exact<RemoteRerankerConfig["provider"], "cohere" | "jina" | "voyage" | "remote">>();
 assertTrue<Exact<RerankProtocol, "cohere" | "jina" | "voyage" | "tei">>();
+
+// 1.17.0: persistent counters, host promotion and human curation.
+assertTrue<Exact<MemoryOps["stats"], (ids: readonly string[] | undefined, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryStatsResult>>>();
+assertTrue<Exact<MemoryOps["promote"], (req: {ids: readonly string[]}, p: Principal, a: AgentContext) => Promise<import("./engine.js").MemoryPromotionResult>>>();
+assertTrue<Exact<keyof import("./engine.js").MemoryRecallStat, "id" | "recalls" | "distinctQueries" | "lastRecalledAt">>();
+assertTrue<Exact<Parameters<MemoryOps["curation"]["resolve"]>[1], "keep" | "drop">>();

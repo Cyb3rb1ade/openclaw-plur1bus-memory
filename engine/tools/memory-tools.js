@@ -110,6 +110,7 @@ export function createMemoryTools(ctx) {
     readKnowledgePendingSnapshot,
     recallMinScore,
     recallQueryLlmCfg,
+    recallStats,
     removeKnowledgePending,
     rerankCandidates,
     reranker,
@@ -292,6 +293,8 @@ export function createMemoryTools(ctx) {
               const summary = summarizeTrace(returnedTrace);
               lines.push(`[decision-trace] totalCandidates:${summary.totalCandidates} included:${summary.included} rejected:${summary.rejected} downranked:${summary.downranked} superseded:${summary.superseded} deduped:${summary.deduped} merged:${summary.merged} guardPass:${summary.guardPass} guardFail:${summary.guardFail}`);
             }
+            try { recallStats?.record(agentId, ordered.map(row => row.entry.id), params.query, Date.now()); }
+            catch (error) { host.logger.warn(`recall statistics unavailable: ${error?.name || "error"}`); }
             return { content: [{ type: "text", text: lines.join("\n") }] };
             });
           } catch (err) {

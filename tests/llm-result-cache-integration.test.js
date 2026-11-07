@@ -505,8 +505,8 @@ describe("deterministic LLM result-cache allowlist", () => {
     // Step 9 part 1 (engine extraction M1b-1) moved the four private
     // transforms out of index.js: summarizeForCapture and makeQuerySummarizer
     // to engine/runtime/env-config.js, callMergeCheck to
-    // engine/runtime/llm-calls.js, updateKnowledgeMd to
-    // engine/knowledge/knowledge-pending.js. Each was the last function before
+    // engine/runtime/llm-calls.js. A1 removed the unreachable LLM knowledge
+    // helper; its replacement is deterministic. Each moved transform was the last function before
     // its old end token; in its module it is the last function before the
     // export list, so the sections end there.
     const captureSection = sourceSection(engine.envConfig, "async function summarizeForCapture", "// Baut eine querySummarizer-Funktion");
@@ -520,7 +520,8 @@ describe("deterministic LLM result-cache allowlist", () => {
     // the section now ends at the factory's own return instead.
     const memoryToolsSource = engine.memoryTools;
     const modelStoreSection = sourceSection(memoryToolsSource, "name: \"memory_store\"", "name: \"memory_forget\"");
-    const knowledgeSection = sourceSection(engine.knowledgePending, "async function updateKnowledgeMd", "\nexport {");
+    const knowledgeSection = engine.knowledgePromotion;
+    assert.doesNotMatch(engine.knowledgePending, /async function updateKnowledgeMd/);
     const knowledgeToolSection = sourceSection(memoryToolsSource, "name: \"knowledge_update\"", "return guardWorkspaceTools(");
     const emotionSection = sourceSection(source, "const emotionT3CallLlm", "if (emotionT3Enabled && emotionT3LlmCfg)");
 
@@ -531,7 +532,8 @@ describe("deterministic LLM result-cache allowlist", () => {
     assertEveryCallIsDeterministic(captureSection, "CAPTURE_SUMMARY", 1);
     assertEveryCallIsDeterministic(recallSection, "RECALL_QUERY_SUMMARY", 1);
     assertEveryCallIsDeterministic(mergeSection, "MERGE_DECISION", 1);
-    assertEveryCallIsDeterministic(knowledgeSection, "KNOWLEDGE_UPDATE", 2);
+    assertEveryCallIsDeterministic(knowledgeSection, "KNOWLEDGE_UPDATE", 0);
+    assert.doesNotMatch(knowledgeSection, /callLlm|completeFeatureLlm/);
     assertEveryCallIsDeterministic(knowledgeToolSection, "KNOWLEDGE_UPDATE", 2);
 
     // PR-03e (engine-extraction M1a) moved the agent_end capture pipeline's
@@ -593,7 +595,7 @@ describe("deterministic LLM result-cache allowlist", () => {
       ["engine/runtime/env-config.js", "async function summarizeForCapture", ["@param {string} agentId", "@returns {Promise<string>}"]],
       ["engine/runtime/env-config.js", "function makeQuerySummarizer", ["@param {string} agentId", "@returns {Function|null}"]],
       ["engine/runtime/llm-calls.js", "async function callMergeCheck", ["@param {string} agentId", "@returns {Promise<object|null>}"]],
-      ["engine/knowledge/knowledge-pending.js", "async function updateKnowledgeMd", ["@param {string} agentId", "@returns {Promise<void>}"]],
+      ["engine/knowledge/promote.js", "export function createKnowledgePromotion", ["@param {{pool: object, cfg: object}} deps", "@returns {{run: Function}}"]],
       ["engine/create-engine.js", "(messages, context = {}) =>", ["@param {Array<object>} messages", "@param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]", "@returns {Promise<string|null>}"]],
       ["lib/jobs/conflict-resolver.js", "async function resolveConflictPair", ["@param {string} agentId", "@returns {Promise<object>}"]],
       ["lib/jobs/conflict-resolver.js", "export async function runConflictResolver", ["@param {string} [opts.agentId]", "@returns {Promise<object>}"]],
