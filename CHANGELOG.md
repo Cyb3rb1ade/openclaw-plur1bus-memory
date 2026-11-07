@@ -6,6 +6,14 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.19.1] — 2026-11-07
+
+### Changed
+
+- Morgen-Review in Telegram aufgeräumt: Notizen erscheinen mit ihrem Titel statt mit Dateiname und abgeschnittenem Markdown, der Rest als „… und N weitere“, das Risiko als Satz („Alle mit niedrigem Risiko.“).
+- Reine Systemhinweise stehen nur noch einmal in der Nachricht, der Titel trägt keine Uhrzeit mehr, doppelte Leerzeilen entfallen.
+- Der nächste Schritt nennt einen Befehl, den es wirklich gibt: `/plur1bus review quickapply` statt „approve low-risk → apply“.
+
 ## [7.19.0] — 2026-11-03
 
 ### Added
