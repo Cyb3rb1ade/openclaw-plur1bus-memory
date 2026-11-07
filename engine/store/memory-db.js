@@ -522,6 +522,8 @@ class MemoryDB {
     if (normalized.moodContextAtCapture == null) normalized.moodContextAtCapture = "";
     if (normalized.emotionStatus == null) normalized.emotionStatus = "final";
     normalized.importanceStatus = normalizeImportanceStatus(normalized.importanceStatus);
+    if (normalized.kind == null) normalized.kind = "";
+    if (normalized.mediaRef == null) normalized.mediaRef = "";
     if (normalized.replayCount == null) normalized.replayCount = 0;
     if (normalized.lastReplayed == null) normalized.lastReplayed = 0;
     if (normalized.retrievalCount == null) normalized.retrievalCount = 0;
@@ -708,6 +710,8 @@ class MemoryDB {
             { name: 'status', valueSql: "'active'" },
             { name: 'versionCreatedAt', valueSql: '0' },
             { name: 'updatedAt', valueSql: '0' },
+            { name: 'kind', valueSql: "''" },
+            { name: 'mediaRef', valueSql: "''" },
             { name: 'memoryKind', valueSql: "'memory'" },
             { name: 'reminderStatus', valueSql: "''" },
             { name: 'remindAt', valueSql: '0' },
@@ -772,6 +776,8 @@ class MemoryDB {
         this.table = await this._acquireInitHandle(this.db.createTable(TABLE_NAME, [
           {
             id: "__schema__",
+            kind: "",
+            mediaRef: "",
             type: "memory",
             confirmed: false,
             text: "",
@@ -1050,6 +1056,7 @@ class MemoryDB {
     const mapped = results.map((r) => ({
       entry: {
         id: r.id,
+        ...(r.kind ? { kind: r.kind, mediaRef: r.mediaRef || "" } : {}),
         type: r.type || "memory",
         confirmed: r.confirmed === true,
         text: r.text,

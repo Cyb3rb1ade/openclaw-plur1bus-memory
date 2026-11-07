@@ -50,7 +50,7 @@ describe("EmbeddingGemma 2 is the default only for newly created stores", () => 
     assert.equal(normalized.local.revision, EMBEDDINGGEMMA2_EMBEDDING_PROFILE.revision);
     assert.equal(
       embeddingFingerprintId(embeddingFingerprintFromNormalizedConfig(normalized)),
-      embeddingFingerprintId(fingerprintOf(local(GEMMA))),
+      embeddingFingerprintId(fingerprintOf({ ...local(GEMMA), local: { ...local(GEMMA).local, dtype: "fp32", variant: "full" } })),
     );
   });
 

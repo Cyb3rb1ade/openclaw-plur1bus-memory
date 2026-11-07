@@ -26,6 +26,8 @@ on the OpenClaw Gateway's own port and authentication (no separate port, no
 separate login); reach it through however you already reach your Gateway
 (loopback, or a Tailscale/VPN front end), then open that tab.
 
+See [media embeddings](docs/media-embeddings.md) for the independent multimodal index, host decoder ports, provider licenses and backfill configuration.
+
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.

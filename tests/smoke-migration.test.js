@@ -140,6 +140,8 @@ const TABLE_NAME = "memories";
     await memoryDb.table.add([
       {
         id: newId,
+        kind: "",
+        mediaRef: "",
         text: "New v6 memory",
         vector: new Float32Array(VECTOR_DIM).fill(0.2),
         importance: 0.9,

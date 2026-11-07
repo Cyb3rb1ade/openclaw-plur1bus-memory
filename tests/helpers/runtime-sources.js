@@ -32,6 +32,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /** Host-neutral engine modules, by short name. */
 const ENGINE_PATHS = Object.freeze({
+  mediaService: "engine/media/service.js",
+  mediaStore: "engine/media/store.js",
+  mediaSegmenting: "engine/media/segmenting.js",
   assemblePromptContext: "engine/recall/assemble-prompt-context.js",
   captureTurn: "engine/capture/capture-turn.js",
   postTurnWork: "engine/capture/post-turn-work.js",
