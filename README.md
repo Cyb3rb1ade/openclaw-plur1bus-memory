@@ -8,8 +8,9 @@ Python distributions: **7.19.2**. This port includes the complete
 [OpenClaw v7.19.2 source](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.19.2)
 and the native Hermes payload. See the [delta and parity review](docs/audits/hermes-7.19.2-delta-review.md)
 and [installation guide](distribution/INSTALLATION.de.md).
-The Node floor `>=24.16.0 <25 || >=26.1.0` applies to the bundled OpenClaw
-plugin, not to the native Python memory provider.
+The bundled OpenClaw plugin requires the same Node as its host:
+`>=24.16.0 <25 || >=26.1.0`. That floor does not apply to the native Python
+memory provider.
 
 ### Web interface
 
