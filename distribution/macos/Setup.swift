@@ -20,9 +20,30 @@ struct InstallPlan: Decodable {
     let warnings: [String]
 }
 
+struct InstallProgress: Decodable {
+    let phase: String
+    let profile: String?
+    let completed: Int?
+    let total: Int?
+
+    var message: String? {
+        switch phase {
+        case "preparing": return "Installation wird vorbereitet und Dateien werden gesichert …"
+        case "installing-dependencies": return "Python-Abhängigkeiten werden installiert …"
+        case "admitting-pm-profile":
+            guard let profile = profile, let completed = completed, let total = total,
+                  completed >= 0, completed < total else { return nil }
+            return "Hermes richtet Profil \(profile) ein (\(completed + 1) von \(total)) …"
+        case "verifying": return "Dateien, Python-Imports und Profilaktivierung werden geprüft …"
+        default: return nil
+        }
+    }
+}
+
 // No shell is involved. Output stays in private temporary files, so a long pip
 // run cannot deadlock on a full pipe or block the main/UI thread.
-func runInstaller(python: String, arguments: [String], completion: @escaping (Int32, String, String) -> Void) {
+func runInstaller(python: String, arguments: [String], progress: ((InstallProgress) -> Void)? = nil,
+                  completion: @escaping (Int32, String, String) -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("plur1bus-setup-\(UUID().uuidString)")
         do {
@@ -40,6 +61,8 @@ func runInstaller(python: String, arguments: [String], completion: @escaping (In
             }
             let out = try FileHandle(forWritingTo: stdout), err = try FileHandle(forWritingTo: stderr)
             defer { out.closeFile(); err.closeFile() }
+            let reader = try progress.map { _ in try FileHandle(forReadingFrom: stderr) }
+            defer { reader?.closeFile() }
             let process = Process()
             process.executableURL = URL(fileURLWithPath: python)
             process.arguments = arguments
@@ -47,6 +70,27 @@ func runInstaller(python: String, arguments: [String], completion: @escaping (In
             process.standardOutput = out
             process.standardError = err
             try process.run()
+            if let reader = reader, let progress = progress {
+                let prefix = Data("PLUR1BUS_PROGRESS ".utf8)
+                var pending = Data()
+                while process.isRunning {
+                    do { pending.append(try reader.read(upToCount: 4096) ?? Data()) }
+                    catch {
+                        NSLog("PLUR1BUS: progress output could not be read: %@", error.localizedDescription)
+                        break
+                    }
+                    while let end = pending.firstIndex(of: 10) {
+                        let line = pending.prefix(upTo: end)
+                        if line.starts(with: prefix),
+                           let event = try? JSONDecoder().decode(InstallProgress.self, from: line.dropFirst(prefix.count)) {
+                            DispatchQueue.main.async { progress(event) }
+                        }
+                        pending.removeFirst(line.count + 1)
+                    }
+                    if pending.count > 4096 { pending.removeAll() }
+                    Thread.sleep(forTimeInterval: 0.25)
+                }
+            }
             process.waitUntilExit()
             let output = try String(contentsOf: stdout, encoding: .utf8)
             let errors = try String(contentsOf: stderr, encoding: .utf8)
@@ -70,6 +114,8 @@ final class SetupModel: ObservableObject {
     @Published var completed = false
     @Published var message = "Wähle dein vorhandenes Hermes-Home. Es werden noch keine Änderungen vorgenommen."
     @Published var details = ""
+    @Published var showDetails = false
+    @Published var phaseStartedAt: Date?
     @Published var plan: InstallPlan?
     private var approvedArguments: [String] = []
     private var approvedPython = ""
@@ -77,7 +123,7 @@ final class SetupModel: ObservableObject {
 
     func reset() {
         profiles = []; selected = []; plan = nil; stopped = false; completed = false
-        details = ""; approvedArguments = []; approvedPython = ""
+        details = ""; showDetails = false; approvedArguments = []; approvedPython = ""
     }
 
     // AppKit is used only for the folder/file chooser. All wizard state lives here.
@@ -148,18 +194,24 @@ final class SetupModel: ObservableObject {
 
     func install() {
         guard let plan = plan, stopped, !busy else { return }
-        busy = true; message = "Installation läuft. Abhängigkeiten können mehrere Minuten benötigen. Bitte nicht beenden."
+        busy = true; showDetails = false; phaseStartedAt = Date()
+        message = "Installationsplan und laufende Hermes-Prozesse werden geprüft …"
         let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "PLUR1BUS installation")
-        runInstaller(python: approvedPython, arguments: approvedArguments + ["--apply", "--confirm", plan.confirmation, "--runtimes-stopped"]) { code, output, errors in
+        let args = approvedArguments + ["--apply", "--confirm", plan.confirmation, "--runtimes-stopped", "--progress"]
+        runInstaller(python: approvedPython, arguments: args, progress: { event in
+            guard let message = event.message else { return }
+            self.message = message; self.phaseStartedAt = Date()
+        }) { code, output, errors in
             ProcessInfo.processInfo.endActivity(activity)
-            self.busy = false; self.details = output + "\n" + errors
+            self.busy = false; self.phaseStartedAt = nil
+            self.details = errors + "\n" + output
             if code == 0 {
                 self.completed = true
                 self.message = plan.activate ? "Installiert und Aktivierung geprüft: \(plan.profiles.joined(separator: ", ")). Hermes jetzt neu starten."
                     : "Dateien installiert. Die bisherige Aktivierung wurde unverändert gelassen."
             } else {
                 self.message = "Installation nicht abgeschlossen. Details und Backup-Journal prüfen; bei einem Abhängigkeitsfehler Hermes noch nicht neu starten. Vor erneutem Versuch einen neuen Plan erstellen."
-                self.plan = nil; self.stopped = false
+                self.showDetails = true; self.plan = nil; self.stopped = false
             }
         }
     }
@@ -235,12 +287,16 @@ struct SetupView: View {
             }
             if model.busy { ProgressView().controlSize(.small) }
             Text(model.message).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("setup-status")
+            if let start = model.phaseStartedAt {
+                HStack { Text("In diesem Schritt seit"); Text(start, style: .timer).monospacedDigit() }
+                    .font(.caption).foregroundColor(.secondary)
+            }
             if model.completed {
                 Text("Nach dem Neustart jedes ausgewählte Profil öffnen und den PLUR1BUS-Knopf prüfen. Ein eingerichteter Embedding-Provider ist zusätzlich für Speichern/Abrufen erforderlich.")
                 Button("Weitere Profile einrichten") { model.reset() }
             }
             if !model.details.isEmpty {
-                DisclosureGroup("Technische Details / Installationsbeleg") {
+                DisclosureGroup("Technische Details / Installationsbeleg", isExpanded: $model.showDetails) {
                     ScrollView { Text(model.details).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 140)
                 }
             }

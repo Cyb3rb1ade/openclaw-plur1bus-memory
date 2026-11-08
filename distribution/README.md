@@ -4,10 +4,16 @@
 **New in 7.12.47-hermes.0:** Graphical macOS setup and guided
 all-profiles/activation defaults. Older assets may still stage the terminal
 `.command` launcher.
-This document describes the `7.19.2-hermes.0` Hermes installer. Portable archives and
+This document describes the `7.19.2-hermes.1` Hermes installer. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.
+
+The macOS assistant shows the current profile and time spent in each step. For
+PM-managed homes the installer checks for a live gateway and unfinished PM
+publication before staging changes. On macOS it also probes Hermes' filesystem
+flush with a bounded wait before staging. The journal names the profile whose
+admission was in progress if the install is interrupted.
 
 This bundle installs the PLUR1BUS provider, Controls, dashboard and Desktop plugin
 into an **existing Hermes installation**. It does not install Hermes itself.

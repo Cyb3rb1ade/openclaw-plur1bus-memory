@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location("portable_installer", Path(__file__).resolve().parents[1] / "installer.py")
 installer = importlib.util.module_from_spec(SPEC)
@@ -439,6 +439,18 @@ class InstallerTests(unittest.TestCase):
             self.apply(plan)
         self.assertTrue(lock.is_dir())
 
+    def test_macos_pm_stalled_sync_probe_reports_failure_without_waiting_twice(self):
+        process = Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("Hermes PM volume probe", 15)
+        with patch.object(installer.subprocess, "Popen", return_value=process) as start:
+            with self.assertRaisesRegex(ValueError, "macOS filesystem synchronization.*no files were changed"):
+                installer.probe_macos_pm_sync(self.home, sys.executable, self.root / "venv")
+        self.assertEqual(start.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(start.call_args.kwargs["stderr"], subprocess.DEVNULL)
+        process.wait.assert_called_once_with(timeout=15)
+        process.terminate.assert_called_once_with()
+        self.assertFalse((self.home / "plur1bus-install-backups").exists())
+
     def test_frozen_bundle_relocation_keeps_confirmation(self):
         first = self.plan()
         second = self.root / "other extraction"
@@ -806,10 +818,25 @@ class InstallerTests(unittest.TestCase):
                 return {"name": "plur1bus", "version": "7.18.4"}
 
         admissions = []
+        progress = []
         fail_rollback_admission = False
+
+        def inspect(_home, _python, code, arguments=()):
+            if "from gateway.status import get_running_pid" in code:
+                self.assertIn("cleanup_stale=False", code)
+                self.assertEqual(json.loads(arguments[0]), {"alpha": str(self.home / "profiles/alpha")})
+                return '["alpha"]'
+            return json.dumps([{"plugins": str((self.home / "plugins").resolve()), "names": ["plur1bus"]}])
 
         def admit(home, profile_home, enabled, disabled, expected_config):
             admissions.append((profile_home, enabled, disabled))
+            if len(admissions) == 1:
+                journals = [json.loads(path.read_bytes())
+                            for path in (home / "plur1bus-install-backups").glob("*/journal.json")]
+                (journal,) = [row for row in journals if row["status"] == "admitting-pm-profile"]
+                self.assertEqual(journal["pendingPmProfile"], "default")
+                if not fail_rollback_admission:
+                    self.assertEqual(progress[-1], {"phase": "admitting-pm-profile", "profile": "default", "completed": 0, "total": 1})
             if fail_rollback_admission and len(admissions) > 1:
                 raise RuntimeError("private PM diagnostic must not enter journal")
             project_name = installer.tomllib.loads(
@@ -837,9 +864,7 @@ class InstallerTests(unittest.TestCase):
 
         patches = (
             patch.object(installer, "run_python", side_effect=pm_python),
-            patch.object(installer, "run_pm_inspection", return_value=json.dumps([
-                {"plugins": str((self.home / "plugins").resolve()), "names": ["plur1bus"]}
-            ])),
+            patch.object(installer, "run_pm_inspection", side_effect=inspect),
             patch.object(installer, "read_config", side_effect=read_json_or_yaml),
             patch.object(installer, "config_bytes", side_effect=lambda _python, config: json.dumps(config).encode()),
             patch.object(installer, "run_pm_selection", side_effect=admit),
@@ -847,11 +872,28 @@ class InstallerTests(unittest.TestCase):
         )
         with patch.object(installer.sys, "platform", "win32"), patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
             plan = installer.plan_install(self.bundle, self.home, profiles=["default"], activate=True)
-            transaction = installer.apply_install(plan, plan["confirmation"], True)
+            gateway_pid = self.home / "profiles/alpha/gateway.pid"
+            gateway_pid.write_text("fixture live gateway")
+            with self.assertRaisesRegex(ValueError, "Hermes gateway still running.*alpha"):
+                installer.apply_install(plan, plan["confirmation"], True)
+            self.assertFalse((self.home / "plur1bus-install-backups").exists())
+            self.assertFalse((self.home / ".plur1bus-install-lock").exists())
+            self.assertEqual(admissions, [])
+            gateway_pid.unlink()
+            publication = facts.with_name("publication.json")
+            publication.write_text("{}")
+            with self.assertRaisesRegex(ValueError, "Hermes PM has an unfinished publication"):
+                installer.apply_install(plan, plan["confirmation"], True)
+            self.assertFalse((self.home / "plur1bus-install-backups").exists())
+            self.assertEqual(admissions, [])
+            publication.unlink()
+            transaction = installer.apply_install(plan, plan["confirmation"], True, progress=progress.append)
             cache_entries = plan["pmNativeCache"]
             receipt = json.loads((self.home / installer.RECEIPT).read_text())
             self.assertEqual(receipt["sharedFiles"], {entry["cache"]: entry["sha256"] for entry in cache_entries})
             journal = json.loads((transaction / "journal.json").read_text())
+            self.assertNotIn("pendingPmProfile", journal)
+            self.assertEqual(progress[-1], {"phase": "verifying"})
             for entry in cache_entries:
                 self.assertEqual(journal["files"][entry["cache"]]["after"], entry["sha256"])
                 self.assertEqual(installer.digest((self.home / entry["cache"]).read_bytes()), entry["sha256"])

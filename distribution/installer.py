@@ -407,7 +407,7 @@ def pm_native_source_paths(home, entries):
     return mapping
 
 
-def run_pm_inspection(home, python, code):
+def run_pm_inspection(home, python, code, arguments=()):
     """Run a bounded read-only PM query against this exact Hermes home."""
     project = home / "hermes-agent"
     if redirected(project) or not project.is_dir():
@@ -416,13 +416,61 @@ def run_pm_inspection(home, python, code):
     environment["HERMES_HOME"] = str(home)
     try:
         result = subprocess.run(
-            [str(python), "-I", "-B", "-X", "utf8", "-c", code, str(project)],
+            [str(python), "-I", "-B", "-X", "utf8", "-c", code, str(project), *arguments],
             capture_output=True, text=True, encoding="utf-8", env=environment, timeout=60)
     except subprocess.TimeoutExpired as error:
         raise ValueError("Hermes PM active plugin inspection timed out") from error
     if result.returncode:
         raise ValueError("Hermes PM active plugin inspection failed")
     return result.stdout
+
+
+def require_stopped_pm_gateways(home, python):
+    """Refuse writes when Hermes still owns a gateway in the shared PM home."""
+    candidates = {name: str(target) for name, target in targets(home, ["all"]).items()
+                  if any(resolve_inside(target, marker).exists() for marker in ("gateway.pid", "gateway.lock"))}
+    if not candidates:
+        return
+    code = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from gateway.status import get_running_pid
+homes = json.loads(sys.argv[2])
+print(json.dumps([name for name, home in homes.items()
+                  if get_running_pid(Path(home) / 'gateway.pid', cleanup_stale=False) is not None]))
+"""
+    running = json.loads(run_pm_inspection(home, python, code, (json.dumps(candidates),)))
+    if not isinstance(running, list) or any(not isinstance(name, str) or name not in candidates for name in running):
+        raise ValueError("Hermes gateway status could not be verified; no files were changed")
+    if running:
+        raise ValueError("Hermes gateway still running for " + ", ".join(running) + "; stop it before installing")
+
+
+def probe_macos_pm_sync(home, python, generation):
+    """Check the host's flush barrier before staging any install files."""
+    code = """
+import inspect, sys
+sys.path.insert(0, sys.argv[1])
+from pm import environments
+flush = getattr(environments, 'flush_before_selecting', None)
+if flush is not None:
+    if inspect.signature(flush).parameters:
+        flush(sys.argv[2])
+    else:
+        flush()
+"""
+    command = [str(python), "-I", "-B", "-c", code, str(home / "hermes-agent"), str(generation)]
+    # A macOS syscall can stay blocked in the kernel even after a signal.
+    # Use no pipes and never wait again after timing out this read-only probe.
+    probe = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        result = probe.wait(timeout=15)
+    except subprocess.TimeoutExpired as error:
+        probe.terminate()
+        raise ValueError("macOS filesystem synchronization did not finish during Hermes PM preflight; no files were changed") from error
+    if result:
+        raise ValueError("macOS filesystem synchronization failed during Hermes PM preflight; no files were changed")
 
 
 def pm_active_member_profiles(home, python):
@@ -770,6 +818,13 @@ def interpreter(home, override=None):
     raise ValueError("Hermes Python not found; pass --python pointing to the Hermes virtual environment")
 
 
+def pm_install_state_root(home):
+    """Resolve the install state directory using Hermes PM's checkout identity."""
+    project = resolve_inside(home, "hermes-agent").resolve()
+    key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:16]
+    return resolve_inside(home, f"installs/{key}")
+
+
 def pm_selected_environment(home):
     """Read Hermes PM's committed generation without booting its mutating launcher."""
     project = home / "hermes-agent"
@@ -777,10 +832,8 @@ def pm_selected_environment(home):
         # Match pm.environments.install_key/runtime_facts_path. The in-tree venv
         # predates PM and can have the wrong ABI after a managed Python upgrade.
         # Do not run Hermes' launch bootstrap: it may synchronize dependencies.
-        project = project.resolve()
-        key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:16]
-        state_root = home / "installs" / key
-        facts_path = resolve_inside(home, f"installs/{key}/facts.json")
+        state_root = pm_install_state_root(home)
+        facts_path = resolve_inside(state_root, "facts.json")
         if facts_path.exists():
             try:
                 facts = json.loads(facts_path.read_text(encoding="utf-8-sig"))
@@ -1124,7 +1177,8 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     return result
 
 
-def apply_install(plan, confirmation, stopped=False):
+def apply_install(plan, confirmation, stopped=False, progress=None):
+    """Apply a confirmed plan and emit profile-level progress when requested."""
     if not stopped:
         raise ValueError("stop affected Hermes runtimes and pass --runtimes-stopped")
     python_arg = None if plan.get("pmManaged") else plan["python"]
@@ -1133,7 +1187,10 @@ def apply_install(plan, confirmation, stopped=False):
         raise ValueError("stale plan or invalid confirmation; no writes performed")
     home, bundle = root_path(plan["home"]), root_path(plan["bundle"])
     lock = resolve_inside(home, ".plur1bus-install-lock")
-    lock.mkdir()  # Refuse concurrent installation; never steal an existing lock.
+    try:
+        lock.mkdir()
+    except FileExistsError as error:
+        raise FileExistsError(error.errno, "another installation is running or was interrupted; inspect the installation journal before retrying", str(lock)) from error
     transaction = None
     journal = {"schema": 1, "status": "preparing", "home": str(home), "files": {}, "version": plan["version"],
                "pipChanged": False, "pmSelections": [],
@@ -1142,6 +1199,14 @@ def apply_install(plan, confirmation, stopped=False):
         # Recheck under the lock, including every target and configuration digest.
         if plan_install(bundle, home, plan["profiles"], python_arg, plan["activate"], plan["dependencies"], plan["desktopOnly"]) != plan:
             raise ValueError("installation changed while acquiring lock")
+        if plan["pmManaged"]:
+            if resolve_inside(pm_install_state_root(home), "publication.json").exists():
+                raise ValueError("Hermes PM has an unfinished publication; let it finish or recover it with Hermes PM before retrying")
+            require_stopped_pm_gateways(home, plan["python"])
+            if sys.platform == "darwin":
+                probe_macos_pm_sync(home, plan["python"], pm_selected_environment(home))
+        if progress is not None:
+            progress({"phase": "preparing"})
         backups = resolve_inside(home, "plur1bus-install-backups")
         backups.mkdir(exist_ok=True)
         transaction = Path(tempfile.mkdtemp(prefix=time.strftime("%Y%m%d-%H%M%S-"), dir=backups))
@@ -1243,6 +1308,8 @@ def apply_install(plan, confirmation, stopped=False):
         # Legacy installs use pip separately. PM-managed profiles are admitted
         # after the plugin files are staged, through PM's generation publisher.
         if not plan["desktopOnly"] and not plan["pmManaged"]:
+            if progress is not None:
+                progress({"phase": "installing-dependencies"})
             if plan["bootstrapPip"]:
                 journal.update(status="bootstrapping-pip", pipChanged=True)
                 record()
@@ -1333,10 +1400,14 @@ def apply_install(plan, confirmation, stopped=False):
                     atomic_create_verified(destination, data, digest(data))
                     continue
                 atomic_write(destination, data)
-        for name, request in pm_requests.items():
+        for index, (name, request) in enumerate(pm_requests.items()):
             before = request["beforeConfig"]
             verify_pm_native_cache(home, pm_native_cache)
             verify_pm_member_native_sources(home, selected, pm_native_cache)
+            journal.update(status="admitting-pm-profile", pendingPmProfile=name)
+            record()
+            if progress is not None:
+                progress({"phase": "admitting-pm-profile", "profile": name, "completed": index, "total": len(pm_requests)})
             run_pm_selection(home, request["target"], request["enabled"], request["disabled"], digest(before))
             config_path = resolve_inside(request["target"], "config.yaml")
             config_after_selection = config_path.read_bytes()
@@ -1354,7 +1425,11 @@ def apply_install(plan, confirmation, stopped=False):
             memory["memory_enabled"] = True
             atomic_write(config_path, config_bytes(selected_python, config))
             journal["files"][relative]["after"] = digest(config_path.read_bytes())
+            journal.pop("pendingPmProfile")
+            journal["status"] = "writing-files"
             record()
+        if progress is not None:
+            progress({"phase": "verifying"})
         if pm_requests:
             selected_python = interpreter(home)
             selected_environment = pm_selected_environment(home)
@@ -1580,6 +1655,7 @@ def main():
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm")
     parser.add_argument("--runtimes-stopped", action="store_true")
+    parser.add_argument("--progress", action="store_true", help="emit structured installation progress on stderr")
     parser.add_argument("--rollback", help="transaction directory name from the backup receipt")
     parser.add_argument("--retrieval-target", help="explicit embedding/reranker JSON; separate from package installation")
     parser.add_argument("--retrieval-kind", choices=("embedding", "reranker"), default="embedding")
@@ -1661,7 +1737,9 @@ def main():
                     return 0
                 args.apply, args.runtimes_stopped, args.confirm = True, True, result["confirmation"]
             if args.apply:
-                apply_install(result, args.confirm, args.runtimes_stopped)
+                def progress(event):
+                    print("PLUR1BUS_PROGRESS " + json.dumps(event), file=sys.stderr, flush=True)
+                apply_install(result, args.confirm, args.runtimes_stopped, progress if args.progress else None)
                 return 0
         if args.rollback:
             print(json.dumps(result, indent=2))
