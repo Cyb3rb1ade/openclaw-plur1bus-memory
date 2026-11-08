@@ -71,6 +71,9 @@ class Upstream761InventoryTests(unittest.TestCase):
                             "plur1bus-hermes/src/plur1bus_hermes/inject_markers.py"})
         changed_715.add("plur1bus-hermes/src/plur1bus_hermes/dream_diary.py")
         changed_715.add("distribution/tests/test_directory_project.py")
+        # The 7.19.2 port extends the native Obsidian importer. Its own tests
+        # cover filtering, exact approval hashes and write/acknowledgement drift.
+        changed_715.add("plur1bus-hermes/src/plur1bus_hermes/obsidian_sync.py")
         for path in paths:
             if Path(path).name in metadata or path in changed_769 or path in changed_715:
                 continue

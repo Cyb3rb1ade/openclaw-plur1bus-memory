@@ -22,7 +22,9 @@ class Upstream756InventoryTests(unittest.TestCase):
                 self.assertIn("`" + path + "`", review)
 
     def test_accepted_upstream_runtime_fixes_match_exactly(self):
-        subprocess.run(["git", "diff", "--exit-code", TARGET, "--",
+        # 7.19.0 changed the episode runtime; require the complete current
+        # release files rather than comparing to the historical 7.12.56 blob.
+        subprocess.run(["git", "diff", "--exit-code", "v7.19.2", "--",
                         "lib/episodes.js",
                         "tests/episodes-skip-episoded.test.js"],
                        cwd=ROOT, check=True)
