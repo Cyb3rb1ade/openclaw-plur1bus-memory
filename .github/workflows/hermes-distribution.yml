@@ -90,10 +90,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for run_id in 42514626662 42514626562; do
-            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" |
-              jq -e --arg sha "$SOURCE" '.head_sha == $sha and .conclusion == "success"'
-          done
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42514626662" |
+            jq -e --arg sha "$SOURCE" '.head_sha == $sha and .conclusion == "success"'
+          # This exact workflow revision checks out SOURCE separately for the
+          # native build. Its QA-only change uses Hermes's lock-aware check.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42516751007" |
+            jq -e '.head_sha == "d48826f5213c65f7991aeaad51190363e070ffa5" and .conclusion == "success"'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.21.0'
