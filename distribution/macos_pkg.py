@@ -20,7 +20,8 @@ def build_app(bundle, output, version, sign_identity=None):
     shutil.copytree(bundle, resources / "distribution")
     source = Path(__file__).parent / "macos/Setup.swift"
     subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-O", "-swift-version", "5",
-                    "-target", "arm64-apple-macosx13.0", str(source), "-o", str(executable)], check=True)
+                    "-target", "arm64-apple-macosx13.0", str(source), str(source.with_name("HermesPython.swift")),
+                    "-o", str(executable)], check=True)
     (contents / "Info.plist").write_bytes(plistlib.dumps({
         "CFBundleExecutable": "PLUR1BUSSetup", "CFBundleIdentifier": "io.plur1bus.hermes.setup",
         "CFBundleName": "PLUR1BUS einrichten", "CFBundleDisplayName": "PLUR1BUS einrichten",

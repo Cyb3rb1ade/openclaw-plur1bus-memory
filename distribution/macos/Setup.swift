@@ -143,10 +143,9 @@ final class SetupModel: ObservableObject {
     func detect() {
         reset()
         home = NSString(string: home).expandingTildeInPath
-        if python.isEmpty {
-            python = ["hermes-agent/venv/bin/python", "hermes-agent/.venv/bin/python"]
-                .map { URL(fileURLWithPath: home).appendingPathComponent($0).path }
-                .first { FileManager.default.isExecutableFile(atPath: $0) } ?? ""
+        if python.isEmpty || python == automaticPython {
+            do { python = try discoverHermesPython(home: home) ?? "" }
+            catch { message = error.localizedDescription; return }
             automaticPython = python
         }
         python = NSString(string: python).expandingTildeInPath

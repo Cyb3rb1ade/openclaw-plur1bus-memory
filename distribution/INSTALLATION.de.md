@@ -127,7 +127,8 @@ Die Einrichtung hat zwei klar getrennte Schritte:
      nicht automatisch eingerichtet; bestehende Modelle und Erinnerungen bleiben erhalten.
 
 Der Assistent zeigt während der Einrichtung das aktuelle Profil und die Dauer
-des Schritts. Bei PM-verwalteten Installationen prüft er vor dem Staging, ob ein
+des Schritts. Er findet auch das von Hermes PM ausgewählte Python einer frischen
+Hermes-Installation. Bei PM-verwalteten Installationen prüft er vor dem Staging, ob ein
 Gateway läuft oder Hermes noch einen Umgebungswechsel abschließt. Auf macOS
 prüft er zusätzlich, ob die Dateisystem-Synchronisierung von Hermes antwortet.
 Scheitert diese Vorprüfung, zeigt der Assistent den Grund in den Details an.

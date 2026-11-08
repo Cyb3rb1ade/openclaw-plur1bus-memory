@@ -1,7 +1,12 @@
 """Native setup packaging and user-scope boundaries (no privileged postinstall)."""
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import plistlib
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -67,6 +72,55 @@ class MacSetupTests(unittest.TestCase):
         self.assertIn('return python == automaticPython ? args : args + ["--python", python]', source)
         base = source.split("private func baseArguments()", 1)[1].split("func preview()", 1)[0]
         self.assertNotIn('"--home", home, "--python", python]', base)
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("xcrun"), "requires native macOS Swift")
+    def test_fresh_pm_home_selects_its_trusted_venv_without_legacy_python(self):
+        source = Path(packaging.__file__).parent / "macos/HermesPython.swift"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            test = root / "probe.swift"
+            test.write_text("""
+import Foundation
+@main struct Probe {
+    static func main() {
+        do { print(try discoverHermesPython(home: CommandLine.arguments[1]) ?? "missing") }
+        catch { print("refused"); exit(4) }
+    }
+}
+""")
+            probe = root / "probe"
+            subprocess.run(["xcrun", "swiftc", str(source), str(test), "-o", str(probe)], check=True, capture_output=True)
+            home = root / "Hermes Home"
+            project = home / "hermes-agent"
+            project.mkdir(parents=True)
+            key = hashlib.sha256(str(project).encode()).hexdigest()[:16]
+            state = home / "installs" / key
+            generation = state / "environments" / "fresh-generation" / "venv"
+            python = generation / "bin/python"
+            python.parent.mkdir(parents=True)
+            (generation / "pyvenv.cfg").write_text("version = 3.14.9\n")
+            facts = state / "facts.json"
+            facts.write_text(json.dumps({"packages": {"venv": {"environment": str(generation)}}}))
+            trusted = home / "tools" / "managed-python"
+            trusted.parent.mkdir()
+            trusted.write_text("#!/bin/sh\n")
+            trusted.chmod(0o755)
+            python.symlink_to(trusted)
+            result = subprocess.run([str(probe), str(home)], check=True, capture_output=True, text=True)
+            self.assertEqual(result.stdout.strip(), str(python))
+
+            python.unlink()
+            python.symlink_to("/bin/sh")
+            result = subprocess.run([str(probe), str(home)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 4)
+            self.assertEqual(result.stdout.strip(), "refused")
+
+            facts.unlink()
+            legacy = project / "venv/bin/python"
+            legacy.parent.mkdir(parents=True)
+            legacy.symlink_to("/bin/sh")
+            result = subprocess.run([str(probe), str(home)], check=True, capture_output=True, text=True)
+            self.assertEqual(result.stdout.strip(), str(legacy))
 
     def test_partial_signing_configuration_is_rejected_before_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
