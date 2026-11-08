@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE: 986e135b3e568ba166ef4a77d60adedab480e0f7
+  SOURCE: 75fa327ec00156f5b4db370c442730f7091811b7
   VERSION: 7.19.2-hermes.1
   PACKAGE: '@cyb3rb1ade/plur1bus-memory'
   TARBALL: cyb3rb1ade-plur1bus-memory-7.19.2-hermes.1.tgz
@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 986e135b3e568ba166ef4a77d60adedab480e0f7
+          ref: 75fa327ec00156f5b4db370c442730f7091811b7
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -95,9 +95,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42522217943" |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42522867546" |
             jq -e --arg sha "$SOURCE" '.head_sha == $sha and .conclusion == "success"'
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42522218061" |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42522867550" |
             jq -e --arg sha "$SOURCE" '.head_sha == $sha and .conclusion == "success"'
           [[ "$PREFLIGHT_RUN" =~ ^[0-9]+$ ]]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREFLIGHT_RUN" |
