@@ -1,110 +1,141 @@
-name: Hermes portable and native distribution
+name: Hermes 7.19.2 GitHub Packages publication
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/hermes-distribution-*']
-    paths:
-      - 'distribution/**'
-      - 'plur1bus-hermes/**'
-      - 'plur1bus-controls/**'
-      - 'hermes-dashboard/**'
-      - 'scripts/hermes-desktop-host.py'
-      - '.github/workflows/hermes-distribution.yml'
-  pull_request:
-    paths:
-      - 'distribution/**'
-      - 'plur1bus-hermes/**'
-      - 'plur1bus-controls/**'
-      - 'hermes-dashboard/**'
-      - '.github/workflows/hermes-distribution.yml'
+    inputs:
+      publish:
+        description: Publish only after both fixed source-bound CI gates pass.
+        type: boolean
+        default: false
+      tarball_sha256:
+        description: Digest of the reviewed preflight artifact (required for publication).
+        type: string
+        default: ''
 
 permissions:
   contents: read
-  actions: read
+
+concurrency:
+  group: hermes-registry-7.19.2
+  cancel-in-progress: false
+
+env:
+  SOURCE: cdbabe2e9dfbd8bab212b297ceb9d84c9dd04f2f
+  VERSION: 7.19.2-hermes.0
+  PACKAGE: '@cyb3rb1ade/plur1bus-memory'
+  TARBALL: cyb3rb1ade-plur1bus-memory-7.19.2-hermes.0.tgz
+  REGISTRY: https://npm.pkg.github.com
 
 jobs:
   package:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            python: '3.12'
-          - os: ubuntu-24.04-arm
-            python: '3.12'
-          - os: macos-15
-            python: '3.12'
-          - os: windows-2025
-            python: '3.12'
-          - os: windows-11-arm
-            python: '3.13'
-            native: windows-arm64
-          # Current Hermes PM uses Python 3.14. Keep legacy package gates too;
-          # these runs prove runtime compatibility, not official PM admission.
-          - os: ubuntu-24.04
-            python: '3.14'
-            artifact-suffix: '-py314'
-          - os: ubuntu-24.04-arm
-            python: '3.14'
-            artifact-suffix: '-py314'
-          - os: macos-15
-            python: '3.14'
-            artifact-suffix: '-py314'
-          - os: windows-2025
-            python: '3.14'
-            artifact-suffix: '-py314'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    env:
-      PYTHONUTF8: '1'
-      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
     steps:
-      - name: Enable Windows checkout of retained long audit paths
-        if: runner.os == 'Windows'
-        run: git config --global core.longpaths true
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          # Inventory and parity tests inspect retained upstream tags and commits.
-          fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+          ref: cdbabe2e9dfbd8bab212b297ceb9d84c9dd04f2f
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          python-version: ${{ matrix.python }}
-      - name: Recover hash-pinned Windows ARM wheels from published 7.18.4
-        if: matrix.native == 'windows-arm64'
-        shell: pwsh
+          node-version: '24.21.0'
+          registry-url: https://npm.pkg.github.com
+          scope: '@cyb3rb1ade'
+      - name: Build and validate exact npm tarball
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ inputs.publish }}
+          EXPECTED_DIGEST: ${{ inputs.tarball_sha256 }}
         run: |
-          gh release download 7.18.4-hermes.0 --repo Cyb3rb1ade/openclaw-plur1bus-memory --pattern 'plur1bus-7.18.4-hermes.0-windows-arm64.zip' --pattern 'source-pinned-provenance.json' --dir "$env:RUNNER_TEMP/plur1bus-arm-inputs"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python .github/scripts/recover-hermes-arm-wheels.py "$env:RUNNER_TEMP/plur1bus-arm-inputs" "$env:RUNNER_TEMP/plur1bus-native-candidates"
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Bind Windows ARM candidate paths and source provenance
-        if: matrix.native == 'windows-arm64'
-        shell: pwsh
-        run: |
-          "PLUR1BUS_ARM_LANCEDB_WHEEL=$env:RUNNER_TEMP/plur1bus-native-candidates/classic-lancedb/lancedb-0.34.0-cp39-abi3-win_arm64.whl" >> $env:GITHUB_ENV
-          "PLUR1BUS_ARM_LANCEDB_SOURCE=$env:RUNNER_TEMP/plur1bus-native-candidates/classic-lancedb/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
-          "PLUR1BUS_ARM_PYARROW_WHEEL=$env:RUNNER_TEMP/plur1bus-native-candidates/classic-pyarrow/pyarrow-25.0.1-cp313-cp313-win_arm64.whl" >> $env:GITHUB_ENV
-          "PLUR1BUS_ARM_PYARROW_SOURCE=$env:RUNNER_TEMP/plur1bus-native-candidates/classic-pyarrow/UPSTREAM_COMMIT.txt" >> $env:GITHUB_ENV
-      - name: Verify reviewed native artifacts before any dependency install
-        if: matrix.native == 'windows-arm64'
-        run: python distribution/ci.py --provision-native
-      - name: Build and test tools
-        run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2'
-      - name: CPU PyTorch (avoid unrelated CUDA downloads)
-        if: runner.os == 'Linux' || matrix.os == 'windows-2025'
-        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Install candidate runtime dependencies
-        run: python -m pip install './plur1bus-hermes[local-onnx]' ./plur1bus-controls
-      - name: Validate resolved dependency environment
-        run: python -m pip check
-      - name: Tests, native packaging and isolated actual installation
-        run: python distribution/ci.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          test -z "$(git status --porcelain)"
+          out="$RUNNER_TEMP/hermes-registry"
+          mkdir "$out"
+          npm pack --ignore-scripts --json --pack-destination "$out" > "$out/npm-pack.json"
+          jq -e --arg p "$PACKAGE" --arg v "$VERSION" --arg f "$TARBALL" '
+            length == 1 and .[0].name == $p and .[0].version == $v and .[0].filename == $f
+            and (.[0].files | map(.path) |
+                 index("plur1bus-hermes/pyproject.toml") != null
+                 and index("hermes-dashboard/plur1bus/desktop/plugin.js") != null
+                 and index("dist/control-ui/jev-key/index.js") != null
+                 and all(test("(^|/)([.]git|[.]env|[.]github|__pycache__|node_modules)(/|$)") | not))
+          ' "$out/npm-pack.json"
+          cd "$out"
+          sha256sum "$TARBALL" > SHA256SUMS
+          cat SHA256SUMS
+          if [[ "$PUBLISH" == true ]]; then
+            [[ "$EXPECTED_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+            test "$(cut -d' ' -f1 SHA256SUMS)" = "$EXPECTED_DIGEST"
+          fi
+      - name: Verify repository-scoped registry read access
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: npm view "$PACKAGE" dist-tags --json --registry "$REGISTRY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: plur1bus-hermes-${{ matrix.os }}${{ matrix.artifact-suffix }}
-          path: distribution-artifacts/*
+          name: hermes-registry-tarball
+          path: ${{ runner.temp }}/hermes-registry/*
           if-no-files-found: error
           retention-days: 14
+
+  publish:
+    if: inputs.publish
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - name: Require the exact passing platform and native Hermes PM runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for run_id in 42514626662 42514626562; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" |
+              jq -e --arg sha "$SOURCE" '.head_sha == $sha and .conclusion == "success"'
+          done
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.21.0'
+          registry-url: https://npm.pkg.github.com
+          scope: '@cyb3rb1ade'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: hermes-registry-tarball
+          path: ${{ runner.temp }}/hermes-registry
+      - name: Publish only hermes and verify the downloaded bytes and untouched latest tag
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+          EXPECTED_DIGEST: ${{ inputs.tarball_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/hermes-registry"
+          sha256sum --check SHA256SUMS
+          [[ "$EXPECTED_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          test "$(cut -d' ' -f1 SHA256SUMS)" = "$EXPECTED_DIGEST"
+          before=$(npm view "$PACKAGE" dist-tags --json --registry "$REGISTRY" --prefer-online)
+          npm publish "./$TARBALL" --ignore-scripts --tag hermes --registry "$REGISTRY"
+          after=$(npm view "$PACKAGE" dist-tags --json --registry "$REGISTRY" --prefer-online)
+          test "$(jq -r '.latest // ""' <<< "$before")" = "$(jq -r '.latest // ""' <<< "$after")"
+          test "$(jq -r '.hermes' <<< "$after")" = "$VERSION"
+          mkdir "$RUNNER_TEMP/registry-download"
+          npm pack "$PACKAGE@$VERSION" --ignore-scripts --registry "$REGISTRY" --prefer-online \
+            --cache "$RUNNER_TEMP/registry-verify-cache" --pack-destination "$RUNNER_TEMP/registry-download"
+          cmp "$TARBALL" "$RUNNER_TEMP/registry-download/$TARBALL"
+          jq -n --arg version "$VERSION" --arg sha "$EXPECTED_DIGEST" --arg source "$SOURCE" \
+            --argjson before "$before" --argjson after "$after" \
+            '{version:$version,sha256:$sha,source:$source,bitIdentical:true,distTagsBefore:$before,distTagsAfter:$after}' \
+            > "$RUNNER_TEMP/registry-download/registry-verification.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: hermes-registry-verification
+          path: ${{ runner.temp }}/registry-download/registry-verification.json
+          if-no-files-found: error
