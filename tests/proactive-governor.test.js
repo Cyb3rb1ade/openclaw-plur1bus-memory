@@ -76,6 +76,73 @@ describe("proactive-governor", () => {
     assert.strictEqual(s.budgetPerWeek, budget);
   });
 
+  it("heartbeat and internal outcomes never adjust the budget or feedback watermark", () => {
+    const heartbeat = "Read the current HEARTBEAT.md in your workspace with the read tool if it exists. Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.";
+    const direct = "agent:main:telegram:default:direct:1";
+    const internalRows = [
+      { sessionKey: direct, userPrompt: heartbeat },
+      { sessionKey: direct, userPrompt: "How is the release going?", replyText: heartbeat },
+      { sessionKey: "agent:main:main:heartbeat" },
+      { sessionKey: "agent:main:cron:job-1" },
+      { sessionKey: "agent:main:active-memory:run-1" },
+      { sessionKey: "agent:main:subagent:run-1" },
+      { origin: "internal" },
+      { source: "cron" },
+      { kind: "background" },
+      { trigger: "heartbeat" },
+      { inputProvenance: { kind: "internal_system" } },
+      { provenance: { kind: "internal_system" } },
+      { message: { provenance: { kind: "internal_system" } } },
+      { sourceChannel: "internal_system" },
+      { sessionKey: direct, userPrompt: "/plur1bus internal afterthought" },
+      { sessionKey: direct, userPrompt: "[cron:abc nightly consolidation] Process pending memories" },
+      { sessionKey: direct, userPrompt: "__openclaw_memory_core_rem_sleep__" },
+    ];
+    const state = recordProactiveSend(createGovernorState(T0), "afterthought", T0);
+    for (const row of internalRows) {
+      for (const outcome of ["continued_topic", "ignored_or_topic_shifted"]) {
+        const result = applyOutcomeAdjustments(state, [{ ...row, timestamp: T0 + H, outcome }], { now: T0 + 2 * H });
+        assert.strictEqual(result.budgetPerWeek, 2, JSON.stringify(row));
+        assert.strictEqual(result.adjustedAt, 0, JSON.stringify(row));
+      }
+    }
+  });
+
+  it("normal heartbeat discussions still count and internal later timestamps cannot consume them", () => {
+    const state = recordProactiveSend(createGovernorState(T0), "afterthought", T0);
+    const internal = { timestamp: T0 + 2 * H, outcome: "continued_topic", sessionKey: "agent:main:cron:job-1" };
+    const first = applyOutcomeAdjustments(state, [internal], { now: T0 + 3 * H });
+    const result = applyOutcomeAdjustments(first, [{
+      timestamp: T0 + H, outcome: "continued_topic", source: "reply-based-outcome-tracking",
+      sessionKey: "agent:main:telegram:default:direct:1",
+      userPrompt: "Read HEARTBEAT.md and explain why HEARTBEAT_OK appears in my logs.",
+    }, internal], { now: T0 + 3 * H });
+    assert.strictEqual(result.budgetPerWeek, 2.25);
+    assert.strictEqual(result.adjustedAt, T0 + H);
+  });
+
+  it("native heartbeat prompts and persisted polls never adjust governor feedback", () => {
+    const state = recordProactiveSend(createGovernorState(T0), "afterthought", T0);
+    for (const text of [
+      "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats.",
+      "[OpenClaw heartbeat poll]",
+    ]) {
+      for (const field of ["userPrompt", "replyText"]) {
+        const result = applyOutcomeAdjustments(state, [{
+          sessionKey: "agent:main:telegram:default:direct:1", [field]: text,
+          timestamp: T0 + H, outcome: "continued_topic",
+        }], { now: T0 + 2 * H });
+        assert.strictEqual(result.budgetPerWeek, 2, `${field}: ${text}`);
+        assert.strictEqual(result.adjustedAt, 0, `${field}: ${text}`);
+      }
+    }
+    const discussion = applyOutcomeAdjustments(state, [{
+      userPrompt: "Explain the heartbeat monitor scratch context and [OpenClaw heartbeat poll].",
+      timestamp: T0 + H, outcome: "continued_topic",
+    }], { now: T0 + 2 * H });
+    assert.strictEqual(discussion.budgetPerWeek, 2.25);
+  });
+
   it("höheres Budget erlaubt mehr Sends pro Woche", () => {
     let s = createGovernorState(T0);
     s.budgetPerWeek = 4;

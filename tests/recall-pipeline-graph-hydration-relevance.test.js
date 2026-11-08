@@ -155,7 +155,7 @@ describe("hydrateGraphResults query-relevance revalidation", () => {
     assert.strictEqual(out[0].entry.id, "m-close");
   });
 
-  it("does not crash when embedding fails and keeps the candidate", async () => {
+  it("drops graph-only candidates when relevance cannot be verified", async () => {
     const rows = [
       { id: "m-error", text: "some memory", summary: "", status: "active" },
     ];
@@ -175,7 +175,7 @@ describe("hydrateGraphResults query-relevance revalidation", () => {
       aclCtx,
       embeddingContext,
     });
-    assert.strictEqual(out.length, 1, "candidate should be kept on embedding error");
+    assert.strictEqual(out.length, 0, "unverified graph-only candidate must not enter the prompt");
     assert.strictEqual(logger.warnings.length, 1, "warning should be logged");
   });
 

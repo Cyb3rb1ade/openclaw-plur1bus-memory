@@ -1015,3 +1015,28 @@ test("close waits for pending opens and permanently disables persistence", async
   await cache.close();
   assert.equal(openedHandles, closedHandles);
 });
+
+test("caller validation bypasses invalid pre-existing memory and persisted responses without disabling valid caching",async(t)=>{
+ const baseDbPath=makeTempDir("llm-result-validation-");
+ const req=request({purpose:LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,jsonMode:true});
+ const opts={baseDbPath,persist:true};
+ const valid=text=>typeof JSON.parse(text).instructions==="string";
+ const stale=result(JSON.stringify({confidence:0.9,skillName:"incomplete"}));
+ const healthy=result(JSON.stringify({confidence:0.9,skillName:"complete",instructions:"Check sources"}));
+ let cache=createLlmResultCache(opts);
+ await cache.getOrCompute(req,async()=>stale);
+ // Old in-memory entries are checked too, without waiting for TTL expiry.
+ let memoryCalls=0;
+ assert.deepEqual(await cache.getOrCompute({...req,validateResult:valid},async()=>{memoryCalls++;return healthy;}),healthy);
+ assert.equal(memoryCalls,1);
+ // Seed a different key to emulate an invalid response persisted by the previous release.
+ const persistedReq={...req,messages:[{role:"user",content:"persisted invalid response"}]};
+ await cache.getOrCompute(persistedReq,async()=>stale);await cache.close();
+ cache=createLlmResultCache(opts);t.after(()=>cache.close());
+ let calls=0;
+ const checked={...persistedReq,validateResult:valid};
+ assert.deepEqual(await cache.getOrCompute(checked,async()=>{calls++;return healthy;}),healthy);
+ assert.deepEqual(await cache.getOrCompute(checked,async()=>{calls++;return healthy;}),healthy);
+ assert.equal(calls,1);
+ assert.equal(cache.getMetrics("agent-a").persistHits,0);
+});

@@ -61,9 +61,19 @@ function buildMoodBlock(state, prevState = null) {
   ].join("\n");
 }
 
+// Skip before touching mood files: the incoming owner supplies one congruent directive.
+function hasActiveJevOwner(api, agentId) {
+  const hostConfig = typeof api.runtime?.config?.current === "function" ? api.runtime.config.current() : api.config;
+  const settings = hostConfig?.plugins?.entries?.["memory-lancedb-namespaced"]?.config?.emotion?.jev;
+  if (settings) return settings.enabled === true && settings.mode === "active" && settings.agents?.[agentId] === true;
+  const shared = globalThis[Symbol.for("plur1bus.jev-emotion-runtime.v1")];
+  return [...(shared?.scopes?.values() || [])].some(scope => scope.enabled?.has(agentId));
+}
+
 function register(api) {
   api.on("before_prompt_build", async (_event, ctx) => {
     try {
+      if (hasActiveJevOwner(api, ctx?.agentId)) return;
       const workspaceDir = ctx?.workspaceDir;
       if (!workspaceDir) return;
       let state;

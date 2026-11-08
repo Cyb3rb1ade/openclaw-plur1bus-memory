@@ -90,9 +90,9 @@ describe("emotion-refine encoding maxTokens — strukturelle Aufrufstellen-Prüf
     assert.ok(encodingEnd > encodingStart, "Ende der encodingCallLlm-Definition (': null;') nicht gefunden");
   });
 
-  it("emotionT3CallLlm (Tier-3-Emotionsklassifikation) trägt weiterhin maxTokens: 300", () => {
+  it("emotionT3CallLlm (Tier-3-Emotionsklassifikation) trägt maxTokens: 450 (7.18.23, Tokenizer Haiku 5.5)", () => {
     const slice = indexSrc.slice(emotionT3Start, encodingStart);
-    assert.match(slice, /maxTokens:\s*300,/, "emotionT3CallLlm muss weiterhin maxTokens: 300 verwenden");
+    assert.match(slice, /maxTokens:\s*450,/, "emotionT3CallLlm muss maxTokens: 450 verwenden");
   });
 
   it("encodingCallLlm (Bedeutung + Emotion in einem Call) trägt keine hartkodierte 300 mehr", () => {

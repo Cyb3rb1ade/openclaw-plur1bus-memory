@@ -79,3 +79,9 @@ BREAKING_CHANGE_AUDIT.md
 # Klarnamen und medizinische Beispiele aus dem Produktivbestand.
 docs/superpowers/plans/2026-09-19-importance-kodierung-gebrauch.md
 docs/superpowers/specs/2026-09-19-importance-kodierung-gebrauch-design.md
+
+!scripts/plan-speech.mjs
+!scripts/telegramTts/
+!scripts/telegramTts/**
+
+__pycache__/

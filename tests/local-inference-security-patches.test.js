@@ -47,7 +47,7 @@ for (const route of ["extractEntryTo", "extractAllTo"]) {
 
 test("patched sharp loads its native library and retains image-processing APIs", async () => {
   const sharp = transformerRequire("sharp");
-  assert.equal(sharp.versions.sharp, "0.35.4");
+  assert.equal(sharp.versions.sharp, "0.35.5");
   const buffer = await sharp({ create: { width: 2, height: 2, channels: 4,
     background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
   const metadata = await sharp(buffer).metadata();

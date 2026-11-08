@@ -18,8 +18,10 @@ QUESTION = {
 
 def storage_for_answer(answer, minimum=0.85):
     """Uncertain, absent or invalid answers retain the whole and its parts."""
+    if not isinstance(answer, dict) or isinstance(answer.get("confidence"), bool):
+        return "both"
     try:
-        confidence = float((answer or {}).get("confidence"))
+        confidence = float(answer.get("confidence"))
     except (TypeError, ValueError):
         return "both"
     if not math.isfinite(confidence) or confidence < minimum:
@@ -27,10 +29,25 @@ def storage_for_answer(answer, minimum=0.85):
     return {"coherent": "whole", "independent": "parts"}.get(answer.get("choice"), "both")
 
 
+def _credentials(config):
+    options = config.get("captureChunkingJev")
+    options = options if isinstance(options, dict) else {}
+    explicit = options.get("apiKeyEnv")
+    explicit = explicit.strip() if isinstance(explicit, str) else ""
+    return options, os.environ.get(explicit or "TYPESAFE_API_KEY", "").strip(), (
+        "configured_environment" if explicit else "default_environment"
+    )
+
+
+def credential_status(config):
+    """Report the selected credential source without disclosing names or values."""
+    _, key, source = _credentials(config)
+    return {"configured": bool(key), "source": source}
+
+
 def decide_storage(text, config):
     """Call the upstream fixed endpoint; log no message, secret or response."""
-    options = config.get("captureChunkingJev") or {}
-    key = os.environ.get(str(options.get("apiKeyEnv") or "TYPESAFE_API_KEY"), "").strip()
+    options, key, _ = _credentials(config)
     if not key or not text.strip():
         return "both"
     timeout = options.get("timeoutMs", 5000)

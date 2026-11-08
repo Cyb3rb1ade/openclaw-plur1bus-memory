@@ -2,25 +2,14 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.18.20-hermes.0 — Hermes release candidate**
+**PLUR1BUS 7.19.2-hermes.0 — Hermes port**
 
-Source version: **7.18.20-hermes.0** (Python distributions:
-**7.18.20**). It integrates the pinned upstream commit
-`0c07263da42e169a8e1245eb2882a6be2a2552a0` while retaining the native Hermes
-payload. See the [Hermes delta review](docs/audits/hermes-7.18.20-delta-review.md)
-and [platform installation guide](distribution/INSTALLATION.de.md).
-Build receipts and checksums identify the tested artifacts. See the
-[previous Hermes release](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/7.18.4-hermes.0)
-for previously published assets; this candidate is not yet published. Known limitation: some shared Hermes Desktop backends keep
-the previous profile on a profile switch; PLUR1BUS safely blocks mismatched requests.
-Native GC-capacity controls and full host model-catalogue integration remain open.
-Existing host compatibility evidence is retained in the
-[compatibility contract](docs/compatibility-openclaw.md), but is not fresh
-release verification.
-
-The bundled OpenClaw JavaScript plugin requires the same Node as its host:
-`>=24.16.0 <25 || >=26.1.0`. The native Hermes memory provider runs in Python;
-this Node floor applies to the npm package and JavaScript verification tools.
+Python distributions: **7.19.2**. This port includes the complete
+[OpenClaw v7.19.2 source](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.19.2)
+and the native Hermes payload. See the [delta and parity review](docs/audits/hermes-7.19.2-delta-review.md)
+and [installation guide](distribution/INSTALLATION.de.md).
+The Node floor `>=24.16.0 <25 || >=26.1.0` applies to the bundled OpenClaw
+plugin, not to the native Python memory provider.
 
 ### Web interface
 
@@ -34,6 +23,12 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.19.0 — independent emotion and bilingual Telegram speech
+
+An opt-in `emotion.jev` owner can assess incoming messages independently of the legacy mood writer (`shadow` logs proposals only, `active` drives the shared per-agent mood by elapsed time) and a new outgoing speech adapter (`scripts/plan-speech.mjs`) plans bilingual (`de`/`pl`) ElevenLabs delivery from canonical semantic intent rather than raw mood text. Both default to off; see [Configuration](docs/configuration.md#independent-incoming-jev-emotion-emotionjev) for the rollout contract and `scripts/telegramTts/README.md` for deployment.
+
+Also in this release: `@huggingface/transformers` moved to 4.3.2 and `zod` is pinned to 4.6.7, closing the high-severity advisories in both — `npm audit --omit=dev` is back to 0.
 
 ### New in v7.16.0 — recall width is an operator setting
 

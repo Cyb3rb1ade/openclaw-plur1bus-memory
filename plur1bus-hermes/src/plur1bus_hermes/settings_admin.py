@@ -13,7 +13,8 @@ from .writer_lock import writer_lock
 # Only paths with an actual native runtime consumer belong here.
 BOOLEANS = {
     "autoCapture": True, "autoRecall": True, "merging.enabled": False,
-    "gc.enabled": False, "obsidianBridge.watch": False, "skillWorkshop.enabled": False,
+    "gc.enabled": False, "obsidianBridge.watch": False, "obsidianBridge.autoApplyLowRisk": False,
+    "skillWorkshop.enabled": False,
     "schicht15.enabled": False, "semanticLens.enabled": False,
     "conversationReactivationRecall.enabled": False, "dreamEcho.enabled": False,
     "personaVoice.enabled": False, "continuityEngine.enabled": True,
@@ -27,6 +28,7 @@ LABELS = {
     "autoCapture": "Automatisch speichern", "autoRecall": "Automatisch erinnern",
     "merging.enabled": "Ähnliche Erinnerungen zusammenführen", "gc.enabled": "Speicherbereinigung",
     "obsidianBridge.watch": "Obsidian-Änderungen beobachten", "skillWorkshop.enabled": "Skill Workshop",
+    "obsidianBridge.autoApplyLowRisk": "Risikoarme Obsidian-Notizen automatisch importieren",
     "schicht15.enabled": "Schicht 15", "semanticLens.enabled": "Semantic Lens",
     "conversationReactivationRecall.enabled": "Gesprächsreaktivierung", "dreamEcho.enabled": "Dream Echo",
     "personaVoice.enabled": "Persona Voice", "continuityEngine.enabled": "Kontinuität",
@@ -48,6 +50,7 @@ HELP = {
     "merging.enabled": "Inhaltlich verwandte Erinnerungen auf eine Zusammenführung prüfen. Die bestehenden Sicherheits- und Freigaberegeln gelten weiter.",
     "gc.enabled": "Die konfigurierte Speicherbereinigung aktivieren. Ein globales Kartenlimit lässt sich in dieser Hermes-Version noch nicht über die Oberfläche festlegen.",
     "obsidianBridge.watch": "Änderungen im konfigurierten Obsidian-Workspace beobachten. Ohne eingerichteten Workspace gibt es nichts zu synchronisieren.",
+    "obsidianBridge.autoApplyLowRisk": "Nur beim aktivierten Obsidian-Watch: kurze, risikoarme Notizen automatisch als unbestätigte Erinnerungen im privaten Profil speichern. Gemeinsame Speicher und KNOWLEDGE.md bleiben unangetastet.",
     "skillWorkshop.enabled": "Wiederkehrende Abläufe als Skill-Vorschläge aufbereiten. Prüfen und Veröffentlichen erfolgt im Bereich Erinnerungen.",
     "schicht15.enabled": "Zusätzliche kognitive Verarbeitung aktivieren. Verfügbarkeit und LLM-Nutzung hängen von den eingerichteten Funktionen ab.",
     "semanticLens.enabled": "Vorbereitete semantische Verbindungen als Ergänzung zum normalen Recall nutzen. Ersetzt weder die Suche noch ihren Trefferbestand.",

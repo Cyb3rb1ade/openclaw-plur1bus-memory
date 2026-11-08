@@ -429,9 +429,31 @@ class RerankerBackend:
                     close()
             self._models.clear()
 
-    def rerank(self, query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def rerank(self, query: str, rows: list[dict[str, Any]], *,
+               candidate_limit: int | None = None, minimum: int = 1) -> list[dict[str, Any]]:
+        """Bound provider input without truncating the fallback when ranking fails."""
         if not rows or self.config.get("provider", "disabled") == "disabled":
             return rows
+        original = rows
+        if type(candidate_limit) is int and candidate_limit > 0:
+            def distance(row):
+                value = row.get("_distance")
+                return value if type(value) in (int, float) and math.isfinite(value) else math.inf
+
+            selected = []
+            seen = set()
+            for row in sorted(rows, key=distance):
+                # Refined ANN can return the same row as the primary ANN.
+                # Distinct namespaces remain separate until final recall dedup.
+                key = (row.get("_namespace"), row.get("id"))
+                if key[1] and key in seen:
+                    continue
+                if key[1]:
+                    seen.add(key)
+                selected.append(row)
+                if len(selected) >= max(minimum, candidate_limit):
+                    break
+            rows = selected
         try:
             return self._rerank_with(self.config, query, rows)
         except Exception as primary_error:
@@ -439,7 +461,7 @@ class RerankerBackend:
                 # Native ONNX is intentionally fail-open: a bad optional local
                 # accelerator must never suppress otherwise valid recall rows.
                 LOGGER.warning("reranker primary (%s) failed; returning unreranked results", primary_error)
-                return rows
+                return original
             try:
                 return self._rerank_with({"provider": "local-transformers", "model": self.config.get("fallbackModel", "BAAI/bge-reranker-v2-m3")}, query, rows)
             except Exception as fallback_error:
@@ -449,7 +471,7 @@ class RerankerBackend:
                     primary_error,
                     fallback_error,
                 )
-                return rows
+                return original
 
     def _rerank_with(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if config.get("provider") == "cohere":
@@ -514,11 +536,17 @@ class RerankerBackend:
         except (OSError, urllib.error.HTTPError, urllib.error.URLError) as error:
             raise RuntimeError("Cohere reranking request failed") from error
         ranked = []
+        seen = set()
         for result in payload.get("results", []):
             index = result.get("index")
-            if isinstance(index, int) and 0 <= index < len(rows):
-                ranked.append(dict(rows[index], rerankScore=float(result.get("relevance_score", 0))))
-        return ranked or rows
+            score = result.get("relevance_score")
+            if (type(index) is int and 0 <= index < len(rows) and index not in seen
+                    and type(score) in (int, float) and math.isfinite(score)):
+                seen.add(index)
+                ranked.append(dict(rows[index], rerankScore=float(score)))
+        if not ranked:
+            raise RuntimeError("Cohere reranker returned no valid results")
+        return ranked
 
     def _rerank_omlx(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Rank candidate cards through oMLX's Cohere/Jina-compatible endpoint."""
@@ -1253,7 +1281,15 @@ class Plur1busRuntime:
             if using_heuristic:
                 refined_rows = heuristic_rows(refined_rows)
             rows.extend(lifecycle_rows(refined_rows))
-        rows = prefer_whole_rows(self._reranker.rerank(semantic_query, rows))
+        rerank_config = self.config.get("reranker")
+        rerank_limit = rerank_config.get("candidates", candidate_limit) if isinstance(rerank_config, dict) else candidate_limit
+        if (isinstance(rerank_config, dict) and rerank_config.get("provider", "disabled") != "disabled"
+                and type(rerank_limit) is int and rerank_limit > 0):
+            rows = self._reranker.rerank(semantic_query, rows, candidate_limit=min(rerank_limit, 100),
+                                         minimum=adaptive_limit)
+        else:
+            rows = self._reranker.rerank(semantic_query, rows)
+        rows = prefer_whole_rows(rows)
         deduplicated = []
         groups: dict[str, int] = {}
         seen_content: dict[str, list[dict[str, Any]]] = {}

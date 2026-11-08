@@ -4,7 +4,7 @@
 **New in 7.12.47-hermes.0:** Graphical macOS setup and guided
 all-profiles/activation defaults. Older assets may still stage the terminal
 `.command` launcher.
-This document describes the `7.18.4-hermes.0` Hermes installer. Portable archives and
+This document describes the `7.19.2-hermes.0` Hermes installer. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.
@@ -36,6 +36,14 @@ It preserves explicitly selected configs/artifacts and retains replaced roots.
 Automatic lossless merging is separately opt-in. Obsidian note review is available
 in the dashboard and with `plur1bus-hermes-operator --hermes-home HOME --agent PROFILE
 obsidian plan`. No model switch or data rewrite is implied by installing a bundle.
+The hourly Obsidian watch still requires review by default. Set
+`obsidianBridge.autoApplyLowRisk: true` only to allow bounded, untrusted
+note imports into the private profile store. Prompt files, derived memory
+notes and routine logs are excluded by default. Configure
+`obsidianBridge.noteImportExclude` with workspace-relative globs; set
+`obsidianBridge.noteImportExcludeReplaceDefaults: true` to replace the
+defaults. Generated mirrors, canonical knowledge and hidden paths remain
+excluded regardless of that setting.
 See the included [feature checkpoint](docs/audits/hermes-completion-followup-2026-09-06.md)
 for implemented native variants and remaining parity/acceptance boundaries.
 

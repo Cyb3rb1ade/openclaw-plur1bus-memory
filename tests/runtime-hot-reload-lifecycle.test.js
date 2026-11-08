@@ -337,4 +337,46 @@ describe("OpenClaw runtime cleanup lifecycle", () => {
     await gatewayStop();
     assert.equal(calls.filter((entry) => entry === "embeddings").length, 1);
   });
+  it("keeps runtime resources alive when the host cleans up a single session", async () => {
+    const calls = [];
+    let lifecycle;
+    let beganCleanup = false;
+    const api = {
+      logger: { warn() {} },
+      lifecycle: { registerRuntimeLifecycle(registration) { lifecycle = registration; } },
+      on() {},
+    };
+    const dependencies = trackedDependencies(calls);
+    dependencies.localModelGeneration = {
+      beginCleanup() { beganCleanup = true; },
+      async releaseModels() { calls.push("models"); },
+    };
+    registerGatewayShutdown(api, dependencies);
+
+    await lifecycle.cleanup({ reason: "reset", sessionKey: "agent:main:telegram:direct:1" });
+    await lifecycle.cleanup({ reason: "delete", sessionKey: "agent:main:cron:job:run:1" });
+    await lifecycle.cleanup({ reason: "reset", sessionKey: "agent:main:main", runId: "run-1" });
+    assert.deepEqual(calls, []);
+    assert.equal(beganCleanup, false);
+
+    await lifecycle.cleanup({ reason: "restart" });
+    assert.equal(calls.includes("pool"), true);
+    assert.equal(calls.includes("shared"), true);
+    assert.equal(beganCleanup, true);
+  });
+
+  it("still disposes runtime resources on plugin disable and context-free cleanup", async () => {
+    for (const context of [{ reason: "disable" }, undefined]) {
+      const calls = [];
+      let lifecycle;
+      const api = {
+        logger: { warn() {} },
+        lifecycle: { registerRuntimeLifecycle(registration) { lifecycle = registration; } },
+        on() {},
+      };
+      registerGatewayShutdown(api, trackedDependencies(calls));
+      await lifecycle.cleanup(context);
+      assert.equal(calls.includes("pool"), true);
+    }
+  });
 });

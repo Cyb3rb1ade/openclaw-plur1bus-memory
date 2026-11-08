@@ -79,7 +79,7 @@ describe("7.12.49: benefit backfill", () => {
     assert.equal(result.filled, 2);
     assert.equal(result.failed, 0);
     assert.equal(asked.length, 2, "no duplicate call for the repeated ledger dir");
-    assert.equal(asked[0].maxTokens, 200);
+    assert.equal(asked[0].maxTokens, 300);
     assert.equal(readProposals(dirA).find((p) => p.skillName === "alpha").benefit, "Spart einen Arbeitsschritt.");
     assert.equal(readProposals(dirA).find((p) => p.skillName === "delta").benefit, "Already there.");
     assert.equal(readProposals(dirB)[0].benefit, "Saves a round trip.");

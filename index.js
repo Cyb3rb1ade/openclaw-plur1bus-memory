@@ -59,9 +59,13 @@ import { readPluginConfigFile, largestKnownAgentCount } from "./lib/dashboard-se
 import { checkRuntimePressure } from "./lib/runtime-pressure-gate.js";
 import { resolveAgentWorkspaceDir } from "./lib/setup/memory-host-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
+import { registerAfterthoughtActivityHooks } from "./lib/afterthought-hooks.js";
+import { observeAfterthoughtActivity, runConversationAfterthoughtJob } from "./lib/afterthought-reflection.js";
+import { createAfterthoughtHost } from "./lib/afterthought-host.js";
 import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
 import {
   createCaptureChunkingMutator,
+  createJevApiKeyMutator,
   createConfirmationStore,
   createSettingMutator,
   createEmbeddingProfileMutator,
@@ -384,7 +388,7 @@ import {
   emotionEmoji,
   setEmotionConfig,
 } from "./lib/emotion.js";
-import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessageText, DEFAULT_TEMPERAMENTS } from "./lib/emotional-state.js";
+import { formatMoodLine, formatMoodFile, extractMessageText, DEFAULT_TEMPERAMENTS } from "./lib/emotional-state.js";
 import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
@@ -434,7 +438,8 @@ import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THRE
 import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
 import { drainPostTurnWork, enqueuePostTurnWork } from "./lib/post-turn-queue.js";
-import { createJevChunkDecider } from "./lib/jev-chunk-decider.js";
+import { createJevChunkDecider, resolveJevApiKey } from "./lib/jev-chunk-decider.js";
+import { createSharedJevEmotionalPool, createJevEmotionRuntime } from "./lib/jevEmotionRuntime.js";
 import { createGroupReasoningFilter } from "./lib/group-reasoning-filter.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
@@ -786,7 +791,7 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, call
       },
     ], withLlmCallContext(
       withLlmResultCacheContext(
-        { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
+        { ...llmCfg, maxTokens: Math.round(maxChars / 2), temperature: 0 },
         agentId,
         LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       ),
@@ -823,7 +828,7 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
       },
     ], withLlmCallContext(
       withLlmResultCacheContext(
-        { ...llmCfg, maxTokens: 300, temperature: 0 },
+        { ...llmCfg, maxTokens: 450, temperature: 0 },
         agentId,
         LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
       ),
@@ -860,7 +865,9 @@ function applyMergedRecallBudget(merged, budget) {
   const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
   const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
   const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
-  const memories = applyRecallBudget(merged.memories || [], { budget: remainingBudget }).selected;
+  const candidates = merged.memories || [];
+  const preserveOrder = candidates.some((item) => Number.isFinite(item?.rerankScore));
+  const memories = applyRecallBudget(candidates, { budget: remainingBudget, preserveOrder }).selected;
   return { ...merged, canonical, memories };
 }
 
@@ -875,7 +882,7 @@ function applyMergedRecallBudget(merged, budget) {
  * @param {{strictReadErrors?: boolean}} [options]
  * @returns {Promise<{queryVector: Array|undefined, canonical: Array, memories: Array, trace: Object|undefined}>}
  */
-async function runMergedNamespaceRecall(
+export async function runMergedNamespaceRecall(
   readDbs,
   baseParams,
   trace,
@@ -3379,6 +3386,12 @@ function aggregateSkillMinerRuns(skillRuns, agent) {
     proposalsCreated: reports.reduce((total, report) => total + finiteSkillMetric(report.proposalsCreated), 0),
     skippedLowEvidence: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedLowEvidence), 0),
     skippedLowConfidence: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedLowConfidence), 0),
+    extractionFailures: reports.reduce((total, report) => total + finiteSkillMetric(report.extractionFailures), 0),
+    llmCalls: reports.reduce((total, report) => total + finiteSkillMetric(report.llmCalls), 0),
+    extractionBudgetExhausted: reports.some((report) => report.extractionBudgetExhausted === true),
+    skippedKnownCluster: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedKnownCluster), 0),
+    autoApplied: reports.reduce((total, report) => total + finiteSkillMetric(report.autoApplied), 0),
+    autoApplyFailed: reports.reduce((total, report) => total + finiteSkillMetric(report.autoApplyFailed), 0),
     skippedDuplicate: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedDuplicate), 0),
     pushMessages: reports.flatMap((report) => Array.isArray(report.pushMessages) ? report.pushMessages : []),
     dryRun: reports.length > 0 && reports.every((report) => report.dryRun === true),
@@ -3929,7 +3942,7 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId, callContex
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
     // No temperature: providers like the Kimi coding endpoint allow exactly
     // one value per thinking mode and answer HTTP 400 for anything else.
-    { jsonMode: true, maxTokens: 300 },
+    { jsonMode: true, maxTokens: 450 },
     callContext,
   ));
   if (!content) return null;
@@ -4910,7 +4923,7 @@ const plugin = {
     const dreamNarrativeLlmCfg = createFeatureRoute("dream-narrative", {});
     const dreamEchoLlmCfg = createFeatureRoute("dream-echo", {});
     const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
-    const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
+    const afterthoughtLlmCfg = createFeatureRoute("afterthought", { maxTokens: 8192, ...(cfg.afterthought || {}) });
     const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
     // 7.12.38: Obergrenze des verwalteten Blocks (Seed + Gelerntes, Default 24)
     // und daraus abgeleiteter Deckel der injizierten Stimm-Direktive
@@ -4967,7 +4980,7 @@ const plugin = {
           const emotionLlmCfg = withLlmCallContext(
             {
               ...emotionT3LlmCfg,
-              maxTokens: 300,
+              maxTokens: 450,
               // No temperature: some providers (Kimi coding) reject anything
               // but one exact value per thinking mode and answer HTTP 400.
               // Letting the provider default apply keeps the call portable.
@@ -5277,7 +5290,8 @@ const plugin = {
     // aber keine schließende Klammer — die Zeile bleibt unbewertet, ohne
     // dass irgendetwas außer einem Zähler das meldet. Der
     // Tier-3-Emotionsaufruf (emotionT3CallLlm oben) bekommt kein längeres
-    // Antwortformat und bleibt deshalb unverändert bei 300 maxTokens.
+    // Antwortformat; seit 7.18.23 450 statt 300 maxTokens (Tokenizer von
+    // Haiku 5.5 zählt denselben Text rund 30 % länger).
     const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT = 1500;
     const emotionT3EncodingMaxTokensRaw = Number(emotionCfg.t3?.encodingMaxTokens);
     // Untergrenze VOR dem Runden prüfen (>= 1, nicht > 0): sonst würde ein
@@ -5781,9 +5795,20 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
       }, ...args);
     }
-    const emotionalPool = createEmotionalStatePool({
-      temperaments: emotionCfg.temperaments || {},
-      moodInfluence: emotionMoodInfluence,
+    const jevRuntimeConfig = { ...cfg, baseDbPath };
+    const emotionalPool = createSharedJevEmotionalPool(jevRuntimeConfig);
+    // Independent of DB recall and its short-input gate; shares the exact pool
+    // consumed by recall, with a single process-wide incoming mood owner.
+    const jevEmotionRuntime = createJevEmotionRuntime({
+      api,
+      config: jevRuntimeConfig,
+      emotionalPool,
+      isEligible: async (event, ctx) => {
+        if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return false;
+        const sessionKey = ctx?.sessionKey;
+        if (typeof sessionKey !== "string" || !sessionKey.trim()) return false;
+        return !(await classifyHostIncognitoSession(sessionKey));
+      },
     });
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? (requiresActiveSharedModelOwner
@@ -6270,7 +6295,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
       { credentialResolver, localModelGeneration },
     );
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
-    const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
+    // Provider normalization supplies its own default; only explicit caps should
+    // override the candidate pool selected for recall.
+    const rerankCandidates = rawPluginConfig.reranker?.candidates == null
+      ? candidateTopK
+      : rerankerCfg.candidates;
 
     if (reranker) {
       const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
@@ -7758,7 +7787,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                         };
                     const text = await callLlm([{ role: "user", content: prompt }], {
                       ...cpLlmCfg,
-                      maxTokens: 16,
+                      maxTokens: 24,
                       callContext,
                     });
                     return { text: text || "" };
@@ -8044,11 +8073,12 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                     ? formatAfterthoughtCronReply(disabledResult)
                     : formatJsonCommandResult(disabledResult);
                 }
-                const { runAfterthoughtJob } = await import("./lib/afterthought.js");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
-                const result = await runAfterthoughtJob({
+                const conversationHost = createAfterthoughtHost({ api, agentId: internalAgent, workspaceDir: commandCtx.workspaceDir });
+                const result = await runConversationAfterthoughtJob({
                   workspaceDir: commandCtx.workspaceDir,
                   agentId: internalAgent,
+                  ...conversationHost,
                   llmCfg: withLlmCallContext(
                     afterthoughtLlmCfg,
                     internalAgent,
@@ -8059,9 +8089,9 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
                   logger: api.logger,
                 });
-                api.logger?.info?.(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
+                api.logger?.info?.(`plur1bus internal afterthought: ${JSON.stringify({ sent: result.sent === true, skipped: result.skipped === true, reason: result.reason })}`);
                 return cronInternal
-                  ? formatAfterthoughtCronReply(result)
+                  ? formatAfterthoughtCronReply({ ...result, text: undefined })
                   : formatJsonCommandResult({ job: "afterthought", ...result });
               }
               if (subKey === "persona-evolve") {
@@ -9239,7 +9269,11 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           if (operatorLang) commandCtx.lang = operatorLang;
           const result = await spec.handler(commandCtx);
           const text = typeof result === "string" ? result : result?.text;
-          return { text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY" };
+          return {
+            text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY",
+            // 7.18.22: Der Review-Cron wertet eine Policy-Ablehnung als Fehler.
+            ...(result?.policyDenied ? { policyDenied: result.policyDenied } : {}),
+          };
         };
         if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
           registerFeatureCronNativeDispatch({
@@ -9549,6 +9583,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
           });
           const setCaptureChunking = createCaptureChunkingMutator({ api });
+          const setJevApiKey = createJevApiKeyMutator({ api });
           const setSetting = createSettingMutator({
             api,
             validate: resolveEffectiveConfig,
@@ -9600,6 +9635,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 setFeatureModel,
                 setChatModel,
                 setCaptureChunking,
+                setJevApiKey,
                 setSetting,
                 setEmbeddingProfile,
                 rerankerKeyConfigured: keyConfigured,
@@ -10684,6 +10720,15 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     // (openclaw/openclaw#162941). runtime.deferPostTurnLlm=false ruft sie wie
     // zuvor direkt aus agent_end auf.
     // ========================================================================
+    registerAfterthoughtActivityHooks({
+      api,
+      phases: ["start"],
+      enabled: cfg.afterthought?.enabled !== false,
+      observe: observeAfterthoughtActivity,
+      classifyIncognito: classifyHostIncognitoSession,
+      isAllowed: (event, ctx) => automaticWorkspacePolicyDecision(event, ctx).allowed,
+      resolveSession: ({ agentId, sessionKey }) => runtimeIfUsable(api)?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
+    });
     const deferPostTurnLlm = cfg.runtime?.deferPostTurnLlm !== false;
     // 7.18.18: captureChunkingMode "automatisch" laesst Jev je Nachricht
     // entscheiden: zusammenhaengend -> ganz, unabhaengig -> nur Teile,
@@ -10691,7 +10736,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
     const jevChunkCfg = cfg.captureChunkingJev || {};
     const jevChunkDecider = cfg.captureChunkingMode === "automatisch"
       ? createJevChunkDecider({
-        apiKey: process.env[typeof jevChunkCfg.apiKeyEnv === "string" && jevChunkCfg.apiKeyEnv.trim() ? jevChunkCfg.apiKeyEnv.trim() : "TYPESAFE_API_KEY"],
+        apiKey: resolveJevApiKey(jevChunkCfg, process.env),
         model: jevChunkCfg.model,
         minConfidence: jevChunkCfg.minConfidence,
         timeoutMs: jevChunkCfg.timeoutMs,
@@ -12911,40 +12956,53 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             }
           }
           const emoState = emotionalPool.get(agentId);
-          // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
-          // Decay rechnet ab persistiertem lastUpdateAt weiter.
-          if (ctx?.workspaceDir) {
-            try { emoState.hydrateOnce(join(ctx.workspaceDir, ".emotional-state.json")); } catch (e) { dbg(e); }
-          }
-          // Stimmung aus dem aktuellen Turn via EmotionEngine (T1→T2→T3)
-          // statt der alten Regex-Heuristik ableiten.
-          try {
-            const promptText = typeof event.prompt === "string" ? event.prompt.trim() : "";
-            const lastUserText = promptText
-              || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
-            if (lastUserText.length >= 3) {
-              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
-              throwIfAborted(signal, "recall aborted");
-              emoState.applyEmotionScore(turnEmotion);
-            } else {
-              emoState.updateFromMessages(voiceMessages);
+          const ownsLegacyMood = jevEmotionRuntime.captureLegacyOwnership(agentId);
+          legacyMood: if (ownsLegacyMood()) {
+            emoState.configureTimedMood({ enabled: false });
+            // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
+            // Decay rechnet ab persistiertem lastUpdateAt weiter.
+            if (ctx?.workspaceDir) {
+              try { emoState.hydrateOnce(resolveInside(ctx.workspaceDir, ".emotional-state.json")); } catch (e) { dbg(e); }
             }
-          } catch (e) {
-            throwIfAborted(signal, "recall aborted");
-            dbg(e);
-            emoState.updateFromMessages(voiceMessages);
-          }
-          if (ctx?.workspaceDir) {
+            // Stimmung aus dem aktuellen Turn via EmotionEngine (T1→T2→T3)
+            // statt der alten Regex-Heuristik ableiten.
             try {
-              throwIfAborted(signal, "recall aborted");
-              const moodNow = emoState.describeMood();
-              throwIfAborted(signal, "recall aborted");
-              writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
-              throwIfAborted(signal, "recall aborted");
-              writeFileSync(join(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
+              const promptText = typeof event.prompt === "string" ? event.prompt.trim() : "";
+              const lastUserText = promptText
+                || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
+              if (lastUserText.length >= 3) {
+                const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
+                throwIfAborted(signal, "recall aborted");
+                if (!ownsLegacyMood()) break legacyMood;
+                emoState.applyEmotionScore(turnEmotion);
+              } else {
+                if (!ownsLegacyMood()) break legacyMood;
+                emoState.updateFromMessages(voiceMessages);
+              }
             } catch (e) {
               throwIfAborted(signal, "recall aborted");
+              if (!ownsLegacyMood()) {
+                dbg("legacy_mood_owner_changed");
+                break legacyMood;
+              }
               dbg(e);
+              emoState.updateFromMessages(voiceMessages);
+            }
+            if (ctx?.workspaceDir) {
+              try {
+                throwIfAborted(signal, "recall aborted");
+                if (!ownsLegacyMood()) break legacyMood;
+                const moodNow = emoState.describeMood();
+                throwIfAborted(signal, "recall aborted");
+                if (!ownsLegacyMood()) break legacyMood;
+                writeFileSync(resolveInside(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
+                throwIfAborted(signal, "recall aborted");
+                if (!ownsLegacyMood()) break legacyMood;
+                writeFileSync(resolveInside(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
+              } catch (e) {
+                throwIfAborted(signal, "recall aborted");
+                dbg(e);
+              }
             }
           }
           // v5.4.0 — Graph-Edges für assoziativen Spread laden
@@ -13564,7 +13622,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
           }
 
           const styleCfg = cfg.styleDirective || {};
-          const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId), {
+          const moodStyleDirective = buildMoodStyleDirective(jevEmotionRuntime.isEnabled(agentId) ? null : emotionalPool.describe(agentId), {
             hour: styleCfg.timeOfDay !== false ? hourInTimeZone(nowMs, styleCfg.timezone ?? cfg.timezone ?? null) : null,
             temperamentName: cfg.emotion?.temperaments?.[agentId]?.preset ?? null,
             opinion: styleCfg.opinion !== false,
@@ -13945,6 +14003,16 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         }
       });
     }
+
+    registerAfterthoughtActivityHooks({
+      api,
+      phases: ["end"],
+      enabled: cfg.afterthought?.enabled !== false,
+      observe: observeAfterthoughtActivity,
+      classifyIncognito: classifyHostIncognitoSession,
+      isAllowed: (event, ctx) => automaticWorkspacePolicyDecision(event, ctx).allowed,
+      resolveSession: ({ agentId, sessionKey }) => runtimeIfUsable(api)?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
+    });
 
     // Manual tools remain available regardless of autoCapture/autoRecall:
     // memory_store, memory_recall, memory_forget and knowledge_update are not

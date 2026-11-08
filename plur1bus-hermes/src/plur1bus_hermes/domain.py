@@ -2200,7 +2200,7 @@ class Plur1busDomain:
         state = self._read_json(state_path)
         previous = state.get("hashes", {}) if isinstance(state.get("hashes"), dict) else {}
         from .obsidian_sync import changed_notes
-        return changed_notes(workspace_dir, previous, limit)
+        return changed_notes(workspace_dir, previous, limit, config=self.config.get("obsidianBridge") or {})
 
     def mark_obsidian_synced(
         self,

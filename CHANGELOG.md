@@ -34,6 +34,128 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+
+## [7.19.2] — 2026-11-07
+
+### Fixed
+
+- `autoApplyLowRisk` never applied note proposals: the auto-approval set only `status`/`approvedAt`/`approvedBy` and skipped `approvedPayloadHash` and `approvalMetadata`, so revalidation rejected every `note_import_candidate`, `memory_promotion` and `knowledge_update` item as "Missing approvedPayloadHash." (status `invalid`). Auto-approval now goes through the same approval record as a human review, with `approvalSource: "auto_low_risk"`. Payload drift is still rejected.
+- The morning review command passes `memoryStore` and `knowledgeUpdate` to the bundle run, so auto-approved items can actually be written instead of ending up `blocked`.
+- A failing auto-apply is logged via `safeWarn` instead of being swallowed.
+
+### Changed
+
+- Note import skips files whose content is already in the prompt or in memory: workspace prompt files (`SOUL.md`, `USER.md`, `IDENTITY.md`, `AGENTS.md`, `HEARTBEAT.md`, `TOOLS.md`, `MEMORY.md`, `BOOTSTRAP.md`, `persona-voice.md`), notes derived from stored memories (`memory/episodes/**`, `memory/dream-diary/**`, `DREAMS.md`, `memory/consolidation/**`, `memory/graph/**`) and continuously appended reports and logs (`reports/routines/**`, `**/logbuch.md`, `**/gesehen.md`). Daily notes, `memory/eigenzeit.md`, research reports and other documents stay importable. Extend the list with `noteImportExclude`, or replace it with `noteImportExcludeReplaceDefaults: true`.
+- The morning review message reports automatically applied and failed items, and drops the preview wording and the next-step hint when nothing is left to approve.
+
+## [7.19.1] — 2026-11-07
+
+### Changed
+
+- Morgen-Review in Telegram aufgeräumt: Notizen erscheinen mit ihrem Titel statt mit Dateiname und abgeschnittenem Markdown, der Rest als „… und N weitere“, das Risiko als Satz („Alle mit niedrigem Risiko.“).
+- Reine Systemhinweise stehen nur noch einmal in der Nachricht, der Titel trägt keine Uhrzeit mehr, doppelte Leerzeilen entfallen.
+- Der nächste Schritt nennt einen Befehl, den es wirklich gibt: `/plur1bus review quickapply` statt „approve low-risk → apply“.
+
+## [7.19.0] — 2026-11-03
+
+### Added
+
+- Independent incoming Jev emotion assessment (`emotion.jev`), opt-in per global and per-agent switch. `shadow` mode assesses and logs bounded proposal metadata without touching the legacy mood writer; `active` mode applies independent reaction evidence to the shared per-agent EmotionalState by elapsed time, skipping the legacy turn update/fallback/writer and the standalone emotional-state injector for active agents. Runs before memory recall, including when `autoRecall` is disabled or its database fails, on the existing `captureChunkingJev` credential and model with a 1,000 ms deadline and no retries. Stored memory emotion classification and recall scoring are unchanged.
+- Telegram outgoing speech adapter (`scripts/plan-speech.mjs` plus rollout tooling in `scripts/telegramTts/`): bilingual (`de`/`pl`) ElevenLabs delivery for `main`, `bernhardine`, `heisenberg` driven by canonical semantic intent/delivery planning, not raw mood text. Shadow mode synthesizes neutral canonical text and exposes content-free proposals; active mode renders validated metadata. Run context is read only from a private, time-bounded `.plur1bus/speech-context/<hashed-run>.json` snapshot scoped to an exact agent/session/run/workspace match; missing or invalid context falls back to final-text-only planning. Preview/rollback via `scripts/telegramTts/deploy.py`.
+
+### Security
+
+- `@huggingface/transformers` 4.2.0 → 4.3.2, closing the high-severity `sharp` advisory (CVE-2026-96889, librsvg) pulled in transitively; the `sharp` override is raised to `0.35.5` to match.
+- Added a `zod` override (`4.6.7`) closing a high-severity memory-exhaustion advisory in the `openai` dependency chain.
+- `npm audit --omit=dev`: 0 vulnerabilities (previously 3 high). Remaining findings are exclusively in `devDependencies` (`c8`, `openclaw`); none ship in the published package. The `c8` fix path is a major-version downgrade and the `openclaw` devDependency fix path regresses the total count on this host — both left unresolved deliberately rather than forced.
+
+## [7.18.31] — 2026-10-23
+
+### Fixed
+
+- Skill Miner distinguishes real low-confidence decisions from technical/invalid responses. Only genuine decisions are reused for seven days; versioned fingerprints include evidence content/trust, prompt, effective model/policy and the authorized skill catalogue. Existing legacy cache entries remain stored but no longer block reconsideration. Semantic extraction validation also rejects invalid responses from the transport result cache, including older persisted entries, while valid results remain cacheable.
+- Compare same-owner workflows as well as names. Shared evidence alone does not merge different workflows; explicit rejections remain binding. Repeated instructions are duplicates even with new supporting evidence.
+
+### Changed
+
+- Focused, bounded topic cohorts supplement mixed evidence clusters. Grouping ignores conversational filler and attachment error metadata; admission and ACL gates stay unchanged. Extraction uses stable system instructions, at most 12 evidence excerpts and eight same-owner catalogue entries, with bounded model attempts.
+- Extend existing mined skills through public OpenClaw Workshop update proposals. Drafts append to the currently installed content, including manual additions; bound base-content hashes and reviewed proposal revisions protect concurrent edits. The Workshop may normalize frontmatter/newlines during application. Previous versions remain in the ledger, becoming superseded only after successful activation. Rejecting an extension retains its active base.
+- Existing approval/auto-apply rules, model overrides, schedules and installed skills are preserved. No OpenClaw upgrade or Harness import.
+
+## [7.18.30] — 2026-10-23
+
+### Fixed
+
+- Feature cron clients retry only the exact Gateway `UNAVAILABLE` rejection for the retired PLUR1BUS instance. Three fresh RPC attempts after 5/10/15 seconds resolve the current registration, covering brief hot-reload gaps without calling the old instance again.
+- Intermediate rejections produce no cron stdout/stderr; successful `NO_REPLY` suppression is preserved. Exhaustion remains a visible error. Business errors, permission failures, timeouts, malformed replies and mutation-policy denials are not retried.
+
+## [7.18.29] — 2026-10-23
+
+### Changed
+
+- Make the Jev credential status prominent beside the key editor: show whether a key is present and whether the effective source is the environment or plugin configuration. The key value stays hidden, including in read-only views.
+- Explain that the credential is shared by all agents in this PLUR1BUS installation and that an explicit plugin configuration key takes precedence over the environment fallback. Credential resolution and saved configuration remain unchanged.
+
+## [7.18.28] — 2026-10-23
+
+### Fixed
+
+- Selectively backport upstream `432313664242fc6c29c0b9bf3bcea8b9e5ad93c0` to the OpenClaw plugin: keep the reranker verdict through namespace merging and tier-budget selection, bound reranker inputs, retry incomplete KNOWLEDGE embeddings, and exclude graph-only hits whose relevance check failed. The standalone harness/engine is not imported.
+- Preserve provider order on equal or inconsistent scores instead of restoring vector order on ties. Omitted reranker caps retain the configured recall candidate pool; explicit caps remain effective. Existing ACL checks and intentional empty Jev shortlists remain intact.
+- The operator recall comparison now uses the same namespace merge and global budget as production. Model assignments, permissions, provider cache boundaries and output limits are unchanged.
+
+## [7.18.27] — 2026-10-23
+
+### Changed
+
+- PLUR1BUS model selections share provider groups and natural sorting across chat, subagents, background defaults and task overrides. Options show safe configured catalog names, concrete IDs and aliases; existing agent allowlists, permissions and saved model IDs remain authoritative.
+- Model-catalog reconciliation distinguishes complete verified inventories from partial/error results, preserves referenced models and never rewrites routing or permissions. ID-only API responses preserve human-readable names.
+- Read-only recall comparison evaluates 40/50/100 ANN candidates and an optional conservative Jev relevance prefilter with the same pipeline and scoped snapshot. Uncertain, missing or invalid Jev decisions retain candidates. Provider ACL is checked immediately before reranking; adapters can explicitly distinguish an empty relevance shortlist from a malformed provider response.
+- Live comparison: 30 questions across three agents, 23/27 known source anchors found by every variant. Jev adds latency and token use without reducing Cohere billing units; production retains 40 candidates, at most 15 prompt memories and the existing direct reranker. See `docs/audits/2026-10-23-recall-comparison.md`.
+
+## [7.18.26] — 2026-10-23
+
+### Changed
+
+- Afterthought prompts keep stable reflection instructions, identity and Persona Voice in the system prefix, with the untrusted conversation and the decision request in a separate user message. The native OpenClaw Anthropic transport can cache the stable prefix independently of changing conversation history. Existing provider cache lifetimes, per-agent task model overrides and full-context reflection remain unchanged; a cache hit is not guaranteed after the idle delay.
+
+## [7.18.25] — 2026-10-22
+
+### Changed
+
+- Afterthoughts reflect on the original conversation after one persisted random idle delay of 15–120 minutes. New interaction invalidates pending work. Full retained history, compaction summaries, tool results, identity and Persona Voice are available; only the context copy is compressed when needed. A model decision may produce no message, a useful short follow-up, or an optional document. Original channel/account/thread and session generation stay pinned. A durable send intent prevents automatic retries after an uncertain transport result.
+- The afterthought cron checks deadlines every minute, without a model call before work is due. Previously shipped 30-minute and three-hour intervals migrate to this cadence; custom intervals remain unchanged.
+- Jev credentials can be saved or removed from the PLUR1BUS dashboard using a dedicated authenticated native UI bridge. Values remain out of URLs, status responses and logs. Explicit config keys take priority over the existing environment fallback. Custom plugin UI must be enabled on the host for credential editing.
+- Persona learning and proactive feedback exclude current heartbeat templates and explicit internal execution while retaining ordinary user discussions of those topics.
+
+## [7.18.24] — 2026-10-13
+
+### Behoben
+
+- **Ein Session-Reset legte das Gedächtnis aller Agenten lahm.** OpenClaw ruft bei jedem Reset oder Löschen einer Session (`/new`, `/reset`, gelöschte Sessions) die Runtime-Lifecycle-Cleanups aller Plugins auf. PLUR1BUS baute daraufhin Pool, Shared Pool, Embeddings und Caches ab, ohne sie neu zu öffnen. Bis zum nächsten Gateway-Neustart scheiterten Recall, Capture und Feature-Crons mit „MultiNamespacePool is shutdown“. Session-bezogene Cleanups (`reason` `reset`/`delete` oder mit `sessionKey`) lassen die Ressourcen jetzt stehen. Bei `restart`, `disable` und `gateway_stop` wird weiter alles abgebaut.
+
+## [7.18.23] — 2026-10-09
+
+### Geändert
+
+- **Haiku-Routen denken im Hintergrund nicht mehr mit.** Claude Haiku 5.5 denkt ohne Angabe adaptiv (Effort `medium`), und die Denk-Tokens zählen gegen `maxTokens`. Bei den knappen Limits der Hintergrundjobs bliebe die Antwort leer. Der Host-Weg schickt deshalb für Routen mit einem `anthropic/claude-haiku-*`-Modell `reasoning: "off"` mit (OpenClaw macht daraus `thinking: disabled`). `disableThinking: false` im Feature-Block schaltet das Denken wieder ein, `disableThinking: true` schaltet es jetzt auch auf Host-Routen für jedes Modell ab. Bei Haiku 4.5 ändert sich nichts, es dachte ohne Angabe ohnehin nie.
+- **Knappe Ausgabelimits rund 50 % höher.** Der Tokenizer von Haiku 5.5 zählt denselben Text etwa 30 % länger. Angehoben: Traum-Erzählungen 400/900 → 600/1200 (Zeichengrenze 1200/3000 → 1800/4000), Light-/REM-Dream 400/600 → 600/900, Emotion-T3 300 → 450, Critical-Push-Klassifikation 16 → 24, Episoden 500 → 750, Konfliktlöser 400 → 600, Kompaktierung 300 → 450, Skill-Miner 800 → 1200 und Nutzen-Nachtrag 200 → 300, Wiki 400 → 600, Capture-Zusammenfassung `maxChars/3` → `maxChars/2`, Standard des Direktwegs 300 → 450.
+
+## [7.18.22] — 2026-10-06
+
+### Behoben
+
+- **Abgelehnte Obsidian-Befehle schickten rohes JSON in den Chat.** Am 06.10. lehnte die Mutation-Policy das Abend-Review ab (`mode_not_apply(augment)`), und Telegram bekam `{"ok": true, "applied": false, "reason": "mutation_policy_denied", …}`. Die Ablehnung ist jetzt ein übersetzter Text: was gesperrt ist, welcher Schalter es freigibt, und darunter die technischen Gate-Namen.
+- **Review-Cron meldete trotz Ablehnung „ok“.** Der Feature-Cron gibt den Text weiter aus und beendet sich danach mit Fehler, sodass der Lauf als `error` erscheint. Das Ergebnis des Befehls trägt dafür ein nicht aufzählbares `policyDenied`, das nur der Operator-/Cron-Pfad ausliest; der Chat-Host sieht weiter nur `{ text }`.
+
+## [7.18.21] — 2026-10-06
+
+### Behoben
+
+- **Morgen-Review meldete bei `obsidianBridge.mode: "apply"` „❌ System: 1 Fehler“.** Der Health-Check in `runMaintenanceLight` ließ nur `augment` gelten, das Schema erlaubt `augment` und `apply`. Wer deshalb auf `augment` umstellte, verlor alle Schreibrechte der Reviews: Die Mutation-Policy verlangt `apply` und lehnte mit `mode_not_apply(augment)` ab. Der Check akzeptiert jetzt beide Werte.
+- **Systemhinweise im Review mehrfach.** Hinweise werden nach Code gruppiert; „Dashboard-Link zu prüfen“ erscheint einmal mit Zähler statt fünfmal.
+- `invalid_mode` und die Fußnote des Morgen-Reviews sind übersetzt.
+
 ## [7.18.20] — 2026-10-04
 
 ### Behoben

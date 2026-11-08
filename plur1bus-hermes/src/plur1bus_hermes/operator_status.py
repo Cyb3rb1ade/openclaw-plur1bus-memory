@@ -20,6 +20,7 @@ from .namespaces import resolve_namespace_routes, scope_where_clause
 from .validation import safe_agent_id, safe_status
 from .writer_lock import writer_lock, WriterLockTimeout
 from .health_watch import owner_key, snapshot as llm_failure_snapshot
+from .jev_chunk_decider import credential_status as jev_credential_status
 
 
 _PUBLIC_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
@@ -179,6 +180,7 @@ def read_operator_status(
             getattr(getattr(runtime, "scope_binding", None), "scope_type", "agent-private")
         ),
         "embedding": _embedding_projection(getattr(runtime, "config", {})),
+        "jevCredentials": jev_credential_status(getattr(runtime, "config", {})),
         "reranker": _reranker_projection(getattr(runtime, "config", {})),
         "storage": {"status": "unavailable", "cards": None},
         "cards": {"byPrimaryAgent": []},

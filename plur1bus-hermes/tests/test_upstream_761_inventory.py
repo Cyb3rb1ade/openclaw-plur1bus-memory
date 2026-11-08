@@ -25,10 +25,10 @@ class Upstream761InventoryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("`" + path + "`", review)
                 if path.startswith(("lib/", "tests/")) and path != "tests/release-750-compat.test.js":
-                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.18.20:" + path))
+                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.19.2:" + path))
 
     def test_dependency_graph_matches_official_release(self):
-        upstream = json.loads(git("show", "v7.18.20:package-lock.json"))
+        upstream = json.loads(git("show", "v7.19.2:package-lock.json"))
         current = json.loads((ROOT / "package-lock.json").read_text())
         current["version"] = upstream["version"]
         current["packages"][""]["version"] = upstream["packages"][""]["version"]

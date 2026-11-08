@@ -10,7 +10,7 @@ import {
   loadPersonaEmojiPalette, ensurePersonaVoiceSeed,
   scheduleEnsurePersonaVoiceSeed, PROPOSAL_HEADER,
   replaceLearnedMarkerInManagedBlock, splitManagedBullets, parseEvolutionReply,
-  isHeartbeatOutcome, readPersonaEvolutionState, selectEvolutionEvidence,
+  isHeartbeatOutcome, isInternalOutcome, readPersonaEvolutionState, selectEvolutionEvidence,
   directiveCharsForBullets, resolvePersonaMaxBullets,
   DEFAULT_PERSONA_MAX_BULLETS, DEFAULT_MAX_DIRECTIVE_CHARS, PERSONA_EVOLUTION_STATE_FILE,
 } from "../lib/persona-voice.js";
@@ -514,6 +514,103 @@ describe("evolvePersonaVoice (7.12.38): Belege, ADD/REPLACE/NONE, Bremsen, Heart
     assert.strictEqual(isHeartbeatOutcome({ userPrompt: "Read HEARTBEAT.md if it exists. If nothing…" }), true);
     assert.strictEqual(isHeartbeatOutcome({ sessionKey: "agent:main:telegram:default:direct:1", userPrompt: "Hallo" }), false);
     assert.strictEqual(isHeartbeatOutcome({}), false);
+  });
+
+  const productionHeartbeat = "Read the current HEARTBEAT.md in your workspace with the read tool if it exists. Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+
+  it("recognizes the production heartbeat on a direct chat key and as the next reply", () => {
+    const sessionKey = "agent:main:telegram:default:direct:1";
+    assert.strictEqual(isHeartbeatOutcome({ sessionKey, userPrompt: productionHeartbeat }), true);
+    assert.strictEqual(isHeartbeatOutcome({ sessionKey, userPrompt: "How is the release going?", replyText: productionHeartbeat }), true);
+  });
+
+  const nativeHeartbeats = [
+    "Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.",
+    "[OpenClaw heartbeat poll]",
+  ];
+
+  it("excludes native heartbeat prompts and persisted wake markers on either side of direct chat feedback", () => {
+    for (const text of nativeHeartbeats) {
+      for (const field of ["userPrompt", "replyText"]) {
+        const row = { sessionKey: "agent:main:telegram:default:direct:1", [field]: text };
+        assert.strictEqual(isHeartbeatOutcome(row), true, `${field}: ${text}`);
+        assert.strictEqual(isInternalOutcome(row), true, `${field}: ${text}`);
+      }
+    }
+    for (const text of [
+      "What does 'Follow the heartbeat monitor scratch context when provided' mean?",
+      "Why does my transcript contain [OpenClaw heartbeat poll]?",
+      "Follow the heartbeat monitor scratch context when provided, then explain it to me.",
+    ]) {
+      assert.strictEqual(isHeartbeatOutcome({ userPrompt: text, replyText: text }), false, text);
+      assert.strictEqual(isInternalOutcome({ userPrompt: text, replyText: text }), false, text);
+    }
+  });
+
+  it("native heartbeat outcomes cannot open persona evolution or enter its evidence", async () => {
+    const genuine = positives(3);
+    const internal = Array.from({ length: 12 }, (_, i) => ({
+      ...rich(T1 - i * 1000, "continued_topic", i),
+      [i % 2 ? "replyText" : "userPrompt"]: nativeHeartbeats[Math.floor(i / 2) % 2],
+    }));
+    const outcomes = [...internal, ...genuine];
+    const result = await evolvePersonaVoice({ workspaceDir: seededDir(), outcomes, llmCfg: { model: "x" }, callLlm: async () => "ADD: - Internal noise.", now: T1 });
+    assert.strictEqual(result.reason, "too_few_outcomes");
+    assert.strictEqual(result.outcomes, 3);
+    assert.deepStrictEqual(selectEvolutionEvidence(outcomes).positive, genuine);
+  });
+
+  it("recognizes explicit internal input provenance without classifying normal channel metadata", () => {
+    for (const metadata of [
+      { inputProvenance: { kind: "internal_system" } },
+      { provenance: { kind: "internal_system" } },
+      { message: { provenance: { kind: "internal_system" } } },
+      { sourceChannel: "internal_system" },
+      { sourceChannel: "cron" },
+    ]) assert.strictEqual(isInternalOutcome({ userPrompt: "Check the pending work.", ...metadata }), true, JSON.stringify(metadata));
+    assert.strictEqual(isInternalOutcome({
+      sourceChannel: "telegram", inputProvenance: { kind: "user", sourceTool: "heartbeat-explainer" },
+      userPrompt: "Explain internal_system input provenance.",
+    }), false);
+  });
+
+  it("retains ordinary user requests and discussion about heartbeat files", () => {
+    for (const userPrompt of [
+      "Read HEARTBEAT.md and explain how the schedule works.",
+      "Read the current HEARTBEAT.md and suggest improvements.",
+      "Why does HEARTBEAT_OK appear in my logs?",
+      "Can you explain this prompt: Read the current HEARTBEAT.md in your workspace with the read tool?",
+    ]) assert.strictEqual(isHeartbeatOutcome({ userPrompt }), false, userPrompt);
+  });
+
+  it("production heartbeat outcomes do not open persona evolution on a direct chat", async () => {
+    const outcomes = Array.from({ length: 12 }, (_, i) => ({
+      ...rich(T1 - i * 1000, "continued_topic", i), userPrompt: productionHeartbeat,
+    }));
+    const result = await evolvePersonaVoice({ workspaceDir: seededDir(), outcomes: [...outcomes, ...positives(3)], llmCfg: { model: "x" }, callLlm: async () => "ADD: - Internal noise.", now: T1 });
+    assert.strictEqual(result.reason, "too_few_outcomes");
+    assert.strictEqual(result.outcomes, 3);
+  });
+
+  it("internal job outcomes cannot open persona evolution", async () => {
+    const outcomes = Array.from({ length: 12 }, (_, i) => ({
+      ...rich(T1 - i * 1000, "continued_topic", i), sessionKey: "agent:main:cron:persona-evolve",
+    }));
+    const result = await evolvePersonaVoice({ workspaceDir: seededDir(), outcomes: [...outcomes, ...positives(3)], llmCfg: { model: "x" }, callLlm: async () => "ADD: - Internal noise.", now: T1 });
+    assert.strictEqual(result.reason, "too_few_outcomes");
+    assert.strictEqual(result.outcomes, 3);
+  });
+
+  it("evolution evidence excludes internal prompts and heartbeat replies", () => {
+    const genuine = rich(T1 - 5000, "continued_topic", 1);
+    const evidence = selectEvolutionEvidence([
+      genuine,
+      { ...rich(T1, "continued_topic", 2), userPrompt: productionHeartbeat },
+      { ...rich(T1, "continued_topic", 3), replyText: productionHeartbeat },
+      { ...rich(T1, "corrected", 4), userPrompt: "/plur1bus internal afterthought" },
+    ]);
+    assert.deepStrictEqual(evidence.positive, [genuine]);
+    assert.deepStrictEqual(evidence.negative, []);
   });
 
   it("parseEvolutionReply versteht ADD, REPLACE n, NONE und nackte Bullet-Zeilen", () => {

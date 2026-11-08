@@ -642,7 +642,9 @@ test("skill-miner callback receives one authorized partition, not foreign eviden
     workspaceKey: partition.workspaceIdentity,
     llmCfg: { model: "test" },
     callLlm: async (messages) => {
-      prompts.push(messages[0].content);
+      assert.equal(messages[0].role, "system");
+        assert.equal(messages[1].role, "user");
+        prompts.push(messages.map(message => message.content).join("\n"));
       return JSON.stringify({
         skillName: "local-release",
         skillTitle: "Local release",

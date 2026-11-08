@@ -18,6 +18,37 @@ function hostConfig() {
   };
 }
 
+test("model choices carry safe provider catalog names and aliases without expanding agent permissions", () => {
+  const host = hostConfig();
+  host.models = { providers: { openai: { apiKey: "CATALOG_SECRET", models: [
+    { id: "base", name: "Model 10" }, { id: "extra", name: "Model 2" }, { id: "not-allowed", name: "Hidden" },
+  ] }, anthropic: { models: [{ id: "haiku", name: "Model 2" }] } } };
+  const projection = buildControlPlaneProjection({ hostConfig: host });
+  const models = projection.featureModels.agents[0].models;
+  assert.equal(models.find((m) => m.id === "openai/base").catalogName, "Model 10");
+  assert.equal(models.find((m) => m.id === "anthropic/haiku").provider, "anthropic");
+  assert.equal(models.find((m) => m.id === "anthropic/haiku").alias, "Fast <model>");
+  assert.equal(models.some((m) => m.id === "openai/not-allowed"), false);
+  assert.doesNotMatch(JSON.stringify(projection), /CATALOG_SECRET/);
+});
+
+test("all dashboard model selects group by provider and sort naturally while keeping saved values", async () => {
+  const host = hostConfig();
+  host.models = { providers: { openai: { models: [{ id: "base", name: "Model 10" }, { id: "extra", name: "Model 2" }] } } };
+  host.plugins.entries[pluginId].config.llmRouter.agentModels = { alice: { merging: "removed/model" } };
+  const html = await render(buildControlPlaneProjection({ hostConfig: host, config: host.plugins.entries[pluginId].config }), true);
+  const selects = [...html.matchAll(/<select\b[^>]*(?:name="model"|name="chat_model")[^>]*>(.*?)<\/select>/gs)];
+  assert.ok(selects.length >= 2);
+  for (const [, options] of selects) {
+    assert.match(options, /<optgroup label="Anthropic">/);
+    assert.match(options, /<optgroup label="OpenAI">/);
+    assert.match(options, /Model 10.*openai\/base/);
+    if (options.includes('value="openai/extra"')) assert.ok(options.indexOf('value="openai/extra"') < options.indexOf('value="openai/base"'));
+  }
+  assert.match(html, /Fast &lt;model&gt;/);
+  assert.match(html, /value="removed\/model" selected disabled/);
+});
+
 test("model controls list configured models per agent, preserve aliases and never expose credentials", () => {
   const host = hostConfig();
   const projection = buildControlPlaneProjection({ config: host.plugins.entries[pluginId].config, hostConfig: host });

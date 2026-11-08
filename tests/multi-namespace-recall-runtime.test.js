@@ -12,6 +12,7 @@ import plugin, { MemoryDB } from "../index.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { createNeoStore } from "../lib/neo-arch.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { CohereRerankerProvider } from "../lib/providers/reranker-cohere.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 import { makeTempDir } from "./helpers/temp-dir.js";
 
@@ -121,6 +122,51 @@ const namespaceRoutingOptions = stableDirectoryCapabilitiesSupported()
   : { skip: "fd-backed directory capabilities are unavailable on this platform; named namespace routing is disabled" };
 
 describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
+  for (const explicit of [undefined, 8, 20]) {
+    it(`registered recall preserves the configured candidate pool (explicit cap ${explicit ?? "omitted"})`, async (t) => {
+      const baseDbPath = makeTempDir("plur1bus-rerank-default-");
+      const workspaceDir = makeTempDir("plur1bus-rerank-default-workspace-");
+      const originalInit = MemoryDB.prototype.init;
+      const originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+      const originalRerank = CohereRerankerProvider.prototype.rerank;
+      const seen = [];
+      const rows = Array.from({ length: 40 }, (_, i) => ({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+        text: `Unique fact ${i}`, summary: `Candidate ${i}`, category: "fact", status: "active",
+        scope: "agent-private", agentId: AGENT_ID, storedBy: AGENT_ID, _distance: i / 100, memoryStrength: 1,
+      }));
+      MemoryDB.prototype.init = async function () {
+        this.table = {
+          vectorSearch() { return { limit(n) { return { async toArray() { return rows.slice(0, n); } }; } }; },
+          query() { return { where() { return { limit() { return { async toArray() { return []; } }; } }; } }; },
+        };
+        return true;
+      };
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
+      CohereRerankerProvider.prototype.rerank = async (_q, docs) => {
+        seen.push(docs.length);
+        return docs.map((_, i) => ({ index: docs.length - 1 - i, relevance_score: 1 - i / docs.length }));
+      };
+      const api = makeApi(baseDbPath);
+      t.after(async () => {
+        for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+        MemoryDB.prototype.init = originalInit;
+        LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbed;
+        CohereRerankerProvider.prototype.rerank = originalRerank;
+        rmSync(baseDbPath, { recursive: true, force: true });
+        rmSync(workspaceDir, { recursive: true, force: true });
+      });
+      api.pluginConfig.autoRecall = false;
+      api.pluginConfig.recall.canonicalFirst = false;
+      api.pluginConfig.recall.candidateTopK = 40;
+      api.pluginConfig.reranker = { enabled: true, provider: "cohere", apiKey: "unit-test", ...(explicit === undefined ? {} : { candidates: explicit }) };
+      plugin.register(api, { importRouting: async () => routingCapability });
+      const tool = api.toolFactory({ agentId: AGENT_ID, workspaceDir, workspaceKey: "namespace-workspace", userId: "namespace-owner" }).find((entry) => entry.name === "memory_recall");
+      await tool.execute("candidate-default", { query: "candidate pool", limit: 5 });
+      assert.ok(seen.length > 0, "registered recall reached the reranker");
+      assert.ok(seen.every((count) => count === (explicit ?? 40)), JSON.stringify(seen));
+    });
+  }
   it("merges same-agent namespace records globally for memory_recall, memory_search, and before_prompt_build without writing legacy storage", async (t) => {
     const baseDbPath = makeTempDir("plur1bus-namespace-runtime-");
     const workspaceDir = makeTempDir("plur1bus-namespace-workspace-");

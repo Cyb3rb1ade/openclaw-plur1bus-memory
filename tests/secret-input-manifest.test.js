@@ -14,6 +14,7 @@ const credentialPaths = Object.freeze([
   "skillMiner.apiKey",
   "criticalPush.apiKey",
   "emotion.t3.apiKey",
+  "captureChunkingJev.apiKey",
 ]);
 
 describe("PLUR1BUS SecretInput manifest", () => {

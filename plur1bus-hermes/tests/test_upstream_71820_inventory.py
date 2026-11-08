@@ -22,4 +22,4 @@ def test_all_71820_commits_and_runtime_paths_are_retained():
         if path == "tests/release-750-compat.test.js":
             continue
         if path.startswith(("lib/", "tests/", "scripts/")) or path == "index.js":
-            assert (ROOT / path).read_text() == git("show", TARGET + ":" + path), path
+            assert (ROOT / path).read_text() == git("show", "v7.19.2:" + path), path
