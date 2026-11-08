@@ -23,7 +23,12 @@ def test_directory_project_installs_canonical_package():
 def test_current_python_uses_native_onnx_dependency_declaration():
     data = tomllib.loads(BUILD.directory_project("plur1bus-hermes", "plur1bus_hermes").decode())
     dependencies = data["project"]["dependencies"]
-    assert "numpy==2.4.3; python_version >= '3.14'" in dependencies
+    from packaging.requirements import Requirement
+
+    numpy = next(Requirement(dep) for dep in dependencies if dep.startswith("numpy>="))
+    assert "2.4.3" in numpy.specifier
+    assert "2.5.4" in numpy.specifier  # Hermes 0.23 voice/wake/audio-io pins
+    assert "2.6.0" not in numpy.specifier
     assert "onnxruntime>=1.20,<2; python_version >= '3.14'" in dependencies
 
 
@@ -44,10 +49,13 @@ def test_default_project_has_no_platform_local_uv_sources_or_pyarrow_pin():
 
 
 def test_cp314_arm_keeps_pypi_tokenizer_abi3_and_onnx_runtime_dependencies():
+    from packaging.requirements import Requirement
     from packaging.tags import cpython_tags
 
     data = tomllib.loads(BUILD.directory_project("plur1bus-hermes", "plur1bus_hermes", pm_arm_sources=True).decode())
     dependencies = data["project"]["dependencies"]
+    numpy = next(Requirement(dep) for dep in dependencies if dep.startswith("numpy>="))
+    assert "2.5.4" in numpy.specifier
     assert "tokenizers>=0.21,<1; python_version >= '3.14'" in dependencies
     assert "onnxruntime>=1.20,<2; python_version >= '3.14'" in dependencies
     assert "tokenizers" not in data["tool"]["uv"]["sources"]

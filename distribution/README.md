@@ -61,7 +61,7 @@ sentence-transformers and optional ONNX wheels for its OS/architecture. For
 current Hermes PM installations, use the PM-selected Python 3.14 environment;
 an older `hermes-agent/venv` may no longer be the active runtime. PLUR1BUS ships
 plugin dependency declarations so PM can reconsider requirements when it
-creates a new environment generation. Python 3.14 uses NumPy 2.4.3 and native
+creates a new environment generation. Python 3.14 supports NumPy 2.4.3–2.5.x and native
 ONNX/tokenizers dependencies; Jina Nano and BGE ONNX inference use the regular
 PyPI CPython 3.10+ stable-ABI tokenizers wheel, not a custom fork. Native
 Windows ARM64 builds are included in CI, but a build alone does not certify the
@@ -219,7 +219,7 @@ Storage-only evidence, or a missing/non-passing receipt, is not a PM pass. See
 the [release acceptance record](ACCEPTANCE.md). Do not bypass a refusal with
 `--python`.
 The installer does not silently replace Hermes's x64 Python with ARM. Python
-3.14 uses NumPy 2.4.3; older supported Python versions retain the prior platform
+3.14 supports NumPy 2.4.3–2.5.x; older supported Python versions retain the prior platform
 pins (NumPy 2.3.0 on classic Windows ARM and 2.2.0 on other targets). Windows
 ARM and Intel macOS do not implicitly install the PyTorch-based transformer
 extra; configure local ONNX or a supported remote provider there. Existing

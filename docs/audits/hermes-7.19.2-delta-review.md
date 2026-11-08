@@ -26,6 +26,13 @@ but cannot mint or consume an actor-bound write approval. The earlier
 optional local Electron patch does not apply to this host release.
 No production installation or platform support is inferred from source tests.
 
+Windows ARM64 PM compatibility: the original CPython 3.14 NumPy pin made
+Hermes 0.23's workspace unsatisfiable (`hermes-agent[audio-io]` requires
+2.5.4). With `>=2.4.3,<2.6`, Hermes 0.23's workspace generator and pinned uv
+resolve both profile members at NumPy 2.5.4 with the same LanceDB 0.34.0 and
+PyArrow 25.0.1 native sources. Python 3.12/3.13 requirements are unchanged.
+The cross-target lock reproduction is separate from native install acceptance.
+
 ## Commits
 
 - `3c42b39b`

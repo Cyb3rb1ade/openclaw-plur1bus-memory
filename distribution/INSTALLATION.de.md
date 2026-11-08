@@ -75,7 +75,7 @@ beachten; gegebenenfalls auf signierte Pakete warten.
    maßgeblich, nicht ein eventuell noch vorhandenes älteres `hermes-agent/venv`.
    PLUR1BUS deklariert seine Python-Pakete im Plugin-Verzeichnis, damit Hermes
    sie bei späteren PM-Umgebungsgenerationen erneut berücksichtigt. Python 3.14
-   nutzt NumPy 2.4.3 sowie passende native ONNX-/Tokenizers-Abhängigkeiten;
+   unterstützt NumPy 2.4.3–2.5.x sowie passende native ONNX-/Tokenizers-Abhängigkeiten;
    Jina-Nano-ONNX und BGE-ONNX können ohne kundenspezifischen Tokenizers-Fork
    betrieben werden. Auf Plattformen mit unterstütztem Transformer-Stack bleibt
    auch dieser als separater Provider verfügbar. Vorhandene Provider- und
@@ -220,7 +220,7 @@ PM-Unterstützung für diese Release nicht als bestanden behandeln. Siehe den
 [Release-Abnahmenachweis](ACCEPTANCE.md). Eine Interpreter- oder
 `--python`-Ausweichlösung umgeht keine Ablehnung.
 
-Python 3.14 verwendet NumPy 2.4.3. Tokenizers kommt als reguläres PyPI-Wheel mit
+Python 3.14 unterstützt NumPy 2.4.3–2.5.x. Tokenizers kommt als reguläres PyPI-Wheel mit
 CPython-3.10+-Stable-ABI; ein kundenspezifischer Tokenizers-Fork ist nicht nötig.
 Lokale Jina-Nano- und BGE-Rerank-Inferenz läuft über ONNX, nicht über Torch.
 Für Windows ARM64 wird keine automatische Torch-Installation versprochen;

@@ -36,7 +36,12 @@ def test_native_platform_requirements(platform, machine, python_version, numpy, 
     requirements = [Requirement(item) for item in PROJECT["dependencies"]]
     selected = {item.name: item for item in requirements if item.marker is None or item.marker.evaluate(environment)}
     assert ("sentence-transformers" in selected) is torch
-    assert str(selected["numpy"].specifier) == "==" + numpy
+    numpy_spec = selected["numpy"].specifier
+    if python_version == "3.14":
+        assert numpy in numpy_spec and "2.5.4" in numpy_spec
+        assert "2.4.2" not in numpy_spec and "2.6.0" not in numpy_spec
+    else:
+        assert str(numpy_spec) == "==" + numpy
     assert str(selected["lancedb"].specifier) == "==0.34.0"
 
 

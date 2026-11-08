@@ -12,7 +12,9 @@ dependencies = [
   "lancedb==0.34.0",
   "numpy==2.2.0; python_version < '3.14' and (sys_platform != 'win32' or platform_machine != 'ARM64')",
   "numpy==2.3.0; python_version < '3.14' and sys_platform == 'win32' and platform_machine == 'ARM64'",
-  "numpy==2.4.3; python_version >= '3.14'",
+  # Share the Hermes PM environment without conflicting with Hermes 0.23's
+  # NumPy 2.5.4 audio/wake extras. Keep the older verified 2.4 floor.
+  "numpy>=2.4.3,<2.6; python_version >= '3.14'",
   "PyYAML>=6,<7",
   # These native targets use explicit ONNX providers, not an implicit old torch
   # downgrade or x64 emulation. Existing transformer installations are retained.
