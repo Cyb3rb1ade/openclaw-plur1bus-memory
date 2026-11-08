@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -88,13 +89,17 @@ def isolated_environment(home: Path, qa_root: Path) -> dict[str, str]:
     allowed = {
         "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
         "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "NUMBER_OF_PROCESSORS",
+        "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMFILES",
+        "COMMONPROGRAMFILES(X86)", "PROGRAMDATA", "SYSTEMDRIVE",
     }
     environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     environment["HERMES_HOME"] = str(home)
     environment["UV_CACHE_DIR"] = str(qa_root / "uv-cache")
+    # Cargo's default target directory is nested under uv's sdist source tree;
+    # MSVC link.exe rejects those long output paths on Windows ARM64.
+    environment["CARGO_TARGET_DIR"] = str(qa_root / "cargo-target")
     # Windows Python/Hermes resolve Path.home() eagerly even when HERMES_HOME
-    # is set. Supply a disposable profile tree rather than forwarding the
-    # runner's real USERPROFILE/APPDATA paths into the official PM process.
+    # is set. Use a disposable QA-local profile, never the runner's profile.
     profile = qa_root / "runner-profile"
     drive = profile.drive
     environment.update({
@@ -103,6 +108,10 @@ def isolated_environment(home: Path, qa_root: Path) -> dict[str, str]:
         "HOMEPATH": str(profile)[len(drive):],
         "APPDATA": str(profile / "AppData" / "Roaming"),
         "LOCALAPPDATA": str(profile / "AppData" / "Local"),
+        # These public markers affect Hermes' native-build prerequisite flow:
+        # CI must not try to open a UAC prompt or interactive installer UI.
+        "CI": "true",
+        "GITHUB_ACTIONS": "true",
     })
     environment["PYTHONNOUSERSITE"] = "1"
     environment.pop("PYTHONPATH", None)
@@ -120,13 +129,105 @@ def run_checked(command: list[str], *, cwd: Path, env: dict[str, str], label: st
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(f"{label} timed out after {timeout} seconds") from error
     if result.returncode:
-        detail = _sanitized_tail(result.stderr or result.stdout)
+        # Native compiler failures often print the actionable cause before the
+        # final wrapper command. Keep a bounded but useful tail from both
+        # channels; this helper runs with a secret-free QA environment.
+        stdout_detail = _sanitized_tail(result.stdout, max_lines=40, max_line_chars=600)
+        stderr_detail = _sanitized_tail(result.stderr, max_lines=80, max_line_chars=600)
+        channels = []
+        if stdout_detail:
+            channels.append(f"stdout: {stdout_detail}")
+        if stderr_detail:
+            channels.append(f"stderr: {stderr_detail}")
+        focused = _error_focused_excerpt(result.stdout + "\n" + result.stderr)
+        if focused:
+            channels.append(f"error-focused excerpt: {focused}")
+        detail = " | ".join(channels)
         suffix = f"; sanitized output tail: {detail}" if detail else "; process output was empty"
         raise RuntimeError(f"{label} failed with exit code {result.returncode}{suffix}")
     return result
 
 
-def _sanitized_tail(output: str, *, max_lines: int = 8, max_line_chars: int = 220) -> str:
+def installer_python_preflight_diagnostic(python: Path, *, cwd: Path, env: dict[str, str]) -> str:
+    """Report only safe exception metadata for the installer's isolated Python probe."""
+    code = """import json,sys,platform,sysconfig
+try:
+    print(json.dumps({'version':list(sys.version_info[:3]),'venv':sys.prefix!=sys.base_prefix,
+        'prefix':sys.prefix,'platform':sys.platform,'architecture':platform.machine(),
+        'implementation':sys.implementation.name,'freeThreaded':bool(sysconfig.get_config_var('Py_GIL_DISABLED'))}))
+except BaseException as e:
+    print(json.dumps({'exception':type(e).__name__,'module':getattr(e,'name',None)}))
+    raise
+"""
+    try:
+        result = subprocess.run([str(python), "-I", "-X", "utf8", "-c", code],
+                                cwd=cwd, env=env, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        # Class names are safe; str(error) can contain host paths or user data.
+        return f"python preflight diagnostic could not start: {type(error).__name__}"
+    parsed = {}
+    try:
+        parsed = json.loads(result.stdout.splitlines()[0]) if result.stdout else {}
+    except (ValueError, json.JSONDecodeError):
+        pass
+    if result.returncode == 0:
+        return "python preflight diagnostic passed"
+    # Do not surface raw child output. The error type and optional missing
+    # module name are enough to identify packaging/interpreter failures.
+    exception = parsed.get("exception")
+    module = parsed.get("module")
+    safe_module = module if isinstance(module, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", module) else None
+    suffix = f", module={safe_module}" if safe_module else ""
+    return f"python preflight diagnostic failed: exit={result.returncode}, exception={exception or 'unknown'}{suffix}"
+
+
+def installer_plan_callsite_diagnostic(bundle: Path, home: Path) -> str:
+    """Replay the read-only plan in-process and identify a failed Python probe callsite."""
+    import importlib.util
+
+    installer_path = bundle / "installer.py"
+    spec = importlib.util.spec_from_file_location("plur1bus_qa_installer", installer_path)
+    if spec is None or spec.loader is None:
+        return "plan diagnostic unavailable: installer import metadata missing"
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as error:
+        return f"plan diagnostic import failed: {type(error).__name__}"
+
+    original = module.run_python
+    failure: dict[str, str] = {}
+
+    def traced_run_python(python, code, data=None, timeout=None):
+        try:
+            return original(python, code, data, timeout)
+        except Exception as error:
+            caller = sys._getframe(1)
+            failure.update({
+                "callsite": f"{caller.f_code.co_name}:{caller.f_lineno}",
+                "exception": type(error).__name__,
+                "module": getattr(error, "name", None) or "",
+            })
+            raise
+
+    module.run_python = traced_run_python
+    try:
+        module.plan_install(bundle, home, ["default", "qa-second"], None, True, True, False)
+    except Exception as error:
+        callsite = failure.get("callsite", "plan_install")
+        exception = failure.get("exception", type(error).__name__)
+        module_name = failure.get("module", "")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", module_name):
+            module_name = ""
+        suffix = f", module={module_name}" if module_name else ""
+        return f"plan diagnostic failed at {callsite}: {exception}{suffix}"
+    finally:
+        module.run_python = original
+    return "plan diagnostic passed on replay"
+
+
+def _sanitized_tail(output: str, *, max_lines: int = 40, max_line_chars: int = 500) -> str:
     """Keep brief failure clues while removing URL queries and credential-like values."""
     from urllib.parse import urlsplit, urlunsplit
 
@@ -153,6 +254,24 @@ def _sanitized_tail(output: str, *, max_lines: int = 8, max_line_chars: int = 22
         value = credential.sub(r"\1\2<redacted>", value)
         rows.append(value[:max_line_chars])
     return " | ".join(rows)
+
+
+def _error_focused_excerpt(output: str, *, max_matches: int = 12) -> str:
+    """Keep a small sanitized context around compiler/linker error markers."""
+    lines = (output or "").splitlines()
+    marker = re.compile(r"(?i)(?:\berror\s*:|\bfatal error\b|\bcaused by\s*:|\bLNK\d{4}\b|\bMSB\d{4}\b)")
+    selected = set()
+    count = 0
+    for index, line in enumerate(lines):
+        if marker.search(line):
+            selected.update(range(max(0, index - 1), min(len(lines), index + 2)))
+            count += 1
+            if count >= max_matches:
+                break
+    if not selected:
+        return ""
+    excerpt = "\n".join(f"{index + 1}: {lines[index]}" for index in sorted(selected)[:48])
+    return _sanitized_tail(excerpt, max_lines=48, max_line_chars=600)
 
 
 def module_smoke_code(data_root: Path) -> str:
@@ -189,6 +308,118 @@ print(json.dumps({"pluginVersion": sys.argv[1], "dependencies": versions,
 '''
 
 
+def windows_arm64_build_tools_probe(source: Path, env: dict[str, str]) -> dict:
+    """Report only the exact compiler prerequisites Hermes PM checks on ARM64."""
+    script = r'''
+$programFilesX86 = ${env:ProgramFiles(x86)}
+$vswhere = if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe' } else { $null }
+$arm64VisualStudio = $null
+$visualStudioInstance = $null
+if ($vswhere -and (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+  $vsJson = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -format json -utf8 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw 'vswhere ARM64 component query failed' }
+  $vsInstances = @($vsJson | ConvertFrom-Json)
+  if ($vsInstances.Count -gt 0) {
+    $visualStudioInstance = $vsInstances[0]
+    $arm64VisualStudio = $visualStudioInstance.installationPath
+  }
+}
+$cl = Get-Command cl.exe -ErrorAction SilentlyContinue
+$clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+$clangCandidates = @()
+if ($env:ProgramFiles) { $clangCandidates += Join-Path $env:ProgramFiles 'LLVM\bin\clang.exe' }
+if ($arm64VisualStudio) {
+  $clangCandidates += @((Join-Path $arm64VisualStudio 'VC\Tools\Llvm\ARM64\bin\clang.exe'),
+                        (Join-Path $arm64VisualStudio 'VC\Tools\Llvm\bin\clang.exe'))
+}
+$clangPath = if ($clang) { $clang.Source } else { $clangCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1 }
+[ordered]@{ programFiles = $env:ProgramFiles; programFilesX86 = $programFilesX86; systemDrive = $env:SystemDrive; vswhereExists = [bool]($vswhere -and (Test-Path -LiteralPath $vswhere -PathType Leaf)); arm64VisualStudio = $arm64VisualStudio; visualStudioProductId = $(if ($visualStudioInstance) { $visualStudioInstance.productId } else { $null }); visualStudioInstallationVersion = $(if ($visualStudioInstance) { $visualStudioInstance.installationVersion } else { $null }); visualStudioDisplayName = $(if ($visualStudioInstance) { $visualStudioInstance.displayName } else { $null }); cl = $(if ($cl) { $cl.Source } else { $null }); clang = $clangPath } | ConvertTo-Json -Compress
+'''
+    shell = shutil.which("powershell", path=env.get("PATH")) or shutil.which("pwsh", path=env.get("PATH"))
+    if shell is None:
+        raise RuntimeError("PowerShell is required for the Windows ARM64 compiler prerequisite probe")
+    result = run_checked([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                          "-Command", script], cwd=source, env=env,
+                         label="Windows ARM64 compiler prerequisite probe", timeout=60)
+    probe = json.loads(result.stdout)
+    if not isinstance(probe, dict):
+        raise ValueError("Windows ARM64 compiler prerequisite probe returned invalid data")
+    return probe
+
+
+def git_checkout_diagnostics(source: Path, status_text: str, isolated_env: dict[str, str]) -> str:
+    """Compare narrow Git EOL config/attributes in ambient and isolated envs."""
+    paths = [line[3:] for line in status_text.splitlines() if len(line) > 3]
+    if not paths:
+        return ""
+    safe_paths = paths[:8]
+    outputs = []
+    contexts = (("ambient", os.environ.copy()), ("isolated", isolated_env))
+    for label, context in contexts:
+        config = subprocess.run(
+            ["git", "-C", str(source), "config", "--show-origin", "--get-regexp",
+             r"^core\.(autocrlf|eol|attributesfile|fsmonitor|longpaths)$"],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        config_rows = []
+        for row in config.stdout.splitlines():
+            origin_and_value = row.split(None, 1)
+            if len(origin_and_value) == 2:
+                origin = origin_and_value[0].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                key_value = origin_and_value[1].split(None, 1)
+                if len(key_value) == 2 and key_value[0].lower() == "core.attributesfile":
+                    key_value[1] = "<configured>"
+                config_rows.append(f"{origin}:{' '.join(key_value)}")
+        attrs = subprocess.run(
+            ["git", "-C", str(source), "check-attr", "text", "eol", "working-tree-encoding", "--", *safe_paths],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        numstat = subprocess.run(
+            ["git", "-C", str(source), "diff", "--numstat", "--", *safe_paths],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        header = subprocess.run(
+            ["git", "-C", str(source), "diff", "--no-ext-diff", "--unified=0", "--", safe_paths[0]],
+            cwd=source, env=context, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+        )
+        headers = [line for line in header.stdout.splitlines()
+                   if line.startswith(("diff --git ", "index ", "--- ", "+++ ", "@@"))][:8]
+        path_lengths = [f"{path}:len={len(str(source / path))}" for path in safe_paths]
+        outputs.append(
+            f"{label} gitconfig=[{'; '.join(config_rows) or 'none'}] "
+            f"attributes=[{_sanitized_tail(attrs.stdout, max_lines=16, max_line_chars=180) or 'none'}] "
+            f"numstat=[{_sanitized_tail(numstat.stdout, max_lines=8, max_line_chars=180) or 'none'}] "
+            f"diff-headers=[{' | '.join(headers) or 'none'}] "
+            f"paths=[{'; '.join(path_lengths)}]"
+        )
+    return "; ".join(outputs)
+
+
+def verify_selected_dependency_graph(source, root, selected, python, uv, env) -> str:
+    """Fail on unknown incompatibilities using Hermes's own lock-aware uv check."""
+    workspace = selected.parent / "workspace"
+    lock = workspace / "uv.lock"
+    if workspace.is_symlink() or lock.is_symlink() or not lock.is_file() or not _inside(lock, selected.parent):
+        raise ValueError("selected Hermes PM generation has no trusted workspace lock")
+    code = r"""
+import os, sys
+from pathlib import Path
+source, uv, python, generation, cache, lock = map(Path, sys.argv[1:])
+sys.path.insert(0, str(source))
+from pm.environment import PythonEnvironment
+PythonEnvironment(uv=uv, python=python, destination=generation,
+                  cache=cache, env=dict(os.environ), no_config=True).check(lock)
+"""
+    run_checked([sys.executable, "-I", "-B", "-c", code, str(source), str(uv), str(python),
+                 str(selected), env["UV_CACHE_DIR"], str(lock)],
+                cwd=root, env=env, label="selected Hermes PM lock-aware dependency check", timeout=90)
+    return "Hermes PM pinned uv check with selected generation lock"
+
+
 def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
     """Run official Hermes PM bootstrap and native PLUR1BUS package acceptance."""
     root, source, home = validate_qa_layout(qa_root, hermes_source, bundle)
@@ -211,13 +442,12 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
             raise ValueError("bundled native wheel is missing or redirected")
 
     env = isolated_environment(home, root)
-    # Materialize every profile/cache location inside the unique temporary
-    # root before Hermes imports code that may eagerly inspect these paths.
-    for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR"):
+    for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "UV_CACHE_DIR", "CARGO_TARGET_DIR"):
         path = Path(env[name])
         if not _inside(path, root):
             raise ValueError("isolated Hermes profile path escaped the QA root")
         path.mkdir(parents=True, exist_ok=True)
+    build_tools = windows_arm64_build_tools_probe(source, env)
     checkout = run_checked(["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
                            cwd=source, env=env, label="Hermes source revision check")
     revision = checkout.stdout.strip()
@@ -226,12 +456,18 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
     clean = run_checked(["git", "-C", str(source), "status", "--porcelain"], cwd=source,
                         env=env, label="Hermes source cleanliness check")
     if clean.stdout.strip():
-        raise ValueError("Hermes source checkout must be clean and pinned before QA")
+        detail = _sanitized_tail(clean.stdout, max_lines=20, max_line_chars=240)
+        diagnostics = git_checkout_diagnostics(source, clean.stdout, env)
+        diagnostic_text = f"; checkout diagnostics: {diagnostics}" if diagnostics else ""
+        raise ValueError(f"Hermes source checkout must be clean and pinned before QA; status: {detail}{diagnostic_text}")
     (home / "config.yaml").write_text('memory:\n  provider: builtin\n', encoding="utf-8")
     # This is Hermes' own public bootstrap/launcher path. Its HERMES_HOME is
     # bound to the isolated QA home; it cannot see the runner's live profile.
-    run_checked([sys.executable, "-m", "pm.cli", "install"], cwd=source, env=env,
-                label="official Hermes PM bootstrap and initial install")
+    try:
+        run_checked([sys.executable, "-m", "pm.cli", "install"], cwd=source, env=env,
+                    label="official Hermes PM bootstrap and initial install")
+    except RuntimeError as error:
+        raise RuntimeError(f"{error}; runner ARM64 build-tools probe: {json.dumps(build_tools, sort_keys=True)}") from error
 
     second_profile = home / "profiles" / "qa-second"
     second_profile.mkdir(parents=True, exist_ok=False)
@@ -240,9 +476,29 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
         encoding="utf-8")
 
     profile_args = ["--profile", "default", "--profile", "qa-second"]
-    plan_result = run_checked([sys.executable, str(bundle / "installer.py"), "--bundle", str(bundle),
-                               "--home", str(home), *profile_args, "--activate"],
-                              cwd=root, env=env, label="PLUR1BUS installer plan")
+
+    preflight_diagnostic = "PM-selected interpreter metadata unavailable"
+    try:
+        key = hashlib.sha256(str(source.resolve()).encode("utf-8")).hexdigest()[:16]
+        facts_path = home / "installs" / key / "facts.json"
+        facts = json.loads(facts_path.read_text(encoding="utf-8"))
+        selected_python = Path(facts["packages"]["venv"]["environment"]) / "Scripts" / "python.exe"
+        preflight_diagnostic = installer_python_preflight_diagnostic(selected_python,
+                                                                      cwd=root, env=env)
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        # The subsequent installer plan remains authoritative; this metadata
+        # probe must never turn a failed preflight into a pass or mask it.
+        pass
+    try:
+        plan_result = run_checked([sys.executable, str(bundle / "installer.py"), "--bundle", str(bundle),
+                                   "--home", str(home), *profile_args, "--activate"],
+                                  cwd=root, env=env, label="PLUR1BUS installer plan")
+    except RuntimeError as error:
+        plan_diagnostic = installer_plan_callsite_diagnostic(bundle, home)
+        raise RuntimeError(
+            f"{error}; safe interpreter preflight metadata: {preflight_diagnostic}; "
+            f"read-only plan replay: {plan_diagnostic}"
+        ) from error
     plan = json.loads(plan_result.stdout)
     if not plan.get("pmManaged") or plan.get("profiles") != ["default", "qa-second"] or not plan.get("activate"):
         raise ValueError("installer did not select both fresh profiles through Hermes PM")
@@ -276,18 +532,11 @@ def verify(hermes_source: Path, bundle: Path, qa_root: Path) -> dict:
         raise ValueError("Hermes PM did not select the required standard-ABI CPython 3.14 ARM64 generation")
 
     installer.verify_pm_plugin_imports(python, home, selected, manifest, manifest["pythonVersion"])
-    has_pip = json.loads(run_checked([str(python), "-I", "-c",
-        "import importlib.util,json; print(json.dumps(importlib.util.find_spec('pip') is not None))"],
-        cwd=root, env=env, label="selected environment pip availability probe").stdout)
-    if has_pip:
-        run_checked([str(python), "-I", "-m", "pip", "check"], cwd=root, env=env,
-                    label="selected Hermes PM environment pip check", timeout=300)
-        check_method = "pip check"
-    else:
-        # Ask the official PM tool resolver for its pinned uv, then check the
-        # exact generation chosen by facts.json. Do not treat a failed check as
-        # equivalent to PM's separate lock/store doctor.
-        uv_probe = r'''
+    # Ask the official PM tool resolver for pinned uv and run the same
+    # lock-aware verification used when publishing a generation. A raw
+    # pip check cannot distinguish host-approved security overrides from
+    # a broken graph (e.g. Pillow 13 against browser-harness metadata).
+    uv_probe = r'''
 import json,sys
 sys.path.insert(0, sys.argv[1])
 from pm._uv import _toolchain
@@ -296,11 +545,9 @@ if resolved is None:
     raise SystemExit("Hermes PM's pinned uv is unavailable")
 print(json.dumps(str(resolved[0])))
 '''
-        uv = json.loads(run_checked([sys.executable, "-I", "-c", uv_probe, str(source)],
-            cwd=source, env=env, label="official Hermes PM pinned uv resolver").stdout)
-        run_checked([uv, "pip", "check", "--python", str(python)], cwd=root, env=env,
-                    label="selected Hermes PM environment uv pip check", timeout=300)
-        check_method = "Hermes PM pinned uv pip check"
+    uv = json.loads(run_checked([sys.executable, "-I", "-c", uv_probe, str(source)],
+        cwd=source, env=env, label="official Hermes PM pinned uv resolver").stdout)
+    check_method = verify_selected_dependency_graph(source, root, selected, python, uv, env)
 
     storage = root / "native-storage-verifier.py"
     storage_source = Path(__file__).with_name("verify-windows-arm64-storage.py")
@@ -315,6 +562,7 @@ print(json.dumps(str(resolved[0])))
                         label="installed plugin import, real capture/recall, and agent-scope smoke", timeout=900)
     result = json.loads(smoke.stdout.strip().splitlines()[-1])
     return {"officialPmBootstrap": True, "hermesSourceRevision": revision,
+            "runnerArm64BuildTools": build_tools,
             "pmFacts": str(facts_path), "selectedPython": info,
             "selectedEnvironment": str(selected), "nativePair": sorted(declared),
             "installedProfiles": plan["profiles"],
