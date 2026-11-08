@@ -65,6 +65,7 @@ class Upstream761InventoryTests(unittest.TestCase):
                             "distribution/tests/test_platform_dependencies.py"})
         # Reviewed 7.18.20 ports have focused runtime and installer regressions.
         changed_715.update({"distribution/macos/Setup.swift",
+                            "distribution/macos_pkg.py",
                             "distribution/tests/test_macos_setup.py",
                             "plur1bus-controls/src/plur1bus_controls/hooks.py",
                             "plur1bus-controls/src/plur1bus_controls/plugin.py",
