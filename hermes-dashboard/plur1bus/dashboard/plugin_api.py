@@ -30,7 +30,7 @@ def _require_profile_binding(request: Request) -> None:
     expected = request.query_params.getlist("expectedProfile")
     if not expected:
         return  # Existing browser clients stay process-scoped.
-    _actor(request)
+    _actor(request, read_only=True)
     from hermes_cli.profiles import get_active_profile_name
     if len(expected) != 1 or expected[0] != get_active_profile_name():
         raise HTTPException(status_code=409, detail="PLUR1BUS backend profile mismatch")
@@ -117,7 +117,7 @@ class _WorkshopAction(BaseModel):
 def get_memories(request: Request, query: str = Query("", max_length=200), status: str = Query("active", pattern="^(active|superseded|archived|deleted)$"),
                  offset: int = Query(0, ge=0, le=100000), limit: int = Query(20, ge=1, le=50)) -> dict[str, Any]:
     """Inspect bounded content from the server-selected scope; never a client-selected path."""
-    _actor(request)
+    _actor(request, read_only=True)
     try:
         return browse_runtime_memories(_active_runtime_view(), query=query, status=status, offset=offset, limit=limit)
     except ValueError as error:
@@ -131,7 +131,7 @@ class _DesktopWorkshopAction(_WorkshopAction):
     nonce: str
 
 
-def _desktop_actor(request: Request) -> str:
+def _desktop_actor(request: Request, *, read_only: bool = False) -> str:
     """Authenticate native IPC transport, never a browser cookie or an origin bypass.
 
     Electron sends a host-issued session token (or verified OAuth bearer), JSON,
@@ -146,7 +146,7 @@ def _desktop_actor(request: Request) -> str:
         presented = request.headers.get("authorization", "")
         if not token or not hmac.compare_digest(presented, "Bearer " + token):
             raise HTTPException(status_code=401, detail="native_bearer_required")
-    return _actor(request)
+    return _actor(request, read_only=read_only)
 
 
 @router.get("/desktop/capabilities")
@@ -156,11 +156,17 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
         actions = True
     except HTTPException:
         actions = False
+    hosted_read = False
+    if not actions:
+        try:
+            hosted_read = _desktop_actor(request, read_only=True) == "hosted:read-only"
+        except HTTPException:
+            hosted_read = False
     result = {"memoryBrowser": True, "workshopActions": actions, "retrievalActions": actions, "obsidianActions": actions}
-    if actions:
+    if actions or hosted_read:
         from hermes_cli.profiles import get_active_profile_name
         from hermes_cli.config import load_config_readonly
-        result.update(profileBinding=1, profile=get_active_profile_name())
+        result.update(profileBinding=1, profile=get_active_profile_name(), hostedReadOnly=hosted_read)
         config = load_config_readonly()
         memory = config.get("memory") or {}
         result["memoryProviderEnabled"] = (isinstance(memory, dict)
@@ -190,8 +196,8 @@ def _settings_context(view):
 
 def _settings_actor(request, verb=None):
     if "/desktop/settings" in request.url.path:
-        return _desktop_actor(request)
-    actor = _actor(request)
+        return _desktop_actor(request, read_only=verb is None)
+    actor = _actor(request, read_only=verb is None)
     if verb:
         _same_origin_confirmation(request, verb)
     return actor
@@ -200,9 +206,9 @@ def _settings_actor(request, verb=None):
 @router.get("/settings")
 @router.get("/desktop/settings")
 def settings_options(request: Request):
-    _settings_actor(request)
+    actor = _settings_actor(request)
     from plur1bus_hermes.settings_admin import public_settings
-    return public_settings(_active_runtime_view())
+    return {**public_settings(_active_runtime_view()), "readOnly": actor == "hosted:read-only"}
 
 
 @router.post("/settings/preview")
@@ -249,12 +255,13 @@ class _RetrievalCommit(BaseModel):
 @router.get("/desktop/retrieval")
 def retrieval_options(request: Request) -> dict[str, Any]:
     """Return editable, secret-free settings for the authenticated current profile."""
-    _desktop_actor(request)
+    actor = _desktop_actor(request, read_only=True)
     from plur1bus_hermes.retrieval_admin import public_config, EMBEDDING_PROVIDERS, RERANKER_PROVIDERS
     view = _active_runtime_view()
     return {"embedding": public_config(view.config.get("embedding", {})),
             "reranker": public_config(view.config.get("reranker", {})),
-            "embeddingProviders": EMBEDDING_PROVIDERS, "rerankerProviders": RERANKER_PROVIDERS}
+            "embeddingProviders": EMBEDDING_PROVIDERS, "rerankerProviders": RERANKER_PROVIDERS,
+            "readOnly": actor == "hosted:read-only"}
 
 
 @router.post("/desktop/retrieval/preview")
@@ -381,8 +388,27 @@ def retrieval_job(identifier: str, request: Request) -> dict[str, Any]:
         return {key: job[key] for key in ("kind", "status", "progress", "result", "error") if key in job}
 
 
-def _actor(request: Request) -> str:
+def _actor(request: Request, *, read_only: bool = False) -> str:
     """Return a server-authenticated actor without accepting browser identity."""
+    native = getattr(request.state, "native_http_principal", None)
+    if native is not None:
+        from hermes_constants import get_hermes_home
+        if (not isinstance(native, dict) or native.get("purpose") != "native-http"
+                or not isinstance(native.get("subject"), str) or not native["subject"]
+                or not isinstance(native.get("profile_id"), str) or not native["profile_id"]
+                or Path(native["profile_id"]).resolve() != Path(get_hermes_home()).resolve()):
+            raise HTTPException(status_code=403, detail="native_profile_mismatch")
+        return "native:" + hashlib.sha256(native["subject"].encode("utf-8")).hexdigest()
+    hosted = getattr(request.state, "hosted_http_authenticated", None)
+    if hosted is False:
+        raise HTTPException(status_code=401, detail="authenticated_actor_required")
+    if hosted is True:
+        # Hermes 0.23 strips transport credentials and sends admission, not a
+        # stable actor. Reads remain profile-bound; never mint a write nonce
+        # for every authenticated caller as one shared synthetic actor.
+        if read_only and request.method in {"GET", "HEAD"}:
+            return "hosted:read-only"
+        raise HTTPException(status_code=403, detail="hosted_actor_unavailable")
     session = getattr(request.state, "session", None)
     user_id = str(getattr(session, "user_id", "") or "")
     provider = str(getattr(session, "provider", "") or "")

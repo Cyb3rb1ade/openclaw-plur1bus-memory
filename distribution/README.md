@@ -327,10 +327,12 @@ identity and reports missing capabilities; it cannot retrofit a sidebar API
 into an incompatible Hermes binary. `helpers/plur1bus-desktop-host.py` and the
 adjacent patch directory can prepare a **separate** host build from a trusted
 clean Hermes source checkout (Python >=3.12 and its Node/npm toolchain required).
-For current Hermes, the default mode selects legacy host patches and is not
-compatible; do not assume the default build plan will fix a current installation.
-Explicitly pass `--modern-profile-api` to review the isolated local-profile API
-patch instead:
+Hermes 0.23 forwards secondary-profile plugin API requests itself. Do not apply
+the old host patch on that release. A forwarded request carries read admission,
+not a stable write actor; open the target as the backend's launch profile to
+review and commit changes, including provider switches and memory migrations.
+For older supported source revisions, explicitly pass `--modern-profile-api`
+to review the isolated local-profile API patch instead:
 
 ```sh
 python helpers/plur1bus-desktop-host.py --source /absolute/hermes-agent-checkout \
@@ -340,9 +342,9 @@ python helpers/plur1bus-desktop-host.py --source /absolute/hermes-agent-checkout
 Review the plan and patch state first. Building requires repeating the same
 arguments with `--apply --confirm HASH_FROM_PLAN`; it builds an isolated copy,
 does not patch, replace, or start the installed/signed app, and does not perform
-automatic compatibility magic at startup. The modern patch addresses local
-profile-scoped plugin API routing; Hermes' upstream remote-profile API remains
-limited. Read the provider README for the full procedure and current acceptance
+automatic patching at startup. The patch addresses older local profile API
+routing; no remote-profile acceptance is implied. Read the provider README for
+the full procedure and current acceptance
 boundaries. No binary host patch runs at every startup.
 
 Hourly/daily maintenance is available through `plur1bus-hermes-jobs` on each

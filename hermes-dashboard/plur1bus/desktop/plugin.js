@@ -489,7 +489,7 @@ function FeatureSettings({ rest }) {
     else setSettings(result.value);
   }
   async function preview(identifier, value) {
-    if (!settings || busy) return;
+    if (!settings || settings.readOnly || busy) return;
     setBusy(true); setReview(null);
     const result = await request.current?.run('/desktop/settings/preview', { method: 'POST',
       body: { identifier, value, revision: settings.revision } });
@@ -515,7 +515,9 @@ function FeatureSettings({ rest }) {
       .some(value => String(value || '').toLocaleLowerCase('de').includes(normalizedSearch)));
   const visibleGroups = [...new Set(visibleSettings.map(setting => setting.group || 'Features'))];
   return h('section', { className: 'pb-settings' }, h('h2', null, 'So arbeitet dein Gedächtnis'),
-    h('p', { className: 'pb-intro' }, 'Diese Einstellungen gelten nur für das aktive Profil. Änderungen werden zuerst zur Prüfung angezeigt und erst nach deiner Bestätigung gespeichert. Zum Aktivieren ist ein Gateway-Neustart nötig.'),
+    h('p', { className: 'pb-intro' }, settings?.readOnly
+      ? 'Lesend geöffnet. Hermes bestätigt den Zugriff auf dieses Profil, übermittelt aber keine Identität für Schreibfreigaben. Für Änderungen das Profil als Backend-Startprofil öffnen.'
+      : 'Diese Einstellungen gelten nur für das aktive Profil. Änderungen werden zuerst zur Prüfung angezeigt und erst nach deiner Bestätigung gespeichert. Zum Aktivieren ist ein Gateway-Neustart nötig.'),
     h('button', { disabled: busy, onClick: () => { void load(); } }, busy ? 'Lädt…' : 'Werte neu laden'),
     h('label', { className: 'pb-settings-search' }, 'Einstellungen suchen',
       h('input', { type: 'search', value: search, placeholder: 'Name, Beschreibung oder Einstellungs-ID',
@@ -527,14 +529,14 @@ function FeatureSettings({ rest }) {
       h('div', null, h('label', { htmlFor: `pb-${setting.id}` }, setting.label || setting.id),
         h('p', { id: `pb-help-${setting.id}`, className: 'pb-setting-help' }, setting.description || 'Einstellung des aktiven Profils.')),
       typeof setting.value === 'boolean' ? h('div', { className: 'pb-toggle' }, setting.value ? 'An' : 'Aus',
-        h('input', { id: `pb-${setting.id}`, type: 'checkbox', role: 'switch', checked: setting.value, disabled: busy,
+        h('input', { id: `pb-${setting.id}`, type: 'checkbox', role: 'switch', checked: setting.value, disabled: busy || settings.readOnly,
           'aria-describedby': `pb-help-${setting.id}`, onChange: event => { void preview(setting.id, event.target.checked); } })) :
       Number.isInteger(setting.minimum) ? h('div', null, h('output', { htmlFor: `pb-${setting.id}` },
         `${new Intl.NumberFormat('de-DE').format(setting.value)}${setting.unit ? ` ${setting.unit}` : ''}`), h('input', { id: `pb-${setting.id}`, className: 'pb-setting-control', type: 'range',
-        min: setting.minimum, max: setting.maximum, step: 1, value: setting.value, disabled: busy,
+        min: setting.minimum, max: setting.maximum, step: 1, value: setting.value, disabled: busy || settings.readOnly,
         'aria-valuetext': String(setting.value), 'aria-describedby': `pb-help-${setting.id}`,
         onChange: event => { void preview(setting.id, Number(event.target.value)); } })) :
-      h('select', { id: `pb-${setting.id}`, className: 'pb-setting-control', 'aria-describedby': `pb-help-${setting.id}`, disabled: busy, value: String(setting.choices.indexOf(setting.value)),
+      h('select', { id: `pb-${setting.id}`, className: 'pb-setting-control', 'aria-describedby': `pb-help-${setting.id}`, disabled: busy || settings.readOnly, value: String(setting.choices.indexOf(setting.value)),
         onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
       setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))))))),
     settings && visibleSettings.length === 0 ? h('p', { role: 'status' }, normalizedSearch ? 'Keine passenden Einstellungen gefunden.' : 'Keine Einstellungen verfügbar.') : null,
@@ -591,6 +593,7 @@ function RetrievalSettings({ rest }) {
     if (result.error) setError('Provider-Einstellungen nicht erreichbar. Backend aktualisieren oder Verbindung prüfen.');
     else {
       setSettings(result.value); setKind('embedding'); edit(result.value.embedding);
+      if (result.value.readOnly) return;
       const recent = await request.current?.run('/desktop/retrieval/jobs');
       if (!recent || recent.stale) return;
       if (recent.error) { setError('Auftragsstatus nicht erreichbar. Vor neuen Änderungen erneut laden.'); setSettings(null); return; }
@@ -602,6 +605,7 @@ function RetrievalSettings({ rest }) {
     }
   }
   async function preview(action = kind) {
+    if (settings?.readOnly) return;
     const current = ++sequence.current;
     setBusy(true); setError(''); setReview(null); setApproved(false);
     const result = await request.current?.run('/desktop/retrieval/preview', { method: 'POST',
@@ -612,7 +616,7 @@ function RetrievalSettings({ rest }) {
     else setReview(result.value);
   }
   async function commit() {
-    if (!review || !approved || busy) return;
+    if (settings?.readOnly || !review || !approved || busy) return;
     setBusy(true); setError('');
     const result = await request.current?.run('/desktop/retrieval/commit', { method: 'POST',
       body: { nonce: review.nonce, confirmation: review.kind } });
@@ -626,9 +630,11 @@ function RetrievalSettings({ rest }) {
       onChange: event => { const next = { ...target }; if (event.target.value) next[key] = event.target.value; else delete next[key]; edit(next); } }));
   const providers = settings?.[kind === 'embedding' ? 'embeddingProviders' : 'rerankerProviders'] || [];
   return h('section', null, h('h2', null, 'Provider & Dimensionen'),
-    h('p', null, 'Embedding-Provider wechseln, Reranking konfigurieren oder Erinnerungen in neue Dimensionen umbetten. Gilt ausschließlich für dieses Profil.'),
+    h('p', null, settings?.readOnly
+      ? 'Diese Backend-Route erlaubt nur lesenden Zugriff. Für Provider-Wechsel und Dimensionsmigration das Profil als Backend-Startprofil öffnen.'
+      : 'Embedding-Provider wechseln, Reranking konfigurieren oder Erinnerungen in neue Dimensionen umbetten. Gilt ausschließlich für dieses Profil.'),
     h('button', { disabled: busy, onClick: () => { void load(); } }, settings ? 'Einstellungen neu laden' : 'Provider-Einstellungen öffnen'),
-    settings ? h('form', { onSubmit: event => { event.preventDefault(); void preview(); } },
+    settings && !settings.readOnly ? h('form', { onSubmit: event => { event.preventDefault(); void preview(); } },
       h('div', { className: 'pb-actions' },
         h('label', null, 'Bereich', h('select', { value: kind, disabled: busy, onChange: event => {
           setKind(event.target.value); edit(settings[event.target.value]);

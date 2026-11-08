@@ -18,8 +18,13 @@ UI and tests are retained at the official tag; they do not execute on Hermes.
 | OpenClaw model token/thinking defaults | Native task profiles and host LLM router preserved; no implicit model or credential migration. |
 
 Previous profile isolation, installer profile selection, model selection, memory
-migration and Desktop UI are preserved. No production installation or platform
-support is inferred from these source tests.
+migration and Desktop UI are preserved. On Hermes 0.23 the host forwards
+secondary profiles' plugin APIs in separate profile-bound plugin hosts. A
+direct native request uses Hermes' verified profile principal. Forwarded
+requests only carry a host-admission bit; they can read the selected profile
+but cannot mint or consume an actor-bound write approval. The earlier
+optional local Electron patch does not apply to this host release.
+No production installation or platform support is inferred from source tests.
 
 ## Commits
 

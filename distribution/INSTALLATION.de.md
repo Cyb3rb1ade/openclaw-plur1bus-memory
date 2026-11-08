@@ -283,10 +283,11 @@ meldet den Backup-/Receipt-Pfad. Danach Hermes selbst neu starten.
   Ein inkompatibles Hermes-Binary bekommt durch Paketinstallation nicht
   automatisch eine neue Sidebar-API. Der Host-Helper ist eine getrennte,
   manuell geprüfte Build-Vorbereitung; er ersetzt oder startet die installierte
-  App nicht automatisch. Für aktuelles Hermes ist der Standardmodus mit den
-  älteren Host-Patches nicht passend. `--modern-profile-api` wählt ausdrücklich
-  nur den geprüften lokalen Profil-API-Patch für einen isolierten Build aus.
-  Dieser behebt nicht sämtliche Remote-Profil-API-Einschränkungen von Hermes.
+  App nicht automatisch. Hermes 0.23 leitet Profil-APIs selbst weiter; dort
+  den alten Host-Patch nicht anwenden. Weitergeleitete Profil-APIs sind
+  in PLUR1BUS lesend; für bestätigte Schreibaktionen das Zielprofil als
+  Backend-Startprofil öffnen. `--modern-profile-api` ist für ältere, im Plan
+  als kompatibel ausgewiesene Hermes-Quellen vorgesehen.
   Details und Grenzen stehen im [technischen Installer-Handbuch](README.md).
   Nach Prüfung der Quelle kann der Helper aus dem entpackten Paket zunächst
   nur einen Plan anzeigen:
