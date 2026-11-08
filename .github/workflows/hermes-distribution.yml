@@ -11,6 +11,10 @@ on:
         description: Digest of the reviewed preflight artifact (required for publication).
         type: string
         default: ''
+      preflight_run:
+        description: Run containing the reviewed immutable preflight artifact.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -20,10 +24,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE: cdbabe2e9dfbd8bab212b297ceb9d84c9dd04f2f
-  VERSION: 7.19.2-hermes.0
+  SOURCE: 986e135b3e568ba166ef4a77d60adedab480e0f7
+  VERSION: 7.19.2-hermes.1
   PACKAGE: '@cyb3rb1ade/plur1bus-memory'
-  TARBALL: cyb3rb1ade-plur1bus-memory-7.19.2-hermes.0.tgz
+  TARBALL: cyb3rb1ade-plur1bus-memory-7.19.2-hermes.1.tgz
   REGISTRY: https://npm.pkg.github.com
 
 jobs:
@@ -37,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: cdbabe2e9dfbd8bab212b297ceb9d84c9dd04f2f
+          ref: 986e135b3e568ba166ef4a77d60adedab480e0f7
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -87,15 +91,17 @@ jobs:
       - name: Require the exact passing platform and native Hermes PM runs
         env:
           GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN: ${{ inputs.preflight_run }}
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42514626662" |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42522217943" |
             jq -e --arg sha "$SOURCE" '.head_sha == $sha and .conclusion == "success"'
-          # This exact workflow revision checks out SOURCE separately for the
-          # native build. Its QA-only change uses Hermes's lock-aware check.
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42516751007" |
-            jq -e '.head_sha == "d48826f5213c65f7991aeaad51190363e070ffa5" and .conclusion == "success"'
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/42522218061" |
+            jq -e --arg sha "$SOURCE" '.head_sha == $sha and .conclusion == "success"'
+          [[ "$PREFLIGHT_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREFLIGHT_RUN" |
+            jq -e --arg sha "$GITHUB_SHA" '.head_sha == $sha and .conclusion == "success"'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.21.0'
@@ -105,7 +111,7 @@ jobs:
         with:
           name: hermes-registry-tarball
           path: ${{ runner.temp }}/hermes-registry
-          run-id: '42514753894'
+          run-id: ${{ inputs.preflight_run }}
           github-token: ${{ github.token }}
       - name: Publish only hermes and verify the downloaded bytes and untouched latest tag
         env:
@@ -119,6 +125,7 @@ jobs:
           [[ "$EXPECTED_DIGEST" =~ ^[a-f0-9]{64}$ ]]
           test "$(cut -d' ' -f1 SHA256SUMS)" = "$EXPECTED_DIGEST"
           before=$(npm view "$PACKAGE" dist-tags --json --registry "$REGISTRY" --prefer-online)
+          test "$(jq -r '.hermes' <<< "$before")" = '7.19.2-hermes.0'
           npm publish "./$TARBALL" --ignore-scripts --tag hermes --registry "$REGISTRY"
           after=$(npm view "$PACKAGE" dist-tags --json --registry "$REGISTRY" --prefer-online)
           test "$(jq -r '.latest // ""' <<< "$before")" = "$(jq -r '.latest // ""' <<< "$after")"
