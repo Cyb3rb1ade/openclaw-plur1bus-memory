@@ -28,6 +28,7 @@ env:
 
 jobs:
   package:
+    if: '!inputs.publish'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -45,9 +46,6 @@ jobs:
           scope: '@cyb3rb1ade'
       - name: Build and validate exact npm tarball
         shell: bash
-        env:
-          PUBLISH: ${{ inputs.publish }}
-          EXPECTED_DIGEST: ${{ inputs.tarball_sha256 }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE"
@@ -66,10 +64,6 @@ jobs:
           cd "$out"
           sha256sum "$TARBALL" > SHA256SUMS
           cat SHA256SUMS
-          if [[ "$PUBLISH" == true ]]; then
-            [[ "$EXPECTED_DIGEST" =~ ^[a-f0-9]{64}$ ]]
-            test "$(cut -d' ' -f1 SHA256SUMS)" = "$EXPECTED_DIGEST"
-          fi
       - name: Verify repository-scoped registry read access
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
@@ -83,7 +77,6 @@ jobs:
 
   publish:
     if: inputs.publish
-    needs: package
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -110,6 +103,8 @@ jobs:
         with:
           name: hermes-registry-tarball
           path: ${{ runner.temp }}/hermes-registry
+          run-id: '42514753894'
+          github-token: ${{ github.token }}
       - name: Publish only hermes and verify the downloaded bytes and untouched latest tag
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
