@@ -307,6 +307,7 @@ import {
   migrateNeoWorkspaces,
   listNeoWorkspaceKeys,
   neoSessionKeysFromContext,
+  pruneHookNeoStoreFiles,
   routeNeoRecall,
   searchNeoCandidatesGlobal,
   dedupeNeoLanesAgainstTexts,
@@ -7629,8 +7630,10 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 }
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const dailyRuns = [];
+                const dailyStoreDirs = new Set();
                 for (const dailyPartition of buildRemPartitions(memoryCtx)) {
                   const dailyStore = createOwnerBoundNeoStore(dailyPartition);
+                  if (dailyStore?.paths?.workspaceDir) dailyStoreDirs.add(dailyStore.paths.workspaceDir);
                   const dailyWorkspaceDir = dailyPartition.scope === "workspace"
                     && memoryCtx?.workspaceDir
                     && dailyPartition.workspaceIdentity === memoryCtx.workspaceIdentity
@@ -7700,6 +7703,19 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 } catch (graphErr) {
                   graphPrune = { error: String(graphErr?.message || graphErr) };
                 }
+                // 7.19.3: Die Partitionen oben bereinigen owner-gebundene Stores
+                // (acl-owner-v1_*); die Hooks schreiben aber in diesen Store.
+                // Dessen Dateien wurden bisher nur durch den Append-Cap gekuerzt.
+                let hookStorePrune = null;
+                try {
+                  hookStorePrune = pruneHookNeoStoreFiles(commandStore, dailyStoreDirs);
+                  if (!hookStorePrune.skipped) {
+                    api.logger?.info?.(`daily-consolidation[${internalAgent}]: neo hook-store prune workspace=${hookStorePrune.workspace} removedAge=${hookStorePrune.removedAge} removedHard=${hookStorePrune.removedHard} removedInjected=${hookStorePrune.removedInjected} removedDup=${hookStorePrune.removedDup} archived=${hookStorePrune.archived}`);
+                  }
+                } catch (pruneErr) {
+                  hookStorePrune = { error: String(pruneErr?.message || pruneErr) };
+                  api.logger?.warn?.(`daily-consolidation[${internalAgent}]: neo hook-store prune failed: ${hookStorePrune.error}`);
+                }
                 // 7.12.28: Kandidaten-Metadatenindex auf die juengste Revision je ID
                 // ziehen (Cap = neo.recall.global.maxCandidates), bevor der Sidecar
                 // kompaktiert wird — dessen Live-Menge liest den Index mit.
@@ -7746,6 +7762,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                   deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
                   merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
                   graphPrune,
+                  hookStorePrune,
                   candidateIndex,
                   vectorCompaction,
                   lancedbOptimize,

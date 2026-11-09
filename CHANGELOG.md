@@ -35,6 +35,21 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.19.3] — 2026-11-09
+
+### Changed
+
+- Neo journals keep at least 90 days instead of the newest 5000 lines. The append path only applies an emergency ceiling of 40,000 lines (`PLUR1BUS_NEO_MAX_RECORDS`); regular retention runs in the daily consolidation: a file is trimmed only above 5000 lines (`PLUR1BUS_NEO_SOFT_MAX_RECORDS`), and then only entries older than 90 days (`PLUR1BUS_NEO_RETENTION_DAYS`). Bernhardine's candidates had shrunk to a 25-day window, including active ones. Small files such as episodes and dream diaries are still never trimmed.
+- Trimming goes by value instead of file position: all revisions of an id (or of a graph edge) stay or go together, the weakest go first (status, salience/strength, confidence), and active or promoted entries with confidence or salience of at least 0.6, strong graph edges (≥ 0.6), `neverForget` entries and pending queue items are protected from the age rule.
+- Removed lines are archived instead of discarded: gzip members are appended to `<workspace>/archive/<file>.<YYYY-MM>.jsonl.gz` (`zcat` reads them as one stream). If the archive cannot be written, the journal is left untouched.
+- The append dedupe tail is fixed at 5000 lines (`PLUR1BUS_NEO_APPEND_DEDUPE_TAIL_RECORDS`) so the higher ceiling does not make every append read more.
+
+### Fixed
+
+- The daily consolidation never pruned the Neo store the hooks write to. It only pruned the owner-bound partition stores (`acl-owner-v1_*`), which hold no journals, so injected context (system interruption notices, recall blocks captured as behavior cards) stayed in the live files. The workspace store's files are now pruned once per run (removing injected context and applying retention, without content dedupe) and the result is reported as `hookStorePrune`.
+- `createNeoStore` called with an existing workspace directory name (`<key>--<hash>`) created a second, empty directory and wrote into it while reads still came from the legacy path. A canonical name whose hash matches its key now resolves to itself.
+- Retention reads numeric `timestamp` values below 1e12 (the retrieval ledger) as seconds.
+
 ## [7.19.2] — 2026-11-07
 
 ### Fixed
