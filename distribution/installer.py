@@ -20,6 +20,7 @@ if _DISTRIBUTION_DIR not in sys.path:
     sys.path.insert(0, _DISTRIBUTION_DIR)
 from native_launcher import apply as apply_native_launcher
 from native_launcher import plan as plan_native_launcher
+from macos_pm_compat import approved_sources as approved_macos_pm_sources
 
 MANIFEST = "distribution.json"
 RECEIPT = "plur1bus-install.json"
@@ -184,7 +185,7 @@ print(json.dumps({'fingerprint': hashlib.sha256(json.dumps(packages).encode()).h
     return json.loads(run_python(python, code))
 
 
-def run_pm_selection(home, profile_home, enabled, disabled, expected_config):
+def run_pm_selection(home, profile_home, enabled, disabled, expected_config, require_volume_sync=False):
     """Ask Hermes PM to publish one profile selection and its dependency generation."""
     project = home / "hermes-agent"
     python = interpreter(home)
@@ -198,8 +199,11 @@ def run_pm_selection(home, profile_home, enabled, disabled, expected_config):
     )
     environment = dict(os.environ)
     environment["HERMES_HOME"] = str(home)
+    command = [str(python), "-I", "-X", "utf8", "-c", code, str(project)]
+    if sys.platform == "darwin":
+        command = macos_pm_command(python, project, "admit", require_volume_sync)
     try:
-        result = subprocess.run([str(python), "-I", "-X", "utf8", "-c", code, str(project)],
+        result = subprocess.run(command,
                                 input=json.dumps(selection), capture_output=True, text=True,
                                 encoding="utf-8", env=environment, timeout=1800)
     except subprocess.TimeoutExpired as error:
@@ -447,20 +451,16 @@ print(json.dumps([name for name, home in homes.items()
         raise ValueError("Hermes gateway still running for " + ", ".join(running) + "; stop it before installing")
 
 
-def probe_macos_pm_sync(home, python, generation):
+def macos_pm_command(python, project, mode, require_volume_sync, *args):
+    """Run the bundled helper in the isolated Hermes interpreter."""
+    helper = Path(_DISTRIBUTION_DIR) / "macos_pm_compat.py"
+    return [str(python), "-I", "-B", "-X", "utf8", str(helper), mode, str(project),
+            "required" if require_volume_sync else "auto", *map(str, args)]
+
+
+def probe_macos_pm_sync(home, python, generation, require_volume_sync=False):
     """Check the host's flush barrier before staging any install files."""
-    code = """
-import inspect, sys
-sys.path.insert(0, sys.argv[1])
-from pm import environments
-flush = getattr(environments, 'flush_before_selecting', None)
-if flush is not None:
-    if inspect.signature(flush).parameters:
-        flush(sys.argv[2])
-    else:
-        flush()
-"""
-    command = [str(python), "-I", "-B", "-c", code, str(home / "hermes-agent"), str(generation)]
+    command = macos_pm_command(python, home / "hermes-agent", "probe", require_volume_sync, generation)
     # A macOS syscall can stay blocked in the kernel even after a signal.
     # Use no pipes and never wait again after timing out this read-only probe.
     probe = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1158,6 +1158,9 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
         if result["bootstrapPip"]:
             result["effects"] += " Confirmed apply first bootstraps pip in this venv using Python's bundled ensurepip."
         if torch["action"] == "pm-managed":
+            if sys.platform == "darwin" and activate and approved_macos_pm_sources(home / "hermes-agent") is not None:
+                result["macOSPMVolumeSync"] = True
+                result["warnings"].append("macOS: This install uses volume-only synchronization for the verified Hermes 0.23.0 PM files.")
             if not activate and dependencies:
                 result["warnings"].append("Python dependencies remain deferred until Hermes PM admits the plugins.")
             result["effects"] += " Hermes PM owns the dependency graph and publishes a replacement generation; restart Hermes after admission."
@@ -1195,6 +1198,8 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
     journal = {"schema": 1, "status": "preparing", "home": str(home), "files": {}, "version": plan["version"],
                "pipChanged": False, "pmSelections": [],
                "torch": None if plan["torch"] is None else dict(plan["torch"])}
+    if plan.get("macOSPMVolumeSync"):
+        journal["macOSPMVolumeSync"] = True
     try:
         # Recheck under the lock, including every target and configuration digest.
         if plan_install(bundle, home, plan["profiles"], python_arg, plan["activate"], plan["dependencies"], plan["desktopOnly"]) != plan:
@@ -1204,7 +1209,7 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
                 raise ValueError("Hermes PM has an unfinished publication; let it finish or recover it with Hermes PM before retrying")
             require_stopped_pm_gateways(home, plan["python"])
             if sys.platform == "darwin":
-                probe_macos_pm_sync(home, plan["python"], pm_selected_environment(home))
+                probe_macos_pm_sync(home, plan["python"], pm_selected_environment(home), plan.get("macOSPMVolumeSync", False))
         if progress is not None:
             progress({"phase": "preparing"})
         backups = resolve_inside(home, "plur1bus-install-backups")
@@ -1408,7 +1413,8 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
             record()
             if progress is not None:
                 progress({"phase": "admitting-pm-profile", "profile": name, "completed": index, "total": len(pm_requests)})
-            run_pm_selection(home, request["target"], request["enabled"], request["disabled"], digest(before))
+            admission_options = {"require_volume_sync": True} if plan.get("macOSPMVolumeSync") else {}
+            run_pm_selection(home, request["target"], request["enabled"], request["disabled"], digest(before), **admission_options)
             config_path = resolve_inside(request["target"], "config.yaml")
             config_after_selection = config_path.read_bytes()
             selection_record = next(row for row in journal["pmSelections"] if row["profile"] == name)

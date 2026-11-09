@@ -7,7 +7,7 @@ Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
 `Install PLUR1BUS.command` in
 `/Applications/PLUR1BUS Installer`.
 
-Diese Anleitung beschreibt den Hermes-Installer **7.19.2-hermes.1**.
+Diese Anleitung beschreibt den Hermes-Installer **7.19.2-hermes.2**.
 Maßgeblich für die Verfügbarkeit sind
 die veröffentlichten Assets samt Prüfberichten unter dem passenden Release-Tag.
 Portable Archive und Python-Wheels sind die
@@ -132,6 +132,9 @@ Hermes-Installation. Bei PM-verwalteten Installationen prüft er vor dem Staging
 Gateway läuft oder Hermes noch einen Umgebungswechsel abschließt. Auf macOS
 prüft er zusätzlich, ob die Dateisystem-Synchronisierung von Hermes antwortet.
 Scheitert diese Vorprüfung, zeigt der Assistent den Grund in den Details an.
+Bei Hermes 0.23.0 verwendet die Installation auf macOS nach Prüfung der
+PM-Dateien die Volume-Synchronisierung für ihre Hermes-PM-Prozesse. Der
+Installer protokolliert diese Auswahl im Installationsjournal.
 Bei einer Unterbrechung während der Übernahme enthält das Backup-Journal das
 zuletzt begonnene Profil. Den dort dokumentierten Vorgang vor einem neuen Lauf
 prüfen und eine ausstehende Hermes-Veröffentlichung mit Hermes PM auflösen.
