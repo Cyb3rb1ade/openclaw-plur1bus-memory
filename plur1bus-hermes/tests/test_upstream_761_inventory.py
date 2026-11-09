@@ -72,6 +72,8 @@ class Upstream761InventoryTests(unittest.TestCase):
                             "plur1bus-hermes/src/plur1bus_hermes/inject_markers.py"})
         changed_715.add("plur1bus-hermes/src/plur1bus_hermes/dream_diary.py")
         changed_715.add("distribution/tests/test_directory_project.py")
+        # The 7.19.2-hermes.2 archive test verifies the bundled PM compatibility helper.
+        changed_715.add("distribution/tests/test_artifact_names.py")
         # The 7.19.2 port extends the native Obsidian importer. Its own tests
         # cover filtering, exact approval hashes and write/acknowledgement drift.
         changed_715.add("plur1bus-hermes/src/plur1bus_hermes/obsidian_sync.py")
