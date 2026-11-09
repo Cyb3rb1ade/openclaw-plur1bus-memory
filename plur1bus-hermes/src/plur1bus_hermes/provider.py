@@ -42,6 +42,7 @@ except ImportError:  # Older Hermes may have MemoryProvider but no status shape.
             self.glyph = glyph
 
 from .service import PLUR1BUS_SERVICE
+from .credentials import profile_secret
 from .runtime import Plur1busRuntime, validate_native_embedding_config
 from .namespaces import binding_from_scope, normalize_scope_context
 from .validation import ValidationError, normalize_text_payload, resolve_inside, safe_agent_id, safe_memory_id
@@ -199,7 +200,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             return False
         return provider in {"local-transformers", "local-onnx", "omlx", "openai-compatible"} or bool(
             embedding.get("apiKey")
-            or os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")))
+            or profile_secret(str(embedding.get("apiKeyEnv") or "PLUR1BUS_EMBEDDING_API_KEY"), self._hermes_home)
         )
 
     def unavailable_reason(self) -> str:
@@ -241,7 +242,7 @@ class Plur1busMemoryProvider(MemoryProvider):
             return "missing Python dependency: sentence-transformers"
         if provider not in {"local-transformers", "local-onnx", "omlx", "openai-compatible"} and not (
             embedding.get("apiKey")
-            or os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")))
+            or profile_secret(str(embedding.get("apiKeyEnv") or "PLUR1BUS_EMBEDDING_API_KEY"), self._hermes_home)
         ):
             return "embedding provider has no configured credentials"
         return "provider configuration is unavailable"
@@ -537,26 +538,21 @@ class Plur1busMemoryProvider(MemoryProvider):
         return []
 
     def write_config_fields(self, values: dict[str, Any], hermes_home: str) -> None:
-        """Save one reviewed setting through Hermes' authenticated provider route."""
-        from hermes_cli.config import load_config_readonly
+        """Validate the native form. Hermes stores the accepted secret."""
+        from .jev_chunk_decider import credential_status
         from .retrieval_admin import active_runtime_view
-        from .settings_admin import save_setting
 
-        if not values or values == {"reviewedSetting": None}:
+        if not values:
             return
-        change = values.get("reviewedSetting")
-        if (set(values) != {"reviewedSetting"} or not isinstance(change, dict)
-                or set(change) != {"profile", "identifier", "value", "revision"}
-                or not isinstance(change["identifier"], str) or not isinstance(change["revision"], str)):
-            raise ValueError("Ungültige PLUR1BUS-Einstellungsänderung.")
+        key = values.get("jevApiKey")
+        if (set(values) != {"jevApiKey"} or not isinstance(key, str)
+                or re.fullmatch(r"[!-~]{1,4096}", key) is None):
+            raise ValueError("Invalid Jev API key.")
         view = active_runtime_view()
-        if Path(hermes_home).resolve() != view.hermes_home.resolve() or change["profile"] != view.profile:
-            raise ValueError("Das PLUR1BUS-Profil hat sich geändert.")
-        memory = load_config_readonly().get("memory") or {}
-        if (not isinstance(memory, Mapping) or memory.get("provider") != "plur1bus"
-                or memory.get("memory_enabled", True) is not True):
-            raise ValueError("PLUR1BUS ist in diesem Profil nicht aktiv.")
-        save_setting(view, change["identifier"], change["value"], change["revision"])
+        if Path(hermes_home).resolve() != view.hermes_home.resolve():
+            raise ValueError("The PLUR1BUS profile changed.")
+        if not credential_status(view.config, hermes_home=view.hermes_home)["editable"]:
+            raise ValueError("This profile uses a custom Jev credential source.")
 
     def save_config(self, values: Mapping[str, Any], hermes_home: str, **kwargs: Any) -> None:
         del kwargs

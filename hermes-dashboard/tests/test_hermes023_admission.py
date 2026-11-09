@@ -30,7 +30,7 @@ def test_hosted_transport_reads_only_and_fails_closed_on_wrong_profile(tmp_path)
     from hermes_cli.plugin_host_http_auth import with_hosted_admission
 
     api, app, view = _fixture(tmp_path)
-    with patch("hermes_cli.profiles.get_active_profile_name", return_value="beta"), patch(
+    with patch("hermes_constants.profile_name_for_home", return_value="beta"), patch(
         "hermes_cli.config.load_config_readonly", return_value={"memory": {"provider": "plur1bus"}}
     ), patch.object(api, "_active_runtime_view", return_value=view), TestClient(
         with_hosted_admission(app, True)
@@ -65,7 +65,7 @@ def test_direct_verified_native_subject_can_review_only_its_own_profile(tmp_path
         return await call_next(request)
 
     with patch("hermes_constants.get_hermes_home", return_value=tmp_path), patch(
-        "hermes_cli.profiles.get_active_profile_name", return_value="beta"
+        "hermes_constants.profile_name_for_home", return_value="beta"
     ), patch.object(api, "_active_runtime_view", return_value=view), TestClient(app) as client:
         path = "/desktop/settings?expectedProfile=beta"
         settings = client.get(path).json()
@@ -91,7 +91,7 @@ def test_direct_verified_native_subject_can_review_only_its_own_profile(tmp_path
         assert client.get(path).status_code == 403
 
 
-def test_desktop_provider_config_saves_hosted_profile_settings(tmp_path, monkeypatch):
+def test_native_provider_schema_saves_a_profile_scoped_jev_key(tmp_path, monkeypatch):
     from agent.secret_scope import is_multiplex_active, set_multiplex_active
     from gateway.runtime_bootstrap import TicketStore
     from gateway.session_authorities import SessionAuthorities
@@ -149,41 +149,22 @@ def test_desktop_provider_config_saves_hosted_profile_settings(tmp_path, monkeyp
                 assert result.status_code == 200, result.text
                 return result.json()
 
-            def payload(identifier, value, settings, profile="beta"):
-                return {"values": {"reviewedSetting": json.dumps({
-                    "identifier": identifier, "value": value, "profile": profile,
-                    "revision": settings["revision"],
-                })}}
-
-            settings = get_settings()
-            assert settings["readOnly"] is True and settings["profile"] == "beta"
+            before_key = get_settings()
+            assert before_key["readOnly"] is True and before_key["profile"] == "beta"
+            assert before_key["jevCredentials"]["configured"] is False
             schema = client.get(config_path, headers=ticket())
             assert schema.status_code == 200, schema.text
-            assert [(field["key"], field["kind"]) for field in schema.json()["fields"]] == [("reviewedSetting", "json")]
-            command = payload("autoCapture", False, settings)
-            assert client.put(config_path, json=command).status_code == 401
-            assert client.put(config_path, json=command, headers=ticket(root)).status_code == 403
-            assert client.put(config_path, json=payload("autoCapture", False, settings, "default"),
-                              headers=ticket()).status_code == 400
-            assert beta_config.read_bytes() == original
-            saved = client.put(config_path, json=command, headers=ticket())
-            assert saved.status_code == 200, saved.text
-            assert client.put(config_path, json=command, headers=ticket()).status_code == 400
-            latest = get_settings()
-            saved = client.put(config_path, json=payload("capture.mode", "geteilt", latest), headers=ticket())
-            assert saved.status_code == 200, saved.text
-            before_key = get_settings()
-            current = {item["id"]: item["value"] for item in before_key["settings"]}
-            assert current["autoCapture"] is False and current["capture.mode"] == "geteilt"
-            env_path = "/api/env?profile=beta"
+            assert [(field["key"], field["kind"]) for field in schema.json()["fields"]] == [("jevApiKey", "secret")]
+            assert client.get(settings_path, headers={"X-Hermes-Session-Token": "forged"}).status_code == 401
             key = "fixture-jev-credential"
-            secret = {"key": "TYPESAFE_API_KEY", "value": key}
-            assert before_key["jevCredentials"]["configured"] is False
-            assert client.put(env_path, json=secret).status_code == 401
-            assert client.put(env_path, json=secret, headers=ticket(root)).status_code == 403
+            secret = {"values": {"jevApiKey": key}}
+            assert client.put(config_path, json=secret).status_code == 401
+            assert client.put(config_path, json=secret, headers=ticket(root)).status_code == 403
+            assert client.put(config_path, json={"values": {"jevApiKey": "bad key"}},
+                              headers=ticket()).status_code == 400
             assert not (beta / ".env").exists()
-            saved = client.put(env_path, json=secret, headers=ticket())
-            assert saved.status_code == 200 and saved.json()["ok"] is True
+            saved = client.put(config_path, json=secret, headers=ticket())
+            assert saved.status_code == 200 and saved.json()["ok"] is True, saved.text
             assert key not in saved.text
             latest = get_settings()
             assert latest["jevCredentials"] == {
@@ -191,7 +172,10 @@ def test_desktop_provider_config_saves_hosted_profile_settings(tmp_path, monkeyp
             }
             assert key not in json.dumps(latest)
             assert latest["revision"] == before_key["revision"]
-            assert next(item["value"] for item in latest["settings"] if item["id"] == "capture.mode") == "geteilt"
+            assert {item["id"]: item["value"] for item in latest["settings"]} == {
+                item["id"]: item["value"] for item in before_key["settings"]
+            }
+            assert beta_config.read_bytes() == original
             assert key in (beta / ".env").read_text(encoding="utf-8")
             assert not (root / ".env").exists()
             # Capture runs outside the request and must use the same profile's key.

@@ -26,7 +26,7 @@ class Upstream760InventoryTests(unittest.TestCase):
         successor_paths = set(subprocess.check_output(
             ["git", "diff", "--name-only", TARGET, successor], cwd=ROOT, text=True).splitlines())
         for path in runtime:
-            expected = "v7.19.2"
+            expected = "v7.19.3"
             subprocess.run(["git", "diff", "--exit-code", expected, "--", path], cwd=ROOT, check=True)
         upstream = subprocess.check_output(["git", "show", TARGET + ":" + whitespace_only], cwd=ROOT, text=True)
         self.assertEqual((ROOT / whitespace_only).read_text().rstrip(), upstream.rstrip())

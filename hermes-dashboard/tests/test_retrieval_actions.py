@@ -23,9 +23,9 @@ class RetrievalActionsTests(unittest.TestCase):
                 config={"embedding": {"provider": "local-onnx", "model": "existing", "dimensions": 768}},
                 scope_binding=binding_from_scope("bernhardine"), _writer_route=SimpleNamespace(path=home / "data/lancedb/bernhardine"))
             headers = {"X-Hermes-Session-Token": "test-host-token"}
-            with patch("hermes_cli.web_server._SESSION_TOKEN", "test-host-token"), patch.object(
+            with patch.object(
                 api, "_active_runtime_view", return_value=view
-            ), patch.object(api._retrieval_executor, "submit") as submit, TestClient(app) as client:
+            ), patch.object(api._retrieval_executor, "submit") as submit, TestClient(app, client=("127.0.0.1", 50000)) as client:
                 url = "/desktop/retrieval"
                 payload = {"kind": "reranker", "target": {"provider": "disabled"}}
                 self.assertEqual(client.post(url + "/preview", json=payload).status_code, 401)
@@ -79,8 +79,8 @@ class RetrievalActionsTests(unittest.TestCase):
                       "revision": "6f5ff65298512715a1e669753bc754d2bc8f367b", "modelDir": str(home / "models/bge"),
                       "localFilesOnly": True, "maxTokens": 512, "batchSize": 8}
             headers = {"X-Hermes-Session-Token": "test-host-token"}
-            with patch("hermes_cli.web_server._SESSION_TOKEN", "test-host-token"), patch.object(api, "_active_runtime_view", return_value=view), \
-                 patch.object(api._retrieval_executor, "submit") as submit, TestClient(app) as client:
+            with patch.object(api, "_active_runtime_view", return_value=view), \
+                 patch.object(api._retrieval_executor, "submit") as submit, TestClient(app, client=("127.0.0.1", 50000)) as client:
                 preview = client.post("/desktop/retrieval/preview", json={"kind": "reranker-prepare", "target": target}, headers=headers)
                 self.assertEqual(preview.status_code, 200)
                 self.assertEqual(list(home.iterdir()), [], "preparation review must not download or write")

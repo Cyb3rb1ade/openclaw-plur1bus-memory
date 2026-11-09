@@ -29,7 +29,7 @@ def client_runtime(tmp_path):
         yield runtime, view
     app = FastAPI()
     app.include_router(api.router)
-    with patch("hermes_cli.web_server._SESSION_TOKEN", "test-host-token"), patch.object(api, "_runtime_lease", lease), TestClient(app) as client:
+    with patch.object(api, "_runtime_lease", lease), TestClient(app, client=("127.0.0.1", 50000)) as client:
         yield client, runtime, note, view
     runtime.shutdown()
 

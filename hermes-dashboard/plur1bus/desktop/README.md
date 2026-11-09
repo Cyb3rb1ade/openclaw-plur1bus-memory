@@ -7,8 +7,8 @@ existing dashboard backend. It does not patch or rebuild Hermes itself.
 Open **PLUR1BUS** from the left navigation, status bar, or command palette. On
 current Hermes Desktop, the sidebar entry targets the contributed `/plur1bus`
 route; compatible older hosts fall back to a native workspace. Requests use
-the host's authenticated, profile-aware Electron bridge, not a hardcoded port
-or separate web server. Runtime-plugin discovery must be supported by the
+Hermes’ authenticated, profile-aware `ctx.rest` transport for the PLUR1BUS
+route namespace. Runtime-plugin discovery must be supported by the
 installed Hermes Desktop version.
 
 The view includes:
@@ -99,26 +99,23 @@ This distributes the UI without changing other profiles' memory-provider
 configuration. After creating a profile, repeat this option or install with
 `--desktop --hermes-home /absolute/root/home/profiles/name` for that profile.
 
-Requests are pinned to the connection/profile descriptor from `host.profileRoutes()`
-via Electron's authenticated `HermesApiRequest` bridge. The ambient `ctx.rest`
-does not provide an explicit route option in this Hermes version and is not used.
-The backend must confirm profile-binding protocol v1, and asserts `expectedProfile`
-before any data read or action. It never uses this value to select an arbitrary
-home. Old/mismatched backends and unavailable/disabled providers fail closed;
-there is no default-partition fallback. Shared remote backends must themselves
-support the selected profile scope; a mismatched shared backend is rejected.
+The plugin matches the selected connection and profile with
+`host.profileRoutes()`. The plugin’s REST endpoint must confirm the routed
+profile, and subsequent requests include `expectedProfile` as an assertion.
+The backend derives the actual home from the host and never selects it from
+a client-supplied value. On hosts with plugin RPC support, regular settings
+can also use the session-controlled `host.requestProfile()` route for an
+authenticated local secondary profile. Otherwise hosted profiles with no
+write identity stay read-only.
 
-Current Hermes uses its `sidebar.nav` contribution with the registered
-`/plur1bus` route. Requests bind to the connection/profile descriptor from
-`host.profileRoutes()` through Electron's authenticated `HermesApiRequest`
-bridge. The backend must confirm profile-binding protocol v1 before any data
-request; the expected profile is an assertion, never a selector for an
-arbitrary home.
+Save an optional Jev API key in **Hermes Settings → Memory → PLUR1BUS**. To
+enable Jev, select **Automatic (Jev)** under **Storage mode** on the PLUR1BUS
+page. This lets Jev classify eligible new capture text at `api.typesafe.ai`.
 
 Memory navigation requires a successful, profile-bound capability response
 reporting `memoryProviderEnabled: true`. An unavailable route (including HTTP
 404 when a shared backend did not mount the plugin router) is unknown, not an
-activation grant. The independent **PLUR1BUS: Desktop-Kompatibilität prüfen**
+activation grant. The independent **PLUR1BUS: Check Desktop compatibility**
 command remains discoverable even when memory navigation is hidden. Only a
 previously confirmed active entry for that exact connection/profile may survive
 a transient probe failure; memory data and actions remain fail-closed until

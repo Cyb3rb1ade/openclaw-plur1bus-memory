@@ -1,6 +1,6 @@
-"""Hermes provider-owned configuration for reviewed PLUR1BUS settings."""
+"""The optional Jev credential is stored by Hermes' native provider form."""
 
-from plugins.memory.config_schema import KIND_JSON, STORAGE_PROVIDER, ProviderConfigSchema, ProviderField
+from plugins.memory.config_schema import KIND_SECRET, STORAGE_PROVIDER, ProviderConfigSchema, ProviderField
 
 
 CONFIG_SCHEMA = ProviderConfigSchema(
@@ -8,9 +8,10 @@ CONFIG_SCHEMA = ProviderConfigSchema(
     label="PLUR1BUS",
     storage=STORAGE_PROVIDER,
     fields=(ProviderField(
-        key="reviewedSetting",
-        label="PLUR1BUS-Einstellungen",
-        kind=KIND_JSON,
-        description="Öffne PLUR1BUS in der Seitenleiste, um Änderungen zu prüfen und zu speichern.",
+        key="jevApiKey",
+        label="Jev API key",
+        kind=KIND_SECRET,
+        env_key="TYPESAFE_API_KEY",
+        description="Optional. In PLUR1BUS, choose Automatic (Jev) to let Jev decide how eligible captures are stored.",
     ),),
 )

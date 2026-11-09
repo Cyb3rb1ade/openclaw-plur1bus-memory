@@ -21,7 +21,7 @@ def test_numeric_recall_settings_preserve_integer_through_review_and_save(tmp_pa
     app = FastAPI()
     app.include_router(api.router)
     headers = {"X-Hermes-Session-Token": "test-token"}
-    with patch("hermes_cli.web_server._SESSION_TOKEN", "test-token"), patch.object(api, "_active_runtime_view", return_value=view), TestClient(app) as client:
+    with patch.object(api, "_active_runtime_view", return_value=view), TestClient(app, client=("127.0.0.1", 50000)) as client:
         current = client.get("/desktop/settings", headers=headers).json()
         body = {"identifier": "recall.candidateTopK", "value": 60, "revision": current["revision"]}
         reviewed = client.post("/desktop/settings/preview", json=body, headers=headers)
@@ -45,7 +45,7 @@ def test_settings_authentication_review_and_replay(tmp_path):
     app = FastAPI()
     app.include_router(api.router)
     headers = {"X-Hermes-Session-Token": "test-token", "Origin": "http://testserver"}
-    with patch("hermes_cli.web_server._SESSION_TOKEN", "test-token"), patch.object(api, "_active_runtime_view", return_value=view), TestClient(app) as client:
+    with patch.object(api, "_active_runtime_view", return_value=view), TestClient(app, client=("127.0.0.1", 50000)) as client:
         assert client.get("/settings").status_code == 401
         projection = client.get("/settings", headers=headers)
         assert "private-secret" not in projection.text

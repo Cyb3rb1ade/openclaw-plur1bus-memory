@@ -6,7 +6,7 @@ const state = { profile: 'alpha', connection: 'local' };
 const values = {
   host: { state: { profile: { get: () => state.profile, subscribe: fn => { fn(); return () => {}; } },
     connectionId: { get: () => state.connection, subscribe: fn => { fn(); return () => {}; } } }, navigate() {} },
-  useValue: () => undefined,
+  useValue: atom => atom.get(),
   STATUSBAR_AREAS: { left: 'statusBar.left' }, PALETTE_AREA: 'palette', ROUTES_AREA: 'routes', SIDEBAR_NAV_AREA: 'sidebar.nav',
 };
 const sdk = new vm.SyntheticModule(Object.keys(values), function () {
@@ -16,11 +16,11 @@ let hookValues = [], hookCursor = 0;
 const react = new vm.SyntheticModule(['default'], function () {
   this.setExport('default', { createElement: (...args) => args,
     useState: initial => [hookCursor < hookValues.length ? hookValues[hookCursor++] : initial, () => {}],
-    useRef: value => ({ current: value }), useEffect() {} });
+    useRef: value => ({ current: value }), useMemo: fn => fn(), useEffect() {} });
 });
 // Execute the actual distributed ESM, with only its documented host imports injected.
 const source = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch, saveJevKey };');
+const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch };');
 await plugin.link(name => {
   if (name === 'react') return react;
   if (name === '@hermes/plugin-sdk') return sdk;
@@ -55,8 +55,8 @@ hookValues = [{ readOnly: true, settings: [{ id: 'autoCapture', value: true, cho
 hookCursor = 0;
 const hostedSettings = plugin.namespace.FeatureSettings({ rest: async () => ({}) });
 assert.equal(elements(hostedSettings, 'input').find(input => input[1].role === 'switch')[1].disabled, true);
-assert.match(plainText(hostedSettings), /Lesend geöffnet/);
-hookValues = [{ providerConfigWrite: true, readOnly: false, settings: [
+assert.match(plainText(hostedSettings), /allows read access/);
+hookValues = [{ settingsRpcWrite: true, readOnly: false, settings: [
   { id: 'capture.mode', label: 'Speicherweise', value: 'beides', choices: ['beides', 'geteilt'],
     choiceLabels: { geteilt: 'Segmente' }, group: 'Speicherung' },
 ] }, { identifier: 'capture.mode', value: 'geteilt' }];
@@ -64,11 +64,11 @@ hookCursor = 0;
 const editable = plugin.namespace.FeatureSettings({ rest: async () => ({}) });
 const settingRow = elements(editable, 'div').find(row => row[1]?.className === 'pb-setting-row');
 assert.equal(elements(settingRow, 'select')[0][1].disabled, false);
-assert.match(plainText(settingRow), /Speicherweise: Segmente.*Speichern bestätigen/);
+assert.match(plainText(settingRow), /Speicherweise: Segmente.*Confirm/);
 hookValues = ['settings', { loading: false, status: { version: '7.15.4' }, proposals: [] }];
 hookCursor = 0;
 const pageTree = plugin.namespace.Partition({ rest: async () => ({}), profile: 'alpha' });
-assert.match(plainText(pageTree), /Einstellungen.*Modelle & Speicher.*Erinnerungen.*Diagnose/);
+assert.match(plainText(pageTree), /Settings.*Models & Storage.*Memories.*Diagnostics/);
 assert.equal(pageTree.at(-1)[0], 'footer');
 assert.match(plainText(pageTree.at(-1)), /PLUR1BUS 7.15.4/);
 const { primaryAgentRows } = plugin.namespace;
@@ -81,122 +81,110 @@ assert.equal(primaryAgentRows({ ...counts, cards: { byPrimaryAgent: [{ id: 'alph
 assert.equal(primaryAgentRows({ ...counts, scopeType: 'chat' }).length, 0, 'shared rows are not private agent cards');
 assert.equal(primaryAgentRows({ ...counts, cards: undefined }).length, 0, 'legacy status does not invent counts');
 const healthUnknown = plugin.namespace.HealthWatch({ status: {} });
-assert.match(plainText(healthUnknown), /Status unbekannt/);
+assert.match(plainText(healthUnknown), /Status unknown/);
 const healthFailure = plugin.namespace.HealthWatch({ status: { health: { status: 'degraded', windowHours: 24,
   llm: { state: 'degraded', failures: [
     { feature: 'capture', hint: 'authority-expired', errorClass: 'PermissionError', count: 3, lastAt: 1791030000 },
   ] } } } });
-assert.match(plainText(healthFailure), /3 fehlgeschlagene Aufrufe/);
-assert.match(plainText(healthFailure), /Profilberechtigung war während des Aufrufs nicht mehr aktiv/);
+assert.match(plainText(healthFailure), /3 failed requests/);
+assert.match(plainText(healthFailure), /The profile authorization expired during the request/);
 const { createScopedReader } = plugin.namespace;
 const { createScopedRequest } = plugin.namespace;
 const { createProfileTransport } = plugin.namespace;
 const { retrievalDefaults } = plugin.namespace;
 const { checkDesktopCompatibility } = plugin.namespace;
-const settingsCalls = [];
-let routeMode = 'local';
-const hostedSettingsTransport = createProfileTransport(async request => {
-  settingsCalls.push(request);
-  if (request.path.endsWith('/desktop/capabilities')) return {
-    profile: 'alpha', profileBinding: 1, memoryProviderEnabled: true, hostedReadOnly: true,
-  };
-  if (request.path.startsWith('/api/memory/providers/plur1bus/config')) return request.method === 'PUT'
-    ? { ok: true } : { fields: [{ key: 'reviewedSetting', kind: 'json' }] };
-  return { readOnly: true, profile: 'alpha' };
-}, async () => [{ connectionId: 'local', profile: 'alpha', targetProfile: 'alpha', mode: routeMode }],
-{ connection: 'local', profile: 'alpha' }, () => 'alpha', 'alpha');
-assert.equal((await hostedSettingsTransport('/desktop/settings')).providerConfigWrite, true);
+const settingsCalls = [], profileCalls = [];
+const profileRoute = { connectionId: 'local', profile: 'alpha', targetProfile: 'alpha', mode: 'local' };
+const compatibleHost = { openWorkspace() {}, profileRoutes: async () => [profileRoute],
+  async requestProfile(route, method, body) {
+    profileCalls.push({ route, method, body });
+    return body.identifier ? { ok: true } : { profile: 'alpha', writable: true };
+  } };
+const compatibilityRest = async (path, options) => {
+  settingsCalls.push({ path, options });
+  return path === '/desktop/capabilities'
+    ? { profile: 'alpha', profileBinding: 1, memoryProviderEnabled: true, hostedReadOnly: true }
+    : { readOnly: true, profile: 'alpha' };
+};
+const owner = { connection: 'local', profile: 'alpha' };
+const identityAlpha = () => '["local","alpha"]';
+const hostedSettingsTransport = createProfileTransport(compatibilityRest, compatibleHost, owner, identityAlpha, identityAlpha());
+assert.equal((await hostedSettingsTransport('/desktop/settings?language=en')).settingsRpcWrite, true);
 await hostedSettingsTransport('/desktop/settings', {
-  method: 'PUT', body: { identifier: 'capture.mode', value: 'geteilt', revision: 'r' },
+  method: 'PUT', body: { identifier: 'capture.mode', value: 'geteilt', revision: 'r', key: 'not-a-field' },
 });
-assert.equal(settingsCalls.at(-1).path, '/api/memory/providers/plur1bus/config?surface=declared&profile=alpha');
-assert.deepEqual(JSON.parse(settingsCalls.at(-1).body.values.reviewedSetting),
-  { identifier: 'capture.mode', value: 'geteilt', revision: 'r', profile: 'alpha' });
-assert.equal((await hostedSettingsTransport('/desktop/settings')).localCredentialWrite, true);
-const saveJevKey = value => hostedSettingsTransport('/desktop/settings/jev-key',
-  { method: 'PUT', body: { value, key: 'UNRELATED_KEY', profile: 'other' } });
-await saveJevKey('fixture-key');
-assert.equal(settingsCalls.at(-1).path, '/api/env?profile=alpha');
-assert.deepEqual(JSON.parse(JSON.stringify(settingsCalls.at(-1).body)),
-  { key: 'TYPESAFE_API_KEY', value: 'fixture-key' });
-await assert.rejects(saveJevKey('fixture-key\n'));
-assert.match(settingsCalls.at(-1).path, /\/desktop\/capabilities$/);
-routeMode = 'remote';
-await assert.rejects(saveJevKey('fixture-key'));
-assert.match(settingsCalls.at(-1).path, /\/desktop\/capabilities$/);
-assert.equal((await hostedSettingsTransport('/desktop/settings')).readOnly, true);
-assert.match(settingsCalls.at(-1).path, /^\/api\/plugins\/plur1bus\/desktop\/settings/);
-const { saveJevKey: saveAndSelectJev } = plugin.namespace;
-const segmented = { providerConfigWrite: true, revision: 'r1',
-  jevCredentials: { configured: true, editable: true }, settings: [{ id: 'capture.mode', value: 'geteilt' }] };
-let jevRequests = [];
-let keyResponse = { error: true };
-let modeResponse = { value: { ok: true } };
-const jevRequest = { async run(path, options) {
-  jevRequests.push({ path, options });
-  return path.endsWith('/jev-key') ? keyResponse : modeResponse;
-} };
-assert.equal(await saveAndSelectJev(jevRequest, segmented, 'fixture', async () => segmented), 'key-rejected');
-assert.equal(jevRequests.length, 1);
-keyResponse = { value: { ok: true } };
-jevRequests = [];
-assert.equal(await saveAndSelectJev(jevRequest, segmented, 'fixture', async () => ({ ...segmented, revision: 'r2' })), 'mode-unconfirmed');
-assert.equal(jevRequests.length, 1, 'a concurrent settings update is never overwritten');
-jevRequests = [];
-let reloads = 0;
-assert.equal(await saveAndSelectJev(jevRequest, segmented, 'fixture', async () => ++reloads === 1
-  ? segmented : { ...segmented, settings: [{ id: 'capture.mode', value: 'automatisch' }] }), 'selected');
-assert.deepEqual(jevRequests.map(call => call.path), ['/desktop/settings/jev-key', '/desktop/settings']);
-assert.equal(jevRequests[1].options.body.value, 'automatisch');
-assert.equal(reloads, 2, 'the stored mode is read back');
-const compatibleHost = { openWorkspace() {}, profileRoutes: async () => [
-  { connectionId: 'local', profile: 'alpha', targetProfile: 'alpha' }] };
-let compatibilityCalls = [];
-const compatibilityBridge = { api: async req => {
-  compatibilityCalls.push(req);
-  return { profile: 'alpha', profileBinding: 1, memoryProviderEnabled: true };
-} };
-const compatibility = await checkDesktopCompatibility(compatibleHost, compatibilityBridge, () => '["local","alpha"]');
+assert.deepEqual(JSON.parse(JSON.stringify(profileCalls.at(-1))), {
+  route: profileRoute, method: 'plugin.plur1bus.settings',
+  body: { identifier: 'capture.mode', value: 'geteilt', revision: 'r', expectedProfile: 'alpha' },
+});
+assert.ok(settingsCalls.some(({ path }) => path === '/desktop/settings?language=en&expectedProfile=alpha'));
+assert.ok(settingsCalls.every(({ path }) => path.startsWith('/desktop/')), 'SDK calls stay in plugin namespace');
+const remote = { ...compatibleHost, profileRoutes: async () => [{ ...profileRoute, mode: 'remote' }] };
+const remoteTransport = createProfileTransport(compatibilityRest, remote, owner, identityAlpha, identityAlpha());
+assert.equal((await remoteTransport('/desktop/settings')).readOnly, true);
+assert.equal(profileCalls.length, 2);
+const compatibility = await checkDesktopCompatibility(compatibleHost, compatibilityRest, identityAlpha);
 assert.equal(compatibility.status, 'verified');
-assert.equal((await checkDesktopCompatibility({ profileRoutes: compatibleHost.profileRoutes }, compatibilityBridge,
-  () => '["local","alpha"]')).status, 'verified', 'route binding does not require openWorkspace');
-assert.equal(compatibility.sidebar, 'unknown', 'profile handshake does not prove host sidebar patch');
-assert.equal(compatibilityCalls.length, 2);
-assert.ok(compatibilityCalls[0].path.endsWith('/desktop/capabilities'));
-assert.equal(compatibilityCalls[0].method, undefined, 'startup check is read-only');
-assert.equal((await checkDesktopCompatibility({}, compatibilityBridge, () => '["local","alpha"]')).status, 'unsupported');
-assert.equal(compatibilityCalls.length, 2, 'missing host API must not dispatch');
-const mismatch = await checkDesktopCompatibility(compatibleHost, { api: async () => ({ profile: 'beta', profileBinding: 1 }) }, () => '["local","alpha"]');
+assert.equal((await checkDesktopCompatibility({ profileRoutes: compatibleHost.profileRoutes }, compatibilityRest,
+  identityAlpha)).status, 'verified', 'route binding does not require openWorkspace');
+assert.equal(compatibility.sidebar, 'unknown', 'profile handshake does not prove host sidebar support');
+assert.equal(settingsCalls.at(-1).path, '/desktop/capabilities');
+assert.equal(settingsCalls.at(-1).options.method, undefined, 'startup check is read-only');
+const previousCount = settingsCalls.length;
+assert.equal((await checkDesktopCompatibility({}, compatibilityRest, identityAlpha)).status, 'unsupported');
+assert.equal(settingsCalls.length, previousCount, 'missing host API must not dispatch');
+const mismatch = await checkDesktopCompatibility(compatibleHost, async () => ({ profile: 'beta', profileBinding: 1 }), identityAlpha);
 assert.equal(mismatch.status, 'blocked');
 assert.equal(mismatch.enabled, null);
-const inactive = await checkDesktopCompatibility(compatibleHost, { api: async () => ({ profile: 'alpha', profileBinding: 1, memoryProviderEnabled: false }) }, () => '["local","alpha"]');
+const inactive = await checkDesktopCompatibility(compatibleHost,
+  async () => ({ profile: 'alpha', profileBinding: 1, memoryProviderEnabled: false }), identityAlpha);
 assert.equal(inactive.enabled, false);
-assert.match(plugin.namespace.compatibilityActivationMessage(inactive), /Sidebar- und Statusleisten-Eintrag ausgeblendet/);
-assert.match(plugin.namespace.compatibilityActivationMessage({ status: 'verified', enabled: null }), /nicht bestätigt/);
+assert.match(plugin.namespace.compatibilityActivationMessage(inactive), /sidebar and status bar entries/);
+assert.match(plugin.namespace.compatibilityActivationMessage({ status: 'verified', enabled: null }), /has not confirmed/);
+
+// Exercise the actual registration and route render with only the scoped SDK context.
+values.host.profileRoutes = compatibleHost.profileRoutes;
+let uiLocale = 'en', bundles, registered = [], routeDisposers = [];
+plugin.namespace.default.register({
+  rest: compatibilityRest,
+  registerMany: records => { registered.push(...records); return () => {}; },
+  onDispose: cleanup => { routeDisposers.push(cleanup); },
+  i18n: { register: copy => { bundles = copy; }, t: key => bundles[uiLocale][key] },
+});
+try {
+  const route = registered.find(entry => entry.id === 'page');
+  const [Page] = route.render();
+  const [, props] = Page();
+  assert.equal((await props.rest('/desktop/capabilities')).profile, 'alpha');
+  uiLocale = 'de';
+  assert.match(plugin.namespace.compatibilityActivationMessage(inactive), /Sidebar- und Statusleisten-Eintrag ausgeblendet/);
+} finally {
+  routeDisposers.reverse().forEach(dispose => dispose());
+}
 
 // A shared backend may not have mounted the PLUR1BUS router at startup. Its
 // 404 is not proof that this selected profile disabled the provider, but an
 // unknown profile must not receive memory navigation. A prior verified true
 // may be retained only for the same identity during this transient failure.
 let missingApiCalls = [];
-const missingBackendApi = async request => {
-  missingApiCalls.push(request.path);
+const missingBackendApi = async path => {
+  missingApiCalls.push(path);
   throw Object.assign(new Error('HTTP 404 Not Found'), { status: 404 });
 };
-const missingApiTransport = createProfileTransport(missingBackendApi, compatibleHost.profileRoutes,
+const missingApiTransport = createProfileTransport(missingBackendApi, compatibleHost,
   { connection: 'local', profile: 'alpha' }, () => '["local","alpha"]', '["local","alpha"]');
-const missingBackend = await checkDesktopCompatibility(compatibleHost, { api: missingBackendApi },
+const missingBackend = await checkDesktopCompatibility(compatibleHost, missingBackendApi,
   () => '["local","alpha"]');
 assert.equal(missingBackend.status, 'blocked');
 assert.equal(missingBackend.enabled, null, '404 means activation is unknown, not disabled');
-assert.match(missingBackend.message, /API ist auf dieser Backend-Route nicht verfügbar/);
+assert.match(missingBackend.message, /unavailable on this profile connection/);
 assert.doesNotMatch(missingBackend.message, /404|Not Found/);
-assert.deepEqual(missingApiCalls, ['/api/plugins/plur1bus/desktop/capabilities'],
+assert.deepEqual(missingApiCalls, ['/desktop/capabilities'],
   'failed capability handshake never requests profile data');
-await assert.rejects(missingApiTransport('/status'), /API ist auf dieser Backend-Route nicht verfügbar/);
+await assert.rejects(missingApiTransport('/status'), /unavailable on this profile connection/);
 assert.deepEqual(missingApiCalls, [
-  '/api/plugins/plur1bus/desktop/capabilities',
-  '/api/plugins/plur1bus/desktop/capabilities',
+  '/desktop/capabilities',
+  '/desktop/capabilities',
 ], 'a missing backend route prevents the subsequent status request');
 
 let currentNavProbe = true, missingNavStates = [];
@@ -219,13 +207,13 @@ unknownNavVisibility.dispose();
 // Even a direct/stale page mount cannot read data once the selected profile's
 // authenticated capability response explicitly says its provider is off.
 let disabledCalls = [];
-const disabledTransport = createProfileTransport(async request => {
-  disabledCalls.push(request.path);
+const disabledTransport = createProfileTransport(async path => {
+  disabledCalls.push(path);
   return { profileBinding: 1, profile: 'alpha', memoryProviderEnabled: false };
-}, compatibleHost.profileRoutes, { connection: 'local', profile: 'alpha' },
+}, compatibleHost, { connection: 'local', profile: 'alpha' },
 () => '["local","alpha"]', '["local","alpha"]');
-await assert.rejects(disabledTransport('/status'), /not as an active Memory-Provider|nicht als aktiver Memory-Provider/);
-assert.deepEqual(disabledCalls, ['/api/plugins/plur1bus/desktop/capabilities'],
+await assert.rejects(disabledTransport('/status'), /not the active memory provider/);
+assert.deepEqual(disabledCalls, ['/desktop/capabilities'],
   'explicitly disabled profile cannot dispatch data requests');
 assert.equal(retrievalDefaults('local-onnx', 'embedding').licenseAccepted, false);
 assert.equal(retrievalDefaults('local-onnx', 'embedding').dimensions, 768);
@@ -234,21 +222,18 @@ assert.equal(retrievalDefaults('local-transformers', 'embedding').localFilesOnly
 assert.equal(retrievalDefaults('openai-compatible', 'embedding').model, '');
 assert.equal(retrievalDefaults('openai-compatible', 'embedding').apiKey, undefined);
 
-// The ambient SDK transport can lag the visible profile. Pin Electron routing
-// explicitly and require the backend's profile-binding protocol before any data.
+// The ambient SDK transport can lag the visible profile. Require the
+// backend's profile-binding protocol before any data request.
 let selected = 'local:bernhardine', wire = [], resolveWire;
-const pinned = createProfileTransport(async request => {
-  wire.push(request);
-  assert.deepEqual(Object.keys(request).sort(), ['body', 'connectionId', 'method', 'path', 'profile', 'timeoutMs'].sort(),
-    'manual transport uses HermesApiRequest fields, with no URL or credentials in renderer payload');
-  assert.equal(request.connectionId, 'local');
-  assert.equal(request.profile, 'bernhardine');
-  assert.equal(new URL(request.path, 'http://test').searchParams.get('expectedProfile'),
-    request.path.includes('/desktop/capabilities') ? null : 'bernhardine');
-  return request.path.includes('/desktop/capabilities')
+const bernhardineRoute = { connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' };
+const bernhardineHost = { profileRoutes: async () => [bernhardineRoute] };
+const pinned = createProfileTransport(async (path, options) => {
+  wire.push({ path, options });
+  assert.equal(new URL(path, 'http://test').searchParams.get('expectedProfile'),
+    path.includes('/desktop/capabilities') ? null : 'bernhardine');
+  return path.includes('/desktop/capabilities')
     ? { profileBinding: 1, profile: 'bernhardine', memoryProviderEnabled: true } : { agentId: 'bernhardine' };
-}, async () => [{ connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' }],
-{ connection: 'local', profile: 'bernhardine' }, () => selected, selected);
+}, bernhardineHost, { connection: 'local', profile: 'bernhardine' }, () => selected, selected);
 assert.equal((await pinned('/status')).agentId, 'bernhardine');
 assert.equal(wire.length, 2);
 assert.match(wire[0].path, /desktop\/capabilities/);
@@ -258,18 +243,17 @@ assert.equal(wire.length, 2, 'changed profile must not dispatch a stale write');
 selected = 'local:bernhardine';
 for (const response of [{}, { profileBinding: 1, profile: 'default' }]) {
   let calls = 0;
-  const wrong = createProfileTransport(async () => { calls++; return response; }, async () => [
-    { connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' },
-  ], { connection: 'local', profile: 'bernhardine' }, () => selected, selected);
+  const wrong = createProfileTransport(async () => { calls++; return response; }, bernhardineHost,
+    { connection: 'local', profile: 'bernhardine' }, () => selected, selected);
   await assert.rejects(wrong('/memories'));
   assert.equal(calls, 1, 'unverified backend must never receive memory/action requests');
 }
 const racing = createProfileTransport(async () => { throw Error('must not dispatch'); },
-  () => new Promise(resolve => { resolveWire = resolve; }),
+  { profileRoutes: () => new Promise(resolve => { resolveWire = resolve; }) },
   { connection: 'local', profile: 'bernhardine' }, () => selected, selected);
 const race = racing('/status');
 selected = 'elsewhere:bernhardine';
-resolveWire([{ connectionId: 'local', profile: 'bernhardine', targetProfile: 'bernhardine' }]);
+resolveWire([bernhardineRoute]);
 await assert.rejects(race);
 
 let dispatches = 0, finish;
@@ -341,14 +325,14 @@ await Promise.resolve(); await Promise.resolve();
 const retryButton = beforeEffect.render(async () => {}).children[2];
 assert.equal(retrievalCalls, 0, 'click before passive request-gate effect must not dispatch');
 assert.equal(retryButton.props.disabled, false, 'click before request gate remains retryable');
-assert.match(beforeEffect.render(async () => {}).children[4].children[0], /initialisiert/, 'missing gate is explained');
+assert.match(beforeEffect.render(async () => {}).children[4].children[0], /still loading/, 'missing gate is explained');
 beforeEffect.runRequestEffect();
 beforeEffect.render(async () => {}).children[2].props.onClick();
 await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 const retriedView = beforeEffect.render(async () => {});
 assert.equal(retrievalCalls, 1, 'explicit retry on the same mounted view dispatches once after initialization');
 assert.equal(retriedView.children[2].props.disabled, false, 'failed transport after retry still clears busy');
-assert.match(retriedView.children[4].children[0], /nicht erreichbar/, 'transport failure remains visible without automatic retries');
+assert.match(retriedView.children[4].children[0], /unavailable/, 'transport failure remains visible without automatic retries');
 
 const normal = await retrievalHarness();
 let normalCalls = [];
@@ -364,7 +348,7 @@ await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 const normalView = normal.render(normalRest);
 assert.deepEqual(normalCalls, ['/desktop/retrieval', '/desktop/retrieval/jobs']);
 assert.equal(normalView.children[2].props.disabled, false, 'successful load clears busy state');
-assert.equal(normalView.children[2].children[0], 'Einstellungen neu laden');
+assert.equal(normalView.children[2].children[0], 'Reload settings');
 
 const switching = await retrievalHarness();
 let complete;
@@ -434,12 +418,12 @@ visibility.dispose();
 let contributions, opened = [], navigated = [], closed = 0;
 const registeredBatches = [];
 const disposers = [];
-globalThis.window = { location: { hash: '#/' }, addEventListener() {}, removeEventListener() {},
-  hermesDesktop: { api: async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: true }) } };
+globalThis.window = { location: { hash: '#/' }, addEventListener() {}, removeEventListener() {} };
+const navigationRest = enabled => async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: enabled });
 values.host.profileRoutes = async () => [{ connectionId: state.connection, profile: state.profile, targetProfile: state.profile }];
 values.host.navigate = path => navigated.push(path);
 values.host.openWorkspace = (id, options) => { opened.push({ id, options }); return () => { closed++; }; };
-plugin.namespace.default.register({ rest() {}, onDispose(fn) { disposers.push(fn); }, registerMany(value) { registeredBatches.push(value); contributions = value; return () => {}; } });
+plugin.namespace.default.register({ rest: navigationRest(true), onDispose(fn) { disposers.push(fn); }, registerMany(value) { registeredBatches.push(value); contributions = value; return () => {}; } });
 await new Promise(resolve => setTimeout(resolve, 0));
 assert.equal(plugin.namespace.default.id, 'plur1bus');
 assert.ok(registeredBatches.flat().some(c => c.area === 'routes' && c.data.path === '/plur1bus'), 'modern sidebar path resolves to a registered page');
@@ -456,8 +440,7 @@ assert.deepEqual(navigated, ['/plur1bus', '/plur1bus'], 'status and palette navi
 assert.deepEqual(opened, [], 'current SDK page does not need legacy workspace support');
 disposers.forEach(dispose => dispose());
 const inactiveDisposers = [], inactiveBatches = [];
-globalThis.window.hermesDesktop.api = async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: false });
-plugin.namespace.default.register({ onDispose: fn => inactiveDisposers.push(fn),
+plugin.namespace.default.register({ rest: navigationRest(false), onDispose: fn => inactiveDisposers.push(fn),
   registerMany: batch => { inactiveBatches.push(batch); return () => { inactiveBatches.splice(inactiveBatches.indexOf(batch), 1); }; } });
 await new Promise(resolve => setTimeout(resolve, 0));
 assert.ok(inactiveBatches.flat().some(c => c.data.id === 'plur1bus.host-check'));
@@ -467,8 +450,7 @@ inactiveDisposers.forEach(dispose => dispose());
 // Unknown activation (including an unmounted shared-backend route) fails
 // closed for memory navigation but keeps the compatibility command available.
 const unknownDisposers = [], unknownBatches = [];
-globalThis.window.hermesDesktop.api = async () => { throw Object.assign(new Error('HTTP 404 Not Found'), { status: 404 }); };
-plugin.namespace.default.register({ onDispose: fn => unknownDisposers.push(fn),
+plugin.namespace.default.register({ rest: missingBackendApi, onDispose: fn => unknownDisposers.push(fn),
   registerMany: batch => { unknownBatches.push(batch); return () => {}; } });
 await new Promise(resolve => setTimeout(resolve, 0));
 const unknownContributions = unknownBatches.flat();
@@ -486,9 +468,8 @@ const legacySdk = new vm.SyntheticModule(legacyNames, function () {
 const legacy = new vm.SourceTextModule(source);
 await legacy.link(name => name === 'react' ? react : legacySdk);
 await legacy.evaluate();
-globalThis.window.hermesDesktop.api = async () => ({ profileBinding: 1, profile: state.profile, memoryProviderEnabled: true });
 const legacyBatches = [], legacyDisposers = [];
-legacy.namespace.default.register({ onDispose: fn => legacyDisposers.push(fn),
+legacy.namespace.default.register({ rest: navigationRest(true), onDispose: fn => legacyDisposers.push(fn),
   registerMany: batch => { legacyBatches.push(batch); return () => {}; } });
 await new Promise(resolve => setTimeout(resolve, 0));
 assert.ok(legacyBatches.flat().some(c => c.area === 'statusBar.left'));

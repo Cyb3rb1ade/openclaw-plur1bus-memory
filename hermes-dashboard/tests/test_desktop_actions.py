@@ -17,7 +17,7 @@ class DesktopActionsTests(unittest.TestCase):
         app.include_router(api.router)
         with patch.object(api, "_desktop_actor", return_value="native"), patch(
             "hermes_cli.config.load_config_readonly", return_value={"memory": {"provider": "plur1bus"}}
-        ) as config, TestClient(app) as client:
+        ) as config, TestClient(app, client=("127.0.0.1", 50000)) as client:
             self.assertTrue(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
             config.return_value = {"memory": {"provider": "plur1bus", "memory_enabled": False}}
             self.assertFalse(client.get("/desktop/capabilities").json()["memoryProviderEnabled"])
@@ -33,9 +33,9 @@ class DesktopActionsTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(api.router)
         headers = {"X-Hermes-Session-Token": "test-host-token"}
-        with patch("hermes_cli.web_server._SESSION_TOKEN", "test-host-token"), patch(
-            "hermes_cli.profiles.get_active_profile_name", return_value="bernhardine"
-        ), patch.object(api, "_active_runtime_view") as view, patch.object(api, "_runtime_lease") as lease, TestClient(app) as client:
+        with patch(
+            "hermes_constants.profile_name_for_home", return_value="bernhardine"
+        ), patch.object(api, "_active_runtime_view") as view, patch.object(api, "_runtime_lease") as lease, TestClient(app, client=("127.0.0.1", 50000)) as client:
             self.assertEqual(client.get("/status?expectedProfile=default").status_code, 401)
             for suffix in ("default", "", "../bernhardine", "bernhardine&expectedProfile=default"):
                 for path in ("/status", "/memories", "/workshop/proposals", "/desktop/capabilities"):
@@ -87,9 +87,9 @@ class DesktopActionsTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(api.router)
         headers = {"X-Hermes-Session-Token": "test-host-token"}
-        with patch("hermes_cli.web_server._SESSION_TOKEN", "test-host-token"), patch.object(
+        with patch.object(
             api, "_runtime_lease", lease
-        ), patch.object(api, "SkillWorkshop", Workshop), TestClient(app) as client:
+        ), patch.object(api, "SkillWorkshop", Workshop), TestClient(app, client=("127.0.0.1", 50000)) as client:
             self.assertFalse(client.get("/desktop/capabilities").json()["workshopActions"])
             self.assertTrue(client.get("/desktop/capabilities", headers=headers).json()["workshopActions"])
             for verb in ("approve", "publish", "reject", "withdraw"):
@@ -128,11 +128,11 @@ class DesktopActionsTests(unittest.TestCase):
         api = _load_api()
         app = FastAPI()
         app.include_router(api.router)
-        with TestClient(app) as client:
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
             self.assertEqual(client.get("/memories").status_code, 401)
         with patch.object(api, "_actor", return_value="authenticated"), patch.object(api, "_active_runtime_view", return_value="server-scope"), patch.object(
             api, "browse_runtime_memories", return_value={"items": []}
-        ) as browse, TestClient(app) as client:
+        ) as browse, TestClient(app, client=("127.0.0.1", 50000)) as client:
             for query in ("limit=51", "offset=-1", "status=oops", "query=" + "x" * 201):
                 self.assertEqual(client.get("/memories?" + query).status_code, 422)
             browse.assert_not_called()

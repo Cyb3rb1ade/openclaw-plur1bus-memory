@@ -13,9 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM_BASE = "c59366f637db5b636c2d822351018b88476f37fb"
 UPSTREAM_HEAD = "8a148c991123be31bc4f99376c8198447d9bb717"
-JS_VERSION = "7.19.2-hermes.3"
-PYTHON_VERSION = "7.19.2"
-CURRENT_UPSTREAM_HEAD = "3c42b39ba8d5a6522e9201c26c3cad267590636d"
+JS_VERSION = "7.19.3-hermes.0"
+PYTHON_VERSION = "7.19.3"
+CURRENT_UPSTREAM_HEAD = "0ef3d270c0272f9ba1aec3f4677ba9ac3668b80d"
 EXPECTED_CHANGED_FILES = {
     "CHANGELOG.md",
     "index.js",
@@ -101,7 +101,7 @@ class Upstream747InventoryTests(unittest.TestCase):
         )
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(f"**PLUR1BUS {JS_VERSION}", readme)
-        audit = "docs/audits/hermes-7.19.2-delta-review.md"
+        audit = "docs/audits/hermes-7.19.3-catalog-review.md"
         self.assertIn(audit, readme)
         self.assertIn(f"`{CURRENT_UPSTREAM_HEAD}`", (ROOT / audit).read_text(encoding="utf-8"))
 

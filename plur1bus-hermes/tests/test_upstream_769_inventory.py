@@ -24,7 +24,7 @@ class Upstream769InventoryTests(unittest.TestCase):
                 if path == "tests/release-750-compat.test.js":
                     continue
                 if path.startswith(("lib/", "tests/", "scripts/")) or path == "index.js":
-                    expected = git("show", "v7.19.2:" + path)
+                    expected = git("show", "v7.19.3:" + path)
                     if path == "lib/memory-chunking.js":
-                        expected = git("show", "v7.19.2:" + path)
+                        expected = git("show", "v7.19.3:" + path)
                     self.assertEqual((ROOT / path).read_text(encoding="utf-8"), expected)

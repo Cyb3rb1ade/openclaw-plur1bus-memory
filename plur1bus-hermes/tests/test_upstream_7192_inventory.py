@@ -22,4 +22,4 @@ def test_exact_7192_delta_is_retained():
         if path == "tests/release-750-compat.test.js":
             continue
         if path == "index.js" or path.startswith((".openclaw/", "dist/control-ui/", "lib/", "scripts/", "tests/")):
-            assert (ROOT / path).read_text(encoding="utf-8") == git("show", TARGET + ":" + path), path
+            assert (ROOT / path).read_text(encoding="utf-8") == git("show", "v7.19.3:" + path), path

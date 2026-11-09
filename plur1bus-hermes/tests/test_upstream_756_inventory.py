@@ -24,13 +24,13 @@ class Upstream756InventoryTests(unittest.TestCase):
     def test_accepted_upstream_runtime_fixes_match_exactly(self):
         # 7.19.0 changed the episode runtime; require the complete current
         # release files rather than comparing to the historical 7.12.56 blob.
-        subprocess.run(["git", "diff", "--exit-code", "v7.19.2", "--",
+        subprocess.run(["git", "diff", "--exit-code", "v7.19.3", "--",
                         "lib/episodes.js",
                         "tests/episodes-skip-episoded.test.js"],
                        cwd=ROOT, check=True)
-        subprocess.run(["git", "diff", "--exit-code", "v7.19.2", "--", "lib/llm-router.js"],
+        subprocess.run(["git", "diff", "--exit-code", "v7.19.3", "--", "lib/llm-router.js"],
                        cwd=ROOT, check=True)
         # .58 legitimately adds common-background-model cases to this test.
         # Pin its updated complete contents rather than drop the parity gate.
-        subprocess.run(["git", "diff", "--exit-code", "v7.19.2", "--",
+        subprocess.run(["git", "diff", "--exit-code", "v7.19.3", "--",
                         "tests/llm-router.test.js"], cwd=ROOT, check=True)

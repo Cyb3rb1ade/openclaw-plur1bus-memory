@@ -25,10 +25,10 @@ class Upstream761InventoryTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("`" + path + "`", review)
                 if path.startswith(("lib/", "tests/")) and path != "tests/release-750-compat.test.js":
-                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.19.2:" + path))
+                    self.assertEqual((ROOT / path).read_text(), git("show", "v7.19.3:" + path))
 
     def test_dependency_graph_matches_official_release(self):
-        upstream = json.loads(git("show", "v7.19.2:package-lock.json"))
+        upstream = json.loads(git("show", "v7.19.3:package-lock.json"))
         current = json.loads((ROOT / "package-lock.json").read_text())
         current["version"] = upstream["version"]
         current["packages"][""]["version"] = upstream["packages"][""]["version"]
@@ -82,6 +82,8 @@ class Upstream761InventoryTests(unittest.TestCase):
         # The 7.19.2 port extends the native Obsidian importer. Its own tests
         # cover filtering, exact approval hashes and write/acknowledgement drift.
         changed_715.add("plur1bus-hermes/src/plur1bus_hermes/obsidian_sync.py")
+        # Catalog review: use the Hermes credential writer, tested in test_cutover.
+        changed_715.add("plur1bus-hermes/src/plur1bus_hermes/cutover.py")
         for path in paths:
             if Path(path).name in metadata or path in changed_769 or path in changed_715:
                 continue

@@ -1,6 +1,6 @@
 """Installable Hermes memory-provider plugin for PLUR1BUS."""
 
-__version__ = "7.19.2"
+__version__ = "7.19.3"
 
 if __name__ == "plur1bus_hermes":
     from .provider import Plur1busMemoryProvider
@@ -21,6 +21,9 @@ else:
 def register(ctx) -> None:
     """Register the provider through Hermes' memory-plugin collector."""
     ctx.register_memory_provider(Plur1busMemoryProvider())
+    if callable(getattr(ctx, "register_rpc", None)):
+        from plur1bus_hermes.settings_admin import settings_rpc
+        ctx.register_rpc("settings", settings_rpc)
 
 
 __all__ = ["Plur1busMemoryProvider", "Plur1busServiceContainer", "ValidationError", "fingerprint_text", "register", "resolve_inside", "safe_agent_id", "safe_memory_id", "safe_status", "safe_type"]

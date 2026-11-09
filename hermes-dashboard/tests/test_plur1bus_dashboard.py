@@ -34,7 +34,7 @@ class Plur1busDashboardTests(unittest.TestCase):
         effective = {**config, "embedding": {"model": "new", "dimensions": 2}}
         with tempfile.TemporaryDirectory() as directory, patch(
             "hermes_constants.get_hermes_home", return_value=Path(directory)
-        ), patch("hermes_cli.profiles.get_active_profile_name", return_value="default"), patch.object(
+        ), patch("hermes_constants.profile_name_for_home", return_value="default"), patch.object(
             Plur1busMemoryProvider, "_runtime_config", return_value=config
         ), patch("plur1bus_hermes.generation.effective_generation_config", return_value=effective) as generation:
             view = api._active_runtime_view()
@@ -65,7 +65,7 @@ class Plur1busDashboardTests(unittest.TestCase):
         config = {"agentId": "memory-agent", "dataDir": "plur1bus", "embedding": {}}
         with tempfile.TemporaryDirectory() as directory, patch(
             "hermes_constants.get_hermes_home", return_value=Path(directory)
-        ), patch("hermes_cli.profiles.get_active_profile_name", return_value="active"), patch.object(
+        ), patch("hermes_constants.profile_name_for_home", return_value="active"), patch.object(
             Plur1busMemoryProvider, "_runtime_config", return_value=config
         ) as runtime_config:
             view = api._active_runtime_view()
@@ -78,7 +78,7 @@ class Plur1busDashboardTests(unittest.TestCase):
         config = {"agentId": "main", "dataDir": "plur1bus", "embedding": {}}
         with tempfile.TemporaryDirectory() as directory, patch(
             "hermes_constants.get_hermes_home", return_value=Path(directory)
-        ), patch("hermes_cli.profiles.get_active_profile_name", return_value="default"), patch.object(
+        ), patch("hermes_constants.profile_name_for_home", return_value="default"), patch.object(
             Plur1busMemoryProvider, "_runtime_config", return_value=config
         ) as runtime_config:
             view = api._active_runtime_view()
@@ -202,7 +202,7 @@ class Plur1busDashboardTests(unittest.TestCase):
                 client.get(f"/api/plugins/plur1bus/workshop/approve/preview/{proposal_id}?revision={revision}").status_code,
                 401,
             )
-        with patch.object(api, "SkillWorkshop", Workshop), patch.object(api, "_runtime_lease", lease), TestClient(app) as client:
+        with patch.object(api, "SkillWorkshop", Workshop), patch.object(api, "_runtime_lease", lease), TestClient(app, client=("127.0.0.1", 50000)) as client:
             self.assertEqual(client.get("/api/plugins/plur1bus/workshop/proposals").status_code, 200)
             self.assertEqual(client.get(f"/api/plugins/plur1bus/workshop/proposals/{proposal_id}").status_code, 200)
             preview = client.get(f"/api/plugins/plur1bus/workshop/approve/preview/{proposal_id}?revision={revision}")
