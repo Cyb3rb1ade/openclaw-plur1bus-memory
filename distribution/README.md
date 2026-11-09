@@ -341,9 +341,10 @@ Desktop app, the PLUR1BUS Settings tab saves confirmed changes through Hermes'
 profile-bound memory provider API. Model and memory migration actions on a
 forwarded route still require opening the target as the backend's launch profile.
 Use **PLUR1BUS → Einstellungen → Speicherung → Speicherweise** in the local
-Desktop app to add or replace a Jev API key for the active profile. Saving a key
-does not select automatic capture chunking. Only **Automatisch (Jev)** can send
-capture text to api.typesafe.ai for a storage decision.
+Desktop app to add or replace a Jev API key for the active profile. The
+confirmation saves the key and selects **Automatisch (Jev)**. After the gateway
+restarts, this mode can send capture text to api.typesafe.ai for a storage
+decision.
 The old host patch is for earlier releases.
 For older supported source revisions, explicitly pass `--modern-profile-api`
 to review the isolated local-profile API patch instead:

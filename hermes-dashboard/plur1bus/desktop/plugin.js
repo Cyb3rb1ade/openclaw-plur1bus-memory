@@ -515,32 +515,58 @@ export function retrievalDefaults(provider, kind) {
     ...(provider === 'local-transformers' ? { localFilesOnly: true } : { baseUrl: '', apiKeyEnv: '' }) };
 }
 
-function JevKeySettings({ rest, credentials, local, reload }) {
+async function writeFeatureSetting(request, settings, change) {
+  const body = { identifier: change.identifier, value: change.value, revision: settings.revision };
+  if (settings.providerConfigWrite) return request.run('/desktop/settings', { method: 'PUT', body });
+  let nonce = change.nonce;
+  if (!nonce) {
+    const preview = await request.run('/desktop/settings/preview', { method: 'POST', body });
+    if (preview.stale || preview.error) return preview;
+    nonce = preview.value.nonce;
+  }
+  return request.run('/desktop/settings', { method: 'POST', body: { ...body, nonce } });
+}
+
+const isJevMode = settings => settings?.settings?.some(item => item.id === 'capture.mode' && item.value === 'automatisch');
+async function saveJevKey(request, settings, key, reload) {
+  const result = await request.run('/desktop/settings/jev-key', { method: 'PUT', body: { value: key } });
+  if (result.stale) return 'stale';
+  if (result.error || result.value?.ok !== true) return 'key-rejected';
+  const saved = await reload();
+  if (saved?.jevCredentials?.configured !== true || saved.jevCredentials.editable !== true) return 'key-unconfirmed';
+  if (isJevMode(saved)) return 'selected';
+  if (saved.revision !== settings.revision || saved.readOnly) return 'mode-unconfirmed';
+  const applied = await writeFeatureSetting(request, saved, { identifier: 'capture.mode', value: 'automatisch' });
+  if (applied.stale) return 'stale';
+  return !applied.error && isJevMode(await reload()) ? 'selected' : 'mode-unconfirmed';
+}
+
+const JEV_SAVE_MESSAGES = {
+  'key-rejected': 'Der Jev-Schlüssel konnte nicht gespeichert werden. Prüfe die Profilverbindung und versuche es erneut.',
+  'key-unconfirmed': 'Hermes hat gespeichert, aber PLUR1BUS konnte den Schlüsselstatus nicht bestätigen. Die Speicherweise wurde nicht geändert.',
+  'mode-unconfirmed': 'Jev-Schlüssel gespeichert. Die Umstellung wurde nicht bestätigt. Lade die Werte neu und wähle bei Bedarf Automatisch (Jev).',
+  selected: 'Jev-Schlüssel gespeichert. Automatisch (Jev) ist ausgewählt. Hermes-Gateway zum Aktivieren neu starten.',
+};
+
+function JevKeySettings({ rest, settings, reload }) {
   const request = useRequests(rest);
+  const credentials = settings.jevCredentials;
   const [editing, setEditing] = React.useState(false);
   const [key, setKey] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState('');
-  const editable = local && credentials.editable === true;
+  const editable = settings.localCredentialWrite === true && !settings.readOnly && credentials.editable === true;
   const valid = validJevKey(key.trim());
   async function save(event) {
     event.preventDefault();
-    if (busy || !editable || !valid) return;
+    const activeRequest = request.current;
+    if (busy || !editable || !valid || !activeRequest) return;
     setBusy(true); setNotice(''); setKey('');
-    const result = await request.current?.run('/desktop/settings/jev-key', {
-      method: 'PUT', body: { value: key.trim() },
-    });
-    if (!result || result.stale) return;
-    if (result.error || result.value?.ok !== true) {
-      setNotice('Der Jev-Schlüssel konnte nicht gespeichert werden. Prüfe die Profilverbindung und versuche es erneut.');
-    } else {
-      setEditing(false);
-      const latest = await reload();
-      setNotice(latest?.jevCredentials?.configured === true
-        ? 'Jev-Schlüssel gespeichert. Die Speicherweise bleibt unverändert.'
-        : 'Hermes hat gespeichert, aber PLUR1BUS konnte den Schlüsselstatus nicht bestätigen.');
-    }
+    const result = await saveJevKey(activeRequest, settings, key.trim(), reload);
     setBusy(false);
+    if (result === 'stale') return;
+    if (result !== 'key-rejected') setEditing(false);
+    setNotice(JEV_SAVE_MESSAGES[result]);
   }
   return h('div', { className: 'pb-review pb-jev-key' },
     h('h3', null, 'Jev-API-Schlüssel'),
@@ -556,7 +582,9 @@ function JevKeySettings({ rest, credentials, local, reload }) {
       h('label', { htmlFor: 'pb-jev-key' }, 'Neuer Jev-API-Schlüssel'),
       h('input', { id: 'pb-jev-key', type: 'password', autoComplete: 'off', spellCheck: false,
         value: key, maxLength: 4096, disabled: busy, onChange: event => setKey(event.target.value) }),
-      h('button', { type: 'submit', disabled: busy || !valid }, busy ? 'Speichert…' : 'Jev-Schlüssel speichern'),
+      h('p', { className: 'pb-setting-help' },
+        'Beim Speichern wechselt die Speicherweise zu Automatisch (Jev). Dabei können neue Gesprächsinhalte zur Entscheidung an api.typesafe.ai gesendet werden.'),
+      h('button', { type: 'submit', disabled: busy || !valid }, busy ? 'Speichert…' : 'Schlüssel speichern und Automatisch (Jev) auswählen'),
       h('button', { type: 'button', disabled: busy, onClick: () => { setEditing(false); setKey(''); setNotice(''); } },
       'Abbrechen')) : null,
     notice ? h('p', { role: 'status' }, notice) : null);
@@ -598,9 +626,7 @@ function FeatureSettings({ rest }) {
     if (!review || busy) return;
     setBusy(true);
     const body = { identifier: review.identifier, value: review.value, revision: review.revision };
-    const result = await request.current?.run('/desktop/settings', settings.providerConfigWrite
-      ? { method: 'PUT', body }
-      : { method: 'POST', body: { ...body, nonce: review.nonce } });
+    const result = request.current && await writeFeatureSetting(request.current, settings, review);
     setBusy(false); setReview(null);
     if (!result || result.stale) return;
     if (result.error) {
@@ -643,7 +669,7 @@ function FeatureSettings({ rest }) {
         onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
       setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))),
       setting.id === 'capture.mode' && settings.jevCredentials
-        ? h(JevKeySettings, { rest, credentials: settings.jevCredentials, local: settings.localCredentialWrite === true, reload: load })
+        ? h(JevKeySettings, { rest, settings, reload: load })
         : null,
       review?.identifier === setting.id ? h('div', { className: 'pb-review', role: 'region', 'aria-label': 'Änderung prüfen' },
         h('h3', null, 'Änderung prüfen'), h('p', null, `${setting.label || setting.id}: ${review.value === true ? 'Aktivieren' : review.value === false ? 'Deaktivieren' : setting.choiceLabels?.[review.value] || (review.value === '' ? 'Standard erben' : String(review.value))}`),

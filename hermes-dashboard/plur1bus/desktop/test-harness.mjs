@@ -20,7 +20,7 @@ const react = new vm.SyntheticModule(['default'], function () {
 });
 // Execute the actual distributed ESM, with only its documented host imports injected.
 const source = await readFile(new URL('./plugin.js', import.meta.url), 'utf8');
-const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch };');
+const plugin = new vm.SourceTextModule(source + '\nexport { FeatureSettings, Partition, HealthWatch, saveJevKey };');
 await plugin.link(name => {
   if (name === 'react') return react;
   if (name === '@hermes/plugin-sdk') return sdk;
@@ -126,6 +126,29 @@ await assert.rejects(saveJevKey('fixture-key'));
 assert.match(settingsCalls.at(-1).path, /\/desktop\/capabilities$/);
 assert.equal((await hostedSettingsTransport('/desktop/settings')).readOnly, true);
 assert.match(settingsCalls.at(-1).path, /^\/api\/plugins\/plur1bus\/desktop\/settings/);
+const { saveJevKey: saveAndSelectJev } = plugin.namespace;
+const segmented = { providerConfigWrite: true, revision: 'r1',
+  jevCredentials: { configured: true, editable: true }, settings: [{ id: 'capture.mode', value: 'geteilt' }] };
+let jevRequests = [];
+let keyResponse = { error: true };
+let modeResponse = { value: { ok: true } };
+const jevRequest = { async run(path, options) {
+  jevRequests.push({ path, options });
+  return path.endsWith('/jev-key') ? keyResponse : modeResponse;
+} };
+assert.equal(await saveAndSelectJev(jevRequest, segmented, 'fixture', async () => segmented), 'key-rejected');
+assert.equal(jevRequests.length, 1);
+keyResponse = { value: { ok: true } };
+jevRequests = [];
+assert.equal(await saveAndSelectJev(jevRequest, segmented, 'fixture', async () => ({ ...segmented, revision: 'r2' })), 'mode-unconfirmed');
+assert.equal(jevRequests.length, 1, 'a concurrent settings update is never overwritten');
+jevRequests = [];
+let reloads = 0;
+assert.equal(await saveAndSelectJev(jevRequest, segmented, 'fixture', async () => ++reloads === 1
+  ? segmented : { ...segmented, settings: [{ id: 'capture.mode', value: 'automatisch' }] }), 'selected');
+assert.deepEqual(jevRequests.map(call => call.path), ['/desktop/settings/jev-key', '/desktop/settings']);
+assert.equal(jevRequests[1].options.body.value, 'automatisch');
+assert.equal(reloads, 2, 'the stored mode is read back');
 const compatibleHost = { openWorkspace() {}, profileRoutes: async () => [
   { connectionId: 'local', profile: 'alpha', targetProfile: 'alpha' }] };
 let compatibilityCalls = [];
