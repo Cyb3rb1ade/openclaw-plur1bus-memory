@@ -77,6 +77,8 @@ class Upstream761InventoryTests(unittest.TestCase):
         # Reviewed 7.19.2-hermes.3 runtime default parity and Skill Workshop gates.
         changed_715.update({"plur1bus-hermes/src/plur1bus_hermes/feature_profiles.py",
                             "plur1bus-hermes/src/plur1bus_hermes/skill_workshop.py"})
+        # The provider settings writer and dashboard share the profile view.
+        changed_715.add("plur1bus-hermes/src/plur1bus_hermes/retrieval_admin.py")
         # The 7.19.2 port extends the native Obsidian importer. Its own tests
         # cover filtering, exact approval hashes and write/acknowledgement drift.
         changed_715.add("plur1bus-hermes/src/plur1bus_hermes/obsidian_sync.py")

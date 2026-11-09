@@ -536,6 +536,28 @@ class Plur1busMemoryProvider(MemoryProvider):
         """
         return []
 
+    def write_config_fields(self, values: dict[str, Any], hermes_home: str) -> None:
+        """Save one reviewed setting through Hermes' authenticated provider route."""
+        from hermes_cli.config import load_config_readonly
+        from .retrieval_admin import active_runtime_view
+        from .settings_admin import save_setting
+
+        if not values or values == {"reviewedSetting": None}:
+            return
+        change = values.get("reviewedSetting")
+        if (set(values) != {"reviewedSetting"} or not isinstance(change, dict)
+                or set(change) != {"profile", "identifier", "value", "revision"}
+                or not isinstance(change["identifier"], str) or not isinstance(change["revision"], str)):
+            raise ValueError("Ungültige PLUR1BUS-Einstellungsänderung.")
+        view = active_runtime_view()
+        if Path(hermes_home).resolve() != view.hermes_home.resolve() or change["profile"] != view.profile:
+            raise ValueError("Das PLUR1BUS-Profil hat sich geändert.")
+        memory = load_config_readonly().get("memory") or {}
+        if (not isinstance(memory, Mapping) or memory.get("provider") != "plur1bus"
+                or memory.get("memory_enabled", True) is not True):
+            raise ValueError("PLUR1BUS ist in diesem Profil nicht aktiv.")
+        save_setting(view, change["identifier"], change["value"], change["revision"])
+
     def save_config(self, values: Mapping[str, Any], hermes_home: str, **kwargs: Any) -> None:
         del kwargs
         root = Path(hermes_home).expanduser().resolve()

@@ -13,6 +13,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 
+from plur1bus_hermes.provider import Plur1busMemoryProvider
+
+
 ROOT = Path(__file__).resolve().parents[1] / "plur1bus" / "dashboard"
 
 
@@ -32,7 +35,7 @@ class Plur1busDashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch(
             "hermes_constants.get_hermes_home", return_value=Path(directory)
         ), patch("hermes_cli.profiles.get_active_profile_name", return_value="default"), patch.object(
-            api.Plur1busMemoryProvider, "_runtime_config", return_value=config
+            Plur1busMemoryProvider, "_runtime_config", return_value=config
         ), patch("plur1bus_hermes.generation.effective_generation_config", return_value=effective) as generation:
             view = api._active_runtime_view()
             self.assertEqual(view.config["embedding"]["model"], "new")
@@ -63,7 +66,7 @@ class Plur1busDashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch(
             "hermes_constants.get_hermes_home", return_value=Path(directory)
         ), patch("hermes_cli.profiles.get_active_profile_name", return_value="active"), patch.object(
-            api.Plur1busMemoryProvider, "_runtime_config", return_value=config
+            Plur1busMemoryProvider, "_runtime_config", return_value=config
         ) as runtime_config:
             view = api._active_runtime_view()
         runtime_config.assert_called_once_with("active")
@@ -76,7 +79,7 @@ class Plur1busDashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch(
             "hermes_constants.get_hermes_home", return_value=Path(directory)
         ), patch("hermes_cli.profiles.get_active_profile_name", return_value="default"), patch.object(
-            api.Plur1busMemoryProvider, "_runtime_config", return_value=config
+            Plur1busMemoryProvider, "_runtime_config", return_value=config
         ) as runtime_config:
             view = api._active_runtime_view()
         runtime_config.assert_called_once_with("default")

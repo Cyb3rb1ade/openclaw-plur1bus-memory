@@ -336,10 +336,11 @@ identity and reports missing capabilities; it cannot retrofit a sidebar API
 into an incompatible Hermes binary. `helpers/plur1bus-desktop-host.py` and the
 adjacent patch directory can prepare a **separate** host build from a trusted
 clean Hermes source checkout (Python >=3.12 and its Node/npm toolchain required).
-Hermes 0.23 forwards secondary-profile plugin API requests itself. Do not apply
-the old host patch on that release. A forwarded request carries read admission,
-not a stable write actor; open the target as the backend's launch profile to
-review and commit changes, including provider switches and memory migrations.
+Hermes 0.23 forwards secondary-profile plugin API requests itself. In the local
+Desktop app, the PLUR1BUS Settings tab saves confirmed changes through Hermes'
+profile-bound memory provider API. Model and memory migration actions on a
+forwarded route still require opening the target as the backend's launch profile.
+The old host patch is for earlier releases.
 For older supported source revisions, explicitly pass `--modern-profile-api`
 to review the isolated local-profile API patch instead:
 

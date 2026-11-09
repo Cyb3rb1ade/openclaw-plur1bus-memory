@@ -183,14 +183,17 @@ export function createProfileTransport(api, routes, owner, current, identity) {
       throw unavailable('Für dieses Profil ist keine eindeutige Hermes-Verbindung verfügbar.');
     }
     const route = matches[0];
-    const send = async (suffix, opts = {}, assertProfile = true) => {
+    const send = async (suffix, opts = {}, assertProfile = true, providerConfig = false) => {
       check();
       if (!suffix.startsWith('/') || suffix.startsWith('//') || suffix.includes('#')
           || suffix.split('?')[0].split('/').some(part => ['.', '..'].includes(decodeURIComponent(part)))) {
         throw new Error('Invalid PLUR1BUS API path');
       }
-      const url = new URL(`/api/plugins/plur1bus${suffix}`, 'http://plur1bus.invalid');
-      if (assertProfile) url.searchParams.set('expectedProfile', route.targetProfile);
+      const url = new URL(providerConfig ? '/api/memory/providers/plur1bus/config' : `/api/plugins/plur1bus${suffix}`, 'http://plur1bus.invalid');
+      if (providerConfig) {
+        url.searchParams.set('surface', 'declared');
+        url.searchParams.set('profile', route.targetProfile);
+      } else if (assertProfile) url.searchParams.set('expectedProfile', route.targetProfile);
       let result;
       try {
         result = await bounded(api({ path: url.pathname + url.search, connectionId: route.connectionId,
@@ -220,7 +223,29 @@ export function createProfileTransport(api, routes, owner, current, identity) {
     if (path !== '/desktop/capabilities' && capabilities.memoryProviderEnabled !== true) {
       throw unavailable('PLUR1BUS ist für dieses Profil nicht als aktiver Memory-Provider bestätigt. Es wurden keine Profildaten geladen.');
     }
-    return path === '/desktop/capabilities' ? capabilities : send(path, options);
+    if (path === '/desktop/capabilities') return capabilities;
+    if (path === '/desktop/settings' && route.mode === 'local' && capabilities.hostedReadOnly === true) {
+      if (options.method === 'PUT') {
+        return send('/config', { method: 'PUT', body: { values: {
+          reviewedSetting: JSON.stringify({ ...options.body, profile: route.targetProfile }),
+        } } }, false, true);
+      }
+      if (!options.method) {
+        const settings = await send(path);
+        if (settings?.readOnly === true && settings.profile === route.targetProfile) {
+          try {
+            const schema = await send('/config', {}, false, true);
+            if (schema?.fields?.some(field => field.key === 'reviewedSetting' && field.kind === 'json')) {
+              return { ...settings, readOnly: false, providerConfigWrite: true };
+            }
+          } catch {
+            check();
+          }
+        }
+        return settings;
+      }
+    }
+    return send(path, options);
   };
 }
 const field = (label, value) => h('div', { key: label }, h('dt', null, label),
@@ -451,8 +476,10 @@ const css = `
 .plur1bus-desktop .pb-toggle input{appearance:none;width:36px;height:21px;padding:2px;border-radius:20px;background:var(--muted,#34343d);cursor:pointer;flex-shrink:0}
 .plur1bus-desktop .pb-toggle input:before{content:'';display:block;width:15px;height:15px;border-radius:50%;background:var(--pb-soft)}
 .plur1bus-desktop .pb-toggle input:checked{background:var(--pb-accent)}.plur1bus-desktop .pb-toggle input:checked:before{transform:translateX(14px);background:var(--background,#fff)}
+.plur1bus-desktop .pb-setting-row :disabled{opacity:.48;cursor:not-allowed}
 .plur1bus-desktop :is(button,input,select,summary):focus-visible{outline:2px solid var(--pb-accent);outline-offset:3px}
 .plur1bus-desktop .pb-review{position:sticky;bottom:0;background:var(--background,#18181c);border-radius:8px;box-shadow:0 -4px 18px #0002;z-index:2}
+.plur1bus-desktop .pb-setting-row .pb-review{position:static;grid-column:1/-1}
 .plur1bus-desktop footer{margin-top:32px;padding:18px 0;border-top:1px solid var(--pb-line);font-size:12px;color:var(--pb-soft)}
 @media(max-width:680px){.plur1bus-desktop{padding:20px 16px}.plur1bus-desktop .pb-setting-row{grid-template-columns:1fr;gap:10px}.plur1bus-desktop .pb-toggle{justify-content:flex-start}.plur1bus-desktop .pb-setting-control{justify-self:start}}
 `;
@@ -486,10 +513,18 @@ function FeatureSettings({ rest }) {
     setBusy(false);
     if (!result || result.stale) return;
     if (result.error) setNotice('Einstellungen sind nicht verfügbar.');
-    else setSettings(result.value);
+    else {
+      setSettings(result.value);
+      return result.value;
+    }
   }
   async function preview(identifier, value) {
     if (!settings || settings.readOnly || busy) return;
+    setNotice('');
+    if (settings.providerConfigWrite) {
+      setReview({ identifier, value, revision: settings.revision });
+      return;
+    }
     setBusy(true); setReview(null);
     const result = await request.current?.run('/desktop/settings/preview', { method: 'POST',
       body: { identifier, value, revision: settings.revision } });
@@ -501,13 +536,20 @@ function FeatureSettings({ rest }) {
   async function save() {
     if (!review || busy) return;
     setBusy(true);
-    const result = await request.current?.run('/desktop/settings', { method: 'POST', body: {
-      identifier: review.identifier, value: review.value, revision: review.revision, nonce: review.nonce } });
+    const body = { identifier: review.identifier, value: review.value, revision: review.revision };
+    const result = await request.current?.run('/desktop/settings', settings.providerConfigWrite
+      ? { method: 'PUT', body }
+      : { method: 'POST', body: { ...body, nonce: review.nonce } });
     setBusy(false); setReview(null);
     if (!result || result.stale) return;
-    setNotice(result.error ? 'Speichern abgelehnt; erneut prüfen.' :
-      'Gespeichert. Hermes-Gateway zum Aktivieren neu starten. Laufender Zustand noch nicht bestätigt.');
-    if (!result.error) await load();
+    if (result.error) {
+      setNotice('Speichern abgelehnt. Bitte die Werte neu laden und die Änderung erneut prüfen.');
+      return;
+    }
+    const latest = await load();
+    if (latest) setNotice(latest.settings?.find(item => item.id === body.identifier)?.value === body.value
+      ? 'Gespeichert. Hermes-Gateway zum Aktivieren neu starten.'
+      : 'Der neue Wert konnte beim Neuladen nicht bestätigt werden.');
   }
   const normalizedSearch = search.trim().toLocaleLowerCase('de');
   const visibleSettings = (settings?.settings || []).filter(setting =>
@@ -538,13 +580,13 @@ function FeatureSettings({ rest }) {
         onChange: event => { void preview(setting.id, Number(event.target.value)); } })) :
       h('select', { id: `pb-${setting.id}`, className: 'pb-setting-control', 'aria-describedby': `pb-help-${setting.id}`, disabled: busy || settings.readOnly, value: String(setting.choices.indexOf(setting.value)),
         onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
-      setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))))))),
-    settings && visibleSettings.length === 0 ? h('p', { role: 'status' }, normalizedSearch ? 'Keine passenden Einstellungen gefunden.' : 'Keine Einstellungen verfügbar.') : null,
-    review ? h('div', { className: 'pb-review', role: 'region', 'aria-label': 'Änderung prüfen' },
-      h('h3', null, 'Änderung prüfen'), h('p', null, `${settings?.settings.find(item => item.id === review.identifier)?.label || review.identifier}: ${review.value === true ? 'Aktivieren' : review.value === false ? 'Deaktivieren' : String(review.value)}`),
-      h('p', { className: 'pb-intro' }, 'Gilt für dieses Profil. Deine gespeicherten Erinnerungen werden durch diesen Einstellungswechsel nicht migriert. Nach dem Speichern ist ein Gateway-Neustart erforderlich.'),
-      h('button', { disabled: busy, onClick: () => setReview(null) }, 'Abbrechen'),
-      h('button', { disabled: busy, onClick: () => { void save(); } }, 'Speichern bestätigen')) : null);
+      setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))),
+      review?.identifier === setting.id ? h('div', { className: 'pb-review', role: 'region', 'aria-label': 'Änderung prüfen' },
+        h('h3', null, 'Änderung prüfen'), h('p', null, `${setting.label || setting.id}: ${review.value === true ? 'Aktivieren' : review.value === false ? 'Deaktivieren' : setting.choiceLabels?.[review.value] || (review.value === '' ? 'Standard erben' : String(review.value))}`),
+        h('p', { className: 'pb-intro' }, 'Gilt für dieses Profil. Nach dem Speichern ist ein Gateway-Neustart erforderlich.'),
+        h('button', { disabled: busy, onClick: () => setReview(null) }, 'Abbrechen'),
+        h('button', { disabled: busy, onClick: () => { void save(); } }, 'Speichern bestätigen')) : null)))),
+    settings && visibleSettings.length === 0 ? h('p', { role: 'status' }, normalizedSearch ? 'Keine passenden Einstellungen gefunden.' : 'Keine Einstellungen verfügbar.') : null);
 }
 
 function RetrievalSettings({ rest }) {

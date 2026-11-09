@@ -56,6 +56,15 @@ hookCursor = 0;
 const hostedSettings = plugin.namespace.FeatureSettings({ rest: async () => ({}) });
 assert.equal(elements(hostedSettings, 'input').find(input => input[1].role === 'switch')[1].disabled, true);
 assert.match(plainText(hostedSettings), /Lesend geöffnet/);
+hookValues = [{ providerConfigWrite: true, readOnly: false, settings: [
+  { id: 'capture.mode', label: 'Speicherweise', value: 'beides', choices: ['beides', 'geteilt'],
+    choiceLabels: { geteilt: 'Segmente' }, group: 'Speicherung' },
+] }, { identifier: 'capture.mode', value: 'geteilt' }];
+hookCursor = 0;
+const editable = plugin.namespace.FeatureSettings({ rest: async () => ({}) });
+const settingRow = elements(editable, 'div').find(row => row[1]?.className === 'pb-setting-row');
+assert.equal(elements(settingRow, 'select')[0][1].disabled, false);
+assert.match(plainText(settingRow), /Speicherweise: Segmente.*Speichern bestätigen/);
 hookValues = ['settings', { loading: false, status: { version: '7.15.4' }, proposals: [] }];
 hookCursor = 0;
 const pageTree = plugin.namespace.Partition({ rest: async () => ({}), profile: 'alpha' });
@@ -84,6 +93,28 @@ const { createScopedRequest } = plugin.namespace;
 const { createProfileTransport } = plugin.namespace;
 const { retrievalDefaults } = plugin.namespace;
 const { checkDesktopCompatibility } = plugin.namespace;
+const settingsCalls = [];
+let routeMode = 'local';
+const hostedSettingsTransport = createProfileTransport(async request => {
+  settingsCalls.push(request);
+  if (request.path.endsWith('/desktop/capabilities')) return {
+    profile: 'alpha', profileBinding: 1, memoryProviderEnabled: true, hostedReadOnly: true,
+  };
+  if (request.path.startsWith('/api/memory/providers/plur1bus/config')) return request.method === 'PUT'
+    ? { ok: true } : { fields: [{ key: 'reviewedSetting', kind: 'json' }] };
+  return { readOnly: true, profile: 'alpha' };
+}, async () => [{ connectionId: 'local', profile: 'alpha', targetProfile: 'alpha', mode: routeMode }],
+{ connection: 'local', profile: 'alpha' }, () => 'alpha', 'alpha');
+assert.equal((await hostedSettingsTransport('/desktop/settings')).providerConfigWrite, true);
+await hostedSettingsTransport('/desktop/settings', {
+  method: 'PUT', body: { identifier: 'capture.mode', value: 'geteilt', revision: 'r' },
+});
+assert.equal(settingsCalls.at(-1).path, '/api/memory/providers/plur1bus/config?surface=declared&profile=alpha');
+assert.deepEqual(JSON.parse(settingsCalls.at(-1).body.values.reviewedSetting),
+  { identifier: 'capture.mode', value: 'geteilt', revision: 'r', profile: 'alpha' });
+routeMode = 'remote';
+assert.equal((await hostedSettingsTransport('/desktop/settings')).readOnly, true);
+assert.match(settingsCalls.at(-1).path, /^\/api\/plugins\/plur1bus\/desktop\/settings/);
 const compatibleHost = { openWorkspace() {}, profileRoutes: async () => [
   { connectionId: 'local', profile: 'alpha', targetProfile: 'alpha' }] };
 let compatibilityCalls = [];
