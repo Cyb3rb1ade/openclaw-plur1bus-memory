@@ -65,8 +65,9 @@ class CutoverTests(unittest.TestCase):
             self.assertIn("USER.md describes the human", first_soul)
             self.assertIn("# SOUL\n\nBe direct.", first_soul)
 
+    @patch("plur1bus_hermes.cutover.profile_secret", return_value="")
     @patch("plur1bus_hermes.cutover._run")
-    def test_omlx_llm_uses_registered_provider(self, run) -> None:
+    def test_omlx_llm_uses_registered_provider(self, run, secret) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile_home = Path(directory)
 
@@ -84,6 +85,7 @@ class CutoverTests(unittest.TestCase):
             self.assertEqual(
                 [call.args[0] for call in run.call_args_list],
                 [
+                    ["hermes", "config", "set", "OMLX_API_KEY", "local"],
                     ["hermes", "config", "set", "model.provider", "omlx"],
                     ["hermes", "config", "set", "model.default", "local-model"],
                     [
@@ -102,7 +104,8 @@ class CutoverTests(unittest.TestCase):
                     ],
                 ],
             )
-            self.assertIn("OMLX_API_KEY=local", (profile_home / ".env").read_text())
+            secret.assert_called_once_with("OMLX_API_KEY", profile_home)
+            self.assertFalse((profile_home / ".env").exists())
 
     def test_completed_manifest_maps_main_to_bernd_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

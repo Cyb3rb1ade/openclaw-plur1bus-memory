@@ -10,26 +10,30 @@ from plur1bus_hermes.validation import ValidationError
 
 
 class RetrievalContracts(unittest.TestCase):
-    def test_openai_default_credentials_and_requested_width(self):
+    def test_plugin_credentials_and_requested_width(self):
         with tempfile.TemporaryDirectory() as root:
             backend = EmbeddingBackend({"provider": "openai-compatible", "model": "text-embedding-3-small", "dimensions": 2}, Path(root))
             response = MagicMock()
             response.__enter__.return_value.read.return_value = b'{"data":[{"embedding":[0.2,0.1]}]}'
-            with patch.dict("os.environ", {"OPENAI_API_KEY": "test-only"}, clear=True), patch("urllib.request.urlopen", return_value=response) as request:
+            with patch.dict("os.environ", {"PLUR1BUS_EMBEDDING_API_KEY": "test-only"}, clear=True), patch("urllib.request.urlopen", return_value=response) as request:
                 self.assertEqual(backend.embed("test"), [0.2, 0.1])
                 sent = request.call_args.args[0]
                 self.assertEqual(json.loads(sent.data)["dimensions"], 2)
                 self.assertEqual(sent.get_header("Authorization"), "Bearer test-only")
             backend.close()
 
-    def test_explicit_missing_key_does_not_use_another_account(self):
+    def test_missing_plugin_key_does_not_send_openai_key_to_custom_endpoint(self):
         with tempfile.TemporaryDirectory() as root:
-            backend = EmbeddingBackend({"provider": "openai-compatible", "model": "test", "apiKeyEnv": "ABSENT_TEST_KEY"}, Path(root))
-            with patch.dict("os.environ", {"OPENAI_API_KEY": "another-account"}, clear=True), patch("urllib.request.urlopen") as request:
-                with self.assertRaisesRegex(RuntimeError, "key"):
-                    backend.embed("test")
-                request.assert_not_called()
-            backend.close()
+            for selection in ({}, {"apiKeyEnv": "ABSENT_TEST_KEY"}):
+                backend = EmbeddingBackend({
+                    "provider": "openai-compatible", "model": "test",
+                    "baseUrl": "https://embeddings.example.invalid/v1", **selection,
+                }, Path(root))
+                with patch.dict("os.environ", {"OPENAI_API_KEY": "another-account"}, clear=True), patch("urllib.request.urlopen") as request:
+                    with self.assertRaisesRegex(RuntimeError, "key"):
+                        backend.embed("test")
+                    request.assert_not_called()
+                backend.close()
 
     def test_invalid_known_width_rejected_before_request(self):
         with tempfile.TemporaryDirectory() as root:

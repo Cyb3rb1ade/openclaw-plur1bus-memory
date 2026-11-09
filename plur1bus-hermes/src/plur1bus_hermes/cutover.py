@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .domain import Plur1busDomain
+from .credentials import profile_secret
 from .identity_migrate import (
     ensure_hermes_identity as _ensure_hermes_identity,
     sanitize_hermes_context_files as _sanitize_hermes_context_files,
@@ -38,13 +39,8 @@ def _configure_profile_llm(profile_home: Path, provider_config: dict[str, Any]) 
         return {"configured": False}
     model = str(llm["model"])
     base_url = str(llm.get("baseUrl") or "http://127.0.0.1:8000/v1").rstrip("/")
-    env_file = profile_home / ".env"
-    env_file.touch(mode=0o600, exist_ok=True)
-    os.chmod(env_file, 0o600)
-    existing = env_file.read_text(encoding="utf-8")
-    if not any(line.startswith("OMLX_API_KEY=") for line in existing.splitlines()):
-        with env_file.open("a", encoding="utf-8") as handle:
-            handle.write("OMLX_API_KEY=local\n")
+    if not profile_secret("OMLX_API_KEY", profile_home):
+        _run(["hermes", "config", "set", "OMLX_API_KEY", "local"], profile_home)
     _run(["hermes", "config", "set", "model.provider", "omlx"], profile_home)
     _run(["hermes", "config", "set", "model.default", model], profile_home)
     _run(["hermes", "config", "set", "model.base_url", base_url], profile_home)
