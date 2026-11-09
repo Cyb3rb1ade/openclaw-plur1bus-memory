@@ -1,0 +1,6 @@
+name: plur1bus
+kind: standalone
+version: "7.19.2-hermes.3"
+description: PLUR1BUS persistent memory engine with semantic recall, emotion, and a Hermes Desktop dashboard.
+requires_hermes: ">=0.23.0"
+min_hermes_version: "0.23.0"

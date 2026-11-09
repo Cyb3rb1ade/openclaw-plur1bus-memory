@@ -1,0 +1,352 @@
+"""Narrow, secret-free operator inspection for one already-authorized runtime.
+
+The functions here deliberately accept a live :class:`Plur1busRuntime` rather
+than an agent id or a path.  This makes it impossible for a control caller to
+turn a status request into a probe of another agent partition.
+"""
+
+from __future__ import annotations
+
+import re
+import threading
+import time
+import math
+from collections.abc import Callable, Mapping
+import os
+from pathlib import Path
+from typing import Any
+
+from .namespaces import resolve_namespace_routes, scope_where_clause
+from .validation import safe_agent_id, safe_status
+from .writer_lock import writer_lock, WriterLockTimeout
+from .health_watch import owner_key, snapshot as llm_failure_snapshot
+from .jev_chunk_decider import credential_status as jev_credential_status
+
+
+_PUBLIC_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+_OPTIMIZE_LOCK = threading.Lock()
+
+
+def _public_value(value: Any) -> str | None:
+    """Return a display-safe configured identifier, never a URI or secret."""
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    return candidate if _PUBLIC_VALUE.fullmatch(candidate) else None
+
+
+def _credential_state(config: Mapping[str, Any], provider: str | None, *, reranker: bool) -> str:
+    """Report credential configuration without exporting a key or env name."""
+    if provider == "disabled":
+        return "disabled"
+    if provider in {"local-transformers", "local-onnx"}:
+        return "not_required"
+    explicit_env = str(config.get("apiKeyEnv") or "").strip()
+    if provider == "omlx" or (reranker and provider == "openai-compatible"):
+        env_name = explicit_env or "OMLX_API_KEY"
+        if os.environ.get(env_name):
+            return "environment_configured"
+        if str(config.get("apiKey") or "").strip():
+            return "inline_configured"
+        if str(config.get("baseUrl") or "").startswith("http://127.0.0.1:"):
+            return "local_default"
+        return "environment_missing"
+    if reranker and provider == "cohere":
+        env_name = explicit_env or "PLUR1BUS_RERANKER_API_KEY"
+        return "environment_configured" if os.environ.get(env_name) else "environment_missing"
+    if str(config.get("apiKey") or "").strip():
+        return "inline_configured"
+    if explicit_env:
+        return "environment_configured" if os.environ.get(explicit_env) else "environment_missing"
+    defaults = (
+        ("PLUR1BUS_RERANKER_API_KEY",)
+        if reranker
+        else ("PLUR1BUS_EMBEDDING_API_KEY", "OPENAI_API_KEY")
+    )
+    return "default_environment_configured" if any(os.environ.get(name) for name in defaults) else "environment_missing"
+
+
+def _embedding_projection(config: Any) -> dict[str, Any]:
+    embedding = config.get("embedding") if isinstance(config, Mapping) else None
+    embedding = embedding if isinstance(embedding, Mapping) else {}
+    provider = _public_value(embedding.get("provider", "local-transformers"))
+    model = _public_value(
+        embedding.get(
+            "model",
+            "intfloat/multilingual-e5-base" if provider == "local-transformers" else None,
+        )
+    )
+    dimensions = embedding.get("dimensions")
+    return {
+        "provider": provider,
+        "model": model,
+        "dimensions": dimensions if isinstance(dimensions, int) and dimensions > 0 else None,
+        "configured": provider is not None and model is not None,
+        "credentials": _credential_state(embedding, provider, reranker=False),
+    }
+
+
+def _reranker_projection(config: Any) -> dict[str, Any]:
+    reranker = config.get("reranker") if isinstance(config, Mapping) else None
+    reranker = reranker if isinstance(reranker, Mapping) else {}
+    provider = _public_value(reranker.get("provider", "disabled"))
+    model = _public_value(
+        reranker.get("model", "BAAI/bge-reranker-v2-m3" if provider == "local-transformers" else None)
+    )
+    return {
+        "provider": provider,
+        "model": model,
+        "configured": provider == "disabled" or (provider is not None and model is not None),
+        "credentials": _credential_state(reranker, provider, reranker=True),
+    }
+
+
+def _reject_symlink_components(root: Path, target: Path) -> None:
+    """Refuse a route when any component below the data root is a symlink."""
+    try:
+        relative = target.relative_to(root)
+    except ValueError as error:
+        raise ValueError("runtime table route escapes data root") from error
+    current = root
+    if current.is_symlink():
+        raise ValueError("runtime data root is a symbolic link")
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("runtime table route contains a symbolic link")
+
+
+def _exact_route(runtime: Any) -> Path:
+    """Validate that runtime's writer route is its canonical private route."""
+    agent_id = safe_agent_id(getattr(runtime, "agent_id"))
+    raw_data_dir = Path(getattr(runtime, "data_dir")).expanduser()
+    if not raw_data_dir.is_absolute() or raw_data_dir.is_symlink() or not raw_data_dir.is_dir():
+        raise ValueError("runtime data directory is unavailable")
+    data_dir = raw_data_dir.resolve()
+    config = getattr(runtime, "config")
+    if not isinstance(config, Mapping):
+        raise ValueError("runtime configuration is unavailable")
+    expected, _ = resolve_namespace_routes(data_dir, agent_id, dict(config))
+    relative_route = expected.path.relative_to(data_dir)
+    lexical_expected = raw_data_dir.joinpath(relative_route)
+    actual = getattr(runtime, "_writer_route", None)
+    actual_path = Path(getattr(actual, "path", "")).expanduser()
+    # Resolve only after checking the lexical expected route.  A symlinked
+    # database must never be followed by the dashboard or compaction action.
+    if (
+        actual_path != lexical_expected
+        or getattr(actual, "name", None) != expected.name
+    ):
+        raise ValueError("runtime writer route does not match its authorization")
+    if actual_path.is_symlink() or not actual_path.is_dir():
+        raise ValueError("runtime table directory is unavailable")
+    _reject_symlink_components(raw_data_dir, actual_path)
+    resolved = actual_path.resolve()
+    # The namespace resolver validates any active generation pointer. Its
+    # certified target can have a staging-generation basename, not agent_id.
+    if resolved != expected.path.resolve():
+        raise ValueError("runtime writer route escapes its data root")
+    return resolved
+
+
+def _connect(path: Path, connect: Callable[[str], Any] | None) -> Any:
+    if connect is None:
+        try:
+            import lancedb
+        except ImportError as error:  # pragma: no cover - installation issue
+            raise RuntimeError("PLUR1BUS requires lancedb") from error
+        connect = lancedb.connect
+    # We only connect to an existing, validated directory.  `open_table` is
+    # used below instead of create_table, so status cannot create a table.
+    return connect(str(path))
+
+
+def _open_exact_table(runtime: Any, connect: Callable[[str], Any] | None) -> Any:
+    return _connect(_exact_route(runtime), connect).open_table("memories")
+
+
+def read_operator_status(
+    runtime: Any, *, connect: Callable[[str], Any] | None = None
+) -> dict[str, Any]:
+    """Return aggregate state for runtime's writer table without exposing paths."""
+    from . import __version__
+
+    agent_id = safe_agent_id(getattr(runtime, "agent_id"))
+    projection = {
+        "schemaVersion": 1,
+        "version": __version__,
+        "agentId": agent_id,
+        "scopeType": str(
+            getattr(getattr(runtime, "scope_binding", None), "scope_type", "agent-private")
+        ),
+        "embedding": _embedding_projection(getattr(runtime, "config", {})),
+        "jevCredentials": jev_credential_status(getattr(runtime, "config", {})),
+        "reranker": _reranker_projection(getattr(runtime, "config", {})),
+        "storage": {"status": "unavailable", "cards": None},
+        "cards": {"byPrimaryAgent": []},
+        "configured": False,
+    }
+    binding = getattr(runtime, "scope_binding", None)
+    scope_key = getattr(binding, "scope_key", None)
+    failures = llm_failure_snapshot(owner_key(agent_id, scope_key))
+    llm_state = "degraded" if any(
+        row["count"] >= 3 and row["hint"] not in {"timeout", "aborted", "host-timeout", "host-aborted"}
+        for row in failures
+    ) else "ready"
+    # Hermes has no verified equivalent of OpenClaw's gateway log signal map.
+    # Keep it unavailable until native signals are explicitly mapped and tested.
+    projection["health"] = {
+        "status": "degraded" if llm_state == "degraded" else "unavailable",
+        "windowHours": 24,
+        "llm": {"state": llm_state, "failures": failures},
+        "gateway": {"state": "unavailable", "readable": False,
+                    "attempted": False, "code": "hermes_signal_mapping_unsupported"},
+    }
+    try:
+        table = _open_exact_table(runtime, connect)
+        binding = getattr(runtime, "scope_binding", None)
+        if binding is None:
+            raise ValueError("runtime scope binding is unavailable")
+        cards = table.count_rows(scope_where_clause(binding))
+        # Match the browser/upstream count contract. In Python bool is an int;
+        # neither booleans nor integers losing precision in JSON consumers are
+        # evidence of a successfully measured memory count.
+        if type(cards) is not int or not 0 <= cards <= 2**53 - 1:
+            raise ValueError("invalid table row count")
+        projection["storage"] = {"status": "ready", "cards": cards}
+        projection["configured"] = bool(projection["embedding"]["configured"])
+    except Exception:
+        # Error text can contain endpoint, path, or credential material.  The
+        # fixed code is intentionally the only diagnostic exported here.
+        projection["storage"] = {
+            "status": "degraded",
+            "cards": None,
+            "code": "table_unavailable",
+        }
+    # Hermes' authority boundary is the active profile, not an OpenClaw
+    # channel-binding roster. Never enumerate sibling profiles to fill a card.
+    profile = _public_value(getattr(runtime, "profile", None))
+    if profile is not None and projection["scopeType"] == "agent-private":
+        projection["cards"]["byPrimaryAgent"] = [{
+            "id": agent_id, "profile": profile, "cards": projection["storage"]["cards"],
+        }]
+    return projection
+
+
+def browse_runtime_memories(runtime: Any, *, query: str = "", status: str = "active",
+                            offset: int = 0, limit: int = 20,
+                            connect: Callable[[str], Any] | None = None) -> dict[str, Any]:
+    """Read a bounded page from the exact authorized scope, without embeddings or writes.
+
+    This is literal substring inspection, not recall: archived/expired records may
+    be inspected explicitly, and neither vectors nor internal provenance is exported.
+    """
+    if not isinstance(query, str) or len(query) > 200 or any(ord(c) < 32 for c in query):
+        raise ValueError("invalid search query")
+    safe_status(status)
+    if type(offset) is not int or not 0 <= offset <= 100000 or type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("invalid page bounds")
+    table = _open_exact_table(runtime, connect)
+    binding = getattr(runtime, "scope_binding", None)
+    if binding is None:
+        raise ValueError("runtime scope binding is unavailable")
+    predicate = f"({scope_where_clause(binding)}) AND status = '{status}'"
+    if query:
+        literal = query.lower().replace("'", "''")
+        predicate += f" AND strpos(lower(content), '{literal}') > 0"
+    # Schema intersection supports old stores without migrating them during a GET.
+    allowed = {"id", "content", "status", "type", "createdAt", "updatedAt", "expiresAt",
+               "validFrom", "validUntil", "epistemicStatus", "sourceRole", "importance"}
+    columns = sorted(allowed.intersection(table.schema.names))
+    rows = table.search().where(predicate).select(columns).offset(offset).limit(limit + 1).to_list()
+    items = [{key: row[key] for key in columns if key in row} for row in rows[:limit]]
+    for item in items:
+        content = item.get("content")
+        if isinstance(content, str) and len(content) > 32768:
+            item["content"] = content[:32768]
+            item["contentTruncated"] = True
+    return {"items": items,
+            "offset": offset, "limit": limit, "hasMore": len(rows) > limit,
+            "searchMode": "literal-substring", "status": status}
+
+
+def optimize_runtime_table(
+    runtime: Any,
+    *,
+    authorized: bool,
+    connect: Callable[[str], Any] | None = None,
+    max_attempts: int = 12,
+    retry_delay_seconds: float = 3,
+    retry_budget_seconds: float = 600,
+) -> dict[str, Any]:
+    """Compact exactly runtime's existing table after caller-side authorization.
+
+    This invokes only LanceDB's physical ``optimize`` primitive.  It never
+    deletes rows itself or creates a missing table. Conflict retries have a
+    bounded waiting budget; an executing synchronous LanceDB call cannot be
+    cancelled by a Python deadline. Non-conflict failures are never retried.
+    Start as soon as cooperating writers release their current transaction;
+    no idle-period deferral. Hold their existing lease only during an attempt,
+    not backoff, and report cumulative acquisition time without exposing paths.
+    """
+    if authorized is not True:
+        return {"ok": False, "code": "unauthorized"}
+    if (type(max_attempts) is not int or not 1 <= max_attempts <= 100
+            or not isinstance(retry_delay_seconds, (int, float))
+            or not math.isfinite(retry_delay_seconds) or retry_delay_seconds < 0
+            or not isinstance(retry_budget_seconds, (int, float))
+            or not math.isfinite(retry_budget_seconds) or retry_budget_seconds <= 0):
+        return {"ok": False, "code": "invalid_retry_options"}
+    if not _OPTIMIZE_LOCK.acquire(blocking=False):
+        return {"ok": False, "code": "busy"}
+    try:
+        deadline = time.monotonic() + retry_budget_seconds
+        writer_wait_seconds = 0.0
+        for attempt in range(1, max_attempts + 1):
+            if time.monotonic() >= deadline:
+                return {"ok": False, "code": "optimize_retry_budget_exhausted"}
+            # Validate before creating any coordination path, then reopen the
+            # certified generation after acquiring the same lease as writers.
+            _exact_route(runtime)
+            waiting_since = time.monotonic()
+            try:
+                with writer_lock(Path(runtime.data_dir), timeout=min(86400, max(0, deadline - waiting_since))):
+                    writer_wait_seconds += time.monotonic() - waiting_since
+                    if time.monotonic() >= deadline:
+                        return {"ok": False, "code": "optimize_retry_budget_exhausted"}
+                    table = _open_exact_table(runtime, connect)
+                    optimize = getattr(table, "optimize", None)
+                    if not callable(optimize):
+                        return {"ok": False, "code": "optimize_unavailable"}
+                    stats = optimize()
+                return {"ok": True, "code": "optimized", "stats": _safe_stats(stats), "attempts": attempt,
+                        "writerWaitMs": round(writer_wait_seconds * 1000)}
+            except WriterLockTimeout:
+                writer_wait_seconds += time.monotonic() - waiting_since
+                return {"ok": False, "code": "writer_busy", "attempts": attempt - 1,
+                        "writerWaitMs": round(writer_wait_seconds * 1000)}
+            except Exception as error:
+                delay = min(60, retry_delay_seconds * 2 ** (attempt - 1))
+                conflict = re.search(r"retryable commit conflict|preempted by concurrent", str(error), re.I)
+                if not conflict or attempt == max_attempts or time.monotonic() + delay >= deadline:
+                    return {"ok": False, "code": "optimize_failed", "attempts": attempt}
+                time.sleep(delay)
+    except Exception:
+        return {"ok": False, "code": "optimize_failed"}
+    finally:
+        _OPTIMIZE_LOCK.release()
+
+
+def _safe_stats(value: Any) -> dict[str, int]:
+    """Project only bounded integer optimization counters from a result."""
+    if not isinstance(value, Mapping):
+        return {}
+    projected: dict[str, int] = {}
+    for source, public in (
+        ("fragments_removed", "fragmentsRemoved"),
+        ("fragments_added", "fragmentsAdded"),
+    ):
+        count = value.get(source)
+        if isinstance(count, int) and count >= 0:
+            projected[public] = count
+    return projected

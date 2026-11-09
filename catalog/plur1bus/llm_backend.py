@@ -1,0 +1,183 @@
+"""OpenAI-compatible internal LLM backend with oMLX defaults."""
+
+from __future__ import annotations
+
+import json
+import copy
+import os
+import logging
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable
+
+from .llm_diagnostics import LlmErrorReporter
+from .feature_models import configured_routes, resolve_feature_route
+from .health_watch import owner_key, record_failure
+
+
+# Native names keep their validation/logging semantics; only the cache key is
+# mapped to the corresponding upstream deterministic transformation purpose.
+_CACHE_PURPOSES = {"skill-workshop-mining": "skill-extraction", "episode-extraction": "episode-analysis"}
+
+
+class InvalidLlmResponse(RuntimeError):
+    """A received but unusable judgment, distinct from an unavailable route."""
+
+
+class InternalLlmBackend:
+    """Execute explicitly configured internal JSON transformations."""
+
+    def __init__(
+        self,
+        config: dict[str, Any],
+        agent_id: str,
+        *,
+        opener: Callable[..., Any] = urllib.request.urlopen,
+        cache: Any = None,
+        data_dir: Path | None = None,
+        scope_key: str | None = None,
+    ) -> None:
+        self.config = dict(config.get("llm") or {})
+        self._routing_config = copy.deepcopy(config)
+        encoding_budget = ((config.get("emotion") or {}).get("t3") or {}).get("encodingMaxTokens", 1500)
+        try:
+            parsed_budget = int(encoding_budget)
+            self.encoding_max_tokens = min(16000, parsed_budget) if parsed_budget > 0 else 1500
+        except (TypeError, ValueError, OverflowError):
+            self.encoding_max_tokens = 1500
+        # Hermes already has a shared internal transport (`llm`), independent
+        # of the chat model. The upstream default is a fallback on that route,
+        # never permission to replace an explicitly selected native model.
+        router = config.get("llmRouter")
+        default_model = router.get("defaultModel") if isinstance(router, dict) else None
+        own_model = self.config.get("model")
+        if not (isinstance(own_model, str) and own_model.strip()):
+            if isinstance(default_model, str) and default_model.strip():
+                self.config["model"] = default_model.strip()
+        self.agent_id = agent_id
+        self.opener = opener
+        self.cache = cache
+        self._errors = LlmErrorReporter(config, agent_id, data_dir=data_dir, scope_key=scope_key)
+        self._health_owner = owner_key(agent_id, scope_key)
+
+    def available(self) -> bool:
+        return bool(self.config.get("model") or configured_routes(self._routing_config))
+
+    def complete_json(
+        self,
+        purpose: str,
+        system: str,
+        user: str,
+    ) -> dict[str, Any]:
+        try:
+            return self._complete_json(purpose, system, user)
+        except Exception as error:
+            fields = self._errors.report(error, purpose)
+            record_failure(self._health_owner, agent_id=self.agent_id, feature=purpose,
+                           hint=fields.get("errorHint"), error_class=fields.get("errorClass"), error=error)
+            # Neither callers nor traceback logging receive upstream text,
+            # endpoint URLs, arbitrary exception class names or chained errors.
+            error_type = InvalidLlmResponse if isinstance(error, InvalidLlmResponse) else RuntimeError
+            raise error_type(f"internal LLM failed: {fields['errorHint']}") from None
+
+    def _complete_json(self, purpose: str, system: str, user: str) -> dict[str, Any]:
+        if not self.available():
+            raise RuntimeError("internal LLM model is not configured")
+        route = resolve_feature_route(self._routing_config, self.config, self.agent_id, purpose)
+        provider = str(route.get("provider") or "omlx").lower()
+        base_url = str(route.get("baseUrl") or "").rstrip("/")
+        if not base_url and provider == "omlx":
+            base_url = "http://127.0.0.1:8000/v1"
+        if not base_url:
+            raise RuntimeError("internal LLM baseUrl is not configured")
+        payload = {
+            "model": str(route["model"]),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "max_tokens": self.encoding_max_tokens if purpose == "memory-encoding" else 300,
+            "response_format": {"type": "json_object"},
+        }
+        # No hardcoded temperature: every complete_json() call hits this raw
+        # endpoint directly (there is no host-mediated "native" route to fall
+        # back on here), and some coding-tuned endpoints — Kimi's among them —
+        # allow exactly one temperature per thinking mode and answer HTTP 400
+        # for anything else. Omitting the field lets the provider default
+        # apply. The result cache distinguishes omission from explicit zero.
+        # A deployment that wants a pinned temperature sets it via
+        # requestExtra below.
+        #
+        # requestExtra also carries server-specific fields, e.g. suppressing
+        # chain-of-thought on a reasoning model — a model that spends its
+        # budget thinking first blows the timeout below before emitting any
+        # JSON. Callers cannot reach this payload, so the escape hatch has to
+        # come from configuration.
+        extra = route.get("requestExtra")
+        if isinstance(extra, dict):
+            payload.update({key: value for key, value in extra.items()
+                            if key not in {"model", "messages"}})
+        headers = {"Content-Type": "application/json"}
+        api_key = str(os.environ.get(str(route.get("apiKeyEnv") or "")) or route.get("apiKey") or "")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        request = urllib.request.Request(
+            base_url + "/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        timeout = max(0.1, min(float(route.get("timeoutSeconds") or 4), 30))
+        cache_request = {
+            "purpose": _CACHE_PURPOSES.get(purpose, purpose), "scopeId": self.agent_id,
+            "endpoint": request.full_url, "credential": api_key,
+            "model": payload.get("model"), "messages": payload.get("messages"),
+            "maxTokens": payload.get("max_tokens"),
+            "temperature": payload.get("temperature"), "jsonMode": True,
+            "headers": headers, "payload": payload,
+        }
+        compute = lambda: self._request_json(request, timeout, purpose)
+        result = self.cache.get_or_compute_sync(cache_request, compute) if self.cache is not None else {
+            "text": compute()[0],
+        }
+        try:
+            value = json.loads(result["text"])
+            if not isinstance(value, dict):
+                raise ValueError("cached result is not an object")
+            if purpose == "query-refinement" and (
+                not isinstance(value.get("query"), str) or not 1 <= len(value["query"].strip()) <= 2048
+            ):
+                raise ValueError("cached query is invalid")
+        except (TypeError, ValueError, KeyError) as error:
+            if not result.get("cached"):
+                raise InvalidLlmResponse("internal LLM returned invalid JSON") from error
+            logging.getLogger(__name__).warning("Invalid cached LLM object bypassed")
+            text, usage = compute()
+            value = json.loads(text)
+            try:
+                self.cache.put(cache_request, text, usage)
+            except Exception:
+                logging.getLogger(__name__).warning("LLM cache repair bypassed")
+        if not isinstance(value, dict):
+            raise InvalidLlmResponse("internal LLM JSON result must be an object")
+        return value
+
+    def _request_json(self, request: Any, timeout: float, purpose: str) -> tuple[str, dict[str, Any]]:
+        """Validate the live result before it can enter the exact cache."""
+        with self.opener(request, timeout=timeout) as response:
+            try:
+                body = json.loads(response.read().decode("utf-8"))
+            except ValueError as error:
+                raise InvalidLlmResponse("internal LLM returned invalid JSON") from error
+        try:
+            content = body["choices"][0]["message"]["content"]
+            value = json.loads(content)
+        except (TypeError, ValueError, KeyError, IndexError) as error:
+            raise InvalidLlmResponse("internal LLM returned invalid JSON") from error
+        if not isinstance(value, dict):
+            raise InvalidLlmResponse("internal LLM JSON result must be an object")
+        if purpose == "query-refinement":
+            query = value.get("query")
+            if not isinstance(query, str) or not 1 <= len(query.strip()) <= 2048:
+                raise RuntimeError("internal LLM returned invalid query refinement")
+        return content, dict(body.get("usage") or {})
