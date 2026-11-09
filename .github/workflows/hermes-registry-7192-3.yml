@@ -38,7 +38,18 @@ jobs:
           npm view "$package" versions dist-tags --json --registry "$registry" > "$RUNNER_TEMP/registry.json"
           jq -e '(.versions | type == "array") and (."dist-tags" | type == "object")' "$RUNNER_TEMP/registry.json" >/dev/null
           jq --arg version "$version" '{versionExists:(.versions|index($version)!=null), tags:."dist-tags"}' "$RUNNER_TEMP/registry.json"
-          if [[ "$GITHUB_REF_NAME" != codex/hermes-registry-7192-3-publish ]]; then exit 0; fi
+          if [[ "$GITHUB_REF_NAME" != codex/hermes-registry-7192-3-publish ]]; then
+            mkdir "$RUNNER_TEMP/plur1bus-readback"
+            npm pack "$package@$version" --ignore-scripts --registry "$registry" --json --pack-destination "$RUNNER_TEMP/plur1bus-readback" > "$RUNNER_TEMP/readback.json"
+            archive="$RUNNER_TEMP/plur1bus-readback/$(jq -er '.[0].filename' "$RUNNER_TEMP/readback.json")"
+            for path in hermes-dashboard/plur1bus/desktop/plugin.js plur1bus-hermes/src/plur1bus_hermes/jev_chunk_decider.py plur1bus-hermes/src/plur1bus_hermes/feature_profiles.py; do
+              tar -xOf "$archive" "package/$path" | cmp - "$path"
+            done
+            sha256sum "$archive"
+            GH_TOKEN="$NODE_AUTH_TOKEN" gh api "users/$GITHUB_REPOSITORY_OWNER/packages/npm/plur1bus-memory" --jq '{visibility,html_url,repository: .repository.full_name}' || true
+            GH_TOKEN="$NODE_AUTH_TOKEN" gh api "users/$GITHUB_REPOSITORY_OWNER/packages/npm/plur1bus-memory/versions?per_page=100" --jq '.[] | select(.name == "7.19.2-hermes.3") | {name,html_url}' || true
+            exit 0
+          fi
           mkdir "$RUNNER_TEMP/plur1bus-pack"
           npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/plur1bus-pack" > "$RUNNER_TEMP/pack.json"
           jq -e 'length == 1 and (.[0].files|map(.path)|
