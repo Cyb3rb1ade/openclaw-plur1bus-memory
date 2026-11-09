@@ -1,4 +1,4 @@
-"""Regression tests for bounded opt-in recall helpers and reminder creation."""
+"""Regression tests for bounded recall helpers and reminder creation."""
 
 from __future__ import annotations
 
@@ -32,14 +32,14 @@ class CognitiveOptInTests(unittest.TestCase):
         ]
         return domain, calls
 
-    def test_lens_and_crr_are_off_without_explicit_opt_in(self):
+    def test_lens_is_on_but_crr_is_off_without_explicit_opt_in(self):
         domain, calls = self._domain()
         result = domain.boost_recall(
             [{"id": "base", "agentId": "main", "content": "base"}],
             object(), 4, session_id="session-a",
         )
-        self.assertEqual(calls, ["graph"])
-        self.assertEqual([row["id"] for row in result], ["base", "graph"])
+        self.assertEqual(calls, ["graph", "lens"])
+        self.assertEqual([row["id"] for row in result], ["base", "graph", "lens"])
 
     def test_crr_is_session_bound_capped_and_explicitly_triggered(self):
         domain, calls = self._domain({
@@ -52,7 +52,7 @@ class CognitiveOptInTests(unittest.TestCase):
             [{"id": "base", "agentId": "main", "content": "base"}],
             object(), 5, session_id="session-a", reactivation_trigger="post_compaction",
         )
-        self.assertEqual(calls, ["graph", "crr"])
+        self.assertEqual(calls, ["graph", "lens", "crr"])
         self.assertIn("crr", {row["id"] for row in result})
         self.assertNotIn("crr", self._domain({"conversationReactivationRecall": {"enabled": True}})[0].boost_recall(
             [{"id": "base", "agentId": "main", "content": "base"}], object(), 4,
@@ -103,11 +103,11 @@ class CognitiveOptInTests(unittest.TestCase):
         domain.note_context_compression("x" * 513, scope_key="owner")
         self.assertEqual(len(domain._reactivation_sessions), 256)
 
-    def test_lens_caps_community_members_and_is_default_off(self):
+    def test_lens_caps_community_members_and_honors_opt_out(self):
         binding = binding_from_scope("main")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            domain = Plur1busDomain(root, "main", {"semanticLens": {"enabled": True, "maxLensMemories": 2}})
+            domain = Plur1busDomain(root, "main", {"semanticLens": {"maxLensMemories": 2}})
             index = domain.workspace_dir / ".plur1bus" / "semantic-lens-index.json"
             index.parent.mkdir(parents=True)
             index.write_text(json.dumps({
@@ -122,8 +122,8 @@ class CognitiveOptInTests(unittest.TestCase):
                 "fadedMemoryIds": ["faded-a", "faded-b"],
             }), encoding="utf-8")
             self.assertEqual(domain._semantic_lens_ids({"seed"}), {"a", "b", "bridge-a", "bridge-b", "faded-a"})
-            disabled = Plur1busDomain(root, "main")
-            disabled._read_json = lambda _path: self.fail("default-off lens must not read")  # type: ignore[method-assign]
+            disabled = Plur1busDomain(root, "main", {"semanticLens": {"enabled": False}})
+            disabled._read_json = lambda _path: self.fail("disabled lens must not read")  # type: ignore[method-assign]
             self.assertEqual(disabled._semantic_lens_ids({"seed"}), set())
 
 
