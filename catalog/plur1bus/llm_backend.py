@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import copy
-import os
 import logging
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
 from .llm_diagnostics import LlmErrorReporter
+from .credentials import profile_secret
 from .feature_models import configured_routes, resolve_feature_route
 from .health_watch import owner_key, record_failure
 
@@ -118,7 +118,8 @@ class InternalLlmBackend:
             payload.update({key: value for key, value in extra.items()
                             if key not in {"model", "messages"}})
         headers = {"Content-Type": "application/json"}
-        api_key = str(os.environ.get(str(route.get("apiKeyEnv") or "")) or route.get("apiKey") or "")
+        api_key = profile_secret(str(route.get("apiKeyEnv") or ""), self._routing_config.get("hermesHome"))
+        api_key = api_key or str(route.get("apiKey") or "")
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(

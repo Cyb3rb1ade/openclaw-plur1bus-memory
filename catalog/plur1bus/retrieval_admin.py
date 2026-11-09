@@ -24,6 +24,21 @@ FIELDS = {"provider", "model", "dimensions", "baseUrl", "apiKeyEnv", "modelDir",
           "maxTokens", "batchSize"}
 
 
+def active_profile_name(home=None) -> str:
+    """Resolve the server's profile id using the public Hermes home API."""
+    import hermes_constants as host
+
+    home = host.get_hermes_home() if home is None else home
+    if resolver := getattr(host, "profile_name_for_home", None):
+        return resolver(home) or "custom"
+    # Older Hermes installations derive their identity from the profile home.
+    path = Path(home).resolve()
+    root = host.get_default_hermes_root().resolve()
+    if path == root:
+        return "default"
+    return path.name if path.parent == root / "profiles" else "custom"
+
+
 def active_runtime_view():
     """Build a read-only view of the dashboard server's active provider route.
 
@@ -34,10 +49,9 @@ def active_runtime_view():
     from .provider import Plur1busMemoryProvider
     from .generation import effective_generation_config
     from hermes_constants import get_hermes_home
-    from hermes_cli.profiles import get_active_profile_name
 
     hermes_home = Path(get_hermes_home()).expanduser()
-    profile = get_active_profile_name()
+    profile = active_profile_name(hermes_home)
     # Config resolution is an instance method, but a full provider constructor
     # starts a prefetch executor and shutdown changes process health state.  A
     # bare instance has exactly the read-only fields used by _runtime_config.

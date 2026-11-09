@@ -38,6 +38,7 @@ from .dream_diary import append_dream_diary_entry
 from .dynamics import index_feedback_events, transform_metadata
 from .encoding import AGENT_BAND_MIN
 from .writer_lock import serialized_memory_write, writer_lock
+from .neo_retention import JOURNALS, NeoRetention
 from .epistemic import is_recallable_epistemic
 from .generation import effective_generation_config
 from .knowledge import content_fingerprint, is_eligible, is_invalidated, write_confirmed_knowledge
@@ -182,6 +183,7 @@ class Plur1busDomain:
         with writer_lock(self.data_dir):
             self._knowledge_writer_identity = self._current_knowledge_writer_identity()
         self.neo_dir = data_dir / "neo" / self.agent_id
+        self._neo_retention = NeoRetention(data_dir)
         self.workspace_dir = data_dir / "profiles" / self.agent_id / "workspace"
         self.state_dir = data_dir / "state" / self.agent_id
         self._speakers = SpeakerMappingStore(self.neo_dir / "speaker-mappings.json")
@@ -2596,6 +2598,7 @@ class Plur1busDomain:
             },
         )
         dynamics = self.run_dynamics(acl_bindings=selector.acl_bindings)
+        neo_prune = self._neo_retention.consolidate(self.neo_dir, neo_dir)
         report = {
             "agentId": self.agent_id,
             "generatedAt": _utcnow(),
@@ -2604,6 +2607,8 @@ class Plur1busDomain:
             "mergeProposals": len(proposals),
             "conflictRecommendations": len(conflict_recommendations),
             "dynamics": dynamics,
+            "hookStorePrune": neo_prune["hook"],
+            "ownerStorePrune": neo_prune.get("owner", {}),
             "selected": len(rows),
             "planned": len(proposals) + len(conflict_recommendations),
             "persisted": 3,
@@ -4621,9 +4626,13 @@ class Plur1busDomain:
         return "neutral", 0.0
 
     def _append_jsonl(self, path: Path, value: dict[str, Any]) -> None:
+        line = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str) + "\n"
+        if path.name in JOURNALS and path.is_relative_to(self.neo_dir):
+            self._neo_retention.append(path, line.encode("utf-8"))
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+            handle.write(line)
 
     def audit_mutation(self, entry: dict[str, Any]) -> None:
         """Append-only Mutations-Audit (destructive-operations.jsonl)."""

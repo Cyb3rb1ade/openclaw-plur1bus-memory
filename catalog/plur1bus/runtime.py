@@ -24,6 +24,7 @@ from typing import Any
 
 from .cache import EmbeddingCache
 from .chunking import capture_options, capture_rows
+from .credentials import profile_secret
 from .domain import Plur1busDomain
 from .feature_profiles import parity_feature_enabled
 from .epistemic import (
@@ -135,9 +136,9 @@ def _embedding_timeout_seconds(config: Mapping[str, Any]) -> float:
         return 15.0
 
 
-def _request_json(url: str, payload: dict[str, Any], config: dict[str, Any], *, default_key_env: str) -> dict[str, Any]:
+def _request_json(url: str, payload: dict[str, Any], config: dict[str, Any], *, hermes_home: Path) -> dict[str, Any]:
     """Post an OpenAI-compatible request and return its JSON response."""
-    key = os.environ.get(str(config.get("apiKeyEnv", default_key_env)), "") or str(config.get("apiKey", ""))
+    key = profile_secret(str(config["apiKeyEnv"]), hermes_home) or str(config.get("apiKey", ""))
     if not key and url.startswith("http://127.0.0.1:"):
         key = "local"
     if not key:
@@ -337,11 +338,8 @@ class EmbeddingBackend:
     def _embed_remote(self, config: dict[str, Any], text: str, *, purpose: str) -> list[float]:
         key = str(config.get("apiKey") or "")
         if not key:
-            explicit_env = config.get("apiKeyEnv")
-            key = os.environ.get(str(explicit_env), "") if explicit_env else (
-                os.environ.get("PLUR1BUS_EMBEDDING_API_KEY", "")
-                or os.environ.get("OPENAI_API_KEY", "")
-            )
+            name = str(config.get("apiKeyEnv") or "PLUR1BUS_EMBEDDING_API_KEY")
+            key = profile_secret(name, self.hermes_home)
         if not key:
             raise RuntimeError("remote embedding API key is not configured")
         base_url = str(config.get("baseUrl") or "https://api.openai.com/v1").rstrip("/")
@@ -399,7 +397,7 @@ class EmbeddingBackend:
             f"{settings['baseUrl'].rstrip('/')}/embeddings",
             body,
             settings,
-            default_key_env="OMLX_API_KEY",
+            hermes_home=self.hermes_home,
         )
         values = payload.get("data")
         if not isinstance(values, list) or len(values) != len(texts):
@@ -522,7 +520,8 @@ class RerankerBackend:
                       key=lambda row: row["rerankScore"], reverse=True)
 
     def _rerank_cohere(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        key = os.environ.get(str(config.get("apiKeyEnv", "PLUR1BUS_RERANKER_API_KEY")), "")
+        name = str(config.get("apiKeyEnv") or "PLUR1BUS_RERANKER_API_KEY")
+        key = profile_secret(name, self.hermes_home)
         if not key:
             raise RuntimeError("Cohere reranking API key is not configured")
         request = urllib.request.Request(
@@ -563,7 +562,7 @@ class RerankerBackend:
                 "return_documents": False,
             },
             settings,
-            default_key_env="OMLX_API_KEY",
+            hermes_home=self.hermes_home,
         )
         ranking = payload.get("results", [])
         scores: dict[int, float] = {}

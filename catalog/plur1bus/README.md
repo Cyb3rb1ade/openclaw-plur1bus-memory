@@ -16,10 +16,9 @@ model and storage controls, a memory browser, and diagnostics.
 3. Start or restart the profile's gateway. **PLUR1BUS** then appears in the
    Desktop navigation for that profile.
 
-Each profile opts in separately. Model and storage migration workflows require
-their own confirmation. Local secondary profiles can edit regular settings.
-Some model or data operations require opening the target as the backend's launch
-profile. The PLUR1BUS settings page currently uses German labels.
+Each profile opts in separately. Model and storage migrations require
+confirmation. If Hermes exposes a secondary profile in read-only mode, open
+it as the backend's launch profile to edit its settings.
 
 The catalog bundle contains reviewable source only. It uses Hermes Package
 Management for Python dependencies. Apple Silicon, Linux x64/ARM64, and Windows
@@ -37,11 +36,10 @@ has the signed macOS installer and step-by-step guides.
 - Local model providers can download weights from their upstream distribution.
   Configured remote embedding, reranking or task model routes can receive the
   text they need to perform those tasks. No remote service is required to install.
-- Jev is optional. In **Speicherweise**, saving a Jev key and choosing automatic
-  mode explicitly authorizes eligible new capture text to be sent to
-  `https://api.typesafe.ai`. The key is stored through Hermes' profile credential
-  API. No key is exposed in the PLUR1BUS dashboard response.
+- Jev is optional. In Hermes Settings → Memory → PLUR1BUS, save a **Jev API
+  key**. In the PLUR1BUS dashboard, choose **Automatic (Jev)** under **Storage
+  mode** to allow sending eligible new capture text to `https://api.typesafe.ai`.
+  Hermes stores the key for the selected profile. The dashboard shows only
+  whether a key is configured.
 - This catalog payload does not include the standalone platform installers,
   an updater, model weights, private credentials, or Hermes core patches.
-
-Source baseline: [PLUR1BUS Hermes 7.19.2-hermes.3](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/tree/33a933bee29d6bbca48f9466ac3914ab39cb04c7).

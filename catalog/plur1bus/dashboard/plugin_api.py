@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import hmac
+from ipaddress import ip_address
 import re
 import secrets
 import threading
@@ -18,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ConfigDict
 
 from plur1bus_hermes.operator_status import browse_runtime_memories, read_operator_status
-from plur1bus_hermes.retrieval_admin import active_runtime_view as _active_runtime_view
+from plur1bus_hermes.retrieval_admin import active_profile_name, active_runtime_view as _active_runtime_view
 from plur1bus_hermes.runtime import Plur1busRuntime
 from plur1bus_hermes.skill_workshop import SkillWorkshop
 
@@ -29,8 +30,7 @@ def _require_profile_binding(request: Request) -> None:
     if not expected:
         return  # Existing browser clients stay process-scoped.
     _actor(request, read_only=True)
-    from hermes_cli.profiles import get_active_profile_name
-    if len(expected) != 1 or expected[0] != get_active_profile_name():
+    if len(expected) != 1 or expected[0] != active_profile_name():
         raise HTTPException(status_code=409, detail="PLUR1BUS backend profile mismatch")
 
 
@@ -110,9 +110,8 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
             hosted_read = False
     result = {"memoryBrowser": True, "workshopActions": actions, "retrievalActions": actions, "obsidianActions": actions}
     if actions or hosted_read:
-        from hermes_cli.profiles import get_active_profile_name
         from hermes_cli.config import load_config_readonly
-        result.update(profileBinding=1, profile=get_active_profile_name(), hostedReadOnly=hosted_read)
+        result.update(profileBinding=1, profile=active_profile_name(), hostedReadOnly=hosted_read)
         config = load_config_readonly()
         memory = config.get("memory") or {}
         result["memoryProviderEnabled"] = (isinstance(memory, dict)
@@ -154,7 +153,8 @@ def _settings_actor(request, verb=None):
 def settings_options(request: Request):
     actor = _settings_actor(request)
     from plur1bus_hermes.settings_admin import public_settings
-    return {**public_settings(_active_runtime_view()), "readOnly": actor == "hosted:read-only"}
+    language = request.query_params.get("language", "en" if "/desktop/" in request.url.path else "de")
+    return {**public_settings(_active_runtime_view(), language=language), "readOnly": actor == "hosted:read-only"}
 
 
 @router.post("/settings/preview")
@@ -369,16 +369,16 @@ def _actor(request: Request, *, read_only: bool = False) -> str:
         )
     if session is not None:
         raise HTTPException(status_code=503, detail="action_identity_unavailable")
-    # Loopback mode has no user principal. Bind to the host-issued token only
-    # after comparing the header server-side; the raw credential is never kept.
-    try:
-        from hermes_cli.web_server import _SESSION_TOKEN
-    except Exception as error:
-        raise HTTPException(status_code=503, detail="action_identity_unavailable") from error
+    # Hermes' outer /api/plugins authentication already verified this header.
+    # Bind reviews to the presented credential and a loopback transport.
     presented = request.headers.get("X-Hermes-Session-Token", "")
-    if not presented or not hmac.compare_digest(presented, _SESSION_TOKEN):
+    try:
+        loopback = request.client is not None and ip_address(request.client.host).is_loopback
+    except ValueError:
+        loopback = False
+    if not presented or not loopback:
         raise HTTPException(status_code=401, detail="authenticated_actor_required")
-    return "loopback:" + hashlib.sha256(_SESSION_TOKEN.encode("utf-8")).hexdigest()
+    return "loopback:" + hashlib.sha256(presented.encode("utf-8")).hexdigest()
 
 
 def _same_origin_confirmation(request: Request, verb: str) -> None:
@@ -407,7 +407,7 @@ def _runtime_lease() -> Iterator[tuple[Plur1busRuntime, Any]]:
     """Open and always close the one server-selected runtime for an action."""
     view = _active_runtime_view()
     runtime = Plur1busRuntime(
-        view.data_dir, view.config, view.agent_id, view.scope_binding.as_dict()
+        view.data_dir, {**view.config, "hermesHome": str(view.hermes_home)}, view.agent_id, view.scope_binding.as_dict()
     )
     try:
         yield runtime, view
