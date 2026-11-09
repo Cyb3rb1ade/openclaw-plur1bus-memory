@@ -1,0 +1,62 @@
+name: Hermes 7.19.2.3 registry
+on:
+  push:
+    branches:
+      - codex/hermes-registry-7192-3-probe
+      - codex/hermes-registry-7192-3-publish
+permissions:
+  contents: read
+jobs:
+  registry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NODE_AUTH_TOKEN: ${{ github.token }}
+      PLUR1BUS_SOURCE: 33a933bee29d6bbca48f9466ac3914ab39cb04c7
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 33a933bee29d6bbca48f9466ac3914ab39cb04c7
+          persist-credentials: false
+      - name: Verify package source and inspect registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PLUR1BUS_SOURCE"
+          test -z "$(git status --porcelain)"
+          test "$(node -p 'require("./package.json").version')" = 7.19.2-hermes.3
+          test "$(node -p 'require("./package.json").name')" = '@cyb3rb1ade/plur1bus-memory'
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/plur1bus-npmrc"
+          umask 077
+          printf '%s\n' '@cyb3rb1ade:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$NPM_CONFIG_USERCONFIG"
+          registry=https://npm.pkg.github.com
+          package='@cyb3rb1ade/plur1bus-memory'
+          version=7.19.2-hermes.3
+          npm view "$package" versions dist-tags --json --registry "$registry" > "$RUNNER_TEMP/registry.json"
+          jq -e '(.versions | type == "array") and (."dist-tags" | type == "object")' "$RUNNER_TEMP/registry.json" >/dev/null
+          jq --arg version "$version" '{versionExists:(.versions|index($version)!=null), tags:."dist-tags"}' "$RUNNER_TEMP/registry.json"
+          if [[ "$GITHUB_REF_NAME" != codex/hermes-registry-7192-3-publish ]]; then exit 0; fi
+          mkdir "$RUNNER_TEMP/plur1bus-pack"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/plur1bus-pack" > "$RUNNER_TEMP/pack.json"
+          jq -e 'length == 1 and (.[0].files|map(.path)|
+            index("hermes-dashboard/plur1bus/desktop/plugin.js") != null and
+            index("plur1bus-hermes/src/plur1bus_hermes/jev_chunk_decider.py") != null and
+            (any(test("(^|/)([.]env([./]|$)|[.]git/|node_modules/|__pycache__/)|[.](sqlite3?|db|pem|key)$")) | not))' "$RUNNER_TEMP/pack.json"
+          file="$RUNNER_TEMP/plur1bus-pack/$(jq -er '.[0].filename' "$RUNNER_TEMP/pack.json")"
+          digest="$(jq -er '.[0].integrity' "$RUNNER_TEMP/pack.json")"
+          if jq -e --arg version "$version" '.versions|index($version)!=null' "$RUNNER_TEMP/registry.json" >/dev/null; then
+            if [[ "$(npm view "$package@$version" dist.integrity --registry "$registry")" != "$digest" ]]; then
+              echo "::error::The version already exists with different bytes. Publish a new package version."
+              exit 1
+            fi
+            npm dist-tag add "$package@$version" hermes --registry "$registry"
+          else
+            npm publish "$file" --ignore-scripts --registry "$registry" --tag hermes
+          fi
+          test "$(npm view "$package@$version" dist.integrity --registry "$registry")" = "$digest"
+          test "$(npm view "$package" dist-tags.hermes --registry "$registry")" = "$version"
+          test "$(npm view "$package" dist-tags.latest --registry "$registry")" = "$(jq -r '."dist-tags".latest // empty' "$RUNNER_TEMP/registry.json")"
+          printf 'Published %s@%s (hermes), integrity %s\n' "$package" "$version" "$digest"
