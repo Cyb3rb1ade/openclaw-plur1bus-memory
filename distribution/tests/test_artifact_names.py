@@ -67,7 +67,7 @@ def test_portable_bundle_ships_identical_unified_and_materialized_desktop(tmp_pa
         "scripts/hermes-desktop-host.py": "# helper\n",
         "LICENSE": "fixture license\n",
     }
-    for name in ("installer.py", "native_launcher.py", "install.sh", "install.ps1",
+    for name in ("installer.py", "macos_pm_compat.py", "native_launcher.py", "install.sh", "install.ps1",
                  "Install PLUR1BUS.command", "README.md", "INSTALLATION.de.md"):
         files["distribution/" + name] = "# fixture\n"
     for name in ("hermes-snapshot-restore.md", "hermes-bge-onnx.md", "audits/hermes-completion-followup-2026-09-06.md"):
@@ -94,6 +94,8 @@ def test_portable_bundle_ships_identical_unified_and_materialized_desktop(tmp_pa
     with zipfile.ZipFile(next(output.glob("*.zip"))) as archive:
         prefix = "plur1bus-7.12.53-hermes.0/"
         manifest = json.loads(archive.read(prefix + "distribution.json"))
+        compat = "macos_pm_compat.py"
+        assert manifest["files"][compat] == hashlib.sha256(archive.read(prefix + compat)).hexdigest()
         unified = "payload/plugins/plur1bus/desktop/plugin.js"
         materialized = "payload/desktop-plugins/plur1bus/plugin.js"
         assert archive.read(prefix + unified) == archive.read(prefix + materialized)
