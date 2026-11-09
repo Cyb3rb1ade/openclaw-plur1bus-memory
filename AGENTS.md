@@ -77,6 +77,18 @@ Memory mirrors use technical filter tags, not semantic content tags:
 
 Use these for filtering and grouping only.
 
+## Neo store retention (7.19.3)
+
+The Neo store keeps per-workspace JSONL journals under `{baseDbPath}/_neo/workspaces/<key>--<hash>/` (candidates, behavior cards, turn journal, graph, episodes, ledgers). Since 7.19.3:
+
+- **Append path:** only an emergency ceiling of 40,000 lines (`PLUR1BUS_NEO_MAX_RECORDS`); evicted lines are archived.
+- **Daily consolidation:** a journal is trimmed only above 5,000 lines (`PLUR1BUS_NEO_SOFT_MAX_RECORDS`), and then only entries older than 90 days (`PLUR1BUS_NEO_RETENTION_DAYS`), weakest first. Revisions of one id (or one graph edge `source|target|type`) stay or go together. Protected from the age rule: active/promoted entries with confidence or salience ≥ 0.6, graph edges with strength ≥ 0.6, `neverForget`, pending queue items. Small journals (episodes, dream diary) are never trimmed.
+- **Archive, never discard:** removed lines go to `<workspace>/archive/<file>.<YYYY-MM>.jsonl.gz` (gzip members, `zcat` reads them). If the archive write fails, the journal stays untouched.
+- **Hook store:** consolidate-daily also prunes the store the hooks write to (`hookStorePrune` in the result, log line `neo hook-store prune`), without content dedupe.
+- **Store keys:** open a Neo store with the workspace key (`main`, `bernhardine`, `heisenberg`), not the directory name. Since 7.19.3 a canonical `<key>--<hash>` name resolves to itself instead of creating a nested empty directory.
+- **Global recall** reads every candidate-index vector per query; keep `PLUR1BUS_NEO_CANDIDATE_INDEX_MAX` (20,000) unless recall latency is re-measured.
+- Neo status changes are appended revisions (`transitionRecordStatus` + `appendCandidates`); `readCandidates` returns all revisions, so use the newest one.
+
 ## Coding Standards
 
 ### Naming
