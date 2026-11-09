@@ -112,7 +112,18 @@ await hostedSettingsTransport('/desktop/settings', {
 assert.equal(settingsCalls.at(-1).path, '/api/memory/providers/plur1bus/config?surface=declared&profile=alpha');
 assert.deepEqual(JSON.parse(settingsCalls.at(-1).body.values.reviewedSetting),
   { identifier: 'capture.mode', value: 'geteilt', revision: 'r', profile: 'alpha' });
+assert.equal((await hostedSettingsTransport('/desktop/settings')).localCredentialWrite, true);
+const saveJevKey = value => hostedSettingsTransport('/desktop/settings/jev-key',
+  { method: 'PUT', body: { value, key: 'UNRELATED_KEY', profile: 'other' } });
+await saveJevKey('fixture-key');
+assert.equal(settingsCalls.at(-1).path, '/api/env?profile=alpha');
+assert.deepEqual(JSON.parse(JSON.stringify(settingsCalls.at(-1).body)),
+  { key: 'TYPESAFE_API_KEY', value: 'fixture-key' });
+await assert.rejects(saveJevKey('fixture-key\n'));
+assert.match(settingsCalls.at(-1).path, /\/desktop\/capabilities$/);
 routeMode = 'remote';
+await assert.rejects(saveJevKey('fixture-key'));
+assert.match(settingsCalls.at(-1).path, /\/desktop\/capabilities$/);
 assert.equal((await hostedSettingsTransport('/desktop/settings')).readOnly, true);
 assert.match(settingsCalls.at(-1).path, /^\/api\/plugins\/plur1bus\/desktop\/settings/);
 const compatibleHost = { openWorkspace() {}, profileRoutes: async () => [

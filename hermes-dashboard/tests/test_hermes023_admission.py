@@ -172,8 +172,36 @@ def test_desktop_provider_config_saves_hosted_profile_settings(tmp_path, monkeyp
             latest = get_settings()
             saved = client.put(config_path, json=payload("capture.mode", "geteilt", latest), headers=ticket())
             assert saved.status_code == 200, saved.text
-            current = {item["id"]: item["value"] for item in get_settings()["settings"]}
+            before_key = get_settings()
+            current = {item["id"]: item["value"] for item in before_key["settings"]}
             assert current["autoCapture"] is False and current["capture.mode"] == "geteilt"
+            env_path = "/api/env?profile=beta"
+            key = "fixture-jev-credential"
+            secret = {"key": "TYPESAFE_API_KEY", "value": key}
+            assert before_key["jevCredentials"]["configured"] is False
+            assert client.put(env_path, json=secret).status_code == 401
+            assert client.put(env_path, json=secret, headers=ticket(root)).status_code == 403
+            assert not (beta / ".env").exists()
+            saved = client.put(env_path, json=secret, headers=ticket())
+            assert saved.status_code == 200 and saved.json()["ok"] is True
+            assert key not in saved.text
+            latest = get_settings()
+            assert latest["jevCredentials"] == {
+                "configured": True, "source": "default_environment", "editable": True,
+            }
+            assert key not in json.dumps(latest)
+            assert latest["revision"] == before_key["revision"]
+            assert next(item["value"] for item in latest["settings"] if item["id"] == "capture.mode") == "geteilt"
+            assert key in (beta / ".env").read_text(encoding="utf-8")
+            assert not (root / ".env").exists()
+            # Capture runs outside the request and must use the same profile's key.
+            from plur1bus_hermes.jev_chunk_decider import decide_storage
+            with patch("plur1bus_hermes.jev_chunk_decider.urlopen") as call:
+                assert decide_storage("Example text", {"hermesHome": str(root)}) == "both"
+                call.assert_not_called()
+                call.return_value.__enter__.return_value.read.return_value = b'{"answers":{"structure":{"choice":"independent","confidence":1}}}'
+                assert decide_storage("Example text", {"hermesHome": str(beta)}) == "parts"
+                assert call.call_args.args[0].get_header("Authorization") == "Bearer " + key
             assert root_config.read_bytes() == original
             assert json.loads(beta_config.read_bytes())["unrelated"] == 17
     finally:

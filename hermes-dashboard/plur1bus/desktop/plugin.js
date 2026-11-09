@@ -148,6 +148,8 @@ export function createScopedReader(rest, scope, publish) {
 
 const h = React.createElement;
 const scopeKey = () => JSON.stringify([host.state.connectionId.get(), host.state.profile.get()]);
+const validJevKey = value => typeof value === 'string' && value.length > 0
+  && value.length <= 4096 && !/[^!-~]/.test(value);
 
 /** Pin each request to a verified host-owned profile route, never ambient REST state.
  * @param {Function} api Electron's authenticated HermesApiRequest bridge.
@@ -183,15 +185,15 @@ export function createProfileTransport(api, routes, owner, current, identity) {
       throw unavailable('Für dieses Profil ist keine eindeutige Hermes-Verbindung verfügbar.');
     }
     const route = matches[0];
-    const send = async (suffix, opts = {}, assertProfile = true, providerConfig = false) => {
+    const send = async (suffix, opts = {}, assertProfile = true, corePath = '') => {
       check();
       if (!suffix.startsWith('/') || suffix.startsWith('//') || suffix.includes('#')
           || suffix.split('?')[0].split('/').some(part => ['.', '..'].includes(decodeURIComponent(part)))) {
         throw new Error('Invalid PLUR1BUS API path');
       }
-      const url = new URL(providerConfig ? '/api/memory/providers/plur1bus/config' : `/api/plugins/plur1bus${suffix}`, 'http://plur1bus.invalid');
-      if (providerConfig) {
-        url.searchParams.set('surface', 'declared');
+      const url = new URL(corePath || `/api/plugins/plur1bus${suffix}`, 'http://plur1bus.invalid');
+      if (corePath) {
+        if (corePath === '/api/memory/providers/plur1bus/config') url.searchParams.set('surface', 'declared');
         url.searchParams.set('profile', route.targetProfile);
       } else if (assertProfile) url.searchParams.set('expectedProfile', route.targetProfile);
       let result;
@@ -224,17 +226,24 @@ export function createProfileTransport(api, routes, owner, current, identity) {
       throw unavailable('PLUR1BUS ist für dieses Profil nicht als aktiver Memory-Provider bestätigt. Es wurden keine Profildaten geladen.');
     }
     if (path === '/desktop/capabilities') return capabilities;
+    if (path === '/desktop/settings/jev-key') {
+      const value = options.body?.value;
+      if (route.mode !== 'local' || options.method !== 'PUT' || !validJevKey(value)) {
+        throw unavailable('Der Jev-Schlüssel kann nur in einem lokalen Hermes-Profil gespeichert werden.');
+      }
+      return send(path, { method: 'PUT', body: { key: 'TYPESAFE_API_KEY', value } }, false, '/api/env');
+    }
     if (path === '/desktop/settings' && route.mode === 'local' && capabilities.hostedReadOnly === true) {
       if (options.method === 'PUT') {
         return send('/config', { method: 'PUT', body: { values: {
           reviewedSetting: JSON.stringify({ ...options.body, profile: route.targetProfile }),
-        } } }, false, true);
+        } } }, false, '/api/memory/providers/plur1bus/config');
       }
       if (!options.method) {
-        const settings = await send(path);
+        const settings = { ...await send(path), localCredentialWrite: true };
         if (settings?.readOnly === true && settings.profile === route.targetProfile) {
           try {
-            const schema = await send('/config', {}, false, true);
+            const schema = await send('/config', {}, false, '/api/memory/providers/plur1bus/config');
             if (schema?.fields?.some(field => field.key === 'reviewedSetting' && field.kind === 'json')) {
               return { ...settings, readOnly: false, providerConfigWrite: true };
             }
@@ -244,6 +253,9 @@ export function createProfileTransport(api, routes, owner, current, identity) {
         }
         return settings;
       }
+    }
+    if (path === '/desktop/settings' && !options.method && route.mode === 'local') {
+      return { ...await send(path), localCredentialWrite: true };
     }
     return send(path, options);
   };
@@ -480,6 +492,8 @@ const css = `
 .plur1bus-desktop :is(button,input,select,summary):focus-visible{outline:2px solid var(--pb-accent);outline-offset:3px}
 .plur1bus-desktop .pb-review{position:sticky;bottom:0;background:var(--background,#18181c);border-radius:8px;box-shadow:0 -4px 18px #0002;z-index:2}
 .plur1bus-desktop .pb-setting-row .pb-review{position:static;grid-column:1/-1}
+.plur1bus-desktop .pb-jev-key input{width:min(100%,380px);margin:8px 0 12px}
+.plur1bus-desktop .pb-jev-key button+button{margin-left:8px}
 .plur1bus-desktop footer{margin-top:32px;padding:18px 0;border-top:1px solid var(--pb-line);font-size:12px;color:var(--pb-soft)}
 @media(max-width:680px){.plur1bus-desktop{padding:20px 16px}.plur1bus-desktop .pb-setting-row{grid-template-columns:1fr;gap:10px}.plur1bus-desktop .pb-toggle{justify-content:flex-start}.plur1bus-desktop .pb-setting-control{justify-self:start}}
 `;
@@ -499,6 +513,53 @@ export function retrievalDefaults(provider, kind) {
     license: 'CC-BY-NC-4.0', licenseAccepted: false, queryPrefix: 'Query: ', passagePrefix: 'Document: ' };
   return { provider, model: '', ...(kind === 'embedding' ? { dimensions: 768 } : {}),
     ...(provider === 'local-transformers' ? { localFilesOnly: true } : { baseUrl: '', apiKeyEnv: '' }) };
+}
+
+function JevKeySettings({ rest, credentials, local, reload }) {
+  const request = useRequests(rest);
+  const [editing, setEditing] = React.useState(false);
+  const [key, setKey] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [notice, setNotice] = React.useState('');
+  const editable = local && credentials.editable === true;
+  const valid = validJevKey(key.trim());
+  async function save(event) {
+    event.preventDefault();
+    if (busy || !editable || !valid) return;
+    setBusy(true); setNotice(''); setKey('');
+    const result = await request.current?.run('/desktop/settings/jev-key', {
+      method: 'PUT', body: { value: key.trim() },
+    });
+    if (!result || result.stale) return;
+    if (result.error || result.value?.ok !== true) {
+      setNotice('Der Jev-Schlüssel konnte nicht gespeichert werden. Prüfe die Profilverbindung und versuche es erneut.');
+    } else {
+      setEditing(false);
+      const latest = await reload();
+      setNotice(latest?.jevCredentials?.configured === true
+        ? 'Jev-Schlüssel gespeichert. Die Speicherweise bleibt unverändert.'
+        : 'Hermes hat gespeichert, aber PLUR1BUS konnte den Schlüsselstatus nicht bestätigen.');
+    }
+    setBusy(false);
+  }
+  return h('div', { className: 'pb-review pb-jev-key' },
+    h('h3', null, 'Jev-API-Schlüssel'),
+    h('p', { className: 'pb-setting-help' },
+      `${credentials.configured === true ? 'Ein Schlüssel ist hinterlegt.' : 'Kein Schlüssel hinterlegt.'} Er wird nur bei „Automatisch (Jev)“ verwendet.`),
+    !editable ? h('p', { className: 'pb-setting-help' }, credentials.editable === false
+      ? 'Dieses Profil verwendet eine separat konfigurierte Schlüsselquelle.'
+      : 'Zum Hinterlegen das Profil in der lokalen Hermes-App öffnen.') : null,
+    editable && !editing ? h('button', { type: 'button', disabled: busy,
+      onClick: () => { setEditing(true); setNotice(''); } },
+    credentials.configured === true ? 'Jev-API-Schlüssel ändern' : 'Jev-API-Schlüssel hinterlegen') : null,
+    editable && editing ? h('form', { onSubmit: save },
+      h('label', { htmlFor: 'pb-jev-key' }, 'Neuer Jev-API-Schlüssel'),
+      h('input', { id: 'pb-jev-key', type: 'password', autoComplete: 'off', spellCheck: false,
+        value: key, maxLength: 4096, disabled: busy, onChange: event => setKey(event.target.value) }),
+      h('button', { type: 'submit', disabled: busy || !valid }, busy ? 'Speichert…' : 'Jev-Schlüssel speichern'),
+      h('button', { type: 'button', disabled: busy, onClick: () => { setEditing(false); setKey(''); setNotice(''); } },
+      'Abbrechen')) : null,
+    notice ? h('p', { role: 'status' }, notice) : null);
 }
 
 function FeatureSettings({ rest }) {
@@ -581,6 +642,9 @@ function FeatureSettings({ rest }) {
       h('select', { id: `pb-${setting.id}`, className: 'pb-setting-control', 'aria-describedby': `pb-help-${setting.id}`, disabled: busy || settings.readOnly, value: String(setting.choices.indexOf(setting.value)),
         onChange: event => { void preview(setting.id, setting.choices[Number(event.target.value)]); } },
       setting.choices.map((value, index) => h('option', { key: index, value: String(index) }, value === '' ? 'Standard erben' : setting.choiceLabels?.[value] || String(value)))),
+      setting.id === 'capture.mode' && settings.jevCredentials
+        ? h(JevKeySettings, { rest, credentials: settings.jevCredentials, local: settings.localCredentialWrite === true, reload: load })
+        : null,
       review?.identifier === setting.id ? h('div', { className: 'pb-review', role: 'region', 'aria-label': 'Änderung prüfen' },
         h('h3', null, 'Änderung prüfen'), h('p', null, `${setting.label || setting.id}: ${review.value === true ? 'Aktivieren' : review.value === false ? 'Deaktivieren' : setting.choiceLabels?.[review.value] || (review.value === '' ? 'Standard erben' : String(review.value))}`),
         h('p', { className: 'pb-intro' }, 'Gilt für dieses Profil. Nach dem Speichern ist ein Gateway-Neustart erforderlich.'),

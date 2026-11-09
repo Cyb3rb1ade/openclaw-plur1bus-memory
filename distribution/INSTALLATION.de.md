@@ -24,6 +24,14 @@ für Semantic Lens, Merge-Vorschläge, Schicht 1.5, Skill Workshop, Persona Voic
 und die Archivierung abgelaufener Erinnerungen. Gespeicherte Profilwerte haben
 Vorrang. Im gewählten Profil „Sicher“ bleiben diese Funktionen bei fehlendem
 Schalter aus. Jev und Auto-Apply erfordern weiterhin eine ausdrückliche Auswahl.
+Dream Echo bleibt aus, bis Hermes dafür eine mit OpenClaw vergleichbare
+Begrenzung hat.
+
+Den Jev-API-Schlüssel kannst du in der lokalen Hermes-App unter
+**PLUR1BUS → Einstellungen → Speicherung → Speicherweise** hinterlegen oder
+ändern. Er wird im ausgewählten Profil gespeichert und nur verwendet, wenn du
+**Automatisch (Jev)** auswählst. Dann kann PLUR1BUS den Text zur Entscheidung
+über die Speicherweise an api.typesafe.ai senden.
 
 Downloads ausschließlich unter [GitHub Releases](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases).
 Ein CI-Artefakt oder diese Anleitung ist keine Release-Freigabe. Erst wenn das

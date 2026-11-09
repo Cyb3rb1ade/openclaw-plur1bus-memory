@@ -7,6 +7,7 @@ import json
 from .feature_models import PURPOSE_FEATURE, configured_routes
 from .feature_profiles import PARITY_DEFAULT_FEATURES, parity_feature_enabled
 from .generation import _atomic_json, _reject_symlink_components
+from .jev_chunk_decider import credential_status as jev_credential_status
 from .retrieval_admin import config_path, context_revision
 from .validation import ValidationError
 from .writer_lock import writer_lock
@@ -132,6 +133,7 @@ def public_settings(view):
             else {"batch": "Gebündelt (Batch)", "rows": "Einzelzeilen"} if key in ENUMS else {})
         setting["group"] = "Aufgabenmodelle" if key.startswith("model.") else "Speicherung" if key in {"capture.mode", "autoCapture", "merging.enabled", "gc.enabled", "dailyConsolidation.decayMode"} else "Gedächtnisfunktionen"
     return {"agentId": view.agent_id, "profile": view.profile,
+            "jevCredentials": jev_credential_status(view.config, hermes_home=view.hermes_home),
             "revision": context_revision(view), "settings": settings,
             "activation": "unknown", "restartRequiredAfterSave": True,
             "notice": "Saved profile configuration. Running gateway activation is not inferred from this view."}
