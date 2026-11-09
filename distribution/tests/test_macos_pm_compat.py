@@ -27,10 +27,13 @@ class MacOSPMCompatibilityTests(unittest.TestCase):
                     compat.enable_volume_sync(project, required=True)
 
     def test_worker_entry_keeps_pms_launcher_and_requires_its_verified_script(self):
-        worker = Path("/example/Hermes/pm/worker.py")
-        expected = ["/example/python", "-I", "-B", str(worker)]
-        with patch.object(compat, "__file__", "/example/installer/macos_pm_compat.py"):
-            command = compat.volume_sync_worker(lambda *_: expected)(None, {}, worker, {})
-            self.assertEqual(command, expected[:-1] + [compat.__file__, "worker", str(worker)])
-            with self.assertRaisesRegex(ValueError, "unexpected Hermes PM worker command"):
-                compat.volume_sync_worker(lambda *_: expected + ["other"])(None, {}, worker, {})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            worker = root / "Hermes" / "pm" / "worker.py"
+            expected = [sys.executable, "-I", "-B", str(worker)]
+            helper = root / "installer" / "macos_pm_compat.py"
+            with patch.object(compat, "__file__", str(helper)):
+                command = compat.volume_sync_worker(lambda *_: expected)(None, {}, worker, {})
+                self.assertEqual(command, expected[:-1] + [str(helper), "worker", str(worker)])
+                with self.assertRaisesRegex(ValueError, "unexpected Hermes PM worker command"):
+                    compat.volume_sync_worker(lambda *_: expected + ["other"])(None, {}, worker, {})
