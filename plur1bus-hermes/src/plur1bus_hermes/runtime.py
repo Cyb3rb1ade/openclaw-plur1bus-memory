@@ -25,6 +25,7 @@ from typing import Any
 from .cache import EmbeddingCache
 from .chunking import capture_options, capture_rows
 from .domain import Plur1busDomain
+from .feature_profiles import parity_feature_enabled
 from .epistemic import (
     decide_epistemic_status_for_capture,
     epistemic_recall_where_clause,
@@ -1109,7 +1110,9 @@ class Plur1busRuntime:
         budgets = [50]
         for name in ("semanticLens", "conversationReactivationRecall"):
             settings = self.config.get(name)
-            if isinstance(settings, dict) and settings.get("enabled") is True:
+            enabled = (parity_feature_enabled(self.config, name) if name == "semanticLens"
+                       else isinstance(settings, Mapping) and settings.get("enabled") is True)
+            if enabled and isinstance(settings, Mapping):
                 budgets.append(self._domain._bounded_int(settings.get("timeoutMs"), 50, 1, 50))
         deadline = time.monotonic() + min(budgets) / 1000
         try:
@@ -1812,8 +1815,8 @@ class Plur1busRuntime:
 
     def create_merge_proposal(self, incoming_text: str, session_id: str, *, valid_from: Any = None,
                               valid_until: Any = None) -> dict[str, Any] | None:
-        """Create (never apply) an opt-in, scope-bound merge proposal."""
-        if not bool((self.config.get("merging") or {}).get("enabled")):
+        """Create (never apply) a scope-bound merge proposal."""
+        if not parity_feature_enabled(self.config, "merging"):
             return None
         text = incoming_text.strip()
         if not text:

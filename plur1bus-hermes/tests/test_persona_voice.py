@@ -172,11 +172,11 @@ class PersonaVoiceTests(unittest.TestCase):
             self.assertIn(lines[5], rendered)
             self.assertNotIn(lines[6], rendered)
 
-    def test_persona_projection_stays_disabled_and_private_scope_only(self):
+    def test_persona_projection_defaults_on_with_opt_out_and_private_scope_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            disabled = Plur1busDomain(root, "main")
-            enabled = Plur1busDomain(root, "main", {"personaVoice": {"enabled": True}})
+            disabled = Plur1busDomain(root, "main", {"personaVoice": {"enabled": False}})
+            enabled = Plur1busDomain(root, "main")
             path = enabled.workspace_dir / "persona-voice.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
@@ -191,14 +191,14 @@ class PersonaVoiceTests(unittest.TestCase):
                 "\n".join(enabled.cognitive_prompt_blocks(scope_key="shared-scope")),
             )
 
-    def test_seed_and_prompt_projection_are_explicit_and_bounded(self):
+    def test_seed_and_prompt_projection_respect_opt_out_and_remain_bounded(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            disabled = Plur1busDomain(root, "main")
+            disabled = Plur1busDomain(root, "main", {"personaVoice": {"enabled": False}})
             disabled.set_llm_backend(_Backend())
             self.assertEqual(disabled.ensure_persona_voice_seed()["reason"], "disabled")
 
-            domain = Plur1busDomain(root, "main", {"personaVoice": {"enabled": True}})
+            domain = Plur1busDomain(root, "main")
             domain.set_llm_backend(_Backend())
             self.assertTrue(domain.ensure_persona_voice_seed()["seeded"])
             blocks = domain.cognitive_prompt_blocks()

@@ -7,7 +7,7 @@ Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
 `Install PLUR1BUS.command` in
 `/Applications/PLUR1BUS Installer`.
 
-Diese Anleitung beschreibt den Hermes-Installer **7.19.2-hermes.2**.
+Diese Anleitung beschreibt den Hermes-Installer **7.19.2-hermes.3**.
 Maßgeblich für die Verfügbarkeit sind
 die veröffentlichten Assets samt Prüfberichten unter dem passenden Release-Tag.
 Portable Archive und Python-Wheels sind die
@@ -18,6 +18,12 @@ Release-Beschreibung ausgewiesen.
 Ältere Hermes-Releases enthalten andere Asset-Sätze. Diese Anleitung gilt nur
 für die Assets des jeweiligen Release-Tags; GitHubs automatisch erzeugtes
 „Source code“-ZIP ist kein fertiges Installationspaket.
+
+Seit 7.19.2-hermes.3 gelten für fehlende Einstellungen die OpenClaw-Defaults
+für Semantic Lens, Merge-Vorschläge, Schicht 1.5, Skill Workshop, Persona Voice
+und die Archivierung abgelaufener Erinnerungen. Gespeicherte Profilwerte haben
+Vorrang. Im gewählten Profil „Sicher“ bleiben diese Funktionen bei fehlendem
+Schalter aus. Jev und Auto-Apply erfordern weiterhin eine ausdrückliche Auswahl.
 
 Downloads ausschließlich unter [GitHub Releases](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases).
 Ein CI-Artefakt oder diese Anleitung ist keine Release-Freigabe. Erst wenn das

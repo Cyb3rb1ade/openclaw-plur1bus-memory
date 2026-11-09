@@ -408,6 +408,13 @@ class WorkshopDeltaTests(unittest.TestCase):
         self.assertTrue(all(row["epistemicStatus"] == "corroborated" for row in self.rows))
         self.assertTrue(all(change[2] == {"epistemicStatus": "corroborated"} for change in self.table.updates))
 
+    def test_default_mining_does_not_activate_a_previously_inert_auto_apply(self):
+        self.runtime.config["skillWorkshop"] = {"autoApply": "on"}
+        result = self.workshop.mine(hermes_home=self.home)
+        self.assertEqual(result["proposals"][0]["status"], "pending_review")
+        self.assertEqual(result["autoApplied"], 0)
+        self.assertFalse((self.home / "skills").exists())
+
     def test_auto_apply_is_manual_without_host_policy_home_or_trusted_evidence(self):
         for mode, has_home, confidence, status, evidence_count in [
             ("host", True, .9, "observed", 3), ("on", False, .9, "observed", 3),

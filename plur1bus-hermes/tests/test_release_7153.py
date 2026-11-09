@@ -78,6 +78,43 @@ def test_reviewed_settings_are_scoped_backed_up_and_not_reported_active(tmp_path
         save_setting(view, "autoCapture", False, public["revision"])
 
 
+def test_default_parity_uses_effective_profile_config_without_writing(tmp_path):
+    from plur1bus_hermes.provider import Plur1busMemoryProvider
+
+    path = tmp_path / "plugins/plur1bus/config.json"
+    path.parent.mkdir(parents=True)
+    original = json.dumps({"gc": {"batchSize": 17}, "profileSettings": {
+        "coder": {"gc": {"enabled": False}, "semanticLens": False, "captureChunking": False},
+        "quiet": {"setupProfile": "safe", "personaVoice": {"enabled": True}},
+    }})
+    path.write_text(original)
+    provider = Plur1busMemoryProvider.__new__(Plur1busMemoryProvider)
+    provider._hermes_home = tmp_path
+    provider._supplied_config = {}
+
+    def settings(profile):
+        view = SimpleNamespace(hermes_home=tmp_path, profile=profile, agent_id=profile,
+            data_dir=tmp_path / "data", config=provider._runtime_config(profile),
+            scope_binding=binding_from_scope(profile),
+            _writer_route=SimpleNamespace(path=tmp_path / "db" / profile))
+        return {entry["id"]: entry["value"] for entry in public_settings(view)["settings"]}
+
+    default = settings("default")
+    aligned = {"merging.enabled", "gc.enabled", "schicht15.enabled", "skillWorkshop.enabled",
+               "semanticLens.enabled", "personaVoice.enabled"}
+    assert all(default[key] is True for key in aligned)
+    assert default["capture.mode"] == "beides"
+    assert default["obsidianBridge.autoApplyLowRisk"] is False
+    assert default["conversationReactivationRecall.enabled"] is False
+    coder = settings("coder")
+    assert coder["gc.enabled"] is False and coder["semanticLens.enabled"] is False
+    assert coder["capture.mode"] == "ganz"
+    quiet = settings("quiet")
+    assert quiet["personaVoice.enabled"] is True
+    assert all(quiet[key] is False for key in aligned - {"personaVoice.enabled"})
+    assert path.read_text() == original
+
+
 @pytest.mark.parametrize("profile", ["default", "coder"])
 def test_reviewed_settings_do_not_leak_across_profiles(tmp_path, profile):
     from plur1bus_hermes.provider import Plur1busMemoryProvider

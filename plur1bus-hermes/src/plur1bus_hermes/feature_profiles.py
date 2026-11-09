@@ -5,9 +5,21 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+PARITY_DEFAULT_FEATURES = ("merging", "gc", "schicht15", "skillWorkshop", "semanticLens", "personaVoice")
+
+
+def parity_feature_enabled(config: Mapping[str, Any], name: str) -> bool:
+    """Resolve a default-on feature without materializing defaults into profile config."""
+    section = config.get(name, {})
+    if isinstance(section, Mapping):
+        return section.get("enabled", config.get("setupProfile") != "safe") is True
+    return section is True
 
 
 TOGGLES = {

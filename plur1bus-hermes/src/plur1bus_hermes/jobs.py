@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .runtime import Plur1busRuntime
+from .feature_profiles import parity_feature_enabled
 from .namespaces import binding_from_scope
 from .validation import safe_agent_id
 from .rate_gate import JobRateGate
@@ -231,7 +232,7 @@ def run_jobs(
                 results["consolidation"] = gate.run(
                     "consolidation", 43_200, lambda: scoped_call(domain.run_consolidation, table)
                 )
-                if (config.get("gc") or {}).get("enabled") is True:
+                if parity_feature_enabled(config, "gc"):
                     results["gc"] = gate.run(
                         "gc", 86_400, lambda: scoped_call(domain.run_gc, table)
                     )
@@ -251,8 +252,7 @@ def run_jobs(
                 )
                 # Run after native maintenance, with enough tolerance that a
                 # nightly run finishing late never blocks tomorrow's slot.
-                workshop_config = config.get("skillWorkshop") or {}
-                if isinstance(workshop_config, dict) and workshop_config.get("enabled") is True:
+                if parity_feature_enabled(config, "skillWorkshop"):
                     from .skill_workshop import SkillWorkshop
                     home = config.get("hermesHome")
                     results["skillMiner"] = (

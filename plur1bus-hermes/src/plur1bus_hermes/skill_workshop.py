@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .feature_profiles import parity_feature_enabled
 from .namespaces import ScopeBinding, scope_where_clause
 from .validation import ValidationError, resolve_inside, safe_agent_id, safe_memory_id
 from .snapshot import append_destructive_op_log
@@ -290,8 +291,7 @@ class SkillWorkshop:
 
     def _backend(self) -> Any:
         config = getattr(self.runtime, "config", {})
-        workshop_config = config.get("skillWorkshop") if isinstance(config, Mapping) else None
-        if not isinstance(workshop_config, Mapping) or workshop_config.get("enabled") is not True:
+        if not isinstance(config, Mapping) or not parity_feature_enabled(config, "skillWorkshop"):
             return None
         domain = getattr(self.runtime, "_domain", None)
         backend = getattr(domain, "_llm_backend", None)
@@ -378,13 +378,16 @@ class SkillWorkshop:
         config = runtime_config.get("skillWorkshop", {}) if isinstance(runtime_config, Mapping) else {}
         config = config if isinstance(config, Mapping) else {}
         mode = config.get("autoApply", "host")
+        auto_apply_enabled = mode == "on" and config.get("enabled") is True
         report = {"created": 0, "proposals": [], "skippedKnownCluster": 0, "skippedDuplicate": 0,
                   "autoApplied": 0, "autoApplyFailed": 0, "autoApplySkipped": 0,
                   "backendCalls": 0, "backendFailed": 0,
                   "autoApplyRequested": mode == "on",
-                  "autoApplySupported": mode == "on" and hermes_home is not None and self.binding.scope_type == "agent-private"}
+                  "autoApplySupported": auto_apply_enabled and hermes_home is not None and self.binding.scope_type == "agent-private"}
         if mode == "host":
             report["autoApplyReason"] = "host_policy_unavailable"
+        elif mode == "on" and not auto_apply_enabled:
+            report["autoApplyReason"] = "explicit_workshop_activation_required"
         elif mode == "on" and not report["autoApplySupported"]:
             report["autoApplyReason"] = "profile_home_required" if hermes_home is None else "private_scope_required"
         if self._backend() is None:

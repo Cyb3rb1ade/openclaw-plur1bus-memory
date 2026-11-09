@@ -25,7 +25,9 @@ def active(runtime):
 
 
 def test_automatic_merge_requires_separate_opt_in(runtime):
+    runtime.config.pop("merging")
     runtime._remember("alpha facts", "s", "user")
+    assert runtime.create_merge_proposal("beta facts", "s") is not None
     runtime._remember("beta facts", "s", "user")
     assert len(active(runtime)) == 2
     runtime._internal_llm.complete_json.assert_not_called()

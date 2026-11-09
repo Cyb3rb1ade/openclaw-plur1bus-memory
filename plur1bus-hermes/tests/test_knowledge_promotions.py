@@ -65,6 +65,7 @@ class KnowledgePromotionTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_private_promotion_requires_proposal_then_confirmation(self) -> None:
+        self.domain.config.pop("schicht15")
         proposal_result = self.domain.propose_knowledge_promotions()
         self.assertFalse(proposal_result["skipped"])
         proposal = proposal_result["proposed"][0]

@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from plur1bus_hermes.jobs import run_jobs, _bind_profile_home
+from plur1bus_hermes.namespaces import binding_from_scope
 from plur1bus_hermes import file_lock
 
 
@@ -47,6 +48,9 @@ class _Domain:
     def run_consolidation(self, _table):
         return {"reviewed": 3}
 
+    def run_gc(self, _table):
+        return {"archived": 0}
+
     def run_dreaming(self, _table):
         return {"dreamed": 4}
 
@@ -63,7 +67,11 @@ class _Domain:
 class _Runtime:
     instances = []
 
-    def __init__(self, *_args):
+    def __init__(self, data_dir, config, agent_id, _scope):
+        self.data_dir = data_dir
+        self.config = config
+        self.agent_id = agent_id
+        self.scope_binding = binding_from_scope(agent_id)
         self._domain = _Domain()
         self.closed = False
         self.instances.append(self)
@@ -86,7 +94,7 @@ class JobsTests(unittest.TestCase):
             def __init__(self, *args):
                 super().__init__(*args)
                 self._domain = OrderedDomain()
-        config = {"skillWorkshop": {"enabled": True}, "hermesHome": "/bound/profile"}
+        config = {"hermesHome": "/bound/profile"}
         with tempfile.TemporaryDirectory() as temporary, patch(
             "plur1bus_hermes.skill_workshop.SkillWorkshop"
         ) as workshop, patch("plur1bus_hermes.rate_gate.time.time", return_value=100_000) as clock:
@@ -124,6 +132,8 @@ class JobsTests(unittest.TestCase):
             report = run_jobs(root, {}, "main", "all", runtime_factory=_Runtime)
 
             self.assertEqual(report["status"], "completed")
+            self.assertEqual(report["results"]["gc"], {"archived": 0})
+            self.assertEqual(report["results"]["skillMiner"]["autoApplied"], 0)
             self.assertEqual(report["results"]["reminders"]["due"], 1)
             self.assertEqual(report["results"]["indexes"]["annIndex"], "created")
             self.assertTrue((root / "state/main/pending-reminders.json").is_file())

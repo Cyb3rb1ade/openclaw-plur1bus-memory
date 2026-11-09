@@ -30,12 +30,17 @@ class RecallFeatureGateTests(unittest.TestCase):
         ]
         return domain, calls
 
-    def test_default_configuration_keeps_only_graph_base_candidates(self) -> None:
+    def test_default_configuration_adds_lens_but_not_reactivation(self) -> None:
         domain, calls = self._boost_domain()
         result = domain.boost_recall(self._base(), object(), 4)
 
+        self.assertEqual(calls, ["graph", "lens"])
+        self.assertEqual({row["id"] for row in result}, {"base", "graph", "lens"})
+
+    def test_safe_profile_keeps_lens_off(self) -> None:
+        domain, calls = self._boost_domain({"setupProfile": "safe"})
+        domain.boost_recall(self._base(), object(), 4)
         self.assertEqual(calls, ["graph"])
-        self.assertEqual({row["id"] for row in result}, {"base", "graph"})
 
     def test_explicit_optouts_keep_graph_base_but_skip_semantic_and_continuity(self) -> None:
         domain, calls = self._boost_domain({"semanticLens": False, "conversationReactivationRecall": {"enabled": False}})

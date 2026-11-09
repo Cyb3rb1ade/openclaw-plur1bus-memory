@@ -25,6 +25,7 @@ from .cognition import (
 )
 from .cognitive_prompt import fresh_dream_echo, style_directive
 from .code_index import query_code_index, rebuild_code_index
+from .feature_profiles import parity_feature_enabled
 from .critical import CRITICAL_TYPES, NON_CRITICAL_TYPE, classify_critical, find_covered_chunk_ids, is_confirmed, is_dream_card
 from .critical_review import (
     assign_short_refs,
@@ -1283,7 +1284,7 @@ class Plur1busDomain:
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         config = self.config.get("schicht15")
         config = config if isinstance(config, Mapping) else {}
-        if config.get("enabled") is not True:
+        if not parity_feature_enabled(self.config, "schicht15"):
             return {"proposed": [], "skipped": True, "reason": "disabled"}
         # KNOWLEDGE.md is a prompt-adjacent file.  Shared/workspace scopes must
         # never create one silently, even when the caller can read that scope.
@@ -1419,7 +1420,7 @@ class Plur1busDomain:
             return {"confirmed": False, "reason": "private-scope-required"}
         config = self.config.get("schicht15")
         config = config if isinstance(config, Mapping) else {}
-        if config.get("enabled") is not True:
+        if not parity_feature_enabled(self.config, "schicht15"):
             return {"confirmed": False, "reason": "disabled"}
         ledger_path = self._scope_state_dir(selector) / "knowledge-promotions.jsonl"
         ledger = self._read_jsonl(ledger_path)
@@ -1784,9 +1785,8 @@ class Plur1busDomain:
         )
         lens_ids: set[str] = set()
         lens_deadline: float | None = None
-        # The lens is useful but intentionally opt-in: it widens recall beyond
-        # the ordinary semantic candidates and must never surprise a profile.
-        if self._opt_in_feature_enabled("semanticLens"):
+        # The lens adds scoped candidates within the existing recall budget.
+        if parity_feature_enabled(self.config, "semanticLens"):
             lens_cfg = self.config.get("semanticLens")
             lens_cfg = lens_cfg if isinstance(lens_cfg, Mapping) else {}
             lens_budget_ms = self._bounded_int(lens_cfg.get("timeoutMs"), 50, 1, 50)
@@ -3730,14 +3730,14 @@ class Plur1busDomain:
         aclBindings: Any = None,
         scopeKey: str | None = None,
     ) -> list[str]:
-        """Return explicitly enabled, scope-bound prompt blocks for the runtime."""
+        """Return enabled, scope-bound prompt blocks for the runtime."""
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         persona_config = self.config.get("personaVoice")
-        persona_enabled = isinstance(persona_config, Mapping) and persona_config.get("enabled") is True
+        persona_config = persona_config if isinstance(persona_config, Mapping) else {}
         blocks = [style_directive(self._mood.state(), self.config)]
-        if persona_enabled and selector.scope_type == "agent-private":
+        if parity_feature_enabled(self.config, "personaVoice") and selector.scope_type == "agent-private":
             directive = load_persona_directive(
                 self._scope_workspace_dir(selector),
                 max_chars=persona_config.get("maxDirectiveChars"),
@@ -3766,8 +3766,7 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        config = self.config.get("personaVoice")
-        if not isinstance(config, Mapping) or config.get("enabled") is not True:
+        if not parity_feature_enabled(self.config, "personaVoice"):
             return {"seeded": False, "reason": "disabled"}
         if selector.scope_type != "agent-private":
             return {"seeded": False, "reason": "private-scope-required"}
@@ -3798,8 +3797,7 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        config = self.config.get("personaVoice")
-        if not isinstance(config, Mapping) or config.get("enabled") is not True:
+        if not parity_feature_enabled(self.config, "personaVoice"):
             return {"evolved": False, "reason": "disabled"}
         if selector.scope_type != "agent-private":
             return {"evolved": False, "reason": "private-scope-required"}
@@ -4419,7 +4417,7 @@ class Plur1busDomain:
         scope_key: str | None = None,
     ) -> set[str]:
         """Return a small, scope-bound lens expansion within a hard time budget."""
-        if not self._opt_in_feature_enabled("semanticLens"):
+        if not parity_feature_enabled(self.config, "semanticLens"):
             return set()
         started = time.monotonic()
         lens_cfg = self.config.get("semanticLens")

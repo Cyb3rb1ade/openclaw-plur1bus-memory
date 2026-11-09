@@ -5,6 +5,7 @@ import copy
 import json
 
 from .feature_models import PURPOSE_FEATURE, configured_routes
+from .feature_profiles import PARITY_DEFAULT_FEATURES, parity_feature_enabled
 from .generation import _atomic_json, _reject_symlink_components
 from .retrieval_admin import config_path, context_revision
 from .validation import ValidationError
@@ -12,12 +13,12 @@ from .writer_lock import writer_lock
 
 # Only paths with an actual native runtime consumer belong here.
 BOOLEANS = {
-    "autoCapture": True, "autoRecall": True, "merging.enabled": False,
-    "gc.enabled": False, "obsidianBridge.watch": False, "obsidianBridge.autoApplyLowRisk": False,
-    "skillWorkshop.enabled": False,
-    "schicht15.enabled": False, "semanticLens.enabled": False,
+    "autoCapture": True, "autoRecall": True, "merging.enabled": True,
+    "gc.enabled": True, "obsidianBridge.watch": False, "obsidianBridge.autoApplyLowRisk": False,
+    "skillWorkshop.enabled": True,
+    "schicht15.enabled": True, "semanticLens.enabled": True,
     "conversationReactivationRecall.enabled": False, "dreamEcho.enabled": False,
-    "personaVoice.enabled": False, "continuityEngine.enabled": True,
+    "personaVoice.enabled": True, "continuityEngine.enabled": True,
     "memoryDynamics.flashbulbEncoding": False,
     "emotion.t3.enabled": False, "recall.queryRefinement.enabled": True,
     "metaCognition.enabled": False, "contradictionDisclosure.enabled": True,
@@ -92,10 +93,17 @@ def _put(config, path, value):
     node[path[-1]] = value
 
 
+def _boolean_setting(config, key, default):
+    section = key.removesuffix(".enabled")
+    if section in PARITY_DEFAULT_FEATURES:
+        return parity_feature_enabled(config, section)
+    value = _get(config, key, default)
+    return value if type(value) is bool else default
+
+
 def public_settings(view):
     """Expose known scalar values and model IDs, never routes or credentials."""
-    settings = [{"id": key, "value": _get(view.config, key, default)
-                 if type(_get(view.config, key, default)) is bool else default, "choices": [True, False]}
+    settings = [{"id": key, "value": _boolean_setting(view.config, key, default), "choices": [True, False]}
                 for key, default in BOOLEANS.items()]
     mode = ("ganz" if view.config.get("captureChunking") is False else
             view.config.get("captureChunkingMode") if view.config.get("captureChunkingMode") in {"geteilt", "automatisch"} else "beides")
