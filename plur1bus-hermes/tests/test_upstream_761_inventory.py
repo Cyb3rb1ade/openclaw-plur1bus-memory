@@ -84,6 +84,8 @@ class Upstream761InventoryTests(unittest.TestCase):
         changed_715.add("plur1bus-hermes/src/plur1bus_hermes/obsidian_sync.py")
         # Catalog review: use the Hermes credential writer, tested in test_cutover.
         changed_715.add("plur1bus-hermes/src/plur1bus_hermes/cutover.py")
+        # Catalog follow-up: the status command retains the selected credential owner.
+        changed_715.add("plur1bus-hermes/src/plur1bus_hermes/operator_cli.py")
         for path in paths:
             if Path(path).name in metadata or path in changed_769 or path in changed_715:
                 continue

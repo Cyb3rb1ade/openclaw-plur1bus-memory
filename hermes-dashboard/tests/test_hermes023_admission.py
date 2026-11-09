@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +13,47 @@ from fastapi.testclient import TestClient
 
 from plur1bus_hermes.namespaces import binding_from_scope
 from test_plur1bus_dashboard import _load_api
+
+
+def test_status_and_retrieval_use_profile_credentials_with_a_separate_store(tmp_path, monkeypatch):
+    from plur1bus_hermes.operator_status import read_operator_status
+    from plur1bus_hermes.runtime import Plur1busRuntime
+
+    root = tmp_path / ".hermes"
+    profile = root / "profiles" / "beta"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setenv("PLUR1BUS_EMBEDDING_API_KEY", "launch-fixture")
+    monkeypatch.setenv("PLUR1BUS_RERANKER_API_KEY", "launch-fixture")
+    secrets = profile / ".env"
+    secrets.write_text("PLUR1BUS_EMBEDDING_API_KEY=beta-embed\nPLUR1BUS_RERANKER_API_KEY=beta-rerank\n")
+    config = {
+        "hermesHome": str(profile),
+        "embedding": {"provider": "openai-compatible", "model": "fixture", "dimensions": 2,
+                      "baseUrl": "https://embeddings.example.invalid/v1"},
+        "reranker": {"provider": "cohere", "model": "fixture"},
+    }
+    runtime = Plur1busRuntime(tmp_path / "separate-storage", config, "beta")
+    try:
+        status = read_operator_status(runtime)
+        assert status["embedding"]["credentials"] == "default_environment_configured"
+        assert status["reranker"]["credentials"] == "environment_configured"
+        assert "beta-embed" not in repr(status) and "beta-rerank" not in repr(status)
+        with patch("urllib.request.urlopen", side_effect=[
+            BytesIO(b'{"data":[{"embedding":[0.2,0.1]}]}'),
+            BytesIO(b'{"results":[{"index":0,"relevance_score":0.7}]}'),
+        ]) as call:
+            assert runtime._embedding.embed("fixture input") == [0.2, 0.1]
+            assert runtime._reranker.rerank("fixture query", [{"content": "fixture row"}])[0]["rerankScore"] == 0.7
+            assert [request.args[0].get_header("Authorization") for request in call.call_args_list] == [
+                "Bearer beta-embed", "Bearer beta-rerank",
+            ]
+        secrets.unlink()
+        status = read_operator_status(runtime)
+        assert status["embedding"]["credentials"] == "environment_missing"
+        assert status["reranker"]["credentials"] == "environment_missing"
+    finally:
+        runtime.shutdown()
 
 
 def _fixture(tmp_path):

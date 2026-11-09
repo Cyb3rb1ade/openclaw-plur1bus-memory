@@ -150,7 +150,24 @@ class OperatorStatusTests(unittest.TestCase):
 
     def test_local_onnx_credentials_are_not_reported_as_missing_remote_key(self):
         from plur1bus_hermes.operator_status import _credential_state
-        self.assertEqual(_credential_state({"provider": "local-onnx"}, "local-onnx", reranker=False), "not_required")
+        self.assertEqual(
+            _credential_state({"provider": "local-onnx"}, "local-onnx", reranker=False, hermes_home=None),
+            "not_required",
+        )
+
+    def test_remote_embedding_status_requires_a_plugin_key_or_explicit_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime, connect = self._runtime(Path(temporary), _Table())
+            runtime.hermes_home = Path(temporary)
+            runtime.config["embedding"]["provider"] = "openai-compatible"
+            with patch.dict("os.environ", {"OPENAI_API_KEY": "unselected-fixture-key"}, clear=True):
+                status = read_operator_status(runtime, connect=connect)
+                self.assertEqual(status["embedding"]["credentials"], "environment_missing")
+                runtime.config["embedding"]["apiKeyEnv"] = "OPENAI_API_KEY"
+                status = read_operator_status(runtime, connect=connect)
+                self.assertEqual(status["embedding"]["credentials"], "environment_configured")
+                self.assertNotIn("unselected-fixture-key", repr(status))
+                self.assertNotIn("OPENAI_API_KEY", repr(status))
 
     def _runtime(self, root: Path, table: _Table):
         config = {"embedding": {"provider": "local-transformers", "model": "intfloat/e5", "dimensions": 384}}

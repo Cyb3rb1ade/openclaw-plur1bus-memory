@@ -38,9 +38,12 @@ class OperatorCliTests(unittest.TestCase):
             __import__("plur1bus_hermes.operator_cli", fromlist=["Plur1busMemoryProvider"]).Plur1busMemoryProvider,
             "_runtime_config", return_value={"agentId": "main", "dataDir": "plur1bus"}
         ) as config:
+            profile_home = Path(directory) / "profiles" / "foo"
+            profile_home.mkdir(parents=True)
             view = runtime_view(Path(directory), "foo")
         config.assert_called_once_with("foo")
         self.assertEqual(view.agent_id, "foo")
+        self.assertEqual(view.hermes_home, profile_home)
 
     def test_activate_requires_exact_saved_plan_approval_without_runtime(self):
         plan = {"planId": "a" * 24}

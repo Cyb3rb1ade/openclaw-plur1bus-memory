@@ -19,6 +19,8 @@ def runtime_view(home: Path, profile: str, *, apply_generation: bool = True) -> 
     if not home.is_absolute() or not home.is_dir() or home.is_symlink():
         raise ValueError("an existing absolute Hermes home is required")
     profile = safe_agent_id(profile)
+    profile_home = home / "profiles" / profile
+    credential_home = profile_home if profile != "default" and profile_home.is_dir() else home
     provider = object.__new__(Plur1busMemoryProvider)
     provider._hermes_home = home
     provider._supplied_config = {}
@@ -46,7 +48,7 @@ def runtime_view(home: Path, profile: str, *, apply_generation: bool = True) -> 
     # canonical route is sufficient until it obtains its exclusive lease.
     writer = (NamespaceRoute("default", data_dir / "lancedb" / agent_id, True)
               if not apply_generation else resolve_namespace_routes(data_dir, agent_id, config)[0])
-    return SimpleNamespace(agent_id=agent_id, data_dir=data_dir, config=config,
+    return SimpleNamespace(agent_id=agent_id, data_dir=data_dir, config=config, hermes_home=credential_home,
                            scope_binding=binding_from_scope(agent_id, scope), _writer_route=writer)
 
 

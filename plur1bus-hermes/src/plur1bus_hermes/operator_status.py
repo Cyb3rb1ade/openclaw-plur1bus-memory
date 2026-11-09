@@ -12,10 +12,10 @@ import threading
 import time
 import math
 from collections.abc import Callable, Mapping
-import os
 from pathlib import Path
 from typing import Any
 
+from .credentials import profile_secret
 from .namespaces import resolve_namespace_routes, scope_where_clause
 from .validation import safe_agent_id, safe_status
 from .writer_lock import writer_lock, WriterLockTimeout
@@ -35,16 +35,18 @@ def _public_value(value: Any) -> str | None:
     return candidate if _PUBLIC_VALUE.fullmatch(candidate) else None
 
 
-def _credential_state(config: Mapping[str, Any], provider: str | None, *, reranker: bool) -> str:
+def _credential_state(
+    config: Mapping[str, Any], provider: str | None, *, reranker: bool, hermes_home: str | Path | None,
+) -> str:
     """Report credential configuration without exporting a key or env name."""
     if provider == "disabled":
         return "disabled"
     if provider in {"local-transformers", "local-onnx"}:
         return "not_required"
-    explicit_env = str(config.get("apiKeyEnv") or "").strip()
+    explicit_env = str(config.get("apiKeyEnv") or "")
     if provider == "omlx" or (reranker and provider == "openai-compatible"):
         env_name = explicit_env or "OMLX_API_KEY"
-        if os.environ.get(env_name):
+        if profile_secret(env_name, hermes_home):
             return "environment_configured"
         if str(config.get("apiKey") or "").strip():
             return "inline_configured"
@@ -53,20 +55,16 @@ def _credential_state(config: Mapping[str, Any], provider: str | None, *, rerank
         return "environment_missing"
     if reranker and provider == "cohere":
         env_name = explicit_env or "PLUR1BUS_RERANKER_API_KEY"
-        return "environment_configured" if os.environ.get(env_name) else "environment_missing"
+        return "environment_configured" if profile_secret(env_name, hermes_home) else "environment_missing"
     if str(config.get("apiKey") or "").strip():
         return "inline_configured"
     if explicit_env:
-        return "environment_configured" if os.environ.get(explicit_env) else "environment_missing"
-    defaults = (
-        ("PLUR1BUS_RERANKER_API_KEY",)
-        if reranker
-        else ("PLUR1BUS_EMBEDDING_API_KEY", "OPENAI_API_KEY")
-    )
-    return "default_environment_configured" if any(os.environ.get(name) for name in defaults) else "environment_missing"
+        return "environment_configured" if profile_secret(explicit_env, hermes_home) else "environment_missing"
+    env_name = "PLUR1BUS_RERANKER_API_KEY" if reranker else "PLUR1BUS_EMBEDDING_API_KEY"
+    return "default_environment_configured" if profile_secret(env_name, hermes_home) else "environment_missing"
 
 
-def _embedding_projection(config: Any) -> dict[str, Any]:
+def _embedding_projection(config: Any, hermes_home: str | Path | None) -> dict[str, Any]:
     embedding = config.get("embedding") if isinstance(config, Mapping) else None
     embedding = embedding if isinstance(embedding, Mapping) else {}
     provider = _public_value(embedding.get("provider", "local-transformers"))
@@ -82,11 +80,11 @@ def _embedding_projection(config: Any) -> dict[str, Any]:
         "model": model,
         "dimensions": dimensions if isinstance(dimensions, int) and dimensions > 0 else None,
         "configured": provider is not None and model is not None,
-        "credentials": _credential_state(embedding, provider, reranker=False),
+        "credentials": _credential_state(embedding, provider, reranker=False, hermes_home=hermes_home),
     }
 
 
-def _reranker_projection(config: Any) -> dict[str, Any]:
+def _reranker_projection(config: Any, hermes_home: str | Path | None) -> dict[str, Any]:
     reranker = config.get("reranker") if isinstance(config, Mapping) else None
     reranker = reranker if isinstance(reranker, Mapping) else {}
     provider = _public_value(reranker.get("provider", "disabled"))
@@ -97,7 +95,7 @@ def _reranker_projection(config: Any) -> dict[str, Any]:
         "provider": provider,
         "model": model,
         "configured": provider == "disabled" or (provider is not None and model is not None),
-        "credentials": _credential_state(reranker, provider, reranker=True),
+        "credentials": _credential_state(reranker, provider, reranker=True, hermes_home=hermes_home),
     }
 
 
@@ -172,6 +170,10 @@ def read_operator_status(
     from . import __version__
 
     agent_id = safe_agent_id(getattr(runtime, "agent_id"))
+    config = getattr(runtime, "config", {})
+    hermes_home = getattr(runtime, "hermes_home", None) or (
+        config.get("hermesHome") if isinstance(config, Mapping) else None
+    )
     projection = {
         "schemaVersion": 1,
         "version": __version__,
@@ -179,9 +181,9 @@ def read_operator_status(
         "scopeType": str(
             getattr(getattr(runtime, "scope_binding", None), "scope_type", "agent-private")
         ),
-        "embedding": _embedding_projection(getattr(runtime, "config", {})),
-        "jevCredentials": jev_credential_status(getattr(runtime, "config", {})),
-        "reranker": _reranker_projection(getattr(runtime, "config", {})),
+        "embedding": _embedding_projection(config, hermes_home),
+        "jevCredentials": jev_credential_status(config, hermes_home=hermes_home),
+        "reranker": _reranker_projection(config, hermes_home),
         "storage": {"status": "unavailable", "cards": None},
         "cards": {"byPrimaryAgent": []},
         "configured": False,

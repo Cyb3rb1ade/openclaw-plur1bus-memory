@@ -188,9 +188,10 @@ def validate_native_embedding_config(config: Mapping[str, Any]) -> None:
 class EmbeddingBackend:
     """Embedding backend with a dimension-checked local failure fallback."""
 
-    def __init__(self, config: dict[str, Any], hermes_home: Path) -> None:
+    def __init__(self, config: dict[str, Any], hermes_home: Path, *, credential_home: str | Path | None = None) -> None:
         self.config = config
         self.hermes_home = hermes_home
+        self._credential_home = Path(credential_home) if credential_home else hermes_home
         self._models: dict[str, Any] = {}
         self._lock = threading.RLock()
         try:
@@ -339,7 +340,7 @@ class EmbeddingBackend:
         key = str(config.get("apiKey") or "")
         if not key:
             name = str(config.get("apiKeyEnv") or "PLUR1BUS_EMBEDDING_API_KEY")
-            key = profile_secret(name, self.hermes_home)
+            key = profile_secret(name, self._credential_home)
         if not key:
             raise RuntimeError("remote embedding API key is not configured")
         base_url = str(config.get("baseUrl") or "https://api.openai.com/v1").rstrip("/")
@@ -397,7 +398,7 @@ class EmbeddingBackend:
             f"{settings['baseUrl'].rstrip('/')}/embeddings",
             body,
             settings,
-            hermes_home=self.hermes_home,
+            hermes_home=self._credential_home,
         )
         values = payload.get("data")
         if not isinstance(values, list) or len(values) != len(texts):
@@ -413,9 +414,10 @@ class EmbeddingBackend:
 class RerankerBackend:
     """Local or Cohere reranker with an optional local fallback."""
 
-    def __init__(self, config: dict[str, Any], hermes_home: Path) -> None:
+    def __init__(self, config: dict[str, Any], hermes_home: Path, *, credential_home: str | Path | None = None) -> None:
         self.config = config
         self.hermes_home = hermes_home
+        self._credential_home = Path(credential_home) if credential_home else hermes_home
         self._models: dict[str, Any] = {}
         self._lock = threading.RLock()
 
@@ -521,7 +523,7 @@ class RerankerBackend:
 
     def _rerank_cohere(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         name = str(config.get("apiKeyEnv") or "PLUR1BUS_RERANKER_API_KEY")
-        key = profile_secret(name, self.hermes_home)
+        key = profile_secret(name, self._credential_home)
         if not key:
             raise RuntimeError("Cohere reranking API key is not configured")
         request = urllib.request.Request(
@@ -562,7 +564,7 @@ class RerankerBackend:
                 "return_documents": False,
             },
             settings,
-            hermes_home=self.hermes_home,
+            hermes_home=self._credential_home,
         )
         ranking = payload.get("results", [])
         scores: dict[int, float] = {}
@@ -655,8 +657,12 @@ class Plur1busRuntime:
             embedding_config["cacheMaxEntries"] = 0
         scope = str(runtime_config.get("embeddingCacheScope", config.get("embeddingCacheScope") or "agent"))
         embedding_config["_scopeId"] = "shared" if scope == "shared" else self.agent_id
-        self._embedding = EmbeddingBackend(embedding_config, data_dir)
-        self._reranker = RerankerBackend(dict(config.get("reranker", {})), data_dir.parent)
+        # The storage root can be relocated independently of the credential owner.
+        credential_home = config.get("hermesHome")
+        self._embedding = EmbeddingBackend(embedding_config, data_dir, credential_home=credential_home)
+        self._reranker = RerankerBackend(
+            dict(config.get("reranker", {})), data_dir.parent, credential_home=credential_home,
+        )
         self._domain = Plur1busDomain(
             data_dir, self.agent_id, config, metadata_path=self._writer_route.path
         )
