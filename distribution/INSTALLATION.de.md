@@ -7,7 +7,7 @@ Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
 `Install PLUR1BUS.command` in
 `/Applications/PLUR1BUS Installer`.
 
-Diese Anleitung beschreibt den Hermes-Installer **7.19.2-hermes.3**.
+Diese Anleitung beschreibt den Hermes-Installer **7.19.3-hermes.0**.
 Maßgeblich für die Verfügbarkeit sind
 die veröffentlichten Assets samt Prüfberichten unter dem passenden Release-Tag.
 Portable Archive und Python-Wheels sind die
@@ -27,12 +27,12 @@ Schalter aus. Jev und Auto-Apply erfordern weiterhin eine ausdrückliche Auswahl
 Dream Echo bleibt aus, bis Hermes dafür eine mit OpenClaw vergleichbare
 Begrenzung hat.
 
-Den Jev-API-Schlüssel kannst du in der lokalen Hermes-App unter
-**PLUR1BUS → Einstellungen → Speicherung → Speicherweise** hinterlegen oder
-ändern. **Schlüssel speichern und Automatisch (Jev) auswählen** speichert ihn
-im ausgewählten Profil und stellt danach die Speicherweise um. Nach dem
-Gateway-Neustart kann PLUR1BUS neue Gesprächsinhalte zur Entscheidung über die
-Speicherweise an api.typesafe.ai senden.
+Den Jev-API-Schlüssel hinterlegst du für das gewählte Profil unter
+**Hermes-Einstellungen → Gedächtnis → PLUR1BUS**. Wähle anschließend unter
+**PLUR1BUS → Einstellungen → Speicherung → Speicherweise** ausdrücklich
+**Automatisch (Jev)**. Nach dem Gateway-Neustart kann PLUR1BUS neue
+Gesprächsinhalte zur Entscheidung über die Speicherweise an api.typesafe.ai
+senden.
 
 Downloads ausschließlich unter [GitHub Releases](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases).
 Ein CI-Artefakt oder diese Anleitung ist keine Release-Freigabe. Erst wenn das

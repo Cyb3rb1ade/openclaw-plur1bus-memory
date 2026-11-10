@@ -4,7 +4,7 @@
 **New in 7.12.47-hermes.0:** Graphical macOS setup and guided
 all-profiles/activation defaults. Older assets may still stage the terminal
 `.command` launcher.
-This document describes the `7.19.2-hermes.3` Hermes installer. Portable archives and
+This document describes the `7.19.3-hermes.0` Hermes installer. Portable archives and
 Python wheels are release artifacts; native installer files are platform-
 qualified and must be treated according to the signature/notarization status
 shown in the release asset list and `SHA256SUMS`.
@@ -336,15 +336,14 @@ identity and reports missing capabilities; it cannot retrofit a sidebar API
 into an incompatible Hermes binary. `helpers/plur1bus-desktop-host.py` and the
 adjacent patch directory can prepare a **separate** host build from a trusted
 clean Hermes source checkout (Python >=3.12 and its Node/npm toolchain required).
-Hermes 0.23 forwards secondary-profile plugin API requests itself. In the local
-Desktop app, the PLUR1BUS Settings tab saves confirmed changes through Hermes'
-profile-bound memory provider API. Model and memory migration actions on a
-forwarded route still require opening the target as the backend's launch profile.
-Use **PLUR1BUS → Einstellungen → Speicherung → Speicherweise** in the local
-Desktop app to add or replace a Jev API key for the active profile. The
-confirmation saves the key and selects **Automatisch (Jev)**. After the gateway
-restarts, this mode can send capture text to api.typesafe.ai for a storage
-decision.
+Hermes 0.23 forwards secondary-profile plugin API requests itself. The
+PLUR1BUS Settings tab uses the Hermes plugin SDK. If the selected connection
+offers read-only access, open the target as the backend's launch profile to
+change settings, model providers or storage dimensions.
+Save the Jev API key for the active profile under
+**Hermes Settings → Memory → PLUR1BUS**. Then select **Automatic (Jev)** under
+**PLUR1BUS → Settings → Storage → Storage mode**. After the gateway restarts,
+this mode can send capture text to api.typesafe.ai for a storage decision.
 The old host patch is for earlier releases.
 For older supported source revisions, explicitly pass `--modern-profile-api`
 to review the isolated local-profile API patch instead:
