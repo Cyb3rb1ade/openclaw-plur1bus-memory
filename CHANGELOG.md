@@ -6,6 +6,12 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.19.4] — 2026-11-10
+
+### Fixed
+
+- Critical pushes arrived almost only after a gateway restart, often many at once. The db adapter behind `classify-recent` kept one LanceDB table per agent open but connected without `readConsistencyInterval`, while captures are written through MemoryDB's own connection. The cached table stayed on the version it was opened with, so every run between two restarts reported "no recent unclassified cards". The first run after a restart then pushed everything from the last 24 hours, and cards that were older than that window by then were never classified. The adapter now connects with `readConsistencyInterval: 0`, as MemoryDB does since 7.5.0. This also affects the other adapter readers (pending critical reviews, `/plur1bus critical`, `getCard`).
+
 ## [7.19.3] — 2026-11-09
 
 ### Changed
