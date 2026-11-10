@@ -1,6 +1,6 @@
 """Installable Hermes memory-provider plugin for PLUR1BUS."""
 
-__version__ = "7.19.3"
+__version__ = "7.19.3.post1"
 
 if __name__ == "plur1bus_hermes":
     from .provider import Plur1busMemoryProvider

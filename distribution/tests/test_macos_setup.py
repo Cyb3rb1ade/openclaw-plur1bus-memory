@@ -32,7 +32,8 @@ class MacSetupTests(unittest.TestCase):
             xml = ET.parse(root / "Distribution.xml").getroot()
             self.assertEqual(xml.find("options").attrib["hostArchitectures"], "arm64")
             self.assertEqual(xml.find("options").attrib["require-scripts"], "false")
-            self.assertIn("Profile noch nicht", (root / "pkg-resources/conclusion.html").read_text())
+            self.assertIn("profiles are not set up yet", (root / "pkg-resources/conclusion.html").read_text())
+            self.assertIn("Profile noch nicht", (root / "pkg-resources/de.lproj/conclusion.html").read_text())
             commands = [call.args[0] for call in run.call_args_list]
             self.assertEqual([cmd[0] for cmd in commands], ["xcrun", "codesign", "pkgbuild", "productbuild"])
             self.assertNotIn("--scripts", commands[2])
@@ -42,7 +43,7 @@ class MacSetupTests(unittest.TestCase):
 
     def test_ui_uses_same_confirmed_backend_and_no_shell(self):
         source = (Path(packaging.__file__).parent / "macos/Setup.swift").read_text()
-        for required in ("--inspect-profiles", "--confirm", "--runtimes-stopped", "--activate", "Alle vorhandenen Profile", "Nur Standardprofil", "guard let plan = plan, stopped, !busy"):
+        for required in ("--inspect-profiles", "--confirm", "--runtimes-stopped", "--activate", "All existing profiles", "Default profile only", "guard let plan = plan, stopped, !busy"):
             self.assertIn(required, source)
         self.assertIn("process.arguments = arguments", source)
         self.assertIn('["-I", "-B", payload.appendingPathComponent', source)
@@ -89,7 +90,7 @@ import Foundation
 }
 """)
             probe = root / "probe"
-            subprocess.run(["xcrun", "swiftc", str(source), str(test), "-o", str(probe)], check=True, capture_output=True)
+            subprocess.run(["xcrun", "swiftc", str(source), str(source.with_name("Localization.swift")), str(test), "-o", str(probe)], check=True, capture_output=True)
             home = root / "Hermes Home"
             project = home / "hermes-agent"
             project.mkdir(parents=True)

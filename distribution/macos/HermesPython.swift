@@ -6,7 +6,7 @@ private enum HermesPythonError: LocalizedError {
     case invalidManagedEnvironment
 
     var errorDescription: String? {
-        "Hermes PM hat keine verwendbare Python-Umgebung ausgewählt. Prüfe die Hermes-Installation mit Hermes PM."
+        setupText("Hermes PM has not selected a usable Python environment. Check the Hermes installation with Hermes PM.")
     }
 }
 

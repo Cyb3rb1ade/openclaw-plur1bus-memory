@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.19.3-hermes.0 — Hermes port**
+**PLUR1BUS 7.19.3-hermes.1 — Hermes port**
 
-Python distributions: **7.19.3**. This port includes the complete
+Python distributions: **7.19.3.post1**. This port includes the complete
 [OpenClaw v7.19.3 source](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v7.19.3)
 and the native Hermes payload. See the [catalog and Neo retention review](docs/audits/hermes-7.19.3-catalog-review.md),
 the [previous delta and parity review](docs/audits/hermes-7.19.2-delta-review.md)

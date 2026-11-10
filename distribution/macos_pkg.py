@@ -19,12 +19,16 @@ def build_app(bundle, output, version, sign_identity=None):
     resources.mkdir()
     shutil.copytree(bundle, resources / "distribution")
     source = Path(__file__).parent / "macos/Setup.swift"
+    for language in ("en", "de"):
+        shutil.copytree(source.parent / "Resources" / f"{language}.lproj", resources / f"{language}.lproj")
     subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-O", "-swift-version", "5",
                     "-target", "arm64-apple-macosx13.0", str(source), str(source.with_name("HermesPython.swift")),
+                    str(source.with_name("Localization.swift")),
                     "-o", str(executable)], check=True)
     (contents / "Info.plist").write_bytes(plistlib.dumps({
         "CFBundleExecutable": "PLUR1BUSSetup", "CFBundleIdentifier": "io.plur1bus.hermes.setup",
-        "CFBundleName": "PLUR1BUS einrichten", "CFBundleDisplayName": "PLUR1BUS einrichten",
+        "CFBundleName": "PLUR1BUS Setup", "CFBundleDisplayName": "PLUR1BUS Setup",
+        "CFBundleDevelopmentRegion": "en", "CFBundleLocalizations": ["en", "de"],
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version.split("-")[0],
         "CFBundleVersion": version.split("-")[0], "PLUR1BUSReleaseVersion": version, "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
@@ -57,30 +61,14 @@ def build_pkg(bundle, work, output, version, app_sign_identity=None, installer_s
                     "--identifier", "io.plur1bus.hermes.installer", "--version", version.replace("-hermes", ""),
                     str(component)], check=True)
     resources = Path(work) / "pkg-resources"
-    resources.mkdir()
-    common = "<html><meta charset='utf-8'><body style='font-family:-apple-system;font-size:14px'>"
-    (resources / "welcome.html").write_text(common + """
-<h1>PLUR1BUS für Hermes</h1>
-<p><b>Schritt 1 von 2:</b> Dieses Paket installiert die App <b>PLUR1BUS einrichten</b> in Programme.</p>
-<p><b>Schritt 2:</b> Öffne danach diese App. Dort wählst du grafisch <b>alle vorhandenen Profile</b>,
-<b>nur das Standardprofil (default)</b> oder einzelne Profile und bestätigst die Aktivierung.</p>
-<p>Hier im Apple-Paketinstaller werden noch keine Hermes-Profile verändert.
-Hermes muss bereits eingerichtet sein. Modellgewichte sind nicht enthalten.</p></body></html>
-""", encoding="utf-8")
-    (resources / "conclusion.html").write_text(common + """
-<h1>Jetzt PLUR1BUS einrichten</h1>
-<p><b>Der Assistent ist installiert – deine Hermes-Profile noch nicht.</b></p>
-<p>Öffne <b>Programme → PLUR1BUS einrichten</b>.</p>
-<ol><li>Hermes-Home bestätigen und Profile erkennen lassen.</li>
-<li>Alle vorhandenen Profile, nur default oder einzelne Profile auswählen.</li>
-<li>Aktivierung eingeschaltet lassen, Plan prüfen, Hermes-Laufzeiten beenden und installieren.</li></ol>
-<p>Danach Hermes neu starten. Für später neu angelegte Profile den Assistenten erneut öffnen.
-Kein Terminal erforderlich.</p></body></html>
-""", encoding="utf-8")
+    shutil.copytree(Path(__file__).parent / "macos/InstallerResources", resources)
+    # Installer.app uses language resources; root copies are the English fallback.
+    for name in ("welcome.html", "conclusion.html"):
+        shutil.copyfile(resources / "en.lproj" / name, resources / name)
     spec = Path(work) / "Distribution.xml"
     spec.write_text(f"""<?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-  <title>PLUR1BUS für Hermes – Einrichtungsassistent</title>
+  <title>PLUR1BUS for Hermes — Setup Assistant</title>
   <welcome file="welcome.html" mime-type="text/html"/>
   <conclusion file="conclusion.html" mime-type="text/html"/>
   <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
