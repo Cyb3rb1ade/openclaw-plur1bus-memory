@@ -153,7 +153,7 @@ def _settings_actor(request, verb=None):
 def settings_options(request: Request):
     actor = _settings_actor(request)
     from plur1bus_hermes.settings_admin import public_settings
-    language = request.query_params.get("language", "en" if "/desktop/" in request.url.path else "de")
+    language = request.query_params.get("language", "en")
     return {**public_settings(_active_runtime_view(), language=language), "readOnly": actor == "hosted:read-only"}
 
 

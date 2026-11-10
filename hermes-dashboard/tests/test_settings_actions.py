@@ -3,11 +3,39 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from test_plur1bus_dashboard import _load_api
 from plur1bus_hermes.namespaces import binding_from_scope
+
+
+@pytest.mark.parametrize("route", ["/settings", "/desktop/settings"])
+@pytest.mark.parametrize("query, label, description, group, automatic", [
+    ("", "Automatically save", "Process new conversation content for long-term memory. Manual saving remains available.", "Storage", "Automatic (Jev)"),
+    ("?language=en", "Automatically save", "Process new conversation content for long-term memory. Manual saving remains available.", "Storage", "Automatic (Jev)"),
+    ("?language=de", "Automatisch speichern", "Neue Gesprächsinhalte automatisch für das Langzeitgedächtnis verarbeiten. Manuelles Speichern bleibt davon unabhängig.", "Speicherung", "Automatisch (Jev)"),
+    ("?language=fr", "Automatically save", "Process new conversation content for long-term memory. Manual saving remains available.", "Storage", "Automatic (Jev)"),
+], ids=["default", "english", "german", "unsupported"])
+def test_settings_routes_default_to_english_and_allow_explicit_german(
+    tmp_path, route, query, label, description, group, automatic,
+):
+    api = _load_api()
+    view = SimpleNamespace(hermes_home=tmp_path, data_dir=tmp_path / "data", profile="default",
+        agent_id="default", config={}, scope_binding=binding_from_scope("default"),
+        _writer_route=SimpleNamespace(path=tmp_path / "data/lancedb/default"))
+    app = FastAPI()
+    app.include_router(api.router)
+    headers = {"X-Hermes-Session-Token": "test-token"}
+    with patch.object(api, "_active_runtime_view", return_value=view), TestClient(app, client=("127.0.0.1", 50000)) as client:
+        response = client.get(route + query, headers=headers)
+    assert response.status_code == 200
+    settings = {setting["id"]: setting for setting in response.json()["settings"]}
+    assert settings["autoCapture"]["label"] == label
+    assert settings["autoCapture"]["description"] == description
+    assert settings["autoCapture"]["group"] == group
+    assert settings["capture.mode"]["choiceLabels"]["automatisch"] == automatic
 
 
 def test_numeric_recall_settings_preserve_integer_through_review_and_save(tmp_path):
