@@ -41,12 +41,13 @@
 
 ### Task 2: Standard Desktop and interactive client shutdown
 
-**Files:** distribution/runtime_worker.py and focused runtime client sibling if needed; distribution/runtime_lifecycle.py only for the shared contract; distribution/tests/test_runtime_lifecycle.py and client behavior tests.
+**Files:** distribution/runtime_worker.py and focused runtime client/recovery siblings if needed; distribution/runtime_lifecycle.py and installer.py for the shared contract; build.py to package new helpers; distribution/tests/test_runtime_lifecycle.py and client/recovery behavior tests.
 
 **Interfaces:** Consume Task 1 worker inspect_clients(home, project, excluded_pids) and durable runtime transaction. Preserve --stop-runtimes and installation-outcome phases. Extend the existing record for client shutdown/reopen decisions.
 
 - [ ] Pin red tests for a standard Desktop of the selected install versus another installation, one parent app with backend/renderer children, PID replacement, interactive CLI, installer ancestors, and an unclassified custom process.
 - [ ] Close the selected installation's verified standard Desktop via native app shutdown and relaunch its original entry after successful installation; verify it releases/reloads its backend. End verified interactive CLI clients using Hermes canonical command and selected home/environment ownership under explicit stop consent; never replay arbitrary CLI commands, cron work or shell text. Saved sessions can be resumed by the user and the receipt must say which clients were closed. Keep unprovable custom holders as a specific pre-write refusal.
+- [ ] Provide `--restore-runtimes RECEIPT_ID` for the assistant to retry a failed restart only when the receipt and current files/environment prove a safe state (verified completed installation, verified pre-write refusal, or verified rollback). Require the selected home and bundled installer; never replay arbitrary receipt commands or restart a possibly partial installation. Make retries idempotent and preserve remaining obligations if an owner cannot be verified. Do not remove an active installer lock. GUI consumes the same installation-outcome status and receipt fields; partial-install repair remains a clearly distinguished failure rather than a blind restart.
 - [ ] Add native smoke where available and run the combined lifecycle/distribution suite. Commit and report exact supported paths and remaining exceptions; do not mark gateway-only support as full installer completion.
 
 ### Task 3: Guided setup and localized lifecycle UX
@@ -56,7 +57,7 @@
 **Interfaces:** Consume Tasks 1–2 --stop-runtimes and progress phases. Do not change the lifecycle engine contract without coordinating with the lifecycle implementers.
 
 - [ ] Add regressions for explicit stop/restart consent, progress, restart failure versus no-write refusal, system-language fallback and guided console default. Include a real short-lived subprocess emitting its final installation-outcome immediately before exit: the Swift runner must drain the final stderr bytes before its completion callback, not lose the event when isRunning becomes false.
-- [ ] Replace the false claim that runtimes are already stopped with a plain stop/install/restart explanation and action. Default guided installation uses managed lifecycle; include an explicit cancel path before any shutdown. Keep active-work delays visible.
+- [ ] Replace the false claim that runtimes are already stopped with a plain stop/install/restart explanation and action. Default guided installation uses managed lifecycle; include an explicit cancel path before any shutdown. Keep active-work delays visible. Offer the checked `--restore-runtimes RECEIPT_ID` action for a safe failed restart; never expose a force-restart action for a possibly partial installation.
 - [ ] Build SwiftUI and test English, German and unsupported-language fallback. Commit and report.
 
 ### Task 4: Release and native acceptance
