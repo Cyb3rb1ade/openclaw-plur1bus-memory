@@ -166,6 +166,49 @@ def _windows_product(executable):
     return result.stdout.strip()
 
 
+def _validate_winsw_shape(root):
+    """Closed stock XML surface: no alternate commands, hooks or extensions."""
+    scalar = {"id", "name", "description", "executable", "arguments", "workingdirectory",
+              "logpath", "startmode", "delayedAutoStart", "stoptimeout", "stopparentprocessfirst",
+              "resetfailure", "depend", "priority", "hidewindow", "waithint", "sleeptime"}
+    nested = {"log": {"sizeThreshold", "keepFiles", "pattern", "autoRollAtTime", "zipOlderThanNumDays", "zipDateFormat"},
+              "serviceaccount": {"domain", "username", "password", "allowservicelogon"}}
+    seen, environment = set(), set()
+    def refuse():
+        raise RuntimeRefused("custom or ambiguous WinSW execution configuration is unsupported")
+    if root.attrib:
+        refuse()
+    for child in root:
+        tag = child.tag
+        if tag in seen and tag not in {"env", "depend", "onfailure"}:
+            refuse()
+        seen.add(tag)
+        if tag in scalar:
+            if child.attrib or len(child):
+                refuse()
+        elif tag == "env":
+            name = child.get("name", "").casefold()
+            if len(child) or set(child.attrib) != {"name", "value"} or not name or name in environment:
+                refuse()
+            environment.add(name)
+        elif tag == "onfailure":
+            if len(child) or set(child.attrib) - {"action", "delay"} or child.get("action") not in {"none", "restart"}:
+                refuse()
+        elif tag in nested:
+            if tag == "log":
+                if set(child.attrib) - {"mode"} or child.get("mode", "append") not in {"append", "reset", "none", "roll", "roll-by-size", "roll-by-time", "roll-by-size-time"}:
+                    refuse()
+            elif child.attrib:
+                refuse()
+            fields = set()
+            for field in child:
+                if field.tag not in nested[tag] or field.tag in fields or field.attrib or len(field):
+                    refuse()
+                fields.add(field.tag)
+        else:
+            refuse()
+
+
 def _windows_definition(owner):
     """Stock NSSM registry or WinSW XML; arbitrary SCM wrapper code is unsupported."""
     import psutil
@@ -199,15 +242,14 @@ def _windows_definition(owner):
     root = ET.fromstring(definition)
     if root.tag != "service" or root.findtext("id") != owner["name"]:
         raise RuntimeRefused("Windows service is not a bound stock WinSW definition")
-    if any(root.find(tag) is not None for tag in ("extensions", "prestart", "poststart", "download")):
-        raise RuntimeRefused("custom WinSW execution hooks are unsupported")
+    _validate_winsw_shape(root)
     def expand(value):
         value = value.replace("%BASE%", str(executable.parent))
         if "%" in value or "$" in value:
             raise RuntimeRefused("Windows wrapper contains unresolved launch variables")
         return value
     application, arguments, directory = (expand(root.findtext(key, "")) for key in ("executable", "arguments", "workingdirectory"))
-    environment = {item.get("name", ""): expand(item.get("value", "")) for item in root.findall("env")}
+    environment = {item.get("name", "").upper(): expand(item.get("value", "")) for item in root.findall("env")}
     return [application, *_windows_split('placeholder ' + arguments)[1:]], directory, definition.decode("utf-8-sig"), environment
 
 

@@ -98,3 +98,39 @@ class ServiceIdentityTests(unittest.TestCase):
                 identity.gateway_options(["python", "-B", "-I", "-u", "-m", "foreign.module", "gateway", "run"], self.project, self.project, manual=True)
             with self.assertRaises(ValueError):
                 identity.gateway_options(["python", "-B", "-I", "-u", "-c", "arbitrary code", "gateway", "run"], self.project, self.project, manual=True)
+
+    def prove_winsw_xml(self, extra=""):
+        import shlex
+        import sys
+        from xml.sax.saxutils import escape
+        command = shlex.join([str(self.project / "hermes_cli/main.py"), "gateway", "run"])
+        document = ("<service><id>hermes</id><name>Hermes</name><description>Gateway</description>"
+                    "<executable>python</executable><arguments>" + escape(command) + "</arguments>"
+                    "<workingdirectory>" + escape(str(self.project)) + "</workingdirectory>"
+                    '<env name="HERMES_HOME" value="' + escape(str(self.root)) + '"/>' + extra + "</service>").encode()
+        psutil = SimpleNamespace(win_service_get=Mock(return_value=SimpleNamespace(binpath=lambda: str(self.root / "hermes-service.exe"))))
+        api = SimpleNamespace(read_definition=Mock(return_value=document))
+        with patch.dict(sys.modules, {"psutil": psutil, "hermes_cli.gateway_runtime_service_identity": api}), patch.object(identity, "_windows_split", side_effect=shlex.split), patch.object(identity, "_windows_product", return_value="Windows Service Wrapper"):
+            identity.prove_service_source({"kind": "windows-service", "name": "hermes"}, self.project, self.root)
+
+    def test_winsw_stock_configuration_remains_supported(self):
+        self.prove_winsw_xml('<log mode="roll"><sizeThreshold>10240</sizeThreshold><keepFiles>8</keepFiles></log><onfailure action="restart" delay="10 sec"/><stoptimeout>60 sec</stoptimeout>')
+
+    def test_winsw_custom_start_stop_executables_are_refused(self):
+        additions = [
+            '<prestop><executable>/unrelated/admin-tool.exe</executable></prestop>',
+            '<poststop><executable>/unrelated/admin-tool.exe</executable></poststop>',
+            '<stopexecutable>/unrelated/admin-tool.exe</stopexecutable>',
+            '<stoparguments>--custom-stop</stoparguments>',
+            '<startarguments>/foreign/hermes_cli/main.py gateway run</startarguments>',
+            '<prestart><executable>/unrelated/admin-tool.exe</executable></prestart>',
+            '<poststart><executable>/unrelated/admin-tool.exe</executable></poststart>',
+            '<extensions><extension id="custom"/></extensions>',
+            '<download from="https://example.invalid/code.exe" to="tool.exe"/>',
+            '<onfailure action="run" delay="0"/><failurecommand>/unrelated/admin-tool.exe</failurecommand>',
+            '<onfailure action="reboot" delay="0"/>',
+            '<future-execution-hook>/unrelated/admin-tool.exe</future-execution-hook>',
+        ]
+        for addition in additions:
+            with self.subTest(xml=addition), self.assertRaisesRegex(ValueError, "WinSW"):
+                self.prove_winsw_xml(addition)
