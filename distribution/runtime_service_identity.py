@@ -37,6 +37,10 @@ def _source_arguments(argv, project, cwd):
                 if Path(argv[offset]).resolve() == project / "hermes_cli/main.py":
                     return argv[offset + 1:]
                 raise RuntimeRefused("gateway script belongs to another source installation")
+            if argv[offset:offset + 1] == ["-m"]:
+                # The vendor's legacy module decoder expects -m immediately
+                # after Python. Keep -I -c bootstrap templates byte-exact.
+                argv = [argv[0], *argv[offset:]]
         api = _identity_api(project)
         if argv[0] == "/usr/bin/osascript":
             argv, _ = api._launchd_command(argv)

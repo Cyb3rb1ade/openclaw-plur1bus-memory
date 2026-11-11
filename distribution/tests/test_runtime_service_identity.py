@@ -69,3 +69,32 @@ class ServiceIdentityTests(unittest.TestCase):
         psutil = SimpleNamespace(win_service_get=Mock(return_value=SimpleNamespace(binpath=lambda: str(self.root / "custom.exe"))))
         with patch.dict(sys.modules, {"psutil": psutil}), patch.object(identity, "_windows_split", return_value=[str(self.root / "custom.exe")]), patch.object(identity, "_windows_product", return_value="Custom Service"), self.assertRaisesRegex(ValueError, "custom Windows"):
             identity._windows_definition({"name": "hermes"})
+
+    @staticmethod
+    def module_decoder(argv):
+        if argv[1:3] == ["-m", "hermes_cli.main"]:
+            return "hermes_cli.main", argv[3:]
+        return None
+
+    def test_python_module_flags_are_normalized_before_vendor_dispatch(self):
+        api = SimpleNamespace(_launch_module=Mock(side_effect=self.module_decoder))
+        with patch.object(identity, "_identity_api", return_value=api):
+            for flags in (["-B"], ["-I"], ["-u"], ["-B", "-I", "-u"], ["-u", "-B", "-I"]):
+                with self.subTest(flags=flags):
+                    command = ["python", *flags, "-m", "hermes_cli.main", "gateway", "run", "-q"]
+                    self.assertEqual(identity.gateway_options(command, self.project, self.project, manual=True), ["--quiet"])
+                    api._launch_module.assert_called_with(["python", "-m", "hermes_cli.main", "gateway", "run", "-q"])
+
+    def test_normalized_module_flags_do_not_relax_source_or_unknown_flags(self):
+        api = SimpleNamespace(_launch_module=Mock(side_effect=self.module_decoder))
+        with patch.object(identity, "_identity_api", return_value=api):
+            for flags in (["-B"], ["-I"], ["-u"], ["-B", "-I", "-u"]):
+                with self.subTest(flags=flags), self.assertRaises(ValueError):
+                    identity.gateway_options(["python", *flags, "-m", "hermes_cli.main", "gateway", "run"], self.project, Path("/foreign"), manual=True)
+            for flags in (["-B", "-S"], ["-I", "-X", "custom"], ["-u", "--unknown"]):
+                with self.subTest(flags=flags), self.assertRaises(ValueError):
+                    identity.gateway_options(["python", *flags, "-m", "hermes_cli.main", "gateway", "run"], self.project, self.project, manual=True)
+            with self.assertRaises(ValueError):
+                identity.gateway_options(["python", "-B", "-I", "-u", "-m", "foreign.module", "gateway", "run"], self.project, self.project, manual=True)
+            with self.assertRaises(ValueError):
+                identity.gateway_options(["python", "-B", "-I", "-u", "-c", "arbitrary code", "gateway", "run"], self.project, self.project, manual=True)
