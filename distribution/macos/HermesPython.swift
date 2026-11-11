@@ -18,10 +18,52 @@ private struct HermesFacts: Decodable {
     let packages: Packages
 }
 
+private struct HermesRuntimeFacts: Decodable {
+    struct Packages: Decodable {
+        struct Python: Decodable { let entry: String }
+        let python: Python
+    }
+    let schema: Int
+    let packages: Packages
+}
+
 private func canonicalPath(_ url: URL) -> String? {
     guard let resolved = realpath(url.path, nil) else { return nil }
     defer { free(resolved) }
     return String(cString: resolved)
+}
+
+private func configuredPMExecutable() throws -> String? {
+    guard let configured = ProcessInfo.processInfo.environment["HERMES_RUNTIME_DIR"], !configured.isEmpty else { return nil }
+    let requested = URL(fileURLWithPath: configured, isDirectory: true)
+    let properties = try? requested.resourceValues(forKeys: [.isSymbolicLinkKey])
+    guard configured.hasPrefix("/"), properties?.isSymbolicLink == false,
+          let path = canonicalPath(requested) else { throw HermesPythonError.invalidManagedEnvironment }
+    let root = URL(fileURLWithPath: path, isDirectory: true)
+    let facts = root.appendingPathComponent("facts.json")
+    guard canonicalPath(facts) == facts.path,
+          let data = try? Data(contentsOf: facts),
+          let decoded = try? JSONDecoder().decode(HermesRuntimeFacts.self, from: data), decoded.schema == 1 else {
+        throw HermesPythonError.invalidManagedEnvironment
+    }
+    let relative = decoded.packages.python.entry
+    let components = relative.components(separatedBy: "/")
+    guard !relative.isEmpty, !relative.hasPrefix("/"), !relative.contains(":"), !relative.contains("\\"),
+          !components.contains("."), !components.contains("..") else { throw HermesPythonError.invalidManagedEnvironment }
+    var entry = root
+    for component in components where !component.isEmpty {
+        entry.appendPathComponent(component, isDirectory: true)
+        guard canonicalPath(entry) == entry.path else { throw HermesPythonError.invalidManagedEnvironment }
+    }
+    let bin = entry.appendingPathComponent("bin", isDirectory: true)
+    // Match configured_pm_python(): trust only PM's canonical binary inside
+    // its recorded entry, including its normal versioned POSIX symlink.
+    guard canonicalPath(bin) == bin.path,
+          let binary = canonicalPath(bin.appendingPathComponent("python3")), binary.hasPrefix(entry.path + "/"),
+          try URL(fileURLWithPath: binary).resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+        throw HermesPythonError.invalidManagedEnvironment
+    }
+    return binary
 }
 
 // Match installer.py's read-only lookup. Invoke the lexical venv Python so
@@ -53,10 +95,12 @@ func discoverHermesPython(home: String) throws -> String? {
         guard let executable = canonicalPath(candidate) else { throw HermesPythonError.invalidManagedEnvironment }
         let withinGeneration = executable.hasPrefix(generation.path + "/")
         let withinTools = canonicalPath(tools) == tools.path && executable.hasPrefix(tools.path + "/")
+        var trusted = withinGeneration || withinTools
+        if !trusted { trusted = try configuredPMExecutable() == executable }
         guard generation.path.hasPrefix(environments.path + "/"),
               canonicalPath(bin) == bin.path,
               files.fileExists(atPath: generation.appendingPathComponent("pyvenv.cfg").path),
-              withinGeneration || withinTools,
+              trusted,
               try URL(fileURLWithPath: executable).resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true,
               files.isExecutableFile(atPath: candidate.path) else {
             throw HermesPythonError.invalidManagedEnvironment
