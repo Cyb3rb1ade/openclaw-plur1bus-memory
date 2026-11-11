@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 
+from native_lifecycle_runner import run_lifecycle
+
 REVISION = 'ea4d2379167af59b23c93b8ff383c9014bd71c08'
 REPO = Path(__file__).resolve().parents[2]
 
@@ -53,33 +55,20 @@ def main():
     python = selected / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     if not python.is_file():
         raise RuntimeError('PM interpreter missing')
-    result = subprocess.run([sys.executable, str(REPO / 'distribution/tests/live_runtime_acceptance.py'),
-                             '--source', str(source), '--python', str(python)],
-                            cwd=REPO, env=env, capture_output=True, text=True)
-    with log.open('a', encoding='utf-8') as handle:
-        handle.write(result.stdout + result.stderr)
-    result.check_returncode()
-    records = []
-    for line in result.stdout.splitlines():
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    passed = [item for item in records if isinstance(item, dict) and item.get('status') == 'passed']
-    if len(passed) != 1 or passed[0].get('configHashesUnchanged') is not True:
-        raise RuntimeError('gateway lifecycle evidence missing')
-    sandbox = Path(passed[0]['sandbox'])
-    for name in ('gateway.log', 'runtime-receipt.json'):
-        candidate = sandbox / name
-        if candidate.is_file():
-            (output / ('native-pm-' + name)).write_bytes(candidate.read_bytes())
+    passed = run_lifecycle(
+        [sys.executable, str(REPO / 'distribution/tests/live_runtime_acceptance.py'),
+         '--source', str(source), '--python', str(python)], output=output, cwd=REPO, env=env)
     evidence = {'schema': 1, 'status': 'passed', 'sourceCommit': actual,
                 'packageSourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(),
-                'profiles': ['default', 'alpha'], 'originalPid': passed[0]['originalPid'],
-                'restoredPid': passed[0]['restoredPid'], 'configHashesUnchanged': True,
+                'profiles': ['default', 'alpha'], 'originalPid': passed['originalPid'],
+                'restoredPid': passed['restoredPid'], 'configHashesUnchanged': True,
                 'pmBootstrap': 'install python venv', 'log': 'native-pm-lifecycle.log'}
     (output / 'native-pm-lifecycle.json').write_text(json.dumps(evidence, indent=2) + '\n', encoding='utf-8')
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(error.returncode) from error

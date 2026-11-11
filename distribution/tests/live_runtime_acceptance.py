@@ -25,9 +25,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True)
     parser.add_argument("--python", required=True)
+    parser.add_argument("--sandbox-parent", help="existing isolated parent for the newly created fixture")
     args = parser.parse_args()
     source = Path(args.source).resolve()
-    sandbox = Path(tempfile.mkdtemp(prefix="plur1bus-runtime-acceptance-")).resolve()
+    sandbox = Path(tempfile.mkdtemp(prefix="plur1bus-runtime-acceptance-", dir=args.sandbox_parent)).resolve()
     home = sandbox / "state"
     project = home / "hermes-agent"
     project.mkdir(parents=True)
