@@ -218,6 +218,39 @@ def gateway_plugin_host(proc, env, project, excluded):
     return bool(actual and actual['pid'] == owner['pid'] and matches(owner))
 
 
+def gateway_venv_redirector(proc, project, excluded_pids):
+    """Recognize the selected Windows venv's waiting parent of a proven gateway."""
+    import psutil
+    executable = Path(proc.exe()).resolve()
+    if (executable != Path(sys.executable).resolve() or executable.parent.name.lower() != 'scripts'
+            or executable.name.lower() not in {'python.exe', 'pythonw.exe'}
+            or not (executable.parent.parent / 'pyvenv.cfg').is_file()):
+        return False
+    argv = proc.cmdline()
+    if not argv or Path(argv[0]).resolve() != executable:
+        return False
+    args = _source_bound(proc, project)
+    if not args or args[:2] != ['gateway', 'run']:
+        return False
+    children = proc.children()  # Only the direct kernel child of this waiting redirector.
+    if len(children) != 1 or children[0].pid not in excluded_pids:
+        return False
+    child = children[0]
+    if (Path(child.exe()).resolve() != Path(psutil.Process(os.getpid()).exe()).resolve()
+            or _source_bound(child, project) != args):
+        return False
+    home, child_home = proc.environ().get('HERMES_HOME'), child.environ().get('HERMES_HOME')
+    if not home or not child_home or Path(home).resolve() != Path(child_home).resolve():
+        return False
+    if __package__:
+        from .runtime_worker import identify
+    else:
+        from runtime_worker import identify
+    actual = identify(Path(home))
+    witness = identity(child)
+    return bool(actual and actual['pid'] == child.pid and matches(witness))
+
+
 def inspect_clients(root, project, excluded_pids):
     import psutil
     from hermes_cli.process_identity import _read_ledger, LEDGER_FILENAME, install_id
@@ -263,6 +296,8 @@ def inspect_clients(root, project, excluded_pids):
             if row and not _ledger_live(row, proc):
                 raise RuntimeRefused('client ledger identity changed; inspect a fresh runtime plan')
             role = _hermes_holder_subcommand(subprocess.list2cmdline(argv))
+            if role == 'gateway' and sys.platform == 'win32' and gateway_venv_redirector(proc, project, excluded_pids):
+                continue  # No signal/restart: it exits with its authoritative child.
             if role in {'serve', 'dashboard'}:
                 if not row or row.get('purpose') not in {'serve', 'dashboard'}:
                     raise RuntimeRefused('backend lacks a verified Desktop owner ledger')

@@ -62,6 +62,7 @@ def main():
         proc = subprocess.Popen([args.python, "-B", str(project / "hermes_cli/main.py"), "gateway", "run", "--quiet"], cwd=project,
                                 env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
     original = []
+    last_refusal = None
     try:
         deadline = time.monotonic() + 90
         while proc.poll() is None and time.monotonic() < deadline:
@@ -69,11 +70,12 @@ def main():
                 original = lifecycle.worker("inventory")
                 if len(original) == 1 and set(original[0]["served_profiles"]) == {"default", "alpha"}:
                     break
-            except ValueError:
-                pass  # startup is not yet ready; bounded below, log retained
+            except ValueError as error:
+                last_refusal = str(error)  # Credential-free worker errors, retained if startup fails.
             time.sleep(.5)
         if not original or set(original[0]["served_profiles"]) != {"default", "alpha"}:
-            raise RuntimeError("sandbox gateway did not become ready; see " + str(sandbox))
+            raise RuntimeError("sandbox gateway did not become ready; last inventory refusal: " +
+                               (last_refusal or "none") + "; see " + str(sandbox))
         lifecycle.pause()
         lifecycle.restore()
         restored = lifecycle.worker("inventory")
@@ -81,12 +83,35 @@ def main():
         assert set(restored[0]["served_profiles"]) == {"default", "alpha"}
         assert all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == value for path, value in hashes.items())
         print(json.dumps({"status": "passed", "sandbox": str(sandbox), "originalPid": original[0]["pid"], "restoredPid": restored[0]["pid"], "configHashesUnchanged": True}))
+    except BaseException:
+        # Only this script's still-running child tree; never argv/env/secrets or
+        # host-wide discovery. Preserve native redirector/worker image evidence.
+        witness = {"python": args.python, "project": str(project), "lastInventoryRefusal": last_refusal, "processes": []}
+        try:
+            import psutil
+        except ImportError as error:
+            witness["inspectionError"] = type(error).__name__
+        else:
+            try:
+                if proc.poll() is None:
+                    parent = psutil.Process(proc.pid)
+                    for child in [parent, *parent.children(recursive=True)]:
+                        witness["processes"].append({"pid": child.pid, "ppid": child.ppid(), "exe": child.exe(), "cwd": child.cwd()})
+            except psutil.Error as error:
+                witness["inspectionError"] = type(error).__name__
+        (sandbox / "startup-witness.json").write_text(json.dumps(witness, indent=2))
+        raise
     finally:
         # Every candidate was launched by this script inside this new home.
         # Never use a host-wide gateway stop or productive runtime directory.
+        failed = sys.exc_info()[0] is not None
         try:
             for entry in lifecycle.worker("inventory"):
                 lifecycle.worker("stop", entry)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            print("Fixture cleanup refused: " + str(error), file=sys.stderr, flush=True)
+            if not failed:
+                raise
         finally:
             if proc.poll() is None:
                 proc.terminate()

@@ -20,6 +20,7 @@ sandbox = parent / "plur1bus-runtime-acceptance-test"
 sandbox.mkdir()
 (sandbox / "gateway.log").write_text("gateway failed")
 (sandbox / "runtime-receipt.json").write_text('{"state":"paused"}')
+(sandbox / "startup-witness.json").write_text('{"processes":[{"pid":42,"ppid":7}]}')
 print("fixture failure", file=sys.stderr)
 sys.exit(17)
 ''')
@@ -31,5 +32,6 @@ sys.exit(17)
     assert error.value.returncode == 17
     assert (output / 'native-pm-gateway.log').read_text() == 'gateway failed'
     assert (output / 'native-pm-runtime-receipt.json').read_text() == '{"state":"paused"}'
+    assert (output / 'native-pm-startup-witness.json').read_text() == '{"processes":[{"pid":42,"ppid":7}]}'
     assert 'fixture failure' in (output / 'native-pm-lifecycle.log').read_text()
     assert not (output / 'native-pm-lifecycle.json').exists()

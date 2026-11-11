@@ -1654,7 +1654,10 @@ def rollback(home, transaction, confirmation=None, stopped=False):
                 before_hash = journal["files"].get(
                     ("" if profile == "default" else "profiles/" + profile + "/") + "config.yaml", {}
                 ).get("before")
-                if digest(current_config) != before_hash:
+                # Admission can replace the dependency graph while preserving
+                # config bytes (an enabled plugin's version-only upgrade).
+                if (selection.get("applied") is True or journal.get("pendingPmProfile") == profile
+                        or digest(current_config) != before_hash):
                     pm_admission_attempted = True
                     try:
                         run_pm_selection(home, profile_home, enabled, disabled, digest(current_config))

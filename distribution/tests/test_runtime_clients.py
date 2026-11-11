@@ -36,7 +36,7 @@ class ClientInventoryTests(unittest.TestCase):
         identity.boot_start = lambda proc: None
         identity._live_boot_id = lambda: None
         parser = ModuleType('hermes_cli.update_cmd_windows')
-        parser._hermes_holder_subcommand = lambda text: next((x for x in ('serve', 'dashboard', 'chat', 'cron') if x in text.split()), None)
+        parser._hermes_holder_subcommand = lambda text: next((x for x in ('gateway', 'serve', 'dashboard', 'chat', 'cron') if x in text.split()), None)
         posix = ModuleType('hermes_cli.update_cmd_posix_pause')
         posix._supervisor_markers = lambda pid: None
         self.modules = patch.dict(sys.modules, {'hermes_cli.process_identity': identity, 'hermes_cli.update_cmd_windows': parser, 'hermes_cli.update_cmd_posix_pause': posix})
@@ -139,6 +139,24 @@ class ClientInventoryTests(unittest.TestCase):
             manager.pause()
         self.assertEqual(actions, ['inventory'])
         self.assertEqual(manager.state['stopped'], [])
+
+    @unittest.skipUnless(sys.platform == 'win32', 'native Windows venv redirector inventory')
+    def test_windows_selected_venv_parent_is_excluded_only_with_its_verified_gateway_child(self):
+        python = self.project / 'venv/Scripts/python.exe'
+        python.parent.mkdir(parents=True)
+        python.write_bytes(b'fixture interpreter')
+        (python.parent.parent / 'pyvenv.cfg').write_text('version = 3.14.0')
+        base = self.home / 'runtime/python.exe'
+        args = ['-B', str(self.project / 'hermes_cli/main.py'), 'gateway', 'run', '--quiet']
+        parent = self.proc(30, [str(python), *args], exe=python)
+        self.proc(42, [str(base), *args], exe=base, parent=30)
+        self.current.exe.return_value = str(base)
+        with patch.object(sys, 'executable', str(python)), patch.object(worker, 'identify', return_value={'pid': 42, 'hermes_home': str(self.home)}):
+            self.assertEqual(worker.inspect_clients(self.home, self.project, {42}), [])
+            self.procs.pop(42)
+            with self.assertRaisesRegex(ValueError, 'custom.*job/client'):
+                worker.inspect_clients(self.home, self.project, {42})
+        parent.terminate.assert_not_called()
 
     def test_unknown_custom_holder_refuses_before_writes(self):
         self.proc(30, [str(self.project / 'venv/bin/python'), '-c', 'custom_job()'])

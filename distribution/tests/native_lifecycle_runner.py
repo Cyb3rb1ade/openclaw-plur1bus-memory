@@ -23,7 +23,7 @@ def run_lifecycle(command, *, output, cwd, env):
         fixtures = [path for path in Path(parent).iterdir()
                     if path.name.startswith('plur1bus-runtime-acceptance-') and not path.is_symlink() and path.is_dir()]
         if len(fixtures) == 1:
-            for name in ('gateway.log', 'runtime-receipt.json'):
+            for name in ('gateway.log', 'runtime-receipt.json', 'startup-witness.json'):
                 candidate = fixtures[0] / name
                 if not candidate.is_symlink() and candidate.is_file():
                     (output / ('native-pm-' + name)).write_bytes(candidate.read_bytes())

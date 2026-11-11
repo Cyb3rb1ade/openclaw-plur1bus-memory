@@ -348,6 +348,11 @@ python3 installer.py --home /absolute/hermes-home --rollback TRANSACTION_NAME
 After reviewing it, repeat with `--apply --confirm HASH --runtimes-stopped`.
 New user edits block automatic rollback. Newly installed files are moved into
 the backup's `removed` directory. **File rollback does not roll back pip.**
+For PM-managed upgrades, rollback re-admits the original plugin selection against
+the restored package files when admission happened or may have begun, including
+upgrades that preserved configuration bytes. A compatible rebuilt dependency graph
+does not prove the original generation's identity; restart recovery retains its
+separate file/environment verification.
 The transaction includes pip-before, pip-check-before/after and pip.log for
 environment recovery. Do not restart after a failed pip phase until dependencies
 are healthy; consult the journal or restore your pre-install venv snapshot.
