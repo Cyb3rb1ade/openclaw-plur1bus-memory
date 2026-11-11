@@ -55,7 +55,7 @@
 
 **Interfaces:** Consume Tasks 1–2 --stop-runtimes and progress phases. Do not change the lifecycle engine contract without coordinating with the lifecycle implementers.
 
-- [ ] Add regressions for explicit stop/restart consent, progress, restart failure versus no-write refusal, system-language fallback and guided console default.
+- [ ] Add regressions for explicit stop/restart consent, progress, restart failure versus no-write refusal, system-language fallback and guided console default. Include a real short-lived subprocess emitting its final installation-outcome immediately before exit: the Swift runner must drain the final stderr bytes before its completion callback, not lose the event when isRunning becomes false.
 - [ ] Replace the false claim that runtimes are already stopped with a plain stop/install/restart explanation and action. Default guided installation uses managed lifecycle; include an explicit cancel path before any shutdown. Keep active-work delays visible.
 - [ ] Build SwiftUI and test English, German and unsupported-language fallback. Commit and report.
 
