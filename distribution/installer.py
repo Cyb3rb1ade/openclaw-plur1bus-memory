@@ -1773,7 +1773,7 @@ def main():
         if any((args.native_root, args.native_python, args.native_desktop_exe)):
             raise ValueError("native ARM launcher paths require --native-arm-launcher")
         if interactive:
-            print("PLUR1BUS for Hermes — package installation and model/memory changes require separate review. Stop affected runtimes before writes.")
+            print("PLUR1BUS for Hermes — package installation and model/memory changes require separate review.")
             suggested_home = os.environ.get("HERMES_HOME") or str(Path(os.environ["LOCALAPPDATA"]) / "hermes" if sys.platform == "win32" and "LOCALAPPDATA" in os.environ else Path.home() / ".hermes")
             args.home = input("Hermes root home [" + suggested_home + "]: ").strip() or suggested_home
             print("Profiles: all = ALL existing profiles; default = root profile only; or enter one existing name.")
@@ -1789,7 +1789,7 @@ def main():
                     args.retrieval_kind = input("Model kind [embedding/reranker]: ").strip() or "embedding"
                     args.retrieval_action = "plan"
                 else:
-                    print("Activation selects PLUR1BUS as memory provider and enables its dashboard and controls. Models and memories are not changed.")
+                    print("Activation selects PLUR1BUS as memory provider and enables its Agent plugin. Existing Desktop preferences, models and memories are preserved.")
                     activation = input("Install AND activate PLUR1BUS for the selected profiles? [Y/n]: ").strip().lower()
                     if activation not in {"", "y", "yes", "n", "no"}:
                         raise ValueError("answer yes or no for activation")
@@ -1820,13 +1820,42 @@ def main():
             if interactive:
                 print("Profiles: " + ", ".join(result["profiles"]))
                 print("Action: " + ("INSTALL AND ACTIVATE" if result["activate"] else "INSTALL FILES ONLY; activation unchanged"))
-                if input("After reviewing the plan and stopping runtimes, type INSTALL: ") != "INSTALL":
+                print("Save unsent work. Setup will close selected local Desktop, gateways and CLI sessions, install, then reopen the original Desktop and services. Active replies and jobs may finish within Hermes' normal shutdown interval and may then be interrupted. Saved CLI sessions remain resumable; commands and jobs are not replayed.")
+                choice = input("Type INSTALL to stop, install and reopen; MANUAL if runtimes are already stopped; or Enter to cancel: ").strip()
+                if choice not in {"INSTALL", "MANUAL"}:
                     return 0
-                args.apply, args.runtimes_stopped, args.confirm = True, True, result["confirmation"]
+                args.apply, args.confirm = True, result["confirmation"]
+                args.stop_runtimes, args.runtimes_stopped = choice == "INSTALL", choice == "MANUAL"
             if args.apply:
+                outcome = {}
                 def progress(event):
-                    print("PLUR1BUS_PROGRESS " + json.dumps(event), file=sys.stderr, flush=True)
-                apply_install(result, args.confirm, args.runtimes_stopped, progress if args.progress else None, stop_runtimes=args.stop_runtimes)
+                    if event.get("phase") == "installation-outcome":
+                        outcome.update(event)
+                    if args.progress:
+                        print("PLUR1BUS_PROGRESS " + json.dumps(event), file=sys.stderr, flush=True)
+                    if interactive:
+                        print("Setup: " + event.get("phase", "") + (" (" + str(event["elapsedSeconds"]) + "s)" if "elapsedSeconds" in event else ""), flush=True)
+                try:
+                    apply_install(result, args.confirm, args.runtimes_stopped, progress if args.progress or interactive else None, stop_runtimes=args.stop_runtimes)
+                except (ValueError, OSError, subprocess.SubprocessError):
+                    failed_status = outcome.get("status")
+                    if interactive:
+                        messages = {
+                            "installed-restart-failed": "Installation verified, but reopening Hermes failed.",
+                            "refused-restored": "Installation refused before changes; original runtimes restored.",
+                            "refused-recovery-required": "Installation refused before changes; runtime restoration needs attention.",
+                            "install-failed-recovery-required": "Installation may be partial; review the receipt before restarting Hermes.",
+                        }
+                        print(messages.get(failed_status, "Operation did not complete; review the details."))
+                    if interactive and outcome.get("recoveryAvailable") and input("Retry reopening Hermes using the verified receipt? [y/N]: ").strip().lower() in {"y", "yes"}:
+                        restore_runtimes(args.bundle, args.home, Path(outcome["receipt"]).name, progress)
+                        if failed_status != "installed-restart-failed":
+                            raise
+                    else:
+                        raise
+                if interactive:
+                    print("Installation verified; runtime status: " + outcome.get("status", "manual restart required") + ".")
+                    print("Existing Desktop preferences are preserved. If the navigation entry is absent, open Hermes > Capabilities > Plugins > PLUR1BUS and enable Desktop.")
                 return 0
         if args.rollback:
             print(json.dumps(result, indent=2))

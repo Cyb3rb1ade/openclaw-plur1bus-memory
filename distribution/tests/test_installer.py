@@ -193,6 +193,56 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(plan.call_args.args[4])
             apply.assert_not_called()
 
+    def test_guided_install_authorizes_managed_lifecycle(self):
+        result = {"profiles": ["default"], "activate": True, "confirmation": "hash"}
+        with patch.object(sys, "argv", ["installer.py", "--interactive"]), \
+             patch.object(sys.stdin, "isatty", return_value=True), \
+             patch("builtins.input", side_effect=[str(self.home), "", "", str(sys.executable), "install", "", "INSTALL"]), \
+             patch.object(installer, "plan_install", return_value=result), \
+             patch.object(installer, "apply_install") as apply:
+            self.assertEqual(installer.main(), 0)
+            self.assertFalse(apply.call_args.args[2])
+            self.assertTrue(apply.call_args.kwargs["stop_runtimes"])
+
+    def test_guided_manual_mode_remains_explicit(self):
+        result = {"profiles": ["default"], "activate": True, "confirmation": "hash"}
+        with patch.object(sys, "argv", ["installer.py", "--interactive"]), \
+             patch.object(sys.stdin, "isatty", return_value=True), \
+             patch("builtins.input", side_effect=[str(self.home), "", "", str(sys.executable), "install", "", "MANUAL"]), \
+             patch.object(installer, "plan_install", return_value=result), \
+             patch.object(installer, "apply_install") as apply:
+            self.assertEqual(installer.main(), 0)
+            self.assertTrue(apply.call_args.args[2])
+            self.assertFalse(apply.call_args.kwargs["stop_runtimes"])
+
+    def test_guided_restart_failure_offers_checked_retry(self):
+        result = {"profiles": ["default"], "activate": True, "confirmation": "hash"}
+        def fail(plan, confirmation, stopped, progress, *, stop_runtimes):
+            progress({"phase": "installation-outcome", "status": "installed-restart-failed", "receipt": "/tmp/receipt-1", "recoveryAvailable": True})
+            raise ValueError("restart failed")
+        with patch.object(sys, "argv", ["installer.py", "--interactive"]), \
+             patch.object(sys.stdin, "isatty", return_value=True), \
+             patch("builtins.input", side_effect=[str(self.home), "", "", str(sys.executable), "install", "", "INSTALL", "y"]), \
+             patch.object(installer, "plan_install", return_value=result), \
+             patch.object(installer, "apply_install", side_effect=fail), \
+             patch.object(installer, "restore_runtimes") as retry:
+            self.assertEqual(installer.main(), 0)
+            self.assertEqual(retry.call_args.args[2], "receipt-1")
+
+    def test_guided_partial_failure_never_offers_retry(self):
+        result = {"profiles": ["default"], "activate": True, "confirmation": "hash"}
+        def fail(plan, confirmation, stopped, progress, *, stop_runtimes):
+            progress({"phase": "installation-outcome", "status": "install-failed-recovery-required", "recoveryAvailable": False})
+            raise ValueError("partial")
+        with patch.object(sys, "argv", ["installer.py", "--interactive"]), \
+             patch.object(sys.stdin, "isatty", return_value=True), \
+             patch("builtins.input", side_effect=[str(self.home), "", "", str(sys.executable), "install", "", "INSTALL", ""]), \
+             patch.object(installer, "plan_install", return_value=result), \
+             patch.object(installer, "apply_install", side_effect=fail), \
+             patch.object(installer, "restore_runtimes") as retry:
+            self.assertEqual(installer.main(), 4)
+            retry.assert_not_called()
+
     def test_stale_config_or_payload_refused(self):
         plan = self.plan()
         (self.home / "config.yaml").write_text("memory: {}")

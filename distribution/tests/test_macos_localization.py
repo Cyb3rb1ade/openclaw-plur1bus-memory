@@ -30,8 +30,9 @@ class MacLocalizationTests(unittest.TestCase):
 import Foundation
 let title = setupText("Set up PLUR1BUS for Hermes")
 let progress = setupText("Hermes is setting up profile %@ (%ld of %ld) …", "coder", 2, 7)
+let consent = setupText("I authorize closing and reopening these Hermes runtimes.")
 let fallback = setupText("Untranslated English message")
-let output = try JSONSerialization.data(withJSONObject: ["title": title, "progress": progress, "fallback": fallback])
+let output = try JSONSerialization.data(withJSONObject: ["title": title, "progress": progress, "consent": consent, "fallback": fallback])
 print(String(data: output, encoding: .utf8)!)
 ''', encoding="utf-8")
             executable = app / "Contents/MacOS/PLUR1BUSSetup"
@@ -49,6 +50,7 @@ print(String(data: output, encoding: .utf8)!)
                     result = subprocess.run([str(executable), "-AppleLanguages", f"({language})"],
                                             check=True, capture_output=True, text=True)
                     self.assertEqual(json.loads(result.stdout), {"title": title, "progress": progress,
+                                                               "consent": "Ich erlaube das Schließen und erneute Öffnen dieser Hermes-Laufzeiten." if language.startswith("de") else "I authorize closing and reopening these Hermes runtimes.",
                                                                "fallback": "Untranslated English message"})
 
 

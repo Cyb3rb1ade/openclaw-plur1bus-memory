@@ -20,88 +20,6 @@ struct InstallPlan: Decodable {
     let warnings: [String]
 }
 
-struct InstallProgress: Decodable {
-    let phase: String
-    let profile: String?
-    let completed: Int?
-    let total: Int?
-
-    var message: String? {
-        switch phase {
-        case "preparing": return setupText("Preparing installation and backing up files …")
-        case "installing-dependencies": return setupText("Installing Python dependencies …")
-        case "admitting-pm-profile":
-            guard let profile = profile, let completed = completed, let total = total,
-                  completed >= 0, completed < total else { return nil }
-            return setupText("Hermes is setting up profile %@ (%ld of %ld) …", profile, completed + 1, total)
-        case "verifying": return setupText("Verifying files, Python imports and profile activation …")
-        default: return nil
-        }
-    }
-}
-
-// No shell is involved. Output stays in private temporary files, so a long pip
-// run cannot deadlock on a full pipe or block the main/UI thread.
-func runInstaller(python: String, arguments: [String], progress: ((InstallProgress) -> Void)? = nil,
-                  completion: @escaping (Int32, String, String) -> Void) {
-    DispatchQueue.global(qos: .userInitiated).async {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("plur1bus-setup-\(UUID().uuidString)")
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-            defer {
-                do { try FileManager.default.removeItem(at: directory) }
-                catch { NSLog("PLUR1BUS: temporary setup output could not be removed: %@", error.localizedDescription) }
-            }
-            let stdout = directory.appendingPathComponent("stdout")
-            let stderr = directory.appendingPathComponent("stderr")
-            for url in [stdout, stderr] {
-                guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
-                    throw NSError(domain: "PLUR1BUS", code: 1, userInfo: [NSLocalizedDescriptionKey: setupText("Could not create temporary output.")])
-                }
-            }
-            let out = try FileHandle(forWritingTo: stdout), err = try FileHandle(forWritingTo: stderr)
-            defer { out.closeFile(); err.closeFile() }
-            let reader = try progress.map { _ in try FileHandle(forReadingFrom: stderr) }
-            defer { reader?.closeFile() }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: python)
-            process.arguments = arguments
-            process.standardInput = FileHandle.nullDevice
-            process.standardOutput = out
-            process.standardError = err
-            try process.run()
-            if let reader = reader, let progress = progress {
-                let prefix = Data("PLUR1BUS_PROGRESS ".utf8)
-                var pending = Data()
-                while process.isRunning {
-                    do { pending.append(try reader.read(upToCount: 4096) ?? Data()) }
-                    catch {
-                        NSLog("PLUR1BUS: progress output could not be read: %@", error.localizedDescription)
-                        break
-                    }
-                    while let end = pending.firstIndex(of: 10) {
-                        let line = pending.prefix(upTo: end)
-                        if line.starts(with: prefix),
-                           let event = try? JSONDecoder().decode(InstallProgress.self, from: line.dropFirst(prefix.count)) {
-                            DispatchQueue.main.async { progress(event) }
-                        }
-                        pending.removeFirst(line.count + 1)
-                    }
-                    if pending.count > 4096 { pending.removeAll() }
-                    Thread.sleep(forTimeInterval: 0.25)
-                }
-            }
-            process.waitUntilExit()
-            let output = try String(contentsOf: stdout, encoding: .utf8)
-            let errors = try String(contentsOf: stderr, encoding: .utf8)
-            DispatchQueue.main.async { completion(process.terminationStatus, output, errors) }
-        } catch {
-            let message = error.localizedDescription
-            DispatchQueue.main.async { completion(4, "", message) }
-        }
-    }
-}
-
 final class SetupModel: ObservableObject {
     @Published var home = ProcessInfo.processInfo.environment["HERMES_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".hermes").path
     @Published var python = ""
@@ -109,7 +27,9 @@ final class SetupModel: ObservableObject {
     @Published var profiles: [Profile] = []
     @Published var selected: Set<String> = []
     @Published var activate = true
-    @Published var stopped = false
+    @Published var consent = false
+    @Published var outcome: InstallProgress?
+    private var phase = ""
     @Published var busy = false
     @Published var completed = false
     @Published var message = setupText("Choose your existing Hermes home. No changes will be made yet.")
@@ -122,7 +42,7 @@ final class SetupModel: ObservableObject {
     private let payload = Bundle.main.resourceURL!.appendingPathComponent("distribution")
 
     func reset() {
-        profiles = []; selected = []; plan = nil; stopped = false; completed = false
+        profiles = []; selected = []; plan = nil; consent = false; completed = false; outcome = nil; phase = ""
         details = ""; showDetails = false; approvedArguments = []; approvedPython = ""
     }
 
@@ -186,34 +106,70 @@ final class SetupModel: ObservableObject {
                 self.plan = try JSONDecoder().decode(InstallPlan.self, from: Data(output.utf8))
                 self.approvedArguments = args; self.approvedPython = interpreter
                 self.details = output
-                self.message = setupText("Review your selection and stop all affected Hermes runtimes.")
+                self.message = setupText("Review your selection and authorize the managed shutdown.")
             } catch { self.message = setupText("Invalid installation plan."); self.details = error.localizedDescription }
         }
     }
 
     func install() {
-        guard let plan = plan, stopped, !busy else { return }
-        busy = true; showDetails = false; phaseStartedAt = Date()
+        guard let plan = plan, consent, !busy else { return }
+        let args = approvedArguments + ["--apply", "--confirm", plan.confirmation, "--stop-runtimes", "--progress"]
+        runOperation(python: approvedPython, args: args)
+    }
+
+    func retry() {
+        guard let result = outcome, result.recoveryAvailable == true,
+              let receipt = result.receipt, !busy else { return }
+        let interpreter: String
+        do {
+            interpreter = python == automaticPython ? try discoverHermesPython(home: home) ?? "" : python
+        } catch { message = error.localizedDescription; return }
+        guard FileManager.default.isExecutableFile(atPath: interpreter) else {
+            message = setupText("Hermes Python could not be found for the retry."); return
+        }
+        let args = ["-I", "-B", payload.appendingPathComponent("installer.py").path, "--bundle", payload.path,
+                    "--home", home, "--restore-runtimes", URL(fileURLWithPath: receipt).lastPathComponent, "--progress"]
+        runOperation(python: interpreter, args: args)
+    }
+
+    private func runOperation(python: String, args: [String]) {
+        busy = true; showDetails = false; phaseStartedAt = Date(); phase = ""; outcome = nil
         message = setupText("Checking the installation plan and running Hermes processes …")
         let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "PLUR1BUS installation")
-        let args = approvedArguments + ["--apply", "--confirm", plan.confirmation, "--runtimes-stopped", "--progress"]
-        runInstaller(python: approvedPython, arguments: args, progress: { event in
-            guard let message = event.message else { return }
-            self.message = message; self.phaseStartedAt = Date()
+        runInstaller(python: python, arguments: args, progress: { event in
+            if event.phase == "installation-outcome" { self.outcome = event }
+            if let message = event.message {
+                if self.phase != event.phase { self.phase = event.phase; self.phaseStartedAt = Date() }
+                self.message = message
+            }
         }) { code, output, errors in
             ProcessInfo.processInfo.endActivity(activity)
             self.busy = false; self.phaseStartedAt = nil
             self.details = errors + "\n" + output
-            if code == 0 {
+            switch self.outcome?.status {
+            case "installed-restored":
                 self.completed = true
-                self.message = plan.activate ? setupText("Installed and activation verified: %@. Restart Hermes now.", plan.profiles.joined(separator: ", "))
-                    : setupText("Files installed. Existing activation settings were preserved.")
-            } else {
-                self.message = setupText("Installation did not complete. Check the details and backup journal. If dependencies failed, do not restart Hermes yet. Create a new plan before trying again.")
-                self.showDetails = true; self.plan = nil; self.stopped = false
+                self.message = (self.outcome?.runtimes?.original?.contains { $0.kind != "cli" } == true)
+                    ? setupText("Installation verified. The original Hermes applications and services were reopened.")
+                    : setupText("Installation verified. No running Hermes applications or services needed reopening.")
+            case "installed-restart-failed":
+                self.completed = true
+                self.message = setupText("Installation verified, but some Hermes applications or services could not be reopened.")
+            case "refused-restored":
+                self.message = setupText("Installation was refused before changes. The original Hermes applications and services were restored.")
+            case "refused-recovery-required":
+                self.message = setupText("Installation was refused before changes, but Hermes could not be fully restored.")
+            case "install-failed-recovery-required":
+                self.message = setupText("Installation did not complete and may be partial. Review the recovery details before restarting Hermes.")
+            case "rollback-restored":
+                self.message = setupText("The verified rollback was restored and Hermes applications and services were reopened.")
+            default:
+                self.message = code == 0 ? setupText("Operation completed. Review the details.") : setupText("Operation did not complete. Review the details before retrying.")
             }
+            if code != 0 { self.showDetails = true }
         }
     }
+
 }
 
 class SetupDelegate: NSObject, NSApplicationDelegate {
@@ -237,7 +193,7 @@ struct SetupView: View {
             Text(setupText("Set up PLUR1BUS for Hermes")).font(.title)
             Text(setupText("1 · Find Hermes    →    2 · Select profiles    →    3 · Review and install")).foregroundColor(.secondary)
             Text(setupText("The PKG installs this assistant. Use it to set up PLUR1BUS for your profiles, without a terminal or administrator privileges."))
-            if model.plan == nil && !model.completed {
+            if model.plan == nil && !model.completed && model.outcome == nil {
                 HStack {
                     TextField(setupText("Hermes home"), text: $model.home).onChange(of: model.home) { _ in model.reset() }
                     Button(setupText("Choose folder …")) { model.choosePath(directory: true) }
@@ -265,12 +221,12 @@ struct SetupView: View {
                     }.frame(height: 150)
                     Text(setupText("Selected: %ld of %ld. Run setup again for profiles created later.", model.selected.count, model.profiles.count)).font(.caption)
                     Toggle(setupText("Activate PLUR1BUS for the selected profiles (recommended)"), isOn: $model.activate)
-                    Text(model.activate ? setupText("Selects PLUR1BUS as the memory provider and activates its main plugin, dashboard and controls. Replaces the current provider selection.")
+                    Text(model.activate ? setupText("Selects PLUR1BUS as the memory provider and activates its Agent plugin. Replaces the current provider selection; Desktop preferences are preserved.")
                          : setupText("Install or update files only. The PLUR1BUS button appears only if PLUR1BUS is already activated.")).font(.caption)
                     Button(setupText("Review installation plan")) { model.preview() }.disabled(model.selected.isEmpty)
                 }
             }
-            if let plan = model.plan, !model.completed {
+            if let plan = model.plan, !model.completed, model.outcome == nil {
                 Text(setupText("Version: %@", plan.version)).font(.headline)
                 Text(setupText("Hermes home: %@", model.home))
                 Text(setupText("Profiles: %@", plan.profiles.joined(separator: ", ")))
@@ -278,10 +234,11 @@ struct SetupView: View {
                 Text(setupText("Dependencies will be installed in the shared Hermes environment. Changed plugin and configuration files will be backed up. This does not back up the entire environment."))
                 Text(setupText("This does not switch models, download model weights or migrate memory. Existing memories are preserved. Models and credentials must be configured separately."))
                 ForEach(plan.warnings, id: \.self) { Text($0).foregroundColor(.orange) }
-                Toggle(setupText("Desktop, gateway, CLI and jobs using this Hermes environment are stopped."), isOn: $model.stopped)
+                Text(setupText("Save unsent work. Setup will close selected local Desktop, gateways and CLI sessions, install, then reopen the original Desktop and services. Running replies and jobs may finish within Hermes’ normal shutdown interval, then may be interrupted. Saved CLI sessions remain resumable; commands and jobs are not replayed."))
+                Toggle(setupText("I authorize closing and reopening these Hermes runtimes."), isOn: $model.consent)
                 HStack {
-                    Button(setupText("Back to selection")) { model.plan = nil; model.stopped = false }
-                    Button(plan.activate ? setupText("Install and activate now") : setupText("Install files only")) { model.install() }.disabled(!model.stopped)
+                    Button(setupText("Back to selection")) { model.plan = nil; model.consent = false }
+                    Button(plan.activate ? setupText("Stop, install and activate") : setupText("Stop and install files")) { model.install() }.disabled(!model.consent)
                 }
             }
             if model.busy { ProgressView().controlSize(.small) }
@@ -290,8 +247,14 @@ struct SetupView: View {
                 HStack { Text(setupText("Time in this step")); Text(start, style: .timer).monospacedDigit() }
                     .font(.caption).foregroundColor(.secondary)
             }
+            if model.outcome != nil && !model.completed {
+                Button(setupText("Start a new plan")) { model.reset() }
+            }
+            if model.outcome?.recoveryAvailable == true {
+                Button(setupText("Retry reopening Hermes")) { model.retry() }
+            }
             if model.completed {
-                Text(setupText("After restarting, open each selected profile and check for the PLUR1BUS button. A configured embedding provider is also required to save and recall memories."))
+                Text(setupText("The Agent and memory provider are activated only if selected. Existing Desktop preferences are preserved. If the navigation entry is absent, open Hermes → Capabilities → Plugins → PLUR1BUS and enable Desktop. A configured embedding provider is required to save and recall memories."))
                 Button(setupText("Set up more profiles")) { model.reset() }
             }
             if !model.details.isEmpty {

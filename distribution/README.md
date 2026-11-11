@@ -89,7 +89,7 @@ your user/profile. Its welcome and conclusion explain the second step: open
 **PLUR1BUS einrichten** from Applications. The graphical setup discovers existing
 profiles, offers all/default/individual selection, and shows activation status.
 All listed profiles and activation are preselected; the final review shows exact
-names and requires confirming that affected runtimes are stopped. Deselecting
+names and asks permission to stop and reopen the affected runtimes. Save unsent work first: active replies and jobs may be interrupted after Hermes’ normal shutdown interval. Saved CLI sessions can be resumed; commands and jobs are not replayed. Deselecting
 activation explicitly means files-only, not an enabled PLUR1BUS provider.
 The GUI uses the same checksum-bound plan/apply transaction as the CLI, not a
 second installation implementation. Python comes from the existing Hermes venv;
@@ -103,7 +103,7 @@ Native artifacts are platform-qualified (for example,
 `.zip` and `.tar.gz` use the same qualifier. Portable builds without a native
 installer flag deliberately retain the unqualified bundle name.
 Package installation does not change ExecutionPolicy, disable antivirus, install
-models, change dimensions, migrate memory, restart Hermes or overwrite its app.
+models, change dimensions, migrate memory or overwrite its app. The guided setup can reopen the original Desktop and services after installation.
 Model/memory changes are separate, explicitly approved operations described below.
 Unsigned artifacts are named/documented as such; signing/notarization
 is a separate release gate, not implied by an artifact's existence.
@@ -118,14 +118,14 @@ a publisher signature; do not trust an archive from an unknown source.
 
 Running the launcher without arguments opens a guided terminal assistant. It
 asks for an existing Hermes root home and profile, displays a read-only plan,
-then requires typing `INSTALL` after stopping affected Hermes runtimes.
+then requires typing `INSTALL` to authorize managed shutdown and reopening, or `MANUAL` when runtimes were already stopped externally. Enter cancels before shutdown.
 The new guided defaults are all existing profiles plus activation; no write
 happens just by accepting those defaults. Noninteractive CLI defaults remain
 read-only, default-profile-only, and without activation. Both paths now warn
 when PLUR1BUS is selected but its required plugins are missing/disabled. An
 activated install verifies provider, `memory.memory_enabled`, and both plugin
 allow/deny lists afterward. Dashboard backend and the unified Desktop
-contribution are included in a normal backend installation.
+contribution are included in a normal backend installation. Existing Desktop preferences are preserved. If the navigation entry is absent, enable Desktop in Hermes → Capabilities → Plugins → PLUR1BUS.
 
 Hermes treats its materialized Desktop frontend as app-wide. A named-profile
 upgrade may therefore also refresh an **existing** shared root Desktop entry and
@@ -151,12 +151,13 @@ python3 installer.py --home /absolute/hermes-home \
   --python /absolute/hermes-venv/bin/python --profile default
 ```
 
-Review its effects and confirmation hash, stop affected Hermes runtimes, then
-repeat the **same arguments** with:
+Review its effects and confirmation hash, then authorize managed shutdown and reopening by repeating the **same arguments** with:
 
 ```sh
---apply --confirm HASH_FROM_PLAN --runtimes-stopped
+--apply --confirm HASH_FROM_PLAN --stop-runtimes
 ```
+
+If runtimes were stopped externally, `--runtimes-stopped` remains available instead. A verified installation with a restart failure remains installed; use the offered checked retry when available. For a partial installation, inspect the recovery receipt before restarting.
 
 ### Additional native Windows ARM desktop launcher
 

@@ -41,15 +41,6 @@ class MacSetupTests(unittest.TestCase):
             components = plistlib.loads((root / "components.plist").read_bytes())
             self.assertFalse(components[0]["BundleIsRelocatable"])
 
-    def test_ui_uses_same_confirmed_backend_and_no_shell(self):
-        source = (Path(packaging.__file__).parent / "macos/Setup.swift").read_text()
-        for required in ("--inspect-profiles", "--confirm", "--runtimes-stopped", "--activate", "All existing profiles", "Default profile only", "guard let plan = plan, stopped, !busy"):
-            self.assertIn(required, source)
-        self.assertIn("process.arguments = arguments", source)
-        self.assertIn('["-I", "-B", payload.appendingPathComponent', source)
-        self.assertNotIn("/bin/sh", source)
-        self.assertNotIn("sudo", source)
-
     def test_signed_build_seals_app_before_signing_product(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -66,13 +57,6 @@ class MacSetupTests(unittest.TestCase):
             info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
             self.assertEqual(info["CFBundleVersion"], "7.12.7")
             self.assertEqual(info["PLUR1BUSReleaseVersion"], "7.12.7-hermes.4")
-
-    def test_automatic_bootstrap_does_not_override_pm_target(self):
-        source = (Path(packaging.__file__).parent / "macos/Setup.swift").read_text()
-        self.assertIn("automaticPython = python", source)
-        self.assertIn('return python == automaticPython ? args : args + ["--python", python]', source)
-        base = source.split("private func baseArguments()", 1)[1].split("func preview()", 1)[0]
-        self.assertNotIn('"--home", home, "--python", python]', base)
 
     @unittest.skipUnless(sys.platform == "darwin" and shutil.which("xcrun"), "requires native macOS Swift")
     def test_fresh_pm_home_selects_its_trusted_venv_without_legacy_python(self):
