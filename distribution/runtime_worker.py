@@ -21,6 +21,35 @@ else:
     from runtime_service_identity import RuntimeRefused, gateway_options, prove_service_source, prove_restart_source, windows_definition_fingerprint
 
 
+# Child runtimes get platform/session paths, not arbitrary installer credentials.
+# Unknown provider/plugin names are excluded by construction, without a blocklist.
+_HOST_ENV_KEYS = frozenset({
+    "HOME", "USER", "LOGNAME", "SHELL", "PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+    "TEMP", "TMP", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "LC_COLLATE", "LC_TIME",
+    "LC_NUMERIC", "LC_MONETARY", "TZ", "TERM", "COLORTERM", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
+    "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_DATA_DIRS", "DBUS_SESSION_BUS_ADDRESS",
+    "SESSIONNAME", "__CF_USER_TEXT_ENCODING", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "HERMES_RUNTIME_DIR", "HERMES_DESKTOP_USER_DATA_DIR", "HERMES_DESKTOP_HERMES_ROOT",
+})
+
+
+def host_environment():
+    return {key: value for key, value in os.environ.items() if key.upper() in _HOST_ENV_KEYS}
+
+
+def profile_environment(home, project):
+    """Hydrate only the selected profile through Hermes over a credential-free base."""
+    from tools.environments.local import served_profile_child_env
+    env = served_profile_child_env(base=host_environment(), target_home=home, inherit_credentials=True)
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "HERMES_PARENT_PID", "HERMES_PARENT_START_MARKER",
+                "INVOCATION_ID", "JOURNAL_STREAM", "HERMES_UPDATE_PAUSED", "_HERMES_GATEWAY"):
+        env.pop(key, None)
+    env["HERMES_HOME"] = str(Path(home).resolve())
+    env["HERMES_DESKTOP_HERMES_ROOT"] = str(project)
+    return env
+
+
 def scoped_home(home, root):
     home = Path(home).resolve()
     return home == root or home.parent == root / "profiles"
@@ -405,10 +434,7 @@ def resume(entry, project):
         else:
             start_native(owner, project, Path(entry["home"]))
     else:
-        from tools.environments.local import served_profile_child_env
-        env = served_profile_child_env(target_home=entry["home"], inherit_credentials=True)
-        for key in ("INVOCATION_ID", "JOURNAL_STREAM", "HERMES_UPDATE_PAUSED", "_HERMES_GATEWAY"):
-            env.pop(key, None)
+        env = profile_environment(entry["home"], project)
         log_dir = Path(entry["home"]) / "logs"
         log_dir.mkdir(exist_ok=True)
         with (log_dir / "plur1bus-runtime-resume.log").open("ab") as log:
@@ -432,24 +458,33 @@ def main():
     project = root / "hermes-agent"
     if not project.is_dir() or project.is_symlink():
         raise RuntimeRefused("selected home has no supported Hermes source installation")
-    os.environ["HERMES_HOME"] = str(root)
+    environment = host_environment()
+    environment["HERMES_HOME"] = str(root)
+    os.environ.clear()
+    os.environ.update(environment)
     sys.path.insert(0, str(project))
     action = sys.argv[2]
     entry = json.load(sys.stdin)
     if entry and not scoped_home(entry["home"], root):
         raise RuntimeRefused("foreign runtime home refused")
+    token = None
     if entry is not None:
-        os.environ["HERMES_HOME"] = str(Path(entry["home"]).resolve())
-    # Hermes helpers sometimes print progress; the worker protocol is JSON only.
-    with contextlib.redirect_stdout(sys.stderr):
-        if action == "inventory":
-            result = inventory(root, project)
-        elif action == "stop":
-            result = stop(entry)
-        elif action == "resume":
-            result = resume(entry, project)
-        else:
-            raise RuntimeRefused("unknown runtime operation")
+        from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+        token = set_hermes_home_override(Path(entry["home"]).resolve())
+    try:
+        # Hermes helpers sometimes print progress; the worker protocol is JSON only.
+        with contextlib.redirect_stdout(sys.stderr):
+            if action == "inventory":
+                result = inventory(root, project)
+            elif action == "stop":
+                result = stop(entry)
+            elif action == "resume":
+                result = resume(entry, project)
+            else:
+                raise RuntimeRefused("unknown runtime operation")
+    finally:
+        if token is not None:
+            reset_hermes_home_override(token)
     print(json.dumps(result))
 
 

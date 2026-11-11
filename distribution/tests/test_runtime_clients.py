@@ -289,7 +289,7 @@ class ExecutableRecoveryTests(unittest.TestCase):
                 if changed:
                     appimage.write_bytes(b'changed image')
                 expected = 'launch target changed' if changed else 'fixture launch reached'
-                with patch.object(worker, 'inventory', return_value=[]), patch.object(clients, 'matches', return_value=False), patch.object(clients, '_desktop_ready', return_value=False), patch.object(clients.subprocess, 'Popen', side_effect=ValueError('fixture launch reached')) as spawn, self.assertRaisesRegex(ValueError, expected):
+                with patch.object(worker, 'profile_environment', return_value={'HERMES_HOME': str(home)}), patch.object(worker, 'inventory', return_value=[]), patch.object(clients, 'matches', return_value=False), patch.object(clients, '_desktop_ready', return_value=False), patch.object(clients.subprocess, 'Popen', side_effect=ValueError('fixture launch reached')) as spawn, self.assertRaisesRegex(ValueError, expected):
                     clients.resume(entry, home / 'hermes-agent')
                 if changed:
                     spawn.assert_not_called()

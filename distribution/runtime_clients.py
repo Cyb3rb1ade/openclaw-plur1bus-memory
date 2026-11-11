@@ -335,9 +335,11 @@ def resume(entry, project):
     if any(matches(item) for item in [entry, *entry.get('members', [])]):
         raise RuntimeRefused('original Desktop/backend is still closing; retry restoration after it exits')
     if current is None:
-        env = dict(os.environ, HERMES_HOME=entry['home'], HERMES_DESKTOP_HERMES_ROOT=str(project))
-        for key in ('PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'HERMES_PARENT_PID', 'HERMES_PARENT_START_MARKER'):
-            env.pop(key, None)
+        if __package__:
+            from .runtime_worker import profile_environment
+        else:
+            from runtime_worker import profile_environment
+        env = profile_environment(entry['home'], project)
         log_dir = root / 'logs'
         log_dir.mkdir(exist_ok=True)
         with (log_dir / 'plur1bus-desktop-resume.log').open('ab') as log:

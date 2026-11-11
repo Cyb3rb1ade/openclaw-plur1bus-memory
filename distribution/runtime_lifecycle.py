@@ -1,7 +1,6 @@
 """Durable, scoped runtime restart obligations for a single installer transaction."""
 import json
 import math
-import os
 from pathlib import Path
 import subprocess
 import time
@@ -17,7 +16,11 @@ class RuntimeLifecycle:
         self.state = {"original": [], "stopped": [], "restored": []}
 
     def _worker(self, action, entry=None):
-        environment = dict(os.environ, HERMES_HOME=str(self.home))
+        if __package__:
+            from .runtime_worker import host_environment
+        else:
+            from runtime_worker import host_environment
+        environment = dict(host_environment(), HERMES_HOME=str(self.home))
         # The selected interpreter is resolved for EVERY operation: PM may have
         # published a new generation while the gateway was paused.
         command = [str(self.python()), "-I", "-B", str(Path(__file__).with_name("runtime_worker.py")), str(self.home), action]
