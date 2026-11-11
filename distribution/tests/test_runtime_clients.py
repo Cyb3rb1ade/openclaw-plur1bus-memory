@@ -243,6 +243,49 @@ class ClientInventoryTests(unittest.TestCase):
         self.assertEqual(env['HERMES_DESKTOP_USER_DATA_DIR'], str(self.home / 'original-ui'))
         self.assertEqual(env['HERMES_DATA_DIR_SUFFIX'], '-fixture')
 
+    def test_same_target_desktops_restore_each_original_user_data_directory(self):
+        from distribution.runtime_lifecycle import RuntimeLifecycle
+        from distribution import runtime_clients as clients
+        original_paths = [self.home / 'ui-a', self.home / 'ui-b']
+        for pid, path in zip((10, 20), original_paths):
+            app = self.proc(pid, [str(self.app)], exe=self.app)
+            app.environ.return_value.update(HOME=str(self.home / 'user'),
+                                            HERMES_DESKTOP_USER_DATA_DIR=str(path))
+        self.proc(42, ['python', str(self.project / 'hermes_cli/main.py'), 'gateway', 'run'])
+        control = ModuleType('gateway.control_socket')
+        control.launch_supervisor = lambda identity: 'manual'
+        scope = ModuleType('hermes_cli.update_fleet_scope')
+        scope.gateway_pid_home = lambda pid: str(self.home)
+        gateway = {'pid': 42, 'hermes_home': str(self.home), 'served_profiles': ['default'], 'state': 'ready'}
+        spawned = []
+        def launch(argv, **kwargs):
+            pid = 100 + len(spawned)
+            app = self.proc(pid, argv, exe=self.app, born=20)
+            app.environ.return_value = dict(kwargs['env'])
+            spawned.append(app)
+            return app
+        now = [0]
+        def wait(seconds):
+            now[0] += seconds
+        saved = []
+        manager = RuntimeLifecycle(self.home, lambda: 'python', lambda state: saved.append(json.loads(json.dumps(state))),
+                                   worker=lambda action, entry=None: clients.resume(entry, self.project))
+        with patch.dict(sys.modules, {'gateway.control_socket': control, 'hermes_cli.update_fleet_scope': scope}), patch.object(worker, 'identify', return_value=gateway), patch.object(worker, 'service_owners', return_value=[]), patch.object(worker, 'profile_environment', return_value={'HERMES_HOME': str(self.home)}), patch.object(clients, 'generation_ready', return_value=True), patch.object(clients.subprocess, 'Popen', side_effect=launch) as spawn, patch.object(clients.time, 'monotonic', side_effect=lambda: now[0]), patch.object(clients.time, 'sleep', side_effect=wait):
+            originals = [entry for entry in worker.inventory(self.home, self.project) if entry['kind'] == 'desktop']
+            self.assertEqual([entry['pid'] for entry in originals], [10, 20])
+            for entry in originals:
+                entry['state'] = 'stopped'
+                self.procs.pop(entry['pid'])
+            manager.state = {'original': originals, 'stopped': [10, 20], 'restored': []}
+            manager.restore()
+            self.assertEqual([entry['restoredPid'] for entry in originals], [100, 101])
+            self.assertEqual(spawn.call_count, 2)
+            for entry, path in zip(originals, original_paths):
+                self.assertEqual(self.procs[entry['restoredPid']].environ()['HERMES_DESKTOP_USER_DATA_DIR'], str(path))
+                self.assertEqual(clients.resume(entry, self.project), {'pid': entry['restoredPid']})
+            self.assertEqual(spawn.call_count, 2)
+        self.assertEqual(saved[-1]['restored'], [10, 20])
+
 
 class ClientShutdownTests(ClientInventoryTests):
     def test_replaced_pid_never_receives_native_quit(self):
@@ -297,6 +340,34 @@ class ClientShutdownTests(ClientInventoryTests):
 
 
 class ReadinessTests(unittest.TestCase):
+    def test_adoption_checks_normalized_isolation_and_connection_mode(self):
+        from distribution import runtime_clients as clients
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            project = home / 'hermes-agent'
+            launch = {'HOME': str(home / 'user'), 'HERMES_DESKTOP_USER_DATA_DIR': str(home / 'ui')}
+            original = {'target': {'path': '/app'}, 'home': str(home), 'backends': [], 'launchEnvironment': launch}
+            equivalent = dict(original, home=str(home / '.'), launchEnvironment={
+                'HOME': str(home / 'user/../user'), 'HERMES_DESKTOP_USER_DATA_DIR': str(home / 'ui/../ui'),
+                'HERMES_DESKTOP_HERMES_ROOT': str(project), 'HERMES_DATA_DIR_SUFFIX': ''})
+            self.assertTrue(clients._desktop_ready(original, equivalent, project))
+            named_home = str(home / 'profiles/second')
+            self.assertTrue(clients._desktop_ready(dict(original, home=named_home), dict(equivalent, home=named_home), project))
+            self.assertTrue(clients._desktop_ready(dict(original, home=named_home), equivalent, project))
+            for name, changed in (
+                ('mode', dict(equivalent, connectionMode='gateway')),
+                ('home', dict(equivalent, home=str(home / 'foreign'))),
+                ('userData', dict(equivalent, launchEnvironment=dict(launch, HERMES_DESKTOP_USER_DATA_DIR=str(home / 'other-ui')))),
+                ('source', dict(equivalent, launchEnvironment=dict(launch, HERMES_DESKTOP_HERMES_ROOT=str(home / 'other-source')))),
+                ('suffix', dict(equivalent, launchEnvironment=dict(launch, HERMES_DATA_DIR_SUFFIX='-other'))),
+                ('runtime', dict(equivalent, launchEnvironment=dict(launch, HERMES_RUNTIME_DIR=str(home / 'other-runtime')))),
+            ):
+                with self.subTest(name=name):
+                    self.assertFalse(clients._desktop_ready(original, changed, project))
+            legacy = {key: value for key, value in original.items() if key != 'launchEnvironment'}
+            self.assertTrue(clients._desktop_ready(legacy, equivalent, project))
+            self.assertFalse(clients._desktop_ready(original, legacy, project))
+
     def test_all_backends_must_be_ready_on_selected_generation(self):
         from distribution import runtime_clients as clients
         original = {'target': {'path': '/app'}, 'backends': [{'home': '/home', 'role': 'serve'}, {'home': '/home/profiles/a', 'role': 'serve'}]}

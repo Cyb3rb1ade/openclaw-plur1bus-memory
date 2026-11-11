@@ -443,8 +443,41 @@ def backend_ready(backend, project):
                for c in proc.net_connections(kind='tcp'))
 
 
-def _desktop_ready(entry, current, project):
+def _desktop_launch_identity(launch, project):
+    allowed = _DESKTOP_PATH_ENV | {'HERMES_DATA_DIR_SUFFIX'}
+    if set(launch) - allowed:
+        raise RuntimeRefused('Desktop receipt contains unsupported launch environment')
+    normalized = {key: str(Path(value).resolve()) for key, value in launch.items()
+                  if key in _DESKTOP_PATH_ENV and value}
+    # Inventory already proved the selected source. Resume makes that default
+    # explicit, including for legacy apps whose first backend is a named profile.
+    normalized.setdefault('HERMES_DESKTOP_HERMES_ROOT', str(project.resolve()))
+    if launch.get('HERMES_DATA_DIR_SUFFIX'):
+        normalized['HERMES_DATA_DIR_SUFFIX'] = launch['HERMES_DATA_DIR_SUFFIX']
+    return normalized
+
+
+def _desktop_instance_matches(entry, current, project):
     if not current or current['target'] != entry['target']:
+        return False
+    if entry.get('connectionMode', 'backend') != current.get('connectionMode', 'backend'):
+        return False
+    def root(record):
+        home = Path(record.get('home', project.parent)).resolve()
+        return home.parent.parent if home.parent.name.lower() == 'profiles' else home
+    if root(entry) != root(current):
+        return False
+    # Older receipts have no launch isolation evidence; retain their existing
+    # backend ownership contract, without weakening newer recorded obligations.
+    if 'launchEnvironment' not in entry:
+        return True
+    return ('launchEnvironment' in current
+            and _desktop_launch_identity(entry['launchEnvironment'], project)
+            == _desktop_launch_identity(current['launchEnvironment'], project))
+
+
+def _desktop_ready(entry, current, project):
+    if not _desktop_instance_matches(entry, current, project):
         return False
     expected = {(b['home'], b['role']) for b in entry['backends']}
     if expected != {(b['home'], b['role']) for b in current['backends']}:
@@ -485,7 +518,7 @@ def resume(entry, project):
         else:
             from runtime_worker import inventory
         candidates = inventory(root, project)
-        return next((c for c in candidates if c['kind'] == 'desktop' and c['target'] == target), None)
+        return next((c for c in candidates if c['kind'] == 'desktop' and _desktop_instance_matches(entry, c, project)), None)
     current = observed()
     if _desktop_ready(entry, current, project):
         return {'pid': current['pid']}
