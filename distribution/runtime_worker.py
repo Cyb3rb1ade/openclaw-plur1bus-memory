@@ -289,6 +289,12 @@ def inventory(root, project):
         app.setdefault("gateways", []).append(entry)
         app["shutdownBudget"] = max(app["shutdownBudget"], entry["shutdownBudget"])
         del entries[pid]
+    for client in clients:
+        if client.get("connectionMode") == "gateway":
+            client["gatewayDependencies"] = [
+                {key: gateway[key] for key in ("pid", "home", "served_profiles")}
+                for gateway in entries.values()
+            ]
     return [*clients, *entries.values()]
 
 

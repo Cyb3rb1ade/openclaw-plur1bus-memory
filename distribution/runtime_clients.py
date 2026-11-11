@@ -73,6 +73,94 @@ def desktop_target(proc):
     return {'path': str(target), 'witness': str(witness), 'sha256': _fingerprint(witness), 'exeSha256': _fingerprint(exe)}
 
 
+# Paths consumed by Electron's data-paths.mjs. Receipts never retain arbitrary
+# environment values (in particular provider/plugin credentials).
+_DESKTOP_PATH_ENV = {'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME',
+                     'XDG_DATA_HOME', 'HERMES_DESKTOP_USER_DATA_DIR', 'HERMES_RUNTIME_DIR',
+                     'HERMES_DESKTOP_HERMES_ROOT'}
+
+
+def desktop_scope(proc):
+    """Mirror Electron data-paths.mjs using the original app's environment/cwd."""
+    env = proc.environ()
+    cwd = Path(proc.cwd())
+    def resolved(value):
+        return (cwd / value).resolve()
+    launch = {key: str(resolved(env[key])) for key in _DESKTOP_PATH_ENV if env.get(key)}
+    suffix = env.get('HERMES_DATA_DIR_SUFFIX', '')
+    if suffix:
+        if any(char in suffix for char in ('/', '\\', '\x00')):
+            raise RuntimeRefused('Desktop data directory suffix is unsupported')
+        launch['HERMES_DATA_DIR_SUFFIX'] = suffix
+    home = env.get('HERMES_HOME')
+    if not home and env.get('HERMES_DESKTOP_USER_DATA_DIR'):
+        return resolved(env['HERMES_DESKTOP_USER_DATA_DIR']) / 'hermes-home', launch
+    if not home and sys.platform == 'win32' and 'HERMES_HOME' not in env:
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                home = winreg.QueryValueEx(key, 'HERMES_HOME')[0]
+        except FileNotFoundError:
+            pass
+    if home:
+        root = resolved(home)
+        return (root.parent.parent if root.parent.name.lower() == 'profiles' else root), launch
+    user_home = env.get('USERPROFILE' if sys.platform == 'win32' else 'HOME')
+    if not user_home and sys.platform != 'win32':
+        import pwd
+        user_home = pwd.getpwuid(os.getuid()).pw_dir
+    if not user_home:
+        raise RuntimeRefused('Desktop user home cannot be verified')
+    user_home = resolved(user_home)
+    if sys.platform == 'win32':
+        base = resolved(env['LOCALAPPDATA']) if env.get('LOCALAPPDATA', '').strip() else user_home / 'AppData/Local'
+        root = Path(str(base / 'hermes') + suffix)
+        legacy = user_home / '.hermes'
+        if not suffix and not root.is_dir() and legacy.is_dir():
+            root = legacy
+    else:
+        root = Path(str(user_home / '.hermes') + suffix)
+    return root, launch
+
+
+def packaged_desktops(processes, root, project, excluded, legacy_owners):
+    """Find current native-gateway apps without relying on the legacy ledger."""
+    import psutil
+    entries, foreign = {}, set()
+    for proc in processes:
+        argv = proc.info.get('cmdline') or []
+        if proc.pid in excluded or proc.pid in legacy_owners or not argv or Path(argv[0]).name.lower() not in {'hermes', 'hermes.exe'}:
+            continue
+        if any(arg == '--type' or arg.startswith('--type=') for arg in argv[1:]):
+            continue  # Electron helper, subsequently grouped through its kernel parent.
+        try:
+            if Path(proc.exe()).name.lower() not in {'hermes', 'hermes.exe'}:
+                continue
+            target = desktop_target(proc)
+            home, launch = desktop_scope(proc)
+            if home != root:
+                foreign.update([proc.pid, *(child.pid for child in proc.children(recursive=True))])
+                continue
+            env = proc.environ()
+            source = Path(launch.get('HERMES_DESKTOP_HERMES_ROOT', home / 'hermes-agent'))
+            if source != project:
+                foreign.update([proc.pid, *(child.pid for child in proc.children(recursive=True))])
+                continue
+            resources = (Path(target['path']) / 'Contents/Resources' if Path(target['path']).suffix == '.app'
+                         else Path(proc.exe()).parent / 'resources')
+            if (resources / 'agent-payload').exists() or env.get('HERMES_DESKTOP_HERMES') or env.get('HERMES_DESKTOP_IGNORE_EXISTING') == '1':
+                raise RuntimeRefused('Desktop backend override requires explicit external close/reopen')
+            _supervised(proc)
+            entries[proc.pid] = dict(identity(proc), kind='desktop', home=str(home), target=target,
+                                    launchEnvironment=launch, connectionMode='gateway',
+                                    members=[], backends=[], restorePolicy='reopen')
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied:
+            raise RuntimeRefused('Desktop process identity is unreadable; no shutdown was attempted') from None
+    return entries, foreign
+
+
 def _ledger_live(row, proc):
     from hermes_cli.process_identity import _pid_alive_matches, _entry_boot
     return _pid_alive_matches(proc.pid, row.get('create_time'), strict=True, boot=_entry_boot(row, 'boot_start'))
@@ -92,6 +180,44 @@ def _supervised(proc):
             raise RuntimeRefused('custom supervised client must be stopped through its owner')
 
 
+def gateway_plugin_host(proc, env, project, excluded):
+    """The gateway owns its exact pipe-bound plugin host, including its shutdown."""
+    argv = proc.cmdline()
+    if len(argv) != 3 or argv[1:] != ['-m', 'hermes_cli.plugin_host_child']:
+        return False
+    parent = proc.parent()
+    if parent is None or parent.pid not in excluded:
+        return False
+    if env.get('HERMES_PLUGIN_HOST_PROCESS') != '1' or not env.get('HERMES_HOME'):
+        return False
+    if Path(proc.cwd()).resolve() != Path(env['HERMES_HOME']).resolve():
+        return False
+    if not env.get('PYTHONPATH'):
+        return False
+    source = Path(env['PYTHONPATH'].split(os.pathsep)[0]).resolve()
+    if source != project:
+        from pm.environments import committed_venv
+        selected = committed_venv(project)
+        if selected is None:
+            return False
+        if source != (selected.parent / 'workspace').resolve():
+            # A gateway can outlive a PM transaction. Its preceding workspace
+            # must still match a direct interpreter or live generation lease.
+            if source.name != 'workspace' or source.parent.parent != selected.parent.parent:
+                return False
+            if not generation_bound(parent, source.parent / 'venv'):
+                return False
+    if Path(argv[0]).resolve() != Path(proc.exe()).resolve() or proc.exe() != parent.exe():
+        return False
+    if __package__:
+        from .runtime_worker import identify
+    else:
+        from runtime_worker import identify
+    owner = identity(parent)
+    actual = identify(Path(env['HERMES_HOME']))
+    return bool(actual and actual['pid'] == owner['pid'] and matches(owner))
+
+
 def inspect_clients(root, project, excluded_pids):
     import psutil
     from hermes_cli.process_identity import _read_ledger, LEDGER_FILENAME, install_id
@@ -102,8 +228,12 @@ def inspect_clients(root, project, excluded_pids):
     excluded = set(excluded_pids) | protected_pids()
     relevant = {row.get('pid'): row for row in rows if row.get('install') == install_id(project)
                 and row.get('hermes_home') and _scoped(row['hermes_home'], root)}
-    desktop, clients, unclassified = {}, [], []
-    for proc in psutil.process_iter(['pid', 'cmdline']):
+    processes = list(psutil.process_iter(['pid', 'cmdline']))
+    legacy_owners = {row.get('spawner_pid') for row in relevant.values() if row.get('purpose') in {'serve', 'dashboard'}}
+    desktop, foreign = packaged_desktops(processes, root, project, excluded, legacy_owners)
+    excluded |= foreign
+    clients, unclassified = [], []
+    for proc in processes:
         if proc.pid in excluded:
             continue
         try:
@@ -119,6 +249,8 @@ def inspect_clients(root, project, excluded_pids):
             env = proc.environ()
             home = env.get('HERMES_HOME') or (row or {}).get('hermes_home')
             if home and not _scoped(home, root):
+                continue
+            if gateway_plugin_host(proc, env, project, excluded_pids):
                 continue
             args = _source_bound(proc, project)
             if args is None and not row:
@@ -151,6 +283,8 @@ def inspect_clients(root, project, excluded_pids):
                     raise RuntimeRefused('Desktop also owns another installation; close it explicitly')
                 entry = desktop.setdefault(owner_pid, dict(owner, kind='desktop', home=str(Path(home).resolve()), target=target,
                                                           members=[], backends=[], restorePolicy='reopen'))
+                entry.pop('connectionMode', None)
+                entry.setdefault('launchEnvironment', desktop_scope(parent)[1])
                 entry['members'].append(identity(proc))
                 for ancestor in ancestors:
                     if ancestor.pid == owner_pid:
@@ -274,19 +408,37 @@ def stop(entry):
     return {'stopped': entry['pid']}
 
 
-def backend_ready(backend, project):
+def generation_bound(proc, selected):
+    argv = proc.cmdline()
+    # A direct venv interpreter is also a canonical PM launch; only the
+    # published bootstrap keeps the store argv and uses a generation lease.
+    if argv and Path(argv[0]).is_absolute():
+        interpreter = Path(argv[0])
+        if interpreter.parent in {selected / 'bin', selected / 'Scripts'} and interpreter.resolve() == Path(proc.exe()).resolve():
+            return True
+    return any(Path(row.path).parent == selected.parent / '.leases' for row in proc.open_files())
+
+
+def generation_ready(pid, project):
     import psutil
     from pm.environments import committed_venv
-    proc = psutil.Process(backend['pid'])
+    proc = psutil.Process(pid)
     selected = committed_venv(project)
     if selected is not None:
         # PM's published launcher keeps the store executable and activates
         # dependencies in sys.path. Its live lease proves the actual generation.
-        lease_dir = selected.parent / '.leases'
-        if not any(Path(row.path).parent == lease_dir for row in proc.open_files()):
+        if not generation_bound(proc, selected):
             return False
     elif str(sys.executable) not in proc.cmdline():
         return False
+    return True
+
+
+def backend_ready(backend, project):
+    import psutil
+    if not generation_ready(backend['pid'], project):
+        return False
+    proc = psutil.Process(backend['pid'])
     return any(c.status == psutil.CONN_LISTEN and c.laddr.port == backend['port']
                for c in proc.net_connections(kind='tcp'))
 
@@ -299,13 +451,18 @@ def _desktop_ready(entry, current, project):
         return False
     if not all(backend_ready(backend, project) for backend in current['backends']):
         return False
-    if entry.get('gateways'):
+    gateways = [*entry.get('gateways', []), *entry.get('gatewayDependencies', [])]
+    if entry.get('connectionMode') == 'gateway' and not gateways:
+        return False
+    if gateways:
         if __package__:
             from .runtime_worker import identify, ready
         else:
             from runtime_worker import identify, ready
-        if not all(ready(gateway, identify(Path(gateway['home']))) for gateway in entry['gateways']):
-            return False
+        for gateway in gateways:
+            actual = identify(Path(gateway['home']))
+            if not ready(gateway, actual) or not generation_ready(actual['pid'], project):
+                return False
     return True
 
 
@@ -340,6 +497,14 @@ def resume(entry, project):
         else:
             from runtime_worker import profile_environment
         env = profile_environment(entry['home'], project)
+        if 'launchEnvironment' in entry:
+            allowed = _DESKTOP_PATH_ENV | {'HERMES_DATA_DIR_SUFFIX'}
+            if set(entry['launchEnvironment']) - allowed:
+                raise RuntimeRefused('Desktop receipt contains unsupported launch environment')
+            for key in allowed:
+                env.pop(key, None)
+            env.update(entry['launchEnvironment'])
+            env['HERMES_DESKTOP_HERMES_ROOT'] = str(project)
         log_dir = root / 'logs'
         log_dir.mkdir(exist_ok=True)
         with (log_dir / 'plur1bus-desktop-resume.log').open('ab') as log:

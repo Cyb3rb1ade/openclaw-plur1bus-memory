@@ -176,6 +176,74 @@ class ClientInventoryTests(unittest.TestCase):
         entries = worker.inspect_clients(self.home, self.project, set())
         self.assertEqual({m['pid'] for m in entries[0]['members']}, {11, 13})
 
+
+    def test_current_gateway_desktop_without_ledger_excludes_same_app_other_home(self):
+        app = self.proc(10, [str(self.app)], exe=self.app)
+        app.environ.return_value.update(HOME=str(self.home / 'original-user'),
+                                        HERMES_DESKTOP_USER_DATA_DIR=str(self.home / 'original-ui'),
+                                        HERMES_DATA_DIR_SUFFIX='-fixture', TYPESAFE_API_KEY='fake-not-recorded')
+        self.proc(12, [str(self.app), '--type=renderer'], exe=self.app, parent=10)
+        foreign = self.home / 'other-install'
+        self.proc(20, [str(self.app)], exe=self.app, home=foreign)
+        python = self.project / 'venv/bin/python'
+        self.proc(42, ['python', str(self.project / 'hermes_cli/main.py'), 'gateway', 'run'])
+        host = self.proc(43, [str(python), '-m', 'hermes_cli.plugin_host_child'], parent=42)
+        host.cwd.return_value = str(self.home)
+        host.environ.return_value.update(PYTHONPATH=str(self.project), HERMES_PLUGIN_HOST_PROCESS='1')
+        control = ModuleType('gateway.control_socket')
+        control.launch_supervisor = lambda identity: 'manual'
+        scope = ModuleType('hermes_cli.update_fleet_scope')
+        scope.gateway_pid_home = lambda pid: str(self.home)
+        pm = ModuleType('pm.environments')
+        generation = self.home / 'installs/selected/environments/current'
+        pm.committed_venv = lambda project: generation / 'venv'
+        previous = generation.parent / 'previous'
+        host.environ.return_value['PYTHONPATH'] = str(previous / 'workspace')
+        old_python = str(previous / 'venv/bin/python')
+        self.procs[42].cmdline.return_value[0] = old_python
+        self.procs[42].exe.return_value = old_python
+        host.cmdline.return_value[0] = old_python
+        host.exe.return_value = old_python
+        self.procs[42].open_files.return_value = []
+        gateway = {'pid': 42, 'hermes_home': str(self.home), 'served_profiles': ['default'], 'state': 'ready'}
+        with patch.dict(sys.modules, {'gateway.control_socket': control, 'hermes_cli.update_fleet_scope': scope, 'pm.environments': pm}), patch.object(worker, 'identify', return_value=gateway), patch.object(worker, 'service_owners', return_value=[]):
+            entries = worker.inventory(self.home, self.project)
+            host.parent.side_effect = lambda: None
+            with self.assertRaisesRegex(ValueError, 'unclassified'):
+                worker.inventory(self.home, self.project)
+        self.assertEqual({entry['pid'] for entry in entries}, {10, 42})
+        desktop = next(entry for entry in entries if entry['pid'] == 10)
+        self.assertEqual(desktop['connectionMode'], 'gateway')
+        self.assertEqual(desktop['backends'], [])
+        self.assertEqual([entry['pid'] for entry in desktop['gatewayDependencies']], [42])
+        self.assertEqual(desktop['launchEnvironment']['HERMES_DESKTOP_USER_DATA_DIR'], str(self.home / 'original-ui'))
+        self.assertEqual(desktop['launchEnvironment']['HERMES_DATA_DIR_SUFFIX'], '-fixture')
+        self.assertNotIn('TYPESAFE_API_KEY', json.dumps(desktop))
+        self.assertEqual({entry['pid'] for entry in desktop['members']}, {12})
+
+    def test_current_desktop_reopens_original_isolation_and_requires_gateway_generation(self):
+        from distribution import runtime_clients as clients
+        app = self.proc(10, [str(self.app)], exe=self.app)
+        target = clients.desktop_target(app)
+        entry = {'pid': 10, 'born': 10, 'exe': str(self.app), 'kind': 'desktop', 'home': str(self.home),
+                 'target': target, 'backends': [], 'members': [], 'connectionMode': 'gateway',
+                 'gatewayDependencies': [{'pid': 42, 'home': str(self.home), 'served_profiles': ['default']}],
+                 'launchEnvironment': {'HOME': str(self.home / 'original-user'),
+                                       'HERMES_DESKTOP_USER_DATA_DIR': str(self.home / 'original-ui'),
+                                       'HERMES_DATA_DIR_SUFFIX': '-fixture'}}
+        current = dict(entry, pid=100)
+        gateway = {'pid': 43, 'hermes_home': str(self.home), 'served_profiles': ['default'], 'state': 'ready'}
+        with patch.object(worker, 'inventory', side_effect=[[], [current], [current]]), patch.object(worker, 'profile_environment', return_value={'HERMES_HOME': str(self.home), 'HERMES_DESKTOP_USER_DATA_DIR': '/installer-ui'}), patch.object(worker, 'identify', return_value=gateway), patch.object(clients, 'generation_ready', side_effect=[False, True], create=True) as generation, patch.object(clients, 'matches', return_value=False), patch.object(clients.time, 'sleep'), patch.object(clients.subprocess, 'Popen') as spawn:
+            result = clients.resume(entry, self.project)
+        self.assertEqual(result, {'pid': 100})
+        self.assertEqual(generation.call_count, 2)
+        self.assertEqual(generation.call_args.args, (43, self.project))
+        env = spawn.call_args.kwargs['env']
+        self.assertEqual(env['HOME'], str(self.home / 'original-user'))
+        self.assertEqual(env['HERMES_DESKTOP_USER_DATA_DIR'], str(self.home / 'original-ui'))
+        self.assertEqual(env['HERMES_DATA_DIR_SUFFIX'], '-fixture')
+
+
 class ClientShutdownTests(ClientInventoryTests):
     def test_replaced_pid_never_receives_native_quit(self):
         from distribution import runtime_clients as clients
