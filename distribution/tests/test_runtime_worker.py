@@ -20,6 +20,12 @@ class RuntimeWorkerTests(unittest.TestCase):
         self.modules = patch.dict(sys.modules, {"gateway.control_socket": self.control,
             "hermes_cli.update_cmd_posix_pause": self.posix, "hermes_cli.update_cmd_windows": self.windows})
         self.modules.start()
+        restart_proof = patch.object(worker, "prove_restart_source")
+        restart_proof.start()
+        self.addCleanup(restart_proof.stop)
+        proof = patch.object(worker, "prove_service_source")
+        proof.start()
+        self.addCleanup(proof.stop)
         budget = patch.object(worker, "restart_budget", return_value=2000.0)
         budget.start()
         self.addCleanup(budget.stop)
@@ -126,7 +132,7 @@ class RuntimeWorkerTests(unittest.TestCase):
             self.control.launch_supervisor = Mock(return_value="launchd")
             scope = ModuleType("hermes_cli.update_fleet_scope")
             scope.gateway_pid_home = Mock(return_value=str(root))
-            proc = Mock(cmdline=Mock(return_value=["python", "/foreign/hermes_cli/main.py", "gateway", "run"]), cwd=Mock(return_value=str(root)))
+            proc = Mock(pid=42, cmdline=Mock(return_value=["python", "/foreign/hermes_cli/main.py", "gateway", "run"]), cwd=Mock(return_value=str(root)))
             with patch.dict(sys.modules, {"hermes_cli.update_fleet_scope": scope}), patch.object(worker, "service_owners", return_value=[owner]), patch.object(worker, "identify", return_value={"pid": 42, "hermes_home": str(root), "served_profiles": ["default"]}), patch.object(worker, "process", return_value=proc), patch.object(worker, "birth", return_value=1.5), patch.object(worker, "same_process", return_value=True), patch.object(worker, "service_fingerprint", return_value="fingerprint"), patch.object(worker, "inspect_clients"), self.assertRaisesRegex(ValueError, "source|checkout|installation"):
                 worker.inventory(root, project)
 
@@ -135,7 +141,7 @@ class RuntimeWorkerTests(unittest.TestCase):
         def advance(_seconds):
             now[0] += 600
         self.windows._start_windows_gateway_service = Mock()
-        entry = dict(self.entry, shutdownBudget=1885, kind="windows-service", owner={"name": "hermes"}, ownerFingerprint="same")
+        entry = dict(self.entry, shutdownBudget=1885, kind="windows-service", owner={"kind": "windows-service", "name": "hermes"}, ownerFingerprint="same")
         identity = dict(pid=42, state="draining", hermes_home=entry["home"], served_profiles=entry["served_profiles"])
         with patch.object(worker, "identify", side_effect=[identity, dict(identity, pid=43, state="ready")]), patch.object(worker, "same_process", side_effect=lambda _entry: now[0] < 1800), patch.object(worker.time, "monotonic", side_effect=lambda: now[0]), patch.object(worker.time, "sleep", side_effect=advance), patch.object(worker, "service_fingerprint", return_value="same"):
             self.assertEqual(worker.resume(entry, Path("/tmp/owned/hermes-agent")), {"pid": 43})
@@ -172,3 +178,59 @@ class OwningBudgetTests(unittest.TestCase):
         constants.reset_hermes_home_override = Mock()
         with patch.dict(sys.modules, {"hermes_cli.gateway": gateway, "hermes_constants": constants}), patch.object(worker, "process", return_value=Mock(environ=Mock(return_value={}))), self.assertRaisesRegex(ValueError, "unbounded"):
             worker.restart_budget({"pid": 42, "home": "/owned"})
+
+class DesktopGroupingTests(unittest.TestCase):
+    def test_desktop_gateway_is_owned_by_app_and_has_no_independent_restart(self):
+        import tempfile
+        control = ModuleType('gateway.control_socket')
+        control.launch_supervisor = lambda identity: 'desktop'
+        scope = ModuleType('hermes_cli.update_fleet_scope')
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            scope.gateway_pid_home = lambda pid: str(home)
+            app = {'pid': 10, 'born': 1, 'kind': 'desktop', 'home': str(home), 'members': [{'pid': 11, 'born': 2}], 'backends': []}
+            gateway = Mock(pid=42, cmdline=Mock(return_value=['python', str(home / 'hermes-agent/hermes_cli/main.py'), 'gateway', 'run']), cwd=Mock(return_value=str(home / 'hermes-agent')), parents=Mock(return_value=[Mock(pid=11), Mock(pid=10)]))
+            with patch.dict(sys.modules, {'gateway.control_socket': control, 'hermes_cli.update_fleet_scope': scope}), patch.object(worker, 'service_owners', return_value=[]), patch.object(worker, 'identify', return_value={'pid': 42, 'hermes_home': str(home), 'served_profiles': ['default']}), patch.object(worker, 'process', return_value=gateway), patch.object(worker, 'birth', return_value=3), patch.object(worker, 'same_process', return_value=True), patch.object(worker, 'restart_budget', return_value=60), patch.object(worker, 'inspect_clients', return_value=[app]), patch.object(worker, 'installer_protected', return_value=set(), create=True), patch('distribution.runtime_clients.identity', return_value={'pid': 42, 'born': 3, 'exe': '/test/python'}):
+                result = worker.inventory(home, home / 'hermes-agent')
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]['pid'], 10)
+            self.assertEqual(result[0]['gateways'][0]['pid'], 42)
+            self.assertIn(42, [r['pid'] for r in result[0]['members']])
+
+class NativeWrapperTests(unittest.TestCase):
+    def test_native_wrapper_ownership_follows_verified_gateway_ancestry(self):
+        owner = {'kind': 'launchd', 'pid': 7}
+        wrapper = Mock(pid=7)
+        gateway = Mock(pid=42, parents=Mock(return_value=[Mock(pid=8), wrapper]))
+        with patch.object(worker, 'birth', return_value=12):
+            self.assertEqual(worker.owner_for_gateway(gateway, [owner]), (owner, {'pid': 7, 'born': 12}))
+        foreign = Mock(pid=42, parents=Mock(return_value=[]))
+        self.assertEqual(worker.owner_for_gateway(foreign, [owner]), (None, None))
+
+    def test_manual_receipt_cannot_replay_arbitrary_options(self):
+        entry = {'pid': 42, 'born': 1, 'home': '/owned', 'kind': 'manual', 'served_profiles': ['default'], 'options': ['--token', 'secret']}
+        with patch.object(worker, 'identify', return_value=None), patch.object(worker, 'same_process', return_value=False), patch.object(worker.subprocess, 'Popen') as launch, self.assertRaises(ValueError):
+            worker.resume(entry, Path('/owned/hermes-agent'))
+        launch.assert_not_called()
+
+    def test_native_chain_excludes_only_proven_owner_to_gateway_wrappers(self):
+        proc = Mock(pid=42, parents=Mock(return_value=[Mock(pid=8), Mock(pid=7), Mock(pid=1)]))
+        with patch.object(worker, 'birth', side_effect=lambda proc: float(proc.pid)):
+            chain = worker.native_chain(proc, {'pid': 7})
+        self.assertEqual(chain, [{'pid': 8, 'born': 8.0}, {'pid': 7, 'born': 7.0}])
+
+    def test_retry_adopts_only_verified_ready_original_gateway_shape(self):
+        entry = {'pid': 42, 'born': 1, 'home': '/owned', 'kind': 'manual', 'served_profiles': ['default'], 'options': []}
+        identity = {'pid': 43, 'hermes_home': '/owned', 'state': 'ready', 'served_profiles': ['default']}
+        current = dict(entry, pid=43, born=2)
+        with patch.object(worker, 'identify', return_value=identity), patch.object(worker, 'same_process', return_value=False), patch.object(worker, 'inventory', return_value=[current]), patch.object(worker.subprocess, 'Popen') as launch:
+            self.assertEqual(worker.resume(entry, Path('/owned/hermes-agent')), {'pid': 43})
+        launch.assert_not_called()
+
+    def test_native_restart_uses_preserved_definition_without_repair(self):
+        owner = {'kind': 'launchd', 'domain': 'gui/501', 'label': 'ai.hermes.fixture', 'plist': '/fixture/gateway.plist'}
+        with patch.object(worker.subprocess, 'run', return_value=Mock(returncode=0)) as run:
+            worker.start_native(owner, Path('/fixture/hermes-agent'), Path('/fixture'))
+        self.assertEqual([call.args[0] for call in run.call_args_list], [
+            ['launchctl', 'bootstrap', 'gui/501', '/fixture/gateway.plist'],
+            ['launchctl', 'kickstart', 'gui/501/ai.hermes.fixture']])

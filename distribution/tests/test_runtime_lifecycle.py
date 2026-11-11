@@ -107,3 +107,28 @@ class LifecycleTests(unittest.TestCase):
                 with patch.object(module.subprocess, "Popen", return_value=proc), patch.object(module.time, "monotonic", side_effect=[0, 2000]):
                     self.manager._worker(action, dict(self.entry, shutdownBudget=7335))
                 proc.kill.assert_not_called()
+
+class ClientLifecycleTests(unittest.TestCase):
+    def test_clients_stop_first_gateways_restore_first_and_cli_is_not_replayed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            records = [dict(pid=1, kind='manual', home=str(home)), dict(pid=2, kind='desktop', home=str(home)), dict(pid=3, kind='cli', home=str(home))]
+            running = records.copy()
+            calls = []
+            def worker(action, entry=None):
+                if action == 'inventory':
+                    return list(running)
+                calls.append((action, entry['pid']))
+                if action == 'stop':
+                    running[:] = [r for r in running if r['pid'] != entry['pid']]
+                    return {}
+                if entry['kind'] == 'cli':
+                    return {'pid': None, 'disposition': 'closed-session-saved'}
+                return {'pid': entry['pid'] + 100}
+            manager = RuntimeLifecycle(home, lambda: 'python', lambda state: None, worker=worker)
+            manager.pause()
+            manager.restore()
+            manager.restore()
+            self.assertEqual(calls, [('stop', 2), ('stop', 3), ('stop', 1), ('resume', 1), ('resume', 2), ('resume', 3)])
+            self.assertEqual(manager.state['original'][1]['state'], 'closed-session-saved')
+            self.assertNotIn(3, manager.state['restored'])

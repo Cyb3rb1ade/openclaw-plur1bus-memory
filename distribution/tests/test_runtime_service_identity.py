@@ -13,6 +13,13 @@ class ServiceIdentityTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.project = self.root / "hermes-agent"
+        import sys
+        from types import ModuleType
+        launcher = ModuleType('hermes_cli._launchers')
+        launcher._launcher_script = lambda *args: 'stock-published-launcher'
+        modules = patch.dict(sys.modules, {'hermes_cli._launchers': launcher})
+        modules.start()
+        self.addCleanup(modules.stop)
         self.command = ["python", str(self.project / "hermes_cli/main.py"), "gateway", "run", "--external-supervisor"]
 
     def test_each_definition_must_name_selected_source_not_just_matching_home(self):
@@ -134,3 +141,18 @@ class ServiceIdentityTests(unittest.TestCase):
         for addition in additions:
             with self.subTest(xml=addition), self.assertRaisesRegex(ValueError, "WinSW"):
                 self.prove_winsw_xml(addition)
+
+class PublishedLauncherTests(unittest.TestCase):
+    def test_executed_stock_pm_launcher_is_compared_byte_for_byte(self):
+        import sys
+        from types import ModuleType
+        project = Path('/fixture/hermes-agent')
+        launcher = ModuleType('hermes_cli._launchers')
+        launcher._launcher_script = lambda name, root, dependencies: 'published launcher for ' + str(root)
+        api = SimpleNamespace(_launch_module=lambda argv: None)
+        command = ['python', '-I', '-c', launcher._launcher_script('hermes', project, None), 'gateway', 'run', '--external-supervisor']
+        with patch.dict(sys.modules, {'hermes_cli._launchers': launcher}), patch.object(identity, '_identity_api', return_value=api):
+            self.assertEqual(identity.gateway_options(command, project, project, manual=False), ['--external-supervisor'])
+            for code in ('published launcher for /foreign', command[3] + '\ncustom()'):
+                with self.assertRaises(ValueError):
+                    identity.gateway_options([*command[:3], code, *command[4:]], project, project, manual=False)

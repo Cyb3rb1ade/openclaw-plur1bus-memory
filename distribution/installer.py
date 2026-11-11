@@ -19,6 +19,8 @@ _DISTRIBUTION_DIR = str(Path(__file__).resolve().parent)
 if _DISTRIBUTION_DIR not in sys.path:
     sys.path.insert(0, _DISTRIBUTION_DIR)
 from runtime_lifecycle import RuntimeLifecycle
+import runtime_recovery
+from types import SimpleNamespace
 from native_launcher import apply as apply_native_launcher
 from native_launcher import plan as plan_native_launcher
 from macos_pm_compat import approved_sources as approved_macos_pm_sources
@@ -1181,6 +1183,14 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     return result
 
 
+def _runtime_api():
+    return SimpleNamespace(**globals())
+
+
+def restore_runtimes(bundle, home, receipt_id, progress=None):
+    return runtime_recovery.restore(bundle, home, receipt_id, progress, _runtime_api())
+
+
 def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runtimes=False):
     """Apply a confirmed plan and emit profile-level progress when requested."""
     if stopped and stop_runtimes:
@@ -1227,6 +1237,9 @@ def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runt
         atomic_write(transaction / "plan.json", json.dumps(plan, indent=2).encode())
         record()
         if stop_runtimes:
+            journal["runtimeRecoveryBefore"] = runtime_recovery.snapshot(plan, journal, _runtime_api())
+            journal["runtimeRecovery"] = {"phase": "prewrite", "snapshot": journal["runtimeRecoveryBefore"]}
+            record()
             def persist_runtimes(state):
                 journal["runtimes"] = state
                 record()
@@ -1478,6 +1491,8 @@ def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runt
             for target in targets(home, plan["profiles"]).values():
                 if not activation_status(read_config(verification_python, resolve_inside(target, "config.yaml")))["active"]:
                     raise ValueError("installed profile activation verification failed")
+        if lifecycle is not None:
+            journal["runtimeRecovery"] = {"phase": "installed", "snapshot": runtime_recovery.snapshot(plan, journal, _runtime_api())}
         installed = True
         journal["status"] = "installed-restart-required"
         record()
@@ -1492,12 +1507,15 @@ def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runt
             record()
         if progress is not None and lifecycle is not None:
             progress({"phase": "installation-outcome", "status": journal["status"],
-                      "receipt": str(transaction), "runtimes": journal.get("runtimes")})
+                      "receipt": str(transaction), "runtimes": journal.get("runtimes"),
+                      "recoveryAvailable": runtime_recovery.available(journal) and journal["status"] in {"installed-restart-failed", "refused-recovery-required"}})
         print("Installed. Runtime status: " + journal["status"] + ". Receipt/backup: " + str(transaction))
         return transaction
     except BaseException:
         if transaction is not None:
             if not installed:
+                if writes_started:
+                    journal.pop("runtimeRecovery", None)
                 journal["status"] = (("install-failed-recovery-required" if writes_started else "refused-restored")
                                      if lifecycle is not None else "failed-review-required")
                 if lifecycle is not None and not writes_started:
@@ -1508,7 +1526,8 @@ def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runt
             atomic_write(transaction / "journal.json", json.dumps(journal, indent=2).encode())
             if progress is not None and lifecycle is not None:
                 progress({"phase": "installation-outcome", "status": journal["status"],
-                          "receipt": str(transaction), "runtimes": journal.get("runtimes")})
+                          "receipt": str(transaction), "runtimes": journal.get("runtimes"),
+                      "recoveryAvailable": runtime_recovery.available(journal) and journal["status"] in {"installed-restart-failed", "refused-recovery-required"}})
             print("Installation outcome: " + journal["status"] + ". Inspect backup/journal: " + str(transaction), file=sys.stderr)
         raise
     finally:
@@ -1643,6 +1662,9 @@ def rollback(home, transaction, confirmation=None, stopped=False):
                 journal["pmGenerationRecovery"] = "not-modified"
             else:
                 journal["status"] = "files-restored-python-unchanged"
+            if journal.get("runtimes"):
+                original_plan = json.loads(resolve_inside(backup, "plan.json").read_text())
+                runtime_recovery.verify_rollback(original_plan, journal, _runtime_api())
             atomic_write(backup / "journal.json", json.dumps(journal, indent=2).encode())
         except BaseException as error:
             journal["status"] = "rollback-failed-review-required"
@@ -1711,6 +1733,7 @@ def main():
     parser.add_argument("--runtimes-stopped", action="store_true")
     parser.add_argument("--stop-runtimes", action="store_true", help="Stop and restore verified Hermes runtimes. Running replies/jobs may be interrupted after Hermes normal configured shutdown interval.")
     parser.add_argument("--progress", action="store_true", help="emit structured installation progress on stderr")
+    parser.add_argument("--restore-runtimes", metavar="RECEIPT_ID", help="Retry runtime restoration using the original installer bundle and a verified safe receipt")
     parser.add_argument("--rollback", help="transaction directory name from the backup receipt")
     parser.add_argument("--retrieval-target", help="explicit embedding/reranker JSON; separate from package installation")
     parser.add_argument("--retrieval-kind", choices=("embedding", "reranker"), default="embedding")
@@ -1722,6 +1745,15 @@ def main():
     args = parser.parse_args()
     interactive = (args.interactive or len(sys.argv) == 1) and sys.stdin.isatty()
     try:
+        if args.restore_runtimes:
+            if not args.home or any((args.apply, args.confirm, args.interactive, args.inspect_profiles, args.rollback, args.retrieval_target,
+                                     args.native_arm_launcher, args.activate, args.profile, args.python, args.stop_runtimes, args.runtimes_stopped, args.desktop_only)):
+                raise ValueError("--restore-runtimes requires --home and the original --bundle without installation actions")
+            def recovery_progress(event):
+                print("PLUR1BUS_PROGRESS " + json.dumps(event), file=sys.stderr, flush=True)
+            receipt = restore_runtimes(args.bundle, args.home, args.restore_runtimes, recovery_progress if args.progress else None)
+            print("Runtime recovery verified. Receipt: " + str(receipt))
+            return 0
         if args.inspect_profiles:
             if not args.home or any((args.apply, args.activate, args.rollback, args.retrieval_target, args.native_arm_launcher, args.desktop_only, args.interactive)):
                 raise ValueError("--inspect-profiles requires --home and cannot perform installation actions")

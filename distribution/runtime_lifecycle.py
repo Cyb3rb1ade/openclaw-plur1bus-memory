@@ -65,7 +65,7 @@ class RuntimeLifecycle:
             if pid in unique and unique[pid] != entry:
                 raise ValueError("conflicting runtime identity for shared PID")
             unique[pid] = entry
-        self.state["original"] = [dict(entry, state="running") for entry in unique.values()]
+        self.state["original"] = [dict(entry, state="running") for entry in sorted(unique.values(), key=lambda item: item.get("kind") not in {"desktop", "cli"})]
         self.persist(self.state)
         for entry in self.state["original"]:
             self.progress({"phase": "stopping-runtimes", "pid": entry["pid"]})
@@ -84,15 +84,20 @@ class RuntimeLifecycle:
 
     def restore(self):
         failures = []
-        for entry in self.state["original"]:
-            if entry["state"] in {"running", "restored"}:
+        for entry in sorted(self.state["original"], key=lambda item: {"desktop": 1, "cli": 2}.get(item.get("kind"), 0)):
+            if entry["state"] in {"running", "restored", "closed-session-saved"}:
                 continue
             self.progress({"phase": "restarting-runtimes", "pid": entry["pid"]})
             try:
                 result = self.worker("resume", entry)
-                entry["state"] = "restored"
-                entry["restoredPid"] = result["pid"]
-                self.state["restored"].append(entry["pid"])
+                entry["state"] = result.get("disposition", "restored")
+                if entry["state"] == "closed-session-saved":
+                    entry["message"] = "Interactive CLI closed; resume saved sessions in Hermes. Commands and jobs were not replayed."
+                else:
+                    entry["restoredPid"] = result["pid"]
+                    if entry["pid"] not in self.state["restored"]:
+                        self.state["restored"].append(entry["pid"])
+                entry.pop("error", None)
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 entry["error"] = str(error) if isinstance(error, ValueError) else type(error).__name__
                 entry["state"] = "restart-failed"

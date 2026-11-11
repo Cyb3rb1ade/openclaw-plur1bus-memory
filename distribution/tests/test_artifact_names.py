@@ -67,7 +67,7 @@ def test_portable_bundle_ships_identical_unified_and_materialized_desktop(tmp_pa
         "scripts/hermes-desktop-host.py": "# helper\n",
         "LICENSE": "fixture license\n",
     }
-    for name in ("installer.py", "macos_pm_compat.py", "native_launcher.py", "install.sh", "install.ps1",
+    for name in ("installer.py", "runtime_lifecycle.py", "runtime_worker.py", "runtime_service_identity.py", "runtime_clients.py", "runtime_recovery.py", "macos_pm_compat.py", "native_launcher.py", "install.sh", "install.ps1",
                  "Install PLUR1BUS.command", "README.md", "INSTALLATION.de.md"):
         files["distribution/" + name] = "# fixture\n"
     for name in ("hermes-snapshot-restore.md", "hermes-bge-onnx.md", "audits/hermes-completion-followup-2026-09-06.md"):

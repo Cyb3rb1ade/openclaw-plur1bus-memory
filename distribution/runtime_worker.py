@@ -15,10 +15,10 @@ import time
 
 
 if __package__:
-    from .runtime_service_identity import RuntimeRefused, gateway_options, prove_service_source, windows_definition_fingerprint
+    from .runtime_service_identity import RuntimeRefused, gateway_options, prove_service_source, prove_restart_source, windows_definition_fingerprint
 else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from runtime_service_identity import RuntimeRefused, gateway_options, prove_service_source, windows_definition_fingerprint
+    from runtime_service_identity import RuntimeRefused, gateway_options, prove_service_source, prove_restart_source, windows_definition_fingerprint
 
 
 def scoped_home(home, root):
@@ -124,29 +124,11 @@ def restart_budget(entry):
 
 
 def inspect_clients(home, project, excluded_pids):
-    """Extension seam for Desktop/interactive client lifecycle (currently fail closed)."""
-    import psutil
-    from hermes_cli.update_cmd_windows import _hermes_holder_subcommand
-    for proc in psutil.process_iter(["pid", "cmdline"]):
-        if proc.pid in excluded_pids or proc.pid == os.getpid():
-            continue
-        argv = proc.info.get("cmdline") or []
-        if not argv:
-            continue
-        # Classification uses Hermes' parser, and ownership requires an exact
-        # source-tree path plus the process's selected home; argv is never logged.
-        source = any(Path(arg).is_absolute() and Path(arg).is_relative_to(project) for arg in argv)
-        if not source:
-            continue
-        try:
-            target = proc.environ().get("HERMES_HOME")
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            raise RuntimeRefused("cannot verify a Hermes client owner; close Hermes clients and retry")
-        if target and not scoped_home(target, home):
-            continue
-        kind = _hermes_holder_subcommand(subprocess.list2cmdline(argv))
-        if kind is not None:
-            raise RuntimeRefused("a Hermes Desktop/CLI/job client is still running; close it and retry (automatic client restoration is not supported)")
+    if __package__:
+        from .runtime_clients import inspect_clients as inspect
+    else:
+        from runtime_clients import inspect_clients as inspect
+    return inspect(home, project, excluded_pids)
 
 
 def served_profiles(identity):
@@ -167,6 +149,39 @@ def served_profiles(identity):
     return sorted(set(names))
 
 
+def installer_protected():
+    if __package__:
+        from .runtime_clients import protected_pids
+    else:
+        from runtime_clients import protected_pids
+    return protected_pids()
+
+
+def native_chain(proc, owner):
+    if proc.pid == owner["pid"]:
+        return []
+    chain = []
+    for parent in proc.parents():
+        chain.append({"pid": parent.pid, "born": birth(parent)})
+        if parent.pid == owner["pid"]:
+            return chain
+    raise RuntimeRefused("native wrapper ancestry changed")
+
+
+def owner_for_gateway(proc, owners):
+    direct = [owner for owner in owners if owner["pid"] == proc.pid]
+    if direct:
+        return direct[0], {"pid": proc.pid, "born": birth(proc)}
+    ancestors = {parent.pid: parent for parent in proc.parents()}
+    matches = [owner for owner in owners if owner["pid"] in ancestors]
+    if len(matches) > 1:
+        raise RuntimeRefused("gateway has multiple native supervisor ancestors")
+    if not matches:
+        return None, None
+    owner = matches[0]
+    return owner, {"pid": owner["pid"], "born": birth(ancestors[owner["pid"]])}
+
+
 def inventory(root, project):
     from gateway.control_socket import launch_supervisor
     from hermes_cli.update_fleet_scope import gateway_pid_home
@@ -174,7 +189,7 @@ def inventory(root, project):
     profiles = root / "profiles"
     if profiles.is_dir():
         homes += [p.resolve() for p in profiles.iterdir() if p.is_dir() and not p.is_symlink()]
-    owners = {entry["pid"]: entry for entry in service_owners()}
+    owners = service_owners()
     entries = {}
     for home in homes:
         identity = identify(home)
@@ -189,29 +204,59 @@ def inventory(root, project):
             raise RuntimeRefused("gateway process home could not be verified")
         proc = process(pid)
         argv = proc.cmdline()
-        options = gateway_options(argv, project, Path(proc.cwd()).resolve(), manual=pid not in owners, home=actual_home)
+        owner, owner_process = owner_for_gateway(proc, owners)
+        options = gateway_options(argv, project, Path(proc.cwd()).resolve(), manual=owner is None, home=actual_home)
+        if pid in installer_protected():
+            raise RuntimeRefused("gateway owns this installer; launch setup outside that runtime")
         entry = dict(pid=pid, born=birth(proc), home=str(actual_home),
                      served_profiles=served_profiles(identity))
-        if pid in owners:
-            owner = owners[pid]
+        if owner is not None:
             if owner.get("home") and Path(owner["home"]).resolve() != actual_home:
                 raise RuntimeRefused("native service belongs to another home")
             prove_service_source(owner, project, actual_home)
-            entry.update(kind=owner["kind"], owner=owner, ownerFingerprint=service_fingerprint(owner))
+            if owner["kind"] == "systemd":
+                from hermes_cli.update_cmd_posix_pause import _inside, _pid_cgroup
+                if not owner.get("cgroup") or _inside(_pid_cgroup(), owner["cgroup"]):
+                    raise RuntimeRefused("installer is inside or cannot verify the gateway service cgroup")
+            entry.update(kind=owner["kind"], owner=owner, ownerProcess=owner_process,
+                         ownerChain=native_chain(proc, owner), ownerFingerprint=service_fingerprint(owner))
         elif launch_supervisor(identity) == "manual":
             if sys.platform != "win32":
                 from hermes_cli.update_cmd_posix_pause import _supervisor_markers
                 if _supervisor_markers(pid):
                     raise RuntimeRefused("custom external supervisor is unsupported; stop it through its owner")
             entry.update(kind="manual", options=options)
+        elif launch_supervisor(identity) == "desktop":
+            entry.update(kind="desktop-gateway")
         else:
-            raise RuntimeRefused("gateway is Desktop-managed or externally supervised; its owner must stop it first")
+            raise RuntimeRefused("gateway is externally supervised; its owner must stop it first")
         if not same_process(entry):
             raise RuntimeRefused("gateway process identity changed during inspection")
         entry["shutdownBudget"] = restart_budget(entry)
         entries[pid] = entry
-    inspect_clients(root, project, set(entries))
-    return list(entries.values())
+    excluded = set(entries) | {member["pid"] for entry in entries.values() for member in entry.get("ownerChain", [])}
+    clients = inspect_clients(root, project, excluded)
+    for client in clients:
+        budgets = [restart_budget({"pid": member["pid"], "home": client["home"]})
+                   for member in (client["members"][:1] if client["kind"] == "desktop" else [client])]
+        client["shutdownBudget"] = max(budgets or [30])
+    for pid, entry in list(entries.items()):
+        if entry["kind"] != "desktop-gateway":
+            continue
+        ancestors = {p.pid for p in process(pid).parents()}
+        owners = [c for c in clients if c["kind"] == "desktop" and c["pid"] in ancestors]
+        if len(owners) != 1:
+            raise RuntimeRefused("Desktop gateway has no verified app owner")
+        app = owners[0]
+        if __package__:
+            from .runtime_clients import identity as client_identity
+        else:
+            from runtime_clients import identity as client_identity
+        app["members"].append(client_identity(process(pid)))
+        app.setdefault("gateways", []).append(entry)
+        app["shutdownBudget"] = max(app["shutdownBudget"], entry["shutdownBudget"])
+        del entries[pid]
+    return [*clients, *entries.values()]
 
 
 def verify_entry(entry):
@@ -225,7 +270,9 @@ def verify_entry(entry):
     proc = process(entry["pid"])
     gateway_options(proc.cmdline(), project, Path(proc.cwd()).resolve(), manual=not entry.get("owner"), home=home)
     if entry.get("owner"):
-        current = next((o for o in service_owners() if o["pid"] == entry["pid"]), None)
+        current, owner_process = owner_for_gateway(proc, service_owners())
+        if owner_process != entry.get("ownerProcess") or (current and native_chain(proc, current) != entry.get("ownerChain", [])):
+            raise RuntimeRefused("native service wrapper identity changed before shutdown")
         if not current or current != entry["owner"] or service_fingerprint(current) != entry["ownerFingerprint"]:
             raise RuntimeRefused("native service ownership changed before shutdown")
         prove_service_source(current, project, home)
@@ -233,6 +280,12 @@ def verify_entry(entry):
 
 
 def stop(entry):
+    if entry.get("kind") in {"desktop", "cli"}:
+        if __package__:
+            from .runtime_clients import stop as stop_client
+        else:
+            from runtime_clients import stop as stop_client
+        return stop_client(entry)
     from gateway.control_socket import pause_gateway_for_update
     verify_entry(entry)
     budget = restart_budget(entry)
@@ -273,7 +326,45 @@ def ready(entry, identity):
                 and set(entry["served_profiles"]) == set(served_profiles(identity)))
 
 
+def start_native(owner, project, home):
+    """Start the verified definition without the updater's source-repair hooks."""
+    if owner["kind"] == "launchd":
+        result = subprocess.run(["launchctl", "bootstrap", owner["domain"], owner["plist"]],
+                                capture_output=True, timeout=90, check=False)
+        if result.returncode:
+            # A prior retry may already have loaded it. Verify the loaded
+            # definition before kickstart; never boot out an unknown occupant.
+            prove_service_source(owner, project, home)
+        subprocess.run(["launchctl", "kickstart", owner["domain"] + "/" + owner["label"]],
+                       capture_output=True, timeout=30, check=True)
+    else:
+        from hermes_cli.update_cmd_posix_pause import _manage_cmd
+        command = _manage_cmd(owner["scope"])
+        if command is None:
+            raise RuntimeRefused("no privilege to start the verified native service")
+        subprocess.run([*command, "reset-failed", owner["unit"]], capture_output=True, timeout=15, check=True)
+        subprocess.run([*command, "start", owner["unit"]], capture_output=True, timeout=120, check=True)
+
+
 def resume(entry, project):
+    if entry.get("kind") in {"desktop", "cli"}:
+        if __package__:
+            from .runtime_clients import resume as resume_client
+        else:
+            from runtime_clients import resume as resume_client
+        return resume_client(entry, project)
+    if entry.get("kind") not in {"manual", "launchd", "systemd", "windows-service"}:
+        raise RuntimeRefused("unsupported runtime receipt kind")
+    if entry.get("owner"):
+        if entry["owner"].get("kind") != entry["kind"]:
+            raise RuntimeRefused("runtime receipt service kind differs from its owner")
+        prove_restart_source(entry["owner"], project, Path(entry["home"]))
+    else:
+        options = entry.get("options", [])
+        if not isinstance(options, list) or not all(isinstance(value, str) for value in options):
+            raise RuntimeRefused("invalid runtime receipt options")
+        gateway_options([sys.executable, str(project / "hermes_cli/main.py"), "gateway", "run", *options],
+                        project, project, manual=True, home=Path(entry["home"]))
     # A pre-write failure may leave an acknowledged pause in flight. Never
     # claim that draining process as restored or launch a competing gateway.
     identity = identify(Path(entry["home"]))
@@ -289,6 +380,16 @@ def resume(entry, project):
         if same_process(entry):
             raise RuntimeRefused("original gateway is still draining; recovery required")
     elif identity:
+        # A previous helper may have spawned successfully then lost its reply.
+        # Re-inventory the native owner/source; readiness alone is insufficient.
+        candidates = inventory(project.parent, project)
+        for candidate in candidates:
+            keys = ("kind", "home", "served_profiles", "options", "ownerFingerprint")
+            owner_keys = ("kind", "label", "domain", "plist", "unit", "scope", "name")
+            if (candidate["pid"] == identity["pid"] and ready(entry, identity)
+                    and all(candidate.get(key) == entry.get(key) for key in keys)
+                    and all(candidate.get("owner", {}).get(key) == entry.get("owner", {}).get(key) for key in owner_keys)):
+                return {"pid": identity["pid"]}
         raise RuntimeRefused("another gateway appeared while paused; automatic restoration refused")
     owner = entry.get("owner")
     if owner:
@@ -298,8 +399,7 @@ def resume(entry, project):
             from hermes_cli.update_cmd_windows import _start_windows_gateway_service
             _start_windows_gateway_service(owner["name"])
         else:
-            from hermes_cli.update_cmd_posix_pause import _start_job, _start_unit
-            (_start_job if entry["kind"] == "launchd" else _start_unit)(owner)
+            start_native(owner, project, Path(entry["home"]))
     else:
         from tools.environments.local import served_profile_child_env
         env = served_profile_child_env(target_home=entry["home"], inherit_credentials=True)

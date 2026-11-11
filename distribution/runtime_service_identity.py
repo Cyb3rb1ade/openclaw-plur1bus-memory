@@ -43,9 +43,20 @@ def _source_arguments(argv, project, cwd):
                 argv = [argv[0], *argv[offset:]]
         api = _identity_api(project)
         if argv[0] == "/usr/bin/osascript":
-            argv, _ = api._launchd_command(argv)
+            try:
+                argv, _ = api._launchd_command(argv)
+            except ValueError:
+                raise RuntimeRefused("native wrapper is not a verified Hermes launcher") from None
             continue
         module = api._launch_module(argv)
+        if module is None and argv[1:3] == ["-I", "-c"] and len(argv) > 3:
+            from hermes_cli._launchers import _launcher_script
+            # A published PM shell launcher execs this longer bootstrap. The
+            # vendor service decoder covers only runtime_command's short form.
+            if argv[3] == _launcher_script("hermes", project, None):
+                args = argv[4:]
+                module = ((args[1], args[2:]) if args[:1] == ["--run-module"] and len(args) > 1
+                          else ("hermes_cli.main", args))
         if module is None:
             break
         name, args = module
@@ -274,3 +285,13 @@ def prove_service_source(owner, project, home):
         records = [(argv, cwd)]
     for argv, cwd in records:
         gateway_options(argv, project, cwd, manual=False, home=home)
+
+
+def prove_restart_source(owner, project, home):
+    """A stopped launchd job has no loaded record; verify its preserved plist."""
+    if owner["kind"] != "launchd":
+        return prove_service_source(owner, project, home)
+    api = _identity_api(project)
+    definition = plistlib.loads(api.read_definition(Path(owner["plist"])))
+    api.verify_launchd_plist(definition, owner["label"], home)
+    gateway_options(definition["ProgramArguments"], project, definition.get("WorkingDirectory"), manual=False, home=home)
