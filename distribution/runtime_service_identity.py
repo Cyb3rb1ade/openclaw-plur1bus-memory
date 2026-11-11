@@ -220,6 +220,23 @@ def _validate_winsw_shape(root):
             refuse()
 
 
+def _nssm_event_state(parameters):
+    """Only absent/empty hook state is stock; never execute or retain hook text."""
+    import winreg
+    try:
+        try:
+            events = winreg.OpenKey(parameters, "AppEvents")
+        except FileNotFoundError:
+            return "absent"
+        with events:
+            children, values, _modified = winreg.QueryInfoKey(events)
+            if children or values:
+                raise RuntimeRefused("configured or unknown NSSM event hooks require external stop/restart")
+        return "empty"
+    except OSError:
+        raise RuntimeRefused("NSSM event hook state is unreadable; no service shutdown was attempted") from None
+
+
 def _windows_definition(owner):
     """Stock NSSM registry or WinSW XML; arbitrary SCM wrapper code is unsupported."""
     import psutil
@@ -232,6 +249,7 @@ def _windows_definition(owner):
         import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\" + owner["name"] + "\\Parameters") as key:
             values = {name: winreg.QueryValueEx(key, name)[0] for name in ("Application", "AppParameters", "AppDirectory")}
+            values["AppEvents"] = _nssm_event_state(key)
             environment = {}
             for name in ("AppEnvironment", "AppEnvironmentExtra"):
                 try:

@@ -1201,6 +1201,8 @@ def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runt
     fresh = plan_install(plan["bundle"], plan["home"], plan["profiles"], python_arg, plan["activate"], plan["dependencies"], plan["desktopOnly"])
     if fresh != plan or confirmation != plan["confirmation"]:
         raise ValueError("stale plan or invalid confirmation; no writes performed")
+    if stop_runtimes and plan["desktopOnly"]:
+        raise ValueError("Desktop-only setup cannot coordinate a WSL/remote backend. Close the local Hermes Desktop, then retry with --runtimes-stopped instead of --stop-runtimes; no local Hermes Python is required.")
     home, bundle = root_path(plan["home"]), root_path(plan["bundle"])
     lock = resolve_inside(home, ".plur1bus-install-lock")
     try:
@@ -1243,7 +1245,7 @@ def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runt
             def persist_runtimes(state):
                 journal["runtimes"] = state
                 record()
-            lifecycle = RuntimeLifecycle(home, lambda: interpreter(home) if plan.get("pmManaged") or plan["desktopOnly"] else plan["python"],
+            lifecycle = RuntimeLifecycle(home, lambda: interpreter(home) if plan.get("pmManaged") else plan["python"],
                                          persist_runtimes, progress)
             lifecycle.pause()
         if plan["pmManaged"] and stop_runtimes:
@@ -1820,9 +1822,17 @@ def main():
             if interactive:
                 print("Profiles: " + ", ".join(result["profiles"]))
                 print("Action: " + ("INSTALL AND ACTIVATE" if result["activate"] else "INSTALL FILES ONLY; activation unchanged"))
-                print("Save unsent work. Setup will close selected local Desktop, gateways and CLI sessions, install, then reopen the original Desktop and services. Active replies and jobs may finish within Hermes' normal shutdown interval and may then be interrupted. Saved CLI sessions remain resumable; commands and jobs are not replayed.")
-                choice = input("Type INSTALL to stop, install and reopen; MANUAL if runtimes are already stopped; or Enter to cancel: ").strip()
-                if choice not in {"INSTALL", "MANUAL"}:
+                if result.get("desktopOnly"):
+                    print("Close the local Hermes Desktop before installing its UI files, then reopen it yourself. Setup does not control the WSL/remote backend and needs no local Hermes Python.")
+                    choice = input("Type MANUAL after closing the local Desktop to install; or Enter to cancel: ").strip()
+                    choices = {"MANUAL"}
+                else:
+                    print("Save unsent work. Setup will close selected local Desktop, gateways and supported CLI sessions, install, then reopen the original Desktop and services. Active replies and jobs may finish within Hermes' normal shutdown interval and may then be interrupted. Saved CLI sessions remain resumable; commands and jobs are not replayed.")
+                    if sys.platform == "win32":
+                        print("Close interactive Hermes CLI sessions yourself before continuing. Setup refuses before shutdown if a Windows CLI is still open.")
+                    choice = input("Type INSTALL to stop, install and reopen; MANUAL if runtimes are already stopped; or Enter to cancel: ").strip()
+                    choices = {"INSTALL", "MANUAL"}
+                if choice not in choices:
                     return 0
                 args.apply, args.confirm = True, result["confirmation"]
                 args.stop_runtimes, args.runtimes_stopped = choice == "INSTALL", choice == "MANUAL"

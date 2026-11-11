@@ -96,7 +96,7 @@ jobs:
           "@ | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install package builder and test tools
-        run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2'
+        run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2' 'psutil>=7.1,<8'
 
       - name: Test installer, native wheel, and generated PM project contracts
         run: |
@@ -212,7 +212,7 @@ jobs:
           [ordered]@{ pmManaged = $plan.pmManaged; pythonVersion = $plan.pythonInfo.version; architecture = $plan.pythonInfo.architecture; implementation = $plan.pythonInfo.implementation; freeThreaded = $plan.pythonInfo.freeThreaded; pmNativeWheels = $plan.pmNativeWheels } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'native-executable-plan.json') -Encoding utf8
 
-      - name: Exercise native Windows WM_CLOSE primitive
+      - name: Exercise native Windows WM_CLOSE and CLI preflight refusal
         env:
           PLUR1BUS_NATIVE_CLIENT_EVIDENCE: ${{ runner.temp }}/plur1bus-pm-package-artifacts/native-client-primitive.json
         run: |

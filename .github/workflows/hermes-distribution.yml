@@ -92,7 +92,7 @@ jobs:
         if: matrix.native == 'windows-arm64'
         run: python distribution/ci.py --provision-native
       - name: Build and test tools
-        run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2'
+        run: python -m pip install 'setuptools>=75' wheel pytest pytest-subtests PyYAML 'pyinstaller==6.22.2' 'psutil>=7.1,<8'
       - name: CPU PyTorch (avoid unrelated CUDA downloads)
         if: runner.os == 'Linux' || matrix.os == 'windows-2025'
         run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu

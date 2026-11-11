@@ -473,6 +473,36 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse((self.home / "plugins").exists())
         self.assertEqual((self.home / "config.yaml").read_bytes(), original)
 
+    def test_desktop_only_managed_request_refuses_before_transaction_with_manual_guidance(self):
+        plan = installer.plan_install(self.bundle, self.home, desktop_only=True)
+        before = sorted(str(path) for path in self.home.rglob('*'))
+        with patch.object(installer, 'interpreter', side_effect=AssertionError('no local backend')), \
+             patch.object(installer, 'RuntimeLifecycle') as lifecycle, \
+             self.assertRaisesRegex(ValueError, '--runtimes-stopped'):
+            installer.apply_install(plan, plan['confirmation'], stop_runtimes=True)
+        lifecycle.assert_not_called()
+        self.assertEqual(sorted(str(path) for path in self.home.rglob('*')), before)
+
+    def test_guided_desktop_only_installs_via_explicit_external_close_without_python(self):
+        from contextlib import redirect_stdout
+        output = io.StringIO()
+        prompts = []
+        answers = iter([str(self.home), 'default', 'y', 'MANUAL'])
+        def answer(prompt):
+            prompts.append(prompt)
+            return next(answers)
+        with patch.object(sys, 'argv', ['installer.py', '--interactive', '--bundle', str(self.bundle)]), \
+             patch.object(sys.stdin, 'isatty', return_value=True), patch('builtins.input', side_effect=answer), \
+             patch.object(installer, 'interpreter', side_effect=AssertionError('no local backend')), \
+             patch.object(installer, 'RuntimeLifecycle') as lifecycle, redirect_stdout(output):
+            self.assertEqual(installer.main(), 0)
+        lifecycle.assert_not_called()
+        self.assertTrue((self.home / 'desktop-plugins/plur1bus/plugin.js').is_file())
+        self.assertFalse((self.home / 'plugins').exists())
+        self.assertNotIn('Type INSTALL', prompts[-1])
+        self.assertIn('Close the local Hermes Desktop', output.getvalue())
+        self.assertIn('WSL/remote backend', output.getvalue())
+
     def test_paths_and_downgrades_are_refused(self):
         for value in ("../foreign", "/absolute", "C:/escape", "profiles\\escape"):
             with self.assertRaises(ValueError):

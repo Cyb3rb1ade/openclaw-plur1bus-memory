@@ -106,6 +106,11 @@ class ClientInventoryTests(unittest.TestCase):
     def test_cli_with_no_subcommand_is_a_saved_session_not_a_replay(self):
         self.proc(30, ['python', str(self.project / 'hermes_cli/main.py')])
         self.rows.append({'pid': 30, 'create_time': 10, 'purpose': 'cli', 'install': 'selected', 'hermes_home': str(self.home)})
+        if sys.platform == 'win32':
+            with self.assertRaisesRegex(ValueError, 'Close.*CLI.*retry'):
+                worker.inspect_clients(self.home, self.project, set())
+            self.procs[30].terminate.assert_not_called()
+            return
         entries = worker.inspect_clients(self.home, self.project, set())
         self.assertEqual(entries[0]['kind'], 'cli')
         self.assertEqual(entries[0]['restorePolicy'], 'saved-session')
@@ -115,6 +120,25 @@ class ClientInventoryTests(unittest.TestCase):
         self.current.parents.return_value = [ancestor]
         self.current.parents.side_effect = None
         self.assertEqual(worker.inspect_clients(self.home, self.project, set()), [])
+
+    @unittest.skipUnless(sys.platform == 'win32', 'native Windows inventory contract')
+    def test_windows_cli_refuses_transaction_before_closing_a_verified_desktop(self):
+        from distribution.runtime_lifecycle import RuntimeLifecycle
+        self.proc(10, [str(self.app)], exe=self.app)
+        self.backend()
+        self.proc(30, ['python', str(self.project / 'hermes_cli/main.py')])
+        self.rows.append({'pid': 30, 'create_time': 10, 'purpose': 'cli', 'install': 'selected', 'hermes_home': str(self.home)})
+        actions = []
+        def dispatch(action, entry=None):
+            actions.append(action)
+            if action == 'inventory':
+                return worker.inspect_clients(self.home, self.project, set())
+            self.fail('shutdown was requested before completing inventory')
+        manager = RuntimeLifecycle(self.home, lambda: sys.executable, lambda state: None, worker=dispatch)
+        with self.assertRaisesRegex(ValueError, 'Close.*CLI.*retry'):
+            manager.pause()
+        self.assertEqual(actions, ['inventory'])
+        self.assertEqual(manager.state['stopped'], [])
 
     def test_unknown_custom_holder_refuses_before_writes(self):
         self.proc(30, [str(self.project / 'venv/bin/python'), '-c', 'custom_job()'])
@@ -159,7 +183,7 @@ class ClientInventoryTests(unittest.TestCase):
         shutil.copytree(self.app.parent.parent.parent, target)
         exe = target / 'Contents/MacOS/Hermes'
         app = self.proc(10, [str(exe)], exe=exe)
-        app.environ.return_value = {}
+        app.environ.return_value = {'HERMES_HOME': str(self.home)}
         self.backend()
         self.proc(12, [str(exe), '--type=renderer'], exe=exe, parent=10)
         entries = worker.inspect_clients(self.home, self.project, set())
@@ -337,6 +361,20 @@ class ClientShutdownTests(ClientInventoryTests):
         self.procs[10].terminate.assert_not_called()
         self.procs[11].terminate.assert_not_called()
         self.procs[12].terminate.assert_not_called()
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'native Windows refusal contract')
+class WindowsCliTests(unittest.TestCase):
+    def test_direct_close_and_stop_refuse_before_any_signal_or_budget_wait(self):
+        import psutil
+        entry = {'kind': 'cli', 'pid': 42, 'shutdownBudget': 30}
+        for action in (runtime_clients.native_close, runtime_clients.stop):
+            with self.subTest(action=action.__name__), patch.object(psutil, 'Process') as process, \
+                 patch.object(runtime_clients, '_wait') as wait, \
+                 self.assertRaisesRegex(ValueError, 'Close.*CLI.*retry'):
+                action(entry)
+            process.assert_not_called()
+            wait.assert_not_called()
 
 
 class ReadinessTests(unittest.TestCase):

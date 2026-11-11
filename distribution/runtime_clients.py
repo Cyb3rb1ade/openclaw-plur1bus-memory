@@ -295,6 +295,7 @@ def inspect_clients(root, project, excluded_pids):
                         entry['members'].append(identity(ancestor))
                 entry['backends'].append({'pid': proc.pid, 'home': str(Path(home).resolve()), 'role': role, 'port': row.get('port'), 'host': row.get('host')})
             elif role in {None, 'chat'} and row and row.get('purpose') == 'cli':
+                require_native_close('cli')
                 _supervised(proc)
                 clients.append(dict(identity(proc), kind='cli', home=str(Path(home).resolve()), restorePolicy='saved-session', members=[]))
             else:
@@ -320,8 +321,16 @@ def inspect_clients(root, project, excluded_pids):
     return clients
 
 
+def require_native_close(kind):
+    # Windows terminate() is TerminateProcess, and a CLI ledger proves neither
+    # a console process group nor a cooperative per-client shutdown endpoint.
+    if kind == 'cli' and sys.platform == 'win32':
+        raise RuntimeRefused('Close interactive Hermes CLI sessions yourself, then retry setup; safely scoped graceful Windows CLI shutdown is unavailable. This CLI was not stopped.')
+
+
 def native_close(entry):
     """Request ordinary native quit; escalation is separately identity checked."""
+    require_native_close(entry['kind'])
     if entry['kind'] != 'desktop' or sys.platform not in {'darwin', 'win32'}:
         import psutil
         psutil.Process(entry['pid']).terminate()
@@ -371,6 +380,7 @@ def _wait(entries, seconds):
 
 
 def stop(entry):
+    require_native_close(entry['kind'])
     import psutil
     entries = [entry, *entry.get('members', [])]
     if any(item['pid'] in protected_pids() for item in entries):

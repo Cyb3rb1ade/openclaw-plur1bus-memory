@@ -25,7 +25,7 @@ class ServiceIdentityTests(unittest.TestCase):
     def test_each_definition_must_name_selected_source_not_just_matching_home(self):
         for kind, reader in (("launchd", "_launchd_records"), ("systemd", "_systemd_records"), ("windows-service", "_windows_definition")):
             with self.subTest(kind=kind):
-                command = ["python", "/foreign/hermes_cli/main.py", "gateway", "run"]
+                command = ["python", str(self.root / "foreign/hermes_cli/main.py"), "gateway", "run"]
                 result = (command, str(self.project), "definition", {"HERMES_HOME": str(self.root)}) if kind == "windows-service" else [(command, str(self.project))]
                 with patch.object(identity, reader, return_value=result), self.assertRaisesRegex(ValueError, "source installation"):
                     identity.prove_service_source({"kind": kind}, self.project, self.root)
@@ -107,17 +107,25 @@ class ServiceIdentityTests(unittest.TestCase):
                 identity.gateway_options(["python", "-B", "-I", "-u", "-c", "arbitrary code", "gateway", "run"], self.project, self.project, manual=True)
 
     def prove_winsw_xml(self, extra=""):
-        import shlex
+        import subprocess
         import sys
         from xml.sax.saxutils import escape
-        command = shlex.join([str(self.project / "hermes_cli/main.py"), "gateway", "run"])
+        arguments = [str(self.project / "hermes_cli/main.py"), "gateway", "run"]
+        command = subprocess.list2cmdline(arguments)
         document = ("<service><id>hermes</id><name>Hermes</name><description>Gateway</description>"
                     "<executable>python</executable><arguments>" + escape(command) + "</arguments>"
                     "<workingdirectory>" + escape(str(self.project)) + "</workingdirectory>"
                     '<env name="HERMES_HOME" value="' + escape(str(self.root)) + '"/>' + extra + "</service>").encode()
-        psutil = SimpleNamespace(win_service_get=Mock(return_value=SimpleNamespace(binpath=lambda: str(self.root / "hermes-service.exe"))))
+        wrapper = str(self.root / "hermes-service.exe")
+        binpath = subprocess.list2cmdline([wrapper])
+        psutil = SimpleNamespace(win_service_get=Mock(return_value=SimpleNamespace(binpath=lambda: binpath)))
         api = SimpleNamespace(read_definition=Mock(return_value=document))
-        with patch.dict(sys.modules, {"psutil": psutil, "hermes_cli.gateway_runtime_service_identity": api}), patch.object(identity, "_windows_split", side_effect=shlex.split), patch.object(identity, "_windows_product", return_value="Windows Service Wrapper"):
+        def split(value):
+            if value == binpath:
+                return [wrapper]
+            self.assertEqual(value, 'placeholder ' + command)
+            return ['placeholder', *arguments]
+        with patch.dict(sys.modules, {"psutil": psutil, "hermes_cli.gateway_runtime_service_identity": api}), patch.object(identity, "_windows_split", side_effect=split), patch.object(identity, "_windows_product", return_value="Windows Service Wrapper"):
             identity.prove_service_source({"kind": "windows-service", "name": "hermes"}, self.project, self.root)
 
     def test_winsw_stock_configuration_remains_supported(self):
@@ -146,7 +154,7 @@ class PublishedLauncherTests(unittest.TestCase):
     def test_executed_stock_pm_launcher_is_compared_byte_for_byte(self):
         import sys
         from types import ModuleType
-        project = Path('/fixture/hermes-agent')
+        project = Path(tempfile.gettempdir(), 'fixture/hermes-agent').resolve()
         launcher = ModuleType('hermes_cli._launchers')
         launcher._launcher_script = lambda name, root, dependencies: 'published launcher for ' + str(root)
         api = SimpleNamespace(_launch_module=lambda argv: None)

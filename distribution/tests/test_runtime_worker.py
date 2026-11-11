@@ -70,8 +70,9 @@ class RuntimeWorkerTests(unittest.TestCase):
         self.assertFalse(worker.ready(self.entry, dict(identity, state="draining")))
 
     def test_custom_command_arguments_never_enter_receipts(self):
+        project = Path('/tmp/project').resolve()
         with self.assertRaises(ValueError):
-            worker.manual_options(["python", "/tmp/project/hermes_cli/main.py", "gateway", "run", "--token", "secret"], Path("/tmp/project"))
+            worker.manual_options(["python", str(project / "hermes_cli/main.py"), "gateway", "run", "--token", "secret"], project)
 
     def test_current_authority_records_preserve_the_served_set(self):
         identity = {"hermes_home": "/tmp/owned", "served_profiles": [{"home": "/tmp/owned", "profile_id": "/tmp/owned"}, {"home": "/tmp/owned/profiles/alpha", "profile_id": "/tmp/owned/profiles/alpha"}]}
@@ -132,7 +133,7 @@ class RuntimeWorkerTests(unittest.TestCase):
             self.control.launch_supervisor = Mock(return_value="launchd")
             scope = ModuleType("hermes_cli.update_fleet_scope")
             scope.gateway_pid_home = Mock(return_value=str(root))
-            proc = Mock(pid=42, cmdline=Mock(return_value=["python", "/foreign/hermes_cli/main.py", "gateway", "run"]), cwd=Mock(return_value=str(root)))
+            proc = Mock(pid=42, cmdline=Mock(return_value=["python", str(root / "foreign/hermes_cli/main.py"), "gateway", "run"]), cwd=Mock(return_value=str(root)))
             with patch.dict(sys.modules, {"hermes_cli.update_fleet_scope": scope}), patch.object(worker, "service_owners", return_value=[owner]), patch.object(worker, "identify", return_value={"pid": 42, "hermes_home": str(root), "served_profiles": ["default"]}), patch.object(worker, "process", return_value=proc), patch.object(worker, "birth", return_value=1.5), patch.object(worker, "same_process", return_value=True), patch.object(worker, "service_fingerprint", return_value="fingerprint"), patch.object(worker, "inspect_clients"), self.assertRaisesRegex(ValueError, "source|checkout|installation"):
                 worker.inventory(root, project)
 
@@ -209,9 +210,10 @@ class NativeWrapperTests(unittest.TestCase):
         self.assertEqual(worker.owner_for_gateway(foreign, [owner]), (None, None))
 
     def test_manual_receipt_cannot_replay_arbitrary_options(self):
-        entry = {'pid': 42, 'born': 1, 'home': '/owned', 'kind': 'manual', 'served_profiles': ['default'], 'options': ['--token', 'secret']}
+        home = Path('/owned').resolve()
+        entry = {'pid': 42, 'born': 1, 'home': str(home), 'kind': 'manual', 'served_profiles': ['default'], 'options': ['--token', 'secret']}
         with patch.object(worker, 'identify', return_value=None), patch.object(worker, 'same_process', return_value=False), patch.object(worker.subprocess, 'Popen') as launch, self.assertRaises(ValueError):
-            worker.resume(entry, Path('/owned/hermes-agent'))
+            worker.resume(entry, home / 'hermes-agent')
         launch.assert_not_called()
 
     def test_native_chain_excludes_only_proven_owner_to_gateway_wrappers(self):
@@ -221,11 +223,12 @@ class NativeWrapperTests(unittest.TestCase):
         self.assertEqual(chain, [{'pid': 8, 'born': 8.0}, {'pid': 7, 'born': 7.0}])
 
     def test_retry_adopts_only_verified_ready_original_gateway_shape(self):
-        entry = {'pid': 42, 'born': 1, 'home': '/owned', 'kind': 'manual', 'served_profiles': ['default'], 'options': []}
-        identity = {'pid': 43, 'hermes_home': '/owned', 'state': 'ready', 'served_profiles': ['default']}
+        home = Path('/owned').resolve()
+        entry = {'pid': 42, 'born': 1, 'home': str(home), 'kind': 'manual', 'served_profiles': ['default'], 'options': []}
+        identity = {'pid': 43, 'hermes_home': str(home), 'state': 'ready', 'served_profiles': ['default']}
         current = dict(entry, pid=43, born=2)
         with patch.object(worker, 'identify', return_value=identity), patch.object(worker, 'same_process', return_value=False), patch.object(worker, 'inventory', return_value=[current]), patch.object(worker.subprocess, 'Popen') as launch:
-            self.assertEqual(worker.resume(entry, Path('/owned/hermes-agent')), {'pid': 43})
+            self.assertEqual(worker.resume(entry, home / 'hermes-agent'), {'pid': 43})
         launch.assert_not_called()
 
     def test_native_restart_uses_preserved_definition_without_repair(self):

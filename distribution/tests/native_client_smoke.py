@@ -10,7 +10,8 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from distribution.runtime_clients import native_close
+from distribution.runtime_clients import native_close, stop
+from distribution.runtime_service_identity import RuntimeRefused
 
 
 def windows_fixture(marker):
@@ -85,12 +86,48 @@ def process_smoke():
                 proc.wait(timeout=10)
 
 
+def windows_cli_refusal_smoke():
+    """A real Windows console client must remain alive on unsupported shutdown."""
+    with tempfile.TemporaryDirectory(prefix='plur1bus-native-cli-') as directory:
+        processes = []
+        try:
+            for index in range(2):
+                marker = Path(directory) / str(index)
+                proc = subprocess.Popen([sys.executable, '-c',
+                    'import pathlib,sys,time; pathlib.Path(sys.argv[1]).touch(); time.sleep(120)', str(marker)])
+                processes.append(proc)
+                deadline = time.monotonic() + 10
+                while not marker.exists() and proc.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.1)
+                if not marker.exists():
+                    raise RuntimeError('native CLI fixture failed to start')
+            entry = {'kind': 'cli', 'pid': processes[0].pid, 'shutdownBudget': 30}
+            for action in (native_close, stop):
+                try:
+                    action(entry)
+                except RuntimeRefused as error:
+                    if 'Close interactive Hermes CLI' not in str(error) or 'retry' not in str(error):
+                        raise RuntimeError('native CLI refusal lacks recovery guidance') from error
+                else:
+                    raise RuntimeError('unsupported Windows CLI shutdown did not refuse')
+            if any(proc.poll() is not None for proc in processes):
+                raise RuntimeError('Windows CLI refusal terminated a fixture before its shutdown interval')
+            print('PASS native Windows CLI refusal before shutdown: target and unrelated console remained running')
+        finally:
+            for proc in processes:
+                if proc.poll() is None:
+                    proc.terminate()  # Only this smoke owns and cleans these disposable children.
+                proc.wait(timeout=10)
+
+
 def main():
     if len(sys.argv) == 3 and sys.argv[1] == '--fixture':
         windows_fixture(sys.argv[2])
         return
     if sys.platform in {'win32', 'linux'}:
         process_smoke()
+        if sys.platform == 'win32':
+            windows_cli_refusal_smoke()
         return
     if sys.platform != 'darwin':
         raise SystemExit('Native Cocoa smoke requires macOS')
@@ -142,4 +179,5 @@ if __name__ == '__main__':
         Path(output).write_text(json.dumps({'schema': 1, 'status': 'passed', 'primitive': primitive,
             'platform': sys.platform, 'architecture': platform.machine(),
             'packageSourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-            'targetExited': True, 'unrelatedPreserved': True}, indent=2) + '\n', encoding='utf-8')
+            'targetExited': True, 'unrelatedPreserved': True,
+            'windowsCliRefusal': 'passed-before-shutdown' if sys.platform == 'win32' else 'not-applicable'}, indent=2) + '\n', encoding='utf-8')

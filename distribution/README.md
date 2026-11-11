@@ -159,6 +159,13 @@ Review its effects and confirmation hash, then authorize managed shutdown and re
 
 If runtimes were stopped externally, `--runtimes-stopped` remains available instead. A verified installation with a restart failure remains installed; use the offered checked retry when available. For a partial installation, inspect the recovery receipt before restarting.
 
+On Windows, close interactive Hermes CLI sessions yourself before managed setup.
+Hermes exposes no verified per-client cooperative Windows CLI shutdown endpoint;
+setup refuses during discovery if one is still running, before stopping any
+Desktop or gateway. Native Desktop and gateway coordination remains available.
+NSSM services must have no configured event hooks (an absent or empty `AppEvents`
+key); custom or unreadable hooks require external stop/restart.
+
 ### Additional native Windows ARM desktop launcher
 
 This is an optional, separate launcher for an already prepared native ARM64
@@ -253,6 +260,11 @@ copies the frontend into selected Desktop profile directories; it does not
 call pip, change backend config, or activate a provider. Install and activate
 the backend separately inside its own environment. The startup handshake still
 requires the selected backend to report the correct agent/profile identity.
+Close the local Desktop first and choose **MANUAL** in guided setup, or use
+`--runtimes-stopped` in automation, then reopen the Desktop yourself. This mode
+requires no local Hermes Python and does not control the WSL/remote backend.
+`--desktop-only --stop-runtimes` refuses before creating a shutdown transaction
+and gives this same external-close instruction.
 
 ## Model changes and memory migration
 

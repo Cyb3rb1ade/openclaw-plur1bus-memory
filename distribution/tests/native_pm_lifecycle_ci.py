@@ -10,7 +10,7 @@ import tempfile
 
 from native_lifecycle_runner import run_lifecycle
 
-REVISION = 'ea4d2379167af59b23c93b8ff383c9014bd71c08'
+REVISION = '2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19'
 REPO = Path(__file__).resolve().parents[2]
 
 

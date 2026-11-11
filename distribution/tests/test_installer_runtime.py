@@ -1,6 +1,8 @@
 """Lifecycle integration with the real installer transaction and temporary files."""
 import json
 import io
+from pathlib import Path
+import sys
 from contextlib import redirect_stdout, redirect_stderr
 import unittest
 from unittest.mock import patch
@@ -18,7 +20,21 @@ class RuntimeInstallerTests(unittest.TestCase):
         self.fixture = fixtures.InstallerTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        self.plan = self.fixture.plan(desktop_only=True)
+        # File-only PM staging permits a verified rollback without pretending
+        # that a legacy pip installation can roll its dependency graph back.
+        self.fixture.files['payload/plugins/plur1bus/plugin.yaml'] = b'{"name":"plur1bus","version":"7.12.0"}'
+        self.fixture.write_bundle()
+        for context in (patch.object(installer.subprocess, 'run', side_effect=self.fixture.fake_run),
+                        patch.object(installer, 'run_python', side_effect=self.fixture.fake_python),
+                        patch.object(installer, 'torch_version', return_value=None),
+                        patch.object(installer, 'environment_state', return_value={'fingerprint': 'fixture-venv', 'pipAvailable': True, 'ensurepipAvailable': True}),
+                        patch.object(installer, 'pm_selected_environment', return_value=Path(sys.prefix)),
+                        patch.object(installer, 'run_pm_inspection', return_value='[]'),
+                        patch.object(installer, 'probe_macos_pm_sync'),
+                        patch.object(installer, 'interpreter', return_value=Path(sys.executable))):
+            context.start()
+            self.addCleanup(context.stop)
+        self.plan = self.fixture.plan(dependencies=False)
         self.actions, self.events = [], []
         self.entry = dict(pid=42, born=2.0, home=str(self.fixture.home), kind="manual", served_profiles=["default"])
         self.running = True
