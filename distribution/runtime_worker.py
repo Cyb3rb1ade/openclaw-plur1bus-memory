@@ -182,6 +182,12 @@ def owner_for_gateway(proc, owners):
     return owner, {"pid": owner["pid"], "born": birth(ancestors[owner["pid"]])}
 
 
+def client_shutdown_budget(entry):
+    owners = ([*entry["backends"], *entry.get("gateways", [])]
+              if entry["kind"] == "desktop" else [entry])
+    return max((restart_budget(owner) for owner in owners), default=30)
+
+
 def inventory(root, project):
     from gateway.control_socket import launch_supervisor
     from hermes_cli.update_fleet_scope import gateway_pid_home
@@ -237,9 +243,7 @@ def inventory(root, project):
     excluded = set(entries) | {member["pid"] for entry in entries.values() for member in entry.get("ownerChain", [])}
     clients = inspect_clients(root, project, excluded)
     for client in clients:
-        budgets = [restart_budget({"pid": member["pid"], "home": client["home"]})
-                   for member in (client["members"][:1] if client["kind"] == "desktop" else [client])]
-        client["shutdownBudget"] = max(budgets or [30])
+        client["shutdownBudget"] = client_shutdown_budget(client)
     for pid, entry in list(entries.items()):
         if entry["kind"] != "desktop-gateway":
             continue

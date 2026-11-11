@@ -196,6 +196,7 @@ class DesktopGroupingTests(unittest.TestCase):
             self.assertEqual(result[0]['pid'], 10)
             self.assertEqual(result[0]['gateways'][0]['pid'], 42)
             self.assertIn(42, [r['pid'] for r in result[0]['members']])
+            self.assertEqual(result[0]['shutdownBudget'], 60)
 
 class NativeWrapperTests(unittest.TestCase):
     def test_native_wrapper_ownership_follows_verified_gateway_ancestry(self):
@@ -234,3 +235,25 @@ class NativeWrapperTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in run.call_args_list], [
             ['launchctl', 'bootstrap', 'gui/501', '/fixture/gateway.plist'],
             ['launchctl', 'kickstart', 'gui/501/ai.hermes.fixture']])
+
+class DesktopBudgetTests(unittest.TestCase):
+    def test_inventory_uses_every_backend_own_home_and_longest_envelope(self):
+        import tempfile
+        control = ModuleType('gateway.control_socket')
+        control.launch_supervisor = Mock()
+        scope = ModuleType('hermes_cli.update_fleet_scope')
+        scope.gateway_pid_home = Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            second_home = home / 'profiles/long-running'
+            app = {'pid': 10, 'kind': 'desktop', 'home': str(home),
+                   'members': [{'pid': 11}, {'pid': 12}],
+                   'backends': [{'pid': 11, 'home': str(home)}, {'pid': 12, 'home': str(second_home)}]}
+            sampled = []
+            def budget(owner):
+                sampled.append((owner['pid'], owner['home']))
+                return 120 if owner['pid'] == 12 and owner['home'] == str(second_home) else 10
+            with patch.dict(sys.modules, {'gateway.control_socket': control, 'hermes_cli.update_fleet_scope': scope}), patch.object(worker, 'service_owners', return_value=[]), patch.object(worker, 'identify', return_value=None), patch.object(worker, 'inspect_clients', return_value=[app]), patch.object(worker, 'restart_budget', side_effect=budget):
+                result = worker.inventory(home, home / 'hermes-agent')
+            self.assertEqual(result[0]['shutdownBudget'], 120)
+            self.assertEqual(sampled, [(11, str(home)), (12, str(second_home))])

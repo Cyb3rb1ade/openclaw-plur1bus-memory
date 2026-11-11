@@ -210,6 +210,24 @@ class ClientShutdownTests(ClientInventoryTests):
         backend.kill.assert_called_once()
         app.kill.assert_not_called()
 
+
+    def test_increased_second_backend_budget_refuses_before_native_quit(self):
+        from distribution import runtime_clients as clients
+        self.proc(10, [str(self.app)], exe=self.app)
+        self.backend()
+        second_home = self.home / 'profiles/long-running'
+        self.backend(12, 10, second_home)
+        entry = dict(worker.inspect_clients(self.home, self.project, set())[0], shutdownBudget=120)
+        def budget(owner):
+            return 121 if owner['pid'] == 12 and owner['home'] == str(second_home) else 10
+        with patch.object(worker, 'restart_budget', side_effect=budget), patch.object(clients, 'native_close') as close, patch.object(clients, '_wait', return_value=[]), self.assertRaisesRegex(ValueError, 'budget changed'):
+            worker.stop(entry)
+        close.assert_not_called()
+        self.procs[10].terminate.assert_not_called()
+        self.procs[11].terminate.assert_not_called()
+        self.procs[12].terminate.assert_not_called()
+
+
 class ReadinessTests(unittest.TestCase):
     def test_all_backends_must_be_ready_on_selected_generation(self):
         from distribution import runtime_clients as clients
@@ -219,3 +237,61 @@ class ReadinessTests(unittest.TestCase):
             self.assertFalse(clients._desktop_ready(original, current, Path('/home/hermes-agent')))
         with patch.object(clients, 'backend_ready', return_value=True, create=True):
             self.assertTrue(clients._desktop_ready(original, current, Path('/home/hermes-agent')))
+
+
+class ExecutableRecoveryTests(unittest.TestCase):
+    def test_changed_packaged_executable_refuses_spawn_and_retains_obligation(self):
+        from distribution.runtime_lifecycle import RuntimeLifecycle
+        from distribution import runtime_clients as clients
+        for name in ('Hermes.exe', 'hermes'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory).resolve()
+                executable = home / name
+                executable.write_bytes(b'original executable')
+                resources = home / 'resources/app.asar'
+                resources.parent.mkdir()
+                resources.write_bytes(b'unchanged resources')
+                proc = Mock(exe=Mock(return_value=str(executable)), environ=Mock(return_value={}))
+                target = clients.desktop_target(proc)
+                entry = {'pid': 10, 'born': 1, 'exe': str(executable), 'kind': 'desktop', 'home': str(home),
+                         'members': [], 'backends': [], 'target': target, 'state': 'restart-failed'}
+                executable.write_bytes(b'replaced executable')
+                saved = []
+                manager = RuntimeLifecycle(home, lambda: 'python', lambda state: saved.append(json.loads(json.dumps(state))),
+                                           worker=lambda action, entry=None: clients.resume(entry, home / 'hermes-agent'))
+                manager.state = {'original': [entry], 'stopped': [10], 'restored': []}
+                with patch.object(worker, 'inventory', return_value=[]), patch.object(clients, 'matches', return_value=False), patch.object(clients, '_desktop_ready', return_value=False), patch.object(clients.subprocess, 'Popen', side_effect=ValueError('unexpected spawn')) as spawn, self.assertRaisesRegex(ValueError, 'restoration not verified'):
+                    manager.restore()
+                self.assertEqual(spawn.call_count, 0)
+                self.assertEqual(saved[-1]['original'][0]['state'], 'restart-failed')
+                self.assertIn('executable changed', saved[-1]['original'][0]['error'])
+                self.assertEqual(saved[-1]['stopped'], [10])
+                self.assertEqual(saved[-1]['restored'], [])
+
+
+    def test_appimage_relaunch_checks_whole_image_after_old_mount_disappears(self):
+        from distribution import runtime_clients as clients
+        for changed in (False, True):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory).resolve()
+                appimage = home / 'Hermes.AppImage'
+                appimage.write_bytes(b'original image')
+                mount = home / 'temporary-mount'
+                mount.mkdir()
+                executable = mount / 'hermes'
+                executable.write_bytes(b'mounted executable')
+                proc = Mock(exe=Mock(return_value=str(executable)), environ=Mock(return_value={'APPIMAGE': str(appimage), 'APPDIR': str(mount)}))
+                target = clients.desktop_target(proc)
+                entry = {'pid': 10, 'born': 1, 'exe': str(executable), 'kind': 'desktop', 'home': str(home),
+                         'members': [], 'backends': [], 'target': target}
+                executable.unlink()
+                mount.rmdir()
+                if changed:
+                    appimage.write_bytes(b'changed image')
+                expected = 'launch target changed' if changed else 'fixture launch reached'
+                with patch.object(worker, 'inventory', return_value=[]), patch.object(clients, 'matches', return_value=False), patch.object(clients, '_desktop_ready', return_value=False), patch.object(clients.subprocess, 'Popen', side_effect=ValueError('fixture launch reached')) as spawn, self.assertRaisesRegex(ValueError, expected):
+                    clients.resume(entry, home / 'hermes-agent')
+                if changed:
+                    spawn.assert_not_called()
+                else:
+                    self.assertEqual(spawn.call_args.args[0], [str(appimage)])

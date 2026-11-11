@@ -246,6 +246,18 @@ def stop(entry):
     budget = entry.get('shutdownBudget')
     if not isinstance(budget, (int, float)) or not math.isfinite(budget) or budget <= 0:
         raise RuntimeRefused('client shutdown budget is not finite')
+    if __package__:
+        from .runtime_worker import client_shutdown_budget
+    else:
+        from runtime_worker import client_shutdown_budget
+    if entry['kind'] == 'desktop':
+        members = {member['pid']: member for member in entry['members']}
+        for owner in [*entry['backends'], *entry.get('gateways', [])]:
+            member = members.get(owner['pid'])
+            if member is None or not matches(member):
+                raise RuntimeRefused('Desktop backend identity changed before shutdown')
+    if client_shutdown_budget(entry) > budget:
+        raise RuntimeRefused('client shutdown budget changed; inspect a fresh runtime plan before stopping')
     native_close(entry)
     remaining = _wait(entries, budget)
     # Explicit --stop-runtimes consent includes bounded interruption. Every
@@ -307,7 +319,7 @@ def resume(entry, project):
     if _fingerprint(target['witness']) != target['sha256']:
         raise RuntimeRefused('Desktop launch target changed since shutdown')
     launch = Path(entry['exe']) if Path(target['path']).suffix == '.app' else Path(target['path'])
-    if Path(target['path']).suffix == '.app' and _fingerprint(launch) != target['exeSha256']:
+    if Path(target['witness']) != launch and _fingerprint(launch) != target['exeSha256']:
         raise RuntimeRefused('Desktop executable changed since shutdown')
     root = project.parent
     def observed():
