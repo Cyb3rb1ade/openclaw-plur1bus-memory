@@ -14,7 +14,7 @@
 
 - Target macOS ARM, Windows x64/ARM, Linux x64/ARM and WSL. Release 7.19.3-hermes.2; Python wheels 7.19.3.post2.
 - Stop only verified runtimes of the chosen installation/home; never argv substring identity or broad process kills. Deduplicate shared gateways.
-- Prefer Hermes pause/drain/service ownership; no host-source patches, no raw pip into PM generations, no silent interruption of active work.
+- Prefer Hermes pause/drain/service ownership; no host-source patches, no raw pip into PM generations. Stop-and-install confirmation explains possible active-work interruption after Hermes' configured shutdown interval; no silent interruption.
 - Keep existing profile settings, secrets and memories. No secrets in diagnostics or receipts.
 - Restore only the original running set, with durable recovery obligations; retain the stopped-runtime CLI option.
 - macOS follows system language, English fallback; German remains available.
@@ -24,7 +24,7 @@
 
 - One shared gateway serves seven profiles: stop/restart once, retain all served profiles.
 - PID reuse/foreign installations/auto-respawning supervisors: never touch foreign processes or proceed while owned writers remain.
-- Work starts between initial inventory and stop: drain or refuse safely before writes, never silently kill it.
+- Work starts between initial inventory and stop: normal Hermes drain/shutdown with explicit interruption disclosure, never an unannounced broad force-kill.
 - Install fails after shutdown or the helper dies: durable restart debt, truthful state and recovery without mixed-version startup.
 - PM publishes a new interpreter generation: resume through the current selected runtime and verify readiness, not merely successful spawn.
 
@@ -35,7 +35,7 @@
 **Interfaces:** apply_install gains keyword stop_runtimes=False alongside stopped=False; CLI --stop-runtimes opts into managed lifecycle. Existing --runtimes-stopped stays valid. Progress phases inspecting-runtimes, stopping-runtimes, waiting-for-runtimes, restarting-runtimes supplement existing phases. The outcome contains a runtimes record with original/stopped/restored state, without credentials. The GUI task consumes these flags/phases. Worker may refine helper signatures after inspecting Hermes APIs; public flags and phases are fixed.
 
 - [ ] Write red behavioral tests for shared-PID deduplication, foreign/PID-reused rejection, no initial runtimes, graceful active-work handling, managed/manual ownership, pre-write failure restoration, safe partial-failure recovery, readiness failure and generation refresh.
-- [ ] Implement the lifecycle and installer integration using existing Hermes mechanisms where available. Read-only installed Hermes source: /Users/cyberblade/.hermes/hermes-agent, HEAD ea4d2379167af59b23c93b8ff383c9014bd71c08. Known mechanisms: gateway.control_socket identify/pause-for-update; hermes_cli.update_cmd_posix_pause and update_cmd_windows with durable update_pause_record; canonical gateway.status identity readers. These are leads to inspect, not permission to stop the real runtime. Need scoped ownership and fail-closed checks around any broad upstream helper. Native PM generations allow some clients to stay alive, but plugin source/UI changes still require a deliberate reload/restart strategy; document and test the resulting handling for Desktop/CLI/job clients.
+- [ ] Implement the lifecycle and installer integration using existing Hermes mechanisms where available. Read-only installed Hermes source: /Users/cyberblade/.hermes/hermes-agent, HEAD ea4d2379167af59b23c93b8ff383c9014bd71c08. Known mechanisms: gateway.control_socket identify/pause-for-update; hermes_cli.update_cmd_posix_pause and update_cmd_windows with durable update_pause_record; canonical gateway.status identity readers. These are leads to inspect, not permission to stop the real runtime. Need scoped ownership and fail-closed checks around any broad upstream helper. `--stop-runtimes` explicitly consents to normal Hermes shutdown including bounded active-work interruption; CLI help and GUI explain it. Native PM generations allow some clients to stay alive, but plugin source/UI changes still require a deliberate reload/restart strategy; document and test the resulting handling for Desktop/CLI/job clients.
 - [ ] Add a temporary-home live-process acceptance test or script which exercises a real Hermes shared gateway lifecycle and confirms settings and served profiles survive. Never use productive state in ordinary tests.
 - [ ] Run focused red/green tests and the distribution suite with /private/tmp/plur1bus-7193-release.7shDfJty/venv/bin/python. Commit only owned files, report limitations and exact evidence.
 
