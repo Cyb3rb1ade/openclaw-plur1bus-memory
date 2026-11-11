@@ -152,12 +152,12 @@ def restart_budget(entry):
     return budget
 
 
-def inspect_clients(home, project, excluded_pids):
+def inspect_clients(home, project, excluded_pids, *, gateway_entries=None):
     if __package__:
         from .runtime_clients import inspect_clients as inspect
     else:
         from runtime_clients import inspect_clients as inspect
-    return inspect(home, project, excluded_pids)
+    return inspect(home, project, excluded_pids, gateway_entries=gateway_entries)
 
 
 def served_profiles(identity):
@@ -270,7 +270,7 @@ def inventory(root, project):
         entry["shutdownBudget"] = restart_budget(entry)
         entries[pid] = entry
     excluded = set(entries) | {member["pid"] for entry in entries.values() for member in entry.get("ownerChain", [])}
-    clients = inspect_clients(root, project, excluded)
+    clients = inspect_clients(root, project, excluded, gateway_entries=entries)
     for client in clients:
         client["shutdownBudget"] = client_shutdown_budget(client)
     for pid, entry in list(entries.items()):
@@ -356,6 +356,11 @@ def stop(entry):
                 _stop_job(owner, drained=True)
             else:
                 _stop_unit(owner)
+    if __package__:
+        from .runtime_clients import wait_owner_death_supervisors
+    else:
+        from runtime_clients import wait_owner_death_supervisors
+    wait_owner_death_supervisors(entry)
     return {"stopped": entry["pid"]}
 
 

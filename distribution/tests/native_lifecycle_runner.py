@@ -61,6 +61,8 @@ def main():
                 'packageSourceCommit': args.package_source_commit, 'profiles': ['default', 'alpha'],
                 'originalPid': passed['originalPid'], 'restoredPid': passed['restoredPid'],
                 'configHashesUnchanged': True, 'pmBootstrap': 'approved-harness', 'log': 'native-pm-lifecycle.log'}
+    evidence['ownerDeathSupervisor'] = passed['ownerDeathSupervisor']
+    evidence['fixturePmAdmission'] = passed['fixturePmAdmission']
     (output / 'native-pm-lifecycle.json').write_text(json.dumps(evidence, indent=2) + '\n', encoding='utf-8')
 
 

@@ -62,6 +62,8 @@ def main():
                 'packageSourceCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(),
                 'profiles': ['default', 'alpha'], 'originalPid': passed['originalPid'],
                 'restoredPid': passed['restoredPid'], 'configHashesUnchanged': True,
+                'ownerDeathSupervisor': passed['ownerDeathSupervisor'],
+                'fixturePmAdmission': passed['fixturePmAdmission'],
                 'pmBootstrap': 'install python venv', 'log': 'native-pm-lifecycle.log'}
     (output / 'native-pm-lifecycle.json').write_text(json.dumps(evidence, indent=2) + '\n', encoding='utf-8')
 

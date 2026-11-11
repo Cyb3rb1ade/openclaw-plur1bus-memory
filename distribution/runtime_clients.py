@@ -180,6 +180,20 @@ def _supervised(proc):
             raise RuntimeRefused('custom supervised client must be stopped through its owner')
 
 
+def gateway_source_workspace(parent, source, project):
+    """Bind an immutable PM workspace to this install and its live owner's lease."""
+    if source == project:
+        return True
+    from pm.environments import committed_venv
+    selected = committed_venv(project)
+    if (selected is None or source.name != 'workspace'
+            or source.parent.parent != selected.parent.parent):
+        return False
+    # The owner can outlive a PM transaction; its exact interpreter or live
+    # generation lease proves which sibling workspace it is still running.
+    return generation_bound(parent, source.parent / 'venv')
+
+
 def gateway_plugin_host(proc, env, project, excluded):
     """The gateway owns its exact pipe-bound plugin host, including its shutdown."""
     argv = proc.cmdline()
@@ -195,27 +209,27 @@ def gateway_plugin_host(proc, env, project, excluded):
     if not env.get('PYTHONPATH'):
         return False
     source = Path(env['PYTHONPATH'].split(os.pathsep)[0]).resolve()
-    if source != project:
-        from pm.environments import committed_venv
-        selected = committed_venv(project)
-        if selected is None:
-            return False
-        if source != (selected.parent / 'workspace').resolve():
-            # A gateway can outlive a PM transaction. Its preceding workspace
-            # must still match a direct interpreter or live generation lease.
-            if source.name != 'workspace' or source.parent.parent != selected.parent.parent:
-                return False
-            if not generation_bound(parent, source.parent / 'venv'):
-                return False
+    if not gateway_source_workspace(parent, source, project):
+        return False
     if Path(argv[0]).resolve() != Path(proc.exe()).resolve() or proc.exe() != parent.exe():
         return False
     if __package__:
-        from .runtime_worker import identify
+        from .runtime_worker import identify, served_profiles
     else:
-        from runtime_worker import identify
+        from runtime_worker import identify, served_profiles
     owner = identity(parent)
-    actual = identify(Path(env['HERMES_HOME']))
-    return bool(actual and actual['pid'] == owner['pid'] and matches(owner))
+    parent_home = parent.environ().get('HERMES_HOME')
+    if not parent_home:
+        return False
+    actual = identify(Path(parent_home))
+    if (not actual or actual['pid'] != owner['pid']
+            or Path(actual.get('hermes_home', '')).resolve() != Path(parent_home).resolve()):
+        return False
+    # Multiplexed profiles need not publish their own PID/socket. The canonical
+    # parent endpoint must explicitly admit this child's profile instead.
+    homes = {project.parent if name == 'default' else project.parent / 'profiles' / name
+             for name in served_profiles(actual)}
+    return Path(env['HERMES_HOME']).resolve() in homes and matches(owner)
 
 
 def gateway_venv_redirector(proc, project, excluded_pids):
@@ -251,7 +265,59 @@ def gateway_venv_redirector(proc, project, excluded_pids):
     return bool(actual and actual['pid'] == child.pid and matches(witness))
 
 
-def inspect_clients(root, project, excluded_pids):
+def gateway_owner_death_supervisor(proc, env, project, excluded_pids):
+    """Prove the stock POSIX safety net; its gateway alone owns its EOF lifetime."""
+    if sys.platform == 'win32':
+        return None
+    argv = proc.cmdline()
+    if len(argv) != 3:
+        return None
+    script = Path(argv[1])
+    if not script.is_absolute() or script.parts[-2:] != ('hermes_cli', 'process_supervisor.sh'):
+        return None
+    parent = proc.parent()
+    if parent is None or parent.pid not in excluded_pids:
+        return None
+    source = script.parent.parent.resolve()
+    if (str(script) != str(source / 'hermes_cli/process_supervisor.sh')
+            or not gateway_source_workspace(parent, source, project)):
+        return None
+    from hermes_cli import process_identity as api
+    # The public helper names its source checkout. Normalize only a PM workspace
+    # already proven above to be this installation's live immutable generation.
+    canonical = [argv[0], str(project / 'hermes_cli/process_supervisor.sh'), argv[2]]
+    if (Path(api.__file__).resolve() != project / 'hermes_cli/process_identity.py'
+            or not api.is_owner_death_supervisor(canonical)):
+        return None
+    shell = '/bin/sh' if Path('/bin/sh').exists() else '/system/bin/sh'
+    images = {Path(shell).resolve()}
+    if sys.platform == 'darwin':
+        images.add(Path('/bin/bash'))  # macOS /bin/sh execs its system bash image.
+    if argv[0] != shell or Path(proc.exe()).resolve() not in images:
+        return None
+    home = env.get('HERMES_HOME')
+    if not home:
+        return None
+    parent_home = parent.environ().get('HERMES_HOME')
+    if not parent_home or Path(home).resolve() != Path(parent_home).resolve():
+        return None
+    if (argv[2] != str(os.getpgid(parent.pid)) or os.getpgid(proc.pid) != proc.pid
+            or os.getsid(proc.pid) != proc.pid):
+        return None
+    if __package__:
+        from .runtime_worker import identify
+    else:
+        from runtime_worker import identify
+    owner, child = identity(parent), identity(proc)
+    actual = identify(Path(home))
+    if (not actual or actual['pid'] != parent.pid
+            or Path(actual.get('hermes_home', '')).resolve() != Path(home).resolve()
+            or child['born'] < owner['born'] or not matches(owner) or not matches(child)):
+        return None
+    return dict(child, ownerPid=owner['pid'], ownerBorn=owner['born'])
+
+
+def inspect_clients(root, project, excluded_pids, *, gateway_entries=None):
     import psutil
     from hermes_cli.process_identity import _read_ledger, LEDGER_FILENAME, install_id
     from hermes_cli.update_cmd_windows import _hermes_holder_subcommand
@@ -284,6 +350,14 @@ def inspect_clients(root, project, excluded_pids):
             if home and not _scoped(home, root):
                 continue
             if gateway_plugin_host(proc, env, project, excluded_pids):
+                continue
+            supervisor = gateway_owner_death_supervisor(proc, env, project, excluded_pids)
+            if supervisor:
+                if gateway_entries is not None:
+                    owner = gateway_entries.get(supervisor['ownerPid'])
+                    if owner is None or abs(owner['born'] - supervisor['ownerBorn']) >= .001:
+                        raise RuntimeRefused('gateway supervisor owner identity changed during inspection')
+                    owner.setdefault('ownerDeathSupervisors', []).append(supervisor)
                 continue
             args = _source_bound(proc, project)
             if args is None and not row:
@@ -450,7 +524,18 @@ def stop(entry):
             psutil.Process(item['pid']).kill()
     if _wait(entries, 5):
         raise RuntimeRefused('verified client failed to exit; installation remains blocked')
+    wait_owner_death_supervisors(entry)
     return {'stopped': entry['pid']}
+
+
+def wait_owner_death_supervisors(entry):
+    """Never signal the safety net while it reaps its owner's registered groups."""
+    dependents = [child for owner in [entry, *entry.get('gateways', [])]
+                  for child in owner.get('ownerDeathSupervisors', [])]
+    # Stock process_supervisor.sh gives surviving groups three seconds after EOF.
+    # Allow its final reap to finish; a survivor still blocks all writes.
+    if dependents and _wait(dependents, 5):
+        raise RuntimeRefused('gateway owner-death supervisor did not exit; installation remains blocked')
 
 
 def generation_bound(proc, selected):
