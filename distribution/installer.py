@@ -18,6 +18,7 @@ import tomllib
 _DISTRIBUTION_DIR = str(Path(__file__).resolve().parent)
 if _DISTRIBUTION_DIR not in sys.path:
     sys.path.insert(0, _DISTRIBUTION_DIR)
+from runtime_lifecycle import RuntimeLifecycle
 from native_launcher import apply as apply_native_launcher
 from native_launcher import plan as plan_native_launcher
 from macos_pm_compat import approved_sources as approved_macos_pm_sources
@@ -1180,10 +1181,12 @@ def plan_install(bundle, home, profiles=None, python=None, activate=False, depen
     return result
 
 
-def apply_install(plan, confirmation, stopped=False, progress=None):
+def apply_install(plan, confirmation, stopped=False, progress=None, *, stop_runtimes=False):
     """Apply a confirmed plan and emit profile-level progress when requested."""
-    if not stopped:
-        raise ValueError("stop affected Hermes runtimes and pass --runtimes-stopped")
+    if stopped and stop_runtimes:
+        raise ValueError("choose --stop-runtimes or --runtimes-stopped, not both")
+    if not stopped and not stop_runtimes:
+        raise ValueError("pass --stop-runtimes to authorize normal graceful shutdown, or --runtimes-stopped")
     python_arg = None if plan.get("pmManaged") else plan["python"]
     fresh = plan_install(plan["bundle"], plan["home"], plan["profiles"], python_arg, plan["activate"], plan["dependencies"], plan["desktopOnly"])
     if fresh != plan or confirmation != plan["confirmation"]:
@@ -1195,6 +1198,9 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
     except FileExistsError as error:
         raise FileExistsError(error.errno, "another installation is running or was interrupted; inspect the installation journal before retrying", str(lock)) from error
     transaction = None
+    lifecycle = None
+    writes_started = False
+    installed = False
     journal = {"schema": 1, "status": "preparing", "home": str(home), "files": {}, "version": plan["version"],
                "pipChanged": False, "pmSelections": [],
                "torch": None if plan["torch"] is None else dict(plan["torch"])}
@@ -1207,7 +1213,8 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
         if plan["pmManaged"]:
             if resolve_inside(pm_install_state_root(home), "publication.json").exists():
                 raise ValueError("Hermes PM has an unfinished publication; let it finish or recover it with Hermes PM before retrying")
-            require_stopped_pm_gateways(home, plan["python"])
+            if not stop_runtimes:
+                require_stopped_pm_gateways(home, plan["python"])
             if sys.platform == "darwin":
                 probe_macos_pm_sync(home, plan["python"], pm_selected_environment(home), plan.get("macOSPMVolumeSync", False))
         if progress is not None:
@@ -1218,6 +1225,16 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
         def record():
             atomic_write(transaction / "journal.json", json.dumps(journal, indent=2).encode())
         atomic_write(transaction / "plan.json", json.dumps(plan, indent=2).encode())
+        record()
+        if stop_runtimes:
+            def persist_runtimes(state):
+                journal["runtimes"] = state
+                record()
+            lifecycle = RuntimeLifecycle(home, lambda: interpreter(home) if plan.get("pmManaged") or plan["desktopOnly"] else plan["python"],
+                                         persist_runtimes, progress)
+            lifecycle.pause()
+        if plan["pmManaged"] and stop_runtimes:
+            require_stopped_pm_gateways(home, plan["python"])
         selected = targets(home, plan["profiles"], plan["desktopOnly"])
         manifest = verify_bundle(bundle)
         incoming = shared_desktop_updates(bundle, home, selected, manifest, plan["desktopOnly"])
@@ -1310,12 +1327,15 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
             atomic_write(resolve_inside(transaction, "before/" + relative), old)
             journal["files"][relative] = {"before": digest(old), "after": None}
         record()
+        if lifecycle is not None:
+            lifecycle.verify_stopped()
         # Legacy installs use pip separately. PM-managed profiles are admitted
         # after the plugin files are staged, through PM's generation publisher.
         if not plan["desktopOnly"] and not plan["pmManaged"]:
             if progress is not None:
                 progress({"phase": "installing-dependencies"})
             if plan["bootstrapPip"]:
+                writes_started = True
                 journal.update(status="bootstrapping-pip", pipChanged=True)
                 record()
                 with (transaction / "pip-bootstrap.log").open("w", encoding="utf-8") as log:
@@ -1327,6 +1347,7 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
             atomic_write(transaction / "pip-check-before.txt", before_check.stdout.encode())
             constraint = None
             if plan["torch"]["action"] == "install-cpu":
+                writes_started = True
                 journal.update(status="installing-cpu-torch", pipChanged=True)
                 record()
                 with (transaction / "pip-cpu-torch.log").open("w", encoding="utf-8") as log:
@@ -1348,6 +1369,7 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
                 verify_cpu_torch(plan["python"], plan["torch"]["version"], require_cpu=False)
                 constraint = transaction / "torch-constraint.txt"
                 atomic_write(constraint, ("torch==" + plan["torch"]["version"] + "\n").encode("utf-8"))
+            writes_started = True
             journal.update(status="installing-python", pipChanged=True)
             record()
             with (transaction / "pip.log").open("w", encoding="utf-8") as log:
@@ -1385,6 +1407,9 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
                        "assert all(any(path == root or root in path.parents for root in roots) "
                        "for path in (Path(plur1bus_hermes.__file__).resolve(), Path(plur1bus_controls.__file__).resolve())), "
                        "'wheel import escaped target venv or managed Hermes plugin root'")
+        if lifecycle is not None:
+            lifecycle.verify_stopped()
+        writes_started = True
         journal["status"] = "writing-files"
         record()
         for relative, data in incoming.items():
@@ -1453,15 +1478,38 @@ def apply_install(plan, confirmation, stopped=False, progress=None):
             for target in targets(home, plan["profiles"]).values():
                 if not activation_status(read_config(verification_python, resolve_inside(target, "config.yaml")))["active"]:
                     raise ValueError("installed profile activation verification failed")
+        installed = True
         journal["status"] = "installed-restart-required"
         record()
-        print("Installed; restart affected Hermes runtimes. Receipt/backup: " + str(transaction))
+        if lifecycle is not None:
+            try:
+                lifecycle.restore()
+            except BaseException:
+                journal["status"] = "installed-restart-failed"
+                record()
+                raise
+            journal["status"] = "installed-restored"
+            record()
+        if progress is not None and lifecycle is not None:
+            progress({"phase": "installation-outcome", "status": journal["status"],
+                      "receipt": str(transaction), "runtimes": journal.get("runtimes")})
+        print("Installed. Runtime status: " + journal["status"] + ". Receipt/backup: " + str(transaction))
         return transaction
     except BaseException:
         if transaction is not None:
-            journal["status"] = "failed-review-required"
+            if not installed:
+                journal["status"] = (("install-failed-recovery-required" if writes_started else "refused-restored")
+                                     if lifecycle is not None else "failed-review-required")
+                if lifecycle is not None and not writes_started:
+                    try:
+                        lifecycle.restore()
+                    except BaseException:
+                        journal["status"] = "refused-recovery-required"
             atomic_write(transaction / "journal.json", json.dumps(journal, indent=2).encode())
-            print("Installation stopped. Inspect backup/journal and Hermes PM state before retrying: " + str(transaction), file=sys.stderr)
+            if progress is not None and lifecycle is not None:
+                progress({"phase": "installation-outcome", "status": journal["status"],
+                          "receipt": str(transaction), "runtimes": journal.get("runtimes")})
+            print("Installation outcome: " + journal["status"] + ". Inspect backup/journal: " + str(transaction), file=sys.stderr)
         raise
     finally:
         lock.rmdir()
@@ -1661,6 +1709,7 @@ def main():
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm")
     parser.add_argument("--runtimes-stopped", action="store_true")
+    parser.add_argument("--stop-runtimes", action="store_true", help="Stop and restore verified Hermes runtimes. Running replies/jobs may be interrupted after Hermes normal configured shutdown interval.")
     parser.add_argument("--progress", action="store_true", help="emit structured installation progress on stderr")
     parser.add_argument("--rollback", help="transaction directory name from the backup receipt")
     parser.add_argument("--retrieval-target", help="explicit embedding/reranker JSON; separate from package installation")
@@ -1682,7 +1731,7 @@ def main():
             if not args.home or not all((args.native_root, args.native_python, args.native_desktop_exe)):
                 raise ValueError("--native-arm-launcher requires --home, --native-root, --native-python, and --native-desktop-exe")
             if any((args.interactive, args.profile, args.activate, args.desktop_only, args.no_deps,
-                    args.runtimes_stopped, args.rollback, args.retrieval_target)):
+                    args.runtimes_stopped, args.stop_runtimes, args.rollback, args.retrieval_target)):
                 raise ValueError("native ARM launcher mode cannot be combined with package or retrieval operations")
             result = plan_native_launcher(args.home, args.native_root, args.native_python, args.native_desktop_exe)
             print(json.dumps(result, indent=2))
@@ -1745,7 +1794,7 @@ def main():
             if args.apply:
                 def progress(event):
                     print("PLUR1BUS_PROGRESS " + json.dumps(event), file=sys.stderr, flush=True)
-                apply_install(result, args.confirm, args.runtimes_stopped, progress if args.progress else None)
+                apply_install(result, args.confirm, args.runtimes_stopped, progress if args.progress else None, stop_runtimes=args.stop_runtimes)
                 return 0
         if args.rollback:
             print(json.dumps(result, indent=2))
