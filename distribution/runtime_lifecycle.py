@@ -1,5 +1,6 @@
 """Durable, scoped runtime restart obligations for a single installer transaction."""
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -20,6 +21,12 @@ class RuntimeLifecycle:
         # The selected interpreter is resolved for EVERY operation: PM may have
         # published a new generation while the gateway was paused.
         command = [str(self.python()), "-I", "-B", str(Path(__file__).with_name("runtime_worker.py")), str(self.home), action]
+        budget = entry.get("shutdownBudget", 0) if entry else 0
+        if not isinstance(budget, (int, float)) or not math.isfinite(budget) or budget < 0:
+            raise ValueError("invalid runtime shutdown budget")
+        # Complete after-turn/drain envelope, native service operations (up to
+        # 120s), then readiness (90s), plus helper startup/IPC headroom.
+        timeout = budget + 300 if action in {"stop", "resume"} else 900
         started = time.monotonic()
         with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               text=True, encoding="utf-8", env=environment) as proc:
@@ -31,7 +38,7 @@ class RuntimeLifecycle:
                 except subprocess.TimeoutExpired:
                     payload = None
                     elapsed = int(time.monotonic() - started)
-                    if elapsed >= 900:
+                    if elapsed >= timeout:
                         proc.kill()
                         proc.communicate()
                         raise ValueError("Hermes runtime helper exceeded its deadline; recovery receipt retained")

@@ -6,6 +6,7 @@ No process-table substring kills, arbitrary command replay or forced termination
 import contextlib
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -13,8 +14,11 @@ import sys
 import time
 
 
-class RuntimeRefused(ValueError):
-    """A credential-free actionable lifecycle refusal."""
+if __package__:
+    from .runtime_service_identity import RuntimeRefused, gateway_options, prove_service_source, windows_definition_fingerprint
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from runtime_service_identity import RuntimeRefused, gateway_options, prove_service_source, windows_definition_fingerprint
 
 
 def scoped_home(home, root):
@@ -84,28 +88,39 @@ def service_fingerprint(owner):
                                 capture_output=True, check=True, timeout=15)
         data = result.stdout
     else:
-        import psutil
-        service = psutil.win_service_get(owner["name"])
-        data = json.dumps([service.binpath(), service.username()], sort_keys=True).encode()
+        return windows_definition_fingerprint(owner)
     return hashlib.sha256(data).hexdigest()
 
 
 def manual_options(argv, project):
-    # Only documented gateway startup arguments are replayable. A shell command,
-    # arbitrary Python program, inline credential or custom launcher is refused.
-    if "gateway" not in argv:
-        raise RuntimeRefused("unsupported manual gateway launcher")
-    index = argv.index("gateway")
-    if argv[index:index + 2] != ["gateway", "run"]:
-        raise RuntimeRefused("unsupported manual gateway launcher")
-    options = argv[index + 2:]
-    if any(arg not in {"--verbose", "--quiet"} for arg in options):
-        raise RuntimeRefused("custom gateway startup options require explicit external stop/restart")
-    scripts = {str(project / "hermes_cli/main.py"), str(project / "cli.py")}
-    module = ["-m", "hermes_cli.main"]
-    if not any(str(Path(arg).resolve()) in scripts for arg in argv[:index] if not arg.startswith("-")) and not any(argv[i:i + 2] == module for i in range(index)):
-        raise RuntimeRefused("gateway launcher does not belong to the selected Hermes installation")
-    return options
+    return gateway_options(argv, Path(project).resolve(), Path(project).resolve(), manual=True)
+
+
+def restart_budget(entry):
+    """Resolve Hermes' complete exit envelope in the actual owner's profile/env."""
+    from hermes_cli.gateway import _get_restart_exit_wait_budget
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    keys = ("HERMES_RESTART_DRAIN_TIMEOUT", "HERMES_RESTART_AFTER_TURN_TIMEOUT", "HERMES_CRON_DRAIN_TIMEOUT")
+    owner_env = process(entry["pid"]).environ()
+    previous = {key: os.environ.get(key) for key in keys}
+    token = set_hermes_home_override(entry["home"])
+    try:
+        for key in keys:
+            if key in owner_env:
+                os.environ[key] = owner_env[key]
+            else:
+                os.environ.pop(key, None)
+        budget = float(_get_restart_exit_wait_budget())
+    finally:
+        reset_hermes_home_override(token)
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    if not math.isfinite(budget) or budget <= 0:
+        raise RuntimeRefused("owning gateway shutdown budget is unbounded or unavailable; stop it externally before installing")
+    return budget
 
 
 def inspect_clients(home, project, excluded_pids):
@@ -174,16 +189,14 @@ def inventory(root, project):
             raise RuntimeRefused("gateway process home could not be verified")
         proc = process(pid)
         argv = proc.cmdline()
-        # All owners must launch this source tree, even if their names look like Hermes.
-        if "-m" in argv and Path(proc.cwd()).resolve() != project:
-            raise RuntimeRefused("module gateway belongs to another Hermes source checkout")
-        options = manual_options(argv, project) if pid not in owners else []
+        options = gateway_options(argv, project, Path(proc.cwd()).resolve(), manual=pid not in owners, home=actual_home)
         entry = dict(pid=pid, born=birth(proc), home=str(actual_home),
                      served_profiles=served_profiles(identity))
         if pid in owners:
             owner = owners[pid]
             if owner.get("home") and Path(owner["home"]).resolve() != actual_home:
                 raise RuntimeRefused("native service belongs to another home")
+            prove_service_source(owner, project, actual_home)
             entry.update(kind=owner["kind"], owner=owner, ownerFingerprint=service_fingerprint(owner))
         elif launch_supervisor(identity) == "manual":
             if sys.platform != "win32":
@@ -195,6 +208,7 @@ def inventory(root, project):
             raise RuntimeRefused("gateway is Desktop-managed or externally supervised; its owner must stop it first")
         if not same_process(entry):
             raise RuntimeRefused("gateway process identity changed during inspection")
+        entry["shutdownBudget"] = restart_budget(entry)
         entries[pid] = entry
     inspect_clients(root, project, set(entries))
     return list(entries.values())
@@ -206,22 +220,29 @@ def verify_entry(entry):
     identity = identify(Path(entry["home"]))
     if not identity or identity["pid"] != entry["pid"] or Path(identity["hermes_home"]).resolve() != Path(entry["home"]).resolve():
         raise RuntimeRefused("gateway identity changed before shutdown")
+    home = Path(entry["home"]).resolve()
+    project = (home.parent.parent if home.parent.name == "profiles" else home) / "hermes-agent"
+    proc = process(entry["pid"])
+    gateway_options(proc.cmdline(), project, Path(proc.cwd()).resolve(), manual=not entry.get("owner"), home=home)
     if entry.get("owner"):
         current = next((o for o in service_owners() if o["pid"] == entry["pid"]), None)
         if not current or current != entry["owner"] or service_fingerprint(current) != entry["ownerFingerprint"]:
             raise RuntimeRefused("native service ownership changed before shutdown")
+        prove_service_source(current, project, home)
     return identity
 
 
 def stop(entry):
     from gateway.control_socket import pause_gateway_for_update
     verify_entry(entry)
+    budget = restart_budget(entry)
+    recorded = entry.get("shutdownBudget")
+    if not isinstance(recorded, (int, float)) or not math.isfinite(recorded) or budget > recorded:
+        raise RuntimeRefused("owning gateway shutdown budget changed; inspect a fresh runtime plan before stopping")
+    budget = float(recorded)
     ack = pause_gateway_for_update(Path(entry["home"]))
     if not ack or ack.get("pid") != entry["pid"] or not (ack.get("pausing") or ack.get("already_stopping")):
         raise RuntimeRefused("gateway did not acknowledge normal graceful shutdown")
-    budget = max(30, float(ack.get("drain_timeout") or 30) + 30)
-    if budget > 780:
-        raise RuntimeRefused("gateway shutdown interval exceeds installer wait budget; recovery receipt retained")
     deadline = time.monotonic() + budget
     while same_process(entry) and time.monotonic() < deadline:
         time.sleep(.25)
@@ -259,7 +280,10 @@ def resume(entry, project):
     if same_process(entry):
         if ready(entry, identity):
             return {"pid": identity["pid"]}
-        deadline = time.monotonic() + 90
+        budget = entry.get("shutdownBudget")
+        if not isinstance(budget, (int, float)) or not math.isfinite(budget) or budget <= 0:
+            raise RuntimeRefused("runtime receipt lacks a finite shutdown budget; manual recovery required")
+        deadline = time.monotonic() + budget
         while same_process(entry) and time.monotonic() < deadline:
             time.sleep(.25)
         if same_process(entry):

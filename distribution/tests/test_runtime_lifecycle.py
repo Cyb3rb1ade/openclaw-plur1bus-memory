@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from distribution.runtime_lifecycle import RuntimeLifecycle
 
 
@@ -93,3 +93,17 @@ class LifecycleTests(unittest.TestCase):
         self.manager.worker = worker
         with self.assertRaisesRegex(ValueError, "still running"):
             self.manager.pause()
+
+    def test_helper_deadline_covers_long_stop_and_restore_debt(self):
+        from distribution import runtime_lifecycle as module
+        import subprocess
+        for action in ("stop", "resume"):
+            with self.subTest(action=action):
+                proc = Mock()
+                proc.__enter__ = Mock(return_value=proc)
+                proc.__exit__ = Mock(return_value=False)
+                proc.communicate.side_effect = [subprocess.TimeoutExpired("helper", 10), ('{"pid": 43}', '')]
+                proc.returncode = 0
+                with patch.object(module.subprocess, "Popen", return_value=proc), patch.object(module.time, "monotonic", side_effect=[0, 2000]):
+                    self.manager._worker(action, dict(self.entry, shutdownBudget=7335))
+                proc.kill.assert_not_called()

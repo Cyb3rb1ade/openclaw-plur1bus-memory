@@ -1,5 +1,7 @@
 """Lifecycle integration with the real installer transaction and temporary files."""
 import json
+import io
+from contextlib import redirect_stdout, redirect_stderr
 import unittest
 from unittest.mock import patch
 from distribution.tests import test_installer as fixtures
@@ -9,6 +11,10 @@ from distribution.runtime_lifecycle import RuntimeLifecycle
 
 class RuntimeInstallerTests(unittest.TestCase):
     def setUp(self):
+        self.stdout, self.stderr = io.StringIO(), io.StringIO()
+        for context in (redirect_stdout(self.stdout), redirect_stderr(self.stderr)):
+            context.__enter__()
+            self.addCleanup(context.__exit__, None, None, None)
         self.fixture = fixtures.InstallerTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
@@ -68,6 +74,7 @@ class RuntimeInstallerTests(unittest.TestCase):
             self.apply()
         self.assertTrue(self.running)
         self.assertEqual(self.journal()["status"], "refused-restored")
+        self.assertIn("refused-restored", self.stderr.getvalue())
 
     def test_partial_install_failure_keeps_stopped_recovery_debt(self):
         original = installer.atomic_write
@@ -79,6 +86,7 @@ class RuntimeInstallerTests(unittest.TestCase):
             self.apply()
         self.assertNotIn("resume", self.actions)
         self.assertEqual(self.journal()["status"], "install-failed-recovery-required")
+        self.assertIn("install-failed-recovery-required", self.stderr.getvalue())
         self.assertEqual(self.journal()["runtimes"]["stopped"], [42])
 
     def test_restart_failure_is_distinct_from_install_failure(self):
@@ -86,4 +94,5 @@ class RuntimeInstallerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.apply()
         self.assertEqual(self.journal()["status"], "installed-restart-failed")
+        self.assertIn("installed-restart-failed", self.stderr.getvalue())
         self.assertEqual(self.events[-1]["status"], "installed-restart-failed")
