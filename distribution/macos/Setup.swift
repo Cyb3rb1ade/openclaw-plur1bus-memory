@@ -20,6 +20,8 @@ struct InstallPlan: Decodable {
     let warnings: [String]
 }
 
+typealias SetupRunner = (_ python: String, _ arguments: [String], _ progress: ((InstallProgress) -> Void)?, _ completion: @escaping (Int32, String, String) -> Void) -> Void
+
 final class SetupModel: ObservableObject {
     @Published var home = ProcessInfo.processInfo.environment["HERMES_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".hermes").path
     @Published var python = ""
@@ -39,7 +41,15 @@ final class SetupModel: ObservableObject {
     @Published var plan: InstallPlan?
     private var approvedArguments: [String] = []
     private var approvedPython = ""
-    private let payload = Bundle.main.resourceURL!.appendingPathComponent("distribution")
+    private let payload: URL
+    private let runner: SetupRunner
+
+    init(payload: URL = Bundle.main.resourceURL!.appendingPathComponent("distribution"),
+         runner: @escaping SetupRunner = { python, args, progress, completion in
+             runInstaller(python: python, arguments: args, progress: progress, completion: completion)
+         }) {
+        self.payload = payload; self.runner = runner
+    }
 
     func reset() {
         profiles = []; selected = []; plan = nil; consent = false; completed = false; outcome = nil; phase = ""
@@ -74,7 +84,7 @@ final class SetupModel: ObservableObject {
             return
         }
         busy = true; message = setupText("Checking existing profiles …")
-        runInstaller(python: python, arguments: baseArguments() + ["--inspect-profiles"]) { code, output, errors in
+        runner(python, baseArguments() + ["--inspect-profiles"], nil) { code, output, errors in
             self.busy = false
             guard code == 0 else { self.message = setupText("Could not read profiles. Nothing was installed."); self.details = errors; return }
             do {
@@ -99,7 +109,7 @@ final class SetupModel: ObservableObject {
         let args = baseArguments() + selected.sorted().flatMap { ["--profile", $0] } + (activate ? ["--activate"] : [])
         busy = true; details = ""; message = setupText("Checking the package, profiles and Python environment. Nothing is being installed yet …")
         let interpreter = python
-        runInstaller(python: interpreter, arguments: args) { code, output, errors in
+        runner(interpreter, args, nil) { code, output, errors in
             self.busy = false
             guard code == 0 else { self.message = setupText("Preflight checks failed. Nothing was installed."); self.details = errors; return }
             do {
@@ -111,10 +121,12 @@ final class SetupModel: ObservableObject {
         }
     }
 
+    func cancelReview() { plan = nil; consent = false }
+
     func install() {
         guard let plan = plan, consent, !busy else { return }
         let args = approvedArguments + ["--apply", "--confirm", plan.confirmation, "--stop-runtimes", "--progress"]
-        runOperation(python: approvedPython, args: args)
+        runOperation(python: approvedPython, args: args, retainOutcome: false)
     }
 
     func retry() {
@@ -129,15 +141,17 @@ final class SetupModel: ObservableObject {
         }
         let args = ["-I", "-B", payload.appendingPathComponent("installer.py").path, "--bundle", payload.path,
                     "--home", home, "--restore-runtimes", URL(fileURLWithPath: receipt).lastPathComponent, "--progress"]
-        runOperation(python: interpreter, args: args)
+        runOperation(python: interpreter, args: args, retainOutcome: true)
     }
 
-    private func runOperation(python: String, args: [String]) {
-        busy = true; showDetails = false; phaseStartedAt = Date(); phase = ""; outcome = nil
+    private func runOperation(python: String, args: [String], retainOutcome: Bool) {
+        if !retainOutcome { outcome = nil }
+        var operationOutcome: InstallProgress?
+        busy = true; showDetails = false; phaseStartedAt = Date(); phase = ""
         message = setupText("Checking the installation plan and running Hermes processes …")
         let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "PLUR1BUS installation")
-        runInstaller(python: python, arguments: args, progress: { event in
-            if event.phase == "installation-outcome" { self.outcome = event }
+        runner(python, args, { event in
+            if event.phase == "installation-outcome" { operationOutcome = event; self.outcome = event }
             if let message = event.message {
                 if self.phase != event.phase { self.phase = event.phase; self.phaseStartedAt = Date() }
                 self.message = message
@@ -146,10 +160,10 @@ final class SetupModel: ObservableObject {
             ProcessInfo.processInfo.endActivity(activity)
             self.busy = false; self.phaseStartedAt = nil
             self.details = errors + "\n" + output
-            switch self.outcome?.status {
+            switch operationOutcome?.status {
             case "installed-restored":
                 self.completed = true
-                self.message = (self.outcome?.runtimes?.original?.contains { $0.kind != "cli" } == true)
+                self.message = (operationOutcome?.runtimes?.original?.contains { $0.kind != "cli" } == true)
                     ? setupText("Installation verified. The original Hermes applications and services were reopened.")
                     : setupText("Installation verified. No running Hermes applications or services needed reopening.")
             case "installed-restart-failed":
@@ -189,6 +203,7 @@ class SetupDelegate: NSObject, NSApplicationDelegate {
 struct SetupView: View {
     @ObservedObject var model: SetupModel
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 14) {
             Text(setupText("Set up PLUR1BUS for Hermes")).font(.title)
             Text(setupText("1 · Find Hermes    →    2 · Select profiles    →    3 · Review and install")).foregroundColor(.secondary)
@@ -237,7 +252,7 @@ struct SetupView: View {
                 Text(setupText("Save unsent work. Setup will close selected local Desktop, gateways and CLI sessions, install, then reopen the original Desktop and services. Running replies and jobs may finish within Hermes’ normal shutdown interval, then may be interrupted. Saved CLI sessions remain resumable; commands and jobs are not replayed."))
                 Toggle(setupText("I authorize closing and reopening these Hermes runtimes."), isOn: $model.consent)
                 HStack {
-                    Button(setupText("Back to selection")) { model.plan = nil; model.consent = false }
+                    Button(setupText("Back to selection")) { model.cancelReview() }
                     Button(plan.activate ? setupText("Stop, install and activate") : setupText("Stop and install files")) { model.install() }.disabled(!model.consent)
                 }
             }
@@ -264,10 +279,13 @@ struct SetupView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(24).frame(width: 740, height: 720).disabled(model.busy)
+        .padding(24).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: 740, height: 720).disabled(model.busy)
     }
 }
 
+#if !SETUP_TESTING
 @main struct PLUR1BUSSetup: App {
     @StateObject private var model = SetupModel()
     @NSApplicationDelegateAdaptor(SetupDelegate.self) private var delegate
@@ -278,3 +296,5 @@ struct SetupView: View {
         .commands { CommandGroup(replacing: .newItem) {} }
     }
 }
+
+#endif
