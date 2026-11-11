@@ -166,6 +166,12 @@ Desktop or gateway. Native Desktop and gateway coordination remains available.
 NSSM services must have no configured event hooks (an absent or empty `AppEvents`
 key); custom or unreadable hooks require external stop/restart.
 
+For a Hermes PM installation with a separate `HERMES_RUNTIME_DIR`, run setup
+with that same explicit runtime directory. After a dependency generation changes,
+setup verifies its Python target against the configured store's recorded Python
+entry and canonical executable. It retains the selected virtual-environment path
+for invocation; an unrelated program in that store is not a trusted interpreter.
+
 ### Additional native Windows ARM desktop launcher
 
 This is an optional, separate launcher for an already prepared native ARM64

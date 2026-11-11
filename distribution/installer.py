@@ -790,6 +790,31 @@ def targets(home, profiles, desktop_only=False):
     return result
 
 
+def configured_pm_python():
+    """Prove the canonical Python in an explicitly selected PM byte store."""
+    configured = os.environ.get("HERMES_RUNTIME_DIR")
+    if not configured:
+        return None
+    try:
+        if not Path(configured).is_absolute():
+            raise ValueError("relative runtime store")
+        store = root_path(configured)
+        facts = json.loads(resolve_inside(store, "facts.json").read_text(encoding="utf-8-sig"))
+        if facts.get("schema") != 1:
+            raise ValueError("runtime facts schema")
+        entry = resolve_inside(store, facts["packages"]["python"]["entry"])
+        # PM's PythonPackage.binary_rel is python.exe / bin/python3. Its final
+        # versioned POSIX symlink is allowed only inside this recorded entry.
+        directory = entry if os.name == "nt" else resolve_inside(entry, "bin")
+        binary = directory / ("python.exe" if os.name == "nt" else "python3")
+        resolved = binary.resolve()
+        if not binary.is_file() or not resolved.is_relative_to(entry.resolve()):
+            raise ValueError("runtime Python escaped its entry")
+        return resolved
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        raise ValueError("Hermes PM configured runtime store Python identity is invalid; repair it with Hermes PM") from None
+
+
 def interpreter(home, override=None):
     if override:
         return Path(override).expanduser().absolute()
@@ -807,8 +832,10 @@ def interpreter(home, override=None):
         trusted_roots = [selected.resolve()]
         if managed_tools.is_dir() and not redirected(managed_tools):
             trusted_roots.append(managed_tools.resolve())
-        if not resolved_candidate.is_file() or not any(
-                resolved_candidate == root or root in resolved_candidate.parents for root in trusted_roots):
+        trusted = any(resolved_candidate == root or root in resolved_candidate.parents for root in trusted_roots)
+        if not trusted:
+            trusted = resolved_candidate == configured_pm_python()
+        if not resolved_candidate.is_file() or not trusted:
             raise ValueError("Hermes PM selected Python target is outside its trusted runtime roots")
         if os.name != "nt" and not os.access(resolved_candidate, os.X_OK):
             raise ValueError("Hermes PM selected Python is not executable; repair it with Hermes PM")
