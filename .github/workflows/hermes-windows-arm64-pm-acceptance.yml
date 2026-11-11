@@ -212,6 +212,34 @@ jobs:
           [ordered]@{ pmManaged = $plan.pmManaged; pythonVersion = $plan.pythonInfo.version; architecture = $plan.pythonInfo.architecture; implementation = $plan.pythonInfo.implementation; freeThreaded = $plan.pythonInfo.freeThreaded; pmNativeWheels = $plan.pmNativeWheels } |
             ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'native-executable-plan.json') -Encoding utf8
 
+      - name: Exercise native Windows WM_CLOSE primitive
+        env:
+          PLUR1BUS_NATIVE_CLIENT_EVIDENCE: ${{ runner.temp }}/plur1bus-pm-package-artifacts/native-client-primitive.json
+        run: |
+          Push-Location port
+          try { python distribution/tests/native_client_smoke.py; if ($LASTEXITCODE) { exit $LASTEXITCODE } } finally { Pop-Location }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Exercise two-profile gateway lifecycle in isolated PM fixture
+        run: |
+          $receipt = Get-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'hermes-pm-acceptance.json') -Raw | ConvertFrom-Json
+          $python = Join-Path $receipt.selectedEnvironment 'Scripts/python.exe'
+          $log = Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'native-pm-lifecycle.log'
+          python port/distribution/tests/live_runtime_acceptance.py --source $env:PLUR1BUS_PM_HERMES_SOURCE --python $python 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $records = @(Get-Content -LiteralPath $log | ForEach-Object { try { $_ | ConvertFrom-Json } catch { } } | Where-Object { $_.status -eq 'passed' })
+          if ($records.Count -ne 1 -or $records[0].configHashesUnchanged -ne $true) { throw 'Lifecycle evidence missing' }
+          [ordered]@{ schema = 1; status = 'passed'; sourceCommit = $env:PLUR1BUS_HERMES_SOURCE_REVISION; packageSourceCommit = $env:PLUR1BUS_PACKAGE_SOURCE_REVISION; profiles = @('default','alpha'); originalPid = $records[0].originalPid; restoredPid = $records[0].restoredPid; configHashesUnchanged = $true; pmBootstrap = 'approved-harness'; log = 'native-pm-lifecycle.log' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'native-pm-lifecycle.json') -Encoding utf8
+          foreach ($file in @('gateway.log', 'runtime-receipt.json')) {
+            $source = Join-Path $records[0].sandbox $file
+            if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-Item -LiteralPath $source -Destination (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT "native-pm-$file") }
+          }
+
+      - name: Reapply candidate frozen executable with managed lifecycle
+        run: |
+          python port/distribution/tests/windows_arm_frozen_acceptance.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Write package and source pin provenance
         run: |
           $manifest = Get-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_BUNDLE 'distribution.json') -Raw | ConvertFrom-Json
@@ -238,6 +266,7 @@ jobs:
           $provenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $env:PLUR1BUS_PM_ARTIFACT_ROOT 'source-pinned-provenance.json') -Encoding utf8
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
           name: plur1bus-hermes-windows-arm64-pm-acceptance
           path: ${{ runner.temp }}/plur1bus-pm-package-artifacts/*

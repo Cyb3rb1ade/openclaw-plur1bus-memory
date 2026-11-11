@@ -7,7 +7,7 @@ Einrichtungsassistenten. Bei älteren Assets startet man nach dem PKG noch
 `Install PLUR1BUS.command` in
 `/Applications/PLUR1BUS Installer`.
 
-Diese Anleitung beschreibt den Hermes-Installer **7.19.3-hermes.1**.
+Diese Anleitung beschreibt den Hermes-Installer **7.19.3-hermes.2**.
 Der macOS-Assistent folgt der System- bzw. App-Sprache. Deutsch und Englisch
 sind enthalten; für andere Sprachen gilt Englisch als Rückfall. Auch die
 Begrüßungs- und Abschlussseiten des PKG sind übersetzt. Technische

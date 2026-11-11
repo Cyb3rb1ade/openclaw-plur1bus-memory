@@ -102,7 +102,16 @@ jobs:
         run: python -m pip check
       - name: Tests, native packaging and isolated actual installation
         run: python distribution/ci.py
+      - name: Exercise native client close primitive
+        if: matrix.python == '3.14'
+        env:
+          PLUR1BUS_NATIVE_CLIENT_EVIDENCE: distribution-artifacts/native-client-primitive.json
+        run: python distribution/tests/native_client_smoke.py
+      - name: Exercise isolated official PM and two-profile gateway lifecycle
+        if: matrix.python == '3.14'
+        run: python distribution/tests/native_pm_lifecycle_ci.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
           name: plur1bus-hermes-${{ matrix.os }}${{ matrix.artifact-suffix }}
           path: distribution-artifacts/*

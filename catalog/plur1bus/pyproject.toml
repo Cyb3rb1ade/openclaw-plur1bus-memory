@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plur1bus-hermes"
-version = "7.19.3.post1"
+version = "7.19.3.post2"
 description = "Hermes Python runtime implementation of the PLUR1BUS memory provider and migration tooling."
 requires-python = ">=3.11"
 dependencies = ["lancedb==0.34.0", "numpy==2.2.0; python_version < '3.14' and (sys_platform != 'win32' or platform_machine != 'ARM64')", "numpy==2.3.0; python_version < '3.14' and sys_platform == 'win32' and platform_machine == 'ARM64'", "numpy>=2.4.3,<2.6; python_version >= '3.14'", "PyYAML>=6,<7", "sentence-transformers>=3.0,<4; python_version < '3.14' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')", "sentence-transformers==6.1.0; python_version >= '3.14' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')", "onnxruntime>=1.20,<2; python_version >= '3.14'", "tokenizers>=0.21,<1; python_version >= '3.14'", "certifi>=2024.8.30; python_version >= '3.14'"]
