@@ -71,6 +71,7 @@ import {
   createEmbeddingProfileMutator,
   createFeatureModelMutator,
   createChatModelMutator,
+  createCompactionModelMutator,
   createFormTokenStore,
   createRerankerMutator,
   applyControlUiWriteAction,
@@ -9599,6 +9600,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             getHostConfig: () => runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {},
             loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
           });
+          const setCompactionModel = createCompactionModelMutator({ api });
           const setCaptureChunking = createCaptureChunkingMutator({ api });
           const setJevApiKey = createJevApiKeyMutator({ api });
           const setSetting = createSettingMutator({
@@ -9651,6 +9653,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
                 setReranker,
                 setFeatureModel,
                 setChatModel,
+                setCompactionModel,
                 setCaptureChunking,
                 setJevApiKey,
                 setSetting,
@@ -9748,6 +9751,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               return buildControlPlaneProjection({
                 config: cfg,
                 hostConfig: api.config,
+                liveHostConfig: runtimeIfUsable(api)?.config?.current?.() ?? null,
                 obsidianVault: {
                   configured: configuredObsidianWorkspaces.length > 0,
                   configuredCount: configuredObsidianWorkspaces.length,
