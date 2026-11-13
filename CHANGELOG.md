@@ -16,6 +16,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 ### Changed
 
 - The card reads its values from the running OpenClaw config. Saving does not touch the plugin's own config entry, so the plugin is not reloaded and the snapshot from its load would keep showing the previous choice.
+- A saved choice is shown at once. OpenClaw writes `openclaw.json` immediately but takes the change into its running config only after its reload check (measured: 13 seconds to 2 minutes); until then the card would have shown the previous choice next to the "saved" notice. The plugin remembers the write until the running config changes, for five minutes at most.
 
 ## [7.19.4] — 2026-11-10
 

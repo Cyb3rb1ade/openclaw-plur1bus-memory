@@ -72,6 +72,7 @@ import {
   createFeatureModelMutator,
   createChatModelMutator,
   createCompactionModelMutator,
+  createPendingCompactionModels,
   createFormTokenStore,
   createRerankerMutator,
   applyControlUiWriteAction,
@@ -9592,6 +9593,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             "memory-lancedb-namespaced: controlUi.writeActions is set but OpenClaw config mutation is unavailable; the dashboard stays read-only",
           );
         }
+        const pendingCompactionModels = createPendingCompactionModels();
         const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
           const confirmations = createConfirmationStore();
           const setFeatureModel = createFeatureModelMutator({ api });
@@ -9600,7 +9602,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
             getHostConfig: () => runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {},
             loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
           });
-          const setCompactionModel = createCompactionModelMutator({ api });
+          const setCompactionModel = createCompactionModelMutator({ api, pending: pendingCompactionModels });
           const setCaptureChunking = createCaptureChunkingMutator({ api });
           const setJevApiKey = createJevApiKeyMutator({ api });
           const setSetting = createSettingMutator({
@@ -9751,7 +9753,7 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
               return buildControlPlaneProjection({
                 config: cfg,
                 hostConfig: api.config,
-                liveHostConfig: runtimeIfUsable(api)?.config?.current?.() ?? null,
+                liveHostConfig: pendingCompactionModels.overlay(runtimeIfUsable(api)?.config?.current?.() ?? null),
                 obsidianVault: {
                   configured: configuredObsidianWorkspaces.length > 0,
                   configuredCount: configuredObsidianWorkspaces.length,

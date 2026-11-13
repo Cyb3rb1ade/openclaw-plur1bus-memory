@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   COMPACTION_MODEL_UNSUPPORTED,
   createCompactionModelMutator,
+  createPendingCompactionModels,
   projectCompactionModels,
 } from "../lib/conversation-compaction-model.js";
 
@@ -188,9 +189,70 @@ describe("Kompaktierungsmodell: Anzeige nach dem Speichern", async () => {
       [["main", ""], ["bernhardine", "strata/qwen-flash"]], "ohne laufende Config bleibt der Schnappschuss die Quelle");
   });
 
-  it("reicht die laufende Config im Plugin-Einstieg an die Projektion durch", async () => {
+  it("reicht die laufende Config samt noch nicht übernommener Wahl an die Projektion durch", async () => {
     const { readFile } = await import("node:fs/promises");
     const source = await readFile(new URL("../index.js", import.meta.url), "utf8");
-    assert.match(source, /hostConfig: api\.config,\s+liveHostConfig: runtimeIfUsable\(api\)\?\.config\?\.current\?\.\(\) \?\? null,/);
+    assert.match(source, /hostConfig: api\.config,\s+liveHostConfig: pendingCompactionModels\.overlay\(runtimeIfUsable\(api\)\?\.config\?\.current\?\.\(\) \?\? null\),/);
+    assert.match(source, /createCompactionModelMutator\(\{ api, pending: pendingCompactionModels \}\)/);
+  });
+});
+
+describe("Kompaktierungsmodell: Wahl, die der Host noch nicht übernommen hat", () => {
+  // OpenClaw schreibt die Datei sofort, übernimmt sie in die laufende Config aber erst nach
+  // seiner Reload-Prüfung (gemessen: 13 s bis 2 min). So lange zeigte die Karte den alten Wert.
+  const chosen = (config, id) => projectCompactionModels(config).agents.find((agent) => agent.id === id)?.chosen;
+
+  function setup({ ttlMs } = {}) {
+    let clock = 1_000;
+    const running = { value: clone(HOST) };
+    const pending = createPendingCompactionModels({ now: () => clock, ...(ttlMs ? { ttlMs } : {}) });
+    const api = { runtime: { config: {
+      current: () => running.value,
+      async mutateConfigFile({ mutate }) { return mutate(clone(running.value)); }, // Datei geschrieben, laufende Config noch alt
+    } } };
+    return { running, pending, set: createCompactionModelMutator({ api, pending }), tick: (ms) => { clock += ms; } };
+  }
+
+  it("zeigt die gespeicherte Wahl sofort und lässt die laufende Config unverändert", async () => {
+    const { running, pending, set } = setup();
+    await set({ agentId: "main", model: "strata/qwen-flash" });
+    const shown = pending.overlay(running.value);
+    assert.equal(chosen(shown, "main"), "strata/qwen-flash");
+    assert.equal(shown.agents.entries.main.compaction.maxSummaryChars, 48000, "übrige Einstellungen bleiben sichtbar");
+    assert.equal(chosen(shown, "bernhardine"), "strata/qwen-flash", "andere Agenten bleiben unberührt");
+    assert.equal(running.value.agents.entries.main.compaction.model, undefined);
+  });
+
+  it("zeigt auch ein Zurücksetzen sofort", async () => {
+    const { running, pending, set } = setup();
+    await set({ agentId: "bernhardine", model: "" });
+    assert.equal(chosen(pending.overlay(running.value), "bernhardine"), "");
+  });
+
+  it("gibt der laufenden Config den Vorrang, sobald sie sich ändert", async () => {
+    const { running, pending, set } = setup();
+    await set({ agentId: "main", model: "strata/qwen-flash" });
+    running.value.agents.entries.main.compaction.model = "anthropic/claude-opus-5-5"; // inzwischen von Hand anders gesetzt
+    assert.equal(chosen(pending.overlay(running.value), "main"), "anthropic/claude-opus-5-5");
+    delete running.value.agents.entries.main.compaction.model;
+    assert.equal(chosen(pending.overlay(running.value), "main"), "", "eine überholte Wahl kommt nicht zurück");
+  });
+
+  it("verwirft eine Wahl, die der Host nach fünf Minuten nicht übernommen hat", async () => {
+    const { running, pending, set, tick } = setup();
+    await set({ agentId: "main", model: "strata/qwen-flash" });
+    tick(5 * 60_000 + 1);
+    assert.equal(chosen(pending.overlay(running.value), "main"), "");
+  });
+
+  it("merkt sich nichts, wenn der Host den Schreibvorgang ablehnt", async () => {
+    const { running, pending } = setup();
+    const api = { runtime: { config: { current: () => running.value, async mutateConfigFile() { throw new Error("disk full"); } } } };
+    await assert.rejects(createCompactionModelMutator({ api, pending })({ agentId: "main", model: "strata/qwen-flash" }), /disk full/);
+    assert.equal(chosen(pending.overlay(running.value), "main"), "");
+  });
+
+  it("reicht eine fehlende laufende Config unverändert durch", () => {
+    assert.equal(createPendingCompactionModels().overlay(null), null);
   });
 });
