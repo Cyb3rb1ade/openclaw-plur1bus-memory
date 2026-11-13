@@ -6,6 +6,17 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.0] — 2026-11-13
+
+### Added
+
+- Dashboard card **Conversation compaction model**: one row per chat agent sets the model OpenClaw uses to summarize that agent's chat context (auto-compaction and `/compact`). The choice is written to `agents.entries.<id>.compaction.model`; other per-agent compaction settings such as `maxSummaryChars` are kept, and an empty choice removes the key. Each row says what applies without a choice: the shared `agents.defaults.compaction.model`, or the session's own model. The card is separate from the **Memory compaction** task, which is the nightly store cleanup.
+- The card needs an OpenClaw host that knows `agents.entries.<id>.compaction.model`. On a host without it nothing is written and the page reports `compaction_model_unsupported` instead of the generic failure.
+
+### Changed
+
+- The card reads its values from the running OpenClaw config. Saving does not touch the plugin's own config entry, so the plugin is not reloaded and the snapshot from its load would keep showing the previous choice.
+
 ## [7.19.4] — 2026-11-10
 
 ### Fixed
