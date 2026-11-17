@@ -6,6 +6,15 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.1] — 2026-11-17
+
+### Fixed
+
+- Neo worker no longer starts from a deleted plugin capture copy. Under OpenClaw 2026.11.5 the
+  runtime created by an earlier plugin generation spawned `neo-worker-runner.js` from a removed
+  `tmp/plugin-captures/…` directory (MODULE_NOT_FOUND on every Neo capture/drain job). Under a
+  capture copy the worker now starts from the installed extension, like the feature-cron runner.
+
 ## [7.20.0] — 2026-11-13
 
 ### Added
