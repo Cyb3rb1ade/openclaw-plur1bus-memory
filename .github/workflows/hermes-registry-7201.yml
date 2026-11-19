@@ -1,0 +1,66 @@
+name: Hermes 7.20.1 registry
+on:
+  push:
+    branches:
+      - codex/hermes-registry-7201-probe
+      - codex/hermes-registry-7201-publish
+permissions:
+  contents: read
+jobs:
+  registry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PLUR1BUS_SOURCE: c08f946d738922b1a46343e81fb04658458aaede
+      PLUR1BUS_VERSION: 7.20.1-hermes.0
+      PLUR1BUS_INTEGRITY: sha512-W4njD5hPlp8QRBcWCb0DduOzn9IDs05YqJQ9Otr5JN9o3+OEqqR/zZjtiN/Y3jMjiyi6PP9wuFP2mgD+4WuLXg==
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: c08f946d738922b1a46343e81fb04658458aaede
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '26.13.1'
+      - name: Pack and verify the release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PLUR1BUS_SOURCE"
+          test -z "$(git status --porcelain)"
+          cd "$GITHUB_WORKSPACE"
+          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/plur1bus-pack.json"
+          jq -e --arg version "$PLUR1BUS_VERSION" --arg digest "$PLUR1BUS_INTEGRITY" '
+            length == 1 and .[0].name == "@cyb3rb1ade/plur1bus-memory" and
+            .[0].version == $version and .[0].integrity == $digest and
+            .[0].filename == ("cyb3rb1ade-plur1bus-memory-" + $version + ".tgz")
+          ' "$RUNNER_TEMP/plur1bus-pack.json"
+      - name: Verify registry and publish to the hermes channel
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/plur1bus-npmrc"
+          umask 077
+          printf '%s\n' '@cyb3rb1ade:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$NPM_CONFIG_USERCONFIG"
+          reg=https://npm.pkg.github.com
+          name='@cyb3rb1ade/plur1bus-memory'
+          version="$PLUR1BUS_VERSION"
+          npm view "$name" versions dist-tags --json --registry "$reg" > "$RUNNER_TEMP/registry-before.json"
+          latest="$(jq -r '."dist-tags".latest // empty' "$RUNNER_TEMP/registry-before.json")"
+          jq --arg version "$version" '{versionExists:(.versions|index($version)!=null), tags:."dist-tags"}' "$RUNNER_TEMP/registry-before.json"
+          if [[ "$GITHUB_REF_NAME" != codex/hermes-registry-7201-publish ]]; then exit 0; fi
+          if jq -e --arg version "$version" '.versions|index($version)!=null' "$RUNNER_TEMP/registry-before.json" >/dev/null; then
+            test "$(npm view "$name@$version" dist.integrity --registry "$reg")" = "$PLUR1BUS_INTEGRITY"
+            npm dist-tag add "$name@$version" hermes --registry "$reg"
+          else
+            npm publish "$RUNNER_TEMP/cyb3rb1ade-plur1bus-memory-$version.tgz" --ignore-scripts --registry "$reg" --tag hermes
+          fi
+          test "$(npm view "$name@$version" dist.integrity --registry "$reg")" = "$PLUR1BUS_INTEGRITY"
+          test "$(npm view "$name" dist-tags.hermes --registry "$reg")" = "$version"
+          test "$(npm view "$name" dist-tags.latest --registry "$reg")" = "$latest"
+          printf 'Verified %s@%s, hermes tag, latest=%s and integrity %s\n' "$name" "$version" "$latest" "$PLUR1BUS_INTEGRITY"
