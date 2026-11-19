@@ -13,10 +13,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read
     env:
       PLUR1BUS_SOURCE: c08f946d738922b1a46343e81fb04658458aaede
       PLUR1BUS_VERSION: 7.20.1-hermes.0
-      PLUR1BUS_INTEGRITY: sha512-W4njD5hPlp8QRBcWCb0DduOzn9IDs05YqJQ9Otr5JN9o3+OEqqR/zZjtiN/Y3jMjiyi6PP9wuFP2mgD+4WuLXg==
+      PLUR1BUS_INTEGRITY: pending-probe
+      PLUR1BUS_PROBE_RUN: pending-probe
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -31,13 +33,30 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$PLUR1BUS_SOURCE"
           test -z "$(git status --porcelain)"
-          cd "$GITHUB_WORKSPACE"
-          npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP" > "$RUNNER_TEMP/plur1bus-pack.json"
-          jq -e --arg version "$PLUR1BUS_VERSION" --arg digest "$PLUR1BUS_INTEGRITY" '
-            length == 1 and .[0].name == "@cyb3rb1ade/plur1bus-memory" and
-            .[0].version == $version and .[0].integrity == $digest and
+          mkdir "$RUNNER_TEMP/plur1bus-pack"
+          if [[ "$GITHUB_REF_NAME" == codex/hermes-registry-7201-publish ]]; then
+            GH_TOKEN="$RELEASE_READ_TOKEN" gh run download "$PLUR1BUS_PROBE_RUN" --repo "$GITHUB_REPOSITORY" --name hermes-npm-candidate --dir "$RUNNER_TEMP/plur1bus-pack"
+          else
+            npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/plur1bus-pack" > "$RUNNER_TEMP/plur1bus-pack/pack.json"
+          fi
+          jq -e --arg version "$PLUR1BUS_VERSION" '
+            length == 1 and .[0].name == "@cyb3rb1ade/plur1bus-memory" and .[0].version == $version and
             .[0].filename == ("cyb3rb1ade-plur1bus-memory-" + $version + ".tgz")
-          ' "$RUNNER_TEMP/plur1bus-pack.json"
+          ' "$RUNNER_TEMP/plur1bus-pack/pack.json"
+          jq '.[0] | {integrity,size,entryCount}' "$RUNNER_TEMP/plur1bus-pack/pack.json"
+          if [[ "$GITHUB_REF_NAME" == codex/hermes-registry-7201-publish ]]; then
+            file="$RUNNER_TEMP/plur1bus-pack/cyb3rb1ade-plur1bus-memory-$PLUR1BUS_VERSION.tgz"
+            test "sha512-$(openssl dgst -sha512 -binary "$file" | openssl base64 -A)" = "$PLUR1BUS_INTEGRITY"
+          fi
+        env:
+          RELEASE_READ_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: github.ref_name == 'codex/hermes-registry-7201-probe'
+        with:
+          name: hermes-npm-candidate
+          path: ${{ runner.temp }}/plur1bus-pack/
+          retention-days: 7
+          if-no-files-found: error
       - name: Verify registry and publish to the hermes channel
         shell: bash
         env:
@@ -58,7 +77,7 @@ jobs:
             test "$(npm view "$name@$version" dist.integrity --registry "$reg")" = "$PLUR1BUS_INTEGRITY"
             npm dist-tag add "$name@$version" hermes --registry "$reg"
           else
-            npm publish "$RUNNER_TEMP/cyb3rb1ade-plur1bus-memory-$version.tgz" --ignore-scripts --registry "$reg" --tag hermes
+            npm publish "$RUNNER_TEMP/plur1bus-pack/cyb3rb1ade-plur1bus-memory-$version.tgz" --ignore-scripts --registry "$reg" --tag hermes
           fi
           test "$(npm view "$name@$version" dist.integrity --registry "$reg")" = "$PLUR1BUS_INTEGRITY"
           test "$(npm view "$name" dist-tags.hermes --registry "$reg")" = "$version"
