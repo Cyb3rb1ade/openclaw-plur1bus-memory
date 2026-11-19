@@ -443,7 +443,7 @@ import { readJsonl } from "./lib/jsonl-utils.js";
 import { drainPostTurnWork, enqueuePostTurnWork } from "./lib/post-turn-queue.js";
 import { createJevChunkDecider, resolveJevApiKey } from "./lib/jev-chunk-decider.js";
 import { createSharedJevEmotionalPool, createJevEmotionRuntime } from "./lib/jevEmotionRuntime.js";
-import { createGroupReasoningFilter } from "./lib/group-reasoning-filter.js";
+import { createGroupReasoningFilter, collectHumanSenderIds } from "./lib/group-reasoning-filter.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -14004,6 +14004,8 @@ const NEO_EMBED_TIMEOUT = Symbol("plur1bus.neo.embedTimeout");
         enabled: true,
         prefixes: cfg.groupReasoningFilter?.prefixes,
         logger: api.logger,
+        // 7.20.2: Menschen aus den allowFrom-Listen werden nie gefiltert.
+        humanSenderIds: () => collectHumanSenderIds(runtimeIfUsable(api)?.config?.current?.() || api.config || {}),
       });
       for (const hookName of ["before_dispatch", "before_agent_reply"]) {
         try {

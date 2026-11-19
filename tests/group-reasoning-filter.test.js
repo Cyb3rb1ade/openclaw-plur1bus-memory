@@ -4,6 +4,7 @@ import {
   isForeignReasoningMessage,
   isGroupHookContext,
   createGroupReasoningFilter,
+  collectHumanSenderIds,
 } from "../lib/group-reasoning-filter.js";
 
 const GROUP_KEY = "agent:main:telegram:group:-1003839640481:topic:5778";
@@ -56,4 +57,51 @@ test("filter never touches direct chats or normal group messages", () => {
 test("disabled filter passes everything through", () => {
   const filter = createGroupReasoningFilter({ enabled: false });
   assert.equal(filter({ cleanedBody: "🧠 test" }, { sessionKey: GROUP_KEY }), undefined);
+});
+
+test("7.20.2: known human senders are never filtered", () => {
+  const logs = [];
+  const filter = createGroupReasoningFilter({
+    humanSenderIds: () => ["55736530", 1211667028],
+    logger: { info: (m) => logs.push(m) },
+  });
+  assert.equal(filter({ body: "🧠 Bernd, schau mal", isGroup: true, senderId: "55736530" }, {}), undefined);
+  assert.equal(filter({ body: "thinking: Bernhardine?", isGroup: true, senderId: "1211667028" }, {}), undefined);
+  assert.equal(filter({ cleanedBody: "💭 x" }, { sessionKey: GROUP_KEY, senderId: "telegram:55736530" }), undefined);
+  assert.equal(logs.length, 0);
+});
+
+test("7.20.2: bot senders are still filtered and the log names sender and prefix", () => {
+  const logs = [];
+  const filter = createGroupReasoningFilter({
+    humanSenderIds: () => ["55736530"],
+    logger: { info: (m) => logs.push(m) },
+  });
+  assert.deepEqual(filter({ body: "🧠 Ich prüfe zuerst", isGroup: true, senderId: "8123456789" }, { sessionKey: GROUP_KEY }), { handled: true });
+  assert.match(logs[0], /sender=8123456789/);
+  assert.match(logs[0], /prefix=🧠/);
+  assert.ok(!logs[0].includes("Ich prüfe"), "log must not contain message text");
+});
+
+test("7.20.2: a throwing human-id lookup degrades to the old behavior", () => {
+  const filter = createGroupReasoningFilter({ humanSenderIds: () => { throw new Error("boom"); } });
+  assert.deepEqual(filter({ body: "🧠 x", isGroup: true, senderId: "1" }, {}), { handled: true });
+});
+
+test("7.20.2: collectHumanSenderIds reads channel allowFrom lists, skips wildcards", () => {
+  const ids = collectHumanSenderIds({
+    channels: {
+      telegram: {
+        allowFrom: ["*"],
+        accounts: {
+          default: { allowFrom: [55736530], groupAllowFrom: ["*"] },
+          bernhardine: { allowFrom: [1211667028] },
+          heisenberg: { allowFrom: ["2048378590"], groupAllowFrom: ["2048378590"] },
+        },
+      },
+      discord: { allowFrom: ["123"] },
+    },
+  });
+  assert.deepEqual([...ids].sort(), ["1211667028", "123", "2048378590", "55736530"]);
+  assert.deepEqual([...collectHumanSenderIds(undefined)], []);
 });

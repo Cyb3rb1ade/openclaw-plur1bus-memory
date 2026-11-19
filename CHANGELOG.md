@@ -1,5 +1,11 @@
 # Changelog — PLUR1BUS Memory
 
+## 7.20.2-hermes.0 — 2026-11-19
+
+- Include OpenClaw v7.20.2. The group reasoning filter lets messages from
+  explicitly allowed senders through, even when their text matches a reasoning
+  prefix. Hermes handles incoming messages through its native gateway.
+
 ## 7.20.1-hermes.0 — 2026-11-19
 
 - Include the full OpenClaw v7.20.1 source, including the cross-connection
@@ -47,6 +53,17 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+
+## [7.20.2] — 2026-11-19
+
+### Fixed
+
+- The group reasoning filter no longer swallows messages from humans. It is meant for other bots'
+  streamed reasoning previews ("🧠 …"), but it also claimed a human's message when its text
+  started with one of the prefixes, so Bernd and Bernhardine silently ignored explicit mentions
+  in the group. Senders listed in any channel's `allowFrom`/`groupAllowFrom` (wildcards
+  excluded) now always pass. The log line names the sender id and the matched prefix, never
+  the message text.
 
 ## [7.20.1] — 2026-11-17
 
