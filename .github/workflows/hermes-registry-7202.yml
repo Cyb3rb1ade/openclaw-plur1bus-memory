@@ -17,8 +17,8 @@ jobs:
     env:
       PLUR1BUS_SOURCE: f8f24c445cc39c577fa7b8e93131616ea51b3310
       PLUR1BUS_VERSION: 7.20.2-hermes.0
-      PLUR1BUS_INTEGRITY: sha512-rRDkQ47nt/SxMovdGkGOEfk+h7TniMeC3yP9gOfFsm+4dpRGFLkNa4ywtS8PAhocjUbsoR/1G9XocD7zcN+Mkw==
-      PLUR1BUS_PROBE_RUN: "44440922570"
+      PLUR1BUS_INTEGRITY: sha512-zzw06+l40VCDT/EkZssFuh4GaRVt4g61ckDg0QKWlqEU+qhklYCLFQ19+K08FQ53S6A1D1VYMZCpw7dpDkxkEg==
+      PLUR1BUS_PROBE_RUN: "44562435002"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
