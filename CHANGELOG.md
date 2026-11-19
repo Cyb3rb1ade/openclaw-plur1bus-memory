@@ -6,6 +6,17 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.2] — 2026-11-19
+
+### Fixed
+
+- The group reasoning filter no longer swallows messages from humans. It is meant for other bots'
+  streamed reasoning previews ("🧠 …"), but it also claimed a human's message when its text
+  started with one of the prefixes, so Bernd and Bernhardine silently ignored explicit mentions
+  in the group. Senders listed in any channel's `allowFrom`/`groupAllowFrom` (wildcards
+  excluded) now always pass. The log line names the sender id and the matched prefix, never
+  the message text.
+
 ## [7.20.1] — 2026-11-17
 
 ### Fixed
