@@ -1,5 +1,11 @@
 # Changelog — PLUR1BUS Memory
 
+## 7.20.2-hermes.1 — 2026-11-19
+
+- Serialize local Sentence Transformers encoding and reranking across profiles
+  in each Hermes process to avoid a Metal/MPS abort during concurrent recall.
+  Local ONNX and remote providers retain their existing execution paths.
+
 ## 7.20.2-hermes.0 — 2026-11-19
 
 - Include OpenClaw v7.20.2. The group reasoning filter lets messages from

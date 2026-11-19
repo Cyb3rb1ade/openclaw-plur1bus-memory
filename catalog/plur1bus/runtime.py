@@ -87,6 +87,10 @@ _JINA_V3_MATRYOSHKA_DIMENSIONS = frozenset({32, 64, 128, 256, 512, 768, 1024})
 
 LOGGER = logging.getLogger(__name__)
 
+# Every profile uses this canonical runtime module. Keep Torch inference
+# single-flight across model instances to prevent overlapping MPS encoders.
+_TORCH_INFERENCE_LOCK = threading.Lock()
+
 # Mirror of upstream PLUR1BUS MAX_POSTPROCESSING_RETRIES (7.2.1 parity).
 MAX_CAPTURE_RETRIES = 5
 
@@ -308,7 +312,8 @@ class EmbeddingBackend:
         # was the local-provider half of the same bug fixed for omlx below.
         prefix = str(config.get("queryPrefix" if purpose == "query" else "passagePrefix",
                                  "query: " if purpose == "query" else "passage: "))
-        vector = model.encode(prefix + text, normalize_embeddings=True)
+        with _TORCH_INFERENCE_LOCK:
+            vector = model.encode(prefix + text, normalize_embeddings=True)
         result = [float(value) for value in vector.tolist()]
         expected = int(config.get("dimensions", len(result)))
         if len(result) != expected:
@@ -497,7 +502,9 @@ class RerankerBackend:
                                      trust_remote_code=False, revision=config.get("revision"),
                                      local_files_only=config.get("localFilesOnly") is True)
                 self._models[model_key] = model
-        scores = model.predict([(query, str(row.get("content", ""))) for row in rows])
+        pairs = [(query, str(row.get("content", ""))) for row in rows]
+        with _TORCH_INFERENCE_LOCK:
+            scores = model.predict(pairs)
         ranked = [dict(row, rerankScore=float(score)) for row, score in zip(rows, scores, strict=True)]
         return sorted(ranked, key=lambda row: row["rerankScore"], reverse=True)
 
