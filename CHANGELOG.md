@@ -1,5 +1,18 @@
 # Changelog — PLUR1BUS Memory
 
+## 7.20.1-hermes.0 — 2026-11-19
+
+- Include the full OpenClaw v7.20.1 source, including the cross-connection
+  LanceDB read fix, per-agent conversation compaction model picker, and Neo
+  worker recovery after OpenClaw removes a plugin capture copy.
+- Hermes already opens the LanceDB table for each Critical Push review and
+  classifies new records during capture. A native LanceDB regression verifies
+  the review sees a newly committed card from a second connection.
+- Configure the conversation compression model per profile in Hermes' own
+  Models settings. Hermes runs Neo capture on its Python executor and does
+  not use OpenClaw's Node worker launcher.
+
+
 ## 7.12.70-hermes.0 — build candidate
 
 - Upstream .62–.69 merged, including encoding, retrieval and migration tools.

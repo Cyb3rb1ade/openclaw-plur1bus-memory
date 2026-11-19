@@ -23,9 +23,16 @@ it as the backend's launch profile to edit its settings.
 The catalog bundle contains reviewable source only. It uses Hermes Package
 Management for Python dependencies. Apple Silicon, Linux x64/ARM64, and Windows
 x64 use the published Python dependency stack. For Windows ARM64, use the native
-installer on the [release page](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/7.19.3-hermes.2);
+installer on the [release page](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/7.20.1-hermes.0);
 the catalog cannot carry its native LanceDB/PyArrow wheels. The release page also
 has the signed macOS installer and step-by-step guides.
+
+## Conversation compression
+
+Set the summary model in Hermes Desktop under **Settings → Models → Auxiliary
+models → Compression**. Select the intended profile under **Applies to**.
+Hermes saves the choice in that profile. PLUR1BUS memory consolidation is a
+separate task and has its own model settings.
 
 ## Data and credentials
 
