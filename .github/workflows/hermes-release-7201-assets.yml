@@ -1,0 +1,45 @@
+name: Upload verified Hermes 7.20.1 ARM64 release assets
+on:
+  push:
+    branches: ['codex/hermes-release-assets-7201']
+permissions:
+  contents: write
+  actions: read
+jobs:
+  upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Upload exact accepted bytes to the existing release draft
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          test "$repo" = Cyb3rb1ade/openclaw-plur1bus-memory
+          tag=7.20.1-hermes.0
+          draft=450800160
+          src=c08f946d738922b1a46343e81fb04658458aaede
+          test "$(gh api "repos/$repo/git/ref/tags/$tag" --jq .object.type)" = tag
+          object="$(gh api "repos/$repo/git/ref/tags/$tag" --jq .object.sha)"
+          test "$(gh api "repos/$repo/git/tags/$object" --jq .object.sha)" = "$src"
+          gh api "repos/$repo/releases/$draft" | jq -e --arg tag "$tag" '.draft and .prerelease and .tag_name == $tag'
+          run=44440309750
+          gh run view "$run" -R "$repo" --json conclusion,headSha | jq -e --arg src "$src" '.conclusion == "success" and .headSha == $src'
+          cd "$RUNNER_TEMP"
+          gh run download "$run" -R "$repo" --name plur1bus-hermes-windows-arm64-pm-acceptance
+          cat > expected-sha256 <<'DIGESTS'
+          e307aae39bf22d1648f250a6636e3ecb791682e781ae0669607e1e790cfa6044  plur1bus-7.20.1-hermes.0-windows-arm64-setup-unsigned.exe
+          b973a4668c02db08bc13fd411c82ef27c564420cfb273f1b99352ba32c090ea5  plur1bus-7.20.1-hermes.0-windows-arm64.tar.gz
+          bd9ce046b3621806261448443fc24ac9faa75fbd557e2b46bca3ec911c5bd6ac  plur1bus-7.20.1-hermes.0-windows-arm64.zip
+          DIGESTS
+          sha256sum -c expected-sha256
+          while read -r expected name; do
+            existing="$(gh api "repos/$repo/releases/$draft" --jq ".assets[] | select(.name == \"$name\") | .digest")"
+            if [[ -n "$existing" ]]; then
+              test "$existing" = "sha256:$expected"
+              continue
+            fi
+            gh release upload "$tag" -R "$repo" "$name"
+          done < expected-sha256
