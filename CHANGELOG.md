@@ -35,6 +35,33 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [7.20.1] — 2026-11-17
+
+### Fixed
+
+- Neo worker no longer starts from a deleted plugin capture copy. Under OpenClaw 2026.11.5 the
+  runtime created by an earlier plugin generation spawned `neo-worker-runner.js` from a removed
+  `tmp/plugin-captures/…` directory (MODULE_NOT_FOUND on every Neo capture/drain job). Under a
+  capture copy the worker now starts from the installed extension, like the feature-cron runner.
+
+## [7.20.0] — 2026-11-13
+
+### Added
+
+- Dashboard card **Conversation compaction model**: one row per chat agent sets the model OpenClaw uses to summarize that agent's chat context (auto-compaction and `/compact`). The choice is written to `agents.entries.<id>.compaction.model`; other per-agent compaction settings such as `maxSummaryChars` are kept, and an empty choice removes the key. Each row says what applies without a choice: the shared `agents.defaults.compaction.model`, or the session's own model. The card is separate from the **Memory compaction** task, which is the nightly store cleanup.
+- The card needs an OpenClaw host that knows `agents.entries.<id>.compaction.model`. On a host without it nothing is written and the page reports `compaction_model_unsupported` instead of the generic failure.
+
+### Changed
+
+- The card reads its values from the running OpenClaw config. Saving does not touch the plugin's own config entry, so the plugin is not reloaded and the snapshot from its load would keep showing the previous choice.
+- A saved choice is shown at once. OpenClaw writes `openclaw.json` immediately but takes the change into its running config only after its reload check (measured: 13 seconds to 2 minutes); until then the card would have shown the previous choice next to the "saved" notice. The plugin remembers the write until the running config changes, for five minutes at most.
+
+## [7.19.4] — 2026-11-10
+
+### Fixed
+
+- Critical pushes arrived almost only after a gateway restart, often many at once. The db adapter behind `classify-recent` kept one LanceDB table per agent open but connected without `readConsistencyInterval`, while captures are written through MemoryDB's own connection. The cached table stayed on the version it was opened with, so every run between two restarts reported "no recent unclassified cards". The first run after a restart then pushed everything from the last 24 hours, and cards that were older than that window by then were never classified. The adapter now connects with `readConsistencyInterval: 0`, as MemoryDB does since 7.5.0. This also affects the other adapter readers (pending critical reviews, `/plur1bus critical`, `getCard`).
+
 ## [7.19.3] — 2026-11-09
 
 ### Changed
