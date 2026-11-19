@@ -17,8 +17,8 @@ jobs:
     env:
       PLUR1BUS_SOURCE: c08f946d738922b1a46343e81fb04658458aaede
       PLUR1BUS_VERSION: 7.20.1-hermes.0
-      PLUR1BUS_INTEGRITY: pending-probe
-      PLUR1BUS_PROBE_RUN: pending-probe
+      PLUR1BUS_INTEGRITY: sha512-rRDkQ47nt/SxMovdGkGOEfk+h7TniMeC3yP9gOfFsm+4dpRGFLkNa4ywtS8PAhocjUbsoR/1G9XocD7zcN+Mkw==
+      PLUR1BUS_PROBE_RUN: "44440922570"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -83,3 +83,22 @@ jobs:
           test "$(npm view "$name" dist-tags.hermes --registry "$reg")" = "$version"
           test "$(npm view "$name" dist-tags.latest --registry "$reg")" = "$latest"
           printf 'Verified %s@%s, hermes tag, latest=%s and integrity %s\n' "$name" "$version" "$latest" "$PLUR1BUS_INTEGRITY"
+
+  node-suite:
+    if: github.ref_name == 'codex/hermes-registry-7201-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: c08f946d738922b1a46343e81fb04658458aaede
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.21.0'
+      - name: Run the OpenClaw JavaScript release checks
+        run: |
+          npm ci --ignore-scripts
+          npm run lint
+          npm test
+          npm audit --omit=dev --audit-level=moderate
