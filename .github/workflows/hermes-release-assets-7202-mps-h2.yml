@@ -1,0 +1,55 @@
+name: Stage checked Hermes 7.20.2 assets
+on:
+  push:
+    branches: [codex/hermes-release-assets-7202-mps-h2]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_SOURCE: 3706c0573a086885b5183dd8bf4f06422da2601b
+      RELEASE_TAG: 7.20.2-hermes.2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify candidate and stage release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Cyb3rb1ade/openclaw-plur1bus-memory
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$EXPECTED_SOURCE"
+          draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json databaseId,isDraft,isPrerelease)
+          jq -e '.isDraft and .isPrerelease' <<< "$draft" >/dev/null
+          release_id=$(jq -r .databaseId <<< "$draft")
+          git worktree add --detach "$RUNNER_TEMP/source" "$EXPECTED_SOURCE"
+          staging="$RUNNER_TEMP/release-verification"
+          mkdir -p "$staging/macos"
+          cp .github/scripts/stage-hermes-7202-h2.py "$staging/stage.py"
+          gh run download 44805190234 --name hermes-npm-candidate --dir "$staging/npm-ci-pack" --repo "$GITHUB_REPOSITORY"
+          for name in 'plur1bus-7.20.2-hermes.2-macos-arm64.pkg' notarization-macos-arm64.json pkg-payload-acceptance.json signature-verification.txt macos-parent-artifact-equivalence.json; do
+            matching=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" | jq -cer --arg name "$name" '.assets[] | select(.name == $name and .state == "uploaded")')
+            asset_id=$(jq -r .id <<< "$matching")
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" -H 'Accept: application/octet-stream' > "$staging/macos/$name"
+            printf '%s  %s\n' "$(jq -r '.digest | sub("^sha256:"; "")' <<< "$matching")" "$staging/macos/$name" | sha256sum --check
+          done
+          python3 "$staging/stage.py" "$RUNNER_TEMP/source" "$EXPECTED_SOURCE" 44805189993 44805190209
+          cd "$staging/publish"
+          sha256sum --check SHA256SUMS
+          for path in *; do
+            digest="sha256:$(sha256sum "$path" | cut -d ' ' -f 1)"
+            existing=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" | jq -c --arg name "$path" '.assets[] | select(.name == $name)')
+            if [[ -z "$existing" ]]; then
+              gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "$path"
+            fi
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" | jq -e --arg name "$path" --arg digest "$digest" '.draft and (.assets | any(.name == $name and .state == "uploaded" and .digest == $digest))' >/dev/null
+          done
+          jq -r '.assets[]' "$staging/release-verification.json" | sort > "$staging/expected-assets.txt"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" | jq -r '.assets[].name' | sort > "$staging/actual-assets.txt"
+          diff -u "$staging/expected-assets.txt" "$staging/actual-assets.txt"
+          cat "$staging/release-verification.json"
