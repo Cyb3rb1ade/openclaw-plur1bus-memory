@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import threading
+
+from .torch_lock import TORCH_LOCK as _TORCH_LOCK
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -119,15 +121,16 @@ def _local_t2_classifier(config: dict[str, Any]) -> tuple[Callable[[str], dict[s
                 from transformers import AutoModelForSequenceClassification, AutoTokenizer  # type: ignore[import-not-found]
                 import torch  # type: ignore[import-not-found]
 
-                tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-                model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
-                model.eval()
+                with _TORCH_LOCK:
+                    tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+                    model = AutoModelForSequenceClassification.from_pretrained(model_name, local_files_only=True)
+                    model.eval()
                 label_map = config.get("labelMap") if isinstance(config.get("labelMap"), dict) else {}
                 id_to_label = getattr(model.config, "id2label", {})
 
                 def classify(text: str) -> dict[str, Any]:
                     inputs = tokenizer(text, truncation=True, max_length=512, return_tensors="pt")
-                    with torch.inference_mode():
+                    with _TORCH_LOCK, torch.inference_mode():
                         logits = model(**inputs).logits[0]
                     scores = logits.softmax(dim=-1).tolist()
                     index = max(range(len(scores)), key=scores.__getitem__)
@@ -143,12 +146,14 @@ def _local_t2_classifier(config: dict[str, Any]) -> tuple[Callable[[str], dict[s
                 prototypes = {str(name).lower(): str(example) for name, example in labels.items() if str(example).strip()}
                 if not prototypes:
                     return None, "sentence-transformers-labels-required"
-                model = SentenceTransformer(model_name, local_files_only=True)
                 names = list(prototypes)
-                vectors = model.encode([prototypes[name] for name in names], normalize_embeddings=True)
+                with _TORCH_LOCK:
+                    model = SentenceTransformer(model_name, local_files_only=True)
+                    vectors = model.encode([prototypes[name] for name in names], normalize_embeddings=True)
 
                 def classify(text: str) -> dict[str, Any]:
-                    vector = model.encode([text], normalize_embeddings=True)[0]
+                    with _TORCH_LOCK:
+                        vector = model.encode([text], normalize_embeddings=True)[0]
                     scores = [sum(float(a) * float(b) for a, b in zip(vector, prototype)) for prototype in vectors]
                     index = max(range(len(scores)), key=scores.__getitem__)
                     dominant = names[index]

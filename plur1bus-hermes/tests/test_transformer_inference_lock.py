@@ -67,3 +67,59 @@ def test_transformer_embedding_and_reranking_share_an_inference_lock(monkeypatch
         assert [row["content"] for row in ranking.result(timeout=5)] == ["match", "other"]
 
     assert peak == 1, "Torch inference overlapped across the embedder and reranker"
+
+
+def _second_plugin_copy(name):
+    """Import the plugin a second time under another name, as Hermes does for every further profile home
+    (``hermes_plugins.plur1bus__home_<digest>``): a module-level lock then exists once per copy."""
+    import importlib
+    import importlib.util
+    from pathlib import Path
+
+    import plur1bus_hermes
+
+    pkg_dir = Path(plur1bus_hermes.__file__).parent
+    spec = importlib.util.spec_from_file_location(name, pkg_dir / "__init__.py",
+                                                  submodule_search_locations=[str(pkg_dir)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return importlib.import_module(f"{name}.runtime")
+
+
+def test_every_plugin_copy_in_one_process_shares_the_torch_lock():
+    from plur1bus_hermes import runtime
+
+    name = "plur1bus_hermes_second_profile_copy"
+    try:
+        copy = _second_plugin_copy(name)
+        assert copy is not runtime
+        assert copy._TORCH_INFERENCE_LOCK is runtime._TORCH_INFERENCE_LOCK, \
+            "two profiles' copies of the plugin would run Torch on MPS at the same time"
+    finally:
+        for key in [k for k in sys.modules if k == name or k.startswith(name + ".")]:
+            del sys.modules[key]
+
+
+def test_loading_a_local_model_holds_the_torch_lock(monkeypatch, tmp_path):
+    from plur1bus_hermes.runtime import _TORCH_INFERENCE_LOCK
+
+    held = []
+
+    def construct(result):
+        held.append(_TORCH_INFERENCE_LOCK._is_owned())
+        return result
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(
+            SentenceTransformer=lambda *a, **k: construct(SimpleNamespace(
+                encode=lambda *a, **k: SimpleNamespace(tolist=lambda: [1.0, 2.0]))),
+            CrossEncoder=lambda *a, **k: construct(SimpleNamespace(predict=lambda pairs: [0.2, 0.9])),
+        ),
+    )
+    config = {"provider": "local-transformers", "dimensions": 2}
+    assert EmbeddingBackend(config, tmp_path)._embed_local(config, "text", purpose="query") == [1.0, 2.0]
+    RerankerBackend(config, tmp_path).rerank("query", [{"content": "a"}, {"content": "b"}])
+    assert held == [True, True], "a model was loaded onto the device outside the Torch lock"

@@ -1,5 +1,14 @@
 # Changelog — PLUR1BUS Memory
 
+## 7.20.2-hermes.2 — 2026-11-20
+
+- Make the Torch lock of 7.20.2-hermes.1 process-wide. Hermes imports the plugin
+  once per profile home, so its module-level lock existed once per profile and
+  two profiles could still load or run models on Metal/MPS at the same time,
+  which aborted the gateway (`failed assertion _status < MTLCommandBufferStatusCommitted`).
+  Loading a local Sentence Transformers model or reranker now holds the same lock
+  as inference, and the optional local emotion classifier uses it too.
+
 ## 7.20.2-hermes.1 — 2026-11-19
 
 - Serialize local Sentence Transformers encoding and reranking across profiles

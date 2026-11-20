@@ -87,9 +87,11 @@ _JINA_V3_MATRYOSHKA_DIMENSIONS = frozenset({32, 64, 128, 256, 512, 768, 1024})
 
 LOGGER = logging.getLogger(__name__)
 
-# Every profile uses this canonical runtime module. Keep Torch inference
-# single-flight across model instances to prevent overlapping MPS encoders.
-_TORCH_INFERENCE_LOCK = threading.Lock()
+# Keep Torch single-flight across model instances AND across the per-profile
+# copies of this plugin (Hermes imports it once per profile home): one
+# process-wide lock (torch_lock.py) for loading and for inference, or MPS
+# aborts the gateway process.
+from .torch_lock import TORCH_LOCK as _TORCH_INFERENCE_LOCK
 
 # Mirror of upstream PLUR1BUS MAX_POSTPROCESSING_RETRIES (7.2.1 parity).
 MAX_CAPTURE_RETRIES = 5
@@ -305,7 +307,8 @@ class EmbeddingBackend:
                     options["revision"] = config["revision"]
                 if "localFilesOnly" in config:
                     options["local_files_only"] = config["localFilesOnly"] is True
-                model = SentenceTransformer(model_name, cache_folder=str(cache_dir), **options)
+                with _TORCH_INFERENCE_LOCK:   # loading puts weights on the device (MPS)
+                    model = SentenceTransformer(model_name, cache_folder=str(cache_dir), **options)
                 self._models[model_key] = model
         # e5-family models are asymmetric like Qwen3: "query: " on questions,
         # "passage: " on stored text. Applying the query prefix to everything
@@ -498,9 +501,10 @@ class RerankerBackend:
         with self._lock:
             model = self._models.get(model_key)
             if model is None:
-                model = CrossEncoder(model_name, cache_dir=str(cache_dir), max_length=512,
-                                     trust_remote_code=False, revision=config.get("revision"),
-                                     local_files_only=config.get("localFilesOnly") is True)
+                with _TORCH_INFERENCE_LOCK:   # loading puts weights on the device (MPS)
+                    model = CrossEncoder(model_name, cache_dir=str(cache_dir), max_length=512,
+                                         trust_remote_code=False, revision=config.get("revision"),
+                                         local_files_only=config.get("localFilesOnly") is True)
                 self._models[model_key] = model
         pairs = [(query, str(row.get("content", ""))) for row in rows]
         with _TORCH_INFERENCE_LOCK:
