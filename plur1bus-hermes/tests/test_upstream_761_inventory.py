@@ -8,6 +8,11 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE = "bcb80ccef6ce5ab9e4604cfe923901885cc59d9e"
 TARGET = "039329d0c74525448190b0bd2ec3ef3551ed168f"
 HERMES_BASE = "34dfd2102a079ec818818aca39dba81134b69d2a"
+# The 7.20.2 Hermes.2 Torch fix intentionally updates this native path.
+# Keep the reviewed revision pinned so later drift still fails the inventory.
+HERMES_REVIEWED_UPDATES = {
+    "plur1bus-hermes/src/plur1bus_hermes/cognition.py": "c8366c240a892862c1cb22036f0efc63ad105b57",
+}
 
 
 def git(*args):
@@ -93,5 +98,6 @@ class Upstream761InventoryTests(unittest.TestCase):
                 # Compare canonical Git blobs, applying this checkout's clean
                 # filters. Windows autocrlf changes working-tree bytes without
                 # changing source; binary files remain byte-exact.
-                expected = git("rev-parse", HERMES_BASE + ":" + path).strip()
+                baseline = HERMES_REVIEWED_UPDATES.get(path, HERMES_BASE)
+                expected = git("rev-parse", baseline + ":" + path).strip()
                 self.assertEqual(git("hash-object", "--path=" + path, path).strip(), expected)
