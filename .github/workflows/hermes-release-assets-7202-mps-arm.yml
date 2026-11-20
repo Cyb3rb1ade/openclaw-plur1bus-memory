@@ -1,0 +1,40 @@
+name: Upload verified Hermes 7.20.2 assets (arm)
+'on':
+  push:
+    branches:
+    - codex/hermes-release-assets-7202-mps-arm
+permissions:
+  contents: write
+  actions: read
+jobs:
+  upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - name: Stage checked bytes on the release draft
+      shell: bash
+      run: "set -euo pipefail\nrepo=Cyb3rb1ade/openclaw-plur1bus-memory\ntest \"$GITHUB_REPOSITORY\"\
+        \ = \"$repo\"\ntag=7.20.2-hermes.1\ndraft=451730486\nsource=924e9ca0ad702bb4d2084fa3aa78bfde837dc9bc\n\
+        object=$(gh api \"repos/$repo/git/ref/tags/$tag\" --jq .object.sha)\ntest\
+        \ \"$(gh api \"repos/$repo/git/tags/$object\" --jq .object.sha)\" = \"$source\"\
+        \ngh api \"repos/$repo/releases/$draft\" | jq -e --arg tag \"$tag\" '.draft\
+        \ and .prerelease and .tag_name == $tag'\ncd \"$RUNNER_TEMP\"\nupload() {\n\
+        \        path=$1\n        name=$2\n        digest=$3\n        test \"$(sha256sum\
+        \ \"$path\" | cut -d' ' -f1)\" = \"$digest\"\n        result=$(gh api \"repos/$repo/releases/$draft\"\
+        \ | jq -c --arg name \"$name\" '.assets[] | select(.name == $name)')\n   \
+        \     if [[ -n \"$result\" ]]; then\n            jq -e --arg digest \"sha256:$digest\"\
+        \ '.state == \"uploaded\" and .digest == $digest' <<< \"$result\"\n      \
+        \      return\n        fi\n        if [[ \"$path\" != \"$name\" ]]; then cp\
+        \ \"$path\" \"$name\"; fi\n        gh release upload \"$tag\" --repo \"$repo\"\
+        \ \"$name\"\n        gh api \"repos/$repo/releases/$draft\" | jq -e --arg\
+        \ name \"$name\" --arg digest \"sha256:$digest\" '.assets[] | select(.name\
+        \ == $name) | .state == \"uploaded\" and .digest == $digest'\n    }\ngh run\
+        \ download 44584593686 --repo \"$repo\" --name plur1bus-hermes-windows-arm64-pm-acceptance\
+        \ --dir package-0\nupload package-0/plur1bus-7.20.2-hermes.1-windows-arm64.tar.gz\
+        \ plur1bus-7.20.2-hermes.1-windows-arm64.tar.gz 863cf8e99601b075cc308e217c47808e61e9b231b35bb538f7537b30b83b9ec1\n\
+        upload package-0/plur1bus-7.20.2-hermes.1-windows-arm64.zip plur1bus-7.20.2-hermes.1-windows-arm64.zip\
+        \ 200e1d05f8711abf4e605047abe9f091077aa3a958c04c9a27d5867808f5d6be\nupload\
+        \ package-0/plur1bus-7.20.2-hermes.1-windows-arm64-setup-unsigned.exe plur1bus-7.20.2-hermes.1-windows-arm64-setup-unsigned.exe\
+        \ 85cb4cd1bb1b7cdae6de2abdcd8193ad9473298347f6c32d137073205e71a17f\n"
