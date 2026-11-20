@@ -1,0 +1,53 @@
+name: Upload verified Hermes 7.20.2 assets (standard)
+'on':
+  push:
+    branches:
+    - codex/hermes-release-assets-7202-mps-standard
+permissions:
+  contents: write
+  actions: read
+jobs:
+  upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - name: Stage checked bytes on the release draft
+      shell: bash
+      run: "set -euo pipefail\nrepo=Cyb3rb1ade/openclaw-plur1bus-memory\ntest \"$GITHUB_REPOSITORY\"\
+        \ = \"$repo\"\ntag=7.20.2-hermes.1\ndraft=451730486\nsource=924e9ca0ad702bb4d2084fa3aa78bfde837dc9bc\n\
+        object=$(gh api \"repos/$repo/git/ref/tags/$tag\" --jq .object.sha)\ntest\
+        \ \"$(gh api \"repos/$repo/git/tags/$object\" --jq .object.sha)\" = \"$source\"\
+        \ngh api \"repos/$repo/releases/$draft\" | jq -e --arg tag \"$tag\" '.draft\
+        \ and .prerelease and .tag_name == $tag'\ncd \"$RUNNER_TEMP\"\nupload() {\n\
+        \        path=$1\n        name=$2\n        digest=$3\n        test \"$(sha256sum\
+        \ \"$path\" | cut -d' ' -f1)\" = \"$digest\"\n        result=$(gh api \"repos/$repo/releases/$draft\"\
+        \ | jq -c --arg name \"$name\" '.assets[] | select(.name == $name)')\n   \
+        \     if [[ -n \"$result\" ]]; then\n            jq -e --arg digest \"sha256:$digest\"\
+        \ '.state == \"uploaded\" and .digest == $digest' <<< \"$result\"\n      \
+        \      return\n        fi\n        if [[ \"$path\" != \"$name\" ]]; then cp\
+        \ \"$path\" \"$name\"; fi\n        gh release upload \"$tag\" --repo \"$repo\"\
+        \ \"$name\"\n        gh api \"repos/$repo/releases/$draft\" | jq -e --arg\
+        \ name \"$name\" --arg digest \"sha256:$digest\" '.assets[] | select(.name\
+        \ == $name) | .state == \"uploaded\" and .digest == $digest'\n    }\ngh run\
+        \ download 44584593463 --repo \"$repo\" --name plur1bus-hermes-ubuntu-24.04\
+        \ --dir package-0\nupload package-0/plur1bus-7.20.2-hermes.1.tar.gz plur1bus-7.20.2-hermes.1-linux-x64.tar.gz\
+        \ db344359dfed9afc2f58747894cd142ded6ccd04353201f33c2f6de943a7f703\nupload\
+        \ package-0/plur1bus-7.20.2-hermes.1.zip plur1bus-7.20.2-hermes.1-linux-x64.zip\
+        \ 58f61dbe8ccde4943fcecf10d2ae508ceb75cf70d8c0eb2f1ea8fa04caa4ae77\ngh run\
+        \ download 44584593463 --repo \"$repo\" --name plur1bus-hermes-ubuntu-24.04-arm\
+        \ --dir package-1\nupload package-1/plur1bus-7.20.2-hermes.1.tar.gz plur1bus-7.20.2-hermes.1-linux-arm64.tar.gz\
+        \ a4870f15d96b4e9d9fc0e6e338ab84ecb86a37c79abc41bf89abd3a86537b748\nupload\
+        \ package-1/plur1bus-7.20.2-hermes.1.zip plur1bus-7.20.2-hermes.1-linux-arm64.zip\
+        \ 0499c003dad60982df7c6de579aa04cd2854f1700b193774ec3c675a42459cfe\ngh run\
+        \ download 44584593463 --repo \"$repo\" --name plur1bus-hermes-windows-2025\
+        \ --dir package-2\nupload package-2/plur1bus-7.20.2-hermes.1-windows-x64.tar.gz\
+        \ plur1bus-7.20.2-hermes.1-windows-x64.tar.gz 4ed96b4ac4f77037911035013f36977f0c4b1993fded194c1ab03e914d79fffd\n\
+        upload package-2/plur1bus-7.20.2-hermes.1-windows-x64.zip plur1bus-7.20.2-hermes.1-windows-x64.zip\
+        \ 77f48dc8a9d08569bd05aed78e291d35b7701144dc6dcac67113c9d9a9987a8d\nupload\
+        \ package-2/plur1bus-7.20.2-hermes.1-windows-x64-setup-unsigned.exe plur1bus-7.20.2-hermes.1-windows-x64-setup-unsigned.exe\
+        \ c3e556e40db12b5181783f421eeb48d302790a9542cbbb35e9914aee5a1eb37e\ngh run\
+        \ download 44584768045 --repo \"$repo\" --name hermes-npm-candidate --dir\
+        \ package-3\nupload package-3/cyb3rb1ade-plur1bus-memory-7.20.2-hermes.1.tgz\
+        \ cyb3rb1ade-plur1bus-memory-7.20.2-hermes.1.tgz af068486b3170ab44c12d04d06c4875a328778418a2f7b4cff8160157902f897\n"
