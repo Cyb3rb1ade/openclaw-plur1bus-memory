@@ -53,6 +53,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.27** — Model selections share provider groups and natural sorting; catalog reconciliation keeps referenced models and never rewrites routing. Read-only recall comparison (`scripts/compare-recall.mjs`, optional conservative Jev prefilter); provider ACL is checked right before reranking, and a reranker may declare an empty result valid.
 - **7.18.28** — Reranker order survives the namespace merge and the recall budget (`preserveOrder` from `rerankScore`); duplicate rerank indices are ignored; only an explicit `reranker.candidates` caps the rerank pool; a knowledge cache with a failed section is not written; a failed graph-hydration relevance check rejects the row. The open PR #257 fixes the same area differently and needs a rebase against this port.
 - **7.18.29** — The dashboard shows whether a Jev credential is configured and where it comes from (config or environment), never the value.
+- **7.18.30** — Feature-cron clients retry only the Gateway `UNAVAILABLE` rejection of a retired PLUR1BUS instance, three times after 5/10/15 s; intermediate rejections stay silent, exhaustion is a visible error.
 
 ### Ported from 7.18.5–7.18.20
 
