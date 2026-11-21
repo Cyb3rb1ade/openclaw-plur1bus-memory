@@ -56,6 +56,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.18.30** — Feature-cron clients retry only the Gateway `UNAVAILABLE` rejection of a retired PLUR1BUS instance, three times after 5/10/15 s; intermediate rejections stay silent, exhaustion is a visible error.
 - **7.18.31** — Skill Miner separates genuine low-confidence decisions from technical failures (only genuine ones are reused for seven days), compares same-owner workflows by content, adds focused topic cohorts, and extends mined skills through Workshop update proposals; the aggregate run report carries the new counters.
 - **7.19.0** — Independent incoming Jev emotion owner (`emotion.jev`, shadow/active, per agent) and the bilingual Telegram speech adapter (`scripts/plan-speech.mjs`, `scripts/telegramTts/`). On main the engine builds the shared pool and runtime; `lib/jevEmotionRuntime.js` returns its hook list (`hooks`) instead of taking the host API, and the adapter registers it right after the Neo warm-up. `@huggingface/transformers` 4.3.1 → 4.3.2, `zod` override 4.6.6 → 4.6.7.
+- **7.19.1** — The Telegram morning review lists notes by title with "… and N more", states the risk as a sentence, shows system notices once, drops the time from the title and names a real next command (`/plur1bus review quickapply`).
 
 ### Ported from 7.18.5–7.18.20
 
