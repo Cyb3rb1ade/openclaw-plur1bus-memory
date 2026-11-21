@@ -62,6 +62,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **7.19.4** — The DB adapter connects with `readConsistencyInterval: 0`, so classify-recent sees cards written after the table was opened. Main already had this (E1 Task 8); the port adds the release regression test.
 - **7.20.0** — Dashboard card "Conversation compaction model": one row per chat agent writes `agents.entries.<id>.compaction.model` in the OpenClaw config (`compaction_model_unsupported` on hosts without it); values come from the running host config (`liveHostConfig`).
 - **7.20.1** — Under a plugin capture copy the Neo worker starts from the installed extension (no MODULE_NOT_FOUND after OpenClaw removes the copy); a saved compaction model the host has not reloaded yet stays visible (`createPendingCompactionModels`).
+- **7.20.2** — Senders listed in a channel's `allowFrom`/`groupAllowFrom` (wildcards excluded) always pass the group reasoning filter (`collectHumanSenderIds`, wired in the adapter). The log line names the matched prefix and the sender as a hash (main logs no raw peer ids).
 
 ### Ported from 7.18.5–7.18.20
 

@@ -61,7 +61,7 @@ import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { warnIfStoreInsideHarnessHome } from "../../lib/setup/harness-coexistence.js";
 import { formatRegistrationTrace, recordRegistration } from "../../lib/register-trace.js";
-import { createGroupReasoningFilter } from "../../lib/group-reasoning-filter.js";
+import { createGroupReasoningFilter, collectHumanSenderIds } from "../../lib/group-reasoning-filter.js";
 import {
   buildWorkspaceReviewCronJobs,
   printMorningReviewCronCommand,
@@ -669,6 +669,8 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       enabled: true,
       prefixes: cfg.groupReasoningFilter?.prefixes,
       logger: host.logger,
+      // 7.20.2: Menschen aus den allowFrom-Listen werden nie gefiltert.
+      humanSenderIds: () => collectHumanSenderIds(host.runtime?.config?.current?.() || api.config || {}),
     });
     for (const hookName of ["before_dispatch", "before_agent_reply"]) {
       try {
