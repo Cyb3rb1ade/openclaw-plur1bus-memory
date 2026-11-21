@@ -51,7 +51,7 @@ import { buildMaintenanceNudges, completePendingConfirmation, findNeoRecord, gua
 import { createEngine } from "../../engine/create-engine.js";
 import { internalsOf } from "../../engine/internals.js";
 import { createHostServices } from "../../lib/host-services.js";
-import { shouldCoordinateLocalModelGeneration, configMutationLogNotice, runtimeIfUsable } from "../../lib/runtime-shutdown.js";
+import { shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "../../lib/runtime-shutdown.js";
 import { registerAfterthoughtActivityHooks } from "./afterthought-hooks.js";
 import { observeAfterthoughtActivity } from "../../lib/afterthought-reflection.js";
 import { createAfterthoughtHost } from "./afterthought-host.js";
@@ -552,7 +552,7 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     observe: observeAfterthoughtActivity,
     classifyIncognito: internals.classifyHostIncognitoSession,
     isAllowed: (event, ctx) => automaticWorkspacePolicyDecision(event, ctx).allowed,
-    resolveSession: ({ agentId, sessionKey }) => runtimeIfUsable(api)?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
+    resolveSession: ({ agentId, sessionKey }) => host.runtime?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
   };
   registerAfterthoughtActivityHooks({ ...afterthoughtActivityOptions, phases: ["start"] });
 
