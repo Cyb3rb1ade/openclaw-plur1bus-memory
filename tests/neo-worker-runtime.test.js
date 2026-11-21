@@ -250,3 +250,14 @@ describe("neo worker runtime", () => {
     }
   });
 });
+
+it("Neo worker runner path leaves a plugin capture copy for the installed extension", async () => {
+  const { stableNeoWorkerRunnerPath } = await import("../lib/neo-worker-runtime.js");
+  const { join, sep } = await import("node:path");
+  const state = join(sep, "root", ".openclaw");
+  const capture = join(state, "tmp", "plugin-captures", "uuid", "captures", "openclaw-plugin-build-x", "package-0", "node_modules", "memory-lancedb-namespaced", "lib", "neo-worker-runner.js");
+  const installed = join(state, "extensions", "memory-lancedb-namespaced", "lib", "neo-worker-runner.js");
+  assert.equal(stableNeoWorkerRunnerPath(capture, (path) => path === installed), installed);
+  assert.equal(stableNeoWorkerRunnerPath(capture, () => false), capture);
+  assert.equal(stableNeoWorkerRunnerPath(installed, () => true), installed);
+});

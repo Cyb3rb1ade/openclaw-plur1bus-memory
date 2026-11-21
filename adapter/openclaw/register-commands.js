@@ -39,7 +39,7 @@ import { resolveEffectiveConfig } from "../../lib/setup/config-contract.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { createCompactionRunner, isPartitionId } from "../../lib/setup/control-ui-compaction.js";
 import { registerControlUiRuntime } from "../../lib/setup/control-ui-plugin-runtime.js";
-import { applyControlUiWriteAction, createCaptureChunkingMutator, createCompactionModelMutator, createJevApiKeyMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
+import { applyControlUiWriteAction, createCaptureChunkingMutator, createCompactionModelMutator, createPendingCompactionModels, createJevApiKeyMutator, createConfirmationStore, createEmbeddingProfileMutator, createFeatureModelMutator, createChatModelMutator, createFormTokenStore, createRerankerMutator, createSettingMutator, rerankerKeyConfigured } from "../../lib/setup/control-ui-write.js";
 import { registerFeatureCronNativeDispatch, loadOpenClawPluginSdkRuntime } from "../../lib/setup/feature-cron-plugin-runtime.js";
 import { resolveAgentWorkspaceDir } from "../../lib/setup/memory-host-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "../../lib/setup/obsidian-vault-plugin-runtime.js";
@@ -484,6 +484,8 @@ export function registerChatCommands(ctx) {
       "memory-lancedb-namespaced: controlUi.writeActions is set but OpenClaw config mutation is unavailable; the dashboard stays read-only",
     );
   }
+  // 7.20.1: a saved compaction model the host has not yet reloaded stays visible.
+  const pendingCompactionModels = createPendingCompactionModels();
   const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
     const confirmations = createConfirmationStore();
     const setFeatureModel = createFeatureModelMutator({ api });
@@ -492,7 +494,7 @@ export function registerChatCommands(ctx) {
       getHostConfig: () => host.runtime?.config?.current?.() ?? api.config ?? {},
       loadModelSession: () => loadOpenClawPluginSdkRuntime("model-session-runtime"),
     });
-    const setCompactionModel = createCompactionModelMutator({ api });
+    const setCompactionModel = createCompactionModelMutator({ api, pending: pendingCompactionModels });
     const setCaptureChunking = createCaptureChunkingMutator({ api });
     const setJevApiKey = createJevApiKeyMutator({ api });
     const setSetting = createSettingMutator({
@@ -643,7 +645,7 @@ export function registerChatCommands(ctx) {
         return buildControlPlaneProjection({
           config: cfg,
           hostConfig: api.config,
-          liveHostConfig: host.runtime?.config?.current?.() ?? null,
+          liveHostConfig: pendingCompactionModels.overlay(host.runtime?.config?.current?.() ?? null),
           obsidianVault: {
             configured: configuredObsidianWorkspaces.length > 0,
             configuredCount: configuredObsidianWorkspaces.length,
