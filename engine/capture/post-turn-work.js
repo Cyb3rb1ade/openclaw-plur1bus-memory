@@ -41,18 +41,62 @@ import { filterAlreadyEpisoded, mergeEpisodedTurnIds } from "../../lib/episode-w
 import { extractEpisodesWithState, writeEpisodeToVault } from "../../lib/episodes.js";
 import { withLlmCallContext } from "../../lib/llm-result-cache.js";
 import { resolveMemoryRequestContext } from "../../lib/memory-request-context.js";
+import { safeDebug } from "../../lib/safe-logging.js";
+import { memoryContextFromPrincipal, principalFromMemoryContext } from "../identity/principal.js";
 import { EPISODED_TURN_ID_MEMORY } from "../runtime/constants.js";
+
+/**
+ * The request context and ACL bindings a light dream writes its insights
+ * under. A caller-resolved memory context (Engine.capture's Principal) is
+ * used as is; only without one does the hook context get re-resolved
+ * (`resolveFallback`, the adapter path - unchanged).
+ * @param {object|null|undefined} memoryCtx
+ * @param {() => object} resolveFallback
+ * @returns {{requestContext: object|null, aclBindings: object|null}}
+ */
+export function lightDreamIdentity(memoryCtx, resolveFallback) {
+  let requestContext = memoryCtx ?? null;
+  if (!requestContext) {
+    try {
+      requestContext = resolveFallback();
+    } catch (_) {
+      requestContext = null;
+    }
+  }
+  const aclBindings = requestContext
+    ? (requestContext.userPrincipal
+      ? { scope: "user", agentId: requestContext.agentId, workspaceIdentity: "", ownerUserId: requestContext.userPrincipal }
+      : { scope: "workspace", agentId: requestContext.agentId, workspaceIdentity: requestContext.workspaceIdentity, ownerUserId: "" })
+    : null;
+  return { requestContext, aclBindings };
+}
 
 /**
  * The hook-context fields the two post-turn runs read. Stored on the queue
  * entry so the cron can reconstruct the work without the original event.
  *
+ * An Engine caller's identity is not in the hook context (it carries only
+ * agent, workspace and session), so the resolved memory context travels as a
+ * serializable `principal` next to it: the deferred light dream must write
+ * under the same scope and owner the inline path would. The principal holds
+ * the stable user hash, never the raw user id.
+ *
  * @param {object} [ctx]
+ * @param {object|null} [memoryCtx] Caller-resolved memory request context (Engine.capture).
  * @returns {object}
  */
-export function postTurnContext(ctx = {}) {
+export function postTurnContext(ctx = {}, memoryCtx = null) {
   const pick = (value) => (typeof value === "string" || typeof value === "number" ? value : undefined);
+  let principal;
+  if (memoryCtx && typeof memoryCtx === "object" && typeof memoryCtx.agentId === "string") {
+    try {
+      principal = principalFromMemoryContext(memoryCtx, memoryCtx.trust);
+    } catch (_) {
+      principal = undefined;
+    }
+  }
   return {
+    ...(principal ? { principal } : {}),
     workspaceDir: pick(ctx?.workspaceDir),
     workspaceKey: pick(ctx?.workspaceKey),
     sessionKey: pick(ctx?.sessionKey),
@@ -89,7 +133,27 @@ export function createPostTurnWorkers(deps) {
     episodeExtractionLlmCfg,
   } = deps;
 
-  const runLightDreamPostTurn = ({ agentId, ctx, neoStore, db, normalizedTurns, digestHash, processedDreams = [], signal = null }) => {
+  /**
+   * Memory context of a queued entry: its serialized principal, re-validated
+   * through the same path Engine.capture used. Null for adapter entries (no
+   * principal), which re-resolve from the hook-context fields as before.
+   */
+  const memoryContextOfEntry = (ctx) => {
+    if (!ctx?.principal || typeof ctx.principal !== "object") return null;
+    try {
+      return memoryContextFromPrincipal(ctx.principal, {
+        workspaceDir: ctx.workspaceDir,
+        sessionKey: ctx.sessionKey,
+        workspaceAliases: memoryWorkspaceAliases,
+        logger,
+      });
+    } catch (error) {
+      safeDebug(logger, "post-turn-work.principal", error);
+      return null;
+    }
+  };
+
+  const runLightDreamPostTurn = ({ agentId, ctx, memoryCtx = null, neoStore, db, normalizedTurns, digestHash, processedDreams = [], signal = null }) => {
     let personaIdentityText = "";
     if (ctx?.workspaceDir) {
       for (const identityFile of ["SOUL.md", "IDENTITY.md", "AGENT.md"]) {
@@ -99,9 +163,14 @@ export function createPostTurnWorkers(deps) {
         } catch (_) { /* try next */ }
       }
     }
-    let lightRequestContext = null;
-    try {
-      lightRequestContext = resolveMemoryRequestContext({
+    // A queued Engine entry that carries a principal never falls back to the
+    // hook-context fields: if its principal cannot be rebuilt, the dream is
+    // written without ACL bindings (agent-private), not widened to workspace.
+    const { requestContext: lightRequestContext, aclBindings: lightAclBindings } = lightDreamIdentity(
+      memoryCtx ?? memoryContextOfEntry(ctx),
+      () => {
+        if (!memoryCtx && ctx?.principal) throw new Error("queued principal could not be rebuilt");
+        return resolveMemoryRequestContext({
         agentId,
         workspaceDir: ctx?.workspaceDir,
         workspaceKey: ctx?.workspaceKey,
@@ -109,15 +178,9 @@ export function createPostTurnWorkers(deps) {
         channel: ctx?.channel ?? ctx?.messageProvider,
         accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
         chatId: ctx?.chatId,
-      }, { workspaceAliases: memoryWorkspaceAliases });
-    } catch (_) {
-      lightRequestContext = null;
-    }
-    const lightAclBindings = lightRequestContext
-      ? (lightRequestContext.userPrincipal
-        ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
-        : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
-      : null;
+        }, { workspaceAliases: memoryWorkspaceAliases });
+      },
+    );
     return lightDream({
       turns: normalizedTurns,
       neoStore,
