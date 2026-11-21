@@ -30,6 +30,8 @@ write "the host's `registerTool`" instead.
 | `join-recall.js` | `prependContextFromRecall` — the host's join-and-cap step over `RecallResult` (`lib/inject-budget.js`'s `applyGlobalInjectBudget`), producing the `{ prependContext }` shape `before_prompt_build` expects |
 | `turn-principal.js` | resolves a `Principal`/`AgentContext` from an OpenClaw hook's own arguments, for the recall/capture/command paths that need one |
 | `host-probes.js` | OpenClaw-specific capability probing (`typeof api.X === "function"` checks) used while building `host.capabilities` during registration |
+| `afterthought-hooks.js` | `registerAfterthoughtActivityHooks` (7.18.25): conversation activity for idle-time afterthoughts — `before_prompt_build` (priority 1000, registered after the Neo service pair) and `agent_end` (registered after the voice-mode override) |
+| `afterthought-host.js` | `createAfterthoughtHost` (7.18.25): reads and delivers into the original public session for the afterthought job; handed to the engine as `host.capabilities.createAfterthoughtHost` |
 
 ## Registration order is part of the contract
 

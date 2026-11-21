@@ -26,7 +26,7 @@ import { resolveLancedbOptimizePlan, summarizeLancedbOptimize } from "../../lib/
 import { LLM_RESULT_CACHE_PURPOSES, withLlmCallContext } from "../../lib/llm-result-cache.js";
 import { LLM_ROUTE_KINDS, isLlmRouteAvailable } from "../../lib/llm-router.js";
 import { pruneGraphEdges } from "../../lib/memory-graph.js";
-import { createNeoStore } from "../../lib/neo-arch.js";
+import { createNeoStore, pruneHookNeoStoreFiles } from "../../lib/neo-arch.js";
 import { drainPostTurnWork } from "../../lib/post-turn-queue.js";
 import { createPostTurnWorkers } from "../capture/post-turn-work.js";
 import { readReplyOutcomeLog } from "../../lib/reply-outcome-tracking.js";
@@ -113,8 +113,10 @@ export function createInternalJobBodies(ctx) {
         }
         const sessionRuntime = commandCtx?.runtimeContext?.llm;
         const dailyRuns = [];
+        const dailyStoreDirs = new Set();
         for (const dailyPartition of buildRemPartitions(memoryCtx)) {
           const dailyStore = createOwnerBoundNeoStore(dailyPartition);
+          if (dailyStore?.paths?.workspaceDir) dailyStoreDirs.add(dailyStore.paths.workspaceDir);
           const dailyWorkspaceDir = dailyPartition.scope === "workspace"
             && memoryCtx?.workspaceDir
             && dailyPartition.workspaceIdentity === memoryCtx.workspaceIdentity
@@ -184,6 +186,19 @@ export function createInternalJobBodies(ctx) {
         } catch (graphErr) {
           graphPrune = { error: String(graphErr?.message || graphErr) };
         }
+        // 7.19.3: Die Partitionen oben bereinigen owner-gebundene Stores
+        // (acl-owner-v1_*); die Hooks schreiben aber in diesen Store.
+        // Dessen Dateien wurden bisher nur durch den Append-Cap gekuerzt.
+        let hookStorePrune = null;
+        try {
+          hookStorePrune = pruneHookNeoStoreFiles(commandStore, dailyStoreDirs);
+          if (!hookStorePrune.skipped) {
+            host.logger.info(`daily-consolidation[${internalAgent}]: neo hook-store prune workspace=${shortHash(hookStorePrune.workspace)} removedAge=${hookStorePrune.removedAge} removedHard=${hookStorePrune.removedHard} removedInjected=${hookStorePrune.removedInjected} removedDup=${hookStorePrune.removedDup} archived=${hookStorePrune.archived}`);
+          }
+        } catch (pruneErr) {
+          hookStorePrune = { error: String(pruneErr?.message || pruneErr) };
+          host.logger.warn(`daily-consolidation[${internalAgent}]: neo hook-store prune failed: ${describeError(pruneErr)}`);
+        }
         // 7.12.28: Kandidaten-Metadatenindex auf die juengste Revision je ID
         // ziehen (Cap = neo.recall.global.maxCandidates), bevor der Sidecar
         // kompaktiert wird — dessen Live-Menge liest den Index mit.
@@ -230,6 +245,7 @@ export function createInternalJobBodies(ctx) {
           deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
           merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
           graphPrune,
+          hookStorePrune,
           candidateIndex,
           vectorCompaction,
           lancedbOptimize,
@@ -269,7 +285,7 @@ export function createInternalJobBodies(ctx) {
                 };
             const text = await callLlm([{ role: "user", content: prompt }], {
               ...cpLlmCfg,
-              maxTokens: 16,
+              maxTokens: 24,
               callContext,
             });
             return { text: text || "" };
@@ -569,11 +585,22 @@ export function createInternalJobBodies(ctx) {
           const disabledResult = { job: "afterthought", skipped: true, reason: "disabled" };
           return jobCtx.skip("disabled", cronInternal ? formatAfterthoughtCronReply(disabledResult) : formatJsonCommandResult(disabledResult));
         }
-        const { runAfterthoughtJob } = await import("../../lib/afterthought.js");
         const sessionRuntime = commandCtx?.runtimeContext?.llm;
-        const result = await runAfterthoughtJob({
+        // 7.18.25: Nachgedanken nach Gesprächsruhe lesen die Originalsitzung
+        // und stellen in sie zu. Das kann nur der Host (OpenClaw-Adapter:
+        // host.capabilities.createAfterthoughtHost); ohne ihn bleibt der
+        // bisherige Journal-basierte Job.
+        const createConversationHost = host.capabilities?.createAfterthoughtHost;
+        const conversationHost = typeof createConversationHost === "function"
+          ? createConversationHost({ agentId: internalAgent, workspaceDir: commandCtx.workspaceDir })
+          : null;
+        const runJob = conversationHost
+          ? (await import("../../lib/afterthought-reflection.js")).runConversationAfterthoughtJob
+          : (await import("../../lib/afterthought.js")).runAfterthoughtJob;
+        const result = await runJob({
           workspaceDir: commandCtx.workspaceDir,
           agentId: internalAgent,
+          ...(conversationHost ?? {}),
           llmCfg: withLlmCallContext(
             afterthoughtLlmCfg,
             internalAgent,
@@ -584,9 +611,14 @@ export function createInternalJobBodies(ctx) {
           timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
           logger: host.logger,
         });
-        host.logger.info(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify(summarizeAfterthoughtResultForLog(result))}`);
+        const afterthoughtLog = conversationHost
+          ? { sent: result?.sent === true, skipped: result?.skipped === true, reason: result?.reason }
+          : summarizeAfterthoughtResultForLog(result);
+        host.logger.info(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify(afterthoughtLog)}`);
         return cronInternal
-          ? formatAfterthoughtCronReply(result)
+          // Der Gesprächs-Nachgedanke stellt selbst in die Sitzung zu; die
+          // Cron-Antwort trägt dann keinen Text mehr.
+          ? formatAfterthoughtCronReply(conversationHost ? { ...result, text: undefined } : result)
           : formatJsonCommandResult({ job: "afterthought", ...result });
       }
       if (subKey === "persona-evolve") {

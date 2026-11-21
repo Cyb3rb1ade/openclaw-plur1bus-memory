@@ -38,7 +38,10 @@ function applyMergedRecallBudget(merged, budget) {
   const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
   const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
   const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
-  const memories = applyRecallBudget(merged.memories || [], { budget: remainingBudget }).selected;
+  const candidates = merged.memories || [];
+  // 7.18.28: Reranker-Reihenfolge durch Merge und Budget erhalten.
+  const preserveOrder = candidates.some((item) => Number.isFinite(item?.rerankScore));
+  const memories = applyRecallBudget(candidates, { budget: remainingBudget, preserveOrder }).selected;
   return { ...merged, canonical, memories };
 }
 

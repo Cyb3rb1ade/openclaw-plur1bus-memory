@@ -87,7 +87,7 @@ import { LLM_RESULT_CACHE_PURPOSES, createLlmResultCache, withLlmCallContext, wi
 import { createLlmFailureRecorder } from "../lib/health-watch.js";
 import { createPostTurnDetacher } from "../lib/post-turn-detach.js";
 import { inferEmotionalValenceAsync, setEmotionConfig } from "../lib/emotion.js";
-import { createEmotionalStatePool } from "../lib/emotional-state.js";
+import { createJevEmotionRuntime, createSharedJevEmotionalPool } from "../lib/jevEmotionRuntime.js";
 import { applyDynamicsDefaults } from "../lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "../lib/retroactive-interference.js";
 import { buildRemPartitions } from "../lib/dreaming/rem-dream.js";
@@ -545,7 +545,7 @@ export function createEngine(host, config, testOptions = {}) {
   const dreamNarrativeLlmCfg = createFeatureRoute("dream-narrative", {});
   const dreamEchoLlmCfg = createFeatureRoute("dream-echo", {});
   const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
-  const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
+  const afterthoughtLlmCfg = createFeatureRoute("afterthought", { maxTokens: 8192, ...(cfg.afterthought || {}) });
   const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
   // 7.12.38: Obergrenze des verwalteten Blocks (Seed + Gelerntes, Default 24)
   // und daraus abgeleiteter Deckel der injizierten Stimm-Direktive
@@ -602,7 +602,7 @@ export function createEngine(host, config, testOptions = {}) {
         const emotionLlmCfg = withLlmCallContext(
           {
             ...emotionT3LlmCfg,
-            maxTokens: 300,
+            maxTokens: 450,
             // No temperature: some providers (Kimi coding) reject anything
             // but one exact value per thinking mode and answer HTTP 400.
             // Letting the provider default apply keeps the call portable.
@@ -913,7 +913,8 @@ export function createEngine(host, config, testOptions = {}) {
   // aber keine schließende Klammer — die Zeile bleibt unbewertet, ohne
   // dass irgendetwas außer einem Zähler das meldet. Der
   // Tier-3-Emotionsaufruf (emotionT3CallLlm oben) bekommt kein längeres
-  // Antwortformat und bleibt deshalb unverändert bei 300 maxTokens.
+  // Antwortformat; seit 7.18.23 450 statt 300 maxTokens (Tokenizer von
+  // Haiku 5.5 zählt denselben Text rund 30 % länger).
   const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT = 1500;
   const emotionT3EncodingMaxTokensRaw = Number(emotionCfg.t3?.encodingMaxTokens);
   // Untergrenze VOR dem Runden prüfen (>= 1, nicht > 0): sonst würde ein
@@ -1430,9 +1431,21 @@ export function createEngine(host, config, testOptions = {}) {
       }
     }, ...args);
   }
-  const emotionalPool = createEmotionalStatePool({
-    temperaments: emotionCfg.temperaments || {},
-    moodInfluence: emotionMoodInfluence,
+  // 7.19.0: one process-wide pool shared by recall and the independent Jev
+  // mood owner (lib/jevEmotionRuntime.js). The host registers the runtime's
+  // hooks (OpenClaw: adapter/openclaw/plugin.js, `jevEmotionRuntime.hooks`).
+  const jevRuntimeConfig = { ...cfg, baseDbPath };
+  const emotionalPool = createSharedJevEmotionalPool(jevRuntimeConfig);
+  const jevEmotionRuntime = createJevEmotionRuntime({
+    config: jevRuntimeConfig,
+    emotionalPool,
+    logger: host.logger,
+    isEligible: async (event, ctx) => {
+      if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return false;
+      const sessionKey = ctx?.sessionKey;
+      if (typeof sessionKey !== "string" || !sessionKey.trim()) return false;
+      return !(await classifyHostIncognitoSession(sessionKey));
+    },
   });
   // One embedder for the whole engine: a test-only testOptions.internals
   // embedder replaces the provider here, at its construction site, so every
@@ -2053,7 +2066,11 @@ export function createEngine(host, config, testOptions = {}) {
     { credentialResolver, localModelGeneration },
   );
   // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
-  const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
+  // Provider normalization supplies its own default; only explicit caps should
+  // override the candidate pool selected for recall (7.18.28).
+  const rerankCandidates = rawPluginConfig.reranker?.candidates == null
+    ? candidateTopK
+    : rerankerCfg.candidates;
 
   if (reranker) {
     const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
@@ -3254,6 +3271,7 @@ export function createEngine(host, config, testOptions = {}) {
     emitCommandRuntimeHook,
     emotionIntensityHalfLifeFactor,
     emotionalPool,
+    jevEmotionRuntime,
     episodeExtractionLlmCfg,
     epistemicCutoffBoot,
     findSafeDuplicateForValidity,
@@ -3415,6 +3433,7 @@ export function createEngine(host, config, testOptions = {}) {
     "detectReactionsCapabilityCached",
     "embeddings",
     "emotionalPool",
+    "jevEmotionRuntime",
     "gcEnabled",
     "getMemoryTurnRoutes",
     "getNeoStore",

@@ -1,5 +1,9 @@
-import { existsSync, readFileSync, copyFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync, readFileSync, copyFileSync, mkdirSync, unlinkSync, writeFileSync,
+  lstatSync, readdirSync, realpathSync, renameSync, chmodSync, statSync, constants as fsConstants,
+} from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -130,6 +134,38 @@ export const DEPLOY_FILES = [
   "lib/llm-failure.js",
   "lib/llm-router.js",
   "lib/featureModels.js",
+  "lib/model-catalog-reconcile.js",
+  "lib/jev-recall-filter.js",
+  "lib/jevEmotion.js",
+  "lib/jevEmotionRuntime.js",
+  "lib/speechText.js",
+  "lib/speechRegie.js",
+  "lib/telegramSpeech.js",
+  "scripts/plan-speech.mjs",
+  "scripts/telegramTts/README.md",
+  "scripts/telegramTts/bernhardine/SKILL.md",
+  "scripts/telegramTts/bernhardine/bin/tts-auto.sh",
+  "scripts/telegramTts/bernhardine/bin/tts-bilingual.sh",
+  "scripts/telegramTts/bernhardine/bin/tts-generate.sh",
+  "scripts/telegramTts/bernhardine/bin/tts-manager.sh",
+  "scripts/telegramTts/bernhardine/bin/tts-reply.sh",
+  "scripts/telegramTts/deploy.py",
+  "scripts/telegramTts/elevenlabs-tts.py",
+  "scripts/telegramTts/heisenberg/SKILL.md",
+  "scripts/telegramTts/heisenberg/bin/tts-auto.sh",
+  "scripts/telegramTts/heisenberg/bin/tts-generate.sh",
+  "scripts/telegramTts/heisenberg/bin/tts-manager.sh",
+  "scripts/telegramTts/heisenberg/bin/tts-reply.sh",
+  "scripts/telegramTts/main/SKILL.md",
+  "scripts/telegramTts/main/bin/tts-auto.sh",
+  "scripts/telegramTts/main/bin/tts-generate.sh",
+  "scripts/telegramTts/main/bin/tts-manager.sh",
+  "scripts/telegramTts/main/bin/tts-reply.sh",
+  "scripts/telegramTts/patch-exec-speech-context.mjs",
+  "scripts/telegramTts/speech-bridge.py",
+
+  "lib/recall-comparison.js",
+  "scripts/compare-recall.mjs",
   "lib/feature-definitions.js",
   "lib/dashboard-settings.js",
   "lib/dashboard-operations.js",
@@ -301,6 +337,10 @@ export const DEPLOY_FILES = [
   "lib/proactive-governor.js",
   "lib/dream-echo.js",
   "lib/afterthought.js",
+  "adapter/openclaw/afterthought-hooks.js",
+  "adapter/openclaw/afterthought-host.js",
+  "lib/afterthought-reflection.js",
+  "dist/control-ui/jev-key/index.js",
   "lib/internal-cron-reply.js",
   "lib/time-window.js",
   "lib/persona-voice.js",
@@ -312,6 +352,7 @@ export const DEPLOY_FILES = [
   "lib/dreaming/dream-diary.js",
   "lib/dreaming/dreaming-status-provider.js",
   "lib/chat-model.js",
+  "lib/conversation-compaction-model.js",
   "lib/episode-watermark.js",
   "lib/episodes.js",
   "lib/jobs/auto-accept-stale-criticals.js",
@@ -385,6 +426,7 @@ export const DEPLOY_FILES = [
   "lib/jobs/memory-compaction.js",
   "lib/jobs/memory-dynamics-maintenance.js",
   "lib/jobs/skill-miner/evidence-aggregator.js",
+  "lib/jobs/skill-miner/candidate-matching.js",
   "lib/jobs/skill-miner/llm-extractor.js",
   "lib/jobs/skill-miner/skill-md-renderer.js",
   "lib/metrics-debounce.js",
@@ -794,6 +836,298 @@ export function validateDeployment({
   }
 
   return { ok: preflight.ok && results.every((r) => r.ok), preflight, results };
+}
+
+// ── Packaged auxiliary files (advisory tier) ────────────────────────────────
+//
+// DEPLOY_FILES is the strict, hand-maintained code contract: a mismatch fails
+// the check. Everything else the package ships (CHANGELOG.md, README.md, the
+// docs listed in package.json `files`, the emotional-state-injector extension,
+// code that index.js does not import) was never compared at all, so a
+// v7.20.2 install kept October-era docs and lacked four shipped runbooks/audits
+// while every code file matched the tag. The auxiliary tier closes that gap
+// without widening what can break a gateway start: it is derived from the
+// source checkout's own package.json `files` (so it can never drift from what
+// npm ships), refreshed best-effort with an archive before each overwrite,
+// never deletes anything, and never changes the check's exit status.
+
+const GLOB_CHARS_RE = /[*?[\]{}!]/;
+// npm-packlist excludes these even inside a directory listed in `files`.
+const NPM_IGNORED_DIRS = new Set([".git", ".svn", ".hg", "CVS", "node_modules"]);
+const NPM_IGNORED_FILE_RE = /^(?:\.DS_Store|\.npmrc|\.npmignore|\.gitignore|npm-debug\.log|\.lock-wscript|\.wafpickle-\d+|\._.*|\..*\.swp|.*\.orig)$/;
+// npm always packs these from the package root, `files` or not.
+const NPM_ALWAYS_INCLUDED_RE = /^(?:package\.json|readme(?:\.[^/]*)?|licen[cs]e(?:\.[^/]*)?)$/i;
+
+function isInsideDir(root, candidate) {
+  return candidate === root || candidate.startsWith(`${root}${sep}`);
+}
+
+function lstatOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function walkPackagedDir(root, relDir, out) {
+  for (const entry of readdirSync(join(root, relDir), { withFileTypes: true })) {
+    const rel = `${relDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (!NPM_IGNORED_DIRS.has(entry.name)) walkPackagedDir(root, rel, out);
+    } else if (entry.isFile() && !NPM_IGNORED_FILE_RE.test(entry.name)) {
+      out.add(rel);
+    }
+  }
+}
+
+/**
+ * Lists the files npm packs for the package at repoDir, derived from its
+ * package.json `files` plus npm's always-included root files and `main`.
+ * Supports the entry forms this package uses (plain files and directories);
+ * glob entries and entries escaping the package are reported, not guessed.
+ * Never throws.
+ *
+ * @param {string} repoDir
+ * @returns {{files: string[], errors: string[]}} sorted repo-relative POSIX paths
+ */
+export function listPackagedFiles(repoDir) {
+  const root = resolvePath(repoDir);
+  const errors = [];
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  } catch {
+    return { files: [], errors: ["package-json-unreadable"] };
+  }
+  if (!Array.isArray(pkg?.files)) {
+    return { files: [], errors: ["package-files-missing"] };
+  }
+
+  const out = new Set();
+  const entries = [...pkg.files];
+  if (typeof pkg.main === "string") entries.push(pkg.main);
+  for (const rawEntry of entries) {
+    if (typeof rawEntry !== "string" || rawEntry.trim() === "") {
+      errors.push("unsupported-files-entry");
+      continue;
+    }
+    const entry = rawEntry.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+    if (GLOB_CHARS_RE.test(entry)) {
+      errors.push(`unsupported-files-entry:${rawEntry}`);
+      continue;
+    }
+    const absolute = resolvePath(root, entry);
+    if (absolute === root || !isInsideDir(root, absolute)) {
+      errors.push(`files-entry-escapes:${rawEntry}`);
+      continue;
+    }
+    const stat = lstatOrNull(absolute);
+    if (!stat) continue; // npm silently skips entries that do not exist
+    const rel = relative(root, absolute).split(sep).join("/");
+    try {
+      if (stat.isDirectory()) walkPackagedDir(root, rel, out);
+      else if (stat.isFile()) out.add(rel);
+    } catch {
+      errors.push(`files-entry-unreadable:${rawEntry}`);
+    }
+  }
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isFile() && NPM_ALWAYS_INCLUDED_RE.test(entry.name)) out.add(entry.name);
+    }
+  } catch {
+    errors.push("package-root-unreadable");
+  }
+  return { files: [...out].sort(), errors };
+}
+
+/**
+ * Packaged files outside the strict DEPLOY_FILES manifest (docs, changelog,
+ * README, auxiliary extensions, code index.js never imports).
+ *
+ * @param {string} repoDir
+ * @param {string[]} [strictFiles]
+ * @returns {{files: string[], errors: string[]}}
+ */
+export function listAuxiliaryPackagedFiles(repoDir, strictFiles = DEPLOY_FILES) {
+  const strict = new Set(strictFiles);
+  const packaged = listPackagedFiles(repoDir);
+  return { files: packaged.files.filter((file) => !strict.has(file)), errors: packaged.errors };
+}
+
+/**
+ * Archive directory for one repair run: ~/.openclaw-backups/plur1bus-repair-<ts>.
+ * Only computes the path; callers create it when they first archive a file.
+ *
+ * @param {{home?: string, now?: Date}} [options]
+ * @returns {string}
+ */
+export function repairBackupRoot({ home = homedir(), now = new Date() } = {}) {
+  // Second resolution (e.g. 20261121T150912Z): runs in the same minute used
+  // to share one directory under the old minute-resolution name.
+  const ts = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  return join(home, ".openclaw-backups", `plur1bus-repair-${ts}`);
+}
+
+function nearestExistingRealpath(path) {
+  let current = path;
+  while (!lstatOrNull(current)) {
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+  return realpathSync(current);
+}
+
+function archiveDeployedFile(deployPath, backupDir, file) {
+  const backupRoot = resolvePath(backupDir);
+  const target = resolvePath(backupRoot, file);
+  if (!isInsideDir(backupRoot, target) || target === backupRoot) throw new Error("backup path escapes");
+  mkdirSync(dirname(target), { recursive: true });
+  try {
+    copyFileSync(deployPath, target, fsConstants.COPYFILE_EXCL);
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+    // Already archived in this run (e.g. by backupDeployDir): fine only if it
+    // is the same content; otherwise this overwrite would lose a version.
+    if (sha256(target) !== sha256(deployPath)) throw new Error("backup slot holds different content");
+  }
+  return target;
+}
+
+function writeFileAtomically(deployPath, content, mode) {
+  mkdirSync(dirname(deployPath), { recursive: true });
+  const tmpPath = `${deployPath}.plur1bus-refresh-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(tmpPath, content, { flag: "wx", mode });
+    chmodSync(tmpPath, mode);
+    renameSync(tmpPath, deployPath);
+  } catch (err) {
+    try {
+      if (lstatOrNull(tmpPath)) unlinkSync(tmpPath);
+    } catch (cleanupErr) {
+      err.message = `${err.message}; temp cleanup failed: ${cleanupErr.message}`;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Compares packaged auxiliary files between the source checkout and the
+ * deployed extension and, with refresh=true, restores stale or missing ones.
+ * Advisory: never throws, never deletes, never touches a path outside the
+ * given file list or outside deployDir, never writes through a symlink, and
+ * archives every existing deployed file into backupDir before overwriting it
+ * (no backupDir → stale files are reported, not overwritten).
+ *
+ * @param {{deployDir: string, repoDir: string, files: string[], refresh?: boolean, dryRun?: boolean, backupDir?: string|null}} options
+ * @returns {{ok: boolean, results: Array<{file: string, status: "current"|"stale"|"missing"|"refreshed"|"skipped"|"failed", reason?: string, backupPath?: string}>}}
+ */
+export function syncAuxiliaryFiles({
+  deployDir,
+  repoDir,
+  files,
+  refresh = false,
+  dryRun = false,
+  backupDir = null,
+}) {
+  const deployBase = resolvePath(deployDir);
+  const repoBase = resolvePath(repoDir);
+  let deployReal = null;
+  try {
+    deployReal = realpathSync(deployBase);
+  } catch {
+    deployReal = null;
+  }
+  const mayWrite = refresh && !dryRun;
+
+  const results = files.map((file) => {
+    try {
+      if (!deployReal) return { file, status: "skipped", reason: "deploy-dir-missing" };
+      const deployPath = resolvePath(deployBase, file);
+      const repoPath = resolvePath(repoBase, file);
+      if (!isInsideDir(deployBase, deployPath) || !isInsideDir(repoBase, repoPath)) {
+        return { file, status: "skipped", reason: "path-escapes" };
+      }
+
+      const sourceStat = lstatOrNull(repoPath);
+      if (!sourceStat) return { file, status: "skipped", reason: "missing-repo-source" };
+      if (!sourceStat.isFile()) return { file, status: "skipped", reason: "repo-source-not-regular-file" };
+
+      const deployStat = lstatOrNull(deployPath);
+      if (deployStat && !deployStat.isFile()) {
+        // Symlink or directory placed by an operator: never write through it.
+        return { file, status: "skipped", reason: "deploy-path-not-regular-file" };
+      }
+      const anchor = nearestExistingRealpath(deployPath);
+      if (!anchor || !isInsideDir(deployReal, anchor)) {
+        return { file, status: "skipped", reason: "deploy-path-escapes" };
+      }
+
+      const content = readFileSync(repoPath);
+      const digest = sha256Content(content);
+      if (deployStat && sha256(deployPath) === digest) return { file, status: "current" };
+
+      const drift = deployStat ? "stale" : "missing";
+      if (!refresh) return { file, status: drift };
+      if (dryRun) return { file, status: drift, reason: "dry-run" };
+
+      let backupPath;
+      if (deployStat) {
+        if (!backupDir) return { file, status: drift, reason: "no-backup-dir" };
+        try {
+          backupPath = archiveDeployedFile(deployPath, backupDir, file);
+        } catch {
+          return { file, status: drift, reason: "backup-failed" };
+        }
+      }
+
+      writeFileAtomically(deployPath, content, statSync(repoPath).mode & 0o777);
+      if (sha256(deployPath) !== digest) {
+        return { file, status: "failed", reason: "refresh-verify-mismatch", ...(backupPath ? { backupPath } : {}) };
+      }
+      return { file, status: "refreshed", reason: drift, ...(backupPath ? { backupPath } : {}) };
+    } catch {
+      return { file, status: "failed", reason: mayWrite ? "refresh-write-failed" : "compare-failed" };
+    }
+  });
+
+  return {
+    ok: results.every((r) => r.status === "current" || r.status === "refreshed"),
+    results,
+  };
+}
+
+/**
+ * Human-readable lines for a syncAuxiliaryFiles report: one line per file
+ * that is not current, then a summary. Shared by the verify and repair CLIs.
+ *
+ * @param {{results: Array<{file: string, status: string, reason?: string}>}} report
+ * @param {string[]} [listErrors]
+ * @returns {string[]}
+ */
+export function describeAuxiliaryReport(report, listErrors = []) {
+  const labels = {
+    stale: "STALE",
+    missing: "MISSING",
+    refreshed: "FIXED",
+    skipped: "SKIP",
+    failed: "WARN",
+  };
+  const lines = [];
+  for (const note of listErrors) lines.push(`NOTE    package file list: ${note}`);
+  for (const r of report.results) {
+    if (r.status === "current") continue;
+    const label = (labels[r.status] ?? r.status.toUpperCase()).padEnd(7);
+    lines.push(`${label} ${r.file}${r.reason ? `  (${r.reason})` : ""}`);
+  }
+  const current = report.results.filter((r) => r.status === "current").length;
+  const refreshed = report.results.filter((r) => r.status === "refreshed").length;
+  const total = report.results.length;
+  lines.push(`${current}/${total} packaged files current${refreshed ? `, ${refreshed} refreshed` : ""}`
+    + " (advisory: never fails the check)");
+  return lines;
 }
 
 /**

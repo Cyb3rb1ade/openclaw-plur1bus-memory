@@ -52,13 +52,16 @@ import { createEngine } from "../../engine/create-engine.js";
 import { internalsOf } from "../../engine/internals.js";
 import { createHostServices } from "../../lib/host-services.js";
 import { shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "../../lib/runtime-shutdown.js";
+import { registerAfterthoughtActivityHooks } from "./afterthought-hooks.js";
+import { observeAfterthoughtActivity } from "../../lib/afterthought-reflection.js";
+import { createAfterthoughtHost } from "./afterthought-host.js";
 import { createOpenClawSkillWorkshopClient } from "../../lib/setup/skill-workshop-plugin-runtime.js";
 import { createOpenClawEmbeddingSelectionMutator } from "../../lib/reembedding/runtime-config.js";
 import { deliverCriticalButtonPush } from "../../lib/critical-button-delivery.js";
 import { boundTelegramAccountId } from "../../lib/setup/feature-cron-plan.js";
 import { warnIfStoreInsideHarnessHome } from "../../lib/setup/harness-coexistence.js";
 import { formatRegistrationTrace, recordRegistration } from "../../lib/register-trace.js";
-import { createGroupReasoningFilter } from "../../lib/group-reasoning-filter.js";
+import { createGroupReasoningFilter, collectHumanSenderIds } from "../../lib/group-reasoning-filter.js";
 import {
   buildWorkspaceReviewCronJobs,
   printMorningReviewCronCommand,
@@ -166,6 +169,10 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       commandRuntimeHooks,
       postTurnRefineScheduled,
       handleObsidianBridgeCommand: handleObsidianBridgeCommandWithNativeCron,
+      // 7.18.25: Nachgedanken nach Gesprächsruhe lesen und beliefern die
+      // Originalsitzung über die öffentlichen Session-Laufzeiten des Hosts
+      // (engine/jobs/internal-job-bodies.js, Job "afterthought").
+      createAfterthoughtHost: ({ agentId, workspaceDir }) => createAfterthoughtHost({ api, agentId, workspaceDir }),
       // MemoryOps archive-first backups stay where /forget and /correct have
       // always put them (~/.openclaw/memory/_archive, or under OPENCLAW_HOME).
       memoryArchiveDir: resolveDefaultArchiveDir,
@@ -292,6 +299,14 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     : {});
   // 4. Neo worker warm-up (lone gateway_start).
   registerNeoWorkerWarmUp({ api, host, neoWorkerRuntime });
+  // 4a. 7.19.0: the independent Jev mood owner (lib/jevEmotionRuntime.js),
+  // registered at the release line's position — after the warm-up, ahead of
+  // every other before_prompt_build/agent_end/gateway_stop handler.
+  if (typeof api.on === "function") {
+    for (const [hookName, handler, options] of internals.jevEmotionRuntime.hooks) {
+      if (options) api.on(hookName, handler, options); else api.on(hookName, handler);
+    }
+  }
   // 5. skill_proposal_changed.
   registerSkillProposalListener({ api, ...internals });
   // 6. Obsidian bridge lifecycle.
@@ -381,7 +396,11 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
         if (operatorLang) commandCtx.lang = operatorLang;
         const result = await spec.handler(commandCtx);
         const text = typeof result === "string" ? result : result?.text;
-        return { text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY" };
+        return {
+          text: typeof text === "string" && text.length > 0 ? text : "NO_REPLY",
+          // 7.18.22: Der Review-Cron wertet eine Policy-Ablehnung als Fehler.
+          ...(result?.policyDenied ? { policyDenied: result.policyDenied } : {}),
+        };
       };
       // PR-03g: every chat-command registration below this point — and,
       // for M1a, the six user-facing command bodies and the four
@@ -524,6 +543,19 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     registerNeoServiceLifecycle({ api, host, neoEnabled, neoRoot, neoWorkerRuntime });
   }
 
+  // 7.18.25: Gesprächsaktivität für die Nachgedanken nach Gesprächsruhe.
+  // "start" auf before_prompt_build (Priorität 1000), "end" weiter unten auf
+  // agent_end — dieselben Positionen wie in index.js der Release-Linie.
+  const afterthoughtActivityOptions = {
+    api,
+    enabled: cfg.afterthought?.enabled !== false,
+    observe: observeAfterthoughtActivity,
+    classifyIncognito: internals.classifyHostIncognitoSession,
+    isAllowed: (event, ctx) => automaticWorkspacePolicyDecision(event, ctx).allowed,
+    resolveSession: ({ agentId, sessionKey }) => host.runtime?.agent?.session?.getSessionEntry?.({ agentId, sessionKey, readConsistency: "latest" }),
+  };
+  registerAfterthoughtActivityHooks({ ...afterthoughtActivityOptions, phases: ["start"] });
+
   // ========================================================================
   // Auto-Capture: Speichere User-Nachrichten automatisch
   // ========================================================================
@@ -637,6 +669,8 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
       enabled: true,
       prefixes: cfg.groupReasoningFilter?.prefixes,
       logger: host.logger,
+      // 7.20.2: Menschen aus den allowFrom-Listen werden nie gefiltert.
+      humanSenderIds: () => collectHumanSenderIds(host.runtime?.config?.current?.() || api.config || {}),
     });
     for (const hookName of ["before_dispatch", "before_agent_reply"]) {
       try {
@@ -649,6 +683,8 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
 
   // 7.17.0: Light-Sprachzüge laufen pro Lauf auf Haiku (register-voice-mode.js).
   registerVoiceModelOverride({ api, host, baseDbPath });
+
+  registerAfterthoughtActivityHooks({ ...afterthoughtActivityOptions, phases: ["end"] });
 
   // Manual tools remain available regardless of autoCapture/autoRecall:
   // memory_store, memory_recall, memory_forget and knowledge_update are not

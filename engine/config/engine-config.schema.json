@@ -755,6 +755,11 @@
       "x-tier": "advanced",
       "description": "Settings for captureChunkingMode \"automatisch\". Jev (TypeSafe) decides per message that the splitter would cut: coherent with high confidence stores the whole row, independent points with high confidence store only the parts, otherwise whole and parts. The message is sent to api.typesafe.ai. Without a key the mode behaves like \"beides\".",
       "properties": {
+        "apiKey": {
+          "$ref": "#/$defs/secretInput",
+          "x-sensitive": true,
+          "description": "Optional TypeSafe API key. A nonempty value takes precedence over apiKeyEnv."
+        },
         "apiKeyEnv": {
           "type": "string",
           "default": "TYPESAFE_API_KEY",
@@ -3054,6 +3059,106 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "jev": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Independent incoming Jev emotion assessment; uses captureChunkingJev credentials/model. Active mode owns timed mood, shadow preserves legacy updates.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "agents": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "main": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "bernhardine": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "heisenberg": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "shadow",
+                "active"
+              ],
+              "default": "shadow"
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1000
+            },
+            "approachHalfLifeMs": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 300000
+            },
+            "evidenceHoldMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120000,
+              "default": 120000
+            },
+            "passiveHalfLivesMs": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "surprise": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 120000
+                },
+                "fear": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 900000
+                },
+                "anger": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 900000
+                },
+                "joy": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 1800000
+                },
+                "anticipation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 1800000
+                },
+                "sadness": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 2700000
+                },
+                "disgust": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 2700000
+                },
+                "trust": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 3600000
+                }
+              }
+            }
+          }
+        },
         "tier": {
           "type": "string",
           "enum": [

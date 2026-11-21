@@ -8,6 +8,7 @@
  */
 
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { resolveInside } from "../../lib/sql-safety.js";
 import { join, resolve, sep } from "node:path";
 import { throwIfAborted } from "../../lib/abort.js";
 import { checkAccess } from "../../lib/acl-middleware.js";
@@ -84,6 +85,7 @@ export function createPromptContextAssembler(ctx) {
     detectReactionsCapabilityCached,
     embeddings,
     emotionalPool,
+    jevEmotionRuntime,
     gcEnabled,
     getNeoStore,
     host,
@@ -370,40 +372,56 @@ export function createPromptContextAssembler(ctx) {
         }
       }
       const emoState = emotionalPool.get(agentId);
-      // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
-      // Decay rechnet ab persistiertem lastUpdateAt weiter.
-      if (hookCtx?.workspaceDir) {
-        try { emoState.hydrateOnce(join(hookCtx.workspaceDir, ".emotional-state.json")); } catch (e) { dbg(e); }
-      }
-      // Stimmung aus dem aktuellen Turn via EmotionEngine (T1→T2→T3)
-      // statt der alten Regex-Heuristik ableiten.
-      try {
-        const promptText = typeof event.prompt === "string" ? event.prompt.trim() : "";
-        const lastUserText = promptText
-          || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
-        if (lastUserText.length >= 3) {
-          const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
-          throwIfAborted(signal, "recall aborted");
-          emoState.applyEmotionScore(turnEmotion);
-        } else {
-          emoState.updateFromMessages(voiceMessages);
+      // 7.19.0: Gehört die eingehende Stimmung dem unabhängigen Jev-Besitzer,
+      // schreibt dieser Pfad nichts; ändert sich der Besitz unterwegs, bricht
+      // er vor jedem Schreiben ab.
+      const ownsLegacyMood = jevEmotionRuntime.captureLegacyOwnership(agentId);
+      legacyMood: if (ownsLegacyMood()) {
+        emoState.configureTimedMood({ enabled: false });
+        // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
+        // Decay rechnet ab persistiertem lastUpdateAt weiter.
+        if (hookCtx?.workspaceDir) {
+          try { emoState.hydrateOnce(resolveInside(hookCtx.workspaceDir, ".emotional-state.json")); } catch (e) { dbg(e); }
         }
-      } catch (e) {
-        throwIfAborted(signal, "recall aborted");
-        dbg(e);
-        emoState.updateFromMessages(voiceMessages);
-      }
-      if (hookCtx?.workspaceDir) {
+        // Stimmung aus dem aktuellen Turn via EmotionEngine (T1→T2→T3)
+        // statt der alten Regex-Heuristik ableiten.
         try {
-          throwIfAborted(signal, "recall aborted");
-          const moodNow = emoState.describeMood();
-          throwIfAborted(signal, "recall aborted");
-          writeFileSync(join(hookCtx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
-          throwIfAborted(signal, "recall aborted");
-          writeFileSync(join(hookCtx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
+          const promptText = typeof event.prompt === "string" ? event.prompt.trim() : "";
+          const lastUserText = promptText
+            || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
+          if (lastUserText.length >= 3) {
+            const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
+            throwIfAborted(signal, "recall aborted");
+            if (!ownsLegacyMood()) break legacyMood;
+            emoState.applyEmotionScore(turnEmotion);
+          } else {
+            if (!ownsLegacyMood()) break legacyMood;
+            emoState.updateFromMessages(voiceMessages);
+          }
         } catch (e) {
           throwIfAborted(signal, "recall aborted");
+          if (!ownsLegacyMood()) {
+            dbg("legacy_mood_owner_changed");
+            break legacyMood;
+          }
           dbg(e);
+          emoState.updateFromMessages(voiceMessages);
+        }
+        if (hookCtx?.workspaceDir) {
+          try {
+            throwIfAborted(signal, "recall aborted");
+            if (!ownsLegacyMood()) break legacyMood;
+            const moodNow = emoState.describeMood();
+            throwIfAborted(signal, "recall aborted");
+            if (!ownsLegacyMood()) break legacyMood;
+            writeFileSync(resolveInside(hookCtx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
+            throwIfAborted(signal, "recall aborted");
+            if (!ownsLegacyMood()) break legacyMood;
+            writeFileSync(resolveInside(hookCtx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
+          } catch (e) {
+            throwIfAborted(signal, "recall aborted");
+            dbg(e);
+          }
         }
       }
       // v5.4.0 — Graph-Edges für assoziativen Spread laden
@@ -572,7 +590,12 @@ export function createPromptContextAssembler(ctx) {
         : await applySemanticLensToRecall(ordered, {
           semanticLens: semanticLensCfg,
           workspaceDir: hookCtx?.workspaceDir,
-          getMemoryById: async (memoryId) => db.getById(memoryId),
+          getMemoryById: async (memoryId) => {
+            const memory = await db.getById(memoryId);
+            // Authorize the raw ownership tuple before Lens projection or quotas.
+            if (!memory || !checkAccess(memoryCtx, memory).allowed) return null;
+            return memory;
+          },
         });
       const semanticLensItems = semanticLensResult.lensMemories.map((r) => ({
         id: r.entry.id,
@@ -1008,7 +1031,7 @@ export function createPromptContextAssembler(ctx) {
       }
 
       const styleCfg = cfg.styleDirective || {};
-      const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId), {
+      const moodStyleDirective = buildMoodStyleDirective(jevEmotionRuntime.isEnabled(agentId) ? null : emotionalPool.describe(agentId), {
         hour: styleCfg.timeOfDay !== false ? hourInTimeZone(nowMs, styleCfg.timezone ?? cfg.timezone ?? null) : null,
         temperamentName: cfg.emotion?.temperaments?.[agentId]?.preset ?? null,
         opinion: styleCfg.opinion !== false,

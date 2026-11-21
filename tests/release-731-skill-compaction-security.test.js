@@ -344,7 +344,9 @@ describe("release 7.3.1 skill-miner and compaction security", () => {
       requestContext: REQUEST_CONTEXT_A,
       aclPartition: USER_A_PARTITION,
       callLlm: async (messages) => {
-        prompts.push(messages[0].content);
+        assert.equal(messages[0].role, "system");
+        assert.equal(messages[1].role, "user");
+        prompts.push(messages.map(message => message.content).join("\n"));
         return JSON.stringify({
           skillName: "owner-a-rollback",
           skillTitle: "Owner A rollback",

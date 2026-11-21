@@ -41,6 +41,7 @@ const runGenerator = (args) => spawnSyncBounded(process.execPath, [SCRIPT, ...ar
 const SECRET_INPUTS = [
   "embedding.apiKey",
   "embedding.fallback.apiKey",
+  "captureChunkingJev.apiKey",
   "reranker.apiKey",
   "merging.apiKey",
   "schicht15.apiKey",
@@ -214,6 +215,9 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     afterSchema.properties.captureChunkingMode.description = "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.";
     assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
     delete afterSchema.properties.healthWatch;
+    // 7.19.0 (ported): the independent Jev emotion owner, emotion.jev.
+    assert.ok(Object.hasOwn(afterSchema.properties.emotion.properties, "jev"));
+    delete afterSchema.properties.emotion.properties.jev;
     // EmbeddingGemma 2 (pinned dtype variants, bounded sub-batches) added exactly these two local-model options.
     const localEmbeddingProperties = afterSchema.properties.embedding.properties.local.properties;
     assert.ok(Object.hasOwn(localEmbeddingProperties, "dtype"));
@@ -229,7 +233,9 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     assert.deepStrictEqual(stripAnnotations(afterSchema), stripAnnotations(before.configSchema));
     assert.deepStrictEqual(Object.keys(afterSchema.properties), Object.keys(before.configSchema.properties));
 
-    assert.deepStrictEqual(Object.keys(after), Object.keys(before));
+    // 7.18.25 (ported): the Jev key dashboard is a control-UI entry right after `kind`.
+    assert.deepStrictEqual(after.controlUi, { entry: "dist/control-ui/jev-key/index.js" });
+    assert.deepStrictEqual(Object.keys(after).filter((key) => key !== "controlUi"), Object.keys(before));
     // Allow-list of uiHints additions since 72b6697f (E5-R24 owner ruling):
     // exactly the five plain-only sensitive paths, each sensitive and advanced.
     const afterHints = structuredClone(after.uiHints);
@@ -239,6 +245,11 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
       assert.equal(afterHints[path]?.advanced, true, path);
       delete afterHints[path];
     }
+    // 7.18.25 (ported): the Jev API key is a SecretInput, sensitive and advanced.
+    assert.ok(!Object.hasOwn(before.uiHints, "captureChunkingJev.apiKey"));
+    assert.equal(afterHints["captureChunkingJev.apiKey"]?.sensitive, true);
+    assert.equal(afterHints["captureChunkingJev.apiKey"]?.advanced, true);
+    delete afterHints["captureChunkingJev.apiKey"];
     assert.deepStrictEqual(afterHints, before.uiHints);
     assert.deepStrictEqual(Object.keys(afterHints), Object.keys(before.uiHints));
     // Allow-list of cliCommands additions since 72b6697f (HM1-R5): exactly
@@ -252,9 +263,14 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     const afterContracts = structuredClone(after.contracts);
     assert.equal(afterContracts.embeddingProviders[0], "plur1bus-embeddinggemma-2");
     afterContracts.embeddingProviders.shift();
+    // 7.18.25 (ported): the Jev API key joins the SecretInput paths.
+    const afterConfigContracts = structuredClone(after.configContracts);
+    afterConfigContracts.secretInputs.paths = afterConfigContracts.secretInputs.paths
+      .filter((entry) => entry.path !== "captureChunkingJev.apiKey");
+    const allowed = { cliCommands: afterCli, contracts: afterContracts, configContracts: afterConfigContracts };
     for (const key of Object.keys(before)) {
       if (key === "configSchema" || key === "uiHints" || key === "version") continue;
-      assert.deepStrictEqual(key === "cliCommands" ? afterCli : key === "contracts" ? afterContracts : after[key], before[key], `manifest field ${key} changed`);
+      assert.deepStrictEqual(Object.hasOwn(allowed, key) ? allowed[key] : after[key], before[key], `manifest field ${key} changed`);
     }
   });
 });

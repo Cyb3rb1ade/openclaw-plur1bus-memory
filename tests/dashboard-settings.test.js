@@ -227,7 +227,7 @@ test("die Karten zeigen ihre Einstellungen; ohne Schreibrecht ohne Formular", as
   assert.match(html, /<option value="false" selected>Off<\/option>/);
   assert.match(html, /name="setting" value="gc\.maxMemoryCount"[\s\S]*?<input type="number"[^>]*value="150000"[^>]*min="1"/);
   assert.match(html, /name="setting" value="llmRouter\.defaultModel"/, "Standardmodell im LLM-Tasks-Panel");
-  assert.match(html, /<option value="anthropic\/haiku">fast †<\/option>/, "Katalog mit Freigabe-Marke");
+  assert.match(html, /<option value="anthropic\/haiku">haiku · anthropic\/haiku · fast †<\/option>/, "Katalog mit Freigabe-Marke");
   assert.match(html, /<h3>Style Directive<\/h3>/);
   assert.equal((html.match(/value="setting\.set"/g) || []).length, DASHBOARD_SETTINGS.length, "ein Formular je Einstellung");
   const readonly = await render({}, false);
