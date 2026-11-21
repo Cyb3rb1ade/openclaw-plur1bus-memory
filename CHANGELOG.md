@@ -46,6 +46,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 - **7.18.21** — Morning/evening review health check accepts `obsidianBridge.mode: "apply"`; system notices are grouped by code; `invalid_mode` and the review footnote are translated.
 - **7.18.22** — A denied Obsidian mutation policy answers with translated text naming the closed gates instead of raw JSON; the result carries a non-enumerable `policyDenied`, which the adapter's operator path forwards so the review feature cron ends with an error.
+- **7.18.23** — Host LLM routes to Claude Haiku disable thinking for background jobs; tight output limits rise about 50 % (dream narratives, light/REM dream, emotion T3 300 → 450, critical-push classification 16 → 24, merge check and query summary 300 → 450, capture summary maxChars/3 → /2).
 
 ### Ported from 7.18.5–7.18.20
 

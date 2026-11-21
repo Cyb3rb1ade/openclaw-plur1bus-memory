@@ -483,6 +483,54 @@ test("native explicit dispatch sends exactly the feature-local model", async () 
   assert.equal(result.model, "anthropic/explicit-model");
 });
 
+async function hostParamsFor(featureConfig, callOptions = {}, options = {}) {
+  let receivedParams;
+  const runtimeLlm = {
+    async complete(params) {
+      receivedParams = params;
+      return { text: "ok", provider: "anthropic", model: params.model };
+    },
+  };
+  const route = resolveFeatureLlmRoute(featureConfig, {
+    feature: "merging",
+    runtimeLlm,
+    logger: createLogger(),
+    ...options,
+  });
+  await completeFeatureLlm([], route, { purpose: "merge-decision", ...callOptions }, createTimerHarness());
+  return receivedParams;
+}
+
+test("7.18.23: a Haiku host route requests reasoning off by default", async () => {
+  const params = await hostParamsFor({ model: "anthropic/claude-haiku-5-5" });
+  assert.equal(params.reasoning, "off");
+});
+
+test("7.18.23: non-Haiku and host-default routes leave reasoning to the host", async () => {
+  assert.equal(Object.hasOwn(await hostParamsFor({ model: "anthropic/claude-sonnet-5-5" }), "reasoning"), false);
+  assert.equal(Object.hasOwn(await hostParamsFor({}), "reasoning"), false);
+});
+
+test("7.18.23: disableThinking false lets a Haiku route think, true turns any route off", async () => {
+  assert.equal(
+    Object.hasOwn(await hostParamsFor({ model: "anthropic/claude-haiku-5-5", disableThinking: false }), "reasoning"),
+    false,
+  );
+  assert.equal((await hostParamsFor({ model: "openai/gpt-6-luna", disableThinking: true })).reasoning, "off");
+  assert.equal(
+    Object.hasOwn(await hostParamsFor({ model: "anthropic/claude-haiku-5-5" }, { disableThinking: false }), "reasoning"),
+    false,
+  );
+});
+
+test("7.18.23: an agent-selected Haiku model also requests reasoning off", async () => {
+  const params = await hostParamsFor({}, { agentId: "main" }, {
+    agentModels: { main: "anthropic/claude-haiku-5-5" },
+  });
+  assert.equal(params.model, "anthropic/claude-haiku-5-5");
+  assert.equal(params.reasoning, "off");
+});
+
 test("call-local native capability overrides the registered route runtime", async () => {
   let registeredCalls = 0;
   let sessionCalls = 0;

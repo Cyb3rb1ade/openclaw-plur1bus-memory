@@ -269,7 +269,7 @@ export function createInternalJobBodies(ctx) {
                 };
             const text = await callLlm([{ role: "user", content: prompt }], {
               ...cpLlmCfg,
-              maxTokens: 16,
+              maxTokens: 24,
               callContext,
             });
             return { text: text || "" };

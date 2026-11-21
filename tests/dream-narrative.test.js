@@ -181,7 +181,7 @@ describe("generateDreamNarrative — fail-open", () => {
     });
     assert.strictEqual(result, dream);
     assert.strictEqual(capturedCfg.temperature, 0.9, "Träume brauchen Varianz (temperature 0.9)");
-    assert.strictEqual(capturedCfg.maxTokens, 400);
+    assert.strictEqual(capturedCfg.maxTokens, 600);
   });
 });
 

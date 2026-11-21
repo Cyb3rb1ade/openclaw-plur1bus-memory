@@ -602,7 +602,7 @@ export function createEngine(host, config, testOptions = {}) {
         const emotionLlmCfg = withLlmCallContext(
           {
             ...emotionT3LlmCfg,
-            maxTokens: 300,
+            maxTokens: 450,
             // No temperature: some providers (Kimi coding) reject anything
             // but one exact value per thinking mode and answer HTTP 400.
             // Letting the provider default apply keeps the call portable.
@@ -913,7 +913,8 @@ export function createEngine(host, config, testOptions = {}) {
   // aber keine schließende Klammer — die Zeile bleibt unbewertet, ohne
   // dass irgendetwas außer einem Zähler das meldet. Der
   // Tier-3-Emotionsaufruf (emotionT3CallLlm oben) bekommt kein längeres
-  // Antwortformat und bleibt deshalb unverändert bei 300 maxTokens.
+  // Antwortformat; seit 7.18.23 450 statt 300 maxTokens (Tokenizer von
+  // Haiku 5.5 zählt denselben Text rund 30 % länger).
   const EMOTION_REFINE_ENCODING_MAX_TOKENS_DEFAULT = 1500;
   const emotionT3EncodingMaxTokensRaw = Number(emotionCfg.t3?.encodingMaxTokens);
   // Untergrenze VOR dem Runden prüfen (>= 1, nicht > 0): sonst würde ein
