@@ -12,6 +12,33 @@ PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using
 - **Telegram/Chat Commands** — user-facing inspection and editing without leaving the chat
 - **Background Jobs** — daily consolidation, critical-push classification, skill mining, REM dreaming
 
+## Branches and release lines
+
+Two lines exist side by side; know which one a change belongs to.
+
+- **Release line** (`release/*`, `fix/<version>-*`, tags `vX.Y.Z`): the plugin
+  as it runs in production, in the pre-split layout (`index.js` + `lib/`, no
+  `engine/`/`adapter/`). Releases are cut and tagged here. Production deploys
+  check out a tag (e.g. `v7.20.2`), not `main`.
+- **`main`**: the engine/adapter split (`engine/`, `adapter/openclaw/`,
+  `types/engine.d.ts`) plus the engine contract the PLUR1BUS Harness consumes.
+  The package version stays at the last line merge (7.18.4); release-line
+  versions arrive as `port(<version>)` commits (one per version,
+  `Original-Commit:` trailer, CHANGELOG section "Ported from …"), e.g. PR #212
+  (7.18.5–7.18.20) and PR #280 (7.18.21–7.20.2). Do not install a build from
+  `main` on a production host without a test instance first.
+- **Harness engine pin**: `PLUR1BUS-Harness` pins this repository by commit in
+  its own `packages/core/package.json`. That pin, the engine contract version
+  and the Rust engine's references/goldens move together in the Harness repo;
+  never change contract, engine schema or recall behaviour here without noting
+  it for the Harness pin.
+- **Hermes**: the Hermes memory plugin lives on `codex/hermes-*` branches and
+  `X.Y.Z-hermes.N` tags, built on the release line. Keep those branches.
+- Port changes from the release line into the `main` layout: `index.js` hunks
+  go to `adapter/openclaw/` (anything touching the OpenClaw `api`) or
+  `engine/`; `lib/` must stay host-neutral (`lint-no-api-outside-adapter`),
+  outbound HTTP goes through `hostFetch`, file modes through `lib/platform.js`.
+
 ## Embedding-Cache v2
 
 `lib/embedding-cache.js` provides the embedding cache with the following behavior:

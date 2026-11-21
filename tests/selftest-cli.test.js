@@ -132,7 +132,7 @@ describe("openclaw plur1bus selftest", () => {
     const lines = h.out.join("").trimEnd().split("\n");
     const info = lines.filter((line) => line.startsWith("info"));
     assert.equal(info.length, 1);
-    assert.match(info[0], /^info\s+PLUR1BUS Harness found: separate memory until you migrate \(`plur1bus import openclaw`\) or switch this plugin to thin client$/);
+    assert.match(info[0], /^info\s+PLUR1BUS Harness found: separate memory until you migrate it into the Harness \(`plur1bus import openclaw`\)$/);
     assert.equal(lines.length, 3 + SELFTEST_STEPS.length + 2);
     assert.equal(lines.at(-1), "selftest ok");
 
