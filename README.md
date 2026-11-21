@@ -30,6 +30,12 @@ separate login); reach it through however you already reach your Gateway
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v7.19.0 — independent emotion and bilingual Telegram speech
+
+An opt-in `emotion.jev` owner can assess incoming messages independently of the legacy mood writer (`shadow` logs proposals only, `active` drives the shared per-agent mood by elapsed time) and a new outgoing speech adapter (`scripts/plan-speech.mjs`) plans bilingual (`de`/`pl`) ElevenLabs delivery from canonical semantic intent rather than raw mood text. Both default to off; see [Configuration](docs/configuration.md#independent-incoming-jev-emotion-emotionjev) for the rollout contract and `scripts/telegramTts/README.md` for deployment.
+
+Also in this release: `@huggingface/transformers` moved to 4.3.2 and `zod` is pinned to 4.6.7, closing the high-severity advisories in both — `npm audit --omit=dev` is back to 0.
+
 ### New in v7.16.0 — recall width is an operator setting
 
 Two number fields on the Recall card. `recall.candidateTopK` sets how many rows

@@ -87,7 +87,7 @@ import { LLM_RESULT_CACHE_PURPOSES, createLlmResultCache, withLlmCallContext, wi
 import { createLlmFailureRecorder } from "../lib/health-watch.js";
 import { createPostTurnDetacher } from "../lib/post-turn-detach.js";
 import { inferEmotionalValenceAsync, setEmotionConfig } from "../lib/emotion.js";
-import { createEmotionalStatePool } from "../lib/emotional-state.js";
+import { createJevEmotionRuntime, createSharedJevEmotionalPool } from "../lib/jevEmotionRuntime.js";
 import { applyDynamicsDefaults } from "../lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "../lib/retroactive-interference.js";
 import { buildRemPartitions } from "../lib/dreaming/rem-dream.js";
@@ -1431,9 +1431,21 @@ export function createEngine(host, config, testOptions = {}) {
       }
     }, ...args);
   }
-  const emotionalPool = createEmotionalStatePool({
-    temperaments: emotionCfg.temperaments || {},
-    moodInfluence: emotionMoodInfluence,
+  // 7.19.0: one process-wide pool shared by recall and the independent Jev
+  // mood owner (lib/jevEmotionRuntime.js). The host registers the runtime's
+  // hooks (OpenClaw: adapter/openclaw/plugin.js, `jevEmotionRuntime.hooks`).
+  const jevRuntimeConfig = { ...cfg, baseDbPath };
+  const emotionalPool = createSharedJevEmotionalPool(jevRuntimeConfig);
+  const jevEmotionRuntime = createJevEmotionRuntime({
+    config: jevRuntimeConfig,
+    emotionalPool,
+    logger: host.logger,
+    isEligible: async (event, ctx) => {
+      if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return false;
+      const sessionKey = ctx?.sessionKey;
+      if (typeof sessionKey !== "string" || !sessionKey.trim()) return false;
+      return !(await classifyHostIncognitoSession(sessionKey));
+    },
   });
   // One embedder for the whole engine: a test-only testOptions.internals
   // embedder replaces the provider here, at its construction site, so every
@@ -3254,6 +3266,7 @@ export function createEngine(host, config, testOptions = {}) {
     emitCommandRuntimeHook,
     emotionIntensityHalfLifeFactor,
     emotionalPool,
+    jevEmotionRuntime,
     episodeExtractionLlmCfg,
     epistemicCutoffBoot,
     findSafeDuplicateForValidity,
@@ -3415,6 +3428,7 @@ export function createEngine(host, config, testOptions = {}) {
     "detectReactionsCapabilityCached",
     "embeddings",
     "emotionalPool",
+    "jevEmotionRuntime",
     "gcEnabled",
     "getMemoryTurnRoutes",
     "getNeoStore",

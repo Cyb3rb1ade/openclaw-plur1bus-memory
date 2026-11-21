@@ -261,7 +261,14 @@ The published runtime tree is LanceDB, apache-arrow, openai, and optional transf
 
 | Package | Spec | Resolved | Pinned? |
 |---------|------|----------|---------|
-| `@huggingface/transformers` | `4.2.0` | `4.2.0` | Yes |
+| `@huggingface/transformers` | `4.3.2` | `4.3.2` | Yes |
+
+### Overrides
+
+| Package | Forced to | Why |
+|---------|-----------|-----|
+| `@huggingface/transformers` → `sharp` | `0.35.5` | Closes CVE-2026-96889 (librsvg) |
+| `zod` | `4.6.7` | Closes a high-severity memory-exhaustion advisory (`openai`/`openclaw` dependency chain) |
 
 All versions are effectively pinned at install time by `package-lock.json`. Major upgrades require a separate plan.
 

@@ -1189,3 +1189,61 @@ A useful follow-up is sent to the original conversation, not a cron fallback rec
 ### Jev key in the dashboard (7.18.25)
 
 With `controlUi.writeActions: "all"` and `gateway.controlUi.experimental.customPlugins: true`, the existing capture-mode card includes Jev API key save/replace/remove controls. The native UI bridge uses a fixed authenticated Gateway method; the key never enters the URL. A blank input keeps the current value. Removing the configured value leaves the environment fallback in effect. `captureChunkingJev.apiKey` takes priority over the variable named by `captureChunkingJev.apiKeyEnv` (default `TYPESAFE_API_KEY`). The page displays only whether a key is configured and whether it comes from config or environment. Existing non-Jev storage and reranker choices are unchanged.
+
+### Independent incoming Jev emotion (`emotion.jev`)
+
+This opt-in owner runs before memory recall, including when `autoRecall` is disabled or its database fails. It uses the existing `captureChunkingJev` credential resolution and model. It makes one batched incoming assessment with a deadline of at most 1,000 ms and no retries. Stored memory emotion classification and recall scoring formulas remain unchanged.
+
+```json
+{
+  "emotion": {
+    "jev": {
+      "enabled": false,
+      "agents": { "main": false, "bernhardine": false, "heisenberg": false },
+      "mode": "shadow",
+      "timeoutMs": 1000,
+      "approachHalfLifeMs": 300000,
+      "evidenceHoldMs": 120000,
+      "passiveHalfLivesMs": {
+        "surprise": 120000,
+        "fear": 900000,
+        "anger": 900000,
+        "joy": 1800000,
+        "anticipation": 1800000,
+        "sadness": 2700000,
+        "disgust": 2700000,
+        "trust": 3600000
+      }
+    }
+  }
+}
+```
+
+Both the global switch and the agent switch must be true. `shadow` assesses and logs bounded proposal metadata: accepted/rejected outcome, closed reason, elapsed milliseconds (capped at 1,000), and only known finite reaction dimensions/strengths. Unknown dimensions are omitted; source text, persona, arbitrary model fields and credentials are never logged. The legacy mood writer remains authoritative; shadow does not add timed evidence, write mood files or inject new mood guidance. `active` applies independent agent reaction evidence to the shared per-agent EmotionalState using elapsed time. Existing temperament sensitivity, baseline and decay multiplier still apply. Active agents skip the full legacy turn update/fallback/writer and the standalone emotional-state injector; other agents retain their behavior. Configure the timing mode before loading persisted state; persisted metadata cannot enable it.
+
+The runtime accepts only the host's authored `currentUserMessage`, never an assembled prompt fallback. Persistent changes require stable agent, session key, session ID, run ID and `currentUserMessageId`; repeated admissions share an assessment. Workspace, incognito, internal/background and subagent exclusions apply before assessment and again before commit. Missing or rejected assessments fail open. Current meaning and intent take priority over compatible delivery, persona and background mood.
+
+Incoming assessments appraise a fictional software persona's independent response to a concrete event. Source attribution `own` includes direct neutral questions, denials, gratitude and appraisals. Each reaction dimension requires source and reaction confidence of at least .70 in every section. Observed speaker affect is diagnostic and cannot veto an independently known reaction. All Score values/confidences still require finite numbers in range; malformed or missing fields reject the assessment. `reactionDimensions` lists the known dimensions; the finite eight-vector `reaction` contains zero placeholders elsewhere, which callers must never consume as evidence. Section `observedConfidence` and `reactionConfidence` maps preserve raw confidence separately from normalized strength. No known reaction dimensions means no update.
+
+`applyTimedEvidence(reaction, { eventId, observedAt, now, dimensions })` accepts an optional nonempty unique dimension mask (omitting it preserves the previous all-eight API). Only named dimensions replace their target and expiry. Others continue their previous trajectory until their original expiry, then passively decay. One message has one admission/dedupe identity; additional observations do not cause immediate mood jumps. Version-3 `timedMood.expiresAtByDimension` stores all eight expiry timestamps, using zero for inactive dimensions; `expiresAt` remains their maximum. Old v3 single-expiry snapshots apply that expiry to all eight dimensions. Invalid additions install no target or dedupe metadata while preserving the saved current mood. Configure timing explicitly before hydration; enabling afterward cannot revive persisted targets. V2 hydration remains supported.
+
+Outgoing semantic planning uses operational intent/delivery descriptions, including `boundary` for explicit limits or insistence. Meaning takes priority over mood; canonical choices include serious correction, warm appreciation, soft sympathy, playful humor and firm boundaries. Uncertain intent/delivery neutralizes its section; an uncertain optional sound becomes `none` while retaining compatible confident delivery. Extra sounds require an explicit trusted performance intention in the classifier contract. A neutral span resets earlier expression without erasing valid neighbors. Bilingual uncertainty neutralizes only the corresponding pair; unsupported section alignment leaves both versions neutral. The renderer preserves canonical words and uses only its existing closed provider tags.
+
+Accepted updates atomically replace `.emotional-state.json` and `.current-mood.txt` with private files (0600). Neither file contains source conversation text. At most two prior authored contributions are kept in ephemeral memory for assessment; arbitrary historical prompt/tool/system messages are excluded. Terminal assistant text supplies the next turn's authored reply context.
+
+For an eligible stable run with Jev configured in either shadow or active mode, `.plur1bus/speech-context/<hashed-run>.json` is a private 0600 snapshot in a 0700 directory. Its version-1 fields are `agentId`, `runId`, `sessionId`, `createdAt`, `expiresAt` (15 minutes after creation), `mood` (eight-vector), `persona`, and `context` (last two authored contributions, including the current user). The exec hook exports only `PLUR1BUS_SPEECH_CONTEXT_FILE` and `PLUR1BUS_SPEECH_RUN_ID` for an exact agent/session/run/workspace match. Missing host run or workspace identity returns no context environment; there is no latest-run lookup. Agent termination, session replacement/reset/end and gateway shutdown invalidate matching runs and remove their files. Both modes publish and refresh the same authored context, persona and current shared mood for contextual speech comparisons. This context eligibility is distinct from active-only timed-state ownership. Snapshot context is ephemeral and never written to memory cards or evidence logs; revoked or terminal runs cannot recreate it.
+
+The installed OpenClaw exec caller needs the separately maintained trusted run/workspace forwarding compatibility patch to supply this full context. Without it, outgoing speech must use its final-text-only fallback. The shipped standalone injector at `.openclaw/extensions/emotional-state-injector/index.js` must be deployed with the plugin so active agents receive only one mood directive.
+
+
+### Telegram outgoing speech adapter
+
+The shipped `scripts/plan-speech.mjs` accepts JSON on stdin and emits JSON only on stdout: `{ "version": 1, "agentId": "main", "versions": [{ "id": "default", "text": "Final reply" }] }`. Supported agents are `main`, `bernhardine`, `heisenberg`; version IDs are `default`, `de`, `pl` with at most two unique versions. It reads `openclaw.json` through the existing effective configuration contract and uses `emotion.jev.enabled`, the explicit agent switch, and `mode` independently of the incoming runtime's active-only `isEnabled` method.
+
+Canonical sanitation and the 2,000 Unicode code point cap apply to every ElevenLabs invocation, including disabled emotion. Disabled skips Jev and tags while preserving toggle/routing/model/speaker behavior; shadow exposes bounded content-free per-section intent/delivery/action proposals in returned JSON and the stderr summary while synthesizing neutral canonical text; active renders validated metadata. No later clipping or punctuation insertion is allowed. Literal provider directions produce no audio. Both bilingual texts are prepared before one combined outgoing Jev request. The helper's `say-prepared` stdin contract keeps canonical text and annotated speech separate and rejects changed words, unknown tags and excessive tag counts. Legacy `say` remains supported.
+
+Credential resolution reuses `captureChunkingJev` / `resolveJevApiKey`: explicit key, then inherited configured environment name, then only that selected assignment from the private existing `/root/.openclaw/gateway.systemd.env`. The adapter does not evaluate shell text, import the whole environment file, expose credentials in arguments, or log conversation text. Endpoint/model conventions and the 1,000 ms maximum request deadline are unchanged.
+
+Run context is accepted only from the exact trusted workspace's `.plur1bus/speech-context/<sha256>.json` with matching explicit agent/run, private ownership/modes and a live bounded timestamp. Missing or invalid context yields final-text-only planning without a latest-agent fallback. The narrowly scoped host patch forwards `context?.hookContext?.runId ?? params.defaults?.runId` and only `context?.hookContext?.workspaceDir`; cwd and model exec arguments are not identity proof.
+
+Controller rollout artifacts live in `scripts/telegramTts/`. After deploying the plugin runtime modules, preview `python3 scripts/telegramTts/deploy.py --host-patch`; install only after review with `--apply --host-patch`. The installer backs up affected files and copies relevant state/config for evidence, but never writes toggle JSONs or native TTS/talk/Discord/STT settings. It installs the host patch through the existing `apply-media-patch.sh` startup entrypoint and backs up the uniquely identified host bundle. Preview a targeted rollback with `python3 scripts/telegramTts/deploy.py --rollback <snapshot>` and add `--apply` to restore only changed artifact/host files. Rollback refuses files changed after this deployment. See `scripts/telegramTts/README.md` for the concrete deployment sequence.

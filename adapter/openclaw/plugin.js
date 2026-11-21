@@ -299,6 +299,14 @@ export function registerPlur1bus(api, registrationDependencies = {}) {
     : {});
   // 4. Neo worker warm-up (lone gateway_start).
   registerNeoWorkerWarmUp({ api, host, neoWorkerRuntime });
+  // 4a. 7.19.0: the independent Jev mood owner (lib/jevEmotionRuntime.js),
+  // registered at the release line's position — after the warm-up, ahead of
+  // every other before_prompt_build/agent_end/gateway_stop handler.
+  if (typeof api.on === "function") {
+    for (const [hookName, handler, options] of internals.jevEmotionRuntime.hooks) {
+      if (options) api.on(hookName, handler, options); else api.on(hookName, handler);
+    }
+  }
   // 5. skill_proposal_changed.
   registerSkillProposalListener({ api, ...internals });
   // 6. Obsidian bridge lifecycle.

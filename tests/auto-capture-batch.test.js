@@ -61,7 +61,9 @@ function makeMockApi(baseDbPath, overrides = {}) {
     async emit(event, ...args) {
       const results = [];
       for (const fn of handlers[event] || []) {
-        results.push(await fn(...args));
+        const result = await fn(...args);
+        // Lifecycle hooks have no result; retain only returned hook outcomes.
+        if (result !== undefined) results.push(result);
       }
       return results;
     },
@@ -380,7 +382,8 @@ describe("auto-capture uses embedBatch when available", () => {
     const emitted = api.emit("agent_end", event, { agentId: "abort-agent", workspaceDir: basePath });
     await batchStarted.promise;
     const results = await emitted;
-    assert.equal(results[0]?.timedOut, true, "the hook should preserve its prompt timeout result");
+    assert.deepEqual(results, [{ ok: false, timedOut: true, background: false }],
+      "the hook should return exactly its prompt timeout result");
 
     batchGate.resolve();
     await sleep(100);
@@ -467,14 +470,16 @@ describe("auto-capture uses embedBatch when available", () => {
     assert.equal(secondStoreCalls, 0, "a second same-agent capture must remain queued while the first raw store is active");
     assert.equal(rawActive, 1);
     assert.equal(rawMaxActive, 1);
-    assert.equal(firstResults[0]?.timedOut, true, "the scheduler should still return its prompt timeout");
+    assert.deepEqual(firstResults, [{ ok: false, timedOut: true, background: false }],
+      "the scheduler should return exactly its prompt timeout result");
 
     firstStoreGate.resolve();
     await secondStoreStarted.promise;
     assert.equal(rawMaxActive, 1, "same-agent raw capture mutations must never overlap");
     secondStoreGate.resolve();
     const secondResults = await secondRun;
-    assert.equal(secondResults[0]?.ok, true, "the queued capture should run normally after settlement");
+    assert.deepEqual(secondResults, [{ ok: true, background: false }],
+      "the queued capture should return exactly one successful result after settlement");
   });
 
   it("retains the same-agent capture slot through a timed-out reminder store", async (t) => {
@@ -579,13 +584,15 @@ describe("auto-capture uses embedBatch when available", () => {
     assert.equal(secondStoreCalls, 0, "the next same-agent capture must remain queued behind the reminder mutation");
     assert.equal(trackedActive, 1);
     assert.equal(trackedMaxActive, 1);
-    assert.equal(firstResults[0]?.timedOut, true, "a pending reminder mutation should preserve prompt timeout behavior");
+    assert.deepEqual(firstResults, [{ ok: false, timedOut: true, background: false }],
+      "a pending reminder mutation should return exactly its prompt timeout result");
 
     reminderGate.resolve();
     await secondStoreStarted.promise;
     assert.equal(trackedMaxActive, 1, "a reminder write must not overlap the next capture mutation");
     secondStoreGate.resolve();
     const secondResults = await secondRun;
-    assert.equal(secondResults[0]?.ok, true);
+    assert.deepEqual(secondResults, [{ ok: true, background: false }],
+      "the next capture should return exactly one successful result after reminder settlement");
   });
 });

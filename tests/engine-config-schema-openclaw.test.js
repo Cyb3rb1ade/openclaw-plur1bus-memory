@@ -215,6 +215,9 @@ describe("openclaw.plugin.json generated from engine-config.schema.json", () => 
     afterSchema.properties.captureChunkingMode.description = "What a split capture stores: \"beides\" keeps the original row and adds its parts next to it, \"geteilt\" stores only the parts; it has no effect when captureChunking is off.";
     assert.ok(Object.hasOwn(afterSchema.properties, "healthWatch"));
     delete afterSchema.properties.healthWatch;
+    // 7.19.0 (ported): the independent Jev emotion owner, emotion.jev.
+    assert.ok(Object.hasOwn(afterSchema.properties.emotion.properties, "jev"));
+    delete afterSchema.properties.emotion.properties.jev;
     // EmbeddingGemma 2 (pinned dtype variants, bounded sub-batches) added exactly these two local-model options.
     const localEmbeddingProperties = afterSchema.properties.embedding.properties.local.properties;
     assert.ok(Object.hasOwn(localEmbeddingProperties, "dtype"));
