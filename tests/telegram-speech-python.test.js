@@ -10,8 +10,12 @@ function wrapperRuntimeMissing() {
   if (process.platform === 'win32') return 'Telegram TTS wrappers are POSIX bash scripts for the Linux host; not run on win32';
   const python = spawnSync('python3', ['--version'], { encoding: 'utf8' });
   if (python.status !== 0) return 'python3 is not available on this runner';
-  const bash = spawnSync('bash', ['-c', 'declare -A probe=([k]=v); [ "${probe[k]}" = v ]'], { encoding: 'utf8' });
-  if (bash.status !== 0) return 'Telegram TTS wrappers need bash >= 4 (associative arrays); this runner has an older bash (macOS ships 3.2)';
+  // Probe through python3 exactly as the wrapper tests start the scripts
+  // (subprocess.run(['bash', …])): on macOS runners node and python can
+  // resolve different `bash` binaries (Homebrew 5.x vs. system 3.2).
+  const probe = 'import subprocess,sys; sys.exit(subprocess.run(["bash","-c","declare -A probe=([k]=v); [ \\"${probe[k]}\\" = v ]"]).returncode)';
+  const bash = spawnSync('python3', ['-c', probe], { encoding: 'utf8' });
+  if (bash.status !== 0) return 'Telegram TTS wrappers need bash >= 4 (associative arrays); the bash the wrapper tests start is older (macOS ships 3.2)';
   return false;
 }
 
