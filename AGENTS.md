@@ -236,8 +236,8 @@ node --test tests/*.test.js
   (`tests/selftest-*`, `tests/snapshot-store.test.js`,
   `tests/protect-plur1bus-deploy.test.js`) green. The full suite on Windows and
   macOS runs in `ci.yml` (`test-cross`).
-- Current baseline (Linux, Node 24.21.0, 7.18.4): 5,891 tests in 1,048 suites,
-  7 skipped (platform-only and opt-in cases). The Local Inference adm-zip check
+- Current baseline (Linux, Node 24.22.3, 7.18.4 with 7.18.21–7.20.2 ported):
+  6,890 tests in 1,184 suites, 9 skipped (platform-only and opt-in cases). The Local Inference adm-zip check
   needs this checkout's own `node_modules` (it fails with a symlinked one).
 
 ## Dependency Audit
