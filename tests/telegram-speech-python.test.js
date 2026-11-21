@@ -7,7 +7,11 @@ import { fileURLToPath } from 'node:url';
 // associative arrays (bash >= 4); macOS ships bash 3.2 and Windows has no
 // POSIX shell on the default runner. Probe the capability instead of guessing.
 function wrapperRuntimeMissing() {
-  if (process.platform === 'win32') return 'Telegram TTS wrappers are POSIX bash scripts for the Linux host; not run on win32';
+  // Linux only: the wrappers target the Linux host (bash >= 4, /root/.openclaw
+  // paths). On macos-15 runners the wrapper subprocesses started the system
+  // bash 3.2 even when a probe found Homebrew bash 5, so the probe alone is not
+  // enough there; win32 has no POSIX shell.
+  if (process.platform !== 'linux') return `Telegram TTS wrappers target the Linux host (bash >= 4); not run on ${process.platform}`;
   const python = spawnSync('python3', ['--version'], { encoding: 'utf8' });
   if (python.status !== 0) return 'python3 is not available on this runner';
   // Probe through python3 exactly as the wrapper tests start the scripts
